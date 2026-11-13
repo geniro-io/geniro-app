@@ -144,6 +144,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       itemDao,
       new ThreadTimelineService(em, waterfall, itemDao, {
         ensureIndexed: () => Promise.resolve(),
+        stampEpochOf: () => 0,
       } as unknown as ItemCallIndexService),
       {
         for: (agent: string) => ({

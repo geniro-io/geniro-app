@@ -1,6 +1,10 @@
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
-import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
+import {
+  EntityManager,
+  type FilterQuery,
+  type FindOptions,
+} from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 import type {
@@ -227,8 +231,33 @@ function wireRowOf(row: {
   };
 }
 
-/** Seqs of one run unstamped per statement by `forgetInCalls`. */
-const FORGET_WINDOW_SEQS = 2_000;
+/**
+ * Ordered on the `(runId, kind, seq)` index's own columns, for a read of one
+ * run or of several: ordered by `seq` alone, SQLite (with no `ANALYZE`
+ * statistics) walks `(runId, seq)` instead and reads every row of each run or
+ * window to keep the few of these kinds. {@link inSeqOrder} puts seq order back.
+ */
+const KIND_ROWS_ORDER: FindOptions<Item>['orderBy'] = [
+  { runId: 'asc' },
+  { kind: 'asc' },
+  { seq: 'asc' },
+];
+
+/**
+ * The `IN` list a kind read filters on. SQLite folds a one-value `IN` into an
+ * equality and, with a seq window, plans that on `(runId, seq)` again; a value
+ * listed twice keeps it a list, answering the same rows.
+ */
+function kindList(kinds: readonly ItemKind[]): ItemKind[] {
+  return kinds.length === 1 ? [kinds[0]!, kinds[0]!] : [...kinds];
+}
+
+/** Rows read in {@link KIND_ROWS_ORDER}, back in seq order within each run (a stable sort). */
+function inSeqOrder<T extends Pick<Item, 'runId' | 'seq'>>(rows: T[]): T[] {
+  return rows.sort((a, b) =>
+    a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq,
+  );
+}
 
 /** Spine rows read per statement; the event loop turns between windows. */
 const SPINE_WINDOW_ROWS = 5_000;
@@ -283,6 +312,18 @@ function payloadRef(
     ? eb.fn<string | null>('lower', [field])
     : field;
 }
+
+/** A row as {@link ItemDao.inCallBatch} reads it. */
+type InCallRow = Pick<
+  Item,
+  'id' | 'seq' | 'kind' | 'memberId' | 'inCall' | 'payload'
+>;
+
+/** A row as {@link ItemDao.inCallRowsOfKind} reads it, keyed by rowid. */
+type InCallIndexRow = Pick<
+  Item,
+  'seq' | 'kind' | 'memberId' | 'inCall' | 'callId' | 'payloadId'
+> & { rowid: number };
 
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
@@ -1954,34 +1995,150 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Unstamp every row — the stamps of a membership rule that has since changed.
-   * Run by run in windows of {@link FORGET_WINDOW_SEQS} seqs with the event
-   * loop turning between them: one statement over the whole table rewrites
-   * every row and held a live daemon for 30 s on a long-used profile.
+   * One batch of a run's rows at or below `throughSeq`, stamped or not, in
+   * `(seq, id)` order with the stamp and payload each carries now — what a run
+   * whose promoted columns were never stamped is stamped again from when the
+   * membership rule changed (a stamped one is read by
+   * {@link inCallRowsOfKind}). Paged on both, since an older profile holds rows
+   * that share a seq.
    */
-  async forgetInCalls(txEm?: EntityManager): Promise<number> {
-    const em = txEm ?? this.em.fork();
-    const runs = await em
-      .getKysely<ChatTextDatabase>({ convertValues: false })
-      .selectFrom('runs')
-      .select('id')
-      .execute();
-    let forgotten = 0;
-    for (const { id: runId } of runs) {
-      const through = await this.maxSeq(runId, em);
-      for (let from = -1; from < through; from += FORGET_WINDOW_SEQS) {
-        forgotten += await this.getRepo(em).nativeUpdate(
-          {
+  async inCallBatch(
+    runId: string,
+    after: { seq: number; id: string } | null,
+    throughSeq: number,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<InCallRow[]> {
+    return this.getRepo(txEm).find(
+      after === null
+        ? { runId, seq: { $lte: throughSeq } }
+        : {
             runId,
-            seq: { $gt: from, $lte: from + FORGET_WINDOW_SEQS },
-            inCall: { $ne: null },
+            // The bound outside the `$or` is the index range; the `$or` alone
+            // left SQLite walking the run from its first row on every batch.
+            seq: { $gte: after.seq, $lte: throughSeq },
+            $or: [
+              { seq: { $gt: after.seq } },
+              { seq: after.seq, id: { $gt: after.id } },
+            ],
           },
-          { inCall: null },
-        );
-        await yieldToEventLoop();
-      }
+      {
+        limit,
+        orderBy: { seq: 'asc', id: 'asc' },
+        fields: ['id', 'seq', 'kind', 'memberId', 'inCall', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /** Every kind of row one run holds, read off the `(run_id, kind, seq)` index. */
+  async kindsOfRun(runId: string, txEm?: EntityManager): Promise<ItemKind[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('kind')
+      .distinct()
+      .where('run_id', '=', runId)
+      .execute();
+    return rows.map((row) => row.kind);
+  }
+
+  /**
+   * One kind of a run's rows with what the membership rule reads of each —
+   * member, stamp, `callId`, and a delegate declaration's `payloadId` — keyed
+   * by rowid. Read from covering indexes only: those columns sit after
+   * `payload` in the row, and reading them off the table walks every payload's
+   * overflow pages, seconds per large run on a cold cache. The run's promoted
+   * columns must be stamped ({@link payloadRefsStamped}).
+   */
+  async inCallRowsOfKind(
+    runId: string,
+    kind: ItemKind,
+    txEm?: EntityManager,
+  ): Promise<InCallIndexRow[]> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const placed = await db
+      .selectFrom('items')
+      .select(['rowid', 'seq', 'member_id', 'in_call'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', kind)
+      .where('deleted_at', 'is', null)
+      .execute();
+    const calls = await db
+      .selectFrom('items')
+      .select(['rowid', 'call_id'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', kind)
+      .where('call_id', 'is not', null)
+      .execute();
+    const callOf = new Map(calls.map((row) => [row.rowid, row.call_id]));
+    const declared =
+      kind === 'subagent_info'
+        ? await db
+            .selectFrom('items')
+            .select(['rowid', 'payload_id'])
+            .where('run_id', '=', runId)
+            .where('kind', '=', kind)
+            .where('payload_id', 'is not', null)
+            .execute()
+        : [];
+    const idOf = new Map(declared.map((row) => [row.rowid, row.payload_id]));
+    return placed.map((row) => ({
+      rowid: row.rowid,
+      seq: row.seq,
+      kind,
+      memberId: row.member_id,
+      inCall: row.in_call,
+      callId: callOf.get(row.rowid) ?? null,
+      payloadId: idOf.get(row.rowid) ?? null,
+    }));
+  }
+
+  /**
+   * {@link rememberInCall} for rows read by {@link inCallRowsOfKind}, by
+   * rowid — and only while each is still the row read, of that run, kind and
+   * seq, carrying the stamp it carried then: a rowid is reused once its row is
+   * deleted, and a row stamped since was stamped by this rule. Answers how many
+   * rows it changed.
+   */
+  async rememberInCallAt(
+    runId: string,
+    kind: ItemKind,
+    inCall: string,
+    rows: readonly { rowid: number; seq: number; was: string | null }[],
+    txEm?: EntityManager,
+  ): Promise<number> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const byWas = new Map<string | null, typeof rows>();
+    for (const row of rows) {
+      byWas.set(row.was, [...(byWas.get(row.was) ?? []), row]);
     }
-    return forgotten;
+    let changed = 0;
+    for (const [was, group] of byWas) {
+      const result = await db
+        .updateTable('items')
+        .set({ in_call: inCall })
+        .where('run_id', '=', runId)
+        .where('kind', '=', kind)
+        .where('in_call', was === null ? 'is' : '=', was)
+        .where(
+          'rowid',
+          'in',
+          group.map((row) => row.rowid),
+        )
+        .where(
+          'seq',
+          'in',
+          group.map((row) => row.seq),
+        )
+        .executeTakeFirst();
+      changed += Number(result.numUpdatedRows);
+    }
+    return changed;
   }
 
   /** Whether one run still holds a row no build stamped with `inCall`. */
@@ -2002,13 +2159,15 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq: number,
     limit: number,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'id' | 'seq' | 'kind' | 'memberId' | 'payload'>[]> {
+  ): Promise<
+    Pick<Item, 'id' | 'seq' | 'kind' | 'memberId' | 'payload' | 'inCall'>[]
+  > {
     return this.getRepo(txEm).find(
       { runId, inCall: null, seq: { $gt: afterSeq } },
       {
         limit,
         orderBy: { seq: 'asc' },
-        fields: ['id', 'seq', 'kind', 'memberId', 'payload'],
+        fields: ['id', 'seq', 'kind', 'memberId', 'payload', 'inCall'],
         disableIdentityMap: true,
       },
     );
@@ -2272,13 +2431,15 @@ export class ItemDao extends BaseDao<Item> {
     range?: SeqRange,
     txEm?: EntityManager,
   ): Promise<Item[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: { $in: [...kinds] },
-        ...seqFilter(range),
-      },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    return inSeqOrder(
+      await this.getRepo(txEm).find(
+        {
+          runId,
+          kind: { $in: kindList(kinds) },
+          ...seqFilter(range),
+        },
+        { orderBy: KIND_ROWS_ORDER, disableIdentityMap: true },
+      ),
     );
   }
 
@@ -2322,13 +2483,15 @@ export class ItemDao extends BaseDao<Item> {
     throughSeq: number,
     txEm?: EntityManager,
   ): Promise<Item[]> {
-    return this.getRepo(txEm).find(
-      {
-        runId,
-        kind: { $in: [...kinds] },
-        seq: { $gt: afterSeq, $lte: throughSeq },
-      },
-      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    return inSeqOrder(
+      await this.getRepo(txEm).find(
+        {
+          runId,
+          kind: { $in: kindList(kinds) },
+          seq: { $gt: afterSeq, $lte: throughSeq },
+        },
+        { orderBy: KIND_ROWS_ORDER, disableIdentityMap: true },
+      ),
     );
   }
 
@@ -2693,9 +2856,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * These runs' shell rows, grouped by run and in seq order — the boot sweep's
-   * read. Ordered by kind in SQL so SQLite seeks `(run_id, kind, seq)` rather
-   * than walking every row of each run on `(run_id, seq)`; seq order is put
-   * back here.
+   * read, in {@link KIND_ROWS_ORDER}.
    */
   async shellRowsOfRuns(
     runIds: readonly string[],
@@ -2705,13 +2866,13 @@ export class ItemDao extends BaseDao<Item> {
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['shell_open', 'shell_info'] } },
         {
-          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
+          orderBy: KIND_ROWS_ORDER,
           fields: ['runId', 'kind', 'seq', 'payload', 'memberId'],
           disableIdentityMap: true,
         },
       ),
     );
-    return inSeqOrderPerRun(rows);
+    return inSeqOrder(rows);
   }
 
   /**
@@ -2749,13 +2910,13 @@ export class ItemDao extends BaseDao<Item> {
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['action', 'action_outcome'] } },
         {
-          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
+          orderBy: KIND_ROWS_ORDER,
           fields: ['runId', 'kind', 'seq', 'payload'],
           disableIdentityMap: true,
         },
       ),
     );
-    return inSeqOrderPerRun(rows);
+    return inSeqOrder(rows);
   }
 
   /**
@@ -3028,12 +3189,4 @@ async function inRunBatches<T>(
     rows.push(...(await read(batch)));
   }
   return rows;
-}
-
-function inSeqOrderPerRun<T extends Pick<Item, 'runId' | 'seq'>>(
-  rows: T[],
-): T[] {
-  return rows.sort((a, b) =>
-    a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq,
-  );
 }

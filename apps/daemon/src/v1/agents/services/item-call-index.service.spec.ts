@@ -25,7 +25,10 @@ import { tempDir } from '../__tests__/temp-dir';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { CALL_MEMBERSHIP_VERSION } from '../utils/call-membership';
-import { ItemCallIndexService } from './item-call-index.service';
+import {
+  ItemCallIndexService,
+  stampPauseAfter,
+} from './item-call-index.service';
 
 describe('ItemCallIndexService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -292,74 +295,417 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       expect(existsSync(marker)).toBe(false);
     });
 
-    it('stamps again a run whose stamping started after the sweep looked, and spans the clear', async () => {
+    async function stale(seq: number, runId: string): Promise<void> {
+      await dao.create({
+        runId,
+        seq,
+        kind: 'message',
+        memberId: 'manager',
+        payload: JSON.stringify({ text: `m${seq}` }),
+        inCall: 'call-stale',
+      });
+    }
+
+    it('stamps again a run past one batch whose rows all carry another rule’s stamp', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await dao.createMany(
+        Array.from({ length: 600 }, (_, at) => ({
+          runId: 'run-1',
+          seq: at + 1,
+          kind: 'message' as const,
+          memberId: 'manager',
+          payload: JSON.stringify({ text: `m${at + 1}` }),
+          inCall: 'call-stale',
+        })),
+      );
+
+      await index.indexAllQuietly();
+
+      expect(new Set(await inCallBySeq())).toEqual(new Set(['']));
+    });
+
+    it('places a run from its indexes, reading no payload, when its promoted columns are filled', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await legacy(1, 'call_started', 'manager', {
+        callId: 'call-1',
+        calleeNodeId: 'engineer',
+      });
+      await legacy(2, 'message', 'engineer', {
+        text: 'on it',
+        callId: 'call-1',
+      });
+      await legacy(3, 'subagent_info', 'manager', {
+        id: 'd1',
+        callId: 'call-1',
+      });
+      await legacy(4, 'tool_call', 'engineer', {
+        id: 't1',
+        parentToolUseId: 'd1',
+      });
+      await orm.em
+        .fork()
+        .nativeUpdate(Item, { runId: 'run-1' }, { inCall: 'call-stale' });
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
+
+      await index.indexAllQuietly();
+
+      expect(await inCallBySeq()).toEqual(['', 'call-1', '', '']);
+      expect(fromIndexes).toHaveBeenCalled();
+      expect(fromPayloads).not.toHaveBeenCalled();
+    });
+
+    it('lets a timer queued while a run is being stamped again run before the next batch is written', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await dao.createMany(
+        Array.from({ length: 600 }, (_, at) => ({
+          runId: 'run-1',
+          seq: at + 1,
+          kind: 'message' as const,
+          memberId: 'manager',
+          payload: JSON.stringify({ text: `m${at + 1}` }),
+          inCall: 'call-stale',
+        })),
+      );
+      const write = dao.rememberInCallAt.bind(dao);
+      let writesBeforeTimer: number | null = null;
+      const writes = vi
+        .spyOn(dao, 'rememberInCallAt')
+        .mockImplementation(async (runId, kind, inCall, rows, em) => {
+          if (writes.mock.calls.length === 1) {
+            setTimeout(() => {
+              writesBeforeTimer = writes.mock.calls.length;
+            }, 0);
+          }
+          return write(runId, kind, inCall, rows, em);
+        });
+
+      await index.indexAllQuietly();
+
+      expect(writes.mock.calls.length).toBeGreaterThan(2);
+      expect(writesBeforeTimer).toBe(1);
+      expect(new Set(await inCallBySeq())).toEqual(new Set(['']));
+    });
+
+    it('pauses after a batch at least as long as the batch held the event loop, within bounds', () => {
+      expect(stampPauseAfter(0)).toBe(10);
+      expect(stampPauseAfter(120.2)).toBe(121);
+      expect(stampPauseAfter(5_000)).toBe(1_000);
+    });
+
+    it('places a run from its payloads when its promoted columns were never filled', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      await orm.em
+        .fork()
+        .nativeUpdate(Run, { id: 'run-1' }, { payloadRefsVersion: null });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await legacy(1, 'call_started', 'manager', {
+        callId: 'call-1',
+        calleeNodeId: 'engineer',
+      });
+      await legacy(2, 'message', 'engineer', {
+        text: 'on it',
+        callId: 'call-1',
+      });
+      await orm.em
+        .fork()
+        .nativeUpdate(
+          Item,
+          { runId: 'run-1' },
+          { inCall: 'call-stale', callId: null, payloadId: null },
+        );
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
+
+      await index.indexAllQuietly();
+
+      expect(await inCallBySeq()).toEqual(['', 'call-1']);
+      expect(fromPayloads).toHaveBeenCalled();
+      expect(fromIndexes).not.toHaveBeenCalled();
+    });
+
+    it('lets a read finish while its run is still being stamped again, then marks the run to be read again', async () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await runs.create({ id: 'run-2', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
-      await legacyRun(
-        600,
-        (seq) => ({
-          kind: 'message',
-          memberId: 'manager',
-          payload: { text: `m${seq}` },
-        }),
-        'run-2',
-      );
-      // run-2's first batch lands BEFORE the clear and its second after it.
-      let firstBatchDone: () => void = () => undefined;
-      const firstBatch = new Promise<void>((resolve) => {
-        firstBatchDone = resolve;
+      await stale(1, 'run-1');
+      await stale(1, 'run-2');
+      await legacy(2, 'message', 'manager', { text: 'unstamped' }, 'run-1');
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
       });
-      let cleared: () => void = () => undefined;
-      const clear = new Promise<void>((resolve) => {
-        cleared = resolve;
-      });
-      const rows = dao.unstampedRows.bind(dao);
-      vi.spyOn(dao, 'unstampedRows').mockImplementation(
-        async (runId, afterSeq, limit, em) => {
-          if (runId === 'run-2' && afterSeq > 0) {
-            firstBatchDone();
-            await clear;
-          }
-          return rows(runId, afterSeq, limit, em);
+      const read = dao.inCallRowsOfKind.bind(dao);
+      vi.spyOn(dao, 'inCallRowsOfKind').mockImplementation(
+        async (runId, kind, em) => {
+          await held;
+          return read(runId, kind, em);
         },
       );
-      const forget = dao.forgetInCalls.bind(dao);
-      let reading: Promise<void> = Promise.resolve();
-      vi.spyOn(dao, 'forgetInCalls').mockImplementation(async (em) => {
-        reading = index.ensureIndexed('run-2');
-        await firstBatch;
-        const forgotten = await forget(em);
-        cleared();
-        return forgotten;
+
+      const sweep = index.indexAllQuietly();
+      await index.ensureIndexed('run-1');
+
+      expect(await inCallBySeq('run-1')).toEqual(['call-stale', '']);
+      expect(index.stampEpochOf('run-1')).toBe(0);
+      expect(readFileSync(marker, 'utf8')).toBe(
+        `${CALL_MEMBERSHIP_VERSION - 1}\n`,
+      );
+
+      release();
+      await sweep;
+
+      expect(await inCallBySeq('run-1')).toEqual(['', '']);
+      expect(await inCallBySeq('run-2')).toEqual(['']);
+      expect(index.stampEpochOf('run-1')).toBe(1);
+      expect(readFileSync(marker, 'utf8').split('\n')[0]).toBe(
+        String(CALL_MEMBERSHIP_VERSION),
+      );
+    });
+
+    it('leaves a run’s epoch alone when stamping it again changed nothing', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await dao.create({
+        runId: 'run-1',
+        seq: 1,
+        kind: 'message',
+        memberId: 'manager',
+        payload: JSON.stringify({ text: 'a' }),
+        inCall: '',
       });
 
       await index.indexAllQuietly();
-      await reading;
 
-      expect(
-        (await inCallBySeq('run-2')).filter((value) => value === null),
-      ).toEqual([]);
+      expect(index.stampEpochOf('run-1')).toBe(0);
     });
 
-    it('leaves no row unstamped when a read was stamping the run as the stamps were cleared', async () => {
+    it('stamps a run again once when a read and the sweep reach it together', async () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
-      await legacyRun(600, (seq) => ({
-        kind: 'message',
-        memberId: 'manager',
-        payload: { text: `m${seq}` },
-      }));
+      await stale(1, 'run-1');
+      const reads = vi.spyOn(dao, 'inCallRowsOfKind');
 
       await Promise.all([
         index.ensureIndexed('run-1'),
         index.indexAllQuietly(),
       ]);
+
+      expect(await inCallBySeq()).toEqual(['']);
+      // One pass: one read of the run's one kind.
+      expect(reads).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes on past a run that fails, leaves the marker unwritten, and the next launch stamps every run again', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      await runs.create({ id: 'run-2', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await stale(1, 'run-1');
+      await stale(1, 'run-2');
+      const read = dao.inCallRowsOfKind.bind(dao);
+      const failing = vi
+        .spyOn(dao, 'inCallRowsOfKind')
+        .mockImplementation(async (runId, kind, em) => {
+          if (runId === 'run-2') {
+            throw new Error('locked');
+          }
+          return read(runId, kind, em);
+        });
+
+      await index.indexAllQuietly();
+
+      expect(await inCallBySeq('run-1')).toEqual(['']);
+      expect(readFileSync(marker, 'utf8')).toBe(
+        `${CALL_MEMBERSHIP_VERSION - 1}\n`,
+      );
+      failing.mockRestore();
+
+      const nextLaunch = new ItemCallIndexService(
+        dao,
+        runs,
+        orm.em.fork() as EntityManager,
+        marker,
+      );
+      const reads = vi.spyOn(dao, 'inCallRowsOfKind');
+      await nextLaunch.indexAllQuietly();
+
+      expect(new Set(reads.mock.calls.map(([runId]) => runId))).toEqual(
+        new Set(['run-1', 'run-2']),
+      );
+      expect(await inCallBySeq('run-2')).toEqual(['']);
+      expect(readFileSync(marker, 'utf8').split('\n')[0]).toBe(
+        String(CALL_MEMBERSHIP_VERSION),
+      );
+    });
+
+    it('moves the run’s epoch when a re-stamp fails after it changed rows, and waits before a read starts one again', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await dao.createMany(
+        (['message', 'tool_call'] as const).map((kind, at) => ({
+          runId: 'run-1',
+          seq: at + 1,
+          kind,
+          memberId: 'manager',
+          payload: JSON.stringify({ text: `m${at + 1}` }),
+          inCall: 'call-stale',
+        })),
+      );
+      const read = dao.inCallRowsOfKind.bind(dao);
+      const reads = vi
+        .spyOn(dao, 'inCallRowsOfKind')
+        .mockImplementation(async (runId, kind, em) => {
+          if (reads.mock.calls.length > 1) {
+            throw new Error('locked');
+          }
+          return read(runId, kind, em);
+        });
+
+      await index.indexAllQuietly();
       await index.ensureIndexed('run-1');
 
-      expect((await inCallBySeq()).filter((value) => value === null)).toEqual(
-        [],
+      expect(index.stampEpochOf('run-1')).toBe(1);
+      expect(reads).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the stamp of a row written while its run is being stamped again', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await stale(1, 'run-1');
+      await stale(4, 'run-1');
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reached: () => void = () => undefined;
+      const reading = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const read = dao.inCallRowsOfKind.bind(dao);
+      vi.spyOn(dao, 'inCallRowsOfKind').mockImplementation(
+        async (runId, kind, em) => {
+          reached();
+          await held;
+          return read(runId, kind, em);
+        },
       );
+      async function written(
+        seq: number,
+        kind: ItemKind,
+        memberId: string,
+        payload: Record<string, unknown>,
+      ): Promise<void> {
+        const inCall = await index.inCallOf('run-1', {
+          kind,
+          memberId,
+          payload,
+        });
+        await dao.create({
+          runId: 'run-1',
+          seq,
+          kind,
+          memberId,
+          payload: JSON.stringify(payload),
+          inCall,
+        });
+      }
+
+      const sweep = index.indexAllQuietly();
+      await reading;
+      await written(2, 'call_started', 'manager', {
+        callId: 'call-9',
+        calleeNodeId: 'engineer',
+      });
+      await written(3, 'message', 'engineer', {
+        text: 'on it',
+        callId: 'call-9',
+      });
+      release();
+      await sweep;
+
+      expect(await inCallBySeq()).toEqual(['', '', 'call-9', '']);
+    });
+
+    it('places every row the same from the promoted columns as from its payload', async () => {
+      const rows: [ItemKind, string, Record<string, unknown>][] = [
+        [
+          'call_started',
+          'manager',
+          { callId: 'call-1', calleeNodeId: 'engineer' },
+        ],
+        ['message', 'engineer', { text: 'on it', callId: 'call-1' }],
+        ['message', 'manager', { text: 'aside', callId: 'call-1' }],
+        ['tool_call', 'engineer', { id: 't1', callId: 'call-1' }],
+        ['call_question', 'manager', { callId: 'call-1' }],
+        ['approval_request', 'engineer', { callId: 'call-1' }],
+        ['subagent_info', 'engineer', { id: 'd1', callId: 'call-1' }],
+        ['subagent_info', 'engineer', { id: 'd1' }],
+        [
+          'call_started',
+          'engineer',
+          {
+            callId: 'call-2',
+            calleeNodeId: 'qa',
+            callerConversationId: 'call-1',
+          },
+        ],
+        ['message', 'qa', { text: 'nested', callId: 'call-2' }],
+        ['call_result', 'manager', { callId: 'call-1' }],
+        ['message', 'manager', { text: 'unknown call', callId: 'call-x' }],
+      ];
+      const placed: (string | null)[][] = [];
+      for (const fromColumns of [true, false]) {
+        await orm.schema.clear();
+        const em = orm.em.fork() as EntityManager;
+        dao = new ItemDao(em);
+        runs = new RunDao(em);
+        index = new ItemCallIndexService(dao, runs, em, marker);
+        await runs.create({ id: 'run-1', teamId: 'dev-team' });
+        if (!fromColumns) {
+          await orm.em
+            .fork()
+            .nativeUpdate(Run, { id: 'run-1' }, { payloadRefsVersion: null });
+        }
+        writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+        for (const [at, [kind, memberId, payload]] of rows.entries()) {
+          await legacy(at + 1, kind, memberId, payload);
+        }
+        await orm.em
+          .fork()
+          .nativeUpdate(Item, { runId: 'run-1' }, { inCall: 'call-stale' });
+
+        await index.indexAllQuietly();
+
+        placed.push(await inCallBySeq());
+      }
+
+      expect(placed[0]).toEqual(placed[1]);
+      expect(placed[0]).not.toContain('call-stale');
+    });
+
+    it('keeps a chat’s stamps under a changed rule, since its rows are all in its own flow', async () => {
+      await runs.create({ id: 'chat-1' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await legacy(1, 'message', null, { text: 'hi' }, 'chat-1');
+      await index.ensureIndexed('chat-1');
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
+
+      await index.ensureIndexed('chat-1');
+      await legacy(2, 'message', null, { text: 'again' }, 'chat-1');
+      await new ItemCallIndexService(
+        dao,
+        runs,
+        orm.em.fork() as EntityManager,
+        marker,
+      ).ensureIndexed('chat-1');
+
+      expect(fromIndexes).not.toHaveBeenCalled();
+      expect(fromPayloads).not.toHaveBeenCalled();
+      expect(await inCallBySeq('chat-1')).toEqual(['', '']);
     });
   });
 });

@@ -129,14 +129,28 @@ describe('RunKindRowsCache (in-memory sqlite)', () => {
     expect(row!.inCall).toBe(OUTSIDE_ANY_CALL);
   });
 
-  it('reads the run again once every call stamp has been cleared', async () => {
+  it('reads a run again from the start once its rows were stamped again', async () => {
     await write(0, 'turn_complete');
     await seqsOf(['turn_complete']);
-    vi.spyOn(calls, 'stampEpoch', 'get').mockReturnValue(1);
+    vi.spyOn(calls, 'stampEpochOf').mockImplementation((runId) =>
+      runId === 'run-a' ? 1 : 0,
+    );
     const read = vi.spyOn(items, 'rowsOfKindsBetween');
 
     expect(await seqsOf(['turn_complete'])).toEqual([0]);
     expect(read.mock.calls[0]![2]).toBe(-1);
+  });
+
+  it('keeps a run’s rows when another run’s rows were stamped again', async () => {
+    await write(0, 'turn_complete');
+    await seqsOf(['turn_complete']);
+    vi.spyOn(calls, 'stampEpochOf').mockImplementation((runId) =>
+      runId === 'run-a' ? 0 : 1,
+    );
+    const read = vi.spyOn(items, 'rowsOfKindsBetween');
+
+    expect(await seqsOf(['turn_complete'])).toEqual([0]);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('never stamps a chat, whose rows are all in its own flow', async () => {

@@ -30,7 +30,7 @@ interface Held {
   /** Every row of the kinds at or below this seq is in `rows`. */
   through: number;
   rows: Item[];
-  /** `ItemCallIndexService.stampEpoch` the rows were read under. */
+  /** `ItemCallIndexService.stampEpochOf` the run's rows were read under. */
   stampEpoch: number;
   chars: number;
 }
@@ -43,9 +43,10 @@ interface Held {
  * a user message is rewritten when it is acknowledged.
  *
  * Two columns of a written row are filled in later: `inCall`, which is why a
- * run that can hold calls is read only once its stamps are complete and read
- * again whenever every stamp is cleared (a chat's rows are all in its own
- * flow); and the promoted payload columns, which no reader of these rows uses.
+ * run that can hold calls is read only once it holds no unstamped row, and
+ * read again from the start once its rows were stamped again under a changed
+ * rule (a chat's rows are all in its own flow); and the promoted payload
+ * columns, which no reader of these rows uses.
  *
  * The high-water mark stops at `ItemSeqAllocator.writtenThrough`, so a row
  * whose seq was reserved but not yet written is read on a later call rather
@@ -144,7 +145,7 @@ export class RunKindRowsCache implements OnModuleInit {
       await this.calls.ensureIndexed(runId);
     }
     const em = this.em.fork();
-    const stampEpoch = this.calls.stampEpoch;
+    const stampEpoch = this.calls.stampEpochOf(runId);
     const kept = this.held.get(key);
     this.drop(key);
     const held =

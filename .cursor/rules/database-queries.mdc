@@ -29,3 +29,7 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 
 - `v1/storage/utils/vacuum-database.ts` runs `VACUUM` and `wal_checkpoint(TRUNCATE)` on a connection of its own in a worker thread, for Settings → Storage. No builder expresses either, and both are constants. On the daemon's own connection the statement would hold the event loop for its whole length. It holds the write lock throughout, and the daemon's writes give up after better-sqlite3's 5 s busy timeout, so it runs only at daemon start, before listen (`StorageService.compactIfScheduled`).
 - `StorageService.freeBytes` reads `freelist_count` and `page_size` through better-sqlite3's `pragma()`, as `main.ts` sets the journal mode.
+
+## Recorded exception: pinning a query plan in a spec
+
+- A spec may prefix `EXPLAIN QUERY PLAN` to a statement a DAO method sent and read the plan, to pin which index the read takes: captured from the connection with its values pasted in by `Platform.formatQuery` as MikroORM runs it (`item.dao.spec.ts` → `planOf`), or, for a `getKysely()` read, which never passes the connection, from Kysely's `SqliteDriver` connection with its own parameters, run as `CompiledQuery.raw` on that connection (`item.dao.spec.ts` → `inCallRowsOfKind`). No builder expresses it, it runs only in specs, and it executes nothing but the DAO's own statement. Production code never sends it.

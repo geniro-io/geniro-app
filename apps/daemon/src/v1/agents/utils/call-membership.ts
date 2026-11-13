@@ -10,8 +10,11 @@ export const OUTSIDE_ANY_CALL = '';
 
 /**
  * The version of {@link callMembershipOf}'s answer. Bump it with ANY change to
- * what the rule answers: a launch that finds stamps of another version clears
- * them and stamps every row again (`ItemCallIndexService.indexAllQuietly`).
+ * what the rule answers: a launch that finds stamps of another version stamps
+ * each team run again, writing only the stamps that change
+ * (`ItemCallIndexService.restamp`). That pass reads a row's `callId` and `id`
+ * from the promoted columns (`utils/payload-refs.ts`), so a rule that reads
+ * any other field of a row's own payload must change that pass too.
  */
 export const CALL_MEMBERSHIP_VERSION = 3;
 

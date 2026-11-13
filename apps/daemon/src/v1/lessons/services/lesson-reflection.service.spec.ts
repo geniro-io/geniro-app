@@ -84,6 +84,7 @@ function build(
     config?: Omit<LessonsConfig, 'quietWindowHours'>;
     rejected?: { title: string; rejectReason: string | null }[];
     sendFails?: Error;
+    createFails?: Error;
   } = {},
 ) {
   const source = runOf(options.source ?? {});
@@ -123,7 +124,9 @@ function build(
   };
   const chats = {
     createChat: vi.fn((_input: Record<string, unknown>) =>
-      Promise.resolve({ id: 'refl-run' }),
+      options.createFails === undefined
+        ? Promise.resolve({ id: 'refl-run' })
+        : Promise.reject(options.createFails),
     ),
     sendMessage: vi.fn((_runId: string, _brief: string) =>
       options.sendFails === undefined
@@ -156,6 +159,7 @@ function build(
   };
   const config = new LessonsConfigService();
   config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
+  const events = new LessonsEventBus();
   const service = new LessonReflectionService(
     em,
     runDao as unknown as RunDao,
@@ -170,11 +174,12 @@ function build(
     segments as unknown as LessonSegmentDao,
     proposals as unknown as LessonProposalDao,
     config,
-    new LessonsEventBus(),
+    events,
   );
   return {
     service,
     em,
+    events,
     runDao,
     itemDao,
     chats,
@@ -469,6 +474,36 @@ describe('LessonReflectionService.start', () => {
       fixture.em,
     );
   });
+
+  it('marks the segment failed and announces it when the chat cannot be created', async () => {
+    const fixture = build({ createFails: new Error('no agent') });
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+
+    await expect(fixture.service.start('src', {})).rejects.toThrow('no agent');
+
+    expect(fixture.chats.sendMessage).not.toHaveBeenCalled();
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-1',
+      { status: 'failed' },
+      fixture.em,
+    );
+    expect(announced).toEqual(['src']);
+  });
+
+  it('announces the started reflection on its thread', async () => {
+    const fixture = build();
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+
+    await fixture.service.start('src', {});
+
+    expect(announced).toEqual(['src']);
+  });
 });
 
 describe('LessonReflectionService — review findings', () => {
@@ -717,6 +752,26 @@ describe('LessonReflectionService: a reflection that ends without filing', () =>
     fixture.service.onModuleDestroy();
   });
 
+  it('announces the failed stretch on its thread', async () => {
+    const fixture = build({
+      reflectionSegment: {
+        id: 'seg-9',
+        runId: 'src',
+        status: 'reflecting',
+      },
+    });
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+
+    await vi.waitFor(() => expect(announced).toEqual(['src']));
+    fixture.service.onModuleDestroy();
+  });
+
   it('leaves a stretch that already filed its lessons alone', async () => {
     const fixture = build({
       reflectionSegment: {
@@ -754,6 +809,28 @@ describe('LessonReflectionService: a reflection that ends without filing', () =>
     expect(fixture.segments.ofReflection).not.toHaveBeenCalled();
     expect(fixture.segments.updateById).not.toHaveBeenCalled();
     fixture.service.onModuleDestroy();
+  });
+});
+
+describe('LessonReflectionService.runningReflectionId', () => {
+  it('names the reflection still working on the thread', async () => {
+    const fixture = build({
+      running: [{ id: 'r1', status: 'running' }],
+    });
+
+    await expect(fixture.service.runningReflectionId('src')).resolves.toBe(
+      'r1',
+    );
+  });
+
+  it('answers null once every reflection on the thread has finished', async () => {
+    const fixture = build({
+      running: [{ id: 'r0', status: 'completed' }],
+    });
+
+    await expect(
+      fixture.service.runningReflectionId('src'),
+    ).resolves.toBeNull();
   });
 });
 

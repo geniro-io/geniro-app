@@ -34,6 +34,10 @@ function runOf(overrides: Partial<Run> = {}): Run {
     status: 'completed',
     agentKind: 'claude',
     configDir: null,
+    analysisSourceRunId: null,
+    analysisTeamSlug: null,
+    editsTeamSlug: null,
+    editsProjectId: null,
     reflectedThroughSeq: null,
     pendingDeleteAt: null,
     archivedAt: null,
@@ -66,6 +70,8 @@ function build(
     items?: Record<string, Item[]>;
     maxSeq?: number;
     startFails?: string[];
+    /** The lessons reflections on the thread, as `listLessonReflectionsOf` finds them. */
+    reflections?: { status: string }[];
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -75,6 +81,9 @@ function build(
   const em = { fork: () => em } as unknown as EntityManager;
   const runDao = {
     getById: vi.fn((runId: string) => Promise.resolve(runs.get(runId) ?? null)),
+    listLessonReflectionsOf: vi.fn(() =>
+      Promise.resolve((options.reflections ?? []) as Run[]),
+    ),
   };
   const itemDao = {
     maxSeqExcept: vi.fn((runId: string) =>
@@ -386,6 +395,69 @@ describe('LessonOffersService.threadEstimate', () => {
       expect.anything(),
       h.em,
     );
+  });
+
+  it.each([
+    ['an analysis', { analysisSourceRunId: 'other' }],
+    ['a thread being deleted', { pendingDeleteAt: new Date() }],
+  ])(
+    'counts zero signals for %s, and still prices it',
+    async (_, overrides) => {
+      const h = build({
+        runs: [runOf({ reflectedThroughSeq: 2, ...overrides })],
+        items: {
+          src: [
+            { seq: 3, kind: 'turn_complete', role: null, payload: '{}' },
+            {
+              seq: 4,
+              kind: 'message',
+              role: 'user',
+              payload: '{"text":"no, still wrong"}',
+            },
+          ],
+        },
+        maxSeq: 5,
+      });
+
+      const result = await h.service.threadEstimate({ runId: 'src' });
+
+      expect(result).toMatchObject({ signals: 0, fromSeq: 2, toSeq: 5 });
+      expect(h.itemDao.analysisPage).not.toHaveBeenCalled();
+      expect(h.estimates.estimate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('counts zero signals while a reflection on the thread still runs, and the signals again once it has finished', async () => {
+    const items = {
+      src: [
+        { seq: 3, kind: 'turn_complete', role: null, payload: '{}' },
+        {
+          seq: 4,
+          kind: 'message',
+          role: 'user',
+          payload: '{"text":"no, still wrong"}',
+        },
+      ],
+    };
+    const working = build({
+      runs: [runOf({ reflectedThroughSeq: 2 })],
+      items,
+      maxSeq: 5,
+      reflections: [{ status: 'running' }],
+    });
+    const finished = build({
+      runs: [runOf({ reflectedThroughSeq: 2 })],
+      items,
+      maxSeq: 5,
+      reflections: [{ status: 'completed' }],
+    });
+
+    await expect(
+      working.service.threadEstimate({ runId: 'src' }),
+    ).resolves.toMatchObject({ signals: 0 });
+    await expect(
+      finished.service.threadEstimate({ runId: 'src' }),
+    ).resolves.toMatchObject({ signals: 1 });
   });
 
   it('refuses a thread that does not exist, with 404 RUN_NOT_FOUND', async () => {

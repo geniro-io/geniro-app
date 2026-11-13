@@ -2691,21 +2691,27 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** These runs' shell rows, grouped by run and in seq order — the boot sweep's read. */
+  /**
+   * These runs' shell rows, grouped by run and in seq order — the boot sweep's
+   * read. Ordered by kind in SQL so SQLite seeks `(run_id, kind, seq)` rather
+   * than walking every row of each run on `(run_id, seq)`; seq order is put
+   * back here.
+   */
   async shellRowsOfRuns(
     runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]> {
-    return inRunBatches(runIds, (batch) =>
+    const rows = await inRunBatches(runIds, (batch) =>
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['shell_open', 'shell_info'] } },
         {
-          orderBy: { runId: 'asc', seq: 'asc' },
-          fields: ['runId', 'kind', 'payload', 'memberId'],
+          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
+          fields: ['runId', 'kind', 'seq', 'payload', 'memberId'],
           disableIdentityMap: true,
         },
       ),
     );
+    return inSeqOrderPerRun(rows);
   }
 
   /**
@@ -2734,21 +2740,22 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** These runs' action rows, grouped by run and in seq order — the boot sweep's read. */
+  /** These runs' action rows, grouped by run and in seq order — read as {@link shellRowsOfRuns} is. */
   async actionRowsOfRuns(
     runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'kind' | 'seq' | 'payload'>[]> {
-    return inRunBatches(runIds, (batch) =>
+    const rows = await inRunBatches(runIds, (batch) =>
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['action', 'action_outcome'] } },
         {
-          orderBy: { runId: 'asc', seq: 'asc' },
+          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
           fields: ['runId', 'kind', 'seq', 'payload'],
           disableIdentityMap: true,
         },
       ),
     );
+    return inSeqOrderPerRun(rows);
   }
 
   /**
@@ -3021,4 +3028,12 @@ async function inRunBatches<T>(
     rows.push(...(await read(batch)));
   }
   return rows;
+}
+
+function inSeqOrderPerRun<T extends Pick<Item, 'runId' | 'seq'>>(
+  rows: T[],
+): T[] {
+  return rows.sort(
+    (a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq),
+  );
 }

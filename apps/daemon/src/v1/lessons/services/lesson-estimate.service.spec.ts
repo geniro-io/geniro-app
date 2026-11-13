@@ -8,13 +8,14 @@ import type { MemoryService } from '../../memory/services/memory.service';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
-import { lessonsReflectionGuide } from '../utils/lessons-reflection-guide';
-import {
-  LESSON_ANSWER_TOKENS,
-  LESSON_READ_OVERHEAD_TOKENS,
-  LessonEstimateService,
-} from './lesson-estimate.service';
+import { LessonEstimateService } from './lesson-estimate.service';
 import { LessonsConfigService } from './lessons-config.service';
+
+/** A guide of a known length, so the literals below are worked out by hand. */
+vi.mock('../utils/lessons-reflection-guide', () => ({
+  lessonsReflectionGuide: (memoryEnabled: boolean) =>
+    'g'.repeat(memoryEnabled ? 396 : 96),
+}));
 
 const RATES: ModelPriceRates = {
   input: 3,
@@ -66,14 +67,6 @@ function build(
   return { service, itemDao, adapter, adapters };
 }
 
-function inputTokensFor(payloadChars: number, memoryEnabled: boolean): number {
-  return (
-    Math.ceil(
-      (payloadChars + lessonsReflectionGuide(memoryEnabled).length) / 4,
-    ) + LESSON_READ_OVERHEAD_TOKENS
-  );
-}
-
 describe('LessonEstimateService', () => {
   it('counts the stretch and the guide in characters, plus the read overhead and the answer', async () => {
     const h = build({ payloadChars: 4_001 });
@@ -86,9 +79,8 @@ describe('LessonEstimateService', () => {
       9,
       expect.anything(),
     );
-    expect(estimate.tokens).toBe(
-      inputTokensFor(4_001, true) + LESSON_ANSWER_TOKENS,
-    );
+    // (4 001 + 396) chars / 4 → 1 100 (rounded up); + 8 000 read overhead + 2 000 answer.
+    expect(estimate.tokens).toBe(11_100);
   });
 
   it('leaves the guide out of the count when the memory is off', async () => {
@@ -96,12 +88,8 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    expect(estimate.tokens).toBe(
-      inputTokensFor(4_000, false) + LESSON_ANSWER_TOKENS,
-    );
-    expect(estimate.tokens).not.toBe(
-      inputTokensFor(4_000, true) + LESSON_ANSWER_TOKENS,
-    );
+    // (4 000 + 96) chars / 4 = 1 024; + 8 000 read overhead + 2 000 answer.
+    expect(estimate.tokens).toBe(11_024);
   });
 
   it('prices the input and the answer at the list price of the model', async () => {
@@ -109,12 +97,9 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    const input = inputTokensFor(4_000, true);
+    // 9 099 input tokens at $3/M + 2 000 output tokens at $15/M = $0.057297.
     expect(h.adapter.billingRatesOf).toHaveBeenCalledWith(estimate.model);
-    expect(estimate.usd).toBeCloseTo(
-      (input * RATES.input + LESSON_ANSWER_TOKENS * RATES.output) / 1_000_000,
-      12,
-    );
+    expect(estimate.usd).toBeCloseTo(0.057297, 10);
   });
 
   it('answers a null price when the model has no list price, never 0', async () => {

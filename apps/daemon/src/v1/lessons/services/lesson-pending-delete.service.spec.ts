@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -35,7 +36,12 @@ function build(
   options: {
     runs?: Run[];
     pending?: Run[];
+    /** The reflection already working on the thread, as `runningReflectionId` finds it. */
+    running?: string | null;
     startFails?: Error;
+    archiveFails?: Error;
+    deleteFails?: Error;
+    pendingFails?: Error;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -43,14 +49,30 @@ function build(
   const runDao = {
     getById: vi.fn((runId: string) => Promise.resolve(runs.get(runId) ?? null)),
     updateById: vi.fn(() => Promise.resolve()),
-    listPendingDeletes: vi.fn(() => Promise.resolve(options.pending ?? [])),
+    listPendingDeletes: vi.fn(() =>
+      options.pendingFails === undefined
+        ? Promise.resolve(options.pending ?? [])
+        : Promise.reject(options.pendingFails),
+    ),
   };
   const chats = {
-    archive: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn((_runId: string) => Promise.resolve({ deleted: true })),
+    archive: vi.fn(() =>
+      options.archiveFails === undefined
+        ? Promise.resolve({})
+        : Promise.reject(options.archiveFails),
+    ),
+    delete: vi.fn((_runId: string) =>
+      options.deleteFails === undefined
+        ? Promise.resolve({ deleted: true })
+        : Promise.reject(options.deleteFails),
+    ),
   };
   const teamRuns = {
-    deleteRun: vi.fn((_runId: string) => Promise.resolve({ deleted: true })),
+    deleteRun: vi.fn((_runId: string) =>
+      options.deleteFails === undefined
+        ? Promise.resolve({ deleted: true })
+        : Promise.reject(options.deleteFails),
+    ),
   };
   const reflections = {
     start: vi.fn(() =>
@@ -62,6 +84,9 @@ function build(
             toSeq: 2,
           })
         : Promise.reject(options.startFails),
+    ),
+    runningReflectionId: vi.fn((_runId: string) =>
+      Promise.resolve(options.running ?? null),
     ),
   };
   const bus = new AgentEventBus();
@@ -100,6 +125,7 @@ describe('LessonPendingDeleteService', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   describe('extractThenDelete', () => {
@@ -118,6 +144,16 @@ describe('LessonPendingDeleteService', () => {
       );
       expect(h.reflections.start).toHaveBeenCalledWith('src', {}, 'delete');
       expect(h.chats.delete).not.toHaveBeenCalled();
+    });
+
+    it('marks the thread pending delete before it archives it', async () => {
+      const h = build();
+
+      await h.service.extractThenDelete('src');
+
+      expect(h.runDao.updateById.mock.invocationCallOrder[0]).toBeLessThan(
+        h.chats.archive.mock.invocationCallOrder[0]!,
+      );
     });
 
     it('does not archive a thread that is already archived', async () => {
@@ -139,13 +175,51 @@ describe('LessonPendingDeleteService', () => {
       expect(h.reflections.start).not.toHaveBeenCalled();
     });
 
-    it('answers null when its reflection cannot start, so the route deletes as usual', async () => {
+    it('adopts the reflection already working on the thread: none starts, and the delete waits for that one', async () => {
+      const h = build({ running: 'refl-running' });
+      h.service.onModuleInit();
+
+      await expect(h.service.extractThenDelete('src')).resolves.toEqual({
+        deleted: true,
+      });
+      expect(h.reflections.runningReflectionId).toHaveBeenCalledWith('src');
+      expect(h.reflections.start).not.toHaveBeenCalled();
+
+      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await settle();
+      expect(h.chats.delete).not.toHaveBeenCalled();
+
+      h.bus.publishRunStatus({ runId: 'refl-running', status: 'completed' });
+      await settle();
+      expect(h.chats.delete).toHaveBeenCalledWith('src');
+    });
+
+    it('answers null when its reflection cannot start, and clears the pending mark so the route deletes as usual', async () => {
       const h = build({ startFails: new Error('no reflection') });
 
       await expect(h.service.extractThenDelete('src')).resolves.toBeNull();
 
+      expect(h.runDao.updateById).toHaveBeenLastCalledWith(
+        'src',
+        { pendingDeleteAt: null },
+        h.em,
+      );
       expect(h.chats.delete).not.toHaveBeenCalled();
       expect(h.teamRuns.deleteRun).not.toHaveBeenCalled();
+    });
+
+    it('answers null and clears the pending mark when the archive fails, starting no reflection', async () => {
+      const h = build({ archiveFails: new Error('archive busy') });
+
+      await expect(h.service.extractThenDelete('src')).resolves.toBeNull();
+
+      expect(h.runDao.updateById).toHaveBeenLastCalledWith(
+        'src',
+        { pendingDeleteAt: null },
+        h.em,
+      );
+      expect(h.reflections.start).not.toHaveBeenCalled();
+      expect(h.chats.delete).not.toHaveBeenCalled();
     });
   });
 
@@ -231,6 +305,26 @@ describe('LessonPendingDeleteService', () => {
 
       expect(h.chats.delete).not.toHaveBeenCalled();
     });
+
+    it('logs and leaves the run in place when its delete fails once the reflection settles', async () => {
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const h = build({
+        runs: [runOf({ teamId: 'team-1' })],
+        deleteFails: new Error('busy'),
+      });
+      h.service.onModuleInit();
+      await h.service.extractThenDelete('src');
+
+      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await settle();
+
+      expect(h.teamRuns.deleteRun).toHaveBeenCalledWith('src');
+      expect(warn).toHaveBeenCalledWith(
+        'run src deleted with lessons first was not deleted: busy',
+      );
+    });
   });
 
   describe('start-up and module lifetime', () => {
@@ -246,11 +340,27 @@ describe('LessonPendingDeleteService', () => {
         ],
       });
 
-      await h.service.onApplicationBootstrap();
+      h.service.onApplicationBootstrap();
+      await settle();
 
       expect(h.runDao.listPendingDeletes).toHaveBeenCalledTimes(1);
       expect(h.chats.delete).toHaveBeenCalledWith('chat-a');
       expect(h.teamRuns.deleteRun).toHaveBeenCalledWith('team-b');
+    });
+
+    it('does not throw at start when the pending deletes cannot be read, and logs it', async () => {
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const h = build({ pendingFails: new Error('db locked') });
+
+      expect(() => h.service.onApplicationBootstrap()).not.toThrow();
+      await settle();
+
+      expect(warn).toHaveBeenCalledWith(
+        'pending deletes not read at start: db locked',
+      );
+      expect(h.chats.delete).not.toHaveBeenCalled();
     });
 
     it('takes the extract-first handler into the registry on init and gives it back on destroy', async () => {

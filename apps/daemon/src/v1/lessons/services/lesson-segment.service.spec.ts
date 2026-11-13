@@ -126,6 +126,8 @@ function build(
     teamLessons?: 'on' | 'off' | null;
     cardRuns?: Run[];
     candidates?: Run[];
+    teamsFail?: boolean;
+    withoutTeams?: boolean;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -223,7 +225,9 @@ function build(
   };
   const teams = {
     get: vi.fn(() =>
-      Promise.resolve({ team: { lessons: options.teamLessons ?? null } }),
+      options.teamsFail === true
+        ? Promise.reject(new Error('team is gone'))
+        : Promise.resolve({ team: { lessons: options.teamLessons ?? null } }),
     ),
   };
 
@@ -243,7 +247,9 @@ function build(
     estimates as unknown as LessonEstimateService,
     rows as unknown as LessonRowWriter,
     config,
-    teams as unknown as TeamStoreService,
+    options.withoutTeams === true
+      ? undefined
+      : (teams as unknown as TeamStoreService),
   );
   return {
     service,
@@ -502,6 +508,78 @@ describe('LessonSegmentService', () => {
 
       expect(h.service.waiting('src')).toBeNull();
     });
+
+    it.each(['in_review', 'done'] as const)(
+      'a second %s event for the same card arms nothing, so the first deadline still holds',
+      async (status) => {
+        const h = build({
+          items: { src: correctionStretch() },
+          cardRuns: [runOf({ id: 'src' })],
+        });
+        h.service.onModuleInit();
+        const event = {
+          taskId: 'task-1',
+          projectId: 'project-1',
+          status,
+        } as TaskChangedEvent;
+
+        h.tasks.publishTaskChanged(event);
+        await settle();
+        expect(h.service.waiting('src')).toBe('done');
+
+        await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS - 1);
+        h.tasks.publishTaskChanged(event);
+        await settle();
+        expect(h.runDao.listOfTask).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await settle();
+        expect(h.created).toEqual([
+          expect.objectContaining({ runId: 'src', closedBy: 'done' }),
+        ]);
+      },
+    );
+
+    it('a card moved from in_progress to done arms the done close', async () => {
+      const h = build({
+        items: { src: correctionStretch() },
+        cardRuns: [runOf({ id: 'src' })],
+      });
+      h.service.onModuleInit();
+
+      h.tasks.publishTaskChanged({
+        taskId: 'task-1',
+        projectId: 'project-1',
+        status: 'in_progress',
+      } as TaskChangedEvent);
+      await settle();
+      expect(h.service.waiting('src')).toBeNull();
+
+      h.tasks.publishTaskChanged({
+        taskId: 'task-1',
+        projectId: 'project-1',
+        status: 'done',
+      } as TaskChangedEvent);
+      await settle();
+      expect(h.service.waiting('src')).toBe('done');
+    });
+
+    it('a host-sourced item during a waiting done close does not cancel it', () => {
+      const h = build({ items: { src: correctionStretch() } });
+      h.service.onModuleInit();
+
+      h.bus.publishRunStatus({
+        runId: 'src',
+        status: null,
+        outcome: recordedOutcome(),
+      });
+      h.bus.publish({
+        runId: 'src',
+        item: { kind: 'system', role: null } as unknown as RunItemEvent['item'],
+      });
+
+      expect(h.service.waiting('src')).toBe('done');
+    });
   });
 
   describe('idle close after a settle', () => {
@@ -731,6 +809,44 @@ describe('LessonSegmentService', () => {
 
       await expect(h.service.close('src', 'manual')).resolves.toBeNull();
       expect(h.created).toEqual([]);
+    });
+
+    it('a team whose lookup fails is judged by the snapshot it ran with', async () => {
+      const h = build({
+        items: { src: correctionStretch() },
+        runs: [
+          runOf({
+            teamId: 'team-1',
+            teamSnapshot: JSON.stringify({ lessons: 'off' }),
+          }),
+        ],
+        project: { lessons: 'on' },
+        teamsFail: true,
+      });
+      h.service.onModuleInit();
+
+      await expect(h.service.close('src', 'manual')).resolves.toBeNull();
+      expect(h.created).toEqual([]);
+    });
+
+    it('with no team store, the team snapshot decides', async () => {
+      const h = build({
+        items: { src: correctionStretch() },
+        runs: [
+          runOf({
+            teamId: 'team-1',
+            teamSnapshot: JSON.stringify({ lessons: 'on' }),
+          }),
+        ],
+        project: { lessons: 'off' },
+        withoutTeams: true,
+      });
+      h.service.onModuleInit();
+
+      await expect(h.service.close('src', 'manual')).resolves.toMatchObject({
+        runId: 'src',
+        closedBy: 'manual',
+      });
     });
   });
 

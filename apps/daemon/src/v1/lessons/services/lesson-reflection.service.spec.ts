@@ -14,7 +14,6 @@ import type { ChatService } from '../../agents/services/chat.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
-import { AgentKind } from '../../runs/runs.types';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
@@ -122,9 +121,6 @@ function build(
         : Promise.reject(options.sendFails),
     ),
     delete: vi.fn((_runId: string) => Promise.resolve({ deleted: true })),
-    readOnlyApproval: vi.fn((kind: string) =>
-      kind === 'cursor-agent' ? 'ask' : 'plan',
-    ),
   };
   const segments = {
     create: vi.fn((input: Record<string, unknown>) =>
@@ -263,7 +259,7 @@ describe('LessonReflectionService.start', () => {
         agentKind: 'claude',
         cwd: folder,
         projectId: null,
-        approval: 'plan',
+        approval: 'ask',
         title: 'Lessons: Migrate the cache',
         taskInstructions: expect.stringContaining('# Lessons reflection'),
         analysisSource: {
@@ -394,18 +390,6 @@ describe('LessonReflectionService.start', () => {
       configDir: '/profiles/work',
     });
     expect(other.chats.createChat.mock.calls[0]![0].configDir).toBeUndefined();
-  });
-
-  it('runs read-only in the mode the CLI it runs as offers', async () => {
-    const fixture = build();
-
-    await fixture.service.start('src', { agentKind: AgentKind.CursorAgent });
-
-    expect(fixture.chats.readOnlyApproval).toHaveBeenCalledWith('cursor-agent');
-    expect(fixture.chats.createChat.mock.calls[0]![0]).toMatchObject({
-      agentKind: 'cursor-agent',
-      approval: 'ask',
-    });
   });
 
   it('runs in the thread’s own folder when it still exists', async () => {

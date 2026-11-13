@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { UsageEventDao } from '../../stats/dao/usage-event.dao';
@@ -65,6 +66,11 @@ function build(
   const rows = {
     write: vi.fn(() => Promise.resolve()),
   };
+  const items = {
+    getByRun: vi.fn((): Promise<{ kind: string; payload: string }[]> =>
+      Promise.resolve([]),
+    ),
+  };
   const service = new LessonProposalService(
     em,
     proposals as unknown as LessonProposalDao,
@@ -72,8 +78,9 @@ function build(
     usage as unknown as UsageEventDao,
     memory as unknown as MemoryService,
     rows as unknown as LessonRowWriter,
+    items as unknown as ItemDao,
   );
-  return { service, em, proposals, runDao, usage, memory, rows };
+  return { service, em, proposals, runDao, usage, memory, rows, items };
 }
 
 describe('LessonProposalService.save', () => {
@@ -352,6 +359,30 @@ describe('LessonProposalService.reflectionFacts', () => {
       costUsd: 0.75,
       tokens: 1000,
     });
+  });
+
+  it('names the model the reflection was billed for, not the one it was configured with', async () => {
+    const { service, runDao, items } = build(null);
+    runDao.getById.mockResolvedValueOnce({
+      ...REFLECTION,
+      model: 'haiku',
+    } as never);
+    items.getByRun.mockResolvedValueOnce([
+      { kind: 'message', payload: JSON.stringify({ text: 'hi' }) },
+      {
+        kind: 'turn_complete',
+        payload: JSON.stringify({
+          usage: {
+            contextModel: 'claude-haiku-5-5',
+            modelCosts: [{ model: 'claude-haiku-5-5', costUsd: 0.01 }],
+          },
+        }),
+      },
+    ]);
+
+    expect((await service.reflectionFacts('refl')).model).toBe(
+      'claude-haiku-5-5',
+    );
   });
 
   it('answers a null cost when the CLI reported none, never zero', async () => {

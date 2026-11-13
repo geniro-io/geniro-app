@@ -66,7 +66,7 @@ export function LessonsBlock({
 
   const reflection: LessonsReflectionView = {
     agent: agentDisplayName(identities, entry.card.agentKind),
-    model: entry.card.model,
+    model: facts?.model ?? entry.card.model,
     working: facts?.working ?? false,
     durationMs: facts?.durationMs ?? null,
     costUsd: facts?.costUsd ?? null,

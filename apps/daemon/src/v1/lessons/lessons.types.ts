@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { ChatApprovalMode } from '../agents/chat.types';
 import { MEMORY_TITLE_MAX_CHARS, MEMORY_TYPES } from '../memory/memory.types';
 import { AgentKindSchema } from '../runs/runs.types';
 
@@ -7,6 +8,7 @@ export const LESSON_TITLE_MAX_CHARS = MEMORY_TITLE_MAX_CHARS;
 export const LESSON_RULE_MAX_CHARS = 300;
 export const LESSON_WHY_MAX_CHARS = 300;
 export const LESSONS_PER_REFLECTION_MAX = 3;
+export const LESSONS_REFLECTION_APPROVAL: ChatApprovalMode = 'ask';
 export const LESSON_REJECT_REASON_MAX_CHARS = 300;
 /** How many rejected proposals of the same place a reflection is shown. */
 export const LESSON_REJECTED_BRIEF_MAX = 20;

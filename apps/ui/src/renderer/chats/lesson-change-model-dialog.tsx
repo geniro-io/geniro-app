@@ -9,11 +9,11 @@ import type {
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
-import type { DaemonApis } from '../daemon-api';
+import { type DaemonApis, describeDaemonError } from '../daemon-api';
+import { choiceToDto, lessonRunLabel, segmentTitle } from './lesson-labels';
 import {
   type LessonModelChoice,
   LessonModelPicker,
-  lessonRunLabel,
 } from './lesson-model-picker';
 
 export function LessonChangeModelDialog({
@@ -41,7 +41,7 @@ export function LessonChangeModelDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reading = useRef(0);
-  const title = segment.sourceTitle?.trim() || 'Untitled thread';
+  const title = segmentTitle(segment);
 
   const pick = (next: LessonModelChoice): void => {
     const read = reading.current + 1;
@@ -50,11 +50,7 @@ export function LessonChangeModelDialog({
     setError(null);
     setEstimating(true);
     lessonsApi
-      .estimateLessons({
-        runId: segment.runId,
-        ...(next.agentKind === null ? {} : { agentKind: next.agentKind }),
-        ...(next.model === null ? {} : { model: next.model }),
-      })
+      .estimateLessons({ runId: segment.runId, ...choiceToDto(next) })
       .then((answer) => {
         if (reading.current === read) {
           setEstimate(answer.estimate);
@@ -62,7 +58,7 @@ export function LessonChangeModelDialog({
       })
       .catch((err: unknown) => {
         if (reading.current === read) {
-          setError(String(err));
+          setError(describeDaemonError(err));
         }
       })
       .finally(() => {
@@ -78,15 +74,11 @@ export function LessonChangeModelDialog({
     lessonsApi
       .reflectLessons({
         runId: segment.runId,
-        reflectLessonsDto: {
-          segmentId: segment.id,
-          ...(choice.agentKind === null ? {} : { agentKind: choice.agentKind }),
-          ...(choice.model === null ? {} : { model: choice.model }),
-        },
+        reflectLessonsDto: { segmentId: segment.id, ...choiceToDto(choice) },
       })
       .then(() => onStarted())
       .catch((err: unknown) => {
-        setError(String(err));
+        setError(describeDaemonError(err));
         setBusy(false);
       });
   };

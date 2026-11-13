@@ -1283,7 +1283,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const executeCalls = new Map<
     string,
-    { command: string; returned: boolean }
+    { command: string; returned: boolean; calledAt: number }
   >();
   /**
    * Calls the OS confirmed were still running after their CLI called them done.
@@ -2789,7 +2789,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     const command = commandLineOf(event);
     if (command !== null) {
-      executeCalls.set(event.id, { command, returned: false });
+      executeCalls.set(event.id, {
+        command,
+        returned: false,
+        calledAt: Date.now(),
+      });
       current?.ownCommands.add(event.id);
       requestCommandGroups();
     }
@@ -2931,10 +2935,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         continue;
       }
       osDetachedShells.delete(id);
-      const command = executeCalls.get(id)?.command;
+      const call = executeCalls.get(id);
+      const command = call?.command;
       executeCalls.delete(id);
       const record =
-        command === undefined ? null : endedRecordOf(records, command);
+        call === undefined
+          ? null
+          : endedRecordOf(records, call.command, call.calledAt);
       announceShellWork({
         type: 'background_work',
         id,
@@ -2948,6 +2955,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
                 command,
                 exitCode: record?.exitCode ?? null,
                 outputPath: record?.outputPath ?? null,
+                endedAt: record?.endedAt ?? null,
               },
             }),
       });

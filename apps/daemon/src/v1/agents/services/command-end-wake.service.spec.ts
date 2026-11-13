@@ -12,8 +12,17 @@ import { HostWakeBus } from './host-wake.bus';
 
 const RUN = 'run-1';
 
-function ending(command: string, exitCode: number | null = 0) {
-  return { command, exitCode, outputPath: `/tmp/terminals/${command}.txt` };
+function ending(
+  command: string,
+  exitCode: number | null = 0,
+  endedAt: string | null = null,
+) {
+  return {
+    command,
+    exitCode,
+    outputPath: `/tmp/terminals/${command}.txt`,
+    endedAt,
+  };
 }
 
 describe('CommandEndWakeService', () => {
@@ -69,6 +78,31 @@ describe('CommandEndWakeService', () => {
     service.ended(chatWakeOwner(RUN), 'w1', ending('make build'), running);
     settle();
     expect(wakes).toHaveLength(0);
+  });
+
+  it('wakes nobody for a command that ended before the conversation’s last turn did', () => {
+    const turnEndedAt = Date.parse('2026-11-13T08:32:32.000Z');
+    vi.setSystemTime(turnEndedAt);
+    service.turnEnded(chatWakeOwner(RUN));
+    service.ended(
+      chatWakeOwner(RUN),
+      'w1',
+      ending('make build', 0, '2026-11-13T08:32:30.000Z'),
+      running,
+    );
+    settle();
+    expect(wakes).toHaveLength(0);
+
+    service.ended(
+      chatWakeOwner(RUN),
+      'w2',
+      ending('make test', 0, '2026-11-13T08:33:21.000Z'),
+      running,
+    );
+    settle();
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.prompt).toContain('make test');
+    expect(wakes[0]!.prompt).not.toContain('make build');
   });
 
   it('drops a pending wake when a turn starts before it is sent', () => {

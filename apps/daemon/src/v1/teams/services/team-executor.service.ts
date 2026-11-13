@@ -2168,6 +2168,7 @@ export class TeamExecutorService
    * this.
    */
   private disposeHostPublishers(runId: string): void {
+    this.commandEndWakes?.forgetRun(runId);
     for (const disposers of [
       this.artifactDisposers,
       this.actionDisposers,
@@ -3789,6 +3790,9 @@ export class TeamExecutorService
         return;
       }
       liveConversations.delete(caller);
+      if (callerConversationOf(caller) === null) {
+        this.commandEndWakes?.turnEnded(memberWakeOwner(runId, caller));
+      }
       // A message the turn never took reaches the conversation as its next
       // turn's prompt, not inside a wait of this one.
       this.callBroker.forgetUserMessage(runId, caller);

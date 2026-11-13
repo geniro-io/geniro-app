@@ -3757,6 +3757,7 @@ export interface CommandEnding {
   command: string;
   exitCode: number | null;
   outputPath: string | null;
+  endedAt: string | null;
 }
 
 /**

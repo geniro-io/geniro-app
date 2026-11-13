@@ -32,10 +32,32 @@ describe('endedRecordOf', () => {
       { pid: 4, command: 'make build', running: false, exitCode: 2 },
     ];
 
-    expect(endedRecordOf(records, 'make\ntest')?.pid).toBe(2);
-    expect(endedRecordOf(records, 'make lint')).toBeNull();
+    const start = Date.parse('2026-11-13T07:00:00.000Z');
+    expect(endedRecordOf(records, 'make\ntest', start)?.pid).toBe(2);
+    expect(endedRecordOf(records, 'make lint', start)).toBeNull();
     expect(
-      endedRecordOf([{ pid: 9, command: 'x y', running: true }], 'x y'),
+      endedRecordOf([{ pid: 9, command: 'x y', running: true }], 'x y', start),
+    ).toBeNull();
+  });
+
+  it('takes no record that ended before the call was made — an earlier run of the same line', () => {
+    const records = [
+      {
+        pid: 1,
+        command: 'make test',
+        running: false,
+        exitCode: 1,
+        endedAt: '2026-11-13T08:00:00.000Z',
+      },
+      { pid: 4, command: 'make test', running: false, exitCode: 2 },
+    ];
+
+    expect(
+      endedRecordOf(
+        records,
+        'make test',
+        Date.parse('2026-11-13T08:30:00.000Z'),
+      ),
     ).toBeNull();
   });
 });

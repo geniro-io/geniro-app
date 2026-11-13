@@ -6,17 +6,15 @@ import {
 } from '../utils/command-end-wake-text';
 import { HostWakeBus, hostWakeSessionKey } from './host-wake.bus';
 
-/** How long the ends of several commands are gathered into one wake. */
 export const COMMAND_END_WAKE_BATCH_MS = 2_000;
 
-/** Wakes in a row a conversation gets with no message from the user between. */
 export const MAX_COMMAND_END_WAKES = 3;
 
 export interface CommandEndWakeOptions {
   batchMs?: number;
+  now?: () => number;
 }
 
-/** A chat's own agent, as a command-end wake addresses it. */
 export function chatWakeOwner(runId: string): HostWakeOwner {
   return {
     runId,
@@ -27,7 +25,6 @@ export function chatWakeOwner(runId: string): HostWakeOwner {
   };
 }
 
-/** A team member's own conversation, as a command-end wake addresses it. */
 export function memberWakeOwner(
   runId: string,
   memberId: string,
@@ -52,27 +49,27 @@ interface Conversation {
 }
 
 /**
- * Starts a turn for an agent whose CLI tells it nothing about a command it
- * left running once its turn is over (`AdapterConfig.shells.lateEndWakeReason`,
- * cursor), when that command ends: one wake per conversation for the commands
- * ending close together, published on `HostWakeBus` with no note owed.
- *
- * Measured on cursor 2026.11.05: the CLI hands a finished command to the model
- * at the end of whatever prompt runs next, so an end inside a turn wakes
- * nothing, and a turn starting before the wake is sent withdraws it.
+ * The CLI hands an ended command to its agent at the end of the next prompt
+ * (`AdapterConfig.shells.lateEndWakeReason`), so an end that a turn's own end
+ * or start covers wakes nothing: no wake is queued behind or kept past a turn.
  */
 export class CommandEndWakeService {
   private readonly conversations = new Map<string, Conversation>();
+  private readonly turnsEnded = new Map<
+    string,
+    { runId: string; at: number }
+  >();
   private readonly batchMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly bus: HostWakeBus,
     options: CommandEndWakeOptions = {},
   ) {
     this.batchMs = options.batchMs ?? COMMAND_END_WAKE_BATCH_MS;
+    this.now = options.now ?? Date.now;
   }
 
-  /** A command the conversation left running has ended between its turns. */
   ended(
     owner: HostWakeOwner,
     workId: string,
@@ -83,7 +80,11 @@ export class CommandEndWakeService {
     const conversation = this.conversationOf(owner);
     conversation.owner = owner;
     conversation.turnRunning = turnRunning;
-    if (conversation.stoppedByUser.delete(workId) || turnRunning()) {
+    if (
+      conversation.stoppedByUser.delete(workId) ||
+      turnRunning() ||
+      this.endedWithinLastTurn(key, ending)
+    ) {
       return;
     }
     conversation.ended.set(workId, ending);
@@ -93,7 +94,6 @@ export class CommandEndWakeService {
     }
   }
 
-  /** A turn of the conversation has started: the CLI tells it what ended. */
   turnStarted(owner: HostWakeOwner): void {
     const conversation = this.conversations.get(hostWakeSessionKey(owner));
     if (conversation === undefined) {
@@ -104,7 +104,13 @@ export class CommandEndWakeService {
     this.clearTimer(conversation);
   }
 
-  /** The user wrote to the thread: its wakes count from zero again. */
+  turnEnded(owner: HostWakeOwner): void {
+    this.turnsEnded.set(hostWakeSessionKey(owner), {
+      runId: owner.runId,
+      at: this.now(),
+    });
+  }
+
   userSpoke(runId: string): void {
     for (const conversation of this.conversations.values()) {
       if (conversation.owner.runId === runId) {
@@ -113,14 +119,12 @@ export class CommandEndWakeService {
     }
   }
 
-  /** The user stopped this command: its end wakes nobody. */
   stoppedByUser(owner: HostWakeOwner, workId: string): void {
     const conversation = this.conversationOf(owner);
     conversation.ended.delete(workId);
     conversation.stoppedByUser.add(workId);
   }
 
-  /** The run was stopped, archived or deleted: nothing of it wakes anyone. */
   forgetRun(runId: string): void {
     for (const [key, conversation] of this.conversations) {
       if (conversation.owner.runId === runId) {
@@ -128,6 +132,17 @@ export class CommandEndWakeService {
         this.conversations.delete(key);
       }
     }
+    for (const [key, ended] of this.turnsEnded) {
+      if (ended.runId === runId) {
+        this.turnsEnded.delete(key);
+      }
+    }
+  }
+
+  private endedWithinLastTurn(key: string, ending: CommandEnding): boolean {
+    const turnEnded = this.turnsEnded.get(key)?.at;
+    const endedMs = Date.parse(ending.endedAt ?? '');
+    return turnEnded !== undefined && endedMs <= turnEnded;
   }
 
   private publish(key: string): void {

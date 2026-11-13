@@ -129,6 +129,7 @@ import type { CliSessionsService } from './cli-sessions.service';
 import {
   COMMAND_END_WAKE_BATCH_MS,
   CommandEndWakeService,
+  MAX_COMMAND_END_WAKES,
 } from './command-end-wake.service';
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
@@ -16171,6 +16172,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
           command: 'python3 /tmp/followup-probe.py',
           exitCode: 0,
           outputPath: '/tmp/terminals/451147.txt',
+          endedAt: null,
         },
       });
       await drain();
@@ -16209,7 +16211,12 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
         type: 'shell_info',
         toolCallId: null,
         workId: 'c1',
-        ending: { command: 'sleep 40', exitCode: 0, outputPath: null },
+        ending: {
+          command: 'sleep 40',
+          exitCode: 0,
+          outputPath: null,
+          endedAt: null,
+        },
       });
       await drain();
       return { ...harness, run, published };
@@ -16226,8 +16233,67 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
 
     it('publishes no wake once the user has written before it went out', async () => {
-      const { service, run, published } = await endAfterTurn('cursor-agent');
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
       await service.sendMessage(run.id, 'and now?');
+      await drain();
+      await finishTurn(cursor);
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('withdraws a wake already published once a turn starts', async () => {
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toHaveLength(1);
+      expect(published[0]!.withdrawn?.()).toBe(false);
+
+      await service.sendMessage(run.id, 'and now?');
+      await drain();
+      expect(published[0]!.withdrawn?.()).toBe(true);
+      await finishTurn(cursor);
+    });
+
+    it('wakes no more than the cap in a row, and again once the user has written', async () => {
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
+      const endLater = async (workId: string): Promise<void> => {
+        cursor.sessions[0]!.onBetweenTurnEvent!({
+          type: 'shell_info',
+          toolCallId: null,
+          workId,
+          ending: {
+            command: `step ${workId}`,
+            exitCode: 0,
+            outputPath: null,
+            endedAt: null,
+          },
+        });
+        await drain();
+        vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+        published.at(-1)?.onDelivered();
+      };
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      published.at(-1)!.onDelivered();
+      for (let i = 1; i < MAX_COMMAND_END_WAKES; i += 1) {
+        await endLater(`c${i + 1}`);
+      }
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES);
+
+      await endLater('over');
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES);
+
+      await service.sendMessage(run.id, 'keep going');
+      await drain();
+      await finishTurn(cursor);
+      await endLater('after-reply');
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES + 1);
+    });
+
+    it('publishes no wake after the user’s Stop', async () => {
+      const { service, run, published } = await endAfterTurn('cursor-agent');
+      await service.cancel(run.id);
       await drain();
       vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
       expect(published).toEqual([]);
@@ -16253,7 +16319,12 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
         type: 'shell_info',
         toolCallId: null,
         workId: 'c1',
-        ending: { command: 'npm run dev', exitCode: null, outputPath: null },
+        ending: {
+          command: 'npm run dev',
+          exitCode: null,
+          outputPath: null,
+          endedAt: null,
+        },
       });
       await drain();
       vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);

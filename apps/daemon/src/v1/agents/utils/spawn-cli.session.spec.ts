@@ -5735,7 +5735,7 @@ describe('runCliSession — a CLI that says nothing while it waits on a command 
       running: false,
       outputPath: '/cursor/terminals/451147.txt',
       exitCode: 0,
-      endedAt: '2026-11-13T08:33:20.581Z',
+      endedAt: new Date(Date.now()).toISOString(),
     });
     await vi.advanceTimersByTimeAsync(5000);
 
@@ -5748,6 +5748,7 @@ describe('runCliSession — a CLI that says nothing while it waits on a command 
           command: HEREDOC,
           exitCode: 0,
           outputPath: '/cursor/terminals/451147.txt',
+          endedAt: expect.any(String),
         },
       },
     ]);

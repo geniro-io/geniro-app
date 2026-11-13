@@ -19215,7 +19215,13 @@ describe('TeamExecutorService — a cursor member’s command that ends after it
     return harness;
   }
 
-  async function endedAfterTurn(agent: 'claude' | 'cursor-agent') {
+  async function endedAfterTurn(
+    agent: 'claude' | 'cursor-agent',
+    beforeWindow: (
+      harness: ReturnType<typeof wakeSetup>,
+      runId: string,
+    ) => Promise<void> = async () => undefined,
+  ) {
     const harness = wakeSetup();
     const run = await harness.service.startRun({
       slug: 's',
@@ -19239,9 +19245,11 @@ describe('TeamExecutorService — a cursor member’s command that ends after it
           command: 'python3 /tmp/followup-probe.py',
           exitCode: 0,
           outputPath: '/tmp/terminals/451147.txt',
+          endedAt: null,
         },
       });
       await drain();
+      await beforeWindow(harness, run.id);
       vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
     } finally {
       vi.useRealTimers();
@@ -19266,5 +19274,79 @@ describe('TeamExecutorService — a cursor member’s command that ends after it
     const { adapter } = await endedAfterTurn('claude');
 
     expect(adapter.starts).toHaveLength(1);
+  });
+
+  it('starts nothing after the user’s Stop', async () => {
+    const { adapter } = await endedAfterTurn('cursor-agent', (harness, runId) =>
+      harness.service.cancel(runId).then(() => undefined),
+    );
+
+    expect(adapter.starts).toHaveLength(1);
+  });
+
+  it('sends no wake once the member’s next turn has started', async () => {
+    const { adapter } = await endedAfterTurn(
+      'cursor-agent',
+      async (harness, runId) => {
+        await harness.service.sendMessage(runId, 'and now?');
+        await drain();
+        completeTurn(harness.cursor.starts[1]!, 'carried on');
+        await drain();
+      },
+    );
+
+    expect(adapter.starts).toHaveLength(2);
+    expect(adapter.starts[1]!.input.prompt).toContain('and now?');
+  });
+
+  it('wakes no callee conversation, whose call has already settled', async () => {
+    const harness = wakeSetup();
+    const run = await harness.service.startRun({
+      slug: 'c',
+      team: teamOf(
+        [
+          member('orch', { instructions: 'You orchestrate.' }),
+          member('helper', { name: 'Helper', agent: 'cursor-agent' }),
+        ],
+        { name: 'calls' },
+      ),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await harness.callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'look',
+      title: 'Look',
+      mode: 'async',
+    });
+    await drain();
+    const callee = harness.cursor.starts[0]!;
+    callee.emit({ type: 'shell_open', toolCallId: 'probe', workId: 'probe' });
+    completeTurn(callee, 'found it, reading the rest next turn');
+    await drain();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      callee.emitOffTurn({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'probe',
+        ending: {
+          command: 'sleep 40',
+          exitCode: 0,
+          outputPath: null,
+          endedAt: null,
+        },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await drain();
+
+    expect(harness.cursor.starts).toHaveLength(1);
+    completeTurn(harness.claude.starts[0]!, 'done');
+    await drain();
   });
 });

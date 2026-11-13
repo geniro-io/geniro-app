@@ -1,9 +1,7 @@
 import type { CommandEnding } from '../adapters/adapter.types';
 
-/** How much of a command's line the wake quotes. */
 export const COMMAND_END_WAKE_COMMAND_CHARS = 300;
 
-/** What the woken agent reads: each command, its exit code and its output. */
 export function commandEndWakePrompt(ended: readonly CommandEnding[]): string {
   return [
     ended.length === 1
@@ -16,7 +14,6 @@ export function commandEndWakePrompt(ended: readonly CommandEnding[]): string {
   ].join('\n');
 }
 
-/** The transcript's line for the turn the wake opens. */
 export function commandEndWakeMessage(count: number): string {
   return count === 1
     ? 'A background command finished after the turn ended, so the agent was started again to carry on.'

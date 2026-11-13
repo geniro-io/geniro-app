@@ -1783,6 +1783,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   private notifyTurnSettled(runId: string): void {
+    this.commandEndWakes?.turnEnded(chatWakeOwner(runId));
     this.notify(this.turnSettledListeners, runId, 'turn-settled');
   }
 
@@ -4511,6 +4512,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (
       event.type === 'shell_info' &&
       event.ending !== undefined &&
+      !this.deleting.has(runId) &&
+      !this.archiving.has(runId) &&
       this.adapters.for(agent).getConfig().shells.lateEndWakeReason !== null
     ) {
       this.commandEndWakes?.ended(

@@ -155,7 +155,7 @@ export class MonitorOutcomeSweep {
       : callSessionKey(runId, monitor.conversationId);
   }
 
-  /** Whether the run's ends were handed to a delivery rather than written. */
+  /** Whether an end of the run is not on disk yet: held for a delivery after listen, or its write failed. */
   private async close(
     runId: string,
     cutOff: CutOff[],
@@ -185,8 +185,9 @@ export class MonitorOutcomeSweep {
       );
       return true;
     }
+    let unwritten = false;
     for (const monitor of cutOff) {
-      await this.rows.write(
+      const written = await this.rows.write(
         {
           runId,
           memberId: monitor.memberId,
@@ -195,9 +196,10 @@ export class MonitorOutcomeSweep {
         },
         monitorRowEntry(message(monitor), 'end'),
       );
+      unwritten ||= !written;
     }
     if (run.archivedAt !== null) {
-      return false;
+      return unwritten;
     }
     for (const monitor of cutOff) {
       const note = `[geniro] geniro restarted, which stopped your monitor ${monitor.id} (${monitor.description}). It was not started again — start one with monitor if you still need it.`;
@@ -206,6 +208,6 @@ export class MonitorOutcomeSweep {
         note,
       );
     }
-    return false;
+    return unwritten;
   }
 }

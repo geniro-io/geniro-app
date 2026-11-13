@@ -1422,6 +1422,46 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(await dao.shellRowsOfRuns([])).toEqual([]);
   });
 
+  it("reads only the listed runs' sub-agent and monitor rows for the boot reconcile", async () => {
+    await insert('run-a', 0, 'subagent_info', JSON.stringify({ id: 'T1' }));
+    await insert('run-a', 1, 'message');
+    await insert('run-b', 0, 'subagent_info', JSON.stringify({ id: 'T2' }));
+    await insert(
+      'run-a',
+      2,
+      'system',
+      JSON.stringify({ monitors: [{ id: 'm1', event: 'start' }] }),
+    );
+    await insert('run-a', 3, 'system', JSON.stringify({ message: 'hi' }));
+    await insert(
+      'run-b',
+      1,
+      'system',
+      JSON.stringify({ monitors: [{ id: 'm1', event: 'start' }] }),
+    );
+
+    expect(
+      (await dao.subagentInfoRowsOfRuns(['run-a'])).map((row) => row.runId),
+    ).toEqual(['run-a']);
+    expect(
+      (await dao.monitorRowsOfRuns(['run-a'])).map((row) => [
+        row.runId,
+        row.seq,
+      ]),
+    ).toEqual([['run-a', 2]]);
+  });
+
+  it('reads the boot reconcile rows of more runs than one query may name', async () => {
+    const runIds = Array.from({ length: 501 }, (_, i) => `run-${i}`);
+    for (const runId of runIds) {
+      await insert(runId, 0, 'subagent_info', JSON.stringify({ id: runId }));
+    }
+
+    const rows = await dao.subagentInfoRowsOfRuns(runIds);
+
+    expect(new Set(rows.map((row) => row.runId))).toEqual(new Set(runIds));
+  });
+
   it('reads the named tool calls of one run, in seq order, and nothing else', async () => {
     // What every listing of open commands reads its words from: a shell row
     // names only its launching call.

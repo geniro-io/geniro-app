@@ -26,7 +26,7 @@ The NestJS loopback daemon the Electron UI spawns and supervises: CLI agent exec
   - It refuses a real profile (`~/Library/Application Support/Geniro`, `~/.geniro`); `GENIRO_SEED_FORCE=1` overrides.
   - Dev-only: `db/seed.ts` and `db/seeders/` are excluded from the build, and `SeedManager` is registered in the seed entry point, never in `mikro-orm.config.ts` (`@mikro-orm/seeder` is a devDependency stripped from the packaged daemon).
 - An adapter spawns only through `start()` / `runCommand()`.
-- The boot's close of stranded work (`StrandedWorkReconcileService`: background delegates, detached commands, command actions, monitors, in that order, before listen) reads only the runs whose newest item seq is above `Run.reconciledThroughSeq` or that have none, then records each run it left with nothing open through its newest seq. A run any of them failed on, or a chat whose interrupted monitor waits on its delivery after listen, keeps its old mark and is read again next launch.
+- The boot's close of stranded work (`StrandedWorkReconcileService`: background delegates, detached commands, command actions, monitors, in that order, before listen) reads only the runs whose newest item seq differs from `Run.reconciledThroughSeq` (null for a run it never read), then records each run it left with nothing open through its newest seq. A run any of them failed on, or a chat whose interrupted monitor waits on its delivery after listen, keeps its old mark and is read again next launch.
 
 ### Migrations
 

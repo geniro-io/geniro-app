@@ -5331,9 +5331,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * every open delegate in the database is by construction stranded and this
    * needs no liveness test of its own.
    *
-   * Called from `main.ts` after the schema sync, beside the other boot
-   * reconciles and in their order, before listen: an `OnApplicationBootstrap`
-   * hook would fire later, inside `listen()`, unordered against them.
+   * Run by `StrandedWorkReconcileService` before listen over the runs written
+   * to since it last found them closed; answers the ones it could not close.
    */
   async reconcileStrandedDelegates(
     runIds: readonly string[],
@@ -5386,7 +5385,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * running for the life of the transcript — and before the executor wrote its
    * own closes at a team's end, every finished team did the same to
    * whatever its members still had out. No process can exist this early, so every
-   * open command on disk is stranded by construction.
+   * open command on disk is stranded by construction. Answers the runs it
+   * could not close.
    */
   async reconcileStrandedShells(runIds: readonly string[]): Promise<string[]> {
     try {

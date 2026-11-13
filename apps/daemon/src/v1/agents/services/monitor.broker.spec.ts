@@ -29,7 +29,7 @@ const startRow = (
 });
 
 describe('MonitorBroker', () => {
-  const registry = new MonitorRegistry(new ProcessRegistry());
+  let registry = new MonitorRegistry(new ProcessRegistry());
 
   afterEach(async () => {
     registry.stopRun('run-1', 'teardown');
@@ -39,6 +39,7 @@ describe('MonitorBroker', () => {
   function brokerOver(
     rows: Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload'>[],
   ) {
+    registry = new MonitorRegistry(new ProcessRegistry());
     const monitorRowsOfRuns = vi.fn(async () => rows);
     const broker = new MonitorBroker(
       registry,
@@ -84,6 +85,14 @@ describe('MonitorBroker', () => {
     });
     expect(monitorRowsOfRuns).toHaveBeenCalledTimes(1);
     expect(monitorRowsOfRuns).toHaveBeenCalledWith(['run-1'], {});
+  });
+
+  it('reads a run with no earlier monitors once, and starts it at m1', async () => {
+    const { start, monitorRowsOfRuns } = brokerOver([]);
+
+    await expect(start('sleep 30')).resolves.toMatchObject({ id: 'm1' });
+    await expect(start('sleep 31')).resolves.toMatchObject({ id: 'm2' });
+    expect(monitorRowsOfRuns).toHaveBeenCalledTimes(1);
   });
 
   it('reads nothing for a run the boot sweep already handed its ids', async () => {

@@ -994,6 +994,21 @@ describe('ActionPressService (in-memory sqlite)', () => {
       expect(await actions.live('run-c')).toMatchObject([{ pending: false }]);
     });
 
+    it('boot sweep answers every run it was handed when it fails', async () => {
+      const failing = {
+        actionRowsOfRuns: async () => {
+          throw new Error('disk I/O error');
+        },
+      } as unknown as ItemDao;
+
+      expect(
+        await new ActionOutcomeSweep(orm.em, failing, actions).sweep([
+          'run-c',
+          'run-d',
+        ]),
+      ).toEqual(['run-c', 'run-d']);
+    });
+
     it('boot sweep reads only the runs it is handed', async () => {
       await commandPublisher.publish(
         { ...ctx, runId: 'run-c' },

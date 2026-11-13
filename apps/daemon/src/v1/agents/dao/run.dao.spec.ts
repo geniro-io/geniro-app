@@ -1027,6 +1027,17 @@ describe('RunDao (in-memory sqlite)', () => {
       );
     });
 
+    it('records a mark without re-dating the run', async () => {
+      const old = new Date('2026-01-01T00:00:00.000Z');
+      await dao.create({ id: 'r1', createdAt: old, updatedAt: old });
+
+      await dao.markReconciledThrough('r1', 3);
+
+      const run = await new RunDao(orm.em.fork()).getById('r1');
+      expect(run!.reconciledThroughSeq).toBe(3);
+      expect(run!.updatedAt.toISOString()).toBe(old.toISOString());
+    });
+
     it('counts a soft-deleted row as the newest seq', async () => {
       await dao.create({ id: 'r1' });
       const items = new ItemDao(orm.em.fork());

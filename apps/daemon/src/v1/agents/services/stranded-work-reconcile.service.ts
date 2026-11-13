@@ -12,11 +12,12 @@ import { MonitorOutcomeSweep } from './monitor-outcome-sweep.service';
  * sub-agents, detached commands, command actions and monitors, in that order —
  * before listen, so no turn of this launch can race it.
  *
- * Only the runs written to since this last found them closed are read
- * (`Run.reconciledThroughSeq`): nothing can be left open in rows it already
- * read. A run it could not close durably — a reconcile that failed, or a chat
- * monitor whose end waits on a delivery after listen — keeps its old mark and
- * is read again next launch.
+ * Only the runs whose newest item seq differs from the one this last found
+ * them closed through are read (`Run.reconciledThroughSeq`, null for never):
+ * nothing can be left open in rows it already read. A run it could not close
+ * durably — a reconcile or a write that failed, or a chat monitor whose end
+ * waits on a delivery after listen — keeps its old mark and is read again next
+ * launch.
  */
 @Injectable()
 export class StrandedWorkReconcileService {
@@ -36,7 +37,7 @@ export class StrandedWorkReconcileService {
       due = (await this.runDao.reconcileMarks(this.em.fork()))
         .filter(
           ({ newestSeq, reconciledThroughSeq }) =>
-            reconciledThroughSeq === null || newestSeq > reconciledThroughSeq,
+            newestSeq !== reconciledThroughSeq,
         )
         .map(({ runId }) => runId);
     } catch (err: unknown) {

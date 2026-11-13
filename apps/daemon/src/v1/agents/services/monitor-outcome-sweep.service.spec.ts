@@ -50,7 +50,7 @@ function harness(
   rows = [row(1, 'm1', 'start'), row(2, 'm1', 'end'), row(3, 'm2', 'start')],
 ) {
   const em = { fork: () => em } as unknown as EntityManager;
-  const write = vi.fn(async () => undefined);
+  const write = vi.fn(async () => true);
   const holdInterrupted = vi.fn();
   const oweRunNote = vi.fn();
   const oweKeyNote = vi.fn();
@@ -117,7 +117,7 @@ describe('MonitorOutcomeSweep', () => {
 
   it("owes a team member's own conversation a note instead of waking it", async () => {
     const h = harness({ teamId: 'wf', archivedAt: null });
-    await h.sweep.sweep('quit', ['run-1']);
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
     expect(h.oweKeyNote).toHaveBeenCalledWith(
@@ -195,7 +195,7 @@ describe('MonitorOutcomeSweep', () => {
 
   it('owes an archived run nothing', async () => {
     const h = harness({ teamId: null, archivedAt: new Date() });
-    await h.sweep.sweep('quit', ['run-1']);
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.oweKeyNote).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
@@ -207,6 +207,12 @@ describe('MonitorOutcomeSweep', () => {
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.write).not.toHaveBeenCalled();
     expect(h.noteUsedIds).not.toHaveBeenCalled();
+  });
+
+  it('answers a run whose interrupted end could not be written, so the next boot reads it again', async () => {
+    const h = harness({ teamId: 'wf', archivedAt: null });
+    h.write.mockResolvedValueOnce(false);
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual(['run-1']);
   });
 
   it('answers every run it was handed when it fails', async () => {

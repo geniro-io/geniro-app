@@ -54,16 +54,14 @@ export class MonitorRowWriter implements OnModuleInit {
     this.monitors.subscribe((event) => {
       const entry = rowEntryOf(event);
       const { owner } = event.monitor;
-      return entry === null
-        ? undefined
-        : // A chat's own rows carry no member.
-          this.write(
-            {
-              ...owner,
-              memberId: owner.target === 'chat' ? null : owner.memberId,
-            },
-            entry,
-          );
+      if (entry === null) {
+        return undefined;
+      }
+      // A chat's own rows carry no member.
+      return this.write(
+        { ...owner, memberId: owner.target === 'chat' ? null : owner.memberId },
+        entry,
+      ).then(() => undefined);
     });
   }
 
@@ -79,13 +77,19 @@ export class MonitorRowWriter implements OnModuleInit {
     }
   }
 
-  /** Write one monitor row under its conversation. Never throws. */
-  async write(owner: MonitorRowOwner, entry: MonitorRowPayload): Promise<void> {
+  /**
+   * Write one monitor row under its conversation. Never throws: answers false
+   * when the write failed, true when it landed or the run is gone.
+   */
+  async write(
+    owner: MonitorRowOwner,
+    entry: MonitorRowPayload,
+  ): Promise<boolean> {
     try {
       const em = this.em.fork();
       // A deleted run has no transcript left to write into.
       if ((await this.runDao.getById(owner.runId, em)) === null) {
-        return;
+        return true;
       }
       await persistItemAndEmit(
         {
@@ -109,10 +113,12 @@ export class MonitorRowWriter implements OnModuleInit {
           ),
         },
       );
+      return true;
     } catch (err) {
       this.logger.error(
         `run ${owner.runId} monitor ${entry.id} ${entry.event} row failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   }
 }

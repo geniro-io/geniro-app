@@ -230,6 +230,14 @@ function mergeStale(current: StaleMark | null, next: StaleMark): StaleMark {
     : { reasons: [...current.reasons, ...added], cause: 'mcp' };
 }
 
+interface KeptSession {
+  key: string;
+  agent: string;
+  cwd: string;
+  configDir: string | null;
+  session: AgentSession;
+}
+
 interface SessionEntry {
   session: AgentSession;
   /**
@@ -1064,6 +1072,27 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   peek(runId: string): AgentSession | null {
     const entry = this.entries.get(runId);
     return entry && entry.session.alive ? entry.session : null;
+  }
+
+  /**
+   * Every live kept process, whichever run it serves, with the agent, folder
+   * and profile it was spawned for. Like {@link peek}, reading does not refresh
+   * the idle clock, and callers must not hold on to a session.
+   */
+  liveSessions(): KeptSession[] {
+    const live: KeptSession[] = [];
+    for (const [key, entry] of this.entries) {
+      if (entry.session.alive) {
+        live.push({
+          key,
+          agent: entry.agent,
+          cwd: entry.cwd,
+          configDir: entry.configDir,
+          session: entry.session,
+        });
+      }
+    }
+    return live;
   }
 
   subagentRecoveryBlocked(runId: string, id: string): boolean {

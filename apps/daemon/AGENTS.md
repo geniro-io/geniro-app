@@ -550,6 +550,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 
 - cursor's limits are asked of the account (`account` channel, `utils/cursor-plan-limits.utils.ts`): `GetCurrentPeriodUsage.planUsage` gives Included / Auto / API, `GetPlanInfo` the plan's name; a period with no `planUsage` (a spend-based Enterprise seat) is `NO_PLAN_LIMITS`.
 - **Plan limits are the ACCOUNT's**: the ledger (`utils/plan-limits-ledger.ts`) is keyed by CLI plus the account's config directory (the folder pin first, else the run's profile). A real reading beats a newer `estimated` one for 5 min (`REAL_READING_PREFERRED_MS`), except on the readout's refresh press, where the agent's live answer stands. An estimate never reads under what the account already reached in the same window (same key and reset), since usage only rises until a reset; a real reading stands. In memory only.
+- A conversation whose own process is gone (evicted by the session ceiling, reaped as idle) on a `live-process` plan channel asks the plan of another live kept process of the same CLI on the same account (`AgentSessionRegistry.liveSessions`, matched by `effectiveAccountKey`); the context breakdown is the conversation's own and is never asked of another process.
 
 ### Daemon endpoints (loopback)
 

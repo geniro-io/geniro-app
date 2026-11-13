@@ -2071,6 +2071,48 @@ describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
     expect(sessions).toHaveLength(2);
   });
 
+  it('lists every live kept process with the agent, folder and profile it was spawned for, and drops a dead one at once', async () => {
+    const registry = new AgentSessionRegistry(8);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, { ...INPUT, configDir: '/p/a' }, noop);
+    registry.startTurn('run-2::call:call-3', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await at(sessions, 1).endTurn();
+
+    expect(
+      registry
+        .liveSessions()
+        .map(({ key, agent, cwd, configDir, session }) => ({
+          key,
+          agent,
+          cwd,
+          configDir,
+          same: session === at(sessions, key === 'run-1' ? 0 : 1),
+        })),
+    ).toEqual([
+      {
+        key: 'run-1',
+        agent: 'claude',
+        cwd: '/proj',
+        configDir: '/p/a',
+        same: true,
+      },
+      {
+        key: 'run-2::call:call-3',
+        agent: 'claude',
+        cwd: '/proj',
+        configDir: null,
+        same: true,
+      },
+    ]);
+
+    at(sessions, 0).die();
+
+    expect(registry.liveSessions().map((kept) => kept.key)).toEqual([
+      'run-2::call:call-3',
+    ]);
+  });
+
   it('retires exactly the sessions a reach predicate names, by folder and profile', async () => {
     // A pinned ceiling above the three sessions: the default is derived from
     // the machine's memory, and a CI runner's evicts one and spawns a fifth.

@@ -79,8 +79,8 @@ describe('LessonEstimateService', () => {
       9,
       expect.anything(),
     );
-    // (4 001 + 396) chars / 4 → 1 100 (rounded up); + 30 000 CLI context = 31 100, × 3 passes = 93 300; + 4 000 answer = 97 300.
-    expect(estimate.tokens).toBe(97_300);
+    // (4 001 + 396) chars / 4 → 1 100 (rounded up); + 30 000 CLI context = 31 100, × 4 passes = 124 400; + 4 000 answer = 128 400.
+    expect(estimate.tokens).toBe(128_400);
   });
 
   it('leaves the guide out of the count when the memory is off', async () => {
@@ -88,8 +88,8 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    // (4 000 + 96) chars / 4 = 1 024; + 30 000 CLI context = 31 024, × 3 passes = 93 072; + 4 000 answer = 97 072.
-    expect(estimate.tokens).toBe(97_072);
+    // (4 000 + 96) chars / 4 = 1 024; + 30 000 CLI context = 31 024, × 4 passes = 124 096; + 4 000 answer = 128 096.
+    expect(estimate.tokens).toBe(128_096);
   });
 
   it('prices the input and the answer at the list price of the model', async () => {
@@ -97,9 +97,9 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    // 93 297 input tokens ((1 099 + 30 000) × 3 passes) at $3/M = $0.279891; 4 000 output tokens at $15/M = $0.06; total $0.339891.
+    // 124 396 input tokens ((1 099 + 30 000) × 4 passes) at $3/M = $0.373188; 4 000 output tokens at $15/M = $0.06; total $0.433188.
     expect(h.adapter.billingRatesOf).toHaveBeenCalledWith(estimate.model);
-    expect(estimate.usd).toBeCloseTo(0.339891, 10);
+    expect(estimate.usd).toBeCloseTo(0.433188, 10);
   });
 
   it('answers a null price when the model has no list price, never 0', async () => {

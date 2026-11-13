@@ -196,6 +196,23 @@ describe('LessonOfferRow', () => {
     expect(el.textContent).not.toContain('$0');
   });
 
+  it('reads a sub-cent price as <$0.01, never ≈<$0.01', async () => {
+    const el = await render(
+      lessonsApi({
+        listLessonSegments: vi.fn(async () => ({
+          segments: [
+            segment('offered', {
+              estimate: { ...OFFER.estimate, usd: 0.0034 },
+            }),
+          ],
+        })),
+      }),
+    );
+
+    expect(el.textContent).toContain('<$0.01 (≈4.2k tokens)');
+    expect(el.textContent).not.toContain('≈<');
+  });
+
   it('extracts lessons from the stretch on the default model', async () => {
     const api = lessonsApi();
     const el = await render(api);

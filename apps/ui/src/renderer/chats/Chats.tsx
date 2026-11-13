@@ -231,10 +231,10 @@ import {
   type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
 import { LessonChangeModelDialog } from './lesson-change-model-dialog';
+import { lessonRunLabel, segmentTitle } from './lesson-labels';
 import {
   type LessonModelChoice,
   LessonModelPicker,
-  lessonRunLabel,
 } from './lesson-model-picker';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
@@ -4232,7 +4232,10 @@ export function Chats({
             );
           })
           .catch((err: unknown) =>
-            setArchiveLessons({ kind: 'error', message: String(err) }),
+            setArchiveLessons({
+              kind: 'error',
+              message: describeDaemonError(err),
+            }),
           );
       }, ARCHIVE_LESSON_OFFER_DELAY_MS);
     },
@@ -4248,7 +4251,10 @@ export function Chats({
           reflectLessonsDto: { segmentId: segment.id },
         })
         .catch((err: unknown) =>
-          setArchiveLessons({ kind: 'error', message: String(err) }),
+          setArchiveLessons({
+            kind: 'error',
+            message: describeDaemonError(err),
+          }),
         );
     },
     [apis],
@@ -4260,7 +4266,10 @@ export function Chats({
       apis.lessons
         .dismissLessonSegment({ segmentId: segment.id })
         .catch((err: unknown) =>
-          setArchiveLessons({ kind: 'error', message: String(err) }),
+          setArchiveLessons({
+            kind: 'error',
+            message: describeDaemonError(err),
+          }),
         );
     },
     [apis],
@@ -11852,13 +11861,6 @@ export function Chats({
                   Keep it queued and it goes out when this turn ends.
                 </ConfirmDialog>
 
-                {/* One dialog for both archives; the COPY is what separates
-                    them. A settled chat is only being filed away, so it is
-                    told what it costs (the row) and what it does not (the
-                    conversation). A chat with a turn in flight has that turn
-                    cancelled on the way, and cancelled work does not come
-                    back with the thread — the one part of archiving that
-                    destroys something, and the only one drawn destructive. */}
                 {archiveLessons === null ? null : (
                   <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
                     <ActionNotice
@@ -11870,7 +11872,7 @@ export function Chats({
                       className="pointer-events-auto w-full max-w-[480px]"
                       message={
                         archiveLessons.kind === 'offer'
-                          ? `💡 Learning signal in “${archiveLessons.segment.sourceTitle?.trim() || 'Untitled thread'}” · ${lessonRunLabel(identities, archiveLessons.segment.estimate)}`
+                          ? `💡 Learning signal in “${segmentTitle(archiveLessons.segment)}” · ${lessonRunLabel(identities, archiveLessons.segment.estimate)}`
                           : archiveLessons.message
                       }
                       actions={
@@ -11920,6 +11922,13 @@ export function Chats({
                   />
                 )}
 
+                {/* One dialog for both archives; the COPY is what separates
+                    them. A settled chat is only being filed away, so it is
+                    told what it costs (the row) and what it does not (the
+                    conversation). A chat with a turn in flight has that turn
+                    cancelled on the way, and cancelled work does not come
+                    back with the thread — the one part of archiving that
+                    destroys something, and the only one drawn destructive. */}
                 <ConfirmDialog
                   open={archiving !== null}
                   busy={archiveBusy}

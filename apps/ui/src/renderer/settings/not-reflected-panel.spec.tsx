@@ -42,7 +42,9 @@ function fakeLessons(segments: LessonSegment[]) {
     listLessonSegments: vi.fn(() => Promise.resolve({ segments })),
     reflectLessons: vi.fn(() => Promise.resolve({})),
     dismissLessonSegment: vi.fn(() => Promise.resolve({})),
-    reflectAllLessonSegments: vi.fn(() => Promise.resolve({})),
+    reflectAllLessonSegments: vi.fn(() =>
+      Promise.resolve({ started: 1, refused: 0 }),
+    ),
   };
   return api;
 }
@@ -104,7 +106,7 @@ describe('NotReflectedPanel', () => {
     expect(row.textContent).toContain('Archived');
     expect(row.textContent).toContain('1 signal');
     expect(row.textContent).toContain(
-      'claude · claude-haiku-5-5 · ≈$0.50 (≈1200 tokens)',
+      'claude · claude-haiku-5-5 · ≈$0.50 (≈1.2k tokens)',
     );
   });
 
@@ -165,6 +167,24 @@ describe('NotReflectedPanel', () => {
 
     await press(buttonNamed('Extract all · ≈$0.50'));
     expect(lessons.reflectAllLessonSegments).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('not started');
+  });
+
+  it('Extract all says how many waiting threads the daemon did not start', async () => {
+    const lessons = fakeLessons([segment({ id: 'seg-1' })]);
+    lessons.reflectAllLessonSegments.mockResolvedValueOnce({
+      started: 0,
+      refused: 1,
+    });
+    await render(lessons);
+
+    await press(buttonNamed('Extract all · ≈$0.50'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain('1 not started');
+    expect(container.querySelectorAll('li')).toHaveLength(1);
   });
 
   it('Dismiss sets an offered stretch aside, and a dismissed one offers no Dismiss', async () => {

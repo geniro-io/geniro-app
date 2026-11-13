@@ -101,7 +101,22 @@ describe('LessonChangeModelDialog', () => {
     await render(fakeLessons());
 
     expect(document.body.textContent).toContain('claude-haiku-5-5');
-    expect(document.body.textContent).toContain('≈$0.50 (≈1200 tokens)');
+    expect(document.body.textContent).toContain('≈$0.50 (≈1.2k tokens)');
+  });
+
+  it('shows the daemon’s own sentence when it refuses the start, not the error’s class', async () => {
+    const lessons = fakeLessons();
+    lessons.reflectLessons.mockRejectedValueOnce(
+      new Error('a reflection on this thread is still working'),
+    );
+    await render(lessons);
+
+    await press(buttonNamed('Extract lessons'));
+
+    expect(document.body.textContent).toContain(
+      'a reflection on this thread is still working',
+    );
+    expect(document.body.textContent).not.toContain('Error: ');
   });
 
   it('re-reads the estimate for a picked model, and starts the reflection with that choice', async () => {
@@ -121,7 +136,7 @@ describe('LessonChangeModelDialog', () => {
       runId: 'run-1',
       agentKind: 'claude',
     });
-    expect(document.body.textContent).toContain('≈1500 tokens');
+    expect(document.body.textContent).toContain('≈1.5k tokens');
 
     await press(buttonNamed('Extract lessons'));
     expect(lessons.reflectLessons).toHaveBeenCalledWith({

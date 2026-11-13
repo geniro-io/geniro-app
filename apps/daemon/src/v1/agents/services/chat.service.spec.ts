@@ -132,6 +132,8 @@ import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { HostWakeBus } from './host-wake.bus';
+import { HostWakeChatDelivery } from './host-wake-chat-delivery.service';
+import type { RunNoticeWriter } from './run-notice.writer';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
@@ -1156,6 +1158,8 @@ function setup(
     threadInbox?: ThreadInboxService;
     /** The in-app browser's tools, when a test drives them. */
     browser?: BrowserBroker;
+    /** Where a wake the chat raises outside its turn is published. */
+    hostWakes?: HostWakeBus;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'>;
     knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
@@ -1464,6 +1468,7 @@ function setup(
     projectChats,
     opts.threadInbox,
     opts.browser,
+    opts.hostWakes,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -16112,6 +16117,55 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(
       (await service.listChats()).find((r) => r.id === run.id)?.shellsOpen,
     ).toBe(0);
+  });
+
+  it('wakes a cursor agent when a command its turn backgrounded ends after that turn', async () => {
+    const hostWakes = new HostWakeBus();
+    const { service, cursor, sessions } = setup({ hostWakes });
+    const delivery = new HostWakeChatDelivery(hostWakes, service, sessions, {
+      warn: vi.fn(async () => undefined),
+    } as unknown as RunNoticeWriter);
+    delivery.onModuleInit();
+    delivery.startDelivering();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'probe the two sources');
+    await drain();
+    cursor.emit({
+      type: 'tool_call',
+      id: 'call-probe',
+      name: '`python3 /tmp/followup-probe.py`',
+      input: { command: 'python3 /tmp/followup-probe.py' },
+    });
+    cursor.emit({
+      type: 'tool_result',
+      id: 'call-probe',
+      name: '`python3 /tmp/followup-probe.py`',
+      result: { exitCode: 0, stdout: '', stderr: '' },
+      isError: false,
+    });
+    cursor.emit({
+      type: 'shell_open',
+      toolCallId: 'call-probe',
+      workId: 'call-probe',
+    });
+    await drain();
+    await finishTurn(cursor);
+    expect(cursor.start).toHaveBeenCalledTimes(1);
+
+    cursor.sessions[0]!.onBetweenTurnEvent!({
+      type: 'shell_info',
+      toolCallId: 'call-probe',
+      workId: 'call-probe',
+    });
+    await drain();
+    await drain();
+
+    expect(cursor.start).toHaveBeenCalledTimes(2);
+    const woken = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+    expect(woken.prompt).toContain('python3 /tmp/followup-probe.py');
   });
 
   it('does NOT clear the parent’s activity on a SUB-AGENT’s tool result', async () => {

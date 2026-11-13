@@ -4260,21 +4260,6 @@ export function Chats({
     [apis],
   );
 
-  const dismissArchivedLessons = useLatestCallback(
-    (segment: LessonSegment): void => {
-      setArchiveLessons(null);
-      apis.lessons
-        .dismissLessonSegment({ segmentId: segment.id })
-        .catch((err: unknown) =>
-          setArchiveLessons({
-            kind: 'error',
-            message: describeDaemonError(err),
-          }),
-        );
-    },
-    [apis],
-  );
-
   const confirmArchive = useLatestCallback(async (): Promise<void> => {
     if (!archiving) {
       return;
@@ -11898,10 +11883,7 @@ export function Chats({
                               {
                                 label: 'Not now',
                                 variant: 'ghost',
-                                onAction: () =>
-                                  dismissArchivedLessons(
-                                    archiveLessons.segment,
-                                  ),
+                                onAction: () => setArchiveLessons(null),
                               },
                             ]
                           : []

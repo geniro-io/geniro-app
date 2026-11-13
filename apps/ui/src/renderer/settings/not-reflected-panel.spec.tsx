@@ -73,6 +73,12 @@ function buttonNamed(label: string): HTMLButtonElement | undefined {
   );
 }
 
+function dismissButtons(): HTMLButtonElement[] {
+  return [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
+    (button) => button.textContent?.trim() === 'Dismiss',
+  );
+}
+
 async function press(button: HTMLButtonElement | undefined): Promise<void> {
   await act(async () => {
     button?.click();
@@ -187,34 +193,34 @@ describe('NotReflectedPanel', () => {
     expect(container.querySelectorAll('li')).toHaveLength(1);
   });
 
-  it('Dismiss sets an offered stretch aside, and a dismissed one offers no Dismiss', async () => {
+  it('Dismiss sets an offered stretch and a failed one aside', async () => {
     const lessons = fakeLessons([
       segment({ id: 'offered-1', status: 'offered' }),
-      segment({
-        id: 'dismissed-1',
-        status: 'dismissed',
-        sourceTitle: 'Old thread',
-      }),
+      segment({ id: 'failed-1', status: 'failed', sourceTitle: 'Old thread' }),
     ]);
     await render(lessons);
 
-    expect(container.querySelectorAll('li')).toHaveLength(2);
-    const dismissButtons = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
-    ].filter((button) => button.textContent?.trim() === 'Dismiss');
-    expect(dismissButtons).toHaveLength(1);
-    expect(container.textContent).toContain('Dismissed');
+    expect(dismissButtons()).toHaveLength(2);
 
-    await press(dismissButtons[0]);
-    expect(lessons.dismissLessonSegment).toHaveBeenCalledWith({
+    await press(dismissButtons()[0]);
+    expect(lessons.dismissLessonSegment).toHaveBeenLastCalledWith({
       segmentId: 'offered-1',
     });
+
+    await press(dismissButtons()[1]);
+    expect(lessons.dismissLessonSegment).toHaveBeenLastCalledWith({
+      segmentId: 'failed-1',
+    });
+    expect(lessons.dismissLessonSegment).toHaveBeenCalledTimes(2);
   });
 
-  it('a failed reflection says so and asks to try again', async () => {
+  it('a failed reflection says so, offers Extract and Dismiss, and shows no dismissed text', async () => {
     await render(fakeLessons([segment({ status: 'failed' })]));
 
     expect(container.textContent).toContain('Reflection failed — try again');
+    expect(container.textContent).not.toContain('Dismissed');
+    expect(buttonNamed('Extract')).toBeDefined();
+    expect(dismissButtons()).toHaveLength(1);
   });
 
   it('a paired device sees the list without any action to start one', async () => {

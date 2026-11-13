@@ -157,7 +157,7 @@ export function NotReflectedPanel({
                         onClick={() => reflect(row)}>
                         Extract
                       </Button>
-                      {row.status === 'offered' ? (
+                      {row.status === 'offered' || row.status === 'failed' ? (
                         <Button
                           type="button"
                           variant="ghost"
@@ -179,8 +179,6 @@ export function NotReflectedPanel({
                   <p className="text-xs text-destructive">
                     Reflection failed — try again
                   </p>
-                ) : row.status === 'dismissed' ? (
-                  <p className="text-xs text-muted-foreground">Dismissed</p>
                 ) : null}
               </li>
             ))}

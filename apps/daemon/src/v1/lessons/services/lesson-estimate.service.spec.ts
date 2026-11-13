@@ -68,7 +68,7 @@ function build(
 }
 
 describe('LessonEstimateService', () => {
-  it('counts the stretch and the guide in characters, plus the read overhead and the answer', async () => {
+  it('counts the stretch and the guide in characters, the CLI context on each of its passes, and the answer', async () => {
     const h = build({ payloadChars: 4_001 });
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 3, toSeq: 9 });
@@ -79,8 +79,8 @@ describe('LessonEstimateService', () => {
       9,
       expect.anything(),
     );
-    // (4 001 + 396) chars / 4 → 1 100 (rounded up); + 8 000 read overhead + 2 000 answer.
-    expect(estimate.tokens).toBe(11_100);
+    // (4 001 + 396) chars / 4 → 1 100 (rounded up); + 30 000 CLI context = 31 100, × 3 passes = 93 300; + 4 000 answer = 97 300.
+    expect(estimate.tokens).toBe(97_300);
   });
 
   it('leaves the guide out of the count when the memory is off', async () => {
@@ -88,8 +88,8 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    // (4 000 + 96) chars / 4 = 1 024; + 8 000 read overhead + 2 000 answer.
-    expect(estimate.tokens).toBe(11_024);
+    // (4 000 + 96) chars / 4 = 1 024; + 30 000 CLI context = 31 024, × 3 passes = 93 072; + 4 000 answer = 97 072.
+    expect(estimate.tokens).toBe(97_072);
   });
 
   it('prices the input and the answer at the list price of the model', async () => {
@@ -97,9 +97,9 @@ describe('LessonEstimateService', () => {
 
     const estimate = await h.service.estimate(SOURCE, { fromSeq: 0, toSeq: 5 });
 
-    // 9 099 input tokens at $3/M + 2 000 output tokens at $15/M = $0.057297.
+    // 93 297 input tokens ((1 099 + 30 000) × 3 passes) at $3/M = $0.279891; 4 000 output tokens at $15/M = $0.06; total $0.339891.
     expect(h.adapter.billingRatesOf).toHaveBeenCalledWith(estimate.model);
-    expect(estimate.usd).toBeCloseTo(0.057297, 10);
+    expect(estimate.usd).toBeCloseTo(0.339891, 10);
   });
 
   it('answers a null price when the model has no list price, never 0', async () => {

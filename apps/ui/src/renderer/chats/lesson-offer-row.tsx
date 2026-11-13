@@ -25,8 +25,11 @@ const STATE_TEXT: Partial<Record<LessonSegment['status'], string>> = {
   empty: 'No lessons from this stretch — nothing passed the bar.',
 };
 
+const PARKED_TEXT =
+  'Not now — waiting in Settings → Memory → Not reflected yet';
+
 const WAITING_TEXT: Partial<Record<LessonSegment['status'], string>> = {
-  dismissed: 'Not now — waiting in Settings → Memory → Not reflected yet',
+  dismissed: 'Dismissed from Not reflected yet',
   failed: 'Reflection failed',
 };
 
@@ -82,14 +85,12 @@ function OpenLessonOffer({
   const [choice, setChoice] = useState<LessonModelChoice | null>(null);
   const [priced, setPriced] = useState<LessonEstimate | null>(null);
   const [picking, setPicking] = useState(false);
-  const [pending, setPending] = useState<{
-    action: 'extract' | 'dismiss';
-    from: LessonSegment['status'];
-  } | null>(null);
+  const [parked, setParked] = useState(false);
+  const [pending, setPending] = useState<LessonSegment['status'] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const choiceDto = choice ?? NO_CHOICE;
-  const busy = pending !== null && pending.from === status;
+  const busy = pending !== null && pending === status;
 
   useEffect(() => {
     if (choice === null || api === null) {
@@ -121,39 +122,26 @@ function OpenLessonOffer({
     return () => clearTimeout(timer);
   }, [status, reload]);
 
-  const press = (action: 'extract' | 'dismiss', request: Promise<unknown>) => {
-    setPending({ action, from: status });
+  const extract = (): void => {
+    if (api === null) {
+      return;
+    }
+    setPending(status);
     setError(null);
-    request
+    api
+      .reflectLessons({
+        runId,
+        reflectLessonsDto: {
+          segmentId: offer.segmentId,
+          ...choiceToDto(choiceDto),
+        },
+      })
       .then(() => reload())
       .catch((err: unknown) => {
         setPending(null);
         setError(describeDaemonError(err));
         reload();
       });
-  };
-
-  const extract = (): void => {
-    if (api === null) {
-      return;
-    }
-    press(
-      'extract',
-      api.reflectLessons({
-        runId,
-        reflectLessonsDto: {
-          segmentId: offer.segmentId,
-          ...choiceToDto(choiceDto),
-        },
-      }),
-    );
-  };
-
-  const dismiss = (): void => {
-    if (api === null) {
-      return;
-    }
-    press('dismiss', api.dismissLessonSegment({ segmentId: offer.segmentId }));
   };
 
   const stateText = STATE_TEXT[status];
@@ -168,7 +156,7 @@ function OpenLessonOffer({
   const estimate = priced ?? segment?.estimate ?? offer.estimate;
   const signalCount = offer.signals.length;
   const question = `💡 ${signalCount} learning ${signalCount === 1 ? 'signal' : 'signals'} here ${signalCount === 1 ? 'was' : 'were'} never reflected on`;
-  const offered = status === 'offered';
+  const offered = status === 'offered' && !parked;
   const pressDisabled = api === null || busy;
 
   return (
@@ -177,15 +165,15 @@ function OpenLessonOffer({
       className="flex min-w-0 flex-col gap-2 rounded-lg border border-border p-3">
       <p className="m-0 text-sm font-medium">{question}</p>
       <p className="m-0 text-xs text-muted-foreground">
-        {offered
-          ? `Extract lessons from messages ${offer.fromSeq + 1}–${offer.toSeq}? · ${lessonRunLabel(identities, estimate)}`
-          : WAITING_TEXT[status]}
+        {parked
+          ? PARKED_TEXT
+          : offered
+            ? `Extract lessons from messages ${offer.fromSeq + 1}–${offer.toSeq}? · ${lessonRunLabel(identities, estimate)}`
+            : WAITING_TEXT[status]}
       </p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={pressDisabled} onClick={extract}>
-          {busy && pending?.action === 'extract'
-            ? 'Extracting…'
-            : 'Extract lessons'}
+          {busy ? 'Extracting…' : 'Extract lessons'}
         </Button>
         {offered && renderModelPicker !== undefined ? (
           <Button
@@ -202,7 +190,7 @@ function OpenLessonOffer({
             size="sm"
             variant="ghost"
             disabled={pressDisabled}
-            onClick={dismiss}>
+            onClick={() => setParked(true)}>
             Not now
           </Button>
         ) : null}

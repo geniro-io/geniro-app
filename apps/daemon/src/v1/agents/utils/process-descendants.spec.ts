@@ -4,11 +4,63 @@ import {
   commandLiveness,
   commandNeedles,
   descendantsOf,
+  endedRecordOf,
   isCommandRunning,
   parseProcessRows,
   type ProcessRow,
   recordedPidsRunning,
 } from './process-descendants';
+
+describe('endedRecordOf', () => {
+  it('takes the newest ended record of the command, its whitespace aside', () => {
+    const records = [
+      {
+        pid: 1,
+        command: 'make  test',
+        running: false,
+        exitCode: 1,
+        endedAt: '2026-11-13T08:00:00.000Z',
+      },
+      {
+        pid: 2,
+        command: 'make test',
+        running: false,
+        exitCode: 0,
+        endedAt: '2026-11-13T09:00:00.000Z',
+      },
+      { pid: 3, command: 'make test', running: true },
+      { pid: 4, command: 'make build', running: false, exitCode: 2 },
+    ];
+
+    const start = Date.parse('2026-11-13T07:00:00.000Z');
+    expect(endedRecordOf(records, 'make\ntest', start)?.pid).toBe(2);
+    expect(endedRecordOf(records, 'make lint', start)).toBeNull();
+    expect(
+      endedRecordOf([{ pid: 9, command: 'x y', running: true }], 'x y', start),
+    ).toBeNull();
+  });
+
+  it('takes no record that ended before the call was made — an earlier run of the same line', () => {
+    const records = [
+      {
+        pid: 1,
+        command: 'make test',
+        running: false,
+        exitCode: 1,
+        endedAt: '2026-11-13T08:00:00.000Z',
+      },
+      { pid: 4, command: 'make test', running: false, exitCode: 2 },
+    ];
+
+    expect(
+      endedRecordOf(
+        records,
+        'make test',
+        Date.parse('2026-11-13T08:30:00.000Z'),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe('parseProcessRows', () => {
   it('reads the three columns `ps` is asked for', () => {

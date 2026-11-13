@@ -126,12 +126,18 @@ import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import {
+  COMMAND_END_WAKE_BATCH_MS,
+  CommandEndWakeService,
+  MAX_COMMAND_END_WAKES,
+} from './command-end-wake.service';
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { HostWakeBus } from './host-wake.bus';
+import { HostWakeChatDelivery } from './host-wake-chat-delivery.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
@@ -150,6 +156,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
+import type { RunNoticeWriter } from './run-notice.writer';
 import { RunOutcomeBroker } from './run-outcome.broker';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
@@ -1156,6 +1163,8 @@ function setup(
     threadInbox?: ThreadInboxService;
     /** The in-app browser's tools, when a test drives them. */
     browser?: BrowserBroker;
+    /** Where a wake the chat raises outside its turn is published. */
+    hostWakes?: HostWakeBus;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'>;
     knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
@@ -1464,6 +1473,9 @@ function setup(
     projectChats,
     opts.threadInbox,
     opts.browser,
+    opts.hostWakes === undefined
+      ? undefined
+      : new CommandEndWakeService(opts.hostWakes),
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -16112,6 +16124,212 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(
       (await service.listChats()).find((r) => r.id === run.id)?.shellsOpen,
     ).toBe(0);
+  });
+
+  it('wakes a cursor agent when a command its turn backgrounded ends after that turn', async () => {
+    const hostWakes = new HostWakeBus();
+    const { service, cursor, sessions } = setup({ hostWakes });
+    const delivery = new HostWakeChatDelivery(hostWakes, service, sessions, {
+      warn: vi.fn(async () => undefined),
+    } as unknown as RunNoticeWriter);
+    delivery.onModuleInit();
+    delivery.startDelivering();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'probe the two sources');
+    await drain();
+    cursor.emit({
+      type: 'tool_call',
+      id: 'call-probe',
+      name: '`python3 /tmp/followup-probe.py`',
+      input: { command: 'python3 /tmp/followup-probe.py' },
+    });
+    cursor.emit({
+      type: 'tool_result',
+      id: 'call-probe',
+      name: '`python3 /tmp/followup-probe.py`',
+      result: { exitCode: 0, stdout: '', stderr: '' },
+      isError: false,
+    });
+    cursor.emit({
+      type: 'shell_open',
+      toolCallId: 'call-probe',
+      workId: 'call-probe',
+    });
+    await drain();
+    await finishTurn(cursor);
+    expect(cursor.start).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      cursor.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'call-probe',
+        ending: {
+          command: 'python3 /tmp/followup-probe.py',
+          exitCode: 0,
+          outputPath: '/tmp/terminals/451147.txt',
+          endedAt: null,
+        },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await drain();
+    await drain();
+
+    expect(cursor.start).toHaveBeenCalledTimes(2);
+    const woken = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+    expect(woken.prompt).toContain('python3 /tmp/followup-probe.py');
+    expect(woken.prompt).toContain('exit code 0');
+    expect(woken.prompt).toContain('/tmp/terminals/451147.txt');
+  });
+
+  describe('a command that ends after its turn, beyond the cursor wake', () => {
+    async function endAfterTurn(kind: 'claude' | 'cursor-agent') {
+      const hostWakes = new HostWakeBus();
+      const published: HostWake[] = [];
+      hostWakes.subscribe((wake) => published.push(wake));
+      const harness = setup({ hostWakes });
+      const agent = kind === 'claude' ? harness.claude : harness.cursor;
+      const run = await harness.service.createChat({
+        agentKind: kind,
+        cwd: process.cwd(),
+      });
+      await harness.service.sendMessage(run.id, 'go');
+      await drain();
+      agent.emit({ type: 'shell_open', toolCallId: 'c1', workId: 'c1' });
+      await drain();
+      await finishTurn(agent);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      agent.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'c1',
+        ending: {
+          command: 'sleep 40',
+          exitCode: 0,
+          outputPath: null,
+          endedAt: null,
+        },
+      });
+      await drain();
+      return { ...harness, run, published };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('publishes no wake for a CLI that starts its own turn', async () => {
+      const { published } = await endAfterTurn('claude');
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('publishes no wake once the user has written before it went out', async () => {
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
+      await service.sendMessage(run.id, 'and now?');
+      await drain();
+      await finishTurn(cursor);
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('withdraws a wake already published once a turn starts', async () => {
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toHaveLength(1);
+      expect(published[0]!.withdrawn?.()).toBe(false);
+
+      await service.sendMessage(run.id, 'and now?');
+      await drain();
+      expect(published[0]!.withdrawn?.()).toBe(true);
+      await finishTurn(cursor);
+    });
+
+    it('wakes no more than the cap in a row, and again once the user has written', async () => {
+      const { service, cursor, run, published } =
+        await endAfterTurn('cursor-agent');
+      const endLater = async (workId: string): Promise<void> => {
+        cursor.sessions[0]!.onBetweenTurnEvent!({
+          type: 'shell_info',
+          toolCallId: null,
+          workId,
+          ending: {
+            command: `step ${workId}`,
+            exitCode: 0,
+            outputPath: null,
+            endedAt: null,
+          },
+        });
+        await drain();
+        vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+        published.at(-1)?.onDelivered();
+      };
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      published.at(-1)!.onDelivered();
+      for (let i = 1; i < MAX_COMMAND_END_WAKES; i += 1) {
+        await endLater(`c${i + 1}`);
+      }
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES);
+
+      await endLater('over');
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES);
+
+      await service.sendMessage(run.id, 'keep going');
+      await drain();
+      await finishTurn(cursor);
+      await endLater('after-reply');
+      expect(published).toHaveLength(MAX_COMMAND_END_WAKES + 1);
+    });
+
+    it('publishes no wake after the user’s Stop', async () => {
+      const { service, run, published } = await endAfterTurn('cursor-agent');
+      await service.cancel(run.id);
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('publishes no wake for a command the user stopped', async () => {
+      const hostWakes = new HostWakeBus();
+      const published: HostWake[] = [];
+      hostWakes.subscribe((wake) => published.push(wake));
+      const { service, cursor } = setup({ hostWakes });
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: process.cwd(),
+      });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      cursor.emit({ type: 'shell_open', toolCallId: 'c1', workId: 'c1' });
+      await drain();
+      await finishTurn(cursor);
+      service.noteShellClosed(run.id, 'c1');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      cursor.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'c1',
+        ending: {
+          command: 'npm run dev',
+          exitCode: null,
+          outputPath: null,
+          endedAt: null,
+        },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
   });
 
   it('does NOT clear the parent’s activity on a SUB-AGENT’s tool result', async () => {

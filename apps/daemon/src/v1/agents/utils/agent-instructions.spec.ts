@@ -538,10 +538,21 @@ describe('each CLI’s background work note', () => {
         'never poll with sleep, date, ls or until/tail loops',
       );
       expect(note).toContain('never predict what they will report');
-      expect(note).toContain('Background COMMANDS are different');
     }
     expect(claudeNote).toContain('started again automatically');
+    expect(claudeNote).toContain('Background COMMANDS are different');
     expect(cursorNote).toContain('prompted with their reports');
+  });
+
+  it('tells cursor a command it leaves running starts it again when it ends, and to wait in-turn with AwaitShell', () => {
+    const note = cursor.getConfig().backgroundWork.agentNote!;
+
+    expect(note).toContain(
+      'you are started again with a message naming it, its exit code and where its output is',
+    );
+    expect(note).toContain('end your turn rather than poll it');
+    expect(note).toContain('wait for it with AwaitShell');
+    expect(note).not.toMatch(/\d/);
   });
 
   it('tells codex the opposite — its turn is not held, so it waits with wait_agent', () => {

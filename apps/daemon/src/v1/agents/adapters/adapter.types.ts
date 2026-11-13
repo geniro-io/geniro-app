@@ -1459,6 +1459,8 @@ type AgentEventBody =
       toolCallId: string | null;
       /** The CLI's own id for the unit (claude's `task_id`, e.g. `bash_1`). */
       workId: string;
+      /** How it ended, for a command the daemon itself found ended. */
+      ending?: CommandEnding;
     }
   | {
       /**
@@ -1705,6 +1707,8 @@ type AgentEventBody =
        * the transcript for every backgrounded `sleep`.
        */
       usage?: BackgroundUnitUsage;
+      /** On a settle the daemon found itself: how the command ended. */
+      ending?: CommandEnding;
     }
   | {
       /**
@@ -3741,6 +3745,19 @@ export interface CommandRecord {
   pid: number;
   command: string;
   running: boolean;
+  /** The file the CLI writes the command's output to. */
+  outputPath?: string;
+  /** Once it has ended, when the CLI recorded one. */
+  exitCode?: number | null;
+  endedAt?: string | null;
+}
+
+/** How a detached command ended, as far as the CLI's own record says. */
+export interface CommandEnding {
+  command: string;
+  exitCode: number | null;
+  outputPath: string | null;
+  endedAt: string | null;
 }
 
 /**
@@ -4357,6 +4374,12 @@ export interface AdapterConfig {
      * quiet turn with such a command alive as waiting on it.
      */
     readonly silentWaitReason: string | null;
+    /**
+     * Non-null when nothing tells this CLI's agent that a command it left
+     * running has ended once its turn is over, so the daemon starts a turn
+     * for it (`CommandEndWakeService`). Null for a CLI that starts one itself.
+     */
+    readonly lateEndWakeReason: string | null;
   };
   readonly questionToolName: string | null;
   /**

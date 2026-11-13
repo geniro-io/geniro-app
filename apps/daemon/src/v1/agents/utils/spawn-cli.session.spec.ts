@@ -5719,6 +5719,41 @@ describe('runCliSession — a CLI that says nothing while it waits on a command 
     expect(events.some((e) => e.type === 'shell_info')).toBe(false);
   });
 
+  it('closes a detached command with how the CLI recorded it ending', async () => {
+    const records: CommandRecord[] = [
+      { pid: 500, command: HEREDOC, running: true },
+    ];
+    const { child, events } = recordedSession(records);
+    line(child, { run: HEREDOC, id: 'probe' });
+    line(child, { answered: 'probe' });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+    expect(events.filter((e) => e.type === 'shell_open')).toHaveLength(1);
+
+    records.splice(0, 1, {
+      pid: 500,
+      command: HEREDOC,
+      running: false,
+      outputPath: '/cursor/terminals/451147.txt',
+      exitCode: 0,
+      endedAt: new Date(Date.now()).toISOString(),
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(events.filter((e) => e.type === 'shell_info')).toEqual([
+      {
+        type: 'shell_info',
+        toolCallId: 'probe',
+        workId: 'probe',
+        ending: {
+          command: HEREDOC,
+          exitCode: 0,
+          outputPath: '/cursor/terminals/451147.txt',
+          endedAt: expect.any(String),
+        },
+      },
+    ]);
+  });
+
   it('announces no wait once the turn has ended', async () => {
     const turn = waitingTurn();
     line(turn.child, { done: true });

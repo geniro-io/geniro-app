@@ -397,6 +397,8 @@ export class CursorAcpAdapter extends AgentAdapter {
           'it is still running is read from its terminal records and the process table instead',
         silentWaitReason:
           'cursor-agent presents no tool_call for its AwaitShell tool (its ACP layer drops a call it has no title for), so a wait of up to 119 minutes sends no frame at all',
+        lateEndWakeReason:
+          'cursor-agent hands a finished background command to the model only at the end of a session/prompt and sends nothing between prompts (2026.11.05-86047df, background-completion-drain)',
       },
       questionToolName: CURSOR_ASK_QUESTION_METHOD,
       /**
@@ -475,9 +477,10 @@ export class CursorAcpAdapter extends AgentAdapter {
         // The CLI holds the prompt while background sub-agents run and
         // continues the agent on their results (`_meta.subagents`, 2026.09.15
         // on); before that the ACP session's own hold does it
-        // (`holdForDelegates`). A backgrounded command holds nothing.
+        // (`holdForDelegates`). A backgrounded command holds nothing; its end
+        // after the turn starts a turn of its own (`CommandEndWakeService`).
         agentNote:
-          '## Work you leave running\n\nSub-agents you start in the background keep running after you end your turn. This conversation — and the call you are answering, if any — stays open until they finish, and you will be prompted with their reports. With nothing else to do, say briefly what you launched and END YOUR TURN instead of waiting: never poll with sleep, date, ls or until/tail loops, never read their transcripts to check on them, and never predict what they will report. Your answer is the reply you give in the turn that has nothing left running. Background COMMANDS are different: they are not waited for — run a command whose result you need in the foreground.',
+          '## Work you leave running\n\nSub-agents you start in the background keep running after you end your turn. This conversation — and the call you are answering, if any — stays open until they finish, and you will be prompted with their reports. With nothing else to do, say briefly what you launched and END YOUR TURN instead of waiting: never poll with sleep, date, ls or until/tail loops, never read their transcripts to check on them, and never predict what they will report. Your answer is the reply you give in the turn that has nothing left running. A background COMMAND does not keep your turn open: when one you left running finishes after your turn has ended, you are started again with a message naming it, its exit code and where its output is, so end your turn rather than poll it. When your next step needs its result in this turn, wait for it with AwaitShell.',
       },
       // None of its tool calls publishes an artifact: across a 43k-row run its
       // names were titles (`Read File`, `grep`) or the command it ran.

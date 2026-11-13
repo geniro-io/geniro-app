@@ -101,6 +101,21 @@ async function press(target: HTMLElement): Promise<void> {
 }
 
 describe('LessonsBlock', () => {
+  it('names in its footer the model the reflection was billed for', async () => {
+    const el = await render(
+      lessonsApi({
+        getLessonReflection: vi.fn(async () => ({
+          ...FACTS_DONE,
+          model: 'claude-sonnet-5-5',
+        })) as never,
+      }),
+      { ...ENTRY, card: { ...ENTRY.card, model: 'haiku' } },
+    );
+
+    expect(el.textContent).toContain('claude-sonnet-5-5');
+    expect(el.textContent).not.toContain('· haiku ·');
+  });
+
   it('disables the actions when no lessons API is provided', async () => {
     const el = await render(null);
 

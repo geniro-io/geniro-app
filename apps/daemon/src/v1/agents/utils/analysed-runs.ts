@@ -213,10 +213,10 @@ export function isAnalysisRun(
 }
 
 /**
- * Whether a run's permission requests nobody approved by rule are refused at
- * once: a lessons reflection is hidden and read-only, so a card raised in it
- * would never be seen and must never be granted.
+ * Whether a run works read-only: a lessons reflection is hidden, so its turns
+ * get no shell or write tools, and a permission request the rules do not
+ * approve is refused at once, since a card raised there would never be seen.
  */
-export function deniesUnanswered(run: Pick<Run, 'analysisPurpose'>): boolean {
+export function runsReadOnly(run: Pick<Run, 'analysisPurpose'>): boolean {
   return run.analysisPurpose === 'lessons';
 }

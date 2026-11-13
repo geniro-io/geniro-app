@@ -2,7 +2,9 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { ConflictException, NotFoundException } from '@packages/common';
 
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { parseJsonColumn } from '../../agents/utils/json-util';
 import { MemoryService } from '../../memory/services/memory.service';
 import { savedEntryOrThrow } from '../../memory/utils/memory-outcome';
 import { isTerminalRunStatus } from '../../runs/runs.types';
@@ -18,6 +20,7 @@ import type {
   RejectLesson,
   SaveLesson,
 } from '../lessons.types';
+import { billedModelOf } from '../utils/billed-model';
 import { LessonRowWriter } from './lesson-row.writer';
 
 /**
@@ -34,6 +37,7 @@ export class LessonProposalService {
     private readonly usage: UsageEventDao,
     private readonly memory: MemoryService,
     private readonly rows: LessonRowWriter,
+    private readonly items: ItemDao,
   ) {}
 
   async list(query: LessonProposalListQuery): Promise<LessonProposalWire[]> {
@@ -131,10 +135,15 @@ export class LessonProposalService {
       );
     }
     const events = await this.usage.rowsByRuns([run.id], em);
+    const turns = (await this.items.getByRun(run.id, -1, em)).filter(
+      (item) => item.kind === 'turn_complete',
+    );
     return {
       reflectionRunId: run.id,
       agentKind: run.agentKind,
-      model: run.model,
+      model:
+        billedModelOf(turns.map((item) => parseJsonColumn(item.payload))) ??
+        run.model,
       working: !isTerminalRunStatus(run.status),
       startedAt: run.createdAt.toISOString(),
       durationMs: sumMeasured(events.map((event) => event.durationMs)),

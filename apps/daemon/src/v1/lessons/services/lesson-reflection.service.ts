@@ -29,6 +29,7 @@ import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import {
   LESSON_REJECTED_BRIEF_MAX,
+  LESSONS_REFLECTION_APPROVAL,
   type LessonSignal,
   type ReflectLessons,
   type ThreadLessonsState,
@@ -213,7 +214,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       agentKind,
       cwd: this.folderFor(source, project?.folder ?? null),
       projectId: place.projectId,
-      approval: this.chats.readOnlyApproval(agentKind),
+      approval: LESSONS_REFLECTION_APPROVAL,
       model: input.model ?? (fromSettings ? settings.model : null) ?? undefined,
       effort:
         input.effort ?? (fromSettings ? settings.effort : null) ?? undefined,

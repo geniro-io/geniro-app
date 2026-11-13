@@ -113,8 +113,8 @@ import {
 } from '../utils/agent-options';
 import {
   analysisTurnOf,
-  deniesUnanswered,
   isAnalysisRun,
+  runsReadOnly,
   teamAnalysisTurn,
   writeAnalysedRuns,
 } from '../utils/analysed-runs';
@@ -2926,16 +2926,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return modes.includes(CHAT_DEFAULT_APPROVAL)
       ? CHAT_DEFAULT_APPROVAL
       : 'auto';
-  }
-
-  /**
-   * The mode an unattended read-only chat starts in: `plan` where the CLI
-   * offers it, else `ask`, whose requests `deniesUnanswered` refuses.
-   */
-  readOnlyApproval(kind: AgentKind): ChatApprovalMode {
-    return this.adapterFor(kind).getConfig().approval.modes.includes('plan')
-      ? 'plan'
-      : 'ask';
   }
 
   /** The adapter driving one agent kind — the single kind→adapter dispatch. */
@@ -7291,6 +7281,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           // conversation nobody asked for and settles at once.
           ...(options.resumeOnly === true ? { resumeOnly: true } : {}),
           approvalMode,
+          ...(runsReadOnly(run) ? { readOnly: true } : {}),
           // A human is watching a chat: let the agent ask, and stream its
           // words as they are written. Each adapter decides what that costs —
           // a CLI without either capability spawns exactly as before.
@@ -7796,7 +7787,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 }
                 return;
               }
-              if (deniesUnanswered(run)) {
+              if (runsReadOnly(run)) {
                 handle.respondApproval(event.id, false, undefined);
                 return;
               }
@@ -8046,7 +8037,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         ({ toolName, input }) =>
           autoApproves(toolName, this.runPosture.get(runId), input)
             ? true
-            : deniesUnanswered(run)
+            : runsReadOnly(run)
               ? false
               : null,
         (event) => {

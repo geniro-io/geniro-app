@@ -12003,7 +12003,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
-      approval: service.readOnlyApproval('claude'),
+      approval: 'ask',
       analysisSource: {
         runId: 'source',
         seq: 5,
@@ -12023,6 +12023,9 @@ describe('ChatService — approval modes (parity M1)', () => {
     }
     await drain();
 
+    expect((claude.start.mock.calls[0]?.[0] as AgentTurnInput).readOnly).toBe(
+      true,
+    );
     const respond = claude.handles[0]!.respondApproval;
     expect(respond).toHaveBeenCalledWith('p-read', true, {});
     expect(respond).toHaveBeenCalledWith('p-lessons', true, {});
@@ -12034,11 +12037,18 @@ describe('ChatService — approval modes (parity M1)', () => {
     );
   });
 
-  it('starts a read-only chat in plan where the CLI offers it, else in ask', () => {
-    const { service } = setup();
+  it('leaves an ordinary chat’s turns with their full toolset', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
 
-    expect(service.readOnlyApproval('claude')).toBe('plan');
-    expect(service.readOnlyApproval('cursor-agent')).toBe('ask');
+    expect(
+      (claude.start.mock.calls[0]?.[0] as AgentTurnInput).readOnly,
+    ).toBeUndefined();
   });
 
   it('auto-approves the four shared-memory tools on an ASK chat', async () => {

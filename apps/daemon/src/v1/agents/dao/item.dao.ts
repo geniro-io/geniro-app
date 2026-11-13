@@ -232,11 +232,13 @@ function wireRowOf(row: {
 }
 
 /**
- * Ordered on the `(runId, kind, seq)` index's own columns: ordered by `seq`
- * alone, SQLite (with no `ANALYZE` statistics) walks `(runId, seq)` instead and
- * reads every row of the run or window to keep the few of these kinds.
+ * Ordered on the `(runId, kind, seq)` index's own columns, for a read of one
+ * run or of several: ordered by `seq` alone, SQLite (with no `ANALYZE`
+ * statistics) walks `(runId, seq)` instead and reads every row of each run or
+ * window to keep the few of these kinds. {@link inSeqOrder} puts seq order back.
  */
 const KIND_ROWS_ORDER: FindOptions<Item>['orderBy'] = [
+  { runId: 'asc' },
   { kind: 'asc' },
   { seq: 'asc' },
 ];
@@ -250,9 +252,11 @@ function kindList(kinds: readonly ItemKind[]): ItemKind[] {
   return kinds.length === 1 ? [kinds[0]!, kinds[0]!] : [...kinds];
 }
 
-/** Rows read in {@link KIND_ROWS_ORDER}, back in seq order (a stable sort). */
-function inSeqOrder<T extends { seq: number }>(rows: T[]): T[] {
-  return rows.sort((a, b) => a.seq - b.seq);
+/** Rows read in {@link KIND_ROWS_ORDER}, back in seq order within each run (a stable sort). */
+function inSeqOrder<T extends Pick<Item, 'runId' | 'seq'>>(rows: T[]): T[] {
+  return rows.sort((a, b) =>
+    a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq,
+  );
 }
 
 /** Spine rows read per statement; the event loop turns between windows. */
@@ -2852,9 +2856,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * These runs' shell rows, grouped by run and in seq order — the boot sweep's
-   * read. Ordered by kind in SQL so SQLite seeks `(run_id, kind, seq)` rather
-   * than walking every row of each run on `(run_id, seq)`; seq order is put
-   * back here.
+   * read, in {@link KIND_ROWS_ORDER}.
    */
   async shellRowsOfRuns(
     runIds: readonly string[],
@@ -2864,13 +2866,13 @@ export class ItemDao extends BaseDao<Item> {
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['shell_open', 'shell_info'] } },
         {
-          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
+          orderBy: KIND_ROWS_ORDER,
           fields: ['runId', 'kind', 'seq', 'payload', 'memberId'],
           disableIdentityMap: true,
         },
       ),
     );
-    return inSeqOrderPerRun(rows);
+    return inSeqOrder(rows);
   }
 
   /**
@@ -2908,13 +2910,13 @@ export class ItemDao extends BaseDao<Item> {
       this.getRepo(txEm).find(
         { runId: { $in: batch }, kind: { $in: ['action', 'action_outcome'] } },
         {
-          orderBy: { runId: 'asc', kind: 'asc', seq: 'asc' },
+          orderBy: KIND_ROWS_ORDER,
           fields: ['runId', 'kind', 'seq', 'payload'],
           disableIdentityMap: true,
         },
       ),
     );
-    return inSeqOrderPerRun(rows);
+    return inSeqOrder(rows);
   }
 
   /**
@@ -3187,12 +3189,4 @@ async function inRunBatches<T>(
     rows.push(...(await read(batch)));
   }
   return rows;
-}
-
-function inSeqOrderPerRun<T extends Pick<Item, 'runId' | 'seq'>>(
-  rows: T[],
-): T[] {
-  return rows.sort((a, b) =>
-    a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq,
-  );
 }

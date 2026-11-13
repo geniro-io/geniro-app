@@ -37,7 +37,7 @@ export class LessonOffersController {
     return { segments: await this.offers.list(query) };
   }
 
-  /** "Not now": the stretch stays in "Not reflected yet". 409 `LESSON_SEGMENT_DECIDED`. */
+  /** "Dismiss" in "Not reflected yet": the stretch leaves the list until a later close extends it. 409 `LESSON_SEGMENT_DECIDED`. */
   @Post('segments/:segmentId/dismiss')
   @ApiOperation({ operationId: 'dismissLessonSegment' })
   @ZodResponse({ status: 201, type: LessonSegmentDto })

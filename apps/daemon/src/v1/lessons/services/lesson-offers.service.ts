@@ -13,7 +13,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import {
   LessonSegmentDao,
-  OPEN_SEGMENT_STATUSES,
+  WAITING_SEGMENT_STATUSES,
 } from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
@@ -84,10 +84,10 @@ export class LessonOffersService {
         `no stretch ${segmentId}`,
       );
     }
-    if (segment.status !== 'offered') {
+    if (!WAITING_SEGMENT_STATUSES.includes(segment.status)) {
       throw new ConflictException(
         'LESSON_SEGMENT_DECIDED',
-        `this stretch is ${segment.status}, not offered`,
+        `this stretch is ${segment.status}, not waiting`,
       );
     }
     await this.segments.updateById(segment.id, { status: 'dismissed' }, em);
@@ -185,7 +185,7 @@ export class LessonOffersService {
 
 function statusesOf(text: string | undefined): readonly LessonSegmentStatus[] {
   if (text === undefined || text.trim() === '') {
-    return OPEN_SEGMENT_STATUSES;
+    return WAITING_SEGMENT_STATUSES;
   }
   const statuses = text.split(',').map((part) => part.trim());
   const unknown = statuses.filter(

@@ -434,6 +434,11 @@ import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
 import {
+  lessonsMarkOf,
+  type ThreadLessonsMark,
+  useThreadLessons,
+} from './use-thread-lessons';
+import {
   changesPullRequestsOf,
   rowPullRequestOf,
   threadPullRequestsOf,
@@ -2442,6 +2447,25 @@ export function Chats({
         .catch((err: unknown) => setError(describeDaemonError(err)));
     },
     [chatApi, setError],
+  );
+
+  // Moved by each "Reflect now" the user starts, so the panel's button
+  // re-reads the thread's lessons state and shows the reflection working.
+  const [lessonsGeneration, setLessonsGeneration] = useState(0);
+  const handleReflectRun = useLatestCallback(
+    (runId: string): void => {
+      setError(null);
+      void apis.lessons
+        .reflectLessons({ runId, reflectLessonsDto: {} })
+        .then(() => setLessonsGeneration((generation) => generation + 1))
+        .catch((err: unknown) => setError(describeDaemonError(err)));
+    },
+    [apis, setError],
+  );
+  const readLessonsMark = useLatestCallback(
+    (runId: string): Promise<ThreadLessonsMark> =>
+      apis.lessons.getThreadLessonsState({ runId }).then(lessonsMarkOf),
+    [apis],
   );
 
   // The run queued for deletion (null = no confirm open). Deleting is
@@ -5158,6 +5182,13 @@ export function Chats({
     client,
     sourceRunId: activeRun && !isAnalysisRun(activeRun) ? activeRun.id : null,
     refreshKey: analysisGeneration,
+  });
+  // The open thread's lessons state, for its Reflect now button.
+  const lessonsMark = useThreadLessons({
+    lessonsApi: apis.lessons,
+    client,
+    sourceRunId: activeRun && !isAnalysisRun(activeRun) ? activeRun.id : null,
+    refreshKey: lessonsGeneration,
   });
   // The repository a TASK run's worktree was cut from, for the header chip —
   // asked only for a task's run, whose folder geniro named by the task's id.
@@ -9671,7 +9702,9 @@ export function Chats({
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}
-        loadKnowledge={loadKnowledge}>
+        loadKnowledge={loadKnowledge}
+        lessonsApi={apis.lessons}
+        lessonsJump={jumpToSeq}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -9940,6 +9973,12 @@ export function Chats({
                                     ? handleAnalyzeRun
                                     : undefined
                                 }
+                                onReflect={
+                                  !isAnalysisRun(run) && !isHosted
+                                    ? handleReflectRun
+                                    : undefined
+                                }
+                                readLessonsMark={readLessonsMark}
                                 // Read off the ROW, like `archived` above and
                                 // for its reason: under `Show all` the band and
                                 // the rest are one list, so a flag derived from
@@ -11501,6 +11540,12 @@ export function Chats({
                           : undefined
                       }
                       analysisMark={analysisMark}
+                      onReflectLessons={
+                        activeRun && !isAnalysisRun(activeRun) && !isHosted
+                          ? () => handleReflectRun(activeRun.id)
+                          : undefined
+                      }
+                      lessonsMark={lessonsMark}
                       terminalReasons={terminalReasons}
                       // In the drawer the panel owns no column, so it drops
                       // the stored width, the resize handle and the fold —

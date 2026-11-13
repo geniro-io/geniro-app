@@ -185,10 +185,9 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every analysis started on one thread, newest first. A thread keeps one —
-   * a new one replaces it — so more than one means a replace that did not
-   * finish, and the reader takes the newest. Archived rows are included: the
-   * source's delete must take them all.
+   * Every analysis started on one thread, newest first, lessons reflections
+   * included. Archived rows are included: the source's delete must take them
+   * all.
    */
   async listAnalysesOf(
     sourceRunId: string,
@@ -196,6 +195,33 @@ export class RunDao extends BaseDao<Run> {
   ): Promise<Run[]> {
     return this.getRepo(txEm).find(
       { analysisSourceRunId: sourceRunId },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * The user's own analyses of one thread ("Analyze thread"), newest first —
+   * never a lessons reflection. A thread keeps one — a new one replaces it —
+   * so more than one means a replace that did not finish, and the reader
+   * takes the newest.
+   */
+  async listReviewAnalysesOf(
+    sourceRunId: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { $and: [{ analysisSourceRunId: sourceRunId }, REVIEW_PURPOSE] },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** One thread's lessons reflections, newest first, archived ones included. */
+  async listLessonReflectionsOf(
+    sourceRunId: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { analysisSourceRunId: sourceRunId, analysisPurpose: 'lessons' },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }
@@ -231,10 +257,15 @@ export class RunDao extends BaseDao<Run> {
   > {
     return this.getRepo(txEm).find(
       {
-        $or: [
-          { analysisTeamSlug: { $ne: null } },
-          { editsTeamSlug: { $ne: null } },
-          { analysisSourceRunId: { $ne: null } },
+        $and: [
+          {
+            $or: [
+              { analysisTeamSlug: { $ne: null } },
+              { editsTeamSlug: { $ne: null } },
+              { analysisSourceRunId: { $ne: null } },
+            ],
+          },
+          REVIEW_PURPOSE,
         ],
       },
       {
@@ -1377,6 +1408,11 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 }
+
+/** An analysis that is the user's own review, not a lessons reflection. */
+const REVIEW_PURPOSE: FilterQuery<Run> = {
+  $or: [{ analysisPurpose: null }, { analysisPurpose: 'review' }],
+};
 
 /** The archive half of a listing's filter; `all` states no condition. */
 function scopeFilter(scope: ChatListScope): {

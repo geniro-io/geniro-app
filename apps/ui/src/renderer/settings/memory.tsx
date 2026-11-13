@@ -53,6 +53,7 @@ import {
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { LessonsSettingsPanel } from './lessons-settings';
 import { MemoryAutoForgetRow } from './memory-auto-forget';
 import { MemoryCheckPanel } from './memory-check-panel';
 import {
@@ -909,6 +910,12 @@ export function Memory({
           />
         )}
       </SettingsPanel>
+
+      <LessonsSettingsPanel
+        agentsApi={agentsApi}
+        capabilities={capabilities}
+        remote={remote}
+      />
 
       {waitingShown ? (
         <SettingsPanel>

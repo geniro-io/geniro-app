@@ -42,6 +42,9 @@ const STAMP_BATCH_SIZE = 500;
  */
 const STAMP_BATCH_PAUSE_MS = 10;
 
+/** How long a read leaves a run whose re-stamp failed before it starts one again. */
+const RESTAMP_RETRY_MS = 10 * 60_000;
+
 /**
  * Writes and repairs `Item.inCall` — which call's card each row of a run is
  * drawn in (`utils/call-membership.ts`), the key a team run's transcript is
@@ -62,13 +65,19 @@ export class ItemCallIndexService {
 
   private readonly indexing = new Map<string, Promise<void>>();
 
-  /** Moves when every stamp is cleared; a stamping pass that spans one starts over. */
-  private epoch = 0;
+  /** Team runs whose every older row was stamped again under this rule on this launch. */
+  private readonly restamped = new Set<string>();
 
-  /** Changes whenever every `inCall` stamp is cleared, so a reader holding rows knows to read them again. */
-  get stampEpoch(): number {
-    return this.epoch;
-  }
+  private readonly restamping = new Map<string, Promise<void>>();
+
+  /** Per run, how many times stamping it again changed a row's stamp on this launch. */
+  private readonly epochs = new Map<string, number>();
+
+  /** When each run's last re-stamp failed, so reads do not start one again at once. */
+  private readonly restampFailedAt = new Map<string, number>();
+
+  /** Whether the stamps on disk may be another rule's, read from the marker once per launch. */
+  private ruleChange: Promise<boolean> | null = null;
 
   private readonly markerPath: string;
 
@@ -123,11 +132,26 @@ export class ItemCallIndexService {
   }
 
   /**
+   * Moves when a run's older rows were stamped again under a changed rule, so
+   * a reader holding that run's rows knows to read them again.
+   */
+  stampEpochOf(runId: string): number {
+    return this.epochs.get(runId) ?? 0;
+  }
+
+  /**
    * Stamp every row of one run written before the column existed. A
    * conversation read awaits this, since a row it has not stamped is invisible
    * to it; once a run is done it costs nothing.
+   *
+   * On a launch whose marker names another rule it also starts stamping the
+   * run's older rows again, and does not wait for it: on a long-used profile
+   * that is a read of every row of the run, tens of seconds for a large one on
+   * a cold cache. Until it is done the run reads under the previous rule's
+   * stamps, and {@link stampEpochOf} moves once it changed any.
    */
   ensureIndexed(runId: string): Promise<void> {
+    void this.restampQuietly(runId);
     if (this.indexed.has(runId)) {
       return Promise.resolve();
     }
@@ -135,46 +159,51 @@ export class ItemCallIndexService {
     if (running) {
       return running;
     }
-    const work = this.stampRun(runId).finally(() => {
-      this.indexing.delete(runId);
-    });
+    const work = this.stampOnce(runId)
+      .then(() => {
+        this.indexed.add(runId);
+      })
+      .finally(() => {
+        this.indexing.delete(runId);
+      });
     this.indexing.set(runId, work);
     return work;
   }
 
   /**
-   * The boot entry point: every team run, newest first, so the threads
-   * opened next are ready soonest. Never throws; a run it misses is stamped
-   * when it is first read.
+   * The boot entry point: on a launch whose marker names another rule, every
+   * team run, newest first, so the threads opened next are ready soonest, one
+   * run at a time. Never throws; the marker is written only once every team
+   * run is done, so a launch that stops short is redone whole by the next.
    */
   async indexAllQuietly(): Promise<void> {
     try {
-      const swept = await this.sweptVersion();
-      if (swept === CALL_MEMBERSHIP_VERSION) {
+      if (!(await this.ruleChanged())) {
         return;
       }
-      // Stamps of another rule, or of a launch that never finished a sweep,
-      // are cleared and redone. A read between the two answers from the rows
-      // stamped by then — once, on the launch the rule changed.
-      // Passes already running finish first. One that starts while the clear
-      // is under way reads the epoch from before it, and starts over.
-      await Promise.allSettled([...this.indexing.values()]);
-      await this.itemDao.forgetInCalls(this.em.fork());
-      this.epoch += 1;
-      this.indexed.clear();
       const runs = await this.runDao.listTeamRuns('all', this.em.fork());
-      let checked = 0;
+      let failed = 0;
       for (const run of runs) {
-        if (this.indexed.has(run.id)) {
-          continue;
+        try {
+          await this.ensureIndexed(run.id);
+          await this.restampOf(run.id);
+        } catch (err) {
+          failed += 1;
+          this.logger.warn(
+            `run ${run.id}: could not stamp call membership again: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
-        await this.ensureIndexed(run.id);
-        checked += 1;
       }
-      if (checked > 0) {
-        this.logger.log(`checked call membership for ${checked} team run(s)`);
+      if (runs.length > 0) {
+        this.logger.log(
+          `checked call membership for ${runs.length - failed} of ${runs.length} team run(s)`,
+        );
+      }
+      if (failed > 0) {
+        return;
       }
       await this.markSwept();
+      this.ruleChange = Promise.resolve(false);
     } catch (err) {
       this.logger.warn(
         `call-membership sweep failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -182,13 +211,109 @@ export class ItemCallIndexService {
     }
   }
 
-  private async stampRun(runId: string): Promise<void> {
-    for (;;) {
-      const epoch = this.epoch;
-      await this.stampOnce(runId);
-      if (epoch === this.epoch) {
-        this.indexed.add(runId);
-        return;
+  private async restampQuietly(runId: string): Promise<void> {
+    if (this.restamped.has(runId) || this.restamping.has(runId)) {
+      return;
+    }
+    const failedAt = this.restampFailedAt.get(runId);
+    if (failedAt !== undefined && Date.now() - failedAt < RESTAMP_RETRY_MS) {
+      return;
+    }
+    try {
+      if ((await this.ruleChanged()) && (await this.holdsCalls(runId))) {
+        await this.restampOf(runId);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: could not stamp call membership again: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private restampOf(runId: string): Promise<void> {
+    if (this.restamped.has(runId)) {
+      return Promise.resolve();
+    }
+    const running = this.restamping.get(runId);
+    if (running) {
+      return running;
+    }
+    const work = this.restamp(runId)
+      .then(
+        () => {
+          this.restamped.add(runId);
+          this.restampFailedAt.delete(runId);
+        },
+        (err: unknown) => {
+          this.restampFailedAt.set(runId, Date.now());
+          throw err;
+        },
+      )
+      .finally(() => {
+        this.restamping.delete(runId);
+      });
+    this.restamping.set(runId, work);
+    return work;
+  }
+
+  private ruleChanged(): Promise<boolean> {
+    this.ruleChange ??= this.sweptVersion().then(
+      (swept) => swept !== CALL_MEMBERSHIP_VERSION,
+    );
+    return this.ruleChange;
+  }
+
+  /**
+   * Stamp again, under this rule, every row of a run an older build or rule
+   * stamped. Rows above the run's newest seq when it starts were stamped as
+   * they were written, by this build. A run whose promoted columns are stamped
+   * is placed from them: the rule reads no payload field but `callId` and `id`.
+   * The lookup is the live one every written row teaches, so a row written
+   * while the pass runs is placed as it was stamped. Any row changed, the
+   * run's epoch moves, whether or not the pass ends.
+   */
+  private async restamp(runId: string): Promise<void> {
+    const em = this.em.fork();
+    const through = await this.itemDao.maxSeq(runId, em);
+    const fromColumns = await this.itemDao.payloadRefsStamped(runId, em);
+    const lookup = await this.lookupFor(runId);
+    let after: { seq: number; id: string } | null = null;
+    let changed = 0;
+    try {
+      for (;;) {
+        const rows = await this.itemDao.inCallBatch(
+          runId,
+          after,
+          through,
+          STAMP_BATCH_SIZE,
+          !fromColumns,
+          em,
+        );
+        if (rows.length === 0) {
+          return;
+        }
+        changed += await this.writeStamps(
+          rows.map((row) => ({
+            id: row.id,
+            inCall: row.inCall,
+            membership: {
+              kind: row.kind,
+              memberId: row.memberId,
+              payload: fromColumns
+                ? { callId: row.callId, id: row.payloadId }
+                : parseJsonColumn(row.payload ?? ''),
+            },
+          })),
+          lookup,
+          em,
+        );
+        const last = rows[rows.length - 1]!;
+        after = { seq: last.seq, id: last.id };
+        await pause();
+      }
+    } finally {
+      if (changed > 0) {
+        this.epochs.set(runId, this.stampEpochOf(runId) + 1);
       }
     }
   }
@@ -212,32 +337,57 @@ export class ItemCallIndexService {
       if (rows.length === 0) {
         break;
       }
-      // One UPDATE per distinct value: a batch is a few calls' rows.
-      const byInCall = new Map<string, string[]>();
-      for (const row of rows) {
-        const inCall = callMembershipOf(
-          {
+      await this.writeStamps(
+        rows.map((row) => ({
+          id: row.id,
+          inCall: row.inCall,
+          membership: {
             kind: row.kind,
             memberId: row.memberId,
             payload: parseJsonColumn(row.payload),
           },
-          lookup,
-        );
-        const ids = byInCall.get(inCall);
-        if (ids === undefined) {
-          byInCall.set(inCall, [row.id]);
-        } else {
-          ids.push(row.id);
-        }
-      }
-      await em.transactional(async (tx) => {
-        for (const [inCall, ids] of byInCall) {
-          await this.itemDao.rememberInCall(ids, inCall, tx as EntityManager);
-        }
-      });
+        })),
+        lookup,
+        em,
+      );
       afterSeq = rows[rows.length - 1]!.seq;
       await pause();
     }
+  }
+
+  /** Write each row's stamp under the rule, skipping a row that already carries it; answers how many it wrote. */
+  private async writeStamps(
+    rows: readonly {
+      id: string;
+      inCall: string | null;
+      membership: CallMembershipRow;
+    }[],
+    lookup: RunLookup,
+    em: EntityManager,
+  ): Promise<number> {
+    // One UPDATE per distinct value: a batch is a few calls' rows.
+    const byInCall = new Map<string, string[]>();
+    for (const row of rows) {
+      const inCall = callMembershipOf(row.membership, lookup);
+      if (inCall === row.inCall) {
+        continue;
+      }
+      const ids = byInCall.get(inCall);
+      if (ids === undefined) {
+        byInCall.set(inCall, [row.id]);
+      } else {
+        ids.push(row.id);
+      }
+    }
+    if (byInCall.size === 0) {
+      return 0;
+    }
+    await em.transactional(async (tx) => {
+      for (const [inCall, ids] of byInCall) {
+        await this.itemDao.rememberInCall(ids, inCall, tx as EntityManager);
+      }
+    });
+    return [...byInCall.values()].reduce((sum, ids) => sum + ids.length, 0);
   }
 
   /** The rule version the last finished sweep ran under, or null when none finished. */
@@ -254,8 +404,8 @@ export class ItemCallIndexService {
   }
 
   /**
-   * A failed write costs the next launch the whole sweep again — every stamp
-   * cleared and redone — which is slow, not wrong.
+   * A failed write costs the next launch the whole sweep again — every team
+   * run stamped again — which is slow, not wrong.
    */
   private async markSwept(): Promise<void> {
     try {

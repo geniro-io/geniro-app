@@ -21,16 +21,19 @@ const FOLD = {
 } as unknown as RunWaterfallFold;
 
 function build() {
-  const fold = vi.fn(() => Promise.resolve(FOLD));
+  const fold = vi.fn((_runId: string, ..._rest: unknown[]) =>
+    Promise.resolve(FOLD),
+  );
   const ensureIndexed = vi.fn(() => Promise.resolve());
   const toolCallTimes = vi.fn(() => Promise.resolve([]));
+  const stampEpochOf = vi.fn((_runId: string) => 0);
   const service = new ThreadTimelineService(
     { fork: () => ({}) } as unknown as EntityManager,
     { fold } as unknown as ChatWaterfallService,
     { toolCallTimes } as unknown as ItemDao,
-    { ensureIndexed } as unknown as ItemCallIndexService,
+    { ensureIndexed, stampEpochOf } as unknown as ItemCallIndexService,
   );
-  return { service, fold, ensureIndexed, toolCallTimes };
+  return { service, fold, ensureIndexed, toolCallTimes, stampEpochOf };
 }
 
 describe('ThreadTimelineService', () => {
@@ -50,6 +53,22 @@ describe('ThreadTimelineService', () => {
       expect.anything(),
       false,
     );
+  });
+
+  it("folds a run again once its rows were stamped again, keeping other runs' readings", async () => {
+    const { service, fold, stampEpochOf } = build();
+    await service.read('source', 9, false);
+    await service.read('other', 9, false);
+
+    stampEpochOf.mockImplementation((runId) => (runId === 'source' ? 1 : 0));
+    await service.read('source', 9, false);
+    await service.read('other', 9, false);
+
+    expect(fold.mock.calls.map(([runId]) => runId)).toEqual([
+      'source',
+      'other',
+      'source',
+    ]);
   });
 
   it("stamps the run's call membership before pairing its tool calls", async () => {

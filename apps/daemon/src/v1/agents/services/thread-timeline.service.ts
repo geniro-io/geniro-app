@@ -42,7 +42,7 @@ export class ThreadTimelineService {
     /** The run was working at the snapshot — see `Run.analysisSourceWorking`. */
     working: boolean,
   ): Promise<ThreadTimelineReading | null> {
-    const key = `${runId}\u0000${snapshotSeq}\u0000${working}`;
+    const key = `${runId}\u0000${snapshotSeq}\u0000${working}\u0000${this.calls.stampEpochOf(runId)}`;
     const hit = this.cache.get(key);
     if (hit !== undefined) {
       this.cache.delete(key);
@@ -55,7 +55,8 @@ export class ThreadTimelineService {
       return null;
     }
     // Tool calls pair by the call they were made in, so the run's rows must be
-    // stamped first — a boot re-stamp clears them and walks runs one by one.
+    // stamped first; a reading is keyed by the run's stamp epoch, since a
+    // re-stamp under a changed rule can move a row to another call.
     await this.calls.ensureIndexed(runId);
     const rows = await this.itemDao.toolCallTimes(runId, snapshotSeq, em);
     const to = Date.parse(folded.to);

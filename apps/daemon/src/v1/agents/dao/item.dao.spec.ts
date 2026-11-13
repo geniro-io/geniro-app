@@ -17,7 +17,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { SeqRange } from '../chat.types';
+import type { ChatTextDatabase, SeqRange } from '../chat.types';
 import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
 import { RunDao } from './run.dao';
@@ -1304,37 +1304,186 @@ describe('ItemDao (in-memory sqlite)', () => {
     ]);
   });
 
-  it('unstamps every row of every run, across the windows it clears them in', async () => {
-    await new RunDao(orm.em.fork()).create({
-      id: 'run-a',
-      status: 'completed',
-      teamId: 'dev',
-    });
-    const at = new Date(Date.UTC(2026, 9, 27));
-    await orm.em.fork().insertMany(
-      Item,
-      [0, 1_999, 2_000, 4_500].map((seq) => ({
-        id: `r-${seq}`,
-        runId: 'run-a',
-        seq,
-        kind: 'message' as const,
-        payload: '{}',
-        inCall: 'call-1',
-        createdAt: at,
-        updatedAt: at,
-      })),
-    );
-    const update = vi.spyOn(
-      orm.em.fork().getRepository(Item).constructor.prototype,
-      'nativeUpdate',
-    );
+  describe('inCallBatch', () => {
+    async function stamped(
+      id: string,
+      seq: number,
+      inCall: string | null,
+      runId = 'run-a',
+    ): Promise<void> {
+      const at = new Date(Date.UTC(2026, 9, 27));
+      await orm.em.fork().insertMany(Item, [
+        {
+          id,
+          runId,
+          seq,
+          kind: 'message' as const,
+          payload: '{}',
+          inCall,
+          createdAt: at,
+          updatedAt: at,
+        },
+      ]);
+    }
 
-    expect(await dao.forgetInCalls()).toBe(4);
-    expect(
-      (await orm.em.fork().find(Item, { runId: 'run-a' })).map((r) => r.inCall),
-    ).toEqual([null, null, null, null]);
-    expect(update.mock.calls.length).toBeGreaterThanOrEqual(3);
-    update.mockRestore();
+    it('pages one run’s rows, stamped or not, by seq then id up to the seq it is given', async () => {
+      await stamped('r-0', 0, 'call-1');
+      await stamped('r-1b', 1, null);
+      await stamped('r-1a', 1, '');
+      await stamped('r-2', 2, 'call-2');
+      await stamped('r-9', 9, 'call-9');
+      await stamped('other', 1, 'call-1', 'run-b');
+
+      const first = await dao.inCallBatch('run-a', null, 2, 2, false);
+      const second = await dao.inCallBatch(
+        'run-a',
+        { seq: first[1]!.seq, id: first[1]!.id },
+        2,
+        2,
+        false,
+      );
+
+      expect(first.map((row) => [row.id, row.inCall])).toEqual([
+        ['r-0', 'call-1'],
+        ['r-1a', ''],
+      ]);
+      expect(second.map((row) => [row.id, row.inCall])).toEqual([
+        ['r-1b', null],
+        ['r-2', 'call-2'],
+      ]);
+    });
+    it('bounds a later batch’s seq from below, so it starts where the last one ended', async () => {
+      const execute = vi.spyOn(orm.em.getConnection(), 'execute');
+
+      await dao.inCallBatch('run-a', { seq: 40, id: 'r-40' }, 90, 10, false);
+
+      const [sql, params] = execute.mock.calls[0]! as [string, unknown[]];
+      execute.mockRestore();
+      const bound = sql.indexOf('`seq` >= ?');
+      expect(bound).toBeGreaterThan(-1);
+      expect(params[sql.slice(0, bound).split('?').length - 1]).toBe(40);
+    });
+
+    it('reads the payload only when asked, and the promoted call columns either way', async () => {
+      await insert('run-a', 0, 'subagent_info', '{"id":"d1","callId":"c1"}');
+
+      const [bare] = await dao.inCallBatch('run-a', null, 0, 10, false);
+      const [whole] = await dao.inCallBatch('run-a', null, 0, 10, true);
+
+      expect([bare!.payload, bare!.callId, bare!.payloadId]).toEqual([
+        null,
+        'c1',
+        'd1',
+      ]);
+      expect(whole!.payload).toBe('{"id":"d1","callId":"c1"}');
+    });
+  });
+
+  describe('rowsOfKinds and rowsOfKindsBetween', () => {
+    /**
+     * Without ANALYZE statistics SQLite breaks a cost tie by the order the
+     * indexes were made, so they are made here in a long-used profile's order:
+     * `(runId, seq)` before `(runId, kind, seq)`.
+     */
+    beforeAll(async () => {
+      const schema = orm.em.getKysely<ChatTextDatabase>().schema;
+      await schema.dropIndex('items_run_id_seq_index').execute();
+      await schema.dropIndex('items_run_id_kind_seq_index').execute();
+      await schema
+        .createIndex('items_run_id_seq_index')
+        .on('items')
+        .columns(['run_id', 'seq'])
+        .execute();
+      await schema
+        .createIndex('items_run_id_kind_seq_index')
+        .on('items')
+        .columns(['run_id', 'kind', 'seq'])
+        .execute();
+    });
+
+    /** The plan SQLite picks for the one statement `read` sends, its values pasted in as MikroORM runs it. */
+    async function planOf(read: () => Promise<unknown>): Promise<string> {
+      const connection = orm.em.getConnection();
+      const execute = vi.spyOn(connection, 'execute');
+      await read();
+      const [sql, params] = execute.mock.calls[0]! as [string, unknown[]];
+      execute.mockRestore();
+      const plan = await connection.execute<{ detail: string }[]>(
+        `explain query plan ${orm.em.getPlatform().formatQuery(sql, params)}`,
+      );
+      return plan.map((step) => step.detail).join(' | ');
+    }
+
+    it('returns the run’s rows of those kinds in seq order', async () => {
+      await insert('run-a', 0, 'call_started', '{"callId":"c1"}');
+      await insert('run-a', 1, 'message');
+      await insert('run-a', 2, 'call_result', '{"callId":"c1"}');
+      await insert('run-a', 3, 'call_started', '{"callId":"c2"}');
+      await insert('run-b', 4, 'call_started', '{"callId":"c3"}');
+
+      expect(
+        (await dao.rowsOfKinds('run-a', ['call_started', 'call_result'])).map(
+          (row) => [row.seq, row.kind],
+        ),
+      ).toEqual([
+        [0, 'call_started'],
+        [2, 'call_result'],
+        [3, 'call_started'],
+      ]);
+      expect(
+        (
+          await dao.rowsOfKindsBetween(
+            'run-a',
+            ['call_started', 'call_result'],
+            0,
+            3,
+          )
+        ).map((row) => [row.seq, row.kind]),
+      ).toEqual([
+        [2, 'call_result'],
+        [3, 'call_started'],
+      ]);
+    });
+
+    it('reads through the (run, kind, seq) index rather than every row of the run', async () => {
+      expect(
+        await planOf(() =>
+          dao.rowsOfKinds('run-a', ['call_started', 'call_result']),
+        ),
+      ).toMatch(/^SEARCH i0 USING INDEX items_run_id_kind_seq_index /);
+      expect(
+        await planOf(() =>
+          dao.rowsOfKindsBetween(
+            'run-a',
+            ['call_started', 'call_result'],
+            0,
+            2_000,
+          ),
+        ),
+      ).toMatch(/^SEARCH i0 USING INDEX items_run_id_kind_seq_index /);
+      expect(
+        await planOf(() =>
+          dao.rowsOfKindsBetween('run-a', ['subagent_info'], 0, 2_000),
+        ),
+      ).toMatch(/^SEARCH i0 USING INDEX items_run_id_kind_seq_index /);
+      expect(
+        await planOf(() =>
+          dao.rowsOfKinds('run-a', ['subagent_info'], { after: 3 }),
+        ),
+      ).toMatch(/^SEARCH i0 USING INDEX items_run_id_kind_seq_index /);
+    });
+
+    it('answers a single kind without repeating a row', async () => {
+      await insert('run-a', 0, 'subagent_info', '{"id":"d1"}');
+      await insert('run-a', 1, 'message');
+      await insert('run-a', 2, 'subagent_info', '{"id":"d2"}');
+
+      expect(
+        (await dao.rowsOfKindsBetween('run-a', ['subagent_info'], -1, 2)).map(
+          (row) => row.seq,
+        ),
+      ).toEqual([0, 2]);
+    });
   });
 
   describe('timelineSpine', () => {

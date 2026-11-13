@@ -23,7 +23,10 @@ import {
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
 import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
-import { ProjectInstructionBlockSchema } from '../projects/projects.types';
+import {
+  LessonOverrideSchema,
+  ProjectInstructionBlockSchema,
+} from '../projects/projects.types';
 import type { ProjectBlockInput } from '../projects/utils/project-instruction-blocks';
 import {
   AgentKindSchema,
@@ -578,6 +581,9 @@ export const TeamSchema = z
       .describe(
         "The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every member of a run sees it and moves it with move_stage. Omitted = the team has no stages",
       ),
+    lessons: LessonOverrideSchema.optional().describe(
+      "Whether this team's runs are offered lessons reflections; omitted = inherit the project's and the app's setting. The app's Off always wins",
+    ),
   })
   .meta({ id: 'Team' });
 

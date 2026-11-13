@@ -192,6 +192,8 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * `lessons` is the lessons a hidden reflection proposed about this thread
  * (`propose_lessons`), written into the thread it read; `lesson_outcome` is
  * the user's save or reject of one of them, append-only like the action pair.
+ * `lesson_offer` is a closed stretch of the thread with a learning signal in
+ * it, offered for a reflection the user starts with a press.
  */
 export const ItemKindSchema = z
   .enum([
@@ -233,6 +235,7 @@ export const ItemKindSchema = z
     'thread_outcome',
     'lessons',
     'lesson_outcome',
+    'lesson_offer',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

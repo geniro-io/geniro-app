@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  Optional,
   Param,
   ParseIntPipe,
   Patch,
@@ -70,6 +71,7 @@ import {
   ForgottenInstructionsDto,
   HistoryQueryDto,
   ItemDto,
+  DeleteRunQueryDto,
   ListChatsQueryDto,
   LocalImageDto,
   LocalImageQueryDto,
@@ -118,6 +120,7 @@ import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTeamNotesService } from '../services/chat-team-notes.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatUploadStoreService } from '../services/chat-upload-store.service';
+import { ExtractLessonsOnDeleteRegistry } from '../services/extract-lessons-on-delete.registry';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
 import { LocalImageService } from '../services/local-image.service';
 import { RecommendationsApplyService } from '../services/recommendations-apply.service';
@@ -164,6 +167,8 @@ export class ChatController {
     private readonly overview: ThreadOverviewService,
     private readonly recommendations: RecommendationsApplyService,
     private readonly actionPresses: ActionPressService,
+    @Optional()
+    private readonly extractLessons?: ExtractLessonsOnDeleteRegistry,
   ) {}
 
   @Post()
@@ -791,7 +796,16 @@ export class ChatController {
   @Delete(':runId')
   @ApiOperation({ operationId: 'deleteChat' })
   @ZodResponse({ status: 200, type: ChatDeletedDto })
-  delete(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
+  async delete(
+    @Param('runId') runId: string,
+    @Query() query: DeleteRunQueryDto,
+  ): Promise<{ deleted: boolean }> {
+    if (query.extractLessons === 'true') {
+      const taken = await this.extractLessons?.extract(runId);
+      if (taken != null) {
+        return taken;
+      }
+    }
     return this.chatService.delete(runId);
   }
 }

@@ -66,6 +66,7 @@ import { BrowserBroker } from './services/browser.broker';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
+import { ExtractLessonsOnDeleteRegistry } from './services/extract-lessons-on-delete.registry';
 import { ChatActionsService } from './services/chat-actions.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
@@ -206,6 +207,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     DesktopOnlyGuard,
+    ExtractLessonsOnDeleteRegistry,
     ChatShellsService,
     ChatHistoryService,
     RunStateService,
@@ -776,6 +778,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // The service alone, and the import runs one way — `TasksModule` imports
     // this module, never the reverse, as `TeamsModule` already does.
     ChatService,
+    // For the lessons module, which takes a delete with "Extract lessons first".
+    ExtractLessonsOnDeleteRegistry,
   ],
 })
 export class AgentsModule {}

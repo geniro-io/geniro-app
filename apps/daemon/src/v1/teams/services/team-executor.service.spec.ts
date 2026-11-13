@@ -84,6 +84,10 @@ import type { AttachmentStoreService } from '../../agents/services/attachment-st
 import { BrowserBroker } from '../../agents/services/browser.broker';
 import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
+import {
+  COMMAND_END_WAKE_BATCH_MS,
+  CommandEndWakeService,
+} from '../../agents/services/command-end-wake.service';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -1176,6 +1180,8 @@ function setup(
     projectInstructionCards?: ProjectInstructionsBroker;
     /** Who writes the run's goals, when a test reads it. */
     goalWriters?: GoalWritersBroker;
+    /** Wakes for members' commands that end after their turn, when a test drives them. */
+    commandEndWakes?: CommandEndWakeService;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1675,6 +1681,7 @@ function setup(
     opts.teamProposals,
     opts.projectInstructionCards,
     opts.goalWriters,
+    opts.commandEndWakes,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -19191,5 +19198,73 @@ describe('TeamExecutorService — relay mode', () => {
       ).rejects.toMatchObject({ errorCode: 'TEAM_OVERLAY_INVALID' });
       expect(runDao.runs.size).toBe(0);
     });
+  });
+});
+
+describe('TeamExecutorService — a cursor member’s command that ends after its turn', () => {
+  function wakeSetup() {
+    const wakes = new HostWakeBus();
+    const harness = setup(4870, {
+      commandEndWakes: new CommandEndWakeService(wakes),
+    });
+    new HostWakeGraphDelivery(
+      wakes,
+      harness.service,
+      harness.sessions,
+    ).onModuleInit();
+    return harness;
+  }
+
+  async function endedAfterTurn(agent: 'claude' | 'cursor-agent') {
+    const harness = wakeSetup();
+    const run = await harness.service.startRun({
+      slug: 's',
+      team: teamOf([member('a', { agent })], { name: 's' }),
+      cwd: dir,
+      prompt: 'probe the two sources',
+    });
+    await drain();
+    const adapter = agent === 'claude' ? harness.claude : harness.cursor;
+    const turn = adapter.starts[0]!;
+    turn.emit({ type: 'shell_open', toolCallId: 'probe', workId: 'probe' });
+    completeTurn(turn, 'Reading the rest next turn.');
+    await drain();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      turn.emitOffTurn({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'probe',
+        ending: {
+          command: 'python3 /tmp/followup-probe.py',
+          exitCode: 0,
+          outputPath: '/tmp/terminals/451147.txt',
+        },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await drain();
+    return { ...harness, run, adapter };
+  }
+
+  it('wakes the member in its own conversation with the command, its exit code and its output', async () => {
+    const { adapter } = await endedAfterTurn('cursor-agent');
+
+    expect(adapter.starts).toHaveLength(2);
+    const prompt = adapter.starts[1]!.input.prompt;
+    expect(prompt).toContain('python3 /tmp/followup-probe.py');
+    expect(prompt).toContain('exit code 0');
+    expect(prompt).toContain('/tmp/terminals/451147.txt');
+    completeTurn(adapter.starts[1]!, 'done');
+    await drain();
+  });
+
+  it('starts nothing for a claude member, whose CLI wakes itself', async () => {
+    const { adapter } = await endedAfterTurn('claude');
+
+    expect(adapter.starts).toHaveLength(1);
   });
 });

@@ -76,6 +76,10 @@ import {
   BrowserBroker,
   type BrowserSink,
 } from '../../agents/services/browser.broker';
+import {
+  CommandEndWakeService,
+  memberWakeOwner,
+} from '../../agents/services/command-end-wake.service';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -874,6 +878,8 @@ export class TeamExecutorService
     private readonly projectInstructionCards?: ProjectInstructionsBroker,
     /** Who writes the run's goals (the lead alone), optional on `artifacts`' terms. */
     @Optional() private readonly goalWriters?: GoalWritersBroker,
+    /** Wakes for members' commands that end between turns, optional on `artifacts`' terms. */
+    @Optional() private readonly commandEndWakes?: CommandEndWakeService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1601,6 +1607,7 @@ export class TeamExecutorService
     // run's processes from here — that, or a later close, since they are kept
     // past the Stop — says it was the Stop's.
     this.sessions.noteUserStop(runId);
+    this.commandEndWakes?.forgetRun(runId);
     // The run's monitors end with it, waking nobody.
     this.monitors?.stopRun(runId, 'thread-stop');
     return { cancelled: this.registry.cancel(runId) };
@@ -1872,6 +1879,7 @@ export class TeamExecutorService
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
+    this.commandEndWakes?.userSpoke(runId);
     return this.messageSends.send(runId, text, clientMessageId, async () => {
       const live = this.liveRuns.get(runId);
       if (live) {
@@ -3765,6 +3773,9 @@ export class TeamExecutorService
     const liveConversations = new Map<string, number>();
     const retainConversation = (caller: string): void => {
       liveConversations.set(caller, (liveConversations.get(caller) ?? 0) + 1);
+      if (callerConversationOf(caller) === null) {
+        this.commandEndWakes?.turnStarted(memberWakeOwner(runId, caller));
+      }
     };
     /**
      * One conversation's turn has ended: it is live no more, and what its
@@ -5742,6 +5753,20 @@ export class TeamExecutorService
       // to the member's totals with its ending, as a turn of ours adds its own.
       let offTurnToolCalls = 0;
       const onOffTurnEvent = (event: AgentEvent): void => {
+        if (
+          event.type === 'shell_info' &&
+          event.ending !== undefined &&
+          !callContext &&
+          adapter.getConfig().shells.lateEndWakeReason !== null &&
+          !this.deleting.has(runId)
+        ) {
+          this.commandEndWakes?.ended(
+            memberWakeOwner(runId, node.id),
+            event.workId,
+            event.ending,
+            () => liveConversations.has(caller),
+          );
+        }
         if (event.type === 'tool_call' && event.parentToolUseId === undefined) {
           offTurnToolCalls += 1;
         } else if (terminalStatus(event) !== null) {

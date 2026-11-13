@@ -220,6 +220,7 @@ export class CodexAdapter extends AgentAdapter {
         // Every command is an item codex opens and closes itself.
         unreportedDetachReason: null,
         silentWaitReason: null,
+        lateEndWakeReason: null,
       },
       questionToolName: CODEX_QUESTION_TOOL_NAME,
       // A question arrives as a server request whatever the approval policy.

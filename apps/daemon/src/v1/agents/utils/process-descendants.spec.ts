@@ -4,11 +4,41 @@ import {
   commandLiveness,
   commandNeedles,
   descendantsOf,
+  endedRecordOf,
   isCommandRunning,
   parseProcessRows,
   type ProcessRow,
   recordedPidsRunning,
 } from './process-descendants';
+
+describe('endedRecordOf', () => {
+  it('takes the newest ended record of the command, its whitespace aside', () => {
+    const records = [
+      {
+        pid: 1,
+        command: 'make  test',
+        running: false,
+        exitCode: 1,
+        endedAt: '2026-11-13T08:00:00.000Z',
+      },
+      {
+        pid: 2,
+        command: 'make test',
+        running: false,
+        exitCode: 0,
+        endedAt: '2026-11-13T09:00:00.000Z',
+      },
+      { pid: 3, command: 'make test', running: true },
+      { pid: 4, command: 'make build', running: false, exitCode: 2 },
+    ];
+
+    expect(endedRecordOf(records, 'make\ntest')?.pid).toBe(2);
+    expect(endedRecordOf(records, 'make lint')).toBeNull();
+    expect(
+      endedRecordOf([{ pid: 9, command: 'x y', running: true }], 'x y'),
+    ).toBeNull();
+  });
+});
 
 describe('parseProcessRows', () => {
   it('reads the three columns `ps` is asked for', () => {

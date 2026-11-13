@@ -22,6 +22,7 @@ import {
   commandLiveness,
   commandTargets,
   descendantsOf,
+  endedRecordOf,
   isGroupAnchored,
   listProcesses,
   type ProcessRow,
@@ -2720,6 +2721,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       type: 'shell_info',
       toolCallId,
       workId: event.id,
+      ...(event.ending === undefined ? {} : { ending: event.ending }),
     };
     // To whoever can carry it, on the same rule as the delegate announcement:
     // a background command routinely OUTLIVES the turn that launched it, so
@@ -2887,10 +2889,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       await (opts.listProcesses ?? listProcesses)(),
       rootPid,
     );
-    const stillRunning = commandLiveness(
-      alive,
-      (await opts.readCommandRecords?.()) ?? [],
-    );
+    const records = (await opts.readCommandRecords?.()) ?? [];
+    const stillRunning = commandLiveness(alive, records);
     const keptOpen = new Set(
       [...osDetachedShells].filter((id) => {
         const call = executeCalls.get(id);
@@ -2931,13 +2931,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         continue;
       }
       osDetachedShells.delete(id);
+      const command = executeCalls.get(id)?.command;
       executeCalls.delete(id);
+      const record =
+        command === undefined ? null : endedRecordOf(records, command);
       announceShellWork({
         type: 'background_work',
         id,
         phase: 'settled',
         unit: 'other',
         toolCallId: null,
+        ...(command === undefined
+          ? {}
+          : {
+              ending: {
+                command,
+                exitCode: record?.exitCode ?? null,
+                outputPath: record?.outputPath ?? null,
+              },
+            }),
       });
     }
     refreshCommandWait();

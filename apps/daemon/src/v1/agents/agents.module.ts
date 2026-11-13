@@ -81,6 +81,7 @@ import { ChatTitleService } from './services/chat-title.service';
 import { ChatUploadStoreService } from './services/chat-upload-store.service';
 import { ChatWaterfallService } from './services/chat-waterfall.service';
 import { CliSessionsService } from './services/cli-sessions.service';
+import { CommandEndWakeService } from './services/command-end-wake.service';
 import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
@@ -297,6 +298,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunOutcomeHistoryService,
     HostWakeBus,
     HostWakeChatDelivery,
+    {
+      provide: CommandEndWakeService,
+      useFactory: (bus: HostWakeBus) => new CommandEndWakeService(bus),
+      inject: [HostWakeBus],
+    },
     RunNoticeWriter,
     RunLiveWork,
     ArtifactPageService,
@@ -671,6 +677,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the share service, which wakes the agent that asked once a share
     // waiting on the user's sign-in lands, and the team delivery of it.
     HostWakeBus,
+    // For the team executor, which wakes a member whose command ended after its turn.
+    CommandEndWakeService,
     // For the team module, which reports its runs' blocked conversations.
     AgentActivityService,
     // For the task board, which keeps a card's worktree while its run works

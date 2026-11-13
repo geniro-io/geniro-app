@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   cursorProjectSlug,
   cursorTerminalDirs,
+  parseCursorTerminalFooter,
   parseCursorTerminalHeader,
   readCursorTerminalRecords,
 } from './cursor-terminals.utils';
@@ -102,6 +103,24 @@ describe('parseCursorTerminalHeader', () => {
   });
 });
 
+describe('parseCursorTerminalFooter', () => {
+  it('reads the exit code and end of the last fenced block', () => {
+    expect(
+      parseCursorTerminalFooter(
+        'output\n---\nexit_code: 1\nelapsed_ms: 5\nended_at: 2026-11-13T08:33:20.581Z\n---\n',
+      ),
+    ).toEqual({ exitCode: 1, endedAt: '2026-11-13T08:33:20.581Z' });
+  });
+
+  it.each([
+    ['output with no footer', 'just output\n'],
+    ['a footer with no exit code', 'x\n---\nelapsed_ms: 5\n---\n'],
+    ['an exit code that is no number', 'x\n---\nexit_code: soon\n---\n'],
+  ])('reads %s as unknown', (_name, text) => {
+    expect(parseCursorTerminalFooter(text).exitCode).toBeNull();
+  });
+});
+
 describe('cursorTerminalDirs', () => {
   const dirs: string[] = [];
   afterEach(() => {
@@ -178,6 +197,40 @@ describe('readCursorTerminalRecords', () => {
     const later = new Date(Date.now());
     utimesSync(path, later, later);
     expect(await runningNow()).toBe(false);
+  });
+
+  it('names the file and reads how an ended command ended from its footer', async () => {
+    const dir = tempDir();
+    const path = join(dir, '451147.txt');
+    const output = 'x'.repeat(300 * 1024);
+    writeFileSync(
+      path,
+      terminalFile({ status: 'succeeded' })
+        .replace(/---\nexit_code: 0\n---\n$/, '')
+        .replace('output: not a field', output) +
+        '---\nexit_code: 3\nelapsed_ms: 169021\nended_at: 2026-11-13T08:33:20.581Z\n---\n',
+    );
+
+    const [record] = await readCursorTerminalRecords([dir], 0);
+
+    expect(record).toEqual(
+      expect.objectContaining({
+        running: false,
+        outputPath: path,
+        exitCode: 3,
+        endedAt: '2026-11-13T08:33:20.581Z',
+      }),
+    );
+  });
+
+  it('reads no exit code for a command still running', async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, '7.txt'), terminalFile({ status: 'running' }));
+
+    const [record] = await readCursorTerminalRecords([dir], 0);
+
+    expect(record?.running).toBe(true);
+    expect(record?.exitCode).toBeUndefined();
   });
 
   it('skips what is not a record and a folder that is not there', async () => {

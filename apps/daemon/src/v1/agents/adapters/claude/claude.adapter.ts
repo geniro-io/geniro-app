@@ -368,6 +368,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // open every one of them a second time.
         unreportedDetachReason: null,
         silentWaitReason: null,
+        lateEndWakeReason: null,
       },
       questionToolName: CLAUDE_QUESTION_TOOL_NAME,
       /**

@@ -233,6 +233,24 @@ export function recordedPidsRunning(
     .map((record) => record.pid);
 }
 
+/** The newest ended record of `command`, or null when none has ended. */
+export function endedRecordOf(
+  records: readonly CommandRecord[],
+  command: string,
+): CommandRecord | null {
+  const line = normalizeCommand(command);
+  let newest: CommandRecord | null = null;
+  for (const record of records) {
+    if (record.running || normalizeCommand(record.command) !== line) {
+      continue;
+    }
+    if (newest === null || (record.endedAt ?? '') >= (newest.endedAt ?? '')) {
+      newest = record;
+    }
+  }
+  return newest;
+}
+
 function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }

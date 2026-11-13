@@ -9,6 +9,7 @@ const TERMINALS_DIR = 'terminals';
 const TERMINAL_FILE_SUFFIX = '.txt';
 const HEADER_FENCE = '---';
 const MAX_HEADER_BYTES = 256 * 1024;
+const MAX_FOOTER_BYTES = 4 * 1024;
 
 /** Twin of the CLI's own `workspace-paths` rule (`index.js`, 2026.11.05-86047df). */
 export function cursorProjectSlug(cwd: string): string {
@@ -35,6 +36,37 @@ export function parseCursorTerminalHeader(text: string): CommandRecord | null {
     }
   }
   return null;
+}
+
+/**
+ * The last fenced block of an ended terminal file — `exit_code`, `ended_at` —
+ * which the CLI appends after the output; nulls for any other shape.
+ */
+export function parseCursorTerminalFooter(text: string): {
+  exitCode: number | null;
+  endedAt: string | null;
+} {
+  const lines = text.trimEnd().split('\n');
+  if (lines.at(-1)?.trim() !== HEADER_FENCE) {
+    return { exitCode: null, endedAt: null };
+  }
+  const fields = new Map<string, string>();
+  for (let i = lines.length - 2; i >= 0; i -= 1) {
+    const line = lines[i] ?? '';
+    if (line.trim() === HEADER_FENCE) {
+      break;
+    }
+    const colon = line.indexOf(':');
+    if (colon > 0) {
+      fields.set(line.slice(0, colon), line.slice(colon + 1).trim());
+    }
+  }
+  const exit = fields.get('exit_code');
+  const exitCode = exit === undefined || exit === '' ? NaN : Number(exit);
+  return {
+    exitCode: Number.isInteger(exitCode) ? exitCode : null,
+    endedAt: fields.get('ended_at') || null,
+  };
 }
 
 function recordFrom(fields: Map<string, string>): CommandRecord | null {
@@ -123,9 +155,23 @@ async function readRecord(
     try {
       const buffer = Buffer.alloc(MAX_HEADER_BYTES);
       const { bytesRead } = await file.read(buffer, 0, MAX_HEADER_BYTES, 0);
-      const record = parseCursorTerminalHeader(
+      const header = parseCursorTerminalHeader(
         buffer.subarray(0, bytesRead).toString('utf8'),
       );
+      let record: CommandRecord | null = null;
+      if (header !== null) {
+        record = { ...header, outputPath: path };
+        if (!header.running) {
+          const { size } = await file.stat();
+          const start = Math.max(0, size - MAX_FOOTER_BYTES);
+          const tail = Buffer.alloc(size - start);
+          const read = await file.read(tail, 0, tail.length, start);
+          const footer = parseCursorTerminalFooter(
+            tail.subarray(0, read.bytesRead).toString('utf8'),
+          );
+          record = { ...record, ...footer };
+        }
+      }
       cache.set(path, { mtimeMs, record });
       return record;
     } finally {

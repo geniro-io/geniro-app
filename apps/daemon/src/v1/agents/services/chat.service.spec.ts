@@ -126,6 +126,10 @@ import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import {
+  COMMAND_END_WAKE_BATCH_MS,
+  CommandEndWakeService,
+} from './command-end-wake.service';
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
@@ -133,7 +137,6 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { GalleryBroker } from './gallery.broker';
 import { HostWakeBus } from './host-wake.bus';
 import { HostWakeChatDelivery } from './host-wake-chat-delivery.service';
-import type { RunNoticeWriter } from './run-notice.writer';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
@@ -152,6 +155,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
+import type { RunNoticeWriter } from './run-notice.writer';
 import { RunOutcomeBroker } from './run-outcome.broker';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
@@ -1468,7 +1472,9 @@ function setup(
     projectChats,
     opts.threadInbox,
     opts.browser,
-    opts.hostWakes,
+    opts.hostWakes === undefined
+      ? undefined
+      : new CommandEndWakeService(opts.hostWakes),
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -16155,17 +16161,104 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await finishTurn(cursor);
     expect(cursor.start).toHaveBeenCalledTimes(1);
 
-    cursor.sessions[0]!.onBetweenTurnEvent!({
-      type: 'shell_info',
-      toolCallId: 'call-probe',
-      workId: 'call-probe',
-    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      cursor.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'call-probe',
+        ending: {
+          command: 'python3 /tmp/followup-probe.py',
+          exitCode: 0,
+          outputPath: '/tmp/terminals/451147.txt',
+        },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+    } finally {
+      vi.useRealTimers();
+    }
     await drain();
     await drain();
 
     expect(cursor.start).toHaveBeenCalledTimes(2);
     const woken = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
     expect(woken.prompt).toContain('python3 /tmp/followup-probe.py');
+    expect(woken.prompt).toContain('exit code 0');
+    expect(woken.prompt).toContain('/tmp/terminals/451147.txt');
+  });
+
+  describe('a command that ends after its turn, beyond the cursor wake', () => {
+    async function endAfterTurn(kind: 'claude' | 'cursor-agent') {
+      const hostWakes = new HostWakeBus();
+      const published: HostWake[] = [];
+      hostWakes.subscribe((wake) => published.push(wake));
+      const harness = setup({ hostWakes });
+      const agent = kind === 'claude' ? harness.claude : harness.cursor;
+      const run = await harness.service.createChat({
+        agentKind: kind,
+        cwd: process.cwd(),
+      });
+      await harness.service.sendMessage(run.id, 'go');
+      await drain();
+      agent.emit({ type: 'shell_open', toolCallId: 'c1', workId: 'c1' });
+      await drain();
+      await finishTurn(agent);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      agent.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'c1',
+        ending: { command: 'sleep 40', exitCode: 0, outputPath: null },
+      });
+      await drain();
+      return { ...harness, run, published };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('publishes no wake for a CLI that starts its own turn', async () => {
+      const { published } = await endAfterTurn('claude');
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('publishes no wake once the user has written before it went out', async () => {
+      const { service, run, published } = await endAfterTurn('cursor-agent');
+      await service.sendMessage(run.id, 'and now?');
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
+
+    it('publishes no wake for a command the user stopped', async () => {
+      const hostWakes = new HostWakeBus();
+      const published: HostWake[] = [];
+      hostWakes.subscribe((wake) => published.push(wake));
+      const { service, cursor } = setup({ hostWakes });
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: process.cwd(),
+      });
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      cursor.emit({ type: 'shell_open', toolCallId: 'c1', workId: 'c1' });
+      await drain();
+      await finishTurn(cursor);
+      service.noteShellClosed(run.id, 'c1');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      cursor.sessions[0]!.onBetweenTurnEvent!({
+        type: 'shell_info',
+        toolCallId: null,
+        workId: 'c1',
+        ending: { command: 'npm run dev', exitCode: null, outputPath: null },
+      });
+      await drain();
+      vi.advanceTimersByTime(COMMAND_END_WAKE_BATCH_MS);
+      expect(published).toEqual([]);
+    });
   });
 
   it('does NOT clear the parent’s activity on a SUB-AGENT’s tool result', async () => {

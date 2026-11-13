@@ -253,6 +253,11 @@ import {
 } from './browser.broker';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
+import {
+  chatWakeOwner,
+  CommandEndWakeService,
+  memberWakeOwner,
+} from './command-end-wake.service';
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
@@ -912,6 +917,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly threadInbox?: ThreadInboxService,
     /** The in-app browser's tools, installed per turn. Optional for the positional specs. */
     @Optional() private readonly browser?: BrowserBroker,
+    /** Wakes for commands that end between turns. Optional for the positional specs. */
+    @Optional() private readonly commandEndWakes?: CommandEndWakeService,
   ) {}
 
   /**
@@ -3709,6 +3716,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     // Claimed BEFORE the cancel, exactly as `delete` claims — see {@link archiving}.
     this.archiving.add(runId);
+    this.commandEndWakes?.forgetRun(runId);
     try {
       if (run.status === 'running') {
         await this.stopForArchive(run);
@@ -3843,6 +3851,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // whether or not a turn was in flight, and wakes nobody — what they had
     // already printed is dropped too.
     this.monitors?.stopRun(runId, 'thread-stop');
+    this.commandEndWakes?.forgetRun(runId);
     this.notify(this.stopListeners, runId, 'stop');
     const cancelled = this.registry.cancel(runId);
     if (cancelled) {
@@ -3947,6 +3956,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // window (where it has no finalizer to wait on) sees the delete and aborts
     // rather than registering behind our back.
     this.deleting.add(runId);
+    this.commandEndWakes?.forgetRun(runId);
     try {
       return await this.teardown.purge(em, runId, this.finalizing.get(runId));
     } finally {
@@ -4498,6 +4508,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // so a launch recorded below this line would be dropped and the count would
     // only ever go down.
     this.recordShellBracket(runId, event);
+    if (
+      event.type === 'shell_info' &&
+      event.ending !== undefined &&
+      this.adapters.for(agent).getConfig().shells.lateEndWakeReason !== null
+    ) {
+      this.commandEndWakes?.ended(
+        chatWakeOwner(runId),
+        event.workId,
+        event.ending,
+        () => this.registry.has(runId),
+      );
+    }
     const kept =
       event.type === 'follow_up_dropped'
         ? await this.withoutReturnedMessages(runId, event)
@@ -5552,6 +5574,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     memberId: string | null = null,
   ): void {
     this.backgroundWork.noteShellClosed(runId, workId, memberId);
+    if (workId !== null) {
+      this.commandEndWakes?.stoppedByUser(
+        memberId === null
+          ? chatWakeOwner(runId)
+          : memberWakeOwner(runId, memberId),
+        workId,
+      );
+    }
   }
 
   /**
@@ -5778,6 +5808,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'RUN_ARCHIVED',
         'this chat is archived — unarchive it to send a message',
       );
+    }
+    if (options.hostRow === undefined) {
+      this.commandEndWakes?.userSpoke(runId);
     }
     return this.messageSends.send(runId, text, options.clientMessageId, () =>
       this.sendMessageOnce(em, run, text, images, options),
@@ -8074,6 +8107,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
       owningSession = this.sessions.peek(runId);
       this.registry.register(runId, handle);
+      this.commandEndWakes?.turnStarted(chatWakeOwner(runId));
       // A Stop can arrive during the claim→register window, before there is
       // a session to close. The registry interrupts the newly registered turn;
       // retire its process as well so delegates cannot restart it afterwards.

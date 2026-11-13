@@ -61,7 +61,13 @@ export class LessonPendingDeleteService
     });
   }
 
-  async onApplicationBootstrap(): Promise<void> {
+  onApplicationBootstrap(): void {
+    void this.deletePending().catch((err: unknown) => {
+      this.logger.warn(`pending deletes not read at start: ${messageOf(err)}`);
+    });
+  }
+
+  private async deletePending(): Promise<void> {
     const pending = await this.runDao.listPendingDeletes(this.em.fork());
     for (const run of pending) {
       await this.deleteNow(run.id, run.teamId);
@@ -86,14 +92,22 @@ export class LessonPendingDeleteService
     if (run === null || !isReflectable(run) || run.pendingDeleteAt !== null) {
       return null;
     }
-    if (run.archivedAt === null) {
-      await this.chats.archive(runId);
-    }
     await this.runDao.updateById(runId, { pendingDeleteAt: new Date() }, em);
     let reflectionRunId: string;
     try {
-      ({ reflectionRunId } = await this.reflections.start(runId, {}, 'delete'));
-    } catch {
+      if (run.archivedAt === null) {
+        await this.chats.archive(runId);
+      }
+      reflectionRunId =
+        (await this.reflections.runningReflectionId(runId)) ??
+        (await this.reflections.start(runId, {}, 'delete')).reflectionRunId;
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: lessons not extracted before its delete: ${messageOf(err)}`,
+      );
+      await this.runDao
+        .updateById(runId, { pendingDeleteAt: null }, em)
+        .catch(() => undefined);
       return null;
     }
     const timer = setTimeout(() => {
@@ -126,8 +140,12 @@ export class LessonPendingDeleteService
       }
     } catch (err) {
       this.logger.warn(
-        `run ${runId} deleted with lessons first was not deleted: ${err instanceof Error ? err.message : String(err)}`,
+        `run ${runId} deleted with lessons first was not deleted: ${messageOf(err)}`,
       );
     }
   }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

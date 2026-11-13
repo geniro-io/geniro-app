@@ -68,6 +68,8 @@ export class LessonSegmentService
   /** Threads a done close found still working: the next settle waits the short window. */
   private readonly doneWaiting = new Set<string>();
   private readonly queues = new Map<string, Promise<unknown>>();
+  /** Each card's column as last heard, so a run settling under a card already in Done is not a move. */
+  private readonly cardColumns = new Map<string, string>();
   private subscriptions: Subscription[] = [];
   private bootTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -103,7 +105,12 @@ export class LessonSegmentService
       }),
       this.bus.allDeleted().subscribe((runId) => this.cancel(runId)),
       this.tasks.allChanges().subscribe((event) => {
-        if (event.status === 'in_review' || event.status === 'done') {
+        const previous = this.cardColumns.get(event.taskId);
+        this.cardColumns.set(event.taskId, event.status);
+        if (
+          (event.status === 'in_review' || event.status === 'done') &&
+          previous !== event.status
+        ) {
           void this.onCardFinished(event.taskId);
         }
       }),

@@ -108,6 +108,13 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** The reflection still working on this thread, if any — a delete waits for it rather than starting a second. */
+  async runningReflectionId(sourceRunId: string): Promise<string | null> {
+    return (
+      (await this.runningReflectionOf(sourceRunId, this.em.fork()))?.id ?? null
+    );
+  }
+
   /** Whether "Reflect now" has anything to do on this thread now. */
   async state(sourceRunId: string): Promise<ThreadLessonsState> {
     const em = this.em.fork();

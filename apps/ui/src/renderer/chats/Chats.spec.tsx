@@ -13062,7 +13062,7 @@ describe('Chats sidebar list', () => {
       expect(container.querySelector('[data-slot="action-notice"]')).toBeNull();
     });
 
-    it('puts the stretch aside with Not now', async () => {
+    it('closes the notice with Not now and calls the daemon for nothing', async () => {
       lessonsApi.listLessonSegments.mockResolvedValue({ segments: [OFFERED] });
       const container = await archiveAndOffer();
 
@@ -13070,9 +13070,7 @@ describe('Chats sidebar list', () => {
         noticeButton(container, 'Not now').click();
       });
 
-      expect(lessonsApi.dismissLessonSegment).toHaveBeenCalledWith({
-        segmentId: 'seg-1',
-      });
+      expect(lessonsApi.dismissLessonSegment).not.toHaveBeenCalled();
       expect(lessonsApi.reflectLessons).not.toHaveBeenCalled();
       expect(container.querySelector('[data-slot="action-notice"]')).toBeNull();
     });

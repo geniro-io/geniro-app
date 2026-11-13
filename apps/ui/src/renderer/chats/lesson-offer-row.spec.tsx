@@ -225,14 +225,30 @@ describe('LessonOfferRow', () => {
     });
   });
 
-  it('puts the stretch aside with Not now', async () => {
+  it('Not now makes no daemon call and collapses the row to where the stretch waits', async () => {
     const api = lessonsApi();
     const el = await render(api);
 
     await press(buttonNamed(el, 'Not now'));
 
-    expect(api.dismissLessonSegment).toHaveBeenCalledWith({
-      segmentId: 'seg-1',
+    expect(api.dismissLessonSegment).not.toHaveBeenCalled();
+    expect(el.textContent).toContain(
+      'Not now — waiting in Settings → Memory → Not reflected yet',
+    );
+    expect(el.textContent).not.toContain('Extract lessons from messages');
+    expect(buttonNames(el)).toEqual(['Extract lessons']);
+  });
+
+  it('extracts a parked stretch from the collapsed row, on the same segment', async () => {
+    const api = lessonsApi();
+    const el = await render(api);
+
+    await press(buttonNamed(el, 'Not now'));
+    await press(buttonNamed(el, 'Extract lessons'));
+
+    expect(api.reflectLessons).toHaveBeenCalledWith({
+      runId: 'run-1',
+      reflectLessonsDto: { segmentId: 'seg-1' },
     });
   });
 
@@ -277,7 +293,7 @@ describe('LessonOfferRow', () => {
     expect(buttonNamed(el, 'Not now').disabled).toBe(false);
   });
 
-  it('says where a put-aside stretch waits and still offers Extract', async () => {
+  it('says a dismissed stretch left Not reflected yet and still offers Extract', async () => {
     const el = await render(
       lessonsApi({
         listLessonSegments: vi.fn(async () => ({
@@ -286,9 +302,7 @@ describe('LessonOfferRow', () => {
       }),
     );
 
-    expect(el.textContent).toContain(
-      'Not now — waiting in Settings → Memory → Not reflected yet',
-    );
+    expect(el.textContent).toContain('Dismissed from Not reflected yet');
     expect(buttonNames(el)).toEqual(['Extract lessons']);
   });
 
@@ -451,6 +465,6 @@ describe('LessonOfferRow', () => {
     });
 
     expect(api.listLessonSegments).toHaveBeenCalledTimes(2);
-    expect(el.textContent).toContain('Not now — waiting in Settings');
+    expect(el.textContent).toContain('Dismissed from Not reflected yet');
   });
 });

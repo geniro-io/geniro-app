@@ -168,13 +168,13 @@ function build(
 }
 
 describe('LessonOffersService.list', () => {
-  it('lists the offered, dismissed and failed stretches when no status is named', async () => {
+  it('lists the offered and failed stretches when no status is named, leaving a dismissed one out', async () => {
     const h = build();
 
     await h.service.list({});
 
     expect(h.segments.listByStatus).toHaveBeenCalledWith(
-      ['offered', 'dismissed', 'failed'],
+      ['offered', 'failed'],
       null,
       h.em,
     );
@@ -261,23 +261,26 @@ describe('LessonOffersService.list', () => {
 });
 
 describe('LessonOffersService.dismiss', () => {
-  it('puts an offered stretch aside as dismissed and announces the change', async () => {
-    const h = build({ segments: [segmentOf()] });
-    const announced: (string | null)[] = [];
-    h.events.allChanges().subscribe((event) => announced.push(event.runId));
+  it.each(['offered', 'failed'] as const)(
+    'puts a %s stretch aside as dismissed and announces the change',
+    async (status) => {
+      const h = build({ segments: [segmentOf({ status })] });
+      const announced: (string | null)[] = [];
+      h.events.allChanges().subscribe((event) => announced.push(event.runId));
 
-    const wire = await h.service.dismiss('seg-1');
+      const wire = await h.service.dismiss('seg-1');
 
-    expect(h.segments.updateById).toHaveBeenCalledWith(
-      'seg-1',
-      { status: 'dismissed' },
-      h.em,
-    );
-    expect(wire.status).toBe('dismissed');
-    expect(announced).toEqual(['src']);
-  });
+      expect(h.segments.updateById).toHaveBeenCalledWith(
+        'seg-1',
+        { status: 'dismissed' },
+        h.em,
+      );
+      expect(wire.status).toBe('dismissed');
+      expect(announced).toEqual(['src']);
+    },
+  );
 
-  it.each(['dismissed', 'reflecting', 'reflected', 'failed', 'empty'] as const)(
+  it.each(['dismissed', 'reflecting', 'reflected', 'empty'] as const)(
     'refuses a stretch that is already %s, with 409 LESSON_SEGMENT_DECIDED',
     async (status) => {
       const h = build({ segments: [segmentOf({ status })] });

@@ -100,6 +100,9 @@ vi.mock('./daemon-client', () => ({
     onReconnect(): () => void {
       return () => {};
     }
+    onMemoryChanged(): () => void {
+      return () => {};
+    }
     onResourceAlertsChanged(): () => void {
       return () => {};
     }
@@ -680,11 +683,13 @@ describe('App — ⌘J to what waits on the user', () => {
     runId: 'approval',
     state: 'asking',
     since: '2026-10-21T10:01:00.000Z',
+    taskId: null,
   };
   const reply: WaitReading = {
     runId: 'reply',
     state: 'unseen',
     since: '2026-10-21T10:02:00.000Z',
+    taskId: null,
   };
 
   async function boot(): Promise<void> {
@@ -755,6 +760,7 @@ describe('App — ⌘J to what waits on the user', () => {
       runId: 'second',
       state: 'asking',
       since: '2026-10-21T10:01:30.000Z',
+      taskId: null,
     };
     await boot();
     await report([approval, second, reply]);
@@ -774,6 +780,7 @@ describe('App — ⌘J to what waits on the user', () => {
       runId: 'later',
       state: 'unseen',
       since: '2026-10-21T10:03:00.000Z',
+      taskId: null,
     };
     await boot();
     await report([approval, reply, later]);
@@ -803,5 +810,129 @@ describe('App — ⌘J to what waits on the user', () => {
     await pressJump();
 
     expect(chatsMock.opened).toEqual(['approval']);
+  });
+});
+
+describe('App — the menu counts what waits on you', () => {
+  const since = '2026-10-21T10:01:00.000Z';
+  const waits: readonly WaitReading[] = [
+    { runId: 'chat-ask', state: 'asking', since, taskId: null },
+    { runId: 'card-ask', state: 'asking', since, taskId: 'task-1' },
+    { runId: 'card-reply', state: 'unseen', since, taskId: 'task-2' },
+    { runId: 'card-busy', state: 'working', since, taskId: 'task-3' },
+  ];
+
+  const jsonResponse = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      headers: { 'content-type': 'application/json' },
+    });
+
+  async function bootWithCounts(counts: {
+    pending: number;
+    knowledgeWaiting: number;
+  }): Promise<void> {
+    chatsMock.waits = [];
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/v1/memories/review/summary')) {
+          return Promise.resolve(jsonResponse({ pending: counts.pending }));
+        }
+        if (url.includes('/v1/knowledge/counts')) {
+          return Promise.resolve(
+            jsonResponse({
+              places: [],
+              active: 0,
+              waiting: counts.knowledgeWaiting,
+            }),
+          );
+        }
+        return Promise.reject(new Error('no daemon in this spec'));
+      }),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+  }
+
+  async function report(readings: readonly WaitReading[]): Promise<void> {
+    chatsMock.waits = readings;
+    await act(async () => {
+      buttonNamed('report waits')!.click();
+    });
+    await flush();
+  }
+
+  function railCount(label: string): string | null {
+    const button = [
+      ...container.querySelectorAll<HTMLButtonElement>('nav button'),
+    ].find((candidate) => candidate.textContent?.startsWith(label));
+    expect(button, `${label} in the rail`).toBeDefined();
+    return (
+      button!.querySelector('[data-slot="nav-count"]')?.textContent ?? null
+    );
+  }
+
+  function tabLabel(label: string): string | null {
+    const tab = container.querySelector<HTMLButtonElement>(
+      `[data-slot="bottom-tab-bar"] button[title="${label}"]`,
+    );
+    expect(tab, `${label} in the tab bar`).not.toBeNull();
+    return tab!.getAttribute('aria-label');
+  }
+
+  it('counts beside the rail what waits on you for Chats, Tasks, Knowledge and Settings, and nothing else', async () => {
+    await bootWithCounts({ pending: 4, knowledgeWaiting: 5 });
+    await report(waits);
+
+    expect(railCount('Chats')).toBe('3');
+    expect(railCount('Tasks')).toBe('2');
+    expect(railCount('Knowledge')).toBe('5');
+    expect(railCount('Settings')).toBe('4');
+    expect(railCount('Projects')).toBeNull();
+    expect(railCount('Teams')).toBeNull();
+    expect(railCount('Stats')).toBeNull();
+  });
+
+  it('counts a card once on Tasks when two of its threads wait on you', async () => {
+    await bootWithCounts({ pending: 0, knowledgeWaiting: 0 });
+    await report([
+      { runId: 'card-old', state: 'unseen', since, taskId: 'task-1' },
+      { runId: 'card-new', state: 'asking', since, taskId: 'task-1' },
+    ]);
+
+    expect(railCount('Chats')).toBe('2');
+    expect(railCount('Tasks')).toBe('1');
+  });
+
+  it('draws no count at zero', async () => {
+    await bootWithCounts({ pending: 0, knowledgeWaiting: 0 });
+    await report([waits[3]!]);
+
+    expect(railCount('Chats')).toBeNull();
+    expect(railCount('Tasks')).toBeNull();
+    expect(railCount('Knowledge')).toBeNull();
+    expect(railCount('Settings')).toBeNull();
+  });
+
+  it('gives the phone’s tab bar the same counts', async () => {
+    stubMatchMedia(true);
+    await bootWithCounts({ pending: 4, knowledgeWaiting: 5 });
+    await report(waits);
+
+    expect(tabLabel('Chats')).toBe('Chats, 3 waiting');
+    expect(tabLabel('Tasks')).toBe('Tasks, 2 waiting');
+    expect(tabLabel('Knowledge')).toBe('Knowledge, 5 waiting');
+    expect(tabLabel('Settings')).toBe('Settings, 4 waiting');
+    expect(tabLabel('Projects')).toBe('Projects');
+    expect(tabLabel('Stats')).toBe('Stats');
   });
 });

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { RunStatusKind } from './run-status';
 import {
   nextWaiting,
+  owedCardCount,
+  owedCount,
   rankByUrgency,
   waitCounts,
   type WaitReading,
@@ -16,6 +18,7 @@ interface Row {
   attentionAt: string | null;
   lastActivityAt: string | null;
   updatedAt: string;
+  taskId: string | null;
 }
 
 function row(
@@ -24,7 +27,14 @@ function row(
   attentionAt: string | null,
   updatedAt = '2026-01-01T00:00:00.000Z',
 ): Row {
-  return { id, status, attentionAt, lastActivityAt: null, updatedAt };
+  return {
+    id,
+    status,
+    attentionAt,
+    lastActivityAt: null,
+    updatedAt,
+    taskId: null,
+  };
 }
 
 function readings(rows: Row[], unseen: string[] = []): WaitReading[] {
@@ -197,6 +207,7 @@ describe('nextWaiting', () => {
       runId: 'seen',
       state: 'unseen',
       since: '2026-01-01T09:00:00.000Z',
+      taskId: null,
     };
     expect(nextWaiting(ranked, gone)?.runId).toBe('approval');
   });
@@ -223,5 +234,100 @@ describe('waitCounts', () => {
         ),
       ),
     ).toEqual({ asking: 1, failed: 1, unseen: 2 });
+  });
+});
+
+describe('waitReadings — the task each thread belongs to', () => {
+  it('carries the run’s task id into its reading, and null for a plain chat', () => {
+    const ranked = readings([
+      {
+        ...row('card', 'needs-input', '2026-01-01T00:00:00.000Z'),
+        taskId: 'task-1',
+      },
+      row('chat', 'needs-input', '2026-01-01T00:01:00.000Z'),
+    ]);
+    expect(ranked.map(({ runId, taskId }) => [runId, taskId])).toEqual([
+      ['card', 'task-1'],
+      ['chat', null],
+    ]);
+  });
+});
+
+describe('owedCount', () => {
+  const mixed = (): WaitReading[] =>
+    readings(
+      [
+        row('ask', 'needs-input', '2026-01-01T00:00:00.000Z'),
+        row('failed', 'failed', '2026-01-01T00:00:00.000Z'),
+        row('reply', 'completed', '2026-01-01T00:00:00.000Z'),
+        row('busy', 'running', null),
+        row('seen', 'completed', '2026-01-01T00:00:00.000Z'),
+      ],
+      ['failed', 'reply'],
+    );
+
+  it('counts every wait on the user and leaves working and seen threads out', () => {
+    expect(owedCount(mixed())).toBe(3);
+  });
+
+  it('is the figure the title bar’s per-state counts add up to', () => {
+    const counts = waitCounts(mixed());
+    expect(owedCount(mixed())).toBe(
+      Object.values(counts).reduce((sum, count) => sum + count, 0),
+    );
+  });
+
+  it('is zero when nothing waits on the user', () => {
+    expect(owedCount(readings([row('busy', 'running', null)]))).toBe(0);
+  });
+});
+
+describe('owedCardCount', () => {
+  it('counts the cards with a thread waiting on the user, leaving plain chats and working cards out', () => {
+    const ranked = readings(
+      [
+        {
+          ...row('card-ask', 'needs-input', '2026-01-01T00:00:00.000Z'),
+          taskId: 'task-1',
+        },
+        row('chat-ask', 'needs-input', '2026-01-01T00:01:00.000Z'),
+        { ...row('card-busy', 'running', null), taskId: 'task-2' },
+        {
+          ...row('card-reply', 'completed', '2026-01-01T00:02:00.000Z'),
+          taskId: 'task-3',
+        },
+      ],
+      ['card-reply'],
+    );
+    expect(owedCardCount(ranked)).toBe(2);
+  });
+
+  it('counts a card once when two of its threads wait on the user', () => {
+    const ranked = readings(
+      [
+        {
+          ...row('card-old', 'completed', '2026-01-01T00:00:00.000Z'),
+          taskId: 'task-1',
+        },
+        {
+          ...row('card-new', 'needs-input', '2026-01-01T00:01:00.000Z'),
+          taskId: 'task-1',
+        },
+      ],
+      ['card-old'],
+    );
+    expect(owedCount(ranked)).toBe(2);
+    expect(owedCardCount(ranked)).toBe(1);
+  });
+
+  it('is zero when no card waits on the user', () => {
+    expect(
+      owedCardCount(
+        readings([
+          row('chat-ask', 'needs-input', '2026-01-01T00:00:00.000Z'),
+          { ...row('card-busy', 'running', null), taskId: 'task-1' },
+        ]),
+      ),
+    ).toBe(0);
   });
 });

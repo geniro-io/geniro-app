@@ -10,6 +10,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { parseJsonColumn } from '../../agents/utils/json-util';
 import type { Run } from '../../runs/entity/run.entity';
+import { isTerminalRunStatus } from '../../runs/runs.types';
 import { LessonSegmentDao, OPEN_SEGMENT_STATUSES } from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
@@ -24,6 +25,7 @@ import {
   type ThreadLessonEstimate,
 } from '../lessons.types';
 import { readLessonSignals } from '../utils/read-lesson-signals';
+import { isReflectable } from '../utils/reflectable';
 import { LessonEstimateService } from './lesson-estimate.service';
 import { LessonReflectionService } from './lesson-reflection.service';
 import { LessonsEventBus } from './lessons-events.bus';
@@ -122,10 +124,14 @@ export class LessonOffersService {
     }
     const fromSeq = run.reflectedThroughSeq ?? -1;
     const toSeq = await this.itemDao.maxSeqExcept(run.id, LESSON_ROW_KINDS, em);
-    const signals =
-      toSeq > fromSeq
-        ? await readLessonSignals(this.itemDao, run.id, fromSeq, toSeq, em)
-        : [];
+    const offerable =
+      toSeq > fromSeq &&
+      isReflectable(run) &&
+      run.pendingDeleteAt === null &&
+      !(await this.reflecting(run.id, em));
+    const signals = offerable
+      ? await readLessonSignals(this.itemDao, run.id, fromSeq, toSeq, em)
+      : [];
     return {
       estimate: await this.estimates.estimate(
         run,
@@ -137,6 +143,11 @@ export class LessonOffersService {
       fromSeq,
       toSeq,
     };
+  }
+
+  private async reflecting(runId: string, em: EntityManager): Promise<boolean> {
+    const reflections = await this.runDao.listLessonReflectionsOf(runId, em);
+    return reflections.some((run) => !isTerminalRunStatus(run.status));
   }
 
   private async wireOf(

@@ -9,7 +9,6 @@ import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import { environment } from '../../../environments';
-import { ANALYSIS_DEFAULT_APPROVAL } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -214,7 +213,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       agentKind,
       cwd: this.folderFor(source, project?.folder ?? null),
       projectId: place.projectId,
-      approval: ANALYSIS_DEFAULT_APPROVAL,
+      approval: this.chats.readOnlyApproval(agentKind),
       model: input.model ?? (fromSettings ? settings.model : null) ?? undefined,
       effort:
         input.effort ?? (fromSettings ? settings.effort : null) ?? undefined,

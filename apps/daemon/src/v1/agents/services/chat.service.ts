@@ -113,6 +113,7 @@ import {
 } from '../utils/agent-options';
 import {
   analysisTurnOf,
+  deniesUnanswered,
   isAnalysisRun,
   teamAnalysisTurn,
   writeAnalysedRuns,
@@ -2925,6 +2926,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return modes.includes(CHAT_DEFAULT_APPROVAL)
       ? CHAT_DEFAULT_APPROVAL
       : 'auto';
+  }
+
+  /**
+   * The mode an unattended read-only chat starts in: `plan` where the CLI
+   * offers it, else `ask`, whose requests `deniesUnanswered` refuses.
+   */
+  readOnlyApproval(kind: AgentKind): ChatApprovalMode {
+    return this.adapterFor(kind).getConfig().approval.modes.includes('plan')
+      ? 'plan'
+      : 'ask';
   }
 
   /** The adapter driving one agent kind — the single kind→adapter dispatch. */
@@ -7785,6 +7796,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 }
                 return;
               }
+              if (deniesUnanswered(run)) {
+                handle.respondApproval(event.id, false, undefined);
+                return;
+              }
               // The CLI is now parked waiting for a verdict. Persist the card
               // first (persist-then-emit, so the user sees it), then track it
               // under the chat's one synthetic member so the WS verdict
@@ -8031,7 +8046,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         ({ toolName, input }) =>
           autoApproves(toolName, this.runPosture.get(runId), input)
             ? true
-            : null,
+            : deniesUnanswered(run)
+              ? false
+              : null,
         (event) => {
           const inFlight = this.offTurnInFlight.get(runId) ?? new Set();
           this.offTurnInFlight.set(runId, inFlight);

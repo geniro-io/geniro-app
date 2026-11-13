@@ -98,6 +98,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         agentKind: 'claude',
         model: 'opus',
         proposals: [],
+        places: { project: false, team: false },
       },
     });
     await writer.write('archived', {
@@ -155,6 +156,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         agentKind: 'claude',
         model: 'opus',
         proposals: [],
+        places: { project: false, team: false },
       },
     });
 

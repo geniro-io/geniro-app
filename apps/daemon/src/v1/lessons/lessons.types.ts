@@ -125,6 +125,7 @@ export const LessonsPayloadSchema = z.object({
   agentKind: AgentKindSchema,
   model: z.string().nullable(),
   proposals: z.array(LessonProposalCardSchema),
+  places: z.object({ project: z.boolean(), team: z.boolean() }),
 });
 export type LessonsPayload = z.infer<typeof LessonsPayloadSchema>;
 

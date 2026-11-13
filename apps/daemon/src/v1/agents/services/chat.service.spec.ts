@@ -11998,6 +11998,49 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 
+  it('refuses at once whatever a lessons reflection asks beyond its own tools, raising no card', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: service.readOnlyApproval('claude'),
+      analysisSource: {
+        runId: 'source',
+        seq: 5,
+        working: false,
+        purpose: 'lessons',
+      },
+    });
+    await service.sendMessage(run.id, 'hi');
+    const server = hostMcpServerName(run.id);
+    for (const [id, tool] of [
+      ['p-read', `mcp__${server}__read_analyzed_thread`],
+      ['p-lessons', `mcp__${server}__propose_lessons`],
+      ['p-write', 'Write'],
+      ['p-bash', 'Bash'],
+    ] as const) {
+      claude.emit({ type: 'approval_request', id, toolName: tool, input: {} });
+    }
+    await drain();
+
+    const respond = claude.handles[0]!.respondApproval;
+    expect(respond).toHaveBeenCalledWith('p-read', true, {});
+    expect(respond).toHaveBeenCalledWith('p-lessons', true, {});
+    expect(respond).toHaveBeenCalledWith('p-write', false, undefined);
+    expect(respond).toHaveBeenCalledWith('p-bash', false, undefined);
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+  });
+
+  it('starts a read-only chat in plan where the CLI offers it, else in ask', () => {
+    const { service } = setup();
+
+    expect(service.readOnlyApproval('claude')).toBe('plan');
+    expect(service.readOnlyApproval('cursor-agent')).toBe('ask');
+  });
+
   it('auto-approves the four shared-memory tools on an ASK chat', async () => {
     const { service, claude, approvals } = setup();
     const run = await service.createChat({

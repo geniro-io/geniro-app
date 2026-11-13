@@ -231,7 +231,11 @@ import {
   type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
 import { LessonChangeModelDialog } from './lesson-change-model-dialog';
-import { lessonRunLabel } from './lesson-model-picker';
+import {
+  type LessonModelChoice,
+  LessonModelPicker,
+  lessonRunLabel,
+} from './lesson-model-picker';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
   LocalImageLoaderContext,
@@ -2576,6 +2580,21 @@ export function Chats({
   // The app's shared answer, and only the data — every read below is a plain
   // `capabilities?.…`, never a loading readout of its own.
   const { capabilities } = useSharedCapabilities(capabilitiesApi);
+  const renderLessonModelPicker = useMemo(
+    () =>
+      (
+        value: LessonModelChoice,
+        onChange: (next: LessonModelChoice) => void,
+      ): React.ReactNode => (
+        <LessonModelPicker
+          value={value}
+          onChange={onChange}
+          agentsApi={apis.agents}
+          capabilities={capabilities}
+        />
+      ),
+    [apis.agents, capabilities],
+  );
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
@@ -9803,7 +9822,9 @@ export function Chats({
         loadMemory={loadMemory}
         loadKnowledge={loadKnowledge}
         lessonsApi={apis.lessons}
-        lessonsJump={jumpToSeq}>
+        lessonsJump={jumpToSeq}
+        lessonsClient={client}
+        lessonsModelPicker={renderLessonModelPicker}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

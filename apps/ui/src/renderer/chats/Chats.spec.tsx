@@ -176,6 +176,8 @@ const projectsApi = vi.hoisted(() => ({
 const lessonsApi = vi.hoisted(() => ({
   getThreadLessonsState: vi.fn(),
   reflectLessons: vi.fn(),
+  estimateLessons: vi.fn(),
+  listLessonSegments: vi.fn(),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
@@ -878,6 +880,18 @@ beforeEach(() => {
     reflectionRunId: null,
     reflectedThroughSeq: null,
   });
+  lessonsApi.estimateLessons.mockReset().mockResolvedValue({
+    estimate: {
+      agentKind: 'claude',
+      model: null,
+      tokens: 0,
+      usd: null,
+    },
+    signals: 0,
+    fromSeq: 0,
+    toSeq: 0,
+  });
+  lessonsApi.listLessonSegments.mockReset().mockResolvedValue({ segments: [] });
   lessonsApi.reflectLessons.mockReset().mockResolvedValue({
     reflectionRunId: 'refl-1',
     segmentId: 'seg-1',
@@ -13297,6 +13311,57 @@ describe('Chats sidebar list', () => {
         ),
       ].find((el) => el.textContent?.includes('My chat')),
     ).toBeUndefined();
+  });
+
+  it('offers Extract lessons first only when the thread has signals, unticked every time, and asks the daemon to extract only when ticked', async () => {
+    api.deleteChat.mockResolvedValue({ deleted: true });
+    lessonsApi.estimateLessons.mockResolvedValue({
+      estimate: {
+        agentKind: 'claude',
+        model: 'claude-haiku-5-5',
+        tokens: 1200,
+        usd: 0.5,
+      },
+      signals: 2,
+      fromSeq: 1,
+      toSeq: 40,
+    });
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
+    const box = dialog.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    expect(box.checked).toBe(false);
+    expect(dialog.textContent).toContain(
+      'Extract lessons first · claude · claude-haiku-5-5 · ≈$0.50 (≈1200 tokens)',
+    );
+
+    await act(async () => {
+      box.click();
+    });
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete')!
+        .click();
+    });
+    expect(api.deleteChat).toHaveBeenCalledWith({
+      runId: 'r1',
+      extractLessons: 'true',
+    });
+  });
+
+  it('shows no Extract lessons box when the thread has no signals to learn from', async () => {
+    api.deleteChat.mockResolvedValue({ deleted: true });
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.querySelector('input[type="checkbox"]')).toBeNull();
   });
 
   it('drops the row when ANOTHER client deletes the run', async () => {

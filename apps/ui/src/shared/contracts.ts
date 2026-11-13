@@ -390,6 +390,8 @@ export const DEFAULT_MEMORY: MemorySettings = {
 /** Whether a thread may be offered a lessons reflection: never, or on the user's press. */
 export type LessonsMode = 'off' | 'offer';
 
+export type LessonsQuietWindowHours = 1 | 3 | 6;
+
 /**
  * What a lessons reflection runs as. A null agent reflects with the thread's own
  * CLI; a null model or effort with that CLI's default. `agentKind` is the
@@ -400,6 +402,7 @@ export interface LessonsSettings {
   agentKind: string | null;
   model: string | null;
   effort: string | null;
+  quietWindowHours: LessonsQuietWindowHours;
 }
 
 export const DEFAULT_LESSONS: LessonsSettings = {
@@ -407,6 +410,7 @@ export const DEFAULT_LESSONS: LessonsSettings = {
   agentKind: null,
   model: null,
   effort: null,
+  quietWindowHours: 3,
 };
 
 /** What an agent's document save does: used at once, held for the user's review, or refused. */

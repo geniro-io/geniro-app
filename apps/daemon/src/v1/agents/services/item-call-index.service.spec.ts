@@ -25,7 +25,10 @@ import { tempDir } from '../__tests__/temp-dir';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { CALL_MEMBERSHIP_VERSION } from '../utils/call-membership';
-import { ItemCallIndexService } from './item-call-index.service';
+import {
+  ItemCallIndexService,
+  stampPauseAfter,
+} from './item-call-index.service';
 
 describe('ItemCallIndexService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -322,7 +325,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       expect(new Set(await inCallBySeq())).toEqual(new Set(['']));
     });
 
-    it('places a run from its promoted columns, reading no payload, when they are filled', async () => {
+    it('places a run from its indexes, reading no payload, when its promoted columns are filled', async () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await legacy(1, 'call_started', 'manager', {
@@ -344,12 +347,53 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       await orm.em
         .fork()
         .nativeUpdate(Item, { runId: 'run-1' }, { inCall: 'call-stale' });
-      const batches = vi.spyOn(dao, 'inCallBatch');
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
 
       await index.indexAllQuietly();
 
       expect(await inCallBySeq()).toEqual(['', 'call-1', '', '']);
-      expect(batches.mock.calls[0]![4]).toBe(false);
+      expect(fromIndexes).toHaveBeenCalled();
+      expect(fromPayloads).not.toHaveBeenCalled();
+    });
+
+    it('lets a timer queued while a run is being stamped again run before the next batch is written', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
+      await dao.createMany(
+        Array.from({ length: 600 }, (_, at) => ({
+          runId: 'run-1',
+          seq: at + 1,
+          kind: 'message' as const,
+          memberId: 'manager',
+          payload: JSON.stringify({ text: `m${at + 1}` }),
+          inCall: 'call-stale',
+        })),
+      );
+      const write = dao.rememberInCallAt.bind(dao);
+      let writesBeforeTimer: number | null = null;
+      const writes = vi
+        .spyOn(dao, 'rememberInCallAt')
+        .mockImplementation(async (runId, kind, inCall, rows, em) => {
+          if (writes.mock.calls.length === 1) {
+            setTimeout(() => {
+              writesBeforeTimer = writes.mock.calls.length;
+            }, 0);
+          }
+          return write(runId, kind, inCall, rows, em);
+        });
+
+      await index.indexAllQuietly();
+
+      expect(writes.mock.calls.length).toBeGreaterThan(2);
+      expect(writesBeforeTimer).toBe(1);
+      expect(new Set(await inCallBySeq())).toEqual(new Set(['']));
+    });
+
+    it('pauses after a batch at least as long as the batch held the event loop, within bounds', () => {
+      expect(stampPauseAfter(0)).toBe(10);
+      expect(stampPauseAfter(120.2)).toBe(121);
+      expect(stampPauseAfter(5_000)).toBe(1_000);
     });
 
     it('places a run from its payloads when its promoted columns were never filled', async () => {
@@ -373,12 +417,14 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
           { runId: 'run-1' },
           { inCall: 'call-stale', callId: null, payloadId: null },
         );
-      const batches = vi.spyOn(dao, 'inCallBatch');
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
 
       await index.indexAllQuietly();
 
       expect(await inCallBySeq()).toEqual(['', 'call-1']);
-      expect(batches.mock.calls[0]![4]).toBe(true);
+      expect(fromPayloads).toHaveBeenCalled();
+      expect(fromIndexes).not.toHaveBeenCalled();
     });
 
     it('lets a read finish while its run is still being stamped again, then marks the run to be read again', async () => {
@@ -392,11 +438,11 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const batch = dao.inCallBatch.bind(dao);
-      vi.spyOn(dao, 'inCallBatch').mockImplementation(
-        async (runId, after, through, limit, withPayload, em) => {
+      const read = dao.inCallRowsOfKind.bind(dao);
+      vi.spyOn(dao, 'inCallRowsOfKind').mockImplementation(
+        async (runId, kind, em) => {
           await held;
-          return batch(runId, after, through, limit, withPayload, em);
+          return read(runId, kind, em);
         },
       );
 
@@ -441,7 +487,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await stale(1, 'run-1');
-      const batches = vi.spyOn(dao, 'inCallBatch');
+      const reads = vi.spyOn(dao, 'inCallRowsOfKind');
 
       await Promise.all([
         index.ensureIndexed('run-1'),
@@ -449,8 +495,8 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       ]);
 
       expect(await inCallBySeq()).toEqual(['']);
-      // One pass: its batch, then the empty read that ends it.
-      expect(batches).toHaveBeenCalledTimes(2);
+      // One pass: one read of the run's one kind.
+      expect(reads).toHaveBeenCalledTimes(1);
     });
 
     it('goes on past a run that fails, leaves the marker unwritten, and the next launch stamps every run again', async () => {
@@ -459,17 +505,15 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await stale(1, 'run-1');
       await stale(1, 'run-2');
-      const batch = dao.inCallBatch.bind(dao);
+      const read = dao.inCallRowsOfKind.bind(dao);
       const failing = vi
-        .spyOn(dao, 'inCallBatch')
-        .mockImplementation(
-          async (runId, after, through, limit, withPayload, em) => {
-            if (runId === 'run-2') {
-              throw new Error('locked');
-            }
-            return batch(runId, after, through, limit, withPayload, em);
-          },
-        );
+        .spyOn(dao, 'inCallRowsOfKind')
+        .mockImplementation(async (runId, kind, em) => {
+          if (runId === 'run-2') {
+            throw new Error('locked');
+          }
+          return read(runId, kind, em);
+        });
 
       await index.indexAllQuietly();
 
@@ -485,10 +529,10 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
         orm.em.fork() as EntityManager,
         marker,
       );
-      const batches = vi.spyOn(dao, 'inCallBatch');
+      const reads = vi.spyOn(dao, 'inCallRowsOfKind');
       await nextLaunch.indexAllQuietly();
 
-      expect(new Set(batches.mock.calls.map(([runId]) => runId))).toEqual(
+      expect(new Set(reads.mock.calls.map(([runId]) => runId))).toEqual(
         new Set(['run-1', 'run-2']),
       );
       expect(await inCallBySeq('run-2')).toEqual(['']);
@@ -501,32 +545,30 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await dao.createMany(
-        Array.from({ length: 600 }, (_, at) => ({
+        (['message', 'tool_call'] as const).map((kind, at) => ({
           runId: 'run-1',
           seq: at + 1,
-          kind: 'message' as const,
+          kind,
           memberId: 'manager',
           payload: JSON.stringify({ text: `m${at + 1}` }),
           inCall: 'call-stale',
         })),
       );
-      const batch = dao.inCallBatch.bind(dao);
-      const batches = vi
-        .spyOn(dao, 'inCallBatch')
-        .mockImplementation(
-          async (runId, after, through, limit, withPayload, em) => {
-            if (after !== null) {
-              throw new Error('locked');
-            }
-            return batch(runId, after, through, limit, withPayload, em);
-          },
-        );
+      const read = dao.inCallRowsOfKind.bind(dao);
+      const reads = vi
+        .spyOn(dao, 'inCallRowsOfKind')
+        .mockImplementation(async (runId, kind, em) => {
+          if (reads.mock.calls.length > 1) {
+            throw new Error('locked');
+          }
+          return read(runId, kind, em);
+        });
 
       await index.indexAllQuietly();
       await index.ensureIndexed('run-1');
 
       expect(index.stampEpochOf('run-1')).toBe(1);
-      expect(batches).toHaveBeenCalledTimes(2);
+      expect(reads).toHaveBeenCalledTimes(2);
     });
 
     it('keeps the stamp of a row written while its run is being stamped again', async () => {
@@ -542,14 +584,12 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       const reading = new Promise<void>((resolve) => {
         reached = resolve;
       });
-      const batch = dao.inCallBatch.bind(dao);
-      vi.spyOn(dao, 'inCallBatch').mockImplementation(
-        async (runId, after, through, limit, withPayload, em) => {
-          if (after === null) {
-            reached();
-            await held;
-          }
-          return batch(runId, after, through, limit, withPayload, em);
+      const read = dao.inCallRowsOfKind.bind(dao);
+      vi.spyOn(dao, 'inCallRowsOfKind').mockImplementation(
+        async (runId, kind, em) => {
+          reached();
+          await held;
+          return read(runId, kind, em);
         },
       );
       async function written(
@@ -651,7 +691,8 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await legacy(1, 'message', null, { text: 'hi' }, 'chat-1');
       await index.ensureIndexed('chat-1');
-      const batches = vi.spyOn(dao, 'inCallBatch');
+      const fromIndexes = vi.spyOn(dao, 'inCallRowsOfKind');
+      const fromPayloads = vi.spyOn(dao, 'inCallBatch');
 
       await index.ensureIndexed('chat-1');
       await legacy(2, 'message', null, { text: 'again' }, 'chat-1');
@@ -662,7 +703,8 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
         marker,
       ).ensureIndexed('chat-1');
 
-      expect(batches).not.toHaveBeenCalled();
+      expect(fromIndexes).not.toHaveBeenCalled();
+      expect(fromPayloads).not.toHaveBeenCalled();
       expect(await inCallBySeq('chat-1')).toEqual(['', '']);
     });
   });

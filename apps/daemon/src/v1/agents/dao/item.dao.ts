@@ -309,11 +309,17 @@ function payloadRef(
     : field;
 }
 
-/** A row as {@link ItemDao.inCallBatch} reads it; `payload` is null unless asked for. */
+/** A row as {@link ItemDao.inCallBatch} reads it. */
 type InCallRow = Pick<
   Item,
-  'id' | 'seq' | 'kind' | 'memberId' | 'inCall' | 'callId' | 'payloadId'
-> & { payload: string | null };
+  'id' | 'seq' | 'kind' | 'memberId' | 'inCall' | 'payload'
+>;
+
+/** A row as {@link ItemDao.inCallRowsOfKind} reads it, keyed by rowid. */
+type InCallIndexRow = Pick<
+  Item,
+  'seq' | 'kind' | 'memberId' | 'inCall' | 'callId' | 'payloadId'
+> & { rowid: number };
 
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
@@ -1986,21 +1992,20 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * One batch of a run's rows at or below `throughSeq`, stamped or not, in
-   * `(seq, id)` order with the stamp each carries now — what a run is stamped
-   * again from when the membership rule changed. Paged on both, since an older
-   * profile holds rows that share a seq. The payload is read only when asked:
-   * a run whose promoted columns are stamped is placed from `callId` and
-   * `payloadId` alone, without walking each payload's pages.
+   * `(seq, id)` order with the stamp and payload each carries now — what a run
+   * whose promoted columns were never stamped is stamped again from when the
+   * membership rule changed (a stamped one is read by
+   * {@link inCallRowsOfKind}). Paged on both, since an older profile holds rows
+   * that share a seq.
    */
   async inCallBatch(
     runId: string,
     after: { seq: number; id: string } | null,
     throughSeq: number,
     limit: number,
-    withPayload: boolean,
     txEm?: EntityManager,
   ): Promise<InCallRow[]> {
-    const rows = await this.getRepo(txEm).find(
+    return this.getRepo(txEm).find(
       after === null
         ? { runId, seq: { $lte: throughSeq } }
         : {
@@ -2016,29 +2021,120 @@ export class ItemDao extends BaseDao<Item> {
       {
         limit,
         orderBy: { seq: 'asc', id: 'asc' },
-        fields: [
-          'id',
-          'seq',
-          'kind',
-          'memberId',
-          'inCall',
-          'callId',
-          'payloadId',
-          ...(withPayload ? (['payload'] as const) : []),
-        ],
+        fields: ['id', 'seq', 'kind', 'memberId', 'inCall', 'payload'],
         disableIdentityMap: true,
       },
     );
-    return rows.map((row) => ({
-      id: row.id,
+  }
+
+  /** Every kind of row one run holds, read off the `(run_id, kind, seq)` index. */
+  async kindsOfRun(runId: string, txEm?: EntityManager): Promise<ItemKind[]> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('kind')
+      .distinct()
+      .where('run_id', '=', runId)
+      .execute();
+    return rows.map((row) => row.kind);
+  }
+
+  /**
+   * One kind of a run's rows with what the membership rule reads of each —
+   * member, stamp, `callId`, and a delegate declaration's `payloadId` — keyed
+   * by rowid. Read from covering indexes only: those columns sit after
+   * `payload` in the row, and reading them off the table walks every payload's
+   * overflow pages, seconds per large run on a cold cache. The run's promoted
+   * columns must be stamped ({@link payloadRefsStamped}).
+   */
+  async inCallRowsOfKind(
+    runId: string,
+    kind: ItemKind,
+    txEm?: EntityManager,
+  ): Promise<InCallIndexRow[]> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const placed = await db
+      .selectFrom('items')
+      .select(['rowid', 'seq', 'member_id', 'in_call'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', kind)
+      .where('deleted_at', 'is', null)
+      .execute();
+    const calls = await db
+      .selectFrom('items')
+      .select(['rowid', 'call_id'])
+      .where('run_id', '=', runId)
+      .where('kind', '=', kind)
+      .where('call_id', 'is not', null)
+      .execute();
+    const callOf = new Map(calls.map((row) => [row.rowid, row.call_id]));
+    const declared =
+      kind === 'subagent_info'
+        ? await db
+            .selectFrom('items')
+            .select(['rowid', 'payload_id'])
+            .where('run_id', '=', runId)
+            .where('kind', '=', kind)
+            .where('payload_id', 'is not', null)
+            .execute()
+        : [];
+    const idOf = new Map(declared.map((row) => [row.rowid, row.payload_id]));
+    return placed.map((row) => ({
+      rowid: row.rowid,
       seq: row.seq,
-      kind: row.kind,
-      memberId: row.memberId,
-      inCall: row.inCall,
-      callId: row.callId,
-      payloadId: row.payloadId,
-      payload: withPayload ? row.payload : null,
+      kind,
+      memberId: row.member_id,
+      inCall: row.in_call,
+      callId: callOf.get(row.rowid) ?? null,
+      payloadId: idOf.get(row.rowid) ?? null,
     }));
+  }
+
+  /**
+   * {@link rememberInCall} for rows read by {@link inCallRowsOfKind}, by
+   * rowid — and only while each is still the row read, of that run, kind and
+   * seq, carrying the stamp it carried then: a rowid is reused once its row is
+   * deleted, and a row stamped since was stamped by this rule. Answers how many
+   * rows it changed.
+   */
+  async rememberInCallAt(
+    runId: string,
+    kind: ItemKind,
+    inCall: string,
+    rows: readonly { rowid: number; seq: number; was: string | null }[],
+    txEm?: EntityManager,
+  ): Promise<number> {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const byWas = new Map<string | null, typeof rows>();
+    for (const row of rows) {
+      byWas.set(row.was, [...(byWas.get(row.was) ?? []), row]);
+    }
+    let changed = 0;
+    for (const [was, group] of byWas) {
+      const result = await db
+        .updateTable('items')
+        .set({ in_call: inCall })
+        .where('run_id', '=', runId)
+        .where('kind', '=', kind)
+        .where('in_call', was === null ? 'is' : '=', was)
+        .where(
+          'rowid',
+          'in',
+          group.map((row) => row.rowid),
+        )
+        .where(
+          'seq',
+          'in',
+          group.map((row) => row.seq),
+        )
+        .executeTakeFirst();
+      changed += Number(result.numUpdatedRows);
+    }
+    return changed;
   }
 
   /** Whether one run still holds a row no build stamped with `inCall`. */

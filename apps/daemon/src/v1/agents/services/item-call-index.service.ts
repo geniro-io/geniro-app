@@ -5,6 +5,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { environment } from '../../../environments';
+import type { Item } from '../../runs/entity/item.entity';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import {
@@ -33,14 +34,45 @@ const LOOKUP_CACHE_SIZE = 64;
  */
 export const CALL_MEMBERSHIP_MARKER_FILE = 'call-membership-indexed';
 
-/** Rows stamped per transaction while indexing one run's older rows. */
+/** Rows read per batch while stamping one run's rows from their payloads. */
 const STAMP_BATCH_SIZE = 500;
 
 /**
- * A breath between batches: the sweep runs while the daemon is serving, and
- * better-sqlite3 is synchronous, so the event loop turns only between batches.
+ * Stamps written per transaction while stamping a run again. A stamp rewrites
+ * the row's whole record, payload overflow included, so a batch is small.
+ */
+const RESTAMP_WRITE_BATCH = 50;
+
+/**
+ * The breath between batches, at least as long as the batch it follows,
+ * within these bounds: the stamping runs while the daemon serves, and
+ * better-sqlite3 is synchronous, so the event loop turns only between batches,
+ * and back-to-back batches held every request behind them. A batch's commit
+ * can carry a WAL checkpoint of most of a second.
  */
 const STAMP_BATCH_PAUSE_MS = 10;
+const STAMP_BATCH_PAUSE_MAX_MS = 1000;
+
+/** How long to pause after a batch that held the event loop for `workedMs`. */
+export function stampPauseAfter(workedMs: number): number {
+  return Math.min(
+    STAMP_BATCH_PAUSE_MAX_MS,
+    Math.max(STAMP_BATCH_PAUSE_MS, Math.ceil(workedMs)),
+  );
+}
+
+interface StampRow<K> {
+  key: K;
+  inCall: string | null;
+  membership: CallMembershipRow;
+}
+
+interface Stamp<K> {
+  key: K;
+  inCall: string;
+  /** The stamp the row carried when it was read. */
+  was: string | null;
+}
 
 /** How long a read leaves a run whose re-stamp failed before it starts one again. */
 const RESTAMP_RETRY_MS = 10 * 60_000;
@@ -266,55 +298,104 @@ export class ItemCallIndexService {
   /**
    * Stamp again, under this rule, every row of a run an older build or rule
    * stamped. Rows above the run's newest seq when it starts were stamped as
-   * they were written, by this build. A run whose promoted columns are stamped
-   * is placed from them: the rule reads no payload field but `callId` and `id`.
-   * The lookup is the live one every written row teaches, so a row written
-   * while the pass runs is placed as it was stamped. Any row changed, the
-   * run's epoch moves, whether or not the pass ends.
+   * they were written, by this build. The lookup is the live one every written
+   * row teaches, so a row written while the pass runs is placed as it was
+   * stamped. Any row changed, the run's epoch moves, whether or not the pass
+   * ends.
    */
   private async restamp(runId: string): Promise<void> {
     const em = this.em.fork();
     const through = await this.itemDao.maxSeq(runId, em);
-    const fromColumns = await this.itemDao.payloadRefsStamped(runId, em);
     const lookup = await this.lookupFor(runId);
-    let after: { seq: number; id: string } | null = null;
-    let changed = 0;
+    const written = { count: 0 };
     try {
-      for (;;) {
-        const rows = await this.itemDao.inCallBatch(
-          runId,
-          after,
-          through,
-          STAMP_BATCH_SIZE,
-          !fromColumns,
-          em,
-        );
-        if (rows.length === 0) {
-          return;
-        }
-        changed += await this.writeStamps(
-          rows.map((row) => ({
-            id: row.id,
-            inCall: row.inCall,
-            membership: {
-              kind: row.kind,
-              memberId: row.memberId,
-              payload: fromColumns
-                ? { callId: row.callId, id: row.payloadId }
-                : parseJsonColumn(row.payload ?? ''),
-            },
-          })),
-          lookup,
-          em,
-        );
-        const last = rows[rows.length - 1]!;
-        after = { seq: last.seq, id: last.id };
-        await pause();
+      if (await this.itemDao.payloadRefsStamped(runId, em)) {
+        await this.restampFromColumns(runId, through, lookup, written, em);
+      } else {
+        await this.restampFromPayloads(runId, through, lookup, written, em);
       }
     } finally {
-      if (changed > 0) {
+      if (written.count > 0) {
         this.epochs.set(runId, this.stampEpochOf(runId) + 1);
       }
+    }
+  }
+
+  /**
+   * A run whose promoted columns are stamped, one kind at a time, from the
+   * indexes alone: the rule reads no payload field but `callId` and `id`.
+   */
+  private async restampFromColumns(
+    runId: string,
+    through: number,
+    lookup: RunLookup,
+    written: { count: number },
+    em: EntityManager,
+  ): Promise<void> {
+    let since = performance.now();
+    for (const kind of await this.itemDao.kindsOfRun(runId, em)) {
+      const rows = await this.itemDao.inCallRowsOfKind(runId, kind, em);
+      const stamps = restampsOf(
+        rows
+          .filter((row) => row.seq <= through)
+          .map((row) => ({
+            key: { rowid: row.rowid, seq: row.seq },
+            inCall: row.inCall,
+            membership: {
+              kind,
+              memberId: row.memberId,
+              payload: { callId: row.callId, id: row.payloadId },
+            },
+          })),
+        lookup,
+      );
+      since = await breathe(since);
+      for (let at = 0; at < stamps.length; at += RESTAMP_WRITE_BATCH) {
+        written.count += await writeStamps(
+          stamps.slice(at, at + RESTAMP_WRITE_BATCH),
+          em,
+          (group, inCall, tx) =>
+            this.itemDao.rememberInCallAt(
+              runId,
+              kind,
+              inCall,
+              group.map(({ key, was }) => ({ ...key, was })),
+              tx,
+            ),
+        );
+        since = await breathe(since);
+      }
+    }
+  }
+
+  private async restampFromPayloads(
+    runId: string,
+    through: number,
+    lookup: RunLookup,
+    written: { count: number },
+    em: EntityManager,
+  ): Promise<void> {
+    let since = performance.now();
+    let after: { seq: number; id: string } | null = null;
+    for (;;) {
+      const rows = await this.itemDao.inCallBatch(
+        runId,
+        after,
+        through,
+        STAMP_BATCH_SIZE,
+        em,
+      );
+      if (rows.length === 0) {
+        return;
+      }
+      written.count += await writeStamps(
+        restampsOf(rows.map(payloadStampRow), lookup),
+        em,
+        byId(this.itemDao),
+      );
+      const last = rows[rows.length - 1]!;
+      after = { seq: last.seq, id: last.id };
+      since = await breathe(since);
     }
   }
 
@@ -326,6 +407,7 @@ export class ItemCallIndexService {
     // The run's starts and declarations are read whole, stamped rows included:
     // a run written across the upgrade holds both, and the rule reads them all.
     const lookup = await this.loadLookup(runId, em);
+    let since = performance.now();
     let afterSeq = -1;
     for (;;) {
       const rows = await this.itemDao.unstampedRows(
@@ -337,57 +419,14 @@ export class ItemCallIndexService {
       if (rows.length === 0) {
         break;
       }
-      await this.writeStamps(
-        rows.map((row) => ({
-          id: row.id,
-          inCall: row.inCall,
-          membership: {
-            kind: row.kind,
-            memberId: row.memberId,
-            payload: parseJsonColumn(row.payload),
-          },
-        })),
-        lookup,
+      await writeStamps(
+        restampsOf(rows.map(payloadStampRow), lookup),
         em,
+        byId(this.itemDao),
       );
       afterSeq = rows[rows.length - 1]!.seq;
-      await pause();
+      since = await breathe(since);
     }
-  }
-
-  /** Write each row's stamp under the rule, skipping a row that already carries it; answers how many it wrote. */
-  private async writeStamps(
-    rows: readonly {
-      id: string;
-      inCall: string | null;
-      membership: CallMembershipRow;
-    }[],
-    lookup: RunLookup,
-    em: EntityManager,
-  ): Promise<number> {
-    // One UPDATE per distinct value: a batch is a few calls' rows.
-    const byInCall = new Map<string, string[]>();
-    for (const row of rows) {
-      const inCall = callMembershipOf(row.membership, lookup);
-      if (inCall === row.inCall) {
-        continue;
-      }
-      const ids = byInCall.get(inCall);
-      if (ids === undefined) {
-        byInCall.set(inCall, [row.id]);
-      } else {
-        ids.push(row.id);
-      }
-    }
-    if (byInCall.size === 0) {
-      return 0;
-    }
-    await em.transactional(async (tx) => {
-      for (const [inCall, ids] of byInCall) {
-        await this.itemDao.rememberInCall(ids, inCall, tx as EntityManager);
-      }
-    });
-    return [...byInCall.values()].reduce((sum, ids) => sum + ids.length, 0);
   }
 
   /** The rule version the last finished sweep ran under, or null when none finished. */
@@ -463,8 +502,88 @@ export class ItemCallIndexService {
   }
 }
 
-function pause(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, STAMP_BATCH_PAUSE_MS);
+function payloadStampRow(
+  row: Pick<Item, 'id' | 'kind' | 'memberId' | 'inCall' | 'payload'>,
+): StampRow<string> {
+  return {
+    key: row.id,
+    inCall: row.inCall,
+    membership: {
+      kind: row.kind,
+      memberId: row.memberId,
+      payload: parseJsonColumn(row.payload),
+    },
+  };
+}
+
+/** The rows whose stamp the rule changes, each with the stamp it gets. */
+function restampsOf<K>(
+  rows: readonly StampRow<K>[],
+  lookup: RunLookup,
+): Stamp<K>[] {
+  return rows.flatMap((row) => {
+    const inCall = callMembershipOf(row.membership, lookup);
+    return inCall === row.inCall
+      ? []
+      : [{ key: row.key, inCall, was: row.inCall }];
   });
+}
+
+/**
+ * Write the stamps in one transaction, one write per distinct value (a batch
+ * is a few calls' rows); answers how many rows the writes changed.
+ */
+async function writeStamps<K>(
+  stamps: readonly Stamp<K>[],
+  em: EntityManager,
+  write: (
+    stamps: Stamp<K>[],
+    inCall: string,
+    tx: EntityManager,
+  ) => Promise<number>,
+): Promise<number> {
+  if (stamps.length === 0) {
+    return 0;
+  }
+  const byInCall = new Map<string, Stamp<K>[]>();
+  for (const stamp of stamps) {
+    const group = byInCall.get(stamp.inCall);
+    if (group === undefined) {
+      byInCall.set(stamp.inCall, [stamp]);
+    } else {
+      group.push(stamp);
+    }
+  }
+  return em.transactional(async (tx) => {
+    let changed = 0;
+    for (const [inCall, group] of byInCall) {
+      changed += await write(group, inCall, tx as EntityManager);
+    }
+    return changed;
+  });
+}
+
+function byId(
+  itemDao: ItemDao,
+): (
+  stamps: Stamp<string>[],
+  inCall: string,
+  tx: EntityManager,
+) => Promise<number> {
+  return async (stamps, inCall, tx) => {
+    await itemDao.rememberInCall(
+      stamps.map(({ key }) => key),
+      inCall,
+      tx,
+    );
+    return stamps.length;
+  };
+}
+
+/** Pause after the work done since `since`; answers when the next batch starts. */
+async function breathe(since: number): Promise<number> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, stampPauseAfter(performance.now() - since));
+  });
+  return performance.now();
 }

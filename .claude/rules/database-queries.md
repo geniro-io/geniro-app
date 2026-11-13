@@ -31,4 +31,4 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 
 ## Recorded exception: pinning a query plan in a spec
 
-- A spec may prefix `EXPLAIN QUERY PLAN` to the one statement a DAO method sent (captured from the connection, its values pasted in with `Platform.formatQuery` as MikroORM runs it) and read the plan, to pin which index the read takes (`item.dao.spec.ts` → `planOf`). No builder expresses it, it runs only in specs, and it executes nothing but the DAO's own statement. Production code never sends it.
+- A spec may prefix `EXPLAIN QUERY PLAN` to a statement a DAO method sent and read the plan, to pin which index the read takes: captured from the connection with its values pasted in by `Platform.formatQuery` as MikroORM runs it (`item.dao.spec.ts` → `planOf`), or, for a `getKysely()` read, which never passes the connection, from Kysely's `SqliteDriver` connection with its own parameters, run as `CompiledQuery.raw` on that connection (`item.dao.spec.ts` → `inCallRowsOfKind`). No builder expresses it, it runs only in specs, and it executes nothing but the DAO's own statement. Production code never sends it.

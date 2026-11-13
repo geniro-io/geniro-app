@@ -3,6 +3,7 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
+import { CompiledQuery, type DatabaseConnection, SqliteDriver } from 'kysely';
 import {
   afterAll,
   beforeAll,
@@ -1334,13 +1335,12 @@ describe('ItemDao (in-memory sqlite)', () => {
       await stamped('r-9', 9, 'call-9');
       await stamped('other', 1, 'call-1', 'run-b');
 
-      const first = await dao.inCallBatch('run-a', null, 2, 2, false);
+      const first = await dao.inCallBatch('run-a', null, 2, 2);
       const second = await dao.inCallBatch(
         'run-a',
         { seq: first[1]!.seq, id: first[1]!.id },
         2,
         2,
-        false,
       );
 
       expect(first.map((row) => [row.id, row.inCall])).toEqual([
@@ -1355,7 +1355,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     it('bounds a later batch’s seq from below, so it starts where the last one ended', async () => {
       const execute = vi.spyOn(orm.em.getConnection(), 'execute');
 
-      await dao.inCallBatch('run-a', { seq: 40, id: 'r-40' }, 90, 10, false);
+      await dao.inCallBatch('run-a', { seq: 40, id: 'r-40' }, 90, 10);
 
       const [sql, params] = execute.mock.calls[0]! as [string, unknown[]];
       execute.mockRestore();
@@ -1364,18 +1364,156 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(params[sql.slice(0, bound).split('?').length - 1]).toBe(40);
     });
 
-    it('reads the payload only when asked, and the promoted call columns either way', async () => {
+    it('reads each row’s payload', async () => {
       await insert('run-a', 0, 'subagent_info', '{"id":"d1","callId":"c1"}');
 
-      const [bare] = await dao.inCallBatch('run-a', null, 0, 10, false);
-      const [whole] = await dao.inCallBatch('run-a', null, 0, 10, true);
+      const [row] = await dao.inCallBatch('run-a', null, 0, 10);
 
-      expect([bare!.payload, bare!.callId, bare!.payloadId]).toEqual([
-        null,
-        'c1',
-        'd1',
+      expect(row!.payload).toBe('{"id":"d1","callId":"c1"}');
+    });
+  });
+
+  describe('inCallRowsOfKind', () => {
+    it('reads one kind of one run with its member, stamp and call, and a delegate declaration’s id', async () => {
+      await dao.create({
+        runId: 'run-a',
+        seq: 0,
+        kind: 'subagent_info',
+        memberId: 'dev',
+        inCall: 'call-old',
+        payload: '{"id":"d1","callId":"c1"}',
+      });
+      await dao.create({
+        runId: 'run-a',
+        seq: 1,
+        kind: 'subagent_info',
+        memberId: 'dev',
+        payload: '{"id":"d2"}',
+      });
+      await insert('run-a', 2, 'message', '{"text":"hi","callId":"c1"}');
+      await insert('run-b', 3, 'subagent_info', '{"id":"d3","callId":"c3"}');
+
+      const rows = await dao.inCallRowsOfKind('run-a', 'subagent_info');
+
+      expect(
+        rows
+          .map(({ rowid: _rowid, ...row }) => row)
+          .sort((a, b) => a.seq - b.seq),
+      ).toEqual([
+        {
+          seq: 0,
+          kind: 'subagent_info',
+          memberId: 'dev',
+          inCall: 'call-old',
+          callId: 'c1',
+          payloadId: 'd1',
+        },
+        {
+          seq: 1,
+          kind: 'subagent_info',
+          memberId: 'dev',
+          inCall: null,
+          callId: null,
+          payloadId: 'd2',
+        },
       ]);
-      expect(whole!.payload).toBe('{"id":"d1","callId":"c1"}');
+      expect(
+        (await dao.inCallRowsOfKind('run-a', 'message')).map((row) => [
+          row.seq,
+          row.callId,
+          row.payloadId,
+        ]),
+      ).toEqual([[2, 'c1', null]]);
+    });
+
+    it('stamps the rows it read by their rowid, and answers how many it changed', async () => {
+      await insert('run-a', 0, 'message', '{"text":"a","callId":"c1"}');
+      await insert('run-a', 1, 'message', '{"text":"b"}');
+      const [first] = (await dao.inCallRowsOfKind('run-a', 'message')).filter(
+        (row) => row.seq === 0,
+      );
+
+      const changed = await dao.rememberInCallAt('run-a', 'message', 'c1', [
+        { rowid: first!.rowid, seq: 0, was: null },
+      ]);
+
+      expect(changed).toBe(1);
+      expect(
+        (await dao.getByRun('run-a', -1)).map((row) => [row.seq, row.inCall]),
+      ).toEqual([
+        [0, 'c1'],
+        [1, null],
+      ]);
+    });
+
+    it('leaves a row stamped since it was read, and another row that took a deleted one’s rowid', async () => {
+      await insert('run-a', 0, 'message', '{"text":"a","callId":"c1"}');
+      await insert('run-a', 1, 'message', '{"text":"b","callId":"c1"}');
+      const read = await dao.inCallRowsOfKind('run-a', 'message');
+      const [restamped, deleted] = [0, 1].map((seq) =>
+        read.find((row) => row.seq === seq)!,
+      );
+      await orm.em
+        .fork()
+        .nativeUpdate(Item, { runId: 'run-a', seq: 0 }, { inCall: 'c1' });
+      await orm.em.fork().nativeDelete(Item, { runId: 'run-a', seq: 1 });
+      const taker = await insert('run-a', 2, 'message', '{"text":"c"}');
+      await orm.em
+        .fork()
+        .getKysely<ChatTextDatabase>()
+        .updateTable('items')
+        .set({ rowid: deleted!.rowid })
+        .where('id', '=', taker.id)
+        .execute();
+
+      const changed = await dao.rememberInCallAt(
+        'run-a',
+        'message',
+        'c-wrong',
+        [restamped!, deleted!].map(({ rowid, seq }) => ({
+          rowid,
+          seq,
+          was: null,
+        })),
+      );
+
+      expect(changed).toBe(0);
+      expect(
+        (await dao.getByRun('run-a', -1)).map((row) => [row.seq, row.inCall]),
+      ).toEqual([
+        [0, 'c1'],
+        [2, null],
+      ]);
+    });
+
+    it('reads every column from a covering index, never the row, whose later columns sit past its payload', async () => {
+      await insert('run-a', 0, 'subagent_info', '{"id":"d1","callId":"c1"}');
+      const acquire = SqliteDriver.prototype.acquireConnection;
+      let connection: DatabaseConnection | null = null;
+      const acquired = vi
+        .spyOn(SqliteDriver.prototype, 'acquireConnection')
+        .mockImplementation(async function (this: SqliteDriver) {
+          connection = await acquire.call(this);
+          return connection;
+        });
+      await dao.kindsOfRun('run-a');
+      acquired.mockRestore();
+      const execute = vi.spyOn(connection!, 'executeQuery');
+
+      await dao.inCallRowsOfKind('run-a', 'subagent_info');
+      await dao.kindsOfRun('run-a');
+
+      const statements = execute.mock.calls.map(([query]) => query);
+      execute.mockRestore();
+      expect(statements).toHaveLength(4);
+      for (const { sql, parameters } of statements) {
+        const plan = await connection!.executeQuery<{ detail: string }>(
+          CompiledQuery.raw(`explain query plan ${sql}`, [...parameters]),
+        );
+        expect(plan.rows.map((step) => step.detail).join(' | ')).toMatch(
+          /^SEARCH items USING COVERING INDEX /,
+        );
+      }
     });
   });
 

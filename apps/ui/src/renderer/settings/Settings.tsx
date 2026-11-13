@@ -11,6 +11,7 @@ import {
   DAEMON_INSPECT_PORT,
   DEFAULT_HISTORY_PAGE_SIZE,
   DEFAULT_KEPT_SESSION_IDLE_MINUTES,
+  DEFAULT_RESOURCE_ALERTS,
   DEFAULT_SETTINGS,
   type FastAction,
   hasControlCharacters,
@@ -21,6 +22,7 @@ import {
   MIN_KEPT_SESSION_IDLE_MINUTES,
   REPLY_LANGUAGE_MAX_LENGTH,
   resolveDaemonInspect,
+  type ResourceAlertSettings,
   type Settings as SettingsShape,
 } from '../../shared/contracts';
 import {
@@ -51,6 +53,7 @@ import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
 import { randomId } from '../random-id';
+import { isRemoteRuntime } from '../remote/remote-session';
 import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
@@ -318,6 +321,9 @@ export function Settings({
   >({});
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [resourceAlerts, setResourceAlerts] = useState<ResourceAlertSettings>(
+    DEFAULT_RESOURCE_ALERTS,
+  );
   const [collapseToolSteps, setCollapseToolSteps] = useState(false);
   /**
    * Each CLI's own switches (claude's browser tools, cursor's Max Mode, …) as
@@ -373,6 +379,7 @@ export function Settings({
   const checkForUpdatesDirtyRef = useRef(false);
   const themeDirtyRef = useRef(false);
   const notificationsDirtyRef = useRef(false);
+  const resourceAlertsDirtyRef = useRef(false);
   const archiveRetentionDirtyRef = useRef(false);
   const historyPageDirtyRef = useRef(false);
   const keptSessionIdleDirtyRef = useRef(false);
@@ -391,6 +398,7 @@ export function Settings({
   // What the daemon was actually spawned with — the switch must report the
   // port's real state, not the stored `null`.
   const inspectEnabled = resolveDaemonInspect(storedInspect, isPackaged);
+  const remote = isRemoteRuntime();
   // The app's shared capabilities answer, read once for this whole screen; the
   // per-CLI config-directory slice goes through the pure selector below rather
   // than a hook of its own.
@@ -465,6 +473,9 @@ export function Settings({
       }
       if (!keptSessionIdleDirtyRef.current) {
         setKeptSessionIdleMinutes(s.keptSessionIdleMinutes);
+      }
+      if (!resourceAlertsDirtyRef.current) {
+        setResourceAlerts(s.resourceAlerts);
       }
       if (!preventSleepDirtyRef.current) {
         setPreventSleepWhileWorking(s.preventSleepWhileWorking);
@@ -940,6 +951,16 @@ export function Settings({
       void persist({ notificationsEnabled: next });
     },
     [persist],
+  );
+
+  const onToggleResourceAlerts = useLatestCallback(
+    (next: boolean): void => {
+      resourceAlertsDirtyRef.current = true;
+      const updated = { ...resourceAlerts, enabled: next };
+      setResourceAlerts(updated);
+      void persist({ resourceAlerts: updated });
+    },
+    [persist, resourceAlerts],
   );
 
   /**
@@ -1429,6 +1450,18 @@ export function Settings({
                       onCheckedChange={onToggleNotifications}
                     />
                   </SettingsPanelRow>
+                  {remote ? null : (
+                    <SettingsPanelRow
+                      label="Warn about memory and disk use"
+                      htmlFor="settings-resource-alerts"
+                      description="The strip at the top of the window and a notification when a chat's processes use too much memory or keep growing, or the Mac runs low on memory or disk. Off stops Geniro reading those figures at all.">
+                      <Switch
+                        id="settings-resource-alerts"
+                        checked={resourceAlerts.enabled}
+                        onCheckedChange={onToggleResourceAlerts}
+                      />
+                    </SettingsPanelRow>
+                  )}
                   {/* The one control here that PROVES something rather than sets it.
               macOS asks for permission the first time an app posts and consumes
               that banner to do it, so without a deliberate test the first

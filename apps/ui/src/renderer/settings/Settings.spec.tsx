@@ -95,6 +95,12 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   })),
 }));
 
+const runtime = vi.hoisted(() => ({ remote: false }));
+vi.mock('../remote/remote-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../remote/remote-session')>()),
+  isRemoteRuntime: () => runtime.remote,
+}));
+
 const handle = {
   host: '127.0.0.1',
   port: 8123,
@@ -308,6 +314,75 @@ describe('Settings notifications section', () => {
     expect(result?.textContent).not.toContain(
       'System Settings › Notifications',
     );
+  });
+
+  describe('memory and disk watch switch', () => {
+    const thresholds = {
+      threadMemoryBytes: 5 * 1024 ** 3,
+      growthBytesPerMinute: 2 * 1024 ** 3,
+      minFreeDiskBytes: 20 * 1024 ** 3,
+    };
+
+    function watchSwitch(): HTMLButtonElement | null {
+      return container.querySelector<HTMLButtonElement>(
+        '#settings-resource-alerts',
+      );
+    }
+
+    it('reads its checked state from resourceAlerts.enabled', async () => {
+      geniro.getSettings.mockResolvedValue({
+        ...settings,
+        resourceAlerts: { ...thresholds, enabled: false },
+      });
+      await mount();
+
+      expect(
+        notificationsSection().querySelector('#settings-resource-alerts'),
+      ).not.toBeNull();
+      expect(watchSwitch()?.getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('saves each flip as the whole object, keeping the thresholds as read', async () => {
+      geniro.getSettings.mockResolvedValue({
+        ...settings,
+        resourceAlerts: { ...thresholds, enabled: true },
+      });
+      await mount();
+
+      await act(async () => {
+        watchSwitch()!.dispatchEvent(
+          new MouseEvent('click', { bubbles: true }),
+        );
+      });
+      expect(watchSwitch()?.getAttribute('aria-checked')).toBe('false');
+      expect(geniro.updateSettings).toHaveBeenLastCalledWith({
+        resourceAlerts: { ...thresholds, enabled: false },
+      });
+
+      await act(async () => {
+        watchSwitch()!.dispatchEvent(
+          new MouseEvent('click', { bubbles: true }),
+        );
+      });
+      expect(watchSwitch()?.getAttribute('aria-checked')).toBe('true');
+      expect(geniro.updateSettings).toHaveBeenLastCalledWith({
+        resourceAlerts: { ...thresholds, enabled: true },
+      });
+    });
+
+    it('is not drawn on a paired phone, which cannot set the field', async () => {
+      runtime.remote = true;
+      try {
+        await mount();
+
+        expect(
+          notificationsSection().querySelector('#settings-notifications'),
+        ).not.toBeNull();
+        expect(watchSwitch()).toBeNull();
+      } finally {
+        runtime.remote = false;
+      }
+    });
   });
 });
 

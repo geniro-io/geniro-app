@@ -11,7 +11,7 @@ import { WaitingStatus } from './waiting-status';
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 function reading(runId: string, state: WaitReading['state']): WaitReading {
-  return { runId, state, since: '2026-10-21T10:00:00.000Z', taskId: null };
+  return { runId, state, since: '2026-10-21T10:00:00.000Z' };
 }
 
 let root: Root | null = null;

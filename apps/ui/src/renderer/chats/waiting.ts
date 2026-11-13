@@ -96,8 +96,6 @@ export interface WaitReading {
   state: WaitState;
   /** When the wait began — the moment the run last asked, ended or failed. */
   since: string;
-  /** The board card the run belongs to, null for a plain chat. */
-  taskId: string | null;
 }
 
 /**
@@ -111,7 +109,6 @@ export function waitReadings<
     attentionAt: string | null;
     lastActivityAt: string | null;
     updatedAt: string;
-    taskId?: string | null;
   },
 >(
   runs: readonly TRun[],
@@ -134,7 +131,6 @@ export function waitReadings<
         runId: run.id,
         state,
         since: run.attentionAt ?? lastActivityOf(run),
-        taskId: run.taskId ?? null,
       });
     }
   }
@@ -201,15 +197,4 @@ export function waitCounts(
 /** How many threads wait on the user. */
 export function owedCount(ranked: readonly WaitReading[]): number {
   return ranked.filter((reading) => waitsOnUser(reading.state)).length;
-}
-
-/** How many board cards have a thread waiting on the user. */
-export function owedCardCount(ranked: readonly WaitReading[]): number {
-  const cards = new Set<string>();
-  for (const { state, taskId } of ranked) {
-    if (taskId !== null && waitsOnUser(state)) {
-      cards.add(taskId);
-    }
-  }
-  return cards.size;
 }

@@ -9267,8 +9267,8 @@ export function Chats({
   // writes and which nothing downstream reads, so it stays out of the key.
   const waitingKey = waiting
     .map(
-      ({ runId, state, since, taskId }) =>
-        `${runId}:${state}:${taskId ?? ''}:${waitsOnUser(state) ? since : ''}`,
+      ({ runId, state, since }) =>
+        `${runId}:${state}:${waitsOnUser(state) ? since : ''}`,
     )
     .join('|');
   const waitingRef = useRef(waiting);

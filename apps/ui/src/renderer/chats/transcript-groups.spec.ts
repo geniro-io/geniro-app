@@ -6724,4 +6724,74 @@ describe('a call a callee made', () => {
 
     expect(topLevelCards(entries)).toEqual(['call-1', 'call-2']);
   });
+
+  /** The engineer's call to middle still out, middle silent inside it. */
+  const middleStillWorking = (): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        started('call-1', 'manager', 'engineer'),
+        status('call-1', 'engineer', 'running'),
+        said('call-1', 'engineer', 'handing the stand to middle'),
+        started('call-2', 'engineer', 'middle', {
+          callerConversationId: 'call-1',
+        }),
+        status('call-2', 'middle', 'running'),
+        item(
+          'message',
+          { text: 'Dispatched; waiting for its report.' },
+          'manager',
+        ),
+      ]),
+    );
+
+  const memberTurnBlocks = (
+    entries: readonly TranscriptEntry[],
+    memberId: string,
+  ): TranscriptEntry[] =>
+    entries.filter(
+      (entry) => entry.type === 'turn-block' && entry.memberId === memberId,
+    );
+
+  it("draws no empty block of its own for a callee working inside a caller's card", () => {
+    const entries = withLiveText(
+      middleStillWorking(),
+      new Map(),
+      new Set(['middle']),
+    );
+
+    expect(memberTurnBlocks(entries, 'middle')).toEqual([]);
+    expect(openCallBlocks(entries).map((call) => call.callId)).toEqual([
+      'call-1',
+      'call-2',
+    ]);
+  });
+
+  it('files the live words of a callee working inside a caller’s card in its own card', () => {
+    const words: LiveState = {
+      text: 'Booting the stand',
+      thinkingTokens: null,
+      thinkingText: null,
+      thinkingSince: null,
+      thinkingStretch: null,
+      composingTool: null,
+      composingBytes: null,
+      contextTokens: null,
+      contextWindowTokens: null,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
+      spentCostUsd: null,
+    };
+    const entries = withLiveText(
+      middleStillWorking(),
+      new Map([['middle::call-2', words]]),
+      new Set(['middle']),
+    );
+
+    expect(memberTurnBlocks(entries, 'middle')).toEqual([]);
+    const tail = indexCallBlocks(entries).get('call-2')?.entries.at(-1);
+    expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
+      text: 'Booting the stand',
+    });
+  });
 });

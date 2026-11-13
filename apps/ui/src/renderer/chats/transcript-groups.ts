@@ -5093,7 +5093,8 @@ export function openCallBlocks(
  * It recurses because a call block is folded into its CALLER's turn block
  * (`ownerOf` attributes it to `callerNodeId`), so it is never a top-level entry
  * in a transcript the caller has said anything in — which is every one of them,
- * the block's own `call_started` row being the caller's.
+ * the block's own `call_started` row being the caller's — and because a call a
+ * callee made is drawn inside its caller's card.
  */
 function openCallCallees(entries: readonly TranscriptEntry[]): Set<string> {
   return callCallees(entries, (block) => OPEN_CALL_STATUSES.has(block.status));
@@ -5110,6 +5111,7 @@ function callCallees(
       if (entry.calleeMemberId !== null && matches(entry)) {
         found.add(entry.calleeMemberId);
       }
+      callCallees(entry.entries, matches, found);
       continue;
     }
     if (entry.type === 'turn-block') {
@@ -5142,6 +5144,10 @@ function enclosingCallOf(
   for (let i = list.length - 1; i >= 0; i--) {
     const candidate = list[i]!;
     if (candidate.type === 'call-block') {
+      const inner = enclosingCallOf(candidate.entries, memberId, callId);
+      if (inner !== null) {
+        return inner;
+      }
       if (
         candidate.calleeMemberId === memberId &&
         (OPEN_CALL_STATUSES.has(candidate.status) || candidate.calleeWorking) &&
@@ -5193,6 +5199,11 @@ function placeInMatchingCall(
     if (candidate.type === 'call-block') {
       if (matches(candidate)) {
         list[i] = { ...candidate, entries: [...candidate.entries, entry] };
+        return true;
+      }
+      const inner = [...candidate.entries];
+      if (placeInMatchingCall(inner, entry, matches)) {
+        list[i] = { ...candidate, entries: inner };
         return true;
       }
       continue;

@@ -14,7 +14,7 @@ import { LessonsConfigService } from './lessons-config.service';
 /** What a reflection reads besides the stretch: the CLI's own system prompt and tool schemas, the brief, the rows around it. */
 export const LESSON_READ_OVERHEAD_TOKENS = 30_000;
 /** How many times a reflection's turns read that context again, one tool call after another. */
-export const LESSON_READ_PASSES = 3;
+export const LESSON_READ_PASSES = 4;
 /** What a reflection writes: its reasoning and one `propose_lessons` call. */
 export const LESSON_ANSWER_TOKENS = 4_000;
 const CHARS_PER_TOKEN = 4;

@@ -12,7 +12,7 @@ export const ALL_SEGMENT_STATUSES =
  * Lesson stretches as the daemon holds them, re-read whenever a
  * `lessons_changed` broadcast names the thread (or names none). `runId` null
  * reads every thread's; `statuses` is the daemon's comma-separated filter,
- * omitted = the ones waiting on the user (offered, dismissed, failed). Null
+ * omitted = the ones waiting in Not reflected yet (offered, failed). Null
  * until the first answer.
  */
 export function useLessonSegments({

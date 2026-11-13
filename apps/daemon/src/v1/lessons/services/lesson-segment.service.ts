@@ -238,7 +238,7 @@ export class LessonSegmentService
   }
 
   private onStatus(event: RunStatusEvent): void {
-    if (event.outcome !== undefined && event.outcome !== null) {
+    if (event.outcome?.source === 'recorded') {
       this.arm(event.runId, 'done');
     }
     if (

@@ -144,7 +144,10 @@ export class LessonSegmentService
    * holds a learning signal. Null when nothing was offered: nothing new, no
    * signal, offers switched off for this thread, or a reflection already on it.
    */
-  close(runId: string, closedBy: LessonSegmentCloser): Promise<LessonSegment | null> {
+  close(
+    runId: string,
+    closedBy: LessonSegmentCloser,
+  ): Promise<LessonSegment | null> {
     const previous = this.queues.get(runId) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
@@ -208,7 +211,12 @@ export class LessonSegmentService
     if (signals.length === 0) {
       return null;
     }
-    const estimate = await this.estimates.estimate(run, { fromSeq, toSeq }, {}, em);
+    const estimate = await this.estimates.estimate(
+      run,
+      { fromSeq, toSeq },
+      {},
+      em,
+    );
     const fields = {
       fromSeq,
       toSeq,
@@ -353,7 +361,9 @@ export class LessonSegmentService
       const quietFor = now - run.updatedAt.getTime();
       if (quietFor >= windowMs) {
         await this.close(run.id, 'idle').catch((err: unknown) => {
-          this.logger.warn(`lessons close of ${run.id} failed: ${messageOf(err)}`);
+          this.logger.warn(
+            `lessons close of ${run.id} failed: ${messageOf(err)}`,
+          );
         });
       } else {
         this.arm(run.id, 'idle', windowMs - quietFor);

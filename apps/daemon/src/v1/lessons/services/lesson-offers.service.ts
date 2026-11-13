@@ -11,7 +11,10 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { parseJsonColumn } from '../../agents/utils/json-util';
 import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
-import { LessonSegmentDao, OPEN_SEGMENT_STATUSES } from '../dao/lesson-segment.dao';
+import {
+  LessonSegmentDao,
+  OPEN_SEGMENT_STATUSES,
+} from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
   LESSON_ROW_KINDS,
@@ -20,8 +23,8 @@ import {
   type LessonSegmentListQuery,
   type LessonSegmentStatus,
   type LessonSegmentWire,
-  type LessonsReflectAll,
   LessonSignalKindSchema,
+  type LessonsReflectAll,
   type ThreadLessonEstimate,
 } from '../lessons.types';
 import { readLessonSignals } from '../utils/read-lesson-signals';
@@ -61,7 +64,10 @@ export class LessonOffersService {
     const wires: LessonSegmentWire[] = [];
     for (const segment of rows) {
       const run = await this.runDao.getById(segment.runId, em);
-      if (run === null || (run.pendingDeleteAt !== null && query.runId === undefined)) {
+      if (
+        run === null ||
+        (run.pendingDeleteAt !== null && query.runId === undefined)
+      ) {
         continue;
       }
       wires.push(await this.wireOf(segment, run, em));
@@ -183,7 +189,8 @@ function statusesOf(text: string | undefined): readonly LessonSegmentStatus[] {
   }
   const statuses = text.split(',').map((part) => part.trim());
   const unknown = statuses.filter(
-    (status) => !(LESSON_SEGMENT_STATUSES as readonly string[]).includes(status),
+    (status) =>
+      !(LESSON_SEGMENT_STATUSES as readonly string[]).includes(status),
   );
   if (unknown.length > 0) {
     throw new BadRequestException(

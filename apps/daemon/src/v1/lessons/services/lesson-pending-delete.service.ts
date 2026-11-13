@@ -84,9 +84,7 @@ export class LessonPendingDeleteService
   }
 
   /** Null when there is nothing to reflect on: the route then deletes as usual. */
-  async extractThenDelete(
-    runId: string,
-  ): Promise<{ deleted: boolean } | null> {
+  async extractThenDelete(runId: string): Promise<{ deleted: boolean } | null> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (run === null || !isReflectable(run) || run.pendingDeleteAt !== null) {

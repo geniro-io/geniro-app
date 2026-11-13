@@ -3,6 +3,14 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { LessonSegment } from '../entity/lesson-segment.entity';
+import type { LessonSegmentStatus } from '../lessons.types';
+
+/** A stretch waiting on the user: offered, put aside with "Not now", or a reflection that failed. */
+export const OPEN_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
+  'offered',
+  'dismissed',
+  'failed',
+];
 
 @Injectable()
 export class LessonSegmentDao extends BaseDao<LessonSegment> {
@@ -18,6 +26,29 @@ export class LessonSegmentDao extends BaseDao<LessonSegment> {
     return this.getRepo(txEm).findOne(
       { reflectionRunId },
       { disableIdentityMap: true },
+    );
+  }
+
+  /** A thread's stretch still waiting on the user; a thread has at most one. */
+  openOf(runId: string, txEm?: EntityManager): Promise<LessonSegment | null> {
+    return this.getRepo(txEm).findOne(
+      { runId, status: { $in: [...OPEN_SEGMENT_STATUSES] } },
+      { orderBy: { closedAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** Segments by status, newest closed first; every run's, or one run's. */
+  listByStatus(
+    statuses: readonly LessonSegmentStatus[],
+    runId: string | null,
+    txEm?: EntityManager,
+  ): Promise<LessonSegment[]> {
+    return this.getRepo(txEm).find(
+      {
+        status: { $in: [...statuses] },
+        ...(runId === null ? {} : { runId }),
+      },
+      { orderBy: { closedAt: 'desc' }, disableIdentityMap: true },
     );
   }
 

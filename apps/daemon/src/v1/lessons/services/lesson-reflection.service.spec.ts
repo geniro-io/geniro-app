@@ -16,7 +16,9 @@ import type { ProjectScopeService } from '../../projects/services/project-scope.
 import type { Run } from '../../runs/entity/run.entity';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
+import type { RunStatusEvent } from '../../agents/chat.types';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
+import { LessonsEventBus } from './lessons-events.bus';
 import { LessonReflectionService } from './lesson-reflection.service';
 import { LessonsConfigService } from './lessons-config.service';
 
@@ -58,6 +60,8 @@ function runOf(overrides: Partial<Run>): Run {
     editsTeamSlug: null,
     editsProjectId: null,
     reflectedThroughSeq: null,
+    pendingDeleteAt: null,
+    archivedAt: null,
     ...overrides,
   } as unknown as Run;
 }
@@ -71,7 +75,7 @@ function build(
     items?: Item[];
     running?: Partial<Run>[];
     project?: { id: string; folder: string } | null;
-    config?: LessonsConfig;
+    config?: Omit<LessonsConfig, 'quietWindowHours'>;
     rejected?: { title: string; rejectReason: string | null }[];
     sendFails?: Error;
   } = {},
@@ -130,8 +134,12 @@ function build(
     deleteOfRuns: vi.fn((_runIds: readonly string[], _em: unknown) =>
       Promise.resolve(),
     ),
+    openOf: vi.fn(() => Promise.resolve(null)),
+    getById: vi.fn(() => Promise.resolve(null)),
+    ofReflection: vi.fn(() => Promise.resolve(null)),
   };
   const deleted = new Subject<string>();
+  const statuses = new Subject<RunStatusEvent>();
   const proposals = {
     rejectedIn: vi.fn(() => Promise.resolve(options.rejected ?? [])),
   };
@@ -139,18 +147,22 @@ function build(
     projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
   const config = new LessonsConfigService();
-  config.set(options.config ?? DEFAULT_LESSONS_CONFIG);
+  config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
   const service = new LessonReflectionService(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     chats as unknown as ChatService,
-    { allDeleted: () => deleted.asObservable() } as unknown as AgentEventBus,
+    {
+      allDeleted: () => deleted.asObservable(),
+      allStatuses: () => statuses.asObservable(),
+    } as unknown as AgentEventBus,
     { enabled: true } as MemoryService,
     projectScope as unknown as ProjectScopeService,
     segments as unknown as LessonSegmentDao,
     proposals as unknown as LessonProposalDao,
     config,
+    new LessonsEventBus(),
   );
   return {
     service,

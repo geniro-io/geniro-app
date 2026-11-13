@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { ChatApprovalMode } from '../agents/chat.types';
 import { MEMORY_TITLE_MAX_CHARS, MEMORY_TYPES } from '../memory/memory.types';
-import { AgentKindSchema } from '../runs/runs.types';
+import { AgentKindSchema, type ItemKind } from '../runs/runs.types';
 
 export const LESSON_TITLE_MAX_CHARS = MEMORY_TITLE_MAX_CHARS;
 export const LESSON_RULE_MAX_CHARS = 300;
@@ -12,6 +12,13 @@ export const LESSONS_REFLECTION_APPROVAL: ChatApprovalMode = 'ask';
 export const LESSON_REJECT_REASON_MAX_CHARS = 300;
 /** How many rejected proposals of the same place a reflection is shown. */
 export const LESSON_REJECTED_BRIEF_MAX = 20;
+
+/** The rows the lessons machinery writes into a thread: never new activity to reflect on. */
+export const LESSON_ROW_KINDS: readonly ItemKind[] = [
+  'lessons',
+  'lesson_outcome',
+  'lesson_offer',
+];
 
 /** What can tell a reflection that something went wrong in a thread. */
 export const LESSON_SIGNAL_KINDS = [
@@ -147,6 +154,12 @@ export const LessonOutcomePayloadSchema = z.object({
 });
 export type LessonOutcomePayload = z.infer<typeof LessonOutcomePayloadSchema>;
 
+export const DEFAULT_LESSON_QUIET_WINDOW_HOURS = 3;
+/** How long a stretch closed by an outcome, a final stage or a finished card waits for a new message. */
+export const LESSON_DONE_QUIET_MS = 10 * 60_000;
+/** How long a delete that extracts lessons first waits for its reflection before deleting anyway. */
+export const LESSON_PENDING_DELETE_MAX_MS = 10 * 60_000;
+
 export const LESSON_REFLECTION_MODES = ['off', 'offer'] as const;
 export type LessonReflectionMode = (typeof LESSON_REFLECTION_MODES)[number];
 
@@ -170,6 +183,12 @@ export const LessonsConfigSchema = z
       ),
     model: z.string().min(1).max(200).nullable(),
     effort: z.string().min(1).max(50).nullable(),
+    quietWindowHours: z
+      .union([z.literal(1), z.literal(3), z.literal(6)])
+      .default(DEFAULT_LESSON_QUIET_WINDOW_HOURS)
+      .describe(
+        'How long a thread left open sits with no new message before its stretch is offered',
+      ),
   })
   .meta({ id: 'LessonsConfig' });
 export type LessonsConfig = z.infer<typeof LessonsConfigSchema>;
@@ -179,16 +198,137 @@ export const DEFAULT_LESSONS_CONFIG: LessonsConfig = {
   agentKind: null,
   model: null,
   effort: null,
+  quietWindowHours: DEFAULT_LESSON_QUIET_WINDOW_HOURS,
 };
 
-/** What "Reflect now" may name for one reflection, over the settings. */
+/** What "Reflect now", an offer's "Extract lessons" or a delete may name for one reflection, over the settings. */
 export const ReflectLessonsSchema = z.object({
+  segmentId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('The offered stretch to reflect on; omitted = everything past the last reflection'),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).max(200).optional(),
   effort: z.string().min(1).max(50).optional(),
   configDir: z.string().min(1).max(4096).optional(),
 });
 export type ReflectLessons = z.infer<typeof ReflectLessonsSchema>;
+
+/** What a reflection would cost, priced before it runs. */
+export const LessonEstimateSchema = z
+  .object({
+    agentKind: AgentKindSchema,
+    model: z
+      .string()
+      .nullable()
+      .describe('The model the reflection would run as; null when the CLI cannot say before a turn'),
+    tokens: z.number().int().min(0),
+    usd: z
+      .number()
+      .nullable()
+      .describe('Null when the model has no list price (cursor-agent, an unlisted id) — never 0'),
+  })
+  .meta({ id: 'LessonEstimate' });
+export type LessonEstimate = z.infer<typeof LessonEstimateSchema>;
+
+export const LessonEstimateQuerySchema = z.object({
+  runId: z.string().min(1).max(200),
+  agentKind: AgentKindSchema.optional(),
+  model: z.string().min(1).max(200).optional(),
+});
+export type LessonEstimateQuery = z.infer<typeof LessonEstimateQuerySchema>;
+
+/** One thread's unreflected stretch priced, for the delete dialog and "Change model…". */
+export const ThreadLessonEstimateSchema = z
+  .object({
+    estimate: LessonEstimateSchema,
+    signals: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Learning signals past the last reflection; 0 = nothing worth reflecting on'),
+    fromSeq: z.number().int(),
+    toSeq: z.number().int(),
+  })
+  .meta({ id: 'ThreadLessonEstimate' });
+export type ThreadLessonEstimate = z.infer<typeof ThreadLessonEstimateSchema>;
+
+export const LessonSignalRefSchema = z
+  .object({ kind: LessonSignalKindSchema, seq: z.number().int() })
+  .meta({ id: 'LessonSignalRef' });
+
+export const LessonSegmentCloserSchema = z
+  .enum(LESSON_SEGMENT_CLOSERS)
+  .meta({ id: 'LessonSegmentCloser' });
+export const LessonSegmentStatusSchema = z
+  .enum(LESSON_SEGMENT_STATUSES)
+  .meta({ id: 'LessonSegmentStatus' });
+
+/**
+ * The `lesson_offer` item a closed stretch with a learning signal writes into
+ * its thread. Its live state (offered, reflecting, done) is the segment's,
+ * read through `GET /v1/lessons/segments`.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/lessons-payload.ts.
+ */
+export const LessonOfferPayloadSchema = z.object({
+  segmentId: z.string(),
+  fromSeq: z.number().int(),
+  toSeq: z.number().int(),
+  closedBy: LessonSegmentCloserSchema,
+  signals: z.array(LessonSignalRefSchema),
+  estimate: LessonEstimateSchema,
+});
+export type LessonOfferPayload = z.infer<typeof LessonOfferPayloadSchema>;
+
+/** One closed stretch, as "Not reflected yet" and an offer row read it. */
+export const LessonSegmentWireSchema = z
+  .object({
+    id: z.string(),
+    runId: z.string(),
+    sourceTitle: z.string().nullable(),
+    archived: z.boolean(),
+    fromSeq: z.number().int(),
+    toSeq: z.number().int(),
+    closedBy: LessonSegmentCloserSchema,
+    closedAt: z.string(),
+    signals: z.array(LessonSignalRefSchema),
+    status: LessonSegmentStatusSchema,
+    reflectionRunId: z.string().nullable(),
+    estimate: LessonEstimateSchema,
+  })
+  .meta({ id: 'LessonSegment' });
+export type LessonSegmentWire = z.infer<typeof LessonSegmentWireSchema>;
+
+export const LessonSegmentListSchema = z.object({
+  segments: z.array(LessonSegmentWireSchema),
+});
+
+export const LessonSegmentListQuerySchema = z.object({
+  status: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Comma-separated statuses; omitted = offered, dismissed and failed'),
+  runId: z.string().min(1).max(200).optional(),
+});
+export type LessonSegmentListQuery = z.infer<
+  typeof LessonSegmentListQuerySchema
+>;
+
+/** "Extract all": a reflection per waiting stretch, each started or refused. */
+export const LessonsReflectAllSchema = z.object({
+  started: z.number().int().min(0),
+  refused: z.number().int().min(0),
+});
+export type LessonsReflectAll = z.infer<typeof LessonsReflectAllSchema>;
+
+/** The `lessons_changed` broadcast: a segment or proposal of this thread changed. */
+export interface LessonsChangedEvent {
+  runId: string | null;
+}
 
 export const LessonsReflectStartedSchema = z.object({
   reflectionRunId: z.string(),

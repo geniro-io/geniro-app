@@ -40,6 +40,7 @@ const LESSONS_PAYLOAD = {
   agentKind: 'claude',
   model: 'claude-haiku-5-5',
   proposals: [PROPOSAL],
+  places: { project: true, team: false },
 };
 
 describe('readLessons', () => {
@@ -61,7 +62,40 @@ describe('readLessons', () => {
           dedup: { verdict: 'refines', handle: 'm12' },
         },
       ],
+      places: { project: true, team: false },
     });
+  });
+
+  it('reads the places the thread has as the daemon wrote them', () => {
+    expect(
+      readLessons(
+        row(50, 'lessons', {
+          ...LESSONS_PAYLOAD,
+          places: { project: false, team: true },
+        }),
+      )?.places,
+    ).toEqual({ project: false, team: true });
+  });
+
+  it('offers every place a row written before the places were named', () => {
+    expect(
+      readLessons(row(50, 'lessons', { ...LESSONS_PAYLOAD, places: undefined }))
+        ?.places,
+    ).toEqual({
+      project: true,
+      team: true,
+    });
+  });
+
+  it('offers a place whose flag does not read as a boolean', () => {
+    expect(
+      readLessons(
+        row(50, 'lessons', {
+          ...LESSONS_PAYLOAD,
+          places: { project: 'no', team: false },
+        }),
+      )?.places,
+    ).toEqual({ project: true, team: false });
   });
 
   it('reads an empty proposal list as a reflection that proposed nothing', () => {
@@ -123,6 +157,7 @@ describe('readLessonOutcome', () => {
     ).toEqual({
       proposalId: 'p-correction',
       status: 'saved',
+      title: LESSON_CORRECTION.title,
       target: { kind: 'memory', scope: 'team', type: 'feedback' },
       memoryHandle: 'm40',
       reason: null,
@@ -148,7 +183,22 @@ describe('readLessonOutcome', () => {
         row(60, 'lesson_outcome', {
           proposalId: 'p-correction',
           status: 'maybe',
+          title: LESSON_CORRECTION.title,
           target: { kind: 'memory', scope: 'team', type: 'feedback' },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('answers null for an outcome that names no lesson', () => {
+    expect(
+      readLessonOutcome(
+        row(60, 'lesson_outcome', {
+          proposalId: 'p-correction',
+          status: 'saved',
+          target: { kind: 'memory', scope: 'team', type: 'feedback' },
+          memoryHandle: 'm40',
+          reason: null,
         }),
       ),
     ).toBeNull();
@@ -160,6 +210,7 @@ describe('foldLessonOutcomes', () => {
     row(seq, 'lesson_outcome', {
       proposalId: 'p-correction',
       status,
+      title: LESSON_CORRECTION.title,
       target: { kind: 'memory', scope: 'project', type: 'feedback' },
       memoryHandle: status === 'saved' ? 'm40' : null,
       reason: null,

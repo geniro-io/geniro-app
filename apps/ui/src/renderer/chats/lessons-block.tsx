@@ -79,6 +79,7 @@ export function LessonsBlock({
       lessons={entry.card.proposals}
       outcomes={entry.outcomes}
       reflection={reflection}
+      places={entry.card.places}
       onShowInThread={jump ?? undefined}
       onSave={
         api === null

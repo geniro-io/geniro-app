@@ -28,6 +28,8 @@ function LessonsDemo({
   const [outcomes, setOutcomes] = useState<Record<string, LessonOutcomeView>>(
     initial ?? {},
   );
+  const titleOf = (proposalId: string): string =>
+    lessons.find((lesson) => lesson.id === proposalId)?.title ?? proposalId;
   return (
     <div className="w-[600px]">
       <LessonsCard
@@ -41,6 +43,7 @@ function LessonsDemo({
             [proposalId]: {
               proposalId,
               status: 'saved',
+              title: request.title ?? titleOf(proposalId),
               target: request.target,
               memoryHandle: 'm40',
               reason: null,
@@ -53,6 +56,7 @@ function LessonsDemo({
             [proposalId]: {
               proposalId,
               status: 'rejected',
+              title: titleOf(proposalId),
               target: LESSON_CORRECTION.target,
               memoryHandle: null,
               reason,
@@ -92,6 +96,7 @@ export const Handled: Story = {
       [LESSON_CORRECTION.id]: {
         proposalId: LESSON_CORRECTION.id,
         status: 'saved',
+        title: LESSON_CORRECTION.title,
         target: LESSON_CORRECTION.target,
         memoryHandle: 'm31',
         reason: null,
@@ -99,6 +104,7 @@ export const Handled: Story = {
       [LESSON_REFINES.id]: {
         proposalId: LESSON_REFINES.id,
         status: 'rejected',
+        title: LESSON_REFINES.title,
         target: LESSON_REFINES.target,
         memoryHandle: null,
         reason: 'already covered by m12',

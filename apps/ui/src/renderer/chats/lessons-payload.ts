@@ -12,6 +12,7 @@ import {
 import type {
   LessonDedupVerdict,
   LessonOutcomeView,
+  LessonPlaces,
   LessonView,
 } from '../components/lessons-card';
 
@@ -33,6 +34,7 @@ export interface LessonsCardData {
   agentKind: AgentKind;
   model: string | null;
   proposals: LessonView[];
+  places: LessonPlaces;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -117,6 +119,14 @@ function readProposal(value: unknown): LessonView | null {
   };
 }
 
+function readPlaces(value: unknown): LessonPlaces {
+  const row = record(value);
+  return {
+    project: typeof row?.project === 'boolean' ? row.project : true,
+    team: typeof row?.team === 'boolean' ? row.team : true,
+  };
+}
+
 /** One `lessons` row, or null. Zero proposals is a valid reading: nothing passed the bar. */
 export function readLessons(item: ChatItem): LessonsCardData | null {
   const row = record(item.payload);
@@ -145,6 +155,7 @@ export function readLessons(item: ChatItem): LessonsCardData | null {
     agentKind,
     model: text(row.model),
     proposals,
+    places: readPlaces(row.places),
   };
 }
 
@@ -153,13 +164,20 @@ export function readLessonOutcome(item: ChatItem): LessonOutcomeView | null {
   const row = record(item.payload);
   const proposalId = text(row?.proposalId);
   const status = oneOf(row?.status, ['saved', 'rejected'] as const);
+  const title = text(row?.title);
   const target = readTarget(row?.target);
-  if (proposalId === null || status === null || target === null) {
+  if (
+    proposalId === null ||
+    status === null ||
+    title === null ||
+    target === null
+  ) {
     return null;
   }
   return {
     proposalId,
     status,
+    title,
     target,
     memoryHandle: text(row?.memoryHandle),
     reason: text(row?.reason),

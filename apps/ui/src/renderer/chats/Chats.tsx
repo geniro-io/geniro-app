@@ -433,7 +433,11 @@ import { useRunTeamNotes } from './use-run-team-notes';
 import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
-import { useThreadLessons } from './use-thread-lessons';
+import {
+  lessonsMarkOf,
+  type ThreadLessonsMark,
+  useThreadLessons,
+} from './use-thread-lessons';
 import {
   changesPullRequestsOf,
   rowPullRequestOf,
@@ -2457,6 +2461,11 @@ export function Chats({
         .catch((err: unknown) => setError(describeDaemonError(err)));
     },
     [apis, setError],
+  );
+  const readLessonsMark = useLatestCallback(
+    (runId: string): Promise<ThreadLessonsMark> =>
+      apis.lessons.getThreadLessonsState({ runId }).then(lessonsMarkOf),
+    [apis],
   );
 
   // The run queued for deletion (null = no confirm open). Deleting is
@@ -9969,6 +9978,7 @@ export function Chats({
                                     ? handleReflectRun
                                     : undefined
                                 }
+                                readLessonsMark={readLessonsMark}
                                 // Read off the ROW, like `archived` above and
                                 // for its reason: under `Show all` the band and
                                 // the rest are one list, so a flag derived from

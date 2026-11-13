@@ -40,6 +40,7 @@ const ENTRY: LessonsEntry = {
     agentKind: 'claude',
     model: 'claude-haiku-5-5',
     proposals: [LESSON_CORRECTION],
+    places: { project: true, team: true },
   },
   outcomes: {},
 };

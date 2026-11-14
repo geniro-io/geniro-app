@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { closeImportedShells } from '../../../utils/imported-shells';
 import type { AgentSessionRecord } from '../../adapter.types';
 import {
   carryClaudeSession,
@@ -1424,32 +1425,40 @@ describe('readClaudeSessionHistory — background commands', () => {
   });
 
   it("trims a command's open with its call without counting it as dropped", async () => {
-    // When the cap bites, the opens ahead of the oldest kept row go too, but
-    // `droppedBefore` counts only the conversation rows it cut.
+    // The cap falls right after the call's result, so the open is the first
+    // row left behind the cut.
     const root = profile([
       {
         dir: 'proj',
         id: 's1',
         lines: [
           ...bashLaunch('toolu_A', 'bxyz', 'pnpm dev'),
-          assistantLine(CWD, 'later'),
           assistantLine(CWD, 'last'),
           assistantLine(CWD, 'end'),
         ],
       },
     ]);
+    const whole = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
     const history = await readClaudeSessionHistory({
       profileDir: root,
       sessionId: 's1',
       limit: 2,
     });
 
+    expect(shellEvents(whole?.events ?? [])).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_A', workId: 'bxyz' },
+    ]);
     expect(history?.events).toEqual([
       { type: 'text', text: 'last' },
       { type: 'text', text: 'end' },
     ]);
-    // The call, its result and 'later' — not the open.
-    expect(history?.droppedBefore).toBe(3);
+    expect(closeImportedShells(history?.events ?? [])).toEqual(history?.events);
+    // The call and its result, not the open.
+    expect(history?.droppedBefore).toBe(2);
   });
 
   it("counts Monitor's task as a detached command, and TaskUpdate's as nothing", async () => {

@@ -448,10 +448,13 @@ export async function readClaudeSessionHistory(input: {
       }
     }
     // Trimmed as we go rather than at the end: the point of the cap is to bound
-    // what is HELD, and a 60k-event array built first would defeat it. The
-    // opens ahead of the oldest kept row go with it; they are bounded by the
-    // tool calls that made them.
-    while (conversation > input.limit) {
+    // what is HELD, and a 60k-event array built first would defeat it. An open
+    // follows its call's result, so once anything is cut an open at the head
+    // belongs to a cut call and goes with it.
+    while (
+      conversation > input.limit ||
+      (dropped > 0 && events[0]?.type === 'shell_open')
+    ) {
       const gone = events.shift() as AgentEvent;
       if (gone.type !== 'shell_open') {
         conversation -= 1;

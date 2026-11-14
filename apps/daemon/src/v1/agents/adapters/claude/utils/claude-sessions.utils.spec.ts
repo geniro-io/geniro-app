@@ -474,6 +474,23 @@ describe('listClaudeSessions', () => {
     expect(rows[0]?.title).toBe('why does this fail?');
   });
 
+  it('does not title a session with the IDE context of a message that is only a picture', async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'ide',
+        lines: [
+          ideUserLine('/w', [IDE_OPENED_FILE, IMAGE]),
+          ideUserLine('/w', [IDE_OPENED_FILE, IMAGE, 'see these']),
+        ],
+      },
+    ]);
+
+    const rows = await listSessions({ profileDir: root, cwd: null, limit: 10 });
+
+    expect(rows[0]?.title).toBe('see these');
+  });
+
   it('titles a session with a message the user typed as nothing but an IDE tag', async () => {
     const typed = '<ide_selection>x</ide_selection>';
     const root = profile([
@@ -587,6 +604,29 @@ describe('readClaudeSessionHistory', () => {
     });
 
     expect(history?.events).toEqual([{ type: 'user_message', text: typed }]);
+  });
+
+  it('imports no IDE context for a message that is only a picture', async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          ideUserLine('/w', [IDE_OPENED_FILE, IDE_SELECTION, IMAGE]),
+          ideUserLine('/w', [IDE_OPENED_FILE, IMAGE, 'explain this']),
+        ],
+      },
+    ]);
+
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
+
+    expect(history?.events).toEqual([
+      { type: 'user_message', text: 'explain this' },
+    ]);
   });
 
   it('keeps a message the user typed as nothing but such a tag', async () => {

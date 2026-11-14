@@ -592,13 +592,13 @@ const ENVELOPE_BLOCK =
  * extension sends with a message (`<ide_opened_file>`, `<ide_selection>`,
  * `<ide_diagnostics>`, matched as a family).
  *
- * The extension records every message as array content whose LAST text block
- * is what the user typed, with each context block a text block of its own
- * ahead of it (measured on 4,300 extension lines: none was context alone). So
- * only a block ahead of the last one is dropped, and string content, which
- * the terminal CLI writes, never is: a user who typed nothing but such a tag
- * keeps their message. Anchored and greedy because a selection is copied code
- * and may contain a closing tag.
+ * The extension records every message as array content whose LAST block is
+ * what the user typed, with each context block and picture ahead of it
+ * (measured on 4,300 extension lines: none was context alone, none ended in a
+ * picture). So a context block is kept only as the last block of the array,
+ * where it can only be the user's own words; string content, which the
+ * terminal CLI writes, is never filtered. Anchored and greedy because a
+ * selection is copied code and may contain a closing tag.
  */
 const IDE_CONTEXT_BLOCK = /^<(ide_[a-z_]+)>[\s\S]*<\/\1>$/;
 /** The slash command itself, which IS what the user typed. */
@@ -652,11 +652,17 @@ function userText(line: Record<string, unknown>): string | null {
 }
 
 function withoutIdeContext(content: unknown): string[] {
-  const blocks = textBlocks(content);
-  const typed = blocks.length - 1;
-  return blocks.filter(
-    (block, index) => index === typed || !IDE_CONTEXT_BLOCK.test(block.trim()),
-  );
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const typed = content.length - 1;
+  return content.flatMap((block: unknown, index) => {
+    const text = blockText(block);
+    return text === null ||
+      (index !== typed && IDE_CONTEXT_BLOCK.test(text.trim()))
+      ? []
+      : [text];
+  });
 }
 
 function joinTextBlocks(content: unknown): string {
@@ -668,17 +674,20 @@ function textBlocks(content: unknown): string[] {
   if (!Array.isArray(content)) {
     return [];
   }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (typeof block !== 'object' || block === null) {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type === 'text' && typeof record.text === 'string') {
-      parts.push(record.text);
-    }
+  return content.flatMap((block: unknown) => {
+    const text = blockText(block);
+    return text === null ? [] : [text];
+  });
+}
+
+function blockText(block: unknown): string | null {
+  if (typeof block !== 'object' || block === null) {
+    return null;
   }
-  return parts;
+  const record = block as Record<string, unknown>;
+  return record.type === 'text' && typeof record.text === 'string'
+    ? record.text
+    : null;
 }
 
 /** Every session file under `<profileDir>/projects`, with its mtime. */

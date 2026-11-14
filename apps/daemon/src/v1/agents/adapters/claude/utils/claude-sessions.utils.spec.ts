@@ -565,6 +565,21 @@ describe('readClaudeSessionHistory', () => {
     ]);
   });
 
+  it('keeps the words of a user who TYPED such a tag in prose', async () => {
+    const typed = 'why does <ide_selection>x</ide_selection> show as a title?';
+    const root = profile([
+      { dir: 'proj', id: 's1', lines: [ideUserLine('/w', [typed])] },
+    ]);
+
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
+
+    expect(history?.events).toEqual([{ type: 'user_message', text: typed }]);
+  });
+
   it("leaves a sub-agent's own conversation out of the main thread", async () => {
     const root = profile([
       {

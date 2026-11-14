@@ -3761,6 +3761,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // it has to hear so — see {@link announceBands}.
       await this.announceBands([fresh.groupId], [answer], em);
       return answer;
+    } catch (err) {
+      await this.teardown.resumeIfLive(runId, em);
+      throw err;
     } finally {
       this.archiving.delete(runId);
     }

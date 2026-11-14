@@ -474,6 +474,17 @@ describe('listClaudeSessions', () => {
     expect(rows[0]?.title).toBe('why does this fail?');
   });
 
+  it('titles a session with a message the user typed as nothing but an IDE tag', async () => {
+    const typed = '<ide_selection>x</ide_selection>';
+    const root = profile([
+      { dir: 'proj', id: 'typed', lines: [userLine('/w', typed)] },
+    ]);
+
+    const rows = await listSessions({ profileDir: root, cwd: null, limit: 10 });
+
+    expect(rows[0]?.title).toBe(typed);
+  });
+
   it('answers an absent profile with an empty list rather than throwing', async () => {
     await expect(
       listSessions({
@@ -548,8 +559,6 @@ describe('readClaudeSessionHistory', () => {
         id: 's1',
         lines: [
           ideUserLine('/w', [IDE_OPENED_FILE, IDE_SELECTION, 'explain this']),
-          // A line that is nothing but IDE context is not a message at all.
-          ideUserLine('/w', [IDE_OPENED_FILE]),
         ],
       },
     ]);
@@ -578,6 +587,33 @@ describe('readClaudeSessionHistory', () => {
     });
 
     expect(history?.events).toEqual([{ type: 'user_message', text: typed }]);
+  });
+
+  it('keeps a message the user typed as nothing but such a tag', async () => {
+    const typed = '<ide_selection>x</ide_selection>';
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          userLine('/w', typed),
+          ideUserLine('/w', [typed]),
+          ideUserLine('/w', [IDE_OPENED_FILE, typed]),
+        ],
+      },
+    ]);
+
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
+
+    expect(history?.events).toEqual([
+      { type: 'user_message', text: typed },
+      { type: 'user_message', text: typed },
+      { type: 'user_message', text: typed },
+    ]);
   });
 
   it("leaves a sub-agent's own conversation out of the main thread", async () => {

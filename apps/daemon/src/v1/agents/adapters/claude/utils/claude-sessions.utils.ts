@@ -592,11 +592,13 @@ const ENVELOPE_BLOCK =
  * extension sends with a message (`<ide_opened_file>`, `<ide_selection>`,
  * `<ide_diagnostics>`, matched as a family).
  *
- * Dropped a whole BLOCK at a time, never searched for in the joined text: the
- * context is always a text block of its own (measured on 163 such lines).
- * Anchored and greedy because a selection is copied code and may contain a
- * closing tag; a search over the joined text would delete the words of a user
- * who TYPED such a tag in prose.
+ * The extension records every message as array content whose LAST text block
+ * is what the user typed, with each context block a text block of its own
+ * ahead of it (measured on 4,300 extension lines: none was context alone). So
+ * only a block ahead of the last one is dropped, and string content, which
+ * the terminal CLI writes, never is: a user who typed nothing but such a tag
+ * keeps their message. Anchored and greedy because a selection is copied code
+ * and may contain a closing tag.
  */
 const IDE_CONTEXT_BLOCK = /^<(ide_[a-z_]+)>[\s\S]*<\/\1>$/;
 /** The slash command itself, which IS what the user typed. */
@@ -610,7 +612,7 @@ const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
  * Four things are NOT the user talking, and each was observed in this profile's
  * own files: a synthetic line the CLI injects after a compaction, a replayed
  * line it re-appends with `isReplay`, a line whose content is entirely
- * `tool_result` blocks, and a line that is only envelopes or IDE context.
+ * `tool_result` blocks, and a line that is only envelopes.
  *
  * A slash command is the interesting case, and it is neither kept whole nor
  * dropped. Whole, it reads as three lines of XML where the transcript wants one
@@ -629,8 +631,9 @@ function userText(line: Record<string, unknown>): string | null {
     return null;
   }
   const content = (message as Record<string, unknown>).content;
-  const raw = (typeof content === 'string' ? [content] : textBlocks(content))
-    .filter((block) => !IDE_CONTEXT_BLOCK.test(block.trim()))
+  const raw = (
+    typeof content === 'string' ? [content] : withoutIdeContext(content)
+  )
     .join('\n')
     .trim();
   if (raw === '') {
@@ -646,6 +649,14 @@ function userText(line: Record<string, unknown>): string | null {
   }
   const args = COMMAND_ARGS.exec(raw)?.[1]?.trim();
   return args ? `${name} ${args}` : name;
+}
+
+function withoutIdeContext(content: unknown): string[] {
+  const blocks = textBlocks(content);
+  const typed = blocks.length - 1;
+  return blocks.filter(
+    (block, index) => index === typed || !IDE_CONTEXT_BLOCK.test(block.trim()),
+  );
 }
 
 function joinTextBlocks(content: unknown): string {

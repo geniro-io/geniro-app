@@ -1495,6 +1495,7 @@ describe('readClaudeSessionHistory — background commands', () => {
   });
 
   it('holds no open for a call the cap cut before its result arrived', async () => {
+    // Conversation rows stay ahead of the open, so it never reaches the head.
     const [launch, launched] = bashLaunch('toolu_A', 'bA', 'pnpm dev');
     const root = profile([
       {
@@ -1504,25 +1505,85 @@ describe('readClaudeSessionHistory — background commands', () => {
           launch,
           toolUseLine('toolu_R1', 'Read', { file_path: '/w/a.ts' }),
           toolUseLine('toolu_R2', 'Read', { file_path: '/w/b.ts' }),
+          toolUseLine('toolu_R3', 'Read', { file_path: '/w/c.ts' }),
           launched,
-          toolResultLine('toolu_R1', 'a', {}),
-          toolResultLine('toolu_R2', 'b', {}),
         ],
       },
     ]);
     const history = await readClaudeSessionHistory({
       profileDir: root,
       sessionId: 's1',
-      limit: 2,
+      limit: 3,
     });
     const events = history?.events ?? [];
 
     expect(events.map((event) => event.type)).toEqual([
-      'tool_result',
+      'tool_call',
+      'tool_call',
       'tool_result',
     ]);
     expect(closeImportedShells(events)).toEqual(events);
-    expect(history?.droppedBefore).toBe(4);
+    expect(history?.droppedBefore).toBe(2);
+  });
+
+  describe('two launches whose calls both arrive before either result', () => {
+    const lines = (): unknown[] => {
+      const [launchA, launchedA] = bashLaunch('toolu_A', 'bA', 'pnpm dev');
+      const [launchB, launchedB] = bashLaunch('toolu_B', 'bB', 'pnpm test');
+      return [launchA, launchB, launchedA, launchedB];
+    };
+    const open = (id: string, workId: string) => ({
+      type: 'shell_open',
+      toolCallId: id,
+      workId,
+    });
+
+    it.each([
+      {
+        limit: 4,
+        types: [
+          'tool_call',
+          'tool_call',
+          'tool_result',
+          'shell_open',
+          'tool_result',
+          'shell_open',
+        ],
+        opens: [open('toolu_A', 'bA'), open('toolu_B', 'bB')],
+        dropped: 0,
+      },
+      {
+        limit: 3,
+        types: ['tool_call', 'tool_result', 'tool_result', 'shell_open'],
+        opens: [open('toolu_B', 'bB')],
+        dropped: 1,
+      },
+      {
+        limit: 2,
+        types: ['tool_result', 'tool_result'],
+        opens: [],
+        dropped: 2,
+      },
+      { limit: 1, types: ['tool_result'], opens: [], dropped: 3 },
+    ])(
+      'keeps only the opens of the calls held under a cap of $limit',
+      async ({ limit, types, opens, dropped }) => {
+        const root = profile([{ dir: 'proj', id: 's1', lines: lines() }]);
+        const history = await readClaudeSessionHistory({
+          profileDir: root,
+          sessionId: 's1',
+          limit,
+        });
+        const events = history?.events ?? [];
+
+        expect(events.map((event) => event.type)).toEqual(types);
+        expect(shellEvents(events)).toEqual(opens);
+        expect(closeImportedShells(events).slice(events.length)).toEqual(
+          opens.map((shell) => ({ ...shell, type: 'shell_info' })),
+        );
+        expect(history?.droppedBefore).toBe(dropped);
+      },
+    );
   });
 
   it("counts Monitor's task as a detached command, and TaskUpdate's as nothing", async () => {

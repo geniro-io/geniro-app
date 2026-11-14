@@ -82,6 +82,34 @@ function userLine(cwd: string, text: string): unknown {
   return { type: 'user', cwd, message: { role: 'user', content: text } };
 }
 
+/**
+ * A message typed in the VS Code / Cursor extension, in the shape it records:
+ * each IDE context block a text block of its own, ahead of the user's words.
+ */
+function ideUserLine(cwd: string, blocks: (string | typeof IMAGE)[]): unknown {
+  return {
+    type: 'user',
+    cwd,
+    message: {
+      role: 'user',
+      content: blocks.map((block) =>
+        typeof block === 'string' ? { type: 'text', text: block } : block,
+      ),
+    },
+  };
+}
+
+const IMAGE = {
+  type: 'image',
+  source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+} as const;
+
+const IDE_OPENED_FILE =
+  '<ide_opened_file>The user opened the file /w/src/updater.ts in the IDE.</ide_opened_file>';
+const IDE_SELECTION =
+  '<ide_selection>The user selected the lines 10 to 12 from /w/src/updater.ts:\n' +
+  'const feed = readFeed();\n</ide_selection>';
+
 function assistantLine(cwd: string, text: string): unknown {
   return {
     type: 'assistant',
@@ -414,6 +442,38 @@ describe('listClaudeSessions', () => {
     expect(rows.map((row) => row.id)).toEqual(['real']);
   });
 
+  it("titles a message sent from the IDE extension with the user's words, not the IDE's", async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'ide',
+        lines: [ideUserLine('/w', [IDE_OPENED_FILE, IMAGE, 'see these'])],
+      },
+    ]);
+
+    const rows = await listSessions({ profileDir: root, cwd: null, limit: 10 });
+
+    expect(rows[0]?.title).toBe('see these');
+  });
+
+  it('keeps a selection that contains its own closing tag out of the title', async () => {
+    // A selection is code copied verbatim, so it can hold `</ide_selection>`.
+    const selection =
+      '<ide_selection>The user selected the lines 1 to 2 from /w/a.spec.ts:\n' +
+      "const close = '</ide_selection>';\n</ide_selection>";
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'ide',
+        lines: [ideUserLine('/w', [selection, 'why does this fail?'])],
+      },
+    ]);
+
+    const rows = await listSessions({ profileDir: root, cwd: null, limit: 10 });
+
+    expect(rows[0]?.title).toBe('why does this fail?');
+  });
+
   it('answers an absent profile with an empty list rather than throwing', async () => {
     await expect(
       listSessions({
@@ -479,6 +539,30 @@ describe('readClaudeSessionHistory', () => {
       { type: 'text', text: '4' },
     ]);
     expect(history?.droppedBefore).toBe(0);
+  });
+
+  it("shows only the user's own words for a message sent from the IDE extension", async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          ideUserLine('/w', [IDE_OPENED_FILE, IDE_SELECTION, 'explain this']),
+          // A line that is nothing but IDE context is not a message at all.
+          ideUserLine('/w', [IDE_OPENED_FILE]),
+        ],
+      },
+    ]);
+
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
+
+    expect(history?.events).toEqual([
+      { type: 'user_message', text: 'explain this' },
+    ]);
   });
 
   it("leaves a sub-agent's own conversation out of the main thread", async () => {
@@ -738,6 +822,24 @@ describe('searching what was SAID in a conversation', () => {
     });
 
     expect(rows).toEqual([]);
+  });
+
+  it('does not match the IDE context the extension sends with a message', async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'ide',
+        lines: [
+          ideUserLine('/w', [IDE_OPENED_FILE, 'explain this']),
+          assistantLine('/w', 'sure'),
+        ],
+      },
+    ]);
+    const search = async (query: string): Promise<AgentSessionRecord[]> =>
+      listSessions({ profileDir: root, cwd: null, limit: 10, query });
+
+    expect(await search('updater.ts')).toEqual([]);
+    expect((await search('explain')).map((row) => row.id)).toEqual(['ide']);
   });
 
   it('says nothing was truncated when the cap was never reached', async () => {
@@ -1129,6 +1231,151 @@ describe('deleteClaudeSession', () => {
 
     expect(result.deleted).toBe(false);
     expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe('readClaudeSessionHistory — background commands', () => {
+  // The shapes below are the CLI's own, copied from real session files
+  // (2.1.292): a launch's result line carries a structured `toolUseResult`
+  // naming the unit. The session file holds none of the `system/task_*`
+  // frames a live turn reads.
+  const CWD = '/tmp/proj';
+
+  function toolUseLine(id: string, name: string, input: unknown): unknown {
+    return {
+      type: 'assistant',
+      cwd: CWD,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id, name, input }],
+      },
+    };
+  }
+
+  function toolResultLine(
+    id: string,
+    text: string,
+    toolUseResult: unknown,
+  ): unknown {
+    return {
+      type: 'user',
+      cwd: CWD,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: id, content: text }],
+      },
+      toolUseResult,
+    };
+  }
+
+  function bashLaunch(id: string, workId: string, command: string): unknown[] {
+    return [
+      toolUseLine(id, 'Bash', { command, run_in_background: true }),
+      toolResultLine(
+        id,
+        `Command running in background with ID: ${workId}. Output is being written to: /tmp/${workId}.output`,
+        {
+          stdout: '',
+          stderr: '',
+          interrupted: false,
+          backgroundTaskId: workId,
+        },
+      ),
+    ];
+  }
+
+  async function read(lines: unknown[]) {
+    const root = profile([{ dir: 'proj', id: 's1', lines }]);
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 100,
+    });
+    return history?.events ?? [];
+  }
+
+  const shellEvents = (events: { type: string }[]) =>
+    events.filter((event) => event.type === 'shell_open');
+
+  it('marks a detached launch OPEN, right after the reply that detached it', async () => {
+    const events = await read(bashLaunch('toolu_A', 'bxyz', 'pnpm dev'));
+
+    const types = events.map((event) => event.type);
+    expect(types.indexOf('shell_open')).toBe(types.indexOf('tool_result') + 1);
+    expect(shellEvents(events)).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_A', workId: 'bxyz' },
+    ]);
+  });
+
+  it("does not count a command's open against the history cap", async () => {
+    // A session that backgrounded many commands would otherwise lose that many
+    // of its oldest VISIBLE rows to bookkeeping about calls already counted.
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: bashLaunch('toolu_A', 'bxyz', 'pnpm dev'),
+      },
+    ]);
+    // Two conversation events — the call and its result — under a cap of two.
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 2,
+    });
+
+    expect(history?.droppedBefore).toBe(0);
+    expect(history?.events.map((event) => event.type)).toEqual([
+      'tool_call',
+      'tool_result',
+      'shell_open',
+    ]);
+  });
+
+  it("trims a command's open with its call without counting it as dropped", async () => {
+    // When the cap bites, the opens ahead of the oldest kept row go too, but
+    // `droppedBefore` counts only the conversation rows it cut.
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          ...bashLaunch('toolu_A', 'bxyz', 'pnpm dev'),
+          assistantLine(CWD, 'later'),
+          assistantLine(CWD, 'last'),
+          assistantLine(CWD, 'end'),
+        ],
+      },
+    ]);
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 2,
+    });
+
+    expect(history?.events).toEqual([
+      { type: 'text', text: 'last' },
+      { type: 'text', text: 'end' },
+    ]);
+    // The call, its result and 'later' — not the open.
+    expect(history?.droppedBefore).toBe(3);
+  });
+
+  it("counts Monitor's task as a detached command, and TaskUpdate's as nothing", async () => {
+    // Both results carry a `taskId`; only one of them started a command.
+    const events = await read([
+      toolUseLine('toolu_M', 'Monitor', { command: 'tail -f log' }),
+      toolResultLine('toolu_M', 'Monitoring…', { taskId: 'bmon' }),
+      toolUseLine('toolu_T', 'TaskUpdate', {
+        taskId: '3',
+        status: 'completed',
+      }),
+      toolResultLine('toolu_T', 'Updated task #3', { taskId: '3' }),
+    ]);
+
+    expect(shellEvents(events)).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_M', workId: 'bmon' },
+    ]);
   });
 });
 

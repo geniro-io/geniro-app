@@ -28,6 +28,7 @@ import {
   unmatchedTerms,
 } from '../../utils/session-search.utils';
 import {
+  CLAUDE_DETACHED_LAUNCH_KEYS,
   CLAUDE_SESSION_FILE_SUFFIX,
   CLAUDE_SESSION_HEAD_BUDGET_BYTES,
   CLAUDE_SESSION_SEARCH_BUDGET_BYTES,
@@ -416,9 +417,10 @@ function spokenText(line: Record<string, unknown>): string | null {
  * The conversation itself, mapped through the live turn's own mapper.
  *
  * `limit` keeps the NEWEST events: an 11MB session is tens of thousands of
- * rows, and a thread that takes a minute to open is its own defect. What was
- * cut is reported rather than silently absent — see
- * {@link AgentSessionHistory.droppedBefore}.
+ * rows, and a thread that takes a minute to open is its own defect. It counts
+ * the conversation alone: a detached command's `shell_open` rides free, so
+ * background work never pushes visible history out. What was cut is reported
+ * rather than silently absent — see {@link AgentSessionHistory.droppedBefore}.
  */
 export async function readClaudeSessionHistory(input: {
   profileDir: string;
@@ -436,15 +438,25 @@ export async function readClaudeSessionHistory(input: {
   // which `mapHistoryLine` drops before the mapper ever sees it (see its doc
   // block). Scoped to this import so it cannot outlive the file being read.
   const costLedger = new ClaudeSessionCostLedger();
+  const shells = new DetachedShellLog();
+  let conversation = 0;
   await eachJsonLine(path, null, (line) => {
-    for (const event of mapHistoryLine(line, costLedger)) {
+    for (const event of mapHistoryLine(line, costLedger, shells)) {
       events.push(event);
+      if (event.type !== 'shell_open') {
+        conversation += 1;
+      }
     }
     // Trimmed as we go rather than at the end: the point of the cap is to bound
-    // what is HELD, and a 60k-event array built first would defeat it.
-    while (events.length > input.limit) {
-      events.shift();
-      dropped += 1;
+    // what is HELD, and a 60k-event array built first would defeat it. The
+    // opens ahead of the oldest kept row go with it; they are bounded by the
+    // tool calls that made them.
+    while (conversation > input.limit) {
+      const gone = events.shift() as AgentEvent;
+      if (gone.type !== 'shell_open') {
+        conversation -= 1;
+        dropped += 1;
+      }
     }
     return true;
   });
@@ -465,17 +477,20 @@ export async function readClaudeSessionHistory(input: {
  * the transcript through `parentToolUseId`, which stitches them under the tool
  * call that launched them — a call whose own row may be thousands of lines and
  * one `limit` trim away. Imported alone they would render as orphans in the
- * main thread.
+ * main thread. A delegate's own background commands go with it, which is the
+ * live path's rule too.
  */
 function mapHistoryLine(
   line: Record<string, unknown>,
   costLedger: ClaudeSessionCostLedger,
+  shells: DetachedShellLog,
 ): AgentEvent[] {
   if (line.isSidechain === true) {
     return [];
   }
   const type = line.type;
   if (type === 'assistant') {
+    shells.noteCalls(line);
     return mapClaudeMessage(line, costLedger);
   }
   if (type !== 'user') {
@@ -488,9 +503,77 @@ function mapHistoryLine(
   // the rest is left to the mapper — never both, or a line holding text and a
   // tool result would be read twice.
   const text = userText(line);
-  return text === null
-    ? mapClaudeMessage(line, costLedger)
-    : [{ type: 'user_message', text }];
+  if (text !== null) {
+    return [{ type: 'user_message', text }];
+  }
+  // The open AFTER the tool result it decorates, the order a live turn writes.
+  return [...mapClaudeMessage(line, costLedger), ...shells.opened(line)];
+}
+
+/**
+ * Which tool calls of one stored conversation put a command in the background.
+ * A live turn learns that from `system/task_*` frames, which a session file
+ * does not hold, so it is read off the result line's structured
+ * `toolUseResult`, never the English sentence. The import closes every launch
+ * read here (`closeImportedShells`).
+ */
+class DetachedShellLog {
+  private readonly toolNames = new Map<string, string>();
+
+  noteCalls(line: Record<string, unknown>): void {
+    for (const block of contentBlocks(line)) {
+      if (
+        block.type === 'tool_use' &&
+        typeof block.id === 'string' &&
+        typeof block.name === 'string'
+      ) {
+        this.toolNames.set(block.id, block.name);
+      }
+    }
+  }
+
+  opened(line: Record<string, unknown>): AgentEvent[] {
+    const result = line.toolUseResult;
+    if (typeof result !== 'object' || result === null) {
+      return [];
+    }
+    const callIds = contentBlocks(line)
+      .filter((block) => block.type === 'tool_result')
+      .map((block) => block.tool_use_id)
+      .filter((id): id is string => typeof id === 'string');
+    // `toolUseResult` describes ONE call, and nothing says which when a line
+    // answers several, so such a line opens nothing rather than guessing.
+    if (callIds.length !== 1) {
+      return [];
+    }
+    const toolCallId = callIds[0] as string;
+    const key = CLAUDE_DETACHED_LAUNCH_KEYS.get(
+      this.toolNames.get(toolCallId) ?? '',
+    );
+    const workId =
+      key === undefined ? undefined : (result as Record<string, unknown>)[key];
+    if (typeof workId !== 'string' || workId === '') {
+      return [];
+    }
+    return [{ type: 'shell_open', toolCallId, workId }];
+  }
+}
+
+/** A line's message content as records, whatever shape it took. */
+function contentBlocks(
+  line: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const message = line.message;
+  if (typeof message !== 'object' || message === null) {
+    return [];
+  }
+  const content = (message as Record<string, unknown>).content;
+  return Array.isArray(content)
+    ? content.filter(
+        (block): block is Record<string, unknown> =>
+          typeof block === 'object' && block !== null,
+      )
+    : [];
 }
 
 /**
@@ -504,6 +587,18 @@ function mapHistoryLine(
  */
 const ENVELOPE_BLOCK =
   /<(command-[a-z-]+|local-command-[a-z-]+|system-reminder|task-notification|geniro-note)>([\s\S]*?)<\/\1>/g;
+/**
+ * A text block that is wholly the editor's state, which the VS Code / Cursor
+ * extension sends with a message (`<ide_opened_file>`, `<ide_selection>`,
+ * `<ide_diagnostics>`, matched as a family).
+ *
+ * Dropped a whole BLOCK at a time, never searched for in the joined text: the
+ * context is always a text block of its own (measured on 163 such lines).
+ * Anchored and greedy because a selection is copied code and may contain a
+ * closing tag; a search over the joined text would delete the words of a user
+ * who TYPED such a tag in prose.
+ */
+const IDE_CONTEXT_BLOCK = /^<(ide_[a-z_]+)>[\s\S]*<\/\1>$/;
 /** The slash command itself, which IS what the user typed. */
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
@@ -515,13 +610,15 @@ const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
  * Four things are NOT the user talking, and each was observed in this profile's
  * own files: a synthetic line the CLI injects after a compaction, a replayed
  * line it re-appends with `isReplay`, a line whose content is entirely
- * `tool_result` blocks, and a line that is only envelopes.
+ * `tool_result` blocks, and a line that is only envelopes or IDE context.
  *
  * A slash command is the interesting case, and it is neither kept whole nor
  * dropped. Whole, it reads as three lines of XML where the transcript wants one
  * line; dropped, a session whose every turn is `/geniro:implement …` becomes an
  * unnamed row in the picker and a transcript of answers to nothing. So the
  * envelopes are stripped and the command is reconstituted as the user typed it.
+ * IDE blocks are dropped BEFORE that read, so a command quoted inside a
+ * selection can never be taken for one the user ran.
  */
 function userText(line: Record<string, unknown>): string | null {
   if (line.isSynthetic === true || line.isReplay === true) {
@@ -532,8 +629,10 @@ function userText(line: Record<string, unknown>): string | null {
     return null;
   }
   const content = (message as Record<string, unknown>).content;
-  const raw =
-    typeof content === 'string' ? content : joinTextBlocks(content).trim();
+  const raw = (typeof content === 'string' ? [content] : textBlocks(content))
+    .filter((block) => !IDE_CONTEXT_BLOCK.test(block.trim()))
+    .join('\n')
+    .trim();
   if (raw === '') {
     return null;
   }
@@ -550,8 +649,13 @@ function userText(line: Record<string, unknown>): string | null {
 }
 
 function joinTextBlocks(content: unknown): string {
+  return textBlocks(content).join('\n');
+}
+
+/** The text of each `text` block in a message's content, in order. */
+function textBlocks(content: unknown): string[] {
   if (!Array.isArray(content)) {
-    return '';
+    return [];
   }
   const parts: string[] = [];
   for (const block of content) {
@@ -563,7 +667,7 @@ function joinTextBlocks(content: unknown): string {
       parts.push(record.text);
     }
   }
-  return parts.join('\n');
+  return parts;
 }
 
 /** Every session file under `<profileDir>/projects`, with its mtime. */

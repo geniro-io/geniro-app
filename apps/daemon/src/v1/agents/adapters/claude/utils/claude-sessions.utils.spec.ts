@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { closeImportedShells } from '../../../utils/imported-shells';
-import type { AgentSessionRecord } from '../../adapter.types';
+import type { AgentEvent, AgentSessionRecord } from '../../adapter.types';
 import {
   carryClaudeSession,
   deleteClaudeSession,
@@ -1389,6 +1389,9 @@ describe('readClaudeSessionHistory — background commands', () => {
   const shellEvents = (events: { type: string }[]) =>
     events.filter((event) => event.type === 'shell_open');
 
+  const callIds = (events: AgentEvent[]): string[] =>
+    events.flatMap((event) => (event.type === 'tool_call' ? [event.id] : []));
+
   it('marks a detached launch OPEN, right after the reply that detached it', async () => {
     const events = await read(bashLaunch('toolu_A', 'bxyz', 'pnpm dev'));
 
@@ -1479,12 +1482,7 @@ describe('readClaudeSessionHistory — background commands', () => {
     });
     const events = history?.events ?? [];
 
-    expect(events.map((event) => event.type)).toEqual([
-      'tool_result',
-      'tool_call',
-      'tool_result',
-      'shell_open',
-    ]);
+    expect(callIds(events)).toEqual(['toolu_B']);
     expect(closeImportedShells(events).slice(events.length)).toEqual([
       { type: 'shell_info', toolCallId: 'toolu_B', workId: 'bB' },
     ]);
@@ -1517,11 +1515,8 @@ describe('readClaudeSessionHistory — background commands', () => {
     });
     const events = history?.events ?? [];
 
-    expect(events.map((event) => event.type)).toEqual([
-      'tool_call',
-      'tool_call',
-      'tool_result',
-    ]);
+    expect(callIds(events)).toEqual(['toolu_R2', 'toolu_R3']);
+    expect(shellEvents(events)).toEqual([]);
     expect(closeImportedShells(events)).toEqual(events);
     expect(history?.droppedBefore).toBe(2);
   });
@@ -1541,33 +1536,21 @@ describe('readClaudeSessionHistory — background commands', () => {
     it.each([
       {
         limit: 4,
-        types: [
-          'tool_call',
-          'tool_call',
-          'tool_result',
-          'shell_open',
-          'tool_result',
-          'shell_open',
-        ],
+        calls: ['toolu_A', 'toolu_B'],
         opens: [open('toolu_A', 'bA'), open('toolu_B', 'bB')],
         dropped: 0,
       },
       {
         limit: 3,
-        types: ['tool_call', 'tool_result', 'tool_result', 'shell_open'],
+        calls: ['toolu_B'],
         opens: [open('toolu_B', 'bB')],
         dropped: 1,
       },
-      {
-        limit: 2,
-        types: ['tool_result', 'tool_result'],
-        opens: [],
-        dropped: 2,
-      },
-      { limit: 1, types: ['tool_result'], opens: [], dropped: 3 },
+      { limit: 2, calls: [], opens: [], dropped: 2 },
+      { limit: 1, calls: [], opens: [], dropped: 3 },
     ])(
       'keeps only the opens of the calls held under a cap of $limit',
-      async ({ limit, types, opens, dropped }) => {
+      async ({ limit, calls, opens, dropped }) => {
         const root = profile([{ dir: 'proj', id: 's1', lines: lines() }]);
         const history = await readClaudeSessionHistory({
           profileDir: root,
@@ -1576,7 +1559,7 @@ describe('readClaudeSessionHistory — background commands', () => {
         });
         const events = history?.events ?? [];
 
-        expect(events.map((event) => event.type)).toEqual(types);
+        expect(callIds(events)).toEqual(calls);
         expect(shellEvents(events)).toEqual(opens);
         expect(closeImportedShells(events).slice(events.length)).toEqual(
           opens.map((shell) => ({ ...shell, type: 'shell_info' })),

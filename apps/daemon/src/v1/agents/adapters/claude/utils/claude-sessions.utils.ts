@@ -419,8 +419,9 @@ function spokenText(line: Record<string, unknown>): string | null {
  * `limit` keeps the NEWEST events: an 11MB session is tens of thousands of
  * rows, and a thread that takes a minute to open is its own defect. It counts
  * the conversation alone: a detached command's `shell_open` rides free, so
- * background work never pushes visible history out. What was cut is reported
- * rather than silently absent — see {@link AgentSessionHistory.droppedBefore}.
+ * background work never pushes visible history out, and is held only while
+ * the call that launched it is. What was cut is reported rather than silently
+ * absent — see {@link AgentSessionHistory.droppedBefore}.
  */
 export async function readClaudeSessionHistory(input: {
   profileDir: string;
@@ -440,25 +441,40 @@ export async function readClaudeSessionHistory(input: {
   const costLedger = new ClaudeSessionCostLedger();
   const shells = new DetachedShellLog();
   let conversation = 0;
+  const heldCalls = new Set<string>();
+  const heldOpens = new Set<string>();
   await eachJsonLine(path, null, (line) => {
     for (const event of mapHistoryLine(line, costLedger, shells)) {
-      events.push(event);
-      if (event.type !== 'shell_open') {
-        conversation += 1;
+      if (event.type === 'shell_open') {
+        if (event.toolCallId !== null && heldCalls.has(event.toolCallId)) {
+          events.push(event);
+          heldOpens.add(event.toolCallId);
+        }
+        continue;
       }
+      if (event.type === 'tool_call') {
+        heldCalls.add(event.id);
+      }
+      events.push(event);
+      conversation += 1;
     }
     // Trimmed as we go rather than at the end: the point of the cap is to bound
-    // what is HELD, and a 60k-event array built first would defeat it. An open
-    // follows its call's result, so once anything is cut an open at the head
-    // belongs to a cut call and goes with it.
-    while (
-      conversation > input.limit ||
-      (dropped > 0 && events[0]?.type === 'shell_open')
-    ) {
+    // what is HELD, and a 60k-event array built first would defeat it.
+    while (conversation > input.limit) {
       const gone = events.shift() as AgentEvent;
-      if (gone.type !== 'shell_open') {
-        conversation -= 1;
-        dropped += 1;
+      conversation -= 1;
+      dropped += 1;
+      if (gone.type === 'tool_call') {
+        heldCalls.delete(gone.id);
+        if (heldOpens.delete(gone.id)) {
+          events.splice(
+            events.findIndex(
+              (event) =>
+                event.type === 'shell_open' && event.toolCallId === gone.id,
+            ),
+            1,
+          );
+        }
       }
     }
     return true;

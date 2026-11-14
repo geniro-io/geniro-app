@@ -1461,6 +1461,70 @@ describe('readClaudeSessionHistory — background commands', () => {
     expect(history?.droppedBefore).toBe(2);
   });
 
+  it("trims a command's open with its call when the cut leaves the call's result", async () => {
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          ...bashLaunch('toolu_A', 'bA', 'pnpm dev'),
+          ...bashLaunch('toolu_B', 'bB', 'pnpm test --watch'),
+        ],
+      },
+    ]);
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 3,
+    });
+    const events = history?.events ?? [];
+
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_result',
+      'tool_call',
+      'tool_result',
+      'shell_open',
+    ]);
+    expect(closeImportedShells(events).slice(events.length)).toEqual([
+      { type: 'shell_info', toolCallId: 'toolu_B', workId: 'bB' },
+    ]);
+    expect(shellEvents(events)).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_B', workId: 'bB' },
+    ]);
+    expect(history?.droppedBefore).toBe(1);
+  });
+
+  it('holds no open for a call the cap cut before its result arrived', async () => {
+    const [launch, launched] = bashLaunch('toolu_A', 'bA', 'pnpm dev');
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 's1',
+        lines: [
+          launch,
+          toolUseLine('toolu_R1', 'Read', { file_path: '/w/a.ts' }),
+          toolUseLine('toolu_R2', 'Read', { file_path: '/w/b.ts' }),
+          launched,
+          toolResultLine('toolu_R1', 'a', {}),
+          toolResultLine('toolu_R2', 'b', {}),
+        ],
+      },
+    ]);
+    const history = await readClaudeSessionHistory({
+      profileDir: root,
+      sessionId: 's1',
+      limit: 2,
+    });
+    const events = history?.events ?? [];
+
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_result',
+      'tool_result',
+    ]);
+    expect(closeImportedShells(events)).toEqual(events);
+    expect(history?.droppedBefore).toBe(4);
+  });
+
   it("counts Monitor's task as a detached command, and TaskUpdate's as nothing", async () => {
     // Both results carry a `taskId`; only one of them started a command.
     const events = await read([

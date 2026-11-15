@@ -12,6 +12,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import type { DelegateFigures } from './adapters/adapter.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
@@ -4319,11 +4320,58 @@ export const RunDelegateStateSchema = z
       .describe(
         "the tool calls this delegate made (rows carrying its id as parentToolUseId), over every row of the run up to the read's throughSeq",
       ),
+    messages: z
+      .number()
+      .int()
+      .describe(
+        "the delegate's own assistant text messages, over every row of the run up to the read's throughSeq",
+      ),
+    requests: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'model requests the delegate made, each response counted once; null when its CLI does not say',
+      ),
+    inputTokens: z.number().int().nullable(),
+    outputTokens: z.number().int().nullable(),
+    cacheReadTokens: z.number().int().nullable(),
+    cacheCreationTokens: z.number().int().nullable(),
+    contextTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the four token kinds of its latest request, summed'),
+    costUsd: z
+      .number()
+      .nullable()
+      .describe('calibrated against what the CLI charged; null until it can be'),
+    estimatedCostUsd: z
+      .number()
+      .nullable()
+      .describe('the same tokens at the list rate'),
+    cumulative: z
+      .boolean()
+      .describe(
+        'true when the token figures above sum every request (counted by the daemon); false when nothing was counted for this delegate',
+      ),
   })
   .meta({ id: 'RunDelegateState' });
 export type RunDelegateState = z.infer<typeof RunDelegateStateSchema>;
-/** A delegate as its rows say it went; the run-state read adds its tool count. */
-export type DelegateLifecycle = Omit<RunDelegateState, 'toolCalls'>;
+type DelegateReadFields =
+  | 'toolCalls'
+  | 'messages'
+  | 'requests'
+  | 'inputTokens'
+  | 'outputTokens'
+  | 'cacheReadTokens'
+  | 'cacheCreationTokens'
+  | 'contextTokens'
+  | 'costUsd'
+  | 'estimatedCostUsd'
+  | 'cumulative';
+/** A delegate as its rows say it went; the run-state read adds its counts. */
+export type DelegateLifecycle = Omit<RunDelegateState, DelegateReadFields>;
 
 /** geniro's own tools that put a button in the chat and take one away. */
 export const HOST_PUBLISH_ACTION_TOOL = 'publish_action';
@@ -7022,6 +7070,15 @@ export interface RunDeltaEvent {
    * rather than the CLI's own ledger; null when none of it was.
    */
   spentEstimatedCostUsd: number | null;
+  /**
+   * The delegates this owner launched, by launching tool call id, each with
+   * its figures over every request so far — the `delegate_progress` levels.
+   * Absent when the owner has none. Never part of {@link spentCostUsd}, which
+   * already includes what the delegates spent.
+   *
+   * TWIN PARSER: `apps/ui/src/renderer/chats/live-text.ts`.
+   */
+  delegates?: Record<string, DelegateFigures>;
 }
 
 /**

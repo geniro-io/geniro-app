@@ -1575,6 +1575,43 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * How many text messages each delegate of one run wrote, up to `maxSeq`: its
+   * assistant `message` rows, by `parentToolUseId`. Reasoning rows are a kind
+   * of their own and are not counted.
+   */
+  async delegateMessageCounts(
+    runId: string,
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom((db) =>
+        db
+          .selectFrom('items')
+          .select((eb) =>
+            payloadRef(eb, 'parent_tool_use_id', stamped).as('delegate_id'),
+          )
+          .where('run_id', '=', runId)
+          .where('kind', '=', 'message')
+          .where('role', '=', 'assistant')
+          .where('deleted_at', 'is', null)
+          .where('seq', '<=', maxSeq)
+          .as('delegate_messages'),
+      )
+      .select((eb) => ['delegate_id', eb.fn.countAll<number>().as('messages')])
+      .where('delegate_id', 'is not', null)
+      .where('delegate_id', '!=', '')
+      .groupBy('delegate_id')
+      .execute();
+    return new Map(
+      rows.map((row) => [String(row.delegate_id), Number(row.messages)]),
+    );
+  }
+
+  /**
    * The seqs of one run's SUB-AGENT tool calls — `tool_call` rows carrying
    * `parentToolUseId` — up to `maxSeq`: what lets the payload-free spine tell
    * an agent's own calls from its delegates'. Only the seq crosses.

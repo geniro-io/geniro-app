@@ -153,6 +153,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'thinking_progress':
     case 'context_progress':
     case 'usage_progress':
+    case 'delegate_progress':
     case 'cost_progress':
     case 'text_delta':
     case 'reasoning_delta':

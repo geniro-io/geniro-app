@@ -218,6 +218,29 @@ describe('WaitingLessons list', () => {
     expect(live?.textContent).not.toContain('thread deleted');
   });
 
+  it('draws each lesson as its own item, divided from the next by a rule and padding', async () => {
+    const el = await render({
+      lessonsApi: asLessonsApi(
+        lessonsApiMock([
+          proposal({ id: 'p-a', sourceTitle: 'First thread' }),
+          proposal({ id: 'p-b', sourceTitle: 'Second thread' }),
+        ]),
+      ),
+    });
+    await flush();
+
+    const list = el.querySelector('[data-slot="waiting-lessons"]');
+    const items = [
+      ...el.querySelectorAll('[data-slot="waiting-lesson"]'),
+    ] as HTMLElement[];
+    expect(list?.className).toContain('divide-y');
+    expect(list?.className).toContain('divide-border');
+    expect(items.map((item) => item.parentElement)).toEqual([list, list]);
+    expect(items[0]?.textContent).toContain('First thread');
+    expect(items[1]?.textContent).toContain('Second thread');
+    expect(items.every((item) => item.className.includes('py-3'))).toBe(true);
+  });
+
   it('names where each lesson goes', async () => {
     const el = await render({
       lessonsApi: asLessonsApi(

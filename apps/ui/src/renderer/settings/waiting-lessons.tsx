@@ -113,9 +113,14 @@ export function WaitingLessons({
     );
   }
   return (
-    <ul className="m-0 flex list-none flex-col gap-2 p-0">
+    <ul
+      data-slot="waiting-lessons"
+      className="m-0 flex list-none flex-col divide-y divide-border p-0">
       {proposals.map((proposal) => (
-        <li key={proposal.id} className="min-w-0">
+        <li
+          key={proposal.id}
+          data-slot="waiting-lesson"
+          className="min-w-0 py-3 first:pt-0 last:pb-0">
           <LessonRow
             lesson={lessonOf(proposal)}
             places={proposal.places}

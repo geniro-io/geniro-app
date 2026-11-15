@@ -314,50 +314,63 @@ function readClaudeDelegateResult(
   root: Record<string, unknown>,
   toolCallId: string,
   costLedger: ClaudeSessionCostLedger,
-): AgentEvent | null {
+): AgentEvent[] {
   const result = asRecord(root.tool_use_result);
   const usage = result ? asRecord(result.usage) : null;
   if (!result || !usage || asString(result.agentId) === null || !toolCallId) {
-    return null;
+    return [];
   }
   const model = asString(result.resolvedModel);
-  const spend = {
-    inputTokens: asNumber(usage.input_tokens),
-    outputTokens: asNumber(usage.output_tokens),
-    cacheReadTokens: asNumber(usage.cache_read_input_tokens),
-    cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
-  };
-  // Filed under the LINE's own session: one ledger serves every process this
-  // adapter drives, and only the session keeps turn A's delegate from being
-  // priced by turn B's `result` (see `ClaudeDelegateCostLedger.pending`).
-  costLedger.delegates.record(asString(root.session_id), toolCallId, {
+  // `usage` and `totalTokens` here describe the delegate's LAST request only
+  // (4 of 4 real transcripts), so they are not its spend. That request is the
+  // one its stream never carried (a foreground delegate's final text-only
+  // response), so it joins the stream's running totals as one request; the
+  // delegate's transcript replaces them when it ends (`ClaudeDelegateSettler`).
+  const figures = costLedger.delegateSpend.noteClosingRequest(
+    asString(root.session_id),
+    toolCallId,
+    usage,
     model,
-    ...spend,
-  });
-  return {
-    type: 'subagent_info',
-    id: toolCallId,
-    // Nulls where this line says nothing, on the merge rule every
-    // `subagent_info` follows: the launching call already carried the brief and
-    // the description, and a null cannot overwrite them.
-    label: null,
-    kind: asString(result.agentType),
-    prompt: null,
-    model,
-    durationMs: asNumber(result.totalDurationMs),
-    tokens: asNumber(result.totalTokens),
-    toolUses: asNumber(result.totalToolUseCount),
-    ...spend,
-    costUsd: null,
-    stepsUnavailableReason: null,
-    // Deliberately silent on the lifecycle. `status` is right there and says
-    // `completed`, but the delegate lifecycle has one owner already
-    // (`announceDelegateWork`, off the task channels), and a second producer
-    // answering the same question is how two channels come to disagree about
-    // whether a delegate is still out.
-    backgroundOutcome: null,
-    backgroundOpen: null,
-  };
+  );
+  return [
+    {
+      type: 'subagent_info',
+      id: toolCallId,
+      // Nulls where this line says nothing, on the merge rule every
+      // `subagent_info` follows: the launching call already carried the brief
+      // and the description, and a null cannot overwrite them.
+      label: null,
+      kind: asString(result.agentType),
+      prompt: null,
+      model,
+      durationMs: asNumber(result.totalDurationMs),
+      tokens: null,
+      toolUses: asNumber(result.totalToolUseCount),
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      // Deliberately silent on the lifecycle. `status` is right there and says
+      // `completed`, but the delegate lifecycle has one owner already
+      // (`announceDelegateWork`, off the task channels), and a second producer
+      // answering the same question is how two channels come to disagree about
+      // whether a delegate is still out.
+      backgroundOutcome: null,
+      backgroundOpen: null,
+    },
+    ...(figures === null
+      ? []
+      : [
+          {
+            type: 'delegate_progress' as const,
+            delegateId: toolCallId,
+            figures,
+            final: false,
+          },
+        ]),
+  ];
 }
 
 /**
@@ -374,27 +387,43 @@ function mapDelegateCosts(
   root: Record<string, unknown>,
   costLedger: ClaudeSessionCostLedger,
 ): AgentEvent[] {
+  const sessionId = asString(root.session_id);
   return costLedger.delegates
-    .settle(asString(root.session_id), root)
-    .map(({ id, costUsd }) => ({
-      type: 'subagent_info',
-      id,
-      label: null,
-      kind: null,
-      prompt: null,
-      model: null,
-      durationMs: null,
-      tokens: null,
-      toolUses: null,
-      inputTokens: null,
-      outputTokens: null,
-      cacheReadTokens: null,
-      cacheCreationTokens: null,
-      costUsd,
-      stepsUnavailableReason: null,
-      backgroundOutcome: null,
-      backgroundOpen: null,
-    }));
+    .settle(sessionId, root)
+    .flatMap(({ id, costUsd }): AgentEvent[] => {
+      const figures = costLedger.delegateSpend.setCost(sessionId, id, costUsd);
+      return [
+        {
+          type: 'subagent_info',
+          id,
+          label: null,
+          kind: null,
+          prompt: null,
+          model: null,
+          durationMs: null,
+          tokens: null,
+          toolUses: null,
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          costUsd,
+          stepsUnavailableReason: null,
+          backgroundOutcome: null,
+          backgroundOpen: null,
+        },
+        ...(figures === null
+          ? []
+          : [
+              {
+                type: 'delegate_progress' as const,
+                delegateId: id,
+                figures,
+                final: true,
+              },
+            ]),
+      ];
+    });
 }
 
 /**
@@ -930,9 +959,32 @@ function mapClaudeLine(
       // request the turn made, delegates included. Reporting both would show a
       // running total that then SHRANK at the settle.
       const spend =
-        parentToolUseId === null ? readClaudeRequestSpend(message) : null;
+        parentToolUseId === null &&
+        costLedger.firstLineOfRequest(
+          asString(root.session_id),
+          asString(message.id),
+        )
+          ? readClaudeRequestSpend(message)
+          : null;
       if (spend !== null) {
         events.push({ type: 'usage_progress', ...spend });
+      }
+      // A delegate's own spend rides its own channel, once per response, so
+      // its card can show every request it made while it runs.
+      if (parentToolUseId !== null) {
+        const figures = costLedger.delegateSpend.noteLine(
+          asString(root.session_id),
+          parentToolUseId,
+          message,
+        );
+        if (figures !== null) {
+          events.push({
+            type: 'delegate_progress',
+            delegateId: parentToolUseId,
+            figures,
+            final: false,
+          });
+        }
       }
       // WHICH MODEL a delegate is running, from the first line it speaks on.
       //
@@ -1123,14 +1175,8 @@ function mapClaudeLine(
           result: b.content ?? null,
           isError: asBoolean(b.is_error),
         });
-        // What the delegate behind this call SPENT, broken down the way billing
-        // breaks it down. The only line that states it, and it states it while
-        // the turn is still working — the price comes later, on `result`.
-        const delegate = soleToolResult
-          ? readClaudeDelegateResult(root, toolCallId, costLedger)
-          : null;
-        if (delegate !== null) {
-          events.push(delegate);
+        if (soleToolResult) {
+          events.push(...readClaudeDelegateResult(root, toolCallId, costLedger));
         }
         // Half of claude's task list is only readable HERE: a created task's id
         // is in its result, and `TaskList`'s result is the only statement of the

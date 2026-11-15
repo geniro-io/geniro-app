@@ -69,6 +69,7 @@ import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { FakeContextWindowStore } from '../../agents/services/__tests__/fake-context-window-store';
+import { FakeDelegateSpendStore } from '../../agents/services/__tests__/fake-delegate-spend-store';
 import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-unrecorded-spend-store';
 import { ActionBroker } from '../../agents/services/action.broker';
 import { ActionCommandRegistry } from '../../agents/services/action-command.registry';
@@ -1404,6 +1405,7 @@ function setup(
     bus,
     new FakeContextWindowStore(opts.contextWindows).asStore(),
     spendStore.asStore(),
+    new FakeDelegateSpendStore().asStore(),
   );
   const deltas: RunDeltaEvent[] = [];
   bus.allDeltas().subscribe((delta) => deltas.push(delta));

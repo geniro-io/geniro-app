@@ -106,6 +106,7 @@ import {
   type WallClockRow,
 } from '../utils/wall-worked';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
+import { FakeDelegateSpendStore } from './__tests__/fake-delegate-spend-store';
 import { FakeUnrecordedSpendStore } from './__tests__/fake-unrecorded-spend-store';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { ActionBroker } from './action.broker';
@@ -1251,6 +1252,7 @@ function setup(
     bus,
     new FakeContextWindowStore(opts.contextWindows).asStore(),
     new FakeUnrecordedSpendStore().asStore(),
+    new FakeDelegateSpendStore().asStore(),
   );
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();

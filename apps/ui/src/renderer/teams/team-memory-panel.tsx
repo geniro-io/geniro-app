@@ -84,6 +84,7 @@ export function TeamMemoryPanel({
         projectName={null}
         teamName={teamName}
         busy={busy === entry.id}
+        showReach
         onEdit={() => {
           setFormError(null);
           setEditing({

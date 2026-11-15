@@ -349,6 +349,7 @@ export function MemoryCleanupDialog({
           projectName={projectName(entry.projectId)}
           teamName={teamName(entry.teamSlug)}
           busy={busy}
+          showStatus={false}
           leading={
             tab === 'cold' ? (
               <button
@@ -379,36 +380,33 @@ export function MemoryCleanupDialog({
           )}
           onRestore={tab === 'forgotten' ? () => onRestore(entry) : undefined}
           actions={
-            tab === 'cold' ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => onKeep(entry)}>
-                Keep
-              </Button>
-            ) : tab === 'kept' ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => onUnkeep(entry)}>
-                Stop keeping
-              </Button>
-            ) : onPurge ? (
-              <ConfirmActionButton
-                disabled={busy}
-                question={`Delete ${entry.handle} permanently?`}
-                description="Its text, its forget reason and any finding that quotes it are erased for good. This cannot be undone. Its number is not reused and its usage figures stay. Past chats keep what they showed."
-                confirmLabel="Delete permanently"
-                busyLabel="Deleting…"
-                confirmVariant="destructive"
-                onConfirm={() => onPurge(entry)}>
-                Delete permanently…
-              </ConfirmActionButton>
-            ) : undefined
+            tab === 'cold'
+              ? [{ value: 'keep', label: 'Keep', run: () => onKeep(entry) }]
+              : tab === 'kept'
+                ? [
+                    {
+                      value: 'unkeep',
+                      label: 'Stop keeping',
+                      run: () => onUnkeep(entry),
+                    },
+                  ]
+                : onPurge
+                  ? [
+                      {
+                        value: 'purge',
+                        label: 'Delete permanently…',
+                        tone: 'destructive',
+                        run: () => onPurge(entry),
+                        confirm: {
+                          question: `Delete ${entry.handle} permanently?`,
+                          description:
+                            'Its text, its forget reason and any finding that quotes it are erased for good. This cannot be undone. Its number is not reused and its usage figures stay. Past chats keep what they showed.',
+                          confirmLabel: 'Delete permanently',
+                          busyLabel: 'Deleting…',
+                        },
+                      },
+                    ]
+                  : []
           }
         />
       </li>

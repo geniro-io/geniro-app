@@ -16,6 +16,10 @@ import {
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { confirmInDialog } from '../__tests__/confirm-in-dialog';
+import {
+  memoryRowActions,
+  pressMemoryRowAction,
+} from '../__tests__/memory-row-menu';
 import type {
   MemoriesApiListMemoryReviewRequest,
   MemoryEntry,
@@ -367,6 +371,19 @@ async function render(
   return api;
 }
 
+function dialogRow(handle: string): HTMLElement {
+  const dialog = document.body.querySelector<HTMLElement>(
+    '[data-slot="memory-cleanup"]',
+  );
+  const found = dialog?.querySelector<HTMLElement>(
+    `[data-memory-handle="${handle}"]`,
+  );
+  if (!found) {
+    throw new Error(`no row ${handle} in the dialog`);
+  }
+  return found;
+}
+
 function rowOf(handle: string): HTMLElement {
   const row = container.querySelector<HTMLElement>(
     `[data-memory-handle="${handle}"]`,
@@ -440,12 +457,13 @@ afterEach(() => {
 });
 
 describe('Memory', () => {
-  it('lists the entries and, apart, what waits for review', async () => {
+  it('lists the entries of the tab picked, counts what waits for review on its tab, and repeats no tab on a row', async () => {
     const api = await render();
 
-    expect(container.textContent).toContain('Waiting for review (1)');
+    expect(button(container, 'Waiting for review · 1')).toBeDefined();
+    expect(() => rowOf('m2')).toThrow();
     expect(rowOf('m1').textContent).toContain('Use pnpm');
-    expect(rowOf('m1').textContent).toContain('In every chat');
+    expect(rowOf('m1').textContent).not.toContain('In every chat');
     expect(api.listMemories).toHaveBeenCalledWith({
       status: 'active',
       reach: 'index',
@@ -468,9 +486,7 @@ describe('Memory', () => {
 
     expect(
       container.querySelector('[data-slot="memory-index-fit"]')?.textContent,
-    ).toBe(
-      'A new chat in no project (pick a project or team to see its own) starts with 22 of 326 titles; the rest are found by search.',
-    );
+    ).toBe('22 of 326 fit · a new chat in no project');
     await choose('Scope', 'Billing');
     await settle();
 
@@ -479,7 +495,7 @@ describe('Memory', () => {
     });
     expect(
       container.querySelector('[data-slot="memory-index-fit"]')?.textContent,
-    ).toContain('A new chat in Billing starts with 22 of 326 titles');
+    ).toBe('22 of 326 fit · a new chat in Billing');
     await press(button(container, 'Search only'));
     expect(
       container.querySelector('[data-slot="memory-index-fit"]'),
@@ -487,7 +503,7 @@ describe('Memory', () => {
     expect(
       container.querySelector('[data-slot="memory-tab-explained"]')
         ?.textContent,
-    ).toContain('Agents find them only when they search memory');
+    ).toBe('Agents find these only by searching.');
   });
 
   it('narrows the list by each filter it offers', async () => {
@@ -510,7 +526,7 @@ describe('Memory', () => {
   it('edits an entry at the rev it read', async () => {
     const api = await render({ api: fakeApi([ACTIVE]) });
 
-    await press(button(rowOf('m1'), 'Edit'));
+    await pressMemoryRowAction(rowOf('m1'), 'Edit');
     const title = container.querySelector<HTMLInputElement>(
       'input[id$="-title"]',
     )!;
@@ -534,16 +550,12 @@ describe('Memory', () => {
   it('forgets, restores and approves through the entry’s status', async () => {
     const api = await render({ api: fakeApi([ACTIVE, WAITING, GONE]) });
 
-    await press(button(rowOf('m1'), 'Forget'));
+    await pressMemoryRowAction(rowOf('m1'), 'Forget…');
     await press(confirmInDialog('Forget'));
-    await press(
-      button(
-        container.querySelectorAll('[data-memory-handle="m2"]')[0]!,
-        'Approve',
-      ),
-    );
+    await press(button(container, 'Waiting for review · 1'));
+    await press(button(rowOf('m2'), 'Approve'));
     await press(button(container, 'Forgotten'));
-    await press(button(rowOf('m3'), 'Restore'));
+    await pressMemoryRowAction(rowOf('m3'), 'Restore');
 
     expect(api.updateMemory.mock.calls.map((call) => call[0])).toEqual([
       { memoryId: 'e1', updateMemoryDto: { status: 'forgotten' } },
@@ -562,7 +574,7 @@ describe('Memory', () => {
     expect(writes).toEqual([
       { memory: { ...DEFAULT_SETTINGS.memory, enabled: false } },
     ]);
-    expect(button(rowOf('m1'), 'Edit').disabled).toBe(false);
+    expect(await memoryRowActions(rowOf('m1'))).toContain('Edit');
   });
 
   it('re-reads the list once for a burst of memory announcements', async () => {
@@ -614,19 +626,21 @@ describe('Memory', () => {
       api: fakeApi([ACTIVE, WAITING, savedAtOnce, approved]),
     });
 
+    expect(() => rowOf('m4')).toThrow();
+    expect(() => button(rowOf('m1'), 'Approve')).toThrow();
+    expect(await memoryRowActions(rowOf('m1'))).toEqual(['Edit', 'Forget…']);
+    expect(() => button(rowOf('m5'), 'Approve')).toThrow();
+    await pressMemoryRowAction(rowOf('m5'), 'Search only');
+    await press(button(container, 'Search only'));
+
+    expect(() => button(rowOf('m4'), 'Approve')).toThrow();
+    await pressMemoryRowAction(rowOf('m4'), 'Load into every chat');
+    await press(button(container, 'Waiting for review · 1'));
+
     expect(
       container.querySelectorAll('[data-memory-handle="m2"]'),
     ).toHaveLength(1);
-    expect(() => rowOf('m4')).toThrow();
-    expect(() => button(rowOf('m1'), 'Approve')).toThrow();
-    expect(() => button(rowOf('m1'), 'Search only')).toThrow();
-    expect(() => button(rowOf('m5'), 'Approve')).toThrow();
-    await press(button(rowOf('m5'), 'Search only'));
-    await press(button(container, 'Search only'));
-
-    expect(rowOf('m4').textContent).toContain('Search only');
-    expect(() => button(rowOf('m4'), 'Approve')).toThrow();
-    await press(button(rowOf('m4'), 'Load into every chat'));
+    expect(button(rowOf('m2'), 'Approve')).toBeDefined();
 
     expect(api.searchOnlyMemory).toHaveBeenCalledWith({ memoryId: 'e5' });
     expect(api.indexMemory).toHaveBeenCalledWith({ memoryId: 'e4' });
@@ -986,7 +1000,7 @@ describe('Memory', () => {
     });
   });
 
-  it('shows the waiting list only beside the index and search-only tabs, and leads to all of it past its cap', async () => {
+  it('counts the waiting entries on their tab, with a plus past the cap, and lists them there', async () => {
     const api = fakeApi();
     api.listMemories.mockImplementation((request: { status?: string } = {}) =>
       Promise.resolve({
@@ -999,14 +1013,16 @@ describe('Memory', () => {
     );
     await render({ api });
 
-    expect(container.textContent).toContain('Waiting for review (1+)');
-    await press(button(container, 'Show every waiting entry'));
+    await press(button(container, 'Waiting for review · 1+'));
 
     expect(api.listMemories).toHaveBeenCalledWith({
       status: 'pending',
       limit: 20,
     });
-    expect(container.textContent).not.toContain('Waiting for review (');
+    expect(
+      container.querySelector('[data-slot="memory-tab-explained"]')
+        ?.textContent,
+    ).toBe('No agent sees these until you approve them.');
   });
 
   it('appends the next page once, however often Show more is pressed while it loads', async () => {
@@ -1442,7 +1458,7 @@ describe('Memory clean up', () => {
     });
     await press(button(container, 'Review…'));
 
-    await press(button(inDialog(), 'Keep'));
+    await pressMemoryRowAction(dialogRow('m21'), 'Keep');
     expect(api.keepMemory).toHaveBeenCalledWith({ memoryId: 'c1' });
 
     await press(button(inDialog(), 'Kept (1)'));
@@ -1561,7 +1577,10 @@ describe('Memory clean up', () => {
     await press(button(container, 'Review…'));
     await press(button(inDialog(), 'Kept (1)'));
 
-    await press(button(inDialog(), 'Stop keeping'));
+    await pressMemoryRowAction(
+      inDialog().querySelector<HTMLElement>('[data-slot="memory-row"]')!,
+      'Stop keeping',
+    );
 
     expect(api.unkeepMemory).toHaveBeenCalledWith({ memoryId: 'k1' });
   });
@@ -1580,7 +1599,7 @@ describe('Memory clean up', () => {
     const row = inDialog().querySelector<HTMLElement>(
       '[data-memory-handle="m22"]',
     );
-    await press(button(row as HTMLElement, 'Forget'));
+    await pressMemoryRowAction(row as HTMLElement, 'Forget…');
     const question = [
       ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
     ].at(-1);
@@ -1685,7 +1704,7 @@ describe('Memory clean up', () => {
     await press(button(container, 'Review…'));
     await press(button(inDialog(), 'Forgotten (3)'));
 
-    await press(button(inDialog(), 'Delete permanently…'));
+    await pressMemoryRowAction(dialogRow('m3'), 'Delete permanently…');
     expect(lastQuestion()?.textContent).toContain('Delete m3 permanently?');
     expect(lastQuestion()?.textContent).toContain('This cannot be undone.');
     expect(lastQuestion()?.textContent).toContain(
@@ -1708,7 +1727,7 @@ describe('Memory clean up', () => {
     await press(button(container, 'Review…'));
     await press(button(inDialog(), 'Forgotten (3)'));
 
-    await press(button(inDialog(), 'Delete permanently…'));
+    await pressMemoryRowAction(dialogRow('m3'), 'Delete permanently…');
     await press(confirmInDialog('Delete permanently'));
 
     expect(lastQuestion()?.textContent).toContain('only a forgotten memory');
@@ -1731,7 +1750,7 @@ describe('Memory clean up', () => {
     await press(button(inDialog(), 'Forgotten (3)'));
 
     expect(inDialog().textContent).toContain('Old rule');
-    expect(inDialog().textContent).not.toContain('Delete permanently');
+    expect(await memoryRowActions(dialogRow('m3'))).toEqual(['Restore']);
   });
 
   it('arms the automatic sweep only after a confirm naming what it would forget now', async () => {

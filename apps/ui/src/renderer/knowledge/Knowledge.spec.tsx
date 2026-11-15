@@ -546,20 +546,20 @@ describe('Knowledge — the page’s own actions', () => {
     expect(panel?.closest('.bottom-full')).toBeNull();
   });
 
-  it('says an agent’s document is search only, offers no Approve, and loads it into every chat on a press', async () => {
+  it('marks an agent’s document Search only by its title, offers no Approve, and loads it into every chat from its More menu', async () => {
     knowledgeApi.readKnowledge.mockResolvedValue(
       aKnowledgeDocument({ approvedAt: null }),
     );
     knowledgeApi.indexKnowledge.mockResolvedValue(aKnowledgeHead());
     const el = await openCutting();
 
-    expect(el.textContent).toContain(
-      'Search only. An agent saved this; agents find it when they search knowledge',
-    );
+    expect(el.querySelector('h2')?.textContent).toContain('Search only');
     expect(
       [...el.querySelectorAll('button')].map((node) => node.textContent),
     ).not.toContain('Approve');
-    await press(el, 'Load into every chat');
+    await press(el, 'More');
+    expect(menuLabels()).not.toContain('Search only');
+    await pressMenuItem('Load into every chat');
 
     expect(knowledgeApi.indexKnowledge).toHaveBeenCalledWith({ id: 'd1' });
   });
@@ -589,8 +589,9 @@ describe('Knowledge — the page’s own actions', () => {
   it('leaves an indexed document without the search-only note', async () => {
     const el = await openCutting();
 
-    expect(el.textContent).not.toContain('Search only. An agent saved this');
-    expect(el.textContent).not.toContain('Load into every chat');
+    expect(el.querySelector('h2')?.textContent).not.toContain('Search only');
+    await press(el, 'More');
+    expect(menuLabels()).not.toContain('Load into every chat');
   });
 
   it('archives the open document from its More menu', async () => {

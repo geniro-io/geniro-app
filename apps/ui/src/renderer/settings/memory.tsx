@@ -122,13 +122,10 @@ const TAB_REQUEST: Record<EntryTab, MemoriesApiListMemoriesRequest> = {
 };
 
 const TAB_EXPLAINED: Record<EntryTab, string> = {
-  index:
-    'Every new chat starts with a short index of these titles: its team’s first, then its project’s, then global ones, most recently used first, cut at 2 KB. Agents open a whole entry by its handle. Your own and imported entries are always here.',
-  search:
-    'No chat starts with these. Agents find them only when they search memory for a task. An agent’s note saved at once lands here; Load into every chat puts it in the index.',
-  pending:
-    'Agents saved these while their notes wait for you. No agent sees them until you approve.',
-  forgotten: 'Agents no longer see these. Restore puts one back where it was.',
+  index: 'Every new chat starts with these titles, up to 2 KB.',
+  search: 'Agents find these only by searching.',
+  pending: 'No agent sees these until you approve them.',
+  forgotten: 'Hidden from agents. Restore brings one back.',
 };
 
 const TAB_EMPTY: Record<EntryTab, string> = {
@@ -778,22 +775,24 @@ export function Memory({
   );
   const warnedPicks = toForget.filter((row) => row.warning !== null).length;
 
-  const waitingShown =
-    focus === null &&
-    (filters.status === 'index' || filters.status === 'search') &&
-    pending.length > 0;
   const previewWhere = (() => {
     const place = previewPlace(filters.scope);
     if (place.teamSlug !== undefined) {
-      return `A run of ${teamName(place.teamSlug) ?? place.teamSlug}`;
+      return `a run of ${teamName(place.teamSlug) ?? place.teamSlug}`;
     }
     if (place.projectId !== undefined) {
-      return `A new chat in ${projectName(place.projectId) ?? 'this project'}`;
+      return `a new chat in ${projectName(place.projectId) ?? 'this project'}`;
     }
-    return filters.scope === ALL_SCOPES
-      ? 'A new chat in no project (pick a project or team to see its own)'
-      : 'A new chat in no project';
+    return 'a new chat in no project';
   })();
+  const tabs = ENTRY_TABS.map((tab) =>
+    tab.id === 'pending' && pending.length > 0
+      ? {
+          ...tab,
+          label: `${tab.label} · ${pending.length.toLocaleString('en-US')}${pendingCut ? '+' : ''}`,
+        }
+      : tab,
+  );
 
   const scopeGroups = [
     {
@@ -841,6 +840,7 @@ export function Memory({
         entry={entry}
         projectName={projectName(entry.projectId)}
         teamName={teamName(entry.teamSlug)}
+        showStatus={focus !== null}
         focused={focus !== null && entry.handle === focus}
         busy={busy === entry.id}
         onEdit={
@@ -986,58 +986,31 @@ export function Memory({
         )}
       </SettingsPanel>
 
-      {waitingShown ? (
-        <SettingsPanel>
-          <SettingsPanelRow
-            layout="block"
-            label={`Waiting for review (${pending.length}${pendingCut ? '+' : ''})`}>
-            <p className="text-xs text-muted-foreground">
-              Agents saved these while their notes wait for you. Only what you
-              approve goes into every new chat's memory index.
-            </p>
-            <ul className="mt-2 flex flex-col gap-2">
-              {pending.map((entry) => (
-                <li key={entry.id}>{row(entry)}</li>
-              ))}
-            </ul>
-            {pendingCut ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="mt-2 self-start"
-                onClick={() => setFilters({ ...filters, status: 'pending' })}>
-                Show every waiting entry
-              </Button>
-            ) : null}
-          </SettingsPanelRow>
-        </SettingsPanel>
-      ) : null}
-
       <SettingsPanel>
         <SettingsPanelRow layout="block" label="Entries">
           {focus === null ? (
             <div className="mb-2 flex min-w-0 flex-col gap-1.5">
               <SegmentedControl
                 ariaLabel="Which entries"
-                options={ENTRY_TABS}
+                options={tabs}
                 value={filters.status}
                 onSelect={(status) => setFilters({ ...filters, status })}
               />
-              <p
-                data-slot="memory-tab-explained"
-                className="m-0 text-xs text-muted-foreground">
-                {TAB_EXPLAINED[filters.status]}
+              <p className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                <span data-slot="memory-tab-explained">
+                  {TAB_EXPLAINED[filters.status]}
+                </span>
+                {filters.status === 'index' && indexPreview !== null ? (
+                  <span
+                    data-slot="memory-index-fit"
+                    title={`How many of these titles ${previewWhere} starts with now; the rest are found by search. Pick a project or team to see its own.`}
+                    className="font-medium text-foreground tabular-nums">
+                    {indexPreview.listed.toLocaleString('en-US')} of{' '}
+                    {indexPreview.eligible.toLocaleString('en-US')} fit ·{' '}
+                    {previewWhere}
+                  </span>
+                ) : null}
               </p>
-              {filters.status === 'index' && indexPreview !== null ? (
-                <p
-                  data-slot="memory-index-fit"
-                  className="m-0 text-xs font-medium text-foreground tabular-nums">
-                  {indexPreview.eligible === 0
-                    ? `${previewWhere} starts with no memory index.`
-                    : `${previewWhere} starts with ${indexPreview.listed.toLocaleString('en-US')} of ${indexPreview.eligible.toLocaleString('en-US')} ${indexPreview.eligible === 1 ? 'title' : 'titles'}${indexPreview.listed < indexPreview.eligible ? '; the rest are found by search' : ''}.`}
-                </p>
-              ) : null}
             </div>
           ) : null}
           {focus !== null ? (

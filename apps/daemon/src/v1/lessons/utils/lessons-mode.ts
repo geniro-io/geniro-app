@@ -2,8 +2,8 @@ import type { LessonOverride } from '../../projects/projects.types';
 import type { LessonReflectionMode } from '../lessons.types';
 
 /**
- * Whether a thread is offered lessons reflections: the app's Off always wins;
- * otherwise the team's own setting, else the project's, else the app's.
+ * Whether reflections run on a thread: the app's Off always wins; otherwise
+ * the team's own setting, else the project's, else the app's.
  */
 export function offersLessons(
   appMode: LessonReflectionMode,

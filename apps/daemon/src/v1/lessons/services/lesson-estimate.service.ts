@@ -3,13 +3,17 @@ import { Injectable } from '@nestjs/common';
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { tokenCostUsd } from '../../agents/utils/model-prices';
+import {
+  type ModelPrice,
+  type ModelPriceRates,
+  ratesForPrompt,
+  tokenCostUsd,
+} from '../../agents/utils/model-prices';
 import { MemoryService } from '../../memory/services/memory.service';
 import type { Run } from '../../runs/entity/run.entity';
-import type { LessonEstimate, ReflectLessons } from '../lessons.types';
+import type { LessonEstimate } from '../lessons.types';
 import { lessonsReflectionGuide } from '../utils/lessons-reflection-guide';
-import { reflectionChoiceOf } from '../utils/reflection-choice';
-import { LessonsConfigService } from './lessons-config.service';
+import type { ReflectionChoice } from '../utils/reflection-choice';
 
 /** What a reflection reads besides the stretch: the CLI's own system prompt and tool schemas, the brief, the rows around it. */
 export const LESSON_READ_OVERHEAD_TOKENS = 30_000;
@@ -20,10 +24,12 @@ export const LESSON_ANSWER_TOKENS = 4_000;
 const CHARS_PER_TOKEN = 4;
 
 /**
- * Prices a reflection before it runs: the stretch's stored characters and the
- * guide's plus a fixed allowance for the CLI's own context, read once per
- * pass of its tool calls, at the list price of the model it would run as. No list price (cursor-agent, an unlisted id) prices
- * nothing — tokens only, never $0.
+ * Prices a reflection or its check before it runs: the stretch's stored
+ * characters and the guide's plus a fixed allowance for the CLI's own
+ * context, read once per pass of its tool calls, each pass billed at the rate
+ * its own prompt size reaches, at the list price of the model it would run
+ * as. No list price (cursor-agent, an unlisted id) prices nothing — tokens
+ * only, never $0.
  */
 @Injectable()
 export class LessonEstimateService {
@@ -32,16 +38,14 @@ export class LessonEstimateService {
     private readonly itemDao: ItemDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly memory: MemoryService,
-    private readonly config: LessonsConfigService,
   ) {}
 
   async estimate(
-    source: Pick<Run, 'id' | 'agentKind' | 'configDir'>,
+    source: Pick<Run, 'id'>,
     range: { fromSeq: number; toSeq: number },
-    input: Pick<ReflectLessons, 'agentKind' | 'model'> = {},
+    choice: ReflectionChoice,
     em: EntityManager = this.em.fork(),
   ): Promise<LessonEstimate> {
-    const choice = reflectionChoiceOf(this.config.config, source, input);
     const adapter = this.adapters.for(choice.agentKind);
     const model = await adapter
       .resolveModel(choice.model, choice.configDir)
@@ -52,13 +56,12 @@ export class LessonEstimateService {
       range.toSeq,
       em,
     );
-    const inputTokens =
-      (Math.ceil(
+    const promptTokens =
+      Math.ceil(
         (chars + lessonsReflectionGuide(this.memory.enabled).length) /
           CHARS_PER_TOKEN,
-      ) +
-        LESSON_READ_OVERHEAD_TOKENS) *
-      LESSON_READ_PASSES;
+      ) + LESSON_READ_OVERHEAD_TOKENS;
+    const inputTokens = promptTokens * LESSON_READ_PASSES;
     const rates = adapter.billingRatesOf(model);
     return {
       agentKind: choice.agentKind,
@@ -67,7 +70,7 @@ export class LessonEstimateService {
       usd:
         rates === null
           ? null
-          : tokenCostUsd(rates, {
+          : tokenCostUsd(tierOf(rates, promptTokens), {
               inputTokens,
               outputTokens: LESSON_ANSWER_TOKENS,
               cacheReadTokens: 0,
@@ -75,4 +78,11 @@ export class LessonEstimateService {
             }),
     };
   }
+}
+
+/** The rates one pass is billed at: a model with context tiers bills a large prompt at the tier it passes. */
+function tierOf(rates: ModelPriceRates, promptTokens: number): ModelPriceRates {
+  return 'tiers' in rates
+    ? ratesForPrompt(rates as ModelPrice, promptTokens)
+    : rates;
 }

@@ -97,6 +97,7 @@ import {
   CODEX_SHELL_TOOL_FEATURE_KEY,
   CODEX_THREAD_FACTS_MAX,
   CODEX_THREAD_ID_PATTERN,
+  CODEX_LIGHT_MODEL,
   CODEX_TITLE_ARGS,
   CODEX_TITLE_MODEL_FLAG,
   CODEX_TITLE_TIMEOUT_MS,
@@ -212,6 +213,7 @@ export class CodexAdapter extends AgentAdapter {
         ],
         icon: 'code',
       },
+      lightModel: CODEX_LIGHT_MODEL,
       autoCompact: {
         kind: 'config-override',
         flag: CODEX_CONFIG_FLAG,

@@ -27,6 +27,7 @@ import type { TeamProposalBroker } from '../../agents/services/team-proposal.bro
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import type { LessonCheckService } from '../../lessons/services/lesson-check.service';
 import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
@@ -66,6 +67,8 @@ import { MonitorTool } from './monitor/monitor.tool';
 import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposeLessonsTool } from './propose-lessons/propose-lessons.tool';
+import { CheckLessonsTool } from './check-lessons/check-lessons.tool';
+import { gatedForHiddenLessons } from './hidden-lessons-gate';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
 import { ProposeTeamTool } from './propose-team/propose-team.tool';
@@ -122,6 +125,7 @@ export interface McpToolDeps {
   knowledgeItems: KnowledgeItemsService;
   analysis: AnalysisBroker;
   lessons: LessonFilingService;
+  lessonChecks: LessonCheckService;
   threads: ThreadReaderService;
   teamChanges: TeamChangeService;
   projectInstructions: ProjectInstructionsChangeService;
@@ -148,6 +152,12 @@ export interface McpToolDeps {
  * agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
+  return allMcpTools(deps).map((tool) =>
+    gatedForHiddenLessons(tool, deps.analysis),
+  );
+}
+
+function allMcpTools(deps: McpToolDeps): McpTool[] {
   return [
     new CallAgentTool(deps.calls),
     new AwaitAgentTool(deps.calls),
@@ -214,6 +224,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     ),
     new MarkRecommendationsTool(deps.analysis),
     new ProposeLessonsTool(deps.analysis, deps.lessons),
+    new CheckLessonsTool(deps.analysis, deps.lessonChecks),
     new SaveTeamChangeTool(
       deps.analysis,
       deps.teamBuilders,

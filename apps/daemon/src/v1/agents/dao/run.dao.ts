@@ -236,38 +236,6 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
-  /** The live runs a board card started, archived ones included. */
-  async listOfTask(taskId: string, txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find(
-      { taskId, pendingDeleteAt: null },
-      { disableIdentityMap: true },
-    );
-  }
-
-  /**
-   * Threads that may have a stretch left open for lessons: on the desk, not
-   * being deleted, no analysis, builder or project chat, worked in since
-   * `since`. Read at daemon start, when the quiet timers of the last launch
-   * are gone.
-   */
-  async listLessonCandidates(
-    since: Date,
-    txEm?: EntityManager,
-  ): Promise<Run[]> {
-    return this.getRepo(txEm).find(
-      {
-        archivedAt: null,
-        pendingDeleteAt: null,
-        editsTeamSlug: null,
-        editsProjectId: null,
-        analysisSourceRunId: null,
-        analysisTeamSlug: null,
-        updatedAt: { $gte: since },
-      },
-      { orderBy: { updatedAt: 'desc' }, disableIdentityMap: true },
-    );
-  }
-
   /**
    * Every analysis started on one library team, newest first — archived
    * rows included, for the reason {@link listAnalysesOf} gives.

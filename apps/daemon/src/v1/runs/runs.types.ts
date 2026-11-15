@@ -50,9 +50,10 @@ export type ProjectSource = (typeof PROJECT_SOURCES)[number];
 
 /**
  * What an analysis chat is for: the user's own "Analyze thread" (`review`;
- * null on rows written before purposes) or a hidden lessons reflection.
+ * null on rows written before purposes), a hidden lessons reflection, or the
+ * hidden second-model check of the lessons a reflection found.
  */
-export const ANALYSIS_PURPOSES = ['review', 'lessons'] as const;
+export const ANALYSIS_PURPOSES = ['review', 'lessons', 'lessons_check'] as const;
 export type AnalysisPurpose = (typeof ANALYSIS_PURPOSES)[number];
 
 /** A member may additionally be `skipped` — it was never started before the run settled. */
@@ -235,7 +236,6 @@ export const ItemKindSchema = z
     'thread_outcome',
     'lessons',
     'lesson_outcome',
-    'lesson_offer',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

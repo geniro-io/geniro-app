@@ -7,11 +7,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { persistItemAndEmit } from '../../agents/utils/persist-item';
-import type {
-  LessonOfferPayload,
-  LessonOutcomePayload,
-  LessonsPayload,
-} from '../lessons.types';
+import type { LessonOutcomePayload, LessonsPayload } from '../lessons.types';
 import { LessonsEventBus } from './lessons-events.bus';
 
 /**
@@ -60,5 +56,4 @@ export class LessonRowWriter {
 
 export type LessonRow =
   | { kind: 'lessons'; payload: LessonsPayload }
-  | { kind: 'lesson_outcome'; payload: LessonOutcomePayload }
-  | { kind: 'lesson_offer'; payload: LessonOfferPayload };
+  | { kind: 'lesson_outcome'; payload: LessonOutcomePayload };

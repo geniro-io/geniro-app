@@ -2,6 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import {
+  EditLessonSchema,
   LessonEstimateQuerySchema,
   LessonProposalListQuerySchema,
   LessonProposalListSchema,
@@ -11,7 +12,7 @@ import {
   LessonSegmentListQuerySchema,
   LessonSegmentListSchema,
   LessonSegmentWireSchema,
-  LessonsReflectAllSchema,
+  LessonsSpendSchema,
   LessonsReflectStartedSchema,
   ReflectLessonsSchema,
   RejectLessonSchema,
@@ -32,9 +33,11 @@ export class LessonSegmentDto extends createZodDto(
   z.object(LessonSegmentWireSchema.shape),
 ) {}
 
-export class LessonsReflectAllDto extends createZodDto(
-  LessonsReflectAllSchema,
+export class LessonsSpendDto extends createZodDto(
+  z.object(LessonsSpendSchema.shape),
 ) {}
+
+export class EditLessonDto extends createZodDto(EditLessonSchema) {}
 
 export class LessonEstimateQueryDto extends createZodDto(
   LessonEstimateQuerySchema,

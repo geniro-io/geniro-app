@@ -398,6 +398,8 @@ export const HOST_ANALYZED_THREAD_TOOL = 'read_analyzed_thread';
 export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 /** A lessons reflection's lessons about the thread it read. */
 export const HOST_LESSONS_TOOL = 'propose_lessons';
+/** The second-model check's verdict on each lesson a reflection found. */
+export const HOST_CHECK_LESSONS_TOOL = 'check_lessons';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_TEAM_CHANGE_TOOL = 'save_team_change';
 /** An analysis's write of applied project-instructions (`P-`) items. */

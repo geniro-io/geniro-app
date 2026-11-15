@@ -1975,6 +1975,12 @@ export const AgentIdentityCapabilitySchema = z
      * the call time out.
      */
     callerEscalatesQuestions: z.boolean(),
+    lightModel: z
+      .string()
+      .nullable()
+      .describe(
+        'The model this CLI offers for light background work (a lessons reflection by default); null = none known, the CLI default runs',
+      ),
   })
   .meta({ id: 'AgentIdentityCapability' });
 export type AgentIdentityCapability = z.infer<

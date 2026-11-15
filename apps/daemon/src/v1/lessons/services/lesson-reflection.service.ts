@@ -20,14 +20,13 @@ import { ProjectScopeService } from '../../projects/services/project-scope.servi
 import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
-import {
-  LessonSegmentDao,
-  WAITING_SEGMENT_STATUSES,
-} from '../dao/lesson-segment.dao';
+import { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
   LESSON_REJECTED_BRIEF_MAX,
   LESSON_ROW_KINDS,
+  LESSON_SEGMENT_LEASE_MS,
+  LESSON_SEGMENT_MAX_ATTEMPTS,
   LESSONS_REFLECTION_APPROVAL,
   type LessonSegmentCloser,
   type ReflectLessons,
@@ -39,7 +38,7 @@ import {
 } from '../utils/lessons-reflection-guide';
 import { readLessonSignals } from '../utils/read-lesson-signals';
 import { isReflectable } from '../utils/reflectable';
-import { reflectionChoiceOf } from '../utils/reflection-choice';
+import { runFailureOf } from '../utils/run-failure';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
 
@@ -56,14 +55,11 @@ export interface LessonsReflectStarted {
  * its `reflectedThroughSeq` and files lessons with `propose_lessons`. Never
  * touches the thread's own "Analyze thread" analysis.
  *
- * A reflection takes the thread's waiting stretch when it has one, so an
- * offer pressed, "Reflect now" and "Extract" in "Not reflected yet" all end
- * the same offer. A reflection that ends without filing leaves its stretch
- * `failed`, back in "Not reflected yet".
- *
- * A press on a named stretch reads that stretch alone, so the part before it
- * the user dismissed stays unread; "Reflect now" and a delete's extraction
- * read everything past the last reflection, a dismissed part included.
+ * A reflection takes the thread's queued stretch when it has one, so the
+ * runner, "Reflect now" and a delete's extraction all end the same stretch.
+ * A reflection that ends without filing is a failed attempt: its stretch goes
+ * back to the queue, and after `LESSON_SEGMENT_MAX_ATTEMPTS` is left `failed`
+ * with the reason, for the Settings readout.
  */
 @Injectable()
 export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
@@ -188,11 +184,8 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
         'a reflection on this thread is still working',
       );
     }
-    const waiting = await this.waitingSegmentOf(source.id, input.segmentId, em);
-    const fromSeq = Math.max(
-      source.reflectedThroughSeq ?? -1,
-      input.segmentId !== undefined && waiting !== null ? waiting.fromSeq : -1,
-    );
+    const waiting = await this.segments.queuedOf(source.id, em);
+    const fromSeq = source.reflectedThroughSeq ?? -1;
     const newest = await this.itemDao.maxSeqExcept(
       source.id,
       LESSON_ROW_KINDS,
@@ -236,6 +229,8 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       toSeq: snapshotSeq,
       signals: JSON.stringify(signals),
       status: 'reflecting' as const,
+      leaseUntil: new Date(Date.now() + LESSON_SEGMENT_LEASE_MS),
+      failReason: null,
     };
     let segment: LessonSegment;
     if (waiting === null) {
@@ -253,12 +248,12 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       const attempts = waiting.attempts + 1;
       await this.segments.updateById(
         waiting.id,
-        { ...stretch, attempts, reflectionRunId: null },
+        { ...stretch, attempts, reflectionRunId: null, checkRunId: null },
         em,
       );
       segment = Object.assign(waiting, stretch, { attempts });
     }
-    const choice = reflectionChoiceOf(this.config.config, source, input);
+    const choice = this.config.reflectionChoice(source, input);
     let runId: string;
     try {
       const run = await this.chats.createChat({
@@ -269,6 +264,10 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
         model: choice.model ?? undefined,
         effort: choice.effort ?? undefined,
         configDir: choice.configDir ?? undefined,
+        contextWindow: choice.contextWindow ?? undefined,
+        ...(Object.keys(choice.modelParameters).length === 0
+          ? {}
+          : { modelParameters: choice.modelParameters }),
         title: `Lessons: ${source.title ?? 'untitled thread'}`,
         taskInstructions: lessonsReflectionGuide(this.memory.enabled),
         analysisSource: {
@@ -280,7 +279,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       });
       runId = run.id;
     } catch (error) {
-      await this.markFailed(segment.id, source.id, em);
+      await this.failAttempt(segment, messageOf(error), em);
       throw error;
     }
     await this.segments.updateById(segment.id, { reflectionRunId: runId }, em);
@@ -294,13 +293,13 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
           signals,
           rejected: rejected.map((proposal) => ({
             title: proposal.title,
-            reason: proposal.rejectReason,
+            reason: proposal.rejectReason ?? proposal.checkReason,
           })),
         }),
       );
     } catch (error) {
       await this.chats.delete(runId).catch(() => undefined);
-      await this.markFailed(segment.id, source.id, em);
+      await this.failAttempt(segment, messageOf(error), em);
       throw error;
     }
     this.events.publishChanged(source.id);
@@ -312,50 +311,61 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** A reflection ended: a stretch it never filed lessons for goes back to waiting, as failed. */
+  /**
+   * Take back a stretch whose reflection outlived its lease: the reflection
+   * is cancelled and the attempt counted as failed.
+   */
+  async abandon(segment: LessonSegment): Promise<void> {
+    const em = this.em.fork();
+    if (segment.reflectionRunId !== null) {
+      await this.chats.cancel(segment.reflectionRunId).catch(() => undefined);
+    }
+    await this.failAttempt(
+      segment,
+      'the reflection ran past its 30-minute limit',
+      em,
+    );
+  }
+
+  /** A reflection ended: a stretch it never filed lessons for is a failed attempt. */
   private async settled(runId: string): Promise<void> {
     const em = this.em.fork();
     const segment = await this.segments.ofReflection(runId, em);
     if (segment === null || segment.status !== 'reflecting') {
       return;
     }
-    await this.markFailed(segment.id, segment.runId, em);
+    const run = await this.runDao.getById(runId, em);
+    await this.failAttempt(
+      segment,
+      await runFailureOf(
+        this.itemDao,
+        run,
+        'the reflection ended without filing lessons',
+        em,
+      ),
+      em,
+    );
   }
 
-  private async markFailed(
-    segmentId: string,
-    sourceRunId: string,
+  /** Back to the queue for another attempt, or `failed` with the reason once the attempts are spent. */
+  private async failAttempt(
+    segment: LessonSegment,
+    reason: string,
     em: EntityManager,
   ): Promise<void> {
+    const spent = segment.attempts >= LESSON_SEGMENT_MAX_ATTEMPTS;
     await this.segments
-      .updateById(segmentId, { status: 'failed' }, em)
+      .updateById(
+        segment.id,
+        {
+          status: spent ? 'failed' : 'queued',
+          failReason: reason,
+          leaseUntil: null,
+        },
+        em,
+      )
       .catch(() => undefined);
-    this.events.publishChanged(sourceRunId);
-  }
-
-  /** The thread's stretch waiting on the user, the one a press named, or null to start a new one. */
-  private async waitingSegmentOf(
-    sourceRunId: string,
-    segmentId: string | undefined,
-    em: EntityManager,
-  ): Promise<LessonSegment | null> {
-    if (segmentId === undefined) {
-      return this.segments.openOf(sourceRunId, em);
-    }
-    const segment = await this.segments.getById(segmentId, em);
-    if (segment === null || segment.runId !== sourceRunId) {
-      throw new NotFoundException(
-        'LESSON_SEGMENT_NOT_FOUND',
-        `no stretch ${segmentId} on this thread`,
-      );
-    }
-    if (!WAITING_SEGMENT_STATUSES.includes(segment.status)) {
-      throw new ConflictException(
-        'LESSON_SEGMENT_DECIDED',
-        `this stretch is already ${segment.status}`,
-      );
-    }
-    return segment;
+    this.events.publishChanged(segment.runId);
   }
 
   private async sourceOf(runId: string, em: EntityManager): Promise<Run> {

@@ -17,7 +17,6 @@ export const LESSON_REJECTED_BRIEF_MAX = 20;
 export const LESSON_ROW_KINDS: readonly ItemKind[] = [
   'lessons',
   'lesson_outcome',
-  'lesson_offer',
 ];
 
 /** What can tell a reflection that something went wrong in a thread. */
@@ -41,28 +40,33 @@ export interface LessonSignal {
   excerpt: string;
 }
 
-export const LESSON_SEGMENT_CLOSERS = [
-  'manual',
-  'archive',
-  'done',
-  'idle',
-  'delete',
-] as const;
+export const LESSON_SEGMENT_CLOSERS = ['manual', 'archive', 'delete'] as const;
 export type LessonSegmentCloser = (typeof LESSON_SEGMENT_CLOSERS)[number];
 
 export const LESSON_SEGMENT_STATUSES = [
-  'offered',
-  'dismissed',
+  'queued',
   'reflecting',
+  'checking',
   'reflected',
   'failed',
   'empty',
+  'skipped',
 ] as const;
 export type LessonSegmentStatus = (typeof LESSON_SEGMENT_STATUSES)[number];
 
+/** How many reflections one stretch gets before it is left `failed`. */
+export const LESSON_SEGMENT_MAX_ATTEMPTS = 3;
+/** How long one reflection or check may hold its stretch before the runner takes it back. */
+export const LESSON_SEGMENT_LEASE_MS = 30 * 60_000;
+
 export const LESSON_PROPOSAL_STATUSES = [
   'proposed',
+  'checking',
   'saved',
+  'skipped_duplicate',
+  'undone',
+  'dropped_by_check',
+  'check_failed',
   'rejected',
   'failed',
 ] as const;
@@ -135,6 +139,13 @@ export const LessonsPayloadSchema = z.object({
   model: z.string().nullable(),
   proposals: z.array(LessonProposalCardSchema),
   places: z.object({ project: z.boolean(), team: z.boolean() }),
+  check: z
+    .object({
+      runId: z.string(),
+      agentKind: AgentKindSchema,
+      model: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type LessonsPayload = z.infer<typeof LessonsPayloadSchema>;
 
@@ -143,9 +154,20 @@ export type LessonsPayload = z.infer<typeof LessonsPayloadSchema>;
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/lessons-payload.ts.
  */
+export const LESSON_OUTCOME_STATUSES = [
+  'saved',
+  'pending',
+  'rejected',
+  'undone',
+  'skipped_duplicate',
+  'dropped_by_check',
+] as const;
+export type LessonOutcomeStatus = (typeof LESSON_OUTCOME_STATUSES)[number];
+
 export const LessonOutcomePayloadSchema = z.object({
   proposalId: z.string(),
-  status: z.enum(['saved', 'rejected']),
+  status: z.enum(LESSON_OUTCOME_STATUSES),
+  by: z.enum(['user', 'auto']),
   title: z.string(),
   rule: z.string(),
   target: LessonTargetSchema,
@@ -154,63 +176,56 @@ export const LessonOutcomePayloadSchema = z.object({
 });
 export type LessonOutcomePayload = z.infer<typeof LessonOutcomePayloadSchema>;
 
-export const DEFAULT_LESSON_QUIET_WINDOW_HOURS = 3;
-/** How long a stretch closed by an outcome, a final stage or a finished card waits for a new message. */
-export const LESSON_DONE_QUIET_MS = 10 * 60_000;
 /** How long a delete that extracts lessons first waits for its reflection before deleting anyway. */
 export const LESSON_PENDING_DELETE_MAX_MS = 10 * 60_000;
 
-export const LESSON_REFLECTION_MODES = ['off', 'offer'] as const;
+export const LESSON_REFLECTION_MODES = ['off', 'auto'] as const;
 export type LessonReflectionMode = (typeof LESSON_REFLECTION_MODES)[number];
 
 /**
+ * One CLI and everything it runs with for a lessons reflection or its check —
+ * the shape of a memory check's agent (`MemoryTriageConfig` in the UI).
+ */
+export const LessonModelChoiceSchema = z
+  .object({
+    agent: z
+      .string()
+      .min(1)
+      .max(64)
+      .describe('An agent kind; one this daemon does not know is ignored'),
+    configDir: z.string().min(1).max(4096).nullable(),
+    model: z.string().min(1).max(200).nullable(),
+    effort: z.string().min(1).max(50).nullable(),
+    contextWindow: z.string().min(1).max(50).nullable(),
+    modelParameters: z.record(z.string().max(100), z.string().max(200)),
+  })
+  .meta({ id: 'LessonModelChoice' });
+export type LessonModelChoice = z.infer<typeof LessonModelChoiceSchema>;
+
+/**
  * The lessons settings Electron main pushes (`PUT /v1/lessons/config`).
- * A null agent reflects with the thread's own CLI, a null model or effort
- * with that CLI's default.
+ * A null reflector reflects as the thread did — its CLI and profile — on that
+ * CLI's light model; a null checker runs no check.
  *
  * TWIN PARSER: `lessonsSchema` in `apps/ui/src/main/ipc-schemas.ts`.
  */
 export const LessonsConfigSchema = z
   .object({
     mode: z.enum(LESSON_REFLECTION_MODES),
-    agentKind: z
-      .string()
-      .min(1)
-      .max(64)
-      .nullable()
-      .describe(
-        'An agent kind; one this daemon does not know reads as null, the thread’s own CLI',
-      ),
-    model: z.string().min(1).max(200).nullable(),
-    effort: z.string().min(1).max(50).nullable(),
-    quietWindowHours: z
-      .union([z.literal(1), z.literal(3), z.literal(6)])
-      .default(DEFAULT_LESSON_QUIET_WINDOW_HOURS)
-      .describe(
-        'How long a thread left open sits with no new message before its stretch is offered',
-      ),
+    reflector: LessonModelChoiceSchema.nullable(),
+    checker: LessonModelChoiceSchema.nullable(),
   })
   .meta({ id: 'LessonsConfig' });
 export type LessonsConfig = z.infer<typeof LessonsConfigSchema>;
 
 export const DEFAULT_LESSONS_CONFIG: LessonsConfig = {
-  mode: 'offer',
-  agentKind: null,
-  model: null,
-  effort: null,
-  quietWindowHours: DEFAULT_LESSON_QUIET_WINDOW_HOURS,
+  mode: 'auto',
+  reflector: null,
+  checker: null,
 };
 
-/** What "Reflect now", an offer's "Extract lessons" or a delete may name for one reflection, over the settings. */
+/** What "Reflect now" or a delete may name for one reflection, over the settings. */
 export const ReflectLessonsSchema = z.object({
-  segmentId: z
-    .string()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe(
-      'The offered stretch to reflect on; omitted = everything past the last reflection',
-    ),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).max(200).optional(),
   effort: z.string().min(1).max(50).optional(),
@@ -241,23 +256,16 @@ export type LessonEstimate = z.infer<typeof LessonEstimateSchema>;
 
 export const LessonEstimateQuerySchema = z.object({
   runId: z.string().min(1).max(200),
-  segmentId: z
-    .string()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe(
-      'Price this waiting stretch alone, as its Extract reads it; omitted = everything past the last reflection, as Reflect now reads it',
-    ),
-  agentKind: AgentKindSchema.optional(),
-  model: z.string().min(1).max(200).optional(),
 });
 export type LessonEstimateQuery = z.infer<typeof LessonEstimateQuerySchema>;
 
-/** One thread's unreflected stretch priced, for the delete dialog and "Change model…". */
+/** One thread's unreflected stretch priced, for the archive notice and the delete dialog. */
 export const ThreadLessonEstimateSchema = z
   .object({
     estimate: LessonEstimateSchema,
+    check: LessonEstimateSchema.nullable().describe(
+      'What the second-model check would cost when it runs; null while the check is off',
+    ),
     signals: z
       .number()
       .int()
@@ -282,30 +290,12 @@ export const LessonSegmentStatusSchema = z
   .enum(LESSON_SEGMENT_STATUSES)
   .meta({ id: 'LessonSegmentStatus' });
 
-/**
- * The `lesson_offer` item a closed stretch with a learning signal writes into
- * its thread. Its live state (offered, reflecting, done) is the segment's,
- * read through `GET /v1/lessons/segments`.
- *
- * TWIN PARSER: apps/ui/src/renderer/chats/lessons-payload.ts.
- */
-export const LessonOfferPayloadSchema = z.object({
-  segmentId: z.string(),
-  fromSeq: z.number().int(),
-  toSeq: z.number().int(),
-  closedBy: LessonSegmentCloserSchema,
-  signals: z.array(LessonSignalRefSchema),
-  estimate: LessonEstimateSchema,
-});
-export type LessonOfferPayload = z.infer<typeof LessonOfferPayloadSchema>;
-
-/** One closed stretch, as "Not reflected yet" and an offer row read it. */
+/** One closed stretch, as the archive notice and the Settings readout read it. */
 export const LessonSegmentWireSchema = z
   .object({
     id: z.string(),
     runId: z.string(),
     sourceTitle: z.string().nullable(),
-    archived: z.boolean(),
     fromSeq: z.number().int(),
     toSeq: z.number().int(),
     closedBy: LessonSegmentCloserSchema,
@@ -313,7 +303,10 @@ export const LessonSegmentWireSchema = z
     signals: z.array(LessonSignalRefSchema),
     status: LessonSegmentStatusSchema,
     reflectionRunId: z.string().nullable(),
+    checkRunId: z.string().nullable(),
+    failReason: z.string().nullable(),
     estimate: LessonEstimateSchema,
+    checkEstimate: LessonEstimateSchema.nullable(),
   })
   .meta({ id: 'LessonSegment' });
 export type LessonSegmentWire = z.infer<typeof LessonSegmentWireSchema>;
@@ -327,21 +320,57 @@ export const LessonSegmentListQuerySchema = z.object({
     .string()
     .max(200)
     .optional()
-    .describe(
-      'Comma-separated statuses; omitted = the ones waiting in "Not reflected yet": offered and failed',
-    ),
+    .describe('Comma-separated statuses; omitted = queued, reflecting and checking'),
   runId: z.string().min(1).max(200).optional(),
 });
 export type LessonSegmentListQuery = z.infer<
   typeof LessonSegmentListQuerySchema
 >;
 
-/** "Extract all": a reflection per waiting stretch, each started or refused. */
-export const LessonsReflectAllSchema = z.object({
-  started: z.number().int().min(0),
-  refused: z.number().int().min(0),
+const LessonSpendByStepSchema = z
+  .object({ reflect: z.number(), check: z.number() })
+  .meta({ id: 'LessonSpendByStep' });
+
+/** What lessons cost today and this month, by step, for the Settings readout. */
+export const LessonsSpendSchema = z
+  .object({
+    todayUsd: z.number(),
+    monthUsd: z.number(),
+    todayByStep: LessonSpendByStepSchema,
+    monthByStep: LessonSpendByStepSchema,
+    reflectedToday: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Threads reflected on today'),
+    savedToday: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Lessons saved to memory today'),
+    unpricedRuns: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Reflections or checks this month whose CLI reported no cost'),
+    failed: z.array(
+      z.object({
+        segmentId: z.string(),
+        runId: z.string(),
+        sourceTitle: z.string().nullable(),
+        reason: z.string().nullable(),
+      }),
+    ),
+  })
+  .meta({ id: 'LessonsSpend' });
+export type LessonsSpend = z.infer<typeof LessonsSpendSchema>;
+
+/** The user's edit of a lesson already saved to memory; the entry becomes the user's own. */
+export const EditLessonSchema = z.object({
+  title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS),
+  rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS),
 });
-export type LessonsReflectAll = z.infer<typeof LessonsReflectAllSchema>;
+export type EditLesson = z.infer<typeof EditLessonSchema>;
 
 /** The `lessons_changed` broadcast: a segment or proposal of this thread changed. */
 export interface LessonsChangedEvent {
@@ -378,6 +407,7 @@ export const LessonReflectionFactsSchema = z
     reflectionRunId: z.string(),
     agentKind: AgentKindSchema,
     model: z.string().nullable(),
+    effort: z.string().nullable(),
     working: z.boolean(),
     startedAt: z.string(),
     durationMs: z.number().int().nullable(),
@@ -407,6 +437,8 @@ export const LessonProposalWireSchema = z
     dedup: LessonDedupSchema,
     status: LessonProposalStatusSchema,
     rejectReason: z.string().nullable(),
+    checkVerdict: z.enum(['keep', 'rewrite', 'drop']).nullable(),
+    checkReason: z.string().nullable(),
     memoryHandle: z.string().nullable(),
     createdAt: z.string(),
     decidedAt: z.string().nullable(),
@@ -517,3 +549,53 @@ export const ProposeLessonsCallSchema = z.object({
     ),
 });
 export type ProposeLessonsCall = z.infer<typeof ProposeLessonsCallSchema>;
+
+export const LESSON_CHECK_VERDICTS = ['keep', 'rewrite', 'drop'] as const;
+export type LessonCheckVerdict = (typeof LESSON_CHECK_VERDICTS)[number];
+export const LESSON_CHECK_REASON_MAX_CHARS = 300;
+
+/** `check_lessons`'s arguments, as the second-model check sends them. */
+export const CheckLessonsCallSchema = z.object({
+  verdicts: z
+    .array(
+      z
+        .object({
+          proposalId: z
+            .string()
+            .min(1)
+            .describe('The id of a lesson your brief lists'),
+          verdict: z
+            .enum(LESSON_CHECK_VERDICTS)
+            .describe(
+              'keep: it passes all five gates as written; rewrite: it passes once reworded; drop: it fails a gate',
+            ),
+          reason: z
+            .string()
+            .min(1)
+            .describe(
+              `Which gate it passes or fails and why, at most ${LESSON_CHECK_REASON_MAX_CHARS} characters`,
+            ),
+          rewrite: z
+            .object({
+              title: z
+                .string()
+                .min(1)
+                .describe(
+                  `The reworded rule for the memory index, at most ${LESSON_TITLE_MAX_CHARS} characters`,
+                ),
+              rule: z
+                .string()
+                .min(1)
+                .describe(
+                  `The reworded rule in full, at most ${LESSON_RULE_MAX_CHARS} characters`,
+                ),
+            })
+            .strict()
+            .optional()
+            .describe('Only with verdict rewrite'),
+        })
+        .strict(),
+    )
+    .describe('One verdict for every lesson your brief lists'),
+});
+export type CheckLessonsCall = z.infer<typeof CheckLessonsCallSchema>;

@@ -3690,8 +3690,12 @@ export class TeamExecutorService
      */
     const nodeSessionIds = new Map<string, string>();
     const nodePoolMembers = new Map(run.nodePoolMembers);
-    /** A follow-up turn failed, so the run must not roll up as a success. */
-    let followUpFailed = false;
+    /**
+     * Members whose own turn in this pass, or a follow-up of it, ended other
+     * than completed, until a later follow-up of their own completes. A woken
+     * run settles failed while any is left — see {@link settleReopenedIfIdle}.
+     */
+    const failedMembers = new Set<string>();
     /** This pass's `liveRuns` entry — removed only by the pass that set it. */
     let liveControl: LiveRunControl | null = null;
     /**
@@ -4088,10 +4092,11 @@ export class TeamExecutorService
       this.registry.runningHandle(runId) !== ownAggregate;
 
     /**
-     * What this run's PASS rolled up to — what the run goes back to once work
-     * it woke up for afterwards has drained. Read only while {@link reopened}.
+     * Whether the pass's own bookkeeping failed, as it stood when the pass
+     * rolled up. A woken run stays failed for it, but a write that fails
+     * during a wake does not pin every later wake as well.
      */
-    let passStatus: RunStatus = 'completed';
+    let passPersistenceFailed = false;
     /** The run is AWAKE again, for work its own agents started. */
     let reopened = false;
     /**
@@ -4218,7 +4223,11 @@ export class TeamExecutorService
         slept = resolve;
       });
       try {
-        const status = cancelRequested ? 'cancelled' : passStatus;
+        const status = cancelRequested
+          ? 'cancelled'
+          : passPersistenceFailed || failedMembers.size > 0
+            ? 'failed'
+            : 'completed';
         // A wake the shutdown ended leaves the `running` it wrote, on the
         // roll-up's own terms below.
         if (!endedByShutdown(status)) {
@@ -4308,18 +4317,17 @@ export class TeamExecutorService
         // A user cancel rolls up cancelled; any other non-completed member (a
         // failure, or a CLI killed externally without cancel()) is a failure,
         // so the run must never read as success.
-        const anyNotCompleted = [...settled.values()].some(
-          (outcome) => outcome !== 'completed',
-        );
+        for (const [memberId, outcome] of settled) {
+          if (outcome !== 'completed') {
+            failedMembers.add(memberId);
+          }
+        }
         const status = cancelRequested
           ? 'cancelled'
-          : anyNotCompleted || persistenceFailed || followUpFailed
+          : failedMembers.size > 0 || persistenceFailed
             ? 'failed'
             : 'completed';
-        // Remembered for {@link settleReopenedIfIdle}: a run that wakes for a
-        // call its agent makes afterwards goes back to what the WALK rolled up
-        // to, never to a fresh `completed` that would paint over a failure.
-        passStatus = status;
+        passPersistenceFailed = persistenceFailed;
         if (endedByShutdown(status)) {
           // Nobody stopped this run: the daemon is shutting down, and that is
           // what ended its turns. Neither the status nor the closing
@@ -4341,6 +4349,7 @@ export class TeamExecutorService
         }
       } catch (err) {
         persistenceFailed = true;
+        passPersistenceFailed = true;
         this.logger.error(
           `team run ${runId} finalization failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -7639,7 +7648,7 @@ export class TeamExecutorService
         endConversationTurn(node.id);
         const outcome = cancelRequested ? 'cancelled' : 'failed';
         if (outcome === 'failed') {
-          followUpFailed = true;
+          failedMembers.add(node.id);
         }
         enqueue(async () => {
           await recordSwept?.();
@@ -7690,7 +7699,9 @@ export class TeamExecutorService
           continuationHandles.delete(node.id);
           const { outcome } = finish();
           if (outcome === 'failed') {
-            followUpFailed = true;
+            failedMembers.add(node.id);
+          } else if (outcome === 'completed') {
+            failedMembers.delete(node.id);
           }
           try {
             await this.nodeStateDao.setStatus(

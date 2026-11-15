@@ -14351,6 +14351,184 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     expect(itemlessSettles).toEqual([run.id]);
   });
 
+  describe('a woken run whose pass failed', () => {
+    const failedPass = async (ctx: ReturnType<typeof setup>) => {
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      ctx.claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your usage limit",
+      });
+      ctx.claude.starts[0]!.finish();
+      await drain();
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+      return run;
+    };
+
+    const wakeForAsyncCall = async (
+      ctx: ReturnType<typeof setup>,
+      runId: string,
+    ) => {
+      void ctx.callBroker.callAgent(runId, 'a', {
+        title: 'one',
+        agent: 'callee',
+        message: 'build it',
+        mode: 'async',
+      });
+      await drain();
+      expect(ctx.runDao.runs.get(runId)?.status).toBe('running');
+      completeTurn(ctx.claude.starts[1]!, 'built it');
+      await drain();
+      const woken = ctx.claude.starts.slice(2);
+      expect(woken).toHaveLength(1);
+      return woken[0]!;
+    };
+
+    it('settles completed once the member that failed it has completed a turn', async () => {
+      const ctx = setup();
+      const run = await failedPass(ctx);
+
+      completeTurn(await wakeForAsyncCall(ctx, run.id), 'reported back');
+      await drain();
+
+      expect(ctx.nodeDao.row(run.id, 'a')?.status).toBe('completed');
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('completed');
+    });
+
+    it('settles failed again when the woken turn of the member that failed it fails too', async () => {
+      const ctx = setup();
+      const run = await failedPass(ctx);
+
+      const woken = await wakeForAsyncCall(ctx, run.id);
+      woken.emit({ type: 'error', message: "You've hit your usage limit" });
+      woken.finish();
+      await drain();
+
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+    });
+
+    it('settles failed again when the wake never gives the member that failed it a turn', async () => {
+      const ctx = setup();
+      const run = await failedPass(ctx);
+
+      const called = ctx.callBroker.callAgent(run.id, 'a', {
+        title: 'one',
+        agent: 'callee',
+        message: 'build it',
+      });
+      await drain();
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('running');
+      completeTurn(ctx.claude.starts[1]!, 'built it');
+      await expect(called).resolves.toMatchObject({ status: 'ok' });
+      await drain();
+
+      expect(ctx.claude.starts).toHaveLength(2);
+      expect(ctx.nodeDao.row(run.id, 'a')?.status).toBe('failed');
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+    });
+  });
+
+  it('settles a woken run failed when the turn it woke a member for fails, though its pass completed', async () => {
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(ctx.claude.starts[0]!, 'done');
+    await drain();
+    expect(ctx.runDao.runs.get(run.id)?.status).toBe('completed');
+
+    void ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'one',
+      agent: 'callee',
+      message: 'build it',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(ctx.claude.starts[1]!, 'built it');
+    await drain();
+    const woken = ctx.claude.starts.slice(2);
+    expect(woken).toHaveLength(1);
+    woken[0]!.emit({ type: 'error', message: 'the CLI died' });
+    woken[0]!.finish();
+    await drain();
+
+    expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+  });
+
+  describe('a woken run whose pass completed', () => {
+    const completedPass = async (ctx: ReturnType<typeof setup>) => {
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(ctx.claude.starts[0]!, 'done');
+      await drain();
+      return run;
+    };
+
+    const asyncCall = (ctx: ReturnType<typeof setup>, runId: string) => {
+      void ctx.callBroker.callAgent(runId, 'a', {
+        title: 'one',
+        agent: 'callee',
+        message: 'build it',
+        mode: 'async',
+      });
+    };
+
+    it('stays failed when the pass could not write its own roll-up', async () => {
+      const ctx = setup();
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      ctx.runDao.failNextStatus = 'completed';
+      completeTurn(ctx.claude.starts[0]!, 'done');
+      await drain();
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+
+      asyncCall(ctx, run.id);
+      await drain();
+      completeTurn(ctx.claude.starts[1]!, 'built it');
+      await drain();
+      completeTurn(ctx.claude.starts[2]!, 'reported back');
+      await drain();
+
+      expect(ctx.nodeDao.row(run.id, 'a')?.status).toBe('completed');
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+    });
+
+    it('settles completed though a transcript write failed during the wake', async () => {
+      const ctx = setup();
+      const run = await completedPass(ctx);
+
+      asyncCall(ctx, run.id);
+      await drain();
+      ctx.itemDao.failNextKind = 'message';
+      completeTurn(ctx.claude.starts[1]!, 'built it');
+      await drain();
+      expect(ctx.itemDao.failNextKind).toBeNull();
+      completeTurn(ctx.claude.starts[2]!, 'reported back');
+      await drain();
+
+      expect(ctx.runDao.runs.get(run.id)?.status).toBe('completed');
+    });
+  });
+
   it('lets go of a woken run whose status could not be written back', async () => {
     // The settle's handle is what the registry entry waits on. A failed write
     // must still settle it, or the run stays registered over nothing — every

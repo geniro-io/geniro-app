@@ -91,10 +91,18 @@ export function lessonsReflectionBrief(input: {
   const members = input.places.members
     .map((member) => `- ${member.id} · ${JSON.stringify(member.name)}`)
     .join('\n');
+  const scopes = [
+    'global',
+    ...(input.places.project ? ['project'] : []),
+    ...(input.places.team ? ['team'] : []),
+  ];
+  const open = [
+    `memory with scope ${scopes.join(' or ')}`,
+    ...(input.places.project ? ['project_instructions', 'knowledge'] : []),
+    ...(input.places.team && members !== '' ? ['member_instructions'] : []),
+  ];
   const places = [
-    input.places.project
-      ? 'This thread belongs to a project: project_instructions and knowledge targets are open.'
-      : 'This thread belongs to no project: only memory targets with scope global or team are open.',
+    `Targets this thread accepts: ${open.join(', ')}. Any other target or memory scope is refused.`,
     input.places.team
       ? members === ''
         ? "This is a team run, but its members could not be read: use memory scope team for a role's lesson."

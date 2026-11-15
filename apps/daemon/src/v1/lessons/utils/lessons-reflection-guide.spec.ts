@@ -44,18 +44,32 @@ describe('lessonsReflectionBrief', () => {
     expect(brief).toContain('- builder · "Builder"');
     expect(brief).toContain('- reviewer · "Reviewer"');
     expect(brief).toContain(
-      'This thread belongs to a project: project_instructions and knowledge targets are open.',
+      'Targets this thread accepts: memory with scope global or project or team, project_instructions, knowledge, member_instructions. Any other target or memory scope is refused.',
     );
   });
 
-  it('says a thread with no project and no team has only memory targets open, and lists no members', () => {
+  it('opens only global memory to a thread with no project and no team, the one target the daemon accepts there', () => {
     const brief = briefOf(NO_PLACE);
 
     expect(brief).toContain(
-      'This thread belongs to no project: only memory targets with scope global or team are open.',
+      'Targets this thread accepts: memory with scope global. Any other target or memory scope is refused.',
     );
+    expect(brief).not.toContain('scope team');
     expect(brief).not.toContain('This is a team run');
-    expect(brief).not.toContain('member_instructions target');
+    expect(brief).not.toContain('member_instructions');
+  });
+
+  it('opens project memory, project instructions and knowledge to a project thread that is no team run', () => {
+    const brief = briefOf({
+      project: true,
+      team: false,
+      projectId: 'p1',
+      members: [],
+    });
+
+    expect(brief).toContain(
+      'Targets this thread accepts: memory with scope global or project, project_instructions, knowledge. Any other target or memory scope is refused.',
+    );
   });
 
   it("tells a team run whose members cannot be read to use memory scope team for a role's lesson", () => {
@@ -68,6 +82,9 @@ describe('lessonsReflectionBrief', () => {
 
     expect(brief).toContain(
       "its members could not be read: use memory scope team for a role's lesson.",
+    );
+    expect(brief).toContain(
+      'Targets this thread accepts: memory with scope global or team. Any other target or memory scope is refused.',
     );
     expect(brief).not.toContain('member_instructions target');
   });

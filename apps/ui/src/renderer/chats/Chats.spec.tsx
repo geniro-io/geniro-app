@@ -13072,9 +13072,17 @@ describe('Chats sidebar list', () => {
       return container.querySelector('[data-slot="action-notice"]');
     }
 
-    it('shows the notice for the stretch the archive queued, with its model, price and today’s spend', async () => {
+    it('shows the notice for the stretch the archive queued, with the model’s menu name and price on one line and today’s spend in its tooltip', async () => {
       lessonsApi.listLessonSegments.mockResolvedValue({ segments: [QUEUED] });
       lessonsApi.getLessonsSpend.mockResolvedValue({ todayUsd: 0.12 });
+      agentsApi.listAgentModels.mockResolvedValue([
+        {
+          id: 'haiku',
+          label: 'Haiku 5.5',
+          resolvedModel: 'claude-haiku-5-5',
+          source: 'cli',
+        },
+      ]);
 
       const { container } = await archiveThread();
 
@@ -13084,8 +13092,12 @@ describe('Chats sidebar list', () => {
       });
       const notice = noticeOf(container)!;
       expect(notice.textContent).toContain('Learning from “My chat”');
-      expect(notice.textContent).toContain(
-        'claude-haiku-5-5 · ≈$0.50 · $0.12 today',
+      const detail = notice.querySelector(
+        '[data-slot="action-notice-detail"]',
+      )!;
+      expect(detail.textContent).toBe('Haiku 5.5 · ≈$0.50');
+      expect(detail.getAttribute('title')).toBe(
+        'Haiku 5.5 · ≈$0.50 · $0.12 spent on lessons today',
       );
     });
 
@@ -13106,7 +13118,13 @@ describe('Chats sidebar list', () => {
 
       const { container } = await archiveThread();
 
-      expect(noticeOf(container)?.textContent).toContain(
+      const detail = noticeOf(container)!.querySelector(
+        '[data-slot="action-notice-detail"]',
+      )!;
+      expect(detail.textContent).toBe(
+        'claude-haiku-5-5 · ≈$0.50 + check ≈$0.27',
+      );
+      expect(detail.getAttribute('title')).toContain(
         'check ≈$0.27 if a lesson is found',
       );
     });
@@ -13524,6 +13542,14 @@ describe('Chats sidebar list', () => {
       toSeq: 40,
     });
     const { client } = makeClient();
+    agentsApi.listAgentModels.mockResolvedValue([
+      {
+        id: 'haiku',
+        label: 'Haiku 5.5',
+        resolvedModel: 'claude-haiku-5-5',
+        source: 'cli',
+      },
+    ]);
     const container = await mountArchived(client);
 
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
@@ -13534,7 +13560,7 @@ describe('Chats sidebar list', () => {
     )!;
     expect(box.checked).toBe(false);
     expect(dialog.textContent).toContain(
-      'Extract lessons first · claude-haiku-5-5 · ≈$0.50',
+      'Extract lessons first · Haiku 5.5 · ≈$0.50',
     );
 
     await act(async () => {

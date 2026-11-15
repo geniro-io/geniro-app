@@ -39,35 +39,54 @@ describe('lessonPriceLabel', () => {
 });
 
 describe('lessonCostLabel', () => {
-  it('names the model and the price', () => {
-    expect(lessonCostLabel(estimate(), null)).toBe('claude-haiku-5-5 · ≈$0.50');
+  it('names the model by the name it is given, then the price', () => {
+    expect(lessonCostLabel(estimate(), null, 'Haiku 5.5')).toBe(
+      'Haiku 5.5 · ≈$0.50',
+    );
   });
 
-  it('says the default model when the estimate names none', () => {
-    expect(lessonCostLabel(estimate({ model: null }), null)).toBe(
+  it('says the default model when no model is named', () => {
+    expect(lessonCostLabel(estimate({ model: null }), null, null)).toBe(
       'default model · ≈$0.50',
     );
   });
 
   it('adds the check’s price, marked as only if a lesson is found', () => {
     expect(
-      lessonCostLabel(estimate(), estimate({ model: 'opus', usd: 0.27 })),
-    ).toBe('claude-haiku-5-5 · ≈$0.50 · check ≈$0.27 if a lesson is found');
+      lessonCostLabel(
+        estimate(),
+        estimate({ model: 'opus', usd: 0.27 }),
+        'Haiku 5.5',
+      ),
+    ).toBe('Haiku 5.5 · ≈$0.50 · check ≈$0.27 if a lesson is found');
   });
 });
 
 describe('archiveNoticeDetail', () => {
   const segment = { estimate: estimate({ usd: 0.02 }), checkEstimate: null };
 
-  it('adds the day’s spend after the cost', () => {
-    expect(archiveNoticeDetail(segment, 0.12)).toBe(
-      'claude-haiku-5-5 · ≈$0.02 · $0.12 today',
-    );
+  it('shows the model’s name and the price, and keeps the day’s spend for the tooltip', () => {
+    expect(archiveNoticeDetail(segment, 0.12, 'Haiku 5.5')).toEqual({
+      detail: 'Haiku 5.5 · ≈$0.02',
+      hint: 'Haiku 5.5 · ≈$0.02 · $0.12 spent on lessons today',
+    });
   });
 
-  it('leaves the spend out while it is not known', () => {
-    expect(archiveNoticeDetail(segment, null)).toBe(
-      'claude-haiku-5-5 · ≈$0.02',
+  it('shortens the check to “+ check” on the line and spells it out in the tooltip', () => {
+    const withCheck = {
+      estimate: estimate({ usd: 0.02 }),
+      checkEstimate: estimate({ usd: 0.27 }),
+    };
+
+    expect(archiveNoticeDetail(withCheck, null, 'Haiku 5.5')).toEqual({
+      detail: 'Haiku 5.5 · ≈$0.02 + check ≈$0.27',
+      hint: 'Haiku 5.5 · ≈$0.02 · check ≈$0.27 if a lesson is found',
+    });
+  });
+
+  it('leaves the spend out of the tooltip while it is not known', () => {
+    expect(archiveNoticeDetail(segment, null, 'Haiku 5.5').hint).toBe(
+      'Haiku 5.5 · ≈$0.02',
     );
   });
 });

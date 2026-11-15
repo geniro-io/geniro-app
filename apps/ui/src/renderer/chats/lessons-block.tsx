@@ -13,8 +13,13 @@ import type { DaemonApis } from '../daemon-api';
 import { describeDaemonError } from '../daemon-api';
 import { formatDuration } from '../stats/stats-format';
 import { formatUsd } from './agent-activity';
-import { LessonsApiContext, LessonsJumpContext } from './lessons-api-context';
+import {
+  LessonsAgentsApiContext,
+  LessonsApiContext,
+  LessonsJumpContext,
+} from './lessons-api-context';
 import type { LessonsEntry } from './transcript-groups';
+import { useModelDisplayName } from './use-model-display-name';
 
 const LOOK: LessonsLook = {
   formatDuration,
@@ -66,13 +71,13 @@ function useRunFacts(
 function footerOf(
   label: LessonsReflectionView['label'],
   agent: string,
-  fallbackModel: string | null,
+  model: string | null,
   facts: LessonReflectionFactsDto | null,
 ): LessonsReflectionView {
   return {
     label,
     agent,
-    model: facts?.model ?? fallbackModel,
+    model,
     effort: facts?.effort ?? null,
     figures:
       facts === null
@@ -111,11 +116,22 @@ export function LessonsBlock({
   const { card } = entry;
   const reflectionFacts = useRunFacts(api, card.reflectionRunId);
   const checkFacts = useRunFacts(api, card.check?.runId ?? null);
+  const agentsApi = useContext(LessonsAgentsApiContext);
+  const reflectionModel = useModelDisplayName(
+    agentsApi,
+    card.agentKind,
+    reflectionFacts?.model ?? card.model,
+  );
+  const checkModel = useModelDisplayName(
+    agentsApi,
+    card.check?.agentKind ?? null,
+    checkFacts?.model ?? card.check?.model ?? null,
+  );
 
   const reflection = footerOf(
     'Reflection',
     agentDisplayName(identities, card.agentKind),
-    card.model,
+    reflectionModel,
     reflectionFacts,
   );
   const check =
@@ -124,7 +140,7 @@ export function LessonsBlock({
       : footerOf(
           'Check',
           agentDisplayName(identities, card.check.agentKind),
-          card.check.model,
+          checkModel,
           checkFacts,
         );
 

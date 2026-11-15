@@ -357,6 +357,39 @@ describe('LessonsCard — the footer', () => {
   });
 });
 
+describe('LessonsCard — header', () => {
+  it('counts undecided lessons as proposed', async () => {
+    const el = await render({ lessons: [LESSON_CORRECTION, LESSON_REFINES] });
+
+    expect(el.textContent).toContain('Lessons from this thread · 2 proposed');
+  });
+
+  it('counts a saved lesson as saved, not proposed', async () => {
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      outcomes: {
+        [LESSON_CORRECTION.id]: outcome(LESSON_CORRECTION.id, { by: 'auto' }),
+      },
+    });
+
+    expect(el.textContent).toContain('Lessons from this thread · 1 saved');
+    expect(el.textContent).not.toContain('proposed');
+  });
+
+  it('counts each state on its own: proposed, saved and waiting for review', async () => {
+    const el = await render({
+      lessons: [LESSON_CORRECTION, LESSON_REFINES],
+      outcomes: {
+        [LESSON_REFINES.id]: outcome(LESSON_REFINES.id, { status: 'pending' }),
+      },
+    });
+
+    expect(el.textContent).toContain(
+      'Lessons from this thread · 1 proposed · 1 waiting for review',
+    );
+  });
+});
+
 describe('LessonsCard — settled', () => {
   it('folds into one summary line once nothing is left to decide, and opens on a press', async () => {
     const el = await render({

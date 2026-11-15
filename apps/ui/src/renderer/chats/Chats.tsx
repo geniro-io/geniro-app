@@ -435,6 +435,7 @@ import {
 } from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
+import { useModelDisplayName } from './use-model-display-name';
 import { ownPoolOf, useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunOutcomes } from './use-run-outcomes';
@@ -2532,6 +2533,24 @@ export function Chats({
     useState<ArchiveLessonNotice | null>(null);
   const stopArchiveLessonWatch = useRef<(() => void) | null>(null);
   useEffect(() => () => stopArchiveLessonWatch.current?.(), []);
+  const archiveLessonModel = useModelDisplayName(
+    agentsApi,
+    archiveLessons?.segment.estimate.agentKind ?? null,
+    archiveLessons?.segment.estimate.model ?? null,
+  );
+  const archiveLessonDetail =
+    archiveLessons === null
+      ? null
+      : archiveNoticeDetail(
+          archiveLessons.segment,
+          archiveLessons.todayUsd,
+          archiveLessonModel,
+        );
+  const deleteLessonModel = useModelDisplayName(
+    agentsApi,
+    deleteLessons?.estimate.agentKind ?? null,
+    deleteLessons?.estimate.model ?? null,
+  );
 
   // The chat queued for archiving — ONLY ever a running one (see the dialog).
   const [archiving, setArchiving] = useState<ChatRun | null>(null);
@@ -9878,6 +9897,7 @@ export function Chats({
         loadMemory={loadMemory}
         loadKnowledge={loadKnowledge}
         lessonsApi={apis.lessons}
+        lessonsAgentsApi={agentsApi}
         lessonsJump={jumpToSeq}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
@@ -11916,10 +11936,8 @@ export function Chats({
                       className="pointer-events-auto w-full max-w-[420px]"
                       icon="💡"
                       title={`Learning from “${segmentTitle(archiveLessons.segment)}”`}
-                      detail={archiveNoticeDetail(
-                        archiveLessons.segment,
-                        archiveLessons.todayUsd,
-                      )}
+                      detail={archiveLessonDetail?.detail}
+                      detailHint={archiveLessonDetail?.hint}
                       action={{
                         label: 'Skip',
                         onAction: () =>
@@ -12008,7 +12026,7 @@ export function Chats({
                           }
                         />
                         <span>
-                          {`Extract lessons first · ${lessonCostLabel(deleteLessons.estimate, deleteLessons.check)}`}
+                          {`Extract lessons first · ${lessonCostLabel(deleteLessons.estimate, deleteLessons.check, deleteLessonModel)}`}
                         </span>
                       </label>
                     )}

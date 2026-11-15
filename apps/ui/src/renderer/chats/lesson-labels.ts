@@ -10,25 +10,42 @@ export function lessonPriceLabel(estimate: LessonEstimate): string {
   return usd.startsWith('<') ? usd : `≈${usd}`;
 }
 
-/** "<model> · ≈$0.02", with " · check … if a lesson is found" when a check runs. */
+/** "Haiku 5.5 · ≈$0.02", with " · check … if a lesson is found" when a check runs. */
 export function lessonCostLabel(
   estimate: LessonEstimate,
   check: LessonEstimate | null,
+  modelName: string | null,
 ): string {
-  const parts = [estimate.model ?? 'default model', lessonPriceLabel(estimate)];
+  const parts = [modelName ?? 'default model', lessonPriceLabel(estimate)];
   if (check !== null) {
     parts.push(`check ${lessonPriceLabel(check)} if a lesson is found`);
   }
   return parts.join(' · ');
 }
 
-/** The archive notice's second line: the cost, then today's spend when it is known. */
+export interface ArchiveNoticeDetail {
+  /** The one line the notice shows: "Haiku 5.5 · ≈$0.02", plus " + check ≈$0.27". */
+  detail: string;
+  /** Its tooltip: the full cost sentence, then today's spend when it is known. */
+  hint: string;
+}
+
 export function archiveNoticeDetail(
   segment: Pick<LessonSegment, 'estimate' | 'checkEstimate'>,
   todayUsd: number | null,
-): string {
-  const cost = lessonCostLabel(segment.estimate, segment.checkEstimate);
-  return todayUsd === null ? cost : `${cost} · ${formatUsd(todayUsd)} today`;
+  modelName: string | null,
+): ArchiveNoticeDetail {
+  const check = segment.checkEstimate;
+  const price = `${modelName ?? 'default model'} · ${lessonPriceLabel(segment.estimate)}`;
+  const cost = lessonCostLabel(segment.estimate, check, modelName);
+  return {
+    detail:
+      check === null ? price : `${price} + check ${lessonPriceLabel(check)}`,
+    hint:
+      todayUsd === null
+        ? cost
+        : `${cost} · ${formatUsd(todayUsd)} spent on lessons today`,
+  };
 }
 
 export function segmentTitle(

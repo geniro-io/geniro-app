@@ -22,6 +22,7 @@ export function ActionNotice({
   icon,
   title,
   detail,
+  detailHint,
   action,
   durationMs = DEFAULT_ACTION_NOTICE_MS,
   onDismiss,
@@ -30,6 +31,8 @@ export function ActionNotice({
   icon: React.ReactNode;
   title: string;
   detail?: string;
+  /** The detail line's tooltip; the line itself when absent. */
+  detailHint?: string;
   action?: ActionNoticeAction;
   durationMs?: number;
   onDismiss: () => void;
@@ -80,7 +83,7 @@ export function ActionNotice({
         {detail === undefined ? null : (
           <p
             data-slot="action-notice-detail"
-            title={detail}
+            title={detailHint ?? detail}
             className="m-0 truncate text-xs text-muted-foreground">
             {detail}
           </p>

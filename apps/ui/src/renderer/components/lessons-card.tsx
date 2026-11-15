@@ -120,8 +120,10 @@ const TITLE_MAX_CHARS = 120;
 const RULE_MAX_CHARS = 300;
 const REJECT_REASON_MAX_CHARS = 300;
 
-const SUMMARY_PARTS: readonly [LessonOutcomeStatus, string][] = [
+const SUMMARY_PARTS: readonly [LessonOutcomeStatus | 'proposed', string][] = [
+  ['proposed', 'proposed'],
   ['saved', 'saved'],
+  ['pending', 'waiting for review'],
   ['rejected', 'rejected'],
   ['undone', 'undone'],
   ['skipped_duplicate', 'already in memory'],
@@ -185,17 +187,26 @@ function footerText(view: LessonsReflectionView, look: LessonsLook): string {
   return `${view.label}: ${parts.join(' · ')}`;
 }
 
+function countsOf(
+  lessons: readonly LessonView[],
+  outcomes: Readonly<Record<string, LessonOutcomeView>>,
+): string {
+  if (lessons.length === 0) {
+    return '0 proposed';
+  }
+  return SUMMARY_PARTS.flatMap(([status, label]) => {
+    const n = lessons.filter(
+      (lesson) => (outcomes[lesson.id]?.status ?? 'proposed') === status,
+    ).length;
+    return n === 0 ? [] : [`${n} ${label}`];
+  }).join(' · ');
+}
+
 function summaryOf(
   lessons: readonly LessonView[],
   outcomes: Readonly<Record<string, LessonOutcomeView>>,
 ): string {
-  const parts = SUMMARY_PARTS.flatMap(([status, label]) => {
-    const n = lessons.filter(
-      (lesson) => outcomes[lesson.id]?.status === status,
-    ).length;
-    return n === 0 ? [] : [`${n} ${label}`];
-  });
-  return `Lessons: ${parts.join(' · ')}`;
+  return `Lessons: ${countsOf(lessons, outcomes)}`;
 }
 
 function messageOf(err: unknown): string {
@@ -248,7 +259,7 @@ export function LessonsCard({
       <div className="flex min-w-0 flex-col gap-1">
         <p className="m-0 flex items-center gap-1.5 text-sm font-medium">
           <span aria-hidden>💡</span>
-          {`Lessons from this thread · ${lessons.length} proposed`}
+          {`Lessons from this thread · ${countsOf(lessons, outcomes)}`}
         </p>
         {hint === null ? null : (
           <p className="m-0 text-xs text-muted-foreground">{hint}</p>

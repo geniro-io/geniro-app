@@ -45,7 +45,10 @@ export class LessonSpendService {
       if (row.occurredAt >= today) {
         todayByStep[step] += cost;
       }
-      priced.set(row.runId, (priced.get(row.runId) ?? false) || row.costUsd !== null);
+      priced.set(
+        row.runId,
+        (priced.get(row.runId) ?? false) || row.costUsd !== null,
+      );
     }
     const ended = await this.segments.listChangedSince(
       ['reflected', 'empty'],

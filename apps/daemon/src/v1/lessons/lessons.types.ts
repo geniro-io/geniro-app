@@ -320,7 +320,9 @@ export const LessonSegmentListQuerySchema = z.object({
     .string()
     .max(200)
     .optional()
-    .describe('Comma-separated statuses; omitted = queued, reflecting and checking'),
+    .describe(
+      'Comma-separated statuses; omitted = queued, reflecting and checking',
+    ),
   runId: z.string().min(1).max(200).optional(),
 });
 export type LessonSegmentListQuery = z.infer<

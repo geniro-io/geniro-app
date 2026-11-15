@@ -129,7 +129,10 @@ export class LessonAutoRunner
       if (run === null) {
         continue;
       }
-      if (segment.closedBy === 'archive' && !(await this.closer.lessonsOnFor(run))) {
+      if (
+        segment.closedBy === 'archive' &&
+        !(await this.closer.lessonsOnFor(run))
+      ) {
         await this.segments.updateById(
           segment.id,
           { status: 'skipped', skipReason: 'off' },

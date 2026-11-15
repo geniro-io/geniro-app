@@ -244,10 +244,17 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
     const queued = await this.segments.queuedOf(run.id, em);
-    if (queued !== null && queued.fromSeq === fromSeq && queued.toSeq >= toSeq) {
+    if (
+      queued !== null &&
+      queued.fromSeq === fromSeq &&
+      queued.toSeq >= toSeq
+    ) {
       return null;
     }
-    if (!(await this.lessonsOnFor(run)) || (await this.reflecting(run.id, em))) {
+    if (
+      !(await this.lessonsOnFor(run)) ||
+      (await this.reflecting(run.id, em))
+    ) {
       return null;
     }
     const signals = await readLessonSignals(

@@ -6,8 +6,8 @@ import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsageEventDao } from '../stats/dao/usage-event.dao';
 import { TeamsModule } from '../teams/teams.module';
-import { LessonsController } from './controllers/lessons.controller';
 import { LessonSegmentsController } from './controllers/lesson-segments.controller';
+import { LessonsController } from './controllers/lessons.controller';
 import { LessonsConfigController } from './controllers/lessons-config.controller';
 import { ThreadLessonsController } from './controllers/thread-lessons.controller';
 import { LessonProposalDao } from './dao/lesson-proposal.dao';
@@ -39,12 +39,7 @@ import { LessonsEventBus } from './services/lessons-events.bus';
  * delete; it does not import this module.
  */
 @Module({
-  imports: [
-    AgentsModule,
-    MemoryModule,
-    ProjectsModule,
-    TeamsModule,
-  ],
+  imports: [AgentsModule, MemoryModule, ProjectsModule, TeamsModule],
   controllers: [
     ThreadLessonsController,
     LessonsController,

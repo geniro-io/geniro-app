@@ -281,7 +281,9 @@ export class LessonFilingService {
     const outcomes: LessonOutcomePayload[] = [];
     for (const row of rows) {
       if (row.status === 'dropped_by_check') {
-        outcomes.push(outcomeOf(row, 'dropped_by_check', null, row.checkReason));
+        outcomes.push(
+          outcomeOf(row, 'dropped_by_check', null, row.checkReason),
+        );
         continue;
       }
       const outcome = await this.fileOne(row, reflection);
@@ -341,7 +343,11 @@ export class LessonFilingService {
 
   private async fileOne(
     row: LessonProposal,
-    reflection: { id: string; agentKind: AgentKind | null; model: string | null } | null,
+    reflection: {
+      id: string;
+      agentKind: AgentKind | null;
+      model: string | null;
+    } | null,
   ): Promise<LessonOutcomePayload | null> {
     const target = JSON.parse(row.target) as LessonTarget;
     const place =

@@ -31,7 +31,10 @@ import {
   LESSON_TITLE_MAX_CHARS,
   LESSONS_REFLECTION_APPROVAL,
 } from '../lessons.types';
-import { lessonsCheckBrief, lessonsCheckGuide } from '../utils/lessons-check-guide';
+import {
+  lessonsCheckBrief,
+  lessonsCheckGuide,
+} from '../utils/lessons-check-guide';
 import { runFailureOf } from '../utils/run-failure';
 import { LessonFilingService } from './lesson-filing.service';
 import { LessonsConfigService } from './lessons-config.service';
@@ -229,14 +232,19 @@ export class LessonCheckService implements OnModuleInit, OnModuleDestroy {
     }
     let dropped = 0;
     for (const verdict of call.verdicts) {
-      const row = rows.find((candidate) => candidate.id === verdict.proposalId)!;
+      const row = rows.find(
+        (candidate) => candidate.id === verdict.proposalId,
+      )!;
       row.checkVerdict = verdict.verdict;
       row.checkReason = verdict.reason.trim();
       if (verdict.verdict === 'drop') {
         row.status = 'dropped_by_check';
         row.decidedAt = new Date();
         dropped += 1;
-      } else if (verdict.verdict === 'rewrite' && verdict.rewrite !== undefined) {
+      } else if (
+        verdict.verdict === 'rewrite' &&
+        verdict.rewrite !== undefined
+      ) {
         row.title = verdict.rewrite.title.trim();
         row.rule = verdict.rewrite.rule.trim();
       }
@@ -289,7 +297,8 @@ export class LessonCheckService implements OnModuleInit, OnModuleDestroy {
     checkRunId: string | null,
     reason: string,
   ): Promise<void> {
-    const attempts = this.attempts.get(segment.id) ?? LESSON_SEGMENT_MAX_ATTEMPTS;
+    const attempts =
+      this.attempts.get(segment.id) ?? LESSON_SEGMENT_MAX_ATTEMPTS;
     if (attempts < LESSON_SEGMENT_MAX_ATTEMPTS && rows.length > 0) {
       await this.start(segment, rows);
       return;

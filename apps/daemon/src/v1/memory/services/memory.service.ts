@@ -1482,7 +1482,9 @@ function applyStatus(
 
 function isAgent(actor: MemoryActor): boolean {
   return (
-    actor.kind === 'agent' || actor.kind === 'analysis' || actor.kind === 'lesson'
+    actor.kind === 'agent' ||
+    actor.kind === 'analysis' ||
+    actor.kind === 'lesson'
   );
 }
 

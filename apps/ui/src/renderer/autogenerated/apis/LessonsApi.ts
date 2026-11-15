@@ -39,6 +39,7 @@ export interface LessonsApiDismissLessonSegmentRequest {
 
 export interface LessonsApiEstimateLessonsRequest {
     runId: string;
+    segmentId?: string;
     agentKind?: AgentKind;
     model?: string;
 }
@@ -145,6 +146,10 @@ export class LessonsApi extends runtime.BaseAPI {
 
         if (requestParameters['runId'] != null) {
             queryParameters['runId'] = requestParameters['runId'];
+        }
+
+        if (requestParameters['segmentId'] != null) {
+            queryParameters['segmentId'] = requestParameters['segmentId'];
         }
 
         if (requestParameters['agentKind'] != null) {

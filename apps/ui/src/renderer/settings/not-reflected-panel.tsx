@@ -14,7 +14,7 @@ import type { DaemonClient } from '../daemon-client';
 const CLOSED_BY: Record<LessonSegmentCloser, string> = {
   manual: 'Ended by you',
   archive: 'Archived',
-  done: 'Marked done',
+  done: 'Work finished',
   idle: 'Left idle',
   delete: 'Deleted',
 };

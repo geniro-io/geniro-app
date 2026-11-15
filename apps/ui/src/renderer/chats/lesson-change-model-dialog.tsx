@@ -50,7 +50,11 @@ export function LessonChangeModelDialog({
     setError(null);
     setEstimating(true);
     lessonsApi
-      .estimateLessons({ runId: segment.runId, ...choiceToDto(next) })
+      .estimateLessons({
+        runId: segment.runId,
+        segmentId: segment.id,
+        ...choiceToDto(next),
+      })
       .then((answer) => {
         if (reading.current === read) {
           setEstimate(answer.estimate);

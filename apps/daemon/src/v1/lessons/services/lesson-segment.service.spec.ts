@@ -184,6 +184,20 @@ function build(
           .at(-1) ?? null,
       ),
     ),
+    offerCursorOf: vi.fn(
+      (run: { id: string; reflectedThroughSeq: number | null }) =>
+        Promise.resolve(
+          Math.max(
+            run.reflectedThroughSeq ?? -1,
+            ...[...stored.values()]
+              .filter(
+                (segment) =>
+                  segment.runId === run.id && segment.status === 'dismissed',
+              )
+              .map((segment) => segment.toSeq as number),
+          ),
+        ),
+    ),
     create: vi.fn((input: Record<string, unknown>) => {
       const segment = { id: `seg-${created.length + 1}`, ...input };
       created.push(input);
@@ -755,6 +769,48 @@ describe('LessonSegmentService', () => {
           toSeq: 3,
         }),
       });
+    });
+
+    it('a close after a dismissed stretch offers only what came after it, with its own signals and price', async () => {
+      const h = build({ items: { src: correctionStretch() } });
+      h.service.onModuleInit();
+
+      const first = await h.service.close('src', 'manual');
+      await h.segments.updateById(first!.id, { status: 'dismissed' });
+      h.items.get('src')!.push(userMessage(3, 'no, still wrong'));
+      await h.service.close('src', 'idle');
+
+      expect(h.created).toHaveLength(2);
+      expect(h.created[1]).toEqual(
+        expect.objectContaining({ fromSeq: 2, toSeq: 3, status: 'offered' }),
+      );
+      expect(h.written[1]!.payload).toEqual(
+        expect.objectContaining({
+          segmentId: 'seg-2',
+          fromSeq: 2,
+          toSeq: 3,
+          signals: [expect.objectContaining({ seq: 3 })],
+        }),
+      );
+      expect(h.estimates.estimate).toHaveBeenLastCalledWith(
+        expect.anything(),
+        { fromSeq: 2, toSeq: 3 },
+        {},
+        expect.anything(),
+      );
+    });
+
+    it('a close with nothing new past a dismissed stretch offers nothing', async () => {
+      const h = build({ items: { src: correctionStretch() } });
+      h.service.onModuleInit();
+
+      const first = await h.service.close('src', 'manual');
+      await h.segments.updateById(first!.id, { status: 'dismissed' });
+      const again = await h.service.close('src', 'archive');
+
+      expect(again).toBeNull();
+      expect(h.created).toHaveLength(1);
+      expect(h.written).toHaveLength(1);
     });
   });
 

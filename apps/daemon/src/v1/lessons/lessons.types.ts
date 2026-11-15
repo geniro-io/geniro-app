@@ -241,6 +241,14 @@ export type LessonEstimate = z.infer<typeof LessonEstimateSchema>;
 
 export const LessonEstimateQuerySchema = z.object({
   runId: z.string().min(1).max(200),
+  segmentId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      'Price this waiting stretch alone, as its Extract reads it; omitted = everything past the last reflection, as Reflect now reads it',
+    ),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).max(200).optional(),
 });

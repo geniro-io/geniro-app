@@ -56,6 +56,47 @@ describe('LessonSegmentDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('openOf and offerCursorOf', () => {
+    function segment(
+      runId: string,
+      status: LessonSegment['status'],
+      fromSeq: number,
+      toSeq: number,
+    ) {
+      return dao.create({
+        runId,
+        fromSeq,
+        toSeq,
+        closedBy: 'idle',
+        status,
+        reflectionRunId: null,
+      });
+    }
+
+    it('a dismissed stretch is no longer the open one a later close would extend', async () => {
+      await segment('run-a', 'dismissed', -1, 4);
+
+      expect(await dao.openOf('run-a')).toBeNull();
+    });
+
+    it('starts the next offer after the newest dismissed stretch, or after the last reflection when that is later', async () => {
+      await segment('run-a', 'dismissed', -1, 4);
+      await segment('run-a', 'dismissed', 4, 9);
+      await segment('run-a', 'offered', 9, 12);
+      await segment('run-b', 'dismissed', -1, 30);
+
+      expect(
+        await dao.offerCursorOf({ id: 'run-a', reflectedThroughSeq: null }),
+      ).toBe(9);
+      expect(
+        await dao.offerCursorOf({ id: 'run-a', reflectedThroughSeq: 11 }),
+      ).toBe(11);
+      expect(
+        await dao.offerCursorOf({ id: 'run-c', reflectedThroughSeq: null }),
+      ).toBe(-1);
+    });
+  });
+
   describe('deleteOfRuns', () => {
     it('drops the segments of the runs named and no other', async () => {
       await insert('run-a', 'refl-1');

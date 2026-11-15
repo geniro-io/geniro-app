@@ -22,7 +22,7 @@ import { isTerminalRunStatus } from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import {
   LessonSegmentDao,
-  OPEN_SEGMENT_STATUSES,
+  WAITING_SEGMENT_STATUSES,
 } from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
@@ -60,6 +60,10 @@ export interface LessonsReflectStarted {
  * offer pressed, "Reflect now" and "Extract" in "Not reflected yet" all end
  * the same offer. A reflection that ends without filing leaves its stretch
  * `failed`, back in "Not reflected yet".
+ *
+ * A press on a named stretch reads that stretch alone, so the part before it
+ * the user dismissed stays unread; "Reflect now" and a delete's extraction
+ * read everything past the last reflection, a dismissed part included.
  */
 @Injectable()
 export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
@@ -185,7 +189,10 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const waiting = await this.waitingSegmentOf(source.id, input.segmentId, em);
-    const fromSeq = source.reflectedThroughSeq ?? -1;
+    const fromSeq = Math.max(
+      source.reflectedThroughSeq ?? -1,
+      input.segmentId !== undefined && waiting !== null ? waiting.fromSeq : -1,
+    );
     const newest = await this.itemDao.maxSeqExcept(
       source.id,
       LESSON_ROW_KINDS,
@@ -342,7 +349,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
         `no stretch ${segmentId} on this thread`,
       );
     }
-    if (!OPEN_SEGMENT_STATUSES.includes(segment.status)) {
+    if (!WAITING_SEGMENT_STATUSES.includes(segment.status)) {
       throw new ConflictException(
         'LESSON_SEGMENT_DECIDED',
         `this stretch is already ${segment.status}`,

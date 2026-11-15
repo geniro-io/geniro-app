@@ -123,17 +123,48 @@ describe('ActionNotice', () => {
     });
 
     const buttons = [
-      ...noticeOf().querySelectorAll<HTMLButtonElement>('button'),
+      ...noticeOf().querySelectorAll<HTMLButtonElement>(
+        '[data-slot="action-notice-actions"] button',
+      ),
     ];
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       'Extract lessons',
       'Not now',
-      '',
     ]);
 
     act(() => buttons[1]!.click());
     expect(notNow).toHaveBeenCalledTimes(1);
     expect(extract).not.toHaveBeenCalled();
+  });
+
+  it('gives the message its own row above the actions, so buttons never squeeze it', () => {
+    renderNotice({
+      actions: [
+        { label: 'Extract lessons', onAction: vi.fn() },
+        { label: 'Change model…', onAction: vi.fn() },
+        { label: 'Not now', onAction: vi.fn(), variant: 'ghost' },
+      ],
+    });
+
+    const message = noticeOf().querySelector(
+      '[data-slot="action-notice-message"]',
+    )!;
+    const actions = noticeOf().querySelector(
+      '[data-slot="action-notice-actions"]',
+    )!;
+    expect(message.parentElement?.contains(actions)).toBe(false);
+    expect(
+      message.compareDocumentPosition(actions) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('draws no actions row when it has no actions', () => {
+    renderNotice({});
+
+    expect(
+      noticeOf().querySelector('[data-slot="action-notice-actions"]'),
+    ).toBeNull();
   });
 
   it('announces its message politely, as a status', () => {

@@ -11,12 +11,6 @@ export const WAITING_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
   'failed',
 ];
 
-/** A stretch no reflection has read yet — waiting, or dismissed from "Not reflected yet"; a later close extends it. */
-export const OPEN_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
-  ...WAITING_SEGMENT_STATUSES,
-  'dismissed',
-];
-
 @Injectable()
 export class LessonSegmentDao extends BaseDao<LessonSegment> {
   constructor(em: EntityManager) {
@@ -34,12 +28,28 @@ export class LessonSegmentDao extends BaseDao<LessonSegment> {
     );
   }
 
-  /** A thread's stretch still waiting on the user; a thread has at most one. */
+  /** A thread's stretch still waiting on the user; a thread has at most one, and a later close extends it. */
   openOf(runId: string, txEm?: EntityManager): Promise<LessonSegment | null> {
     return this.getRepo(txEm).findOne(
-      { runId, status: { $in: [...OPEN_SEGMENT_STATUSES] } },
+      { runId, status: { $in: [...WAITING_SEGMENT_STATUSES] } },
       { orderBy: { closedAt: 'desc' }, disableIdentityMap: true },
     );
+  }
+
+  /**
+   * Where the thread's next offer starts: after its last reflection, or after
+   * the newest stretch the user dismissed, whichever is later — a dismissed
+   * stretch is never offered or priced again.
+   */
+  async offerCursorOf(
+    run: { id: string; reflectedThroughSeq: number | null },
+    txEm?: EntityManager,
+  ): Promise<number> {
+    const dismissed = await this.getRepo(txEm).findOne(
+      { runId: run.id, status: 'dismissed' },
+      { orderBy: { toSeq: 'desc' }, disableIdentityMap: true },
+    );
+    return Math.max(run.reflectedThroughSeq ?? -1, dismissed?.toSeq ?? -1);
   }
 
   /** Segments by status, newest closed first; every run's, or one run's. */

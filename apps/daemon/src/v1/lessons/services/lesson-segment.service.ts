@@ -53,8 +53,9 @@ type QuietCloser = Extract<LessonSegmentCloser, 'done' | 'idle'>;
  *
  * A user message cancels a waiting close; a turn geniro started itself (a
  * monitor's output) neither cancels nor arms one. Only the items past the
- * thread's `reflectedThroughSeq` belong to a stretch, and a thread has at
- * most one stretch waiting: a later close extends it.
+ * thread's offer cursor (its `reflectedThroughSeq`, or the end of the newest
+ * stretch the user dismissed) belong to a stretch, and a thread has at most
+ * one stretch waiting: a later close extends it.
  */
 @Injectable()
 export class LessonSegmentService
@@ -189,7 +190,7 @@ export class LessonSegmentService
     if (run === null || !isReflectable(run) || run.pendingDeleteAt !== null) {
       return null;
     }
-    const fromSeq = run.reflectedThroughSeq ?? -1;
+    const fromSeq = await this.segments.offerCursorOf(run, em);
     const toSeq = await this.itemDao.maxSeqExcept(run.id, LESSON_ROW_KINDS, em);
     if (toSeq <= fromSeq) {
       return null;

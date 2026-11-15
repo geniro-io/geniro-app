@@ -407,6 +407,7 @@ describe('LessonOfferRow', () => {
 
     expect(api.estimateLessons).toHaveBeenCalledWith({
       runId: 'run-1',
+      segmentId: 'seg-1',
       agentKind: 'claude',
       model: 'claude-sonnet-5-5',
     });

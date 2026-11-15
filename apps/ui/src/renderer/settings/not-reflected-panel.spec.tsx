@@ -116,6 +116,14 @@ describe('NotReflectedPanel', () => {
     );
   });
 
+  it('names a stretch a finished-work close ended (outcome, last stage, card to In review or Done) as work finished, never as marked done', async () => {
+    await render(fakeLessons([segment({ closedBy: 'done', archived: false })]));
+
+    const row = container.querySelector('li')!;
+    expect(row.textContent).toContain('Work finished');
+    expect(row.textContent).not.toContain('Marked done');
+  });
+
   it('shows the tokens alone when the model has no list price', async () => {
     await render(
       fakeLessons([

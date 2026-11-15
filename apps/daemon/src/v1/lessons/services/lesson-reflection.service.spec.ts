@@ -658,7 +658,7 @@ describe('LessonReflectionService.start on a waiting stretch', () => {
   };
 
   it('adopts the open stretch of the thread: no new row, one more attempt, reflecting', async () => {
-    const fixture = build({ open: OPEN });
+    const fixture = build({ open: { ...OPEN } });
 
     const started = await fixture.service.start('src', {});
 
@@ -682,7 +682,7 @@ describe('LessonReflectionService.start on a waiting stretch', () => {
 
   it('adopts the stretch a press named, without looking for the open one', async () => {
     const fixture = build({
-      segment: { ...OPEN, id: 'seg-named', status: 'dismissed' },
+      segment: { ...OPEN, id: 'seg-named', status: 'failed' },
     });
 
     const started = await fixture.service.start('src', {
@@ -698,7 +698,34 @@ describe('LessonReflectionService.start on a waiting stretch', () => {
     expect(fixture.segments.create).not.toHaveBeenCalled();
   });
 
-  it.each(['reflected', 'reflecting', 'empty'])(
+  it('a named stretch that starts after a dismissed part reads from its own start, leaving that part unread', async () => {
+    const fixture = build({ segment: { ...OPEN, fromSeq: 4, toSeq: 7 } });
+
+    const started = await fixture.service.start('src', {
+      segmentId: 'seg-open',
+    });
+
+    expect(started).toEqual(
+      expect.objectContaining({ fromSeq: 4, toSeq: SNAPSHOT_SEQ }),
+    );
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-open',
+      expect.objectContaining({ fromSeq: 4, status: 'reflecting' }),
+      fixture.em,
+    );
+  });
+
+  it('Reflect now, naming no stretch, reads everything past the last reflection, a dismissed part included', async () => {
+    const fixture = build({ open: { ...OPEN, fromSeq: 4, toSeq: 7 } });
+
+    const started = await fixture.service.start('src', {});
+
+    expect(started).toEqual(
+      expect.objectContaining({ fromSeq: -1, toSeq: SNAPSHOT_SEQ }),
+    );
+  });
+
+  it.each(['dismissed', 'reflected', 'reflecting', 'empty'])(
     'refuses a named stretch that is already %s, with 409 LESSON_SEGMENT_DECIDED',
     async (status) => {
       const fixture = build({ segment: { ...OPEN, status } });

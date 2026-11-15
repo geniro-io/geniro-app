@@ -463,6 +463,58 @@ describe('LessonOffersService.threadEstimate', () => {
     ).resolves.toMatchObject({ signals: 1 });
   });
 
+  it('prices a named stretch from its own start, so a dismissed part before it is neither counted nor priced', async () => {
+    const h = build({
+      runs: [runOf({ reflectedThroughSeq: null })],
+      segments: [segmentOf({ id: 'seg-after', fromSeq: 2, toSeq: 5 })],
+      items: {
+        src: [
+          { seq: 0, kind: 'turn_complete', role: null, payload: '{}' },
+          {
+            seq: 1,
+            kind: 'message',
+            role: 'user',
+            payload: '{"text":"no, that is wrong"}',
+          },
+          { seq: 2, kind: 'turn_complete', role: null, payload: '{}' },
+          {
+            seq: 4,
+            kind: 'message',
+            role: 'user',
+            payload: '{"text":"no, still wrong"}',
+          },
+        ],
+      },
+      maxSeq: 5,
+    });
+
+    const named = await h.service.threadEstimate({
+      runId: 'src',
+      segmentId: 'seg-after',
+    });
+    const whole = await h.service.threadEstimate({ runId: 'src' });
+
+    expect(named).toMatchObject({ signals: 1, fromSeq: 2, toSeq: 5 });
+    expect(whole).toMatchObject({ signals: 2, fromSeq: -1, toSeq: 5 });
+    expect(h.estimates.estimate).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      { fromSeq: 2, toSeq: 5 },
+      expect.anything(),
+      h.em,
+    );
+  });
+
+  it('refuses a named stretch of another thread with 404 LESSON_SEGMENT_NOT_FOUND', async () => {
+    const h = build({
+      segments: [segmentOf({ id: 'seg-x', runId: 'other' })],
+    });
+
+    await expect(
+      h.service.threadEstimate({ runId: 'src', segmentId: 'seg-x' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_NOT_FOUND' });
+  });
+
   it('refuses a thread that does not exist, with 404 RUN_NOT_FOUND', async () => {
     const h = build({ runs: [] });
 

@@ -60,31 +60,43 @@ export function ActionNotice({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={cn(
-        'flex items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-panel-md',
+        'flex flex-col gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-panel-md',
         className,
       )}>
-      <div className="min-w-0 flex-1 break-words">{message}</div>
-      {actions.map((action) => (
+      <div className="flex items-start gap-2">
+        <div
+          data-slot="action-notice-message"
+          className="min-w-0 flex-1 self-center break-words">
+          {message}
+        </div>
         <Button
-          key={action.label}
           type="button"
-          variant={action.variant ?? 'outline'}
-          size="sm"
-          disabled={action.disabled}
-          onClick={action.onAction}>
-          {action.label}
+          variant="ghost"
+          size="icon"
+          className="size-7 shrink-0"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={onDismiss}>
+          <X className="size-3.5" />
         </Button>
-      ))}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7 shrink-0"
-        aria-label="Dismiss"
-        title="Dismiss"
-        onClick={onDismiss}>
-        <X className="size-3.5" />
-      </Button>
+      </div>
+      {actions.length === 0 ? null : (
+        <div
+          data-slot="action-notice-actions"
+          className="flex flex-wrap justify-end gap-2">
+          {actions.map((action) => (
+            <Button
+              key={action.label}
+              type="button"
+              variant={action.variant ?? 'outline'}
+              size="sm"
+              disabled={action.disabled}
+              onClick={action.onAction}>
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

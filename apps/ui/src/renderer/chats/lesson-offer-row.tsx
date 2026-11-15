@@ -98,7 +98,11 @@ function OpenLessonOffer({
     }
     let live = true;
     api
-      .estimateLessons({ runId, ...choiceToDto(choice) })
+      .estimateLessons({
+        runId,
+        segmentId: offer.segmentId,
+        ...choiceToDto(choice),
+      })
       .then((answer) => {
         if (live) {
           setPriced(answer.estimate);
@@ -112,7 +116,7 @@ function OpenLessonOffer({
     return () => {
       live = false;
     };
-  }, [api, choice, runId]);
+  }, [api, choice, runId, offer.segmentId]);
 
   useEffect(() => {
     if (status !== 'reflecting') {

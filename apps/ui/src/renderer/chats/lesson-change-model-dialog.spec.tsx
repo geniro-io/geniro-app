@@ -134,6 +134,7 @@ describe('LessonChangeModelDialog', () => {
 
     expect(lessons.estimateLessons).toHaveBeenLastCalledWith({
       runId: 'run-1',
+      segmentId: 'seg-1',
       agentKind: 'claude',
     });
     expect(document.body.textContent).toContain('≈1.5k tokens');

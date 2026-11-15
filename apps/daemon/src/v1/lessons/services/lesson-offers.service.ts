@@ -128,7 +128,12 @@ export class LessonOffersService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${query.runId}`);
     }
-    const fromSeq = run.reflectedThroughSeq ?? -1;
+    const fromSeq = Math.max(
+      run.reflectedThroughSeq ?? -1,
+      query.segmentId === undefined
+        ? -1
+        : (await this.segmentOf(run.id, query.segmentId, em)).fromSeq,
+    );
     const toSeq = await this.itemDao.maxSeqExcept(run.id, LESSON_ROW_KINDS, em);
     const offerable =
       toSeq > fromSeq &&
@@ -149,6 +154,21 @@ export class LessonOffersService {
       fromSeq,
       toSeq,
     };
+  }
+
+  private async segmentOf(
+    runId: string,
+    segmentId: string,
+    em: EntityManager,
+  ): Promise<LessonSegment> {
+    const segment = await this.segments.getById(segmentId, em);
+    if (segment === null || segment.runId !== runId) {
+      throw new NotFoundException(
+        'LESSON_SEGMENT_NOT_FOUND',
+        `no stretch ${segmentId} on this thread`,
+      );
+    }
+    return segment;
   }
 
   private async reflecting(runId: string, em: EntityManager): Promise<boolean> {

@@ -197,6 +197,8 @@ describe('readDelegateTranscriptFile', () => {
       cacheCreationTokens: 35_605 + 4_188,
       contextTokens: 2 + 88 + 35_605 + 4_188,
       model: 'claude-haiku-5-5',
+      // One response carried text ("BETA"); the tool_use one did not.
+      messages: 1,
     });
   });
 

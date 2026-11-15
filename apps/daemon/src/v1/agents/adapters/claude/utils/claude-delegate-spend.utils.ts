@@ -28,6 +28,8 @@ import { eachJsonLine, findSessionFile } from './claude-sessions.utils';
  */
 export interface ClaudeDelegateTotals extends ClaudeDelegateSpend {
   requests: number;
+  /** Responses carrying text, when read from the transcript. */
+  messages?: number;
   /** The four kinds of the latest request, summed. */
   contextTokens: number | null;
 }
@@ -169,6 +171,7 @@ export class ClaudeDelegateSpendTracker {
       cacheCreationTokens: totals.cacheCreationTokens,
       contextTokens: totals.contextTokens,
       model: totals.model,
+      ...(totals.messages === undefined ? {} : { messages: totals.messages }),
       costUsd: account.costUsd,
       estimatedCostUsd: positiveOrNull(
         totals.model === null
@@ -231,6 +234,7 @@ export async function readDelegateTranscriptFile(
 ): Promise<ClaudeDelegateTotals | null> {
   const totals = emptyTotals();
   const seen = new Set<string>();
+  const texts = new Set<string>();
   try {
     // A torn last line (claude still appending) is skipped, not fatal: every
     // complete request before it is still exactly what was billed.
@@ -243,7 +247,13 @@ export async function readDelegateTranscriptFile(
         }
         const message = asRecord(line.message);
         const request = message === null ? null : readRequestUsage(message);
-        if (request === null || request.id === null || seen.has(request.id)) {
+        if (request === null || request.id === null) {
+          return true;
+        }
+        if (message !== null && hasText(message)) {
+          texts.add(request.id);
+        }
+        if (seen.has(request.id)) {
           return true;
         }
         seen.add(request.id);
@@ -253,7 +263,9 @@ export async function readDelegateTranscriptFile(
       undefined,
       'assistant',
     );
-    return read && totals.requests > 0 ? totals : null;
+    return read && totals.requests > 0
+      ? { ...totals, messages: texts.size }
+      : null;
   } catch {
     return null;
   }
@@ -516,6 +528,15 @@ function addRequest(
     (request.cacheReadTokens ?? 0) +
     (request.cacheCreationTokens ?? 0);
   totals.model = request.model ?? totals.model;
+}
+
+function hasText(message: Record<string, unknown>): boolean {
+  return asArray(message.content).some((block) => {
+    const record = asRecord(block);
+    return (
+      record?.type === 'text' && (asString(record.text) ?? '').trim() !== ''
+    );
+  });
 }
 
 function sameUsage(a: ClaudeRequestUsage, b: ClaudeRequestUsage): boolean {

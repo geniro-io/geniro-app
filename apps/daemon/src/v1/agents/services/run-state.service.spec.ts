@@ -513,6 +513,37 @@ describe('RunStateService (in-memory sqlite)', () => {
     });
   });
 
+  it('counts the replies its transcript holds when the rows hold fewer — a foreground delegate’s final reply is no row', async () => {
+    await createRun('running');
+    await insert(1, 'tool_call', { id: 'toolu_a', name: 'Task', input: {} });
+    await runs.setDelegateSpend(
+      'run-a',
+      writeDelegateSpend(
+        new Map([
+          [
+            'toolu_a',
+            {
+              requests: 2,
+              inputTokens: 4,
+              outputTokens: 165,
+              cacheReadTokens: 35_605,
+              cacheCreationTokens: 39_793,
+              contextTokens: 39_883,
+              model: 'claude-haiku-5-5',
+              costUsd: null,
+              estimatedCostUsd: 0.08,
+              messages: 1,
+            },
+          ],
+        ]),
+      ),
+    );
+
+    const delegate = (await service().read('run-a')).delegates[0]!;
+
+    expect(delegate.messages).toBe(1);
+  });
+
   it('reads a delegate the run holds no figures for as not measured, its messages still counted', async () => {
     await createRun('running');
     await insert(1, 'tool_call', { id: 'toolu_a', name: 'Task', input: {} });

@@ -4312,6 +4312,12 @@ export interface DelegateFigures {
   costUsd: number | null;
   /** The same tokens at the list rate. */
   estimatedCostUsd: number | null;
+  /**
+   * Text replies the delegate wrote, read from its own transcript when it
+   * ended — the count that includes a foreground delegate's final reply, which
+   * reaches the parent only inside its tool result. Absent until then.
+   */
+  messages?: number | null;
 }
 
 /** One delegate (sub-agent) over the whole conversation. */

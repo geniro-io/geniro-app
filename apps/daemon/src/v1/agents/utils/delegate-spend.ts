@@ -64,6 +64,9 @@ function readFigures(value: unknown): DelegateFigures | null {
     model: asString(record.model),
     costUsd: money(record.costUsd),
     estimatedCostUsd: money(record.estimatedCostUsd),
+    ...(record.messages === undefined
+      ? {}
+      : { messages: count(record.messages) }),
   };
   return hasFigure(entry) ? entry : null;
 }
@@ -79,6 +82,9 @@ function normalized(entry: DelegateFigures): DelegateFigures {
     model: entry.model,
     costUsd: money(entry.costUsd),
     estimatedCostUsd: money(entry.estimatedCostUsd),
+    ...(entry.messages === undefined
+      ? {}
+      : { messages: count(entry.messages) }),
   };
 }
 

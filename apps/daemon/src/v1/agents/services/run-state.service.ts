@@ -189,7 +189,10 @@ export class RunStateService {
       return {
         ...delegate,
         toolCalls: toolCalls.get(delegate.id) ?? 0,
-        messages: messages.get(delegate.id) ?? 0,
+        messages: Math.max(
+          messages.get(delegate.id) ?? 0,
+          figures?.messages ?? 0,
+        ),
         requests: figures?.requests ?? null,
         inputTokens: figures?.inputTokens ?? null,
         outputTokens: figures?.outputTokens ?? null,

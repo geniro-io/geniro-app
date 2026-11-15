@@ -32,11 +32,11 @@ import {
   type ReflectLessons,
   type ThreadLessonsState,
 } from '../lessons.types';
+import { placesOfRun } from '../utils/lesson-places';
 import {
   lessonsReflectionBrief,
   lessonsReflectionGuide,
 } from '../utils/lessons-reflection-guide';
-import { placesOfRun } from '../utils/lesson-places';
 import { readLessonSignals } from '../utils/read-lesson-signals';
 import { isReflectable } from '../utils/reflectable';
 import { runFailureOf } from '../utils/run-failure';

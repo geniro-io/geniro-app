@@ -309,10 +309,7 @@ export type ProjectInstructionField =
 
 /** Who changed a project's texts: the user, an analysis applying `P-` items, a chat the user asked, or a lesson the user saved. */
 export type ProjectInstructionChangeSource =
-  | 'user'
-  | 'analysis'
-  | 'chat'
-  | 'lesson';
+  'user' | 'analysis' | 'chat' | 'lesson';
 
 /** Consecutive user edits of one field this close together are logged as one change. */
 export const PROJECT_CHANGE_COALESCE_MS = 10 * 60 * 1000;

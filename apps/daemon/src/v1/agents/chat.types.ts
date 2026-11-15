@@ -12,7 +12,6 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
-import type { DelegateFigures } from './adapters/adapter.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
@@ -4294,6 +4293,26 @@ export type RunCallState = z.infer<typeof RunCallStateSchema>;
 export const RunDelegateStatusSchema = z
   .enum([...RunWorkStatusSchema.options, 'untracked'])
   .meta({ id: 'RunDelegateStatus' });
+
+/**
+ * A delegate's spend over every model request it has made, as the adapter
+ * counted it. Null means "not measured", never zero: a CLI that reports no
+ * requests (codex) leaves {@link requests} null.
+ */
+export interface DelegateFigures {
+  requests: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  /** The four kinds of the latest request, summed. */
+  contextTokens: number | null;
+  model: string | null;
+  /** Calibrated against what the CLI charged; null until it can be. */
+  costUsd: number | null;
+  /** The same tokens at the list rate. */
+  estimatedCostUsd: number | null;
+}
 
 /** One delegate (sub-agent) over the whole conversation. */
 export const RunDelegateStateSchema = z

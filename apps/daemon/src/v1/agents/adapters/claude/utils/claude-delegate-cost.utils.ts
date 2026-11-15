@@ -143,6 +143,12 @@ export class ClaudeDelegateCostLedger {
     spend: ClaudeDelegateSpend,
   ): void {
     const key = pendingKey(sessionId, toolCallId);
+    // A delegate claude reports ended again (a resumed one, or one whose
+    // detached command reported back) was already priced into the turn that
+    // ran it; holding it again would add its whole spend to a later turn.
+    if (this.priced.has(key)) {
+      return;
+    }
     this.pending.delete(key);
     this.pending.set(key, {
       session: sessionId ?? '',
@@ -178,6 +184,8 @@ export class ClaudeDelegateCostLedger {
         continue;
       }
       this.pending.delete(key);
+      this.priced.add(key);
+      trimSet(this.priced, MAX_PENDING_DELEGATES * 4);
       delegates.push([entry.toolCallId, entry.spend]);
     }
     this.settledUsd = 0;
@@ -229,6 +237,9 @@ export class ClaudeDelegateCostLedger {
       : priceWith(calibration, spend, this.prices);
   }
 
+  /** Delegates a `result` line has already priced, by {@link pendingKey}. */
+  private readonly priced = new Set<string>();
+
   /** Each session's latest usable calibration, insertion-ordered. */
   private readonly calibrations = new Map<
     string,
@@ -257,6 +268,16 @@ export class ClaudeDelegateCostLedger {
   private settledUsd: number | null = 0;
   /** Whose figure {@link settledUsd} is — the session of the last settle. */
   private settledSession: string | null = null;
+}
+
+function trimSet(set: Set<string>, max: number): void {
+  while (set.size > max) {
+    const oldest = set.values().next();
+    if (oldest.done === true) {
+      break;
+    }
+    set.delete(oldest.value);
+  }
 }
 
 function priceWith(

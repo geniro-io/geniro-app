@@ -52,6 +52,8 @@ interface DelegateAccount {
   totals: ClaudeDelegateTotals;
   seen: Set<string>;
   costUsd: number | null;
+  /** The latest request folded in, for the closing request's comparison. */
+  last: ClaudeRequestUsage | null;
 }
 
 /**
@@ -91,6 +93,7 @@ export class ClaudeDelegateSpendTracker {
       trimOldest(account.seen, MAX_REQUEST_IDS_PER_DELEGATE);
     }
     addRequest(account.totals, request);
+    account.last = request;
     return this.figuresOf(account);
   }
 
@@ -110,7 +113,13 @@ export class ClaudeDelegateSpendTracker {
       return null;
     }
     const account = this.account(sessionId, delegateId);
+    // The closing usage names no response id. When it repeats the last
+    // streamed response exactly, that response WAS streamed and is counted.
+    if (account.last !== null && sameUsage(account.last, request)) {
+      return null;
+    }
     addRequest(account.totals, request);
+    account.last = request;
     return this.figuresOf(account);
   }
 
@@ -180,6 +189,7 @@ export class ClaudeDelegateSpendTracker {
         totals: emptyTotals(),
         seen: new Set(),
         costUsd: null,
+        last: null,
       };
       this.accounts.set(key, account);
       trimOldest(this.accounts, MAX_TRACKED_DELEGATES);
@@ -506,6 +516,15 @@ function addRequest(
     (request.cacheReadTokens ?? 0) +
     (request.cacheCreationTokens ?? 0);
   totals.model = request.model ?? totals.model;
+}
+
+function sameUsage(a: ClaudeRequestUsage, b: ClaudeRequestUsage): boolean {
+  return (
+    a.inputTokens === b.inputTokens &&
+    a.outputTokens === b.outputTokens &&
+    a.cacheReadTokens === b.cacheReadTokens &&
+    a.cacheCreationTokens === b.cacheCreationTokens
+  );
 }
 
 function emptyTotals(): ClaudeDelegateTotals {

@@ -263,6 +263,16 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           cacheReadTokens: event.cacheReadTokens,
           cacheCreationTokens: event.cacheCreationTokens,
           costUsd: event.costUsd,
+          ...(event.estimatedCostUsd === undefined
+            ? {}
+            : { estimatedCostUsd: event.estimatedCostUsd }),
+          ...(event.requests === undefined ? {} : { requests: event.requests }),
+          ...(event.contextTokens === undefined
+            ? {}
+            : { contextTokens: event.contextTokens }),
+          ...(event.cumulative === undefined
+            ? {}
+            : { cumulative: event.cumulative }),
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
           ...(event.recovery === undefined ? {} : { recovery: event.recovery }),

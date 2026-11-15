@@ -6,6 +6,7 @@ import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentApprovalProbeSchema,
   AgentOptionSpecSchema,
+  DelegateFigures,
   ProbeStatusSchema,
   PromptCacheTtlReason,
 } from '../chat.types';
@@ -85,25 +86,7 @@ export interface BackgroundUnitUsage {
   durationMs: number | null;
 }
 
-/**
- * A delegate's spend over every model request it has made, as the adapter
- * counted it. Null means "not measured", never zero: a CLI that reports no
- * requests (codex) leaves {@link requests} null.
- */
-export interface DelegateFigures {
-  requests: number | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  cacheReadTokens: number | null;
-  cacheCreationTokens: number | null;
-  /** The four kinds of the latest request, summed. */
-  contextTokens: number | null;
-  model: string | null;
-  /** Calibrated against what the CLI charged; null until it can be. */
-  costUsd: number | null;
-  /** The same tokens at the list rate. */
-  estimatedCostUsd: number | null;
-}
+export type { DelegateFigures } from '../chat.types';
 
 /**
  * How ONE agent inside a dynamic workflow is doing, in this app's own words.

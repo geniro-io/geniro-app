@@ -124,6 +124,36 @@ describe('a delegate’s requests off the stream', () => {
     ]);
   });
 
+  it('does not count the closing request twice when its response WAS streamed', () => {
+    const ledger = new ClaudeSessionCostLedger(FLAT);
+    for (const line of backgroundDelegateLines) {
+      mapClaudeMessage(line, ledger);
+    }
+    const close = {
+      ...foregroundClose,
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: BACKGROUND_CALL, content: [] },
+        ],
+      },
+      tool_use_result: {
+        ...(foregroundClose.tool_use_result as Record<string, unknown>),
+        usage: {
+          input_tokens: 2,
+          output_tokens: 3,
+          cache_read_input_tokens: 35_605,
+          cache_creation_input_tokens: 4_188,
+        },
+      },
+    };
+
+    expect(progressOf(mapClaudeMessage(close, ledger))).toEqual([]);
+    expect(
+      ledger.delegateSpend.totalsOf(SESSION, BACKGROUND_CALL)?.requests,
+    ).toBe(2);
+  });
+
   it('leaves an unpriced model without a cost rather than at zero', () => {
     const ledger = new ClaudeSessionCostLedger(() => null);
     const [progress] = progressOf(
@@ -351,6 +381,52 @@ describe('ClaudeDelegateSettler', () => {
       final: true,
       figures: { costUsd: expect.closeTo(list * 2, 9) },
     });
+  });
+
+  it('never holds a delegate a result line already priced, so a later end bills no later turn', async () => {
+    const ledger = new ClaudeSessionCostLedger(FLAT);
+    const result: Record<string, unknown> = {
+      type: 'result',
+      subtype: 'success',
+      session_id: SESSION,
+      result: 'DONE',
+      total_cost_usd: 1.5,
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {
+        'claude-haiku-5-5': {
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 1.5,
+        },
+      },
+    };
+    const settler = settlerFor(ledger, () => Promise.resolve(transcriptTotals));
+    const end = {
+      sessionId: SESSION,
+      delegateId: BACKGROUND_CALL,
+      agentId: BACKGROUND_AGENT,
+    };
+    await settler.settle(end);
+    expect(
+      mapClaudeMessage(result, ledger).some(
+        (event) =>
+          event.type === 'subagent_info' && event.id === BACKGROUND_CALL,
+      ),
+    ).toBe(true);
+
+    const again = await settler.settle(end);
+    expect(progressOf(again)[0]?.figures.costUsd).toBeCloseTo(
+      ((4 + 165 + 35_605 + 39_793) / 1_000_000) * 1.5,
+      9,
+    );
+    expect(
+      mapClaudeMessage(result, ledger).some(
+        (event) =>
+          event.type === 'subagent_info' && event.id === BACKGROUND_CALL,
+      ),
+    ).toBe(false);
   });
 
   it('emits through the process it is attached to, once per end, re-reading an end that arrives mid-read', async () => {

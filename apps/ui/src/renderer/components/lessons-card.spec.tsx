@@ -7,7 +7,13 @@ import {
   CHECK_FOOTER,
   LESSON_BROKEN_AGAIN,
   LESSON_CORRECTION,
+  LESSON_KNOWLEDGE_PROCEDURE,
+  LESSON_MEMBER_RULE,
+  LESSON_NO_PROJECT_PLACES,
+  LESSON_PROJECT_RULE,
   LESSON_REFINES,
+  PROJECT_DOCUMENTS,
+  PROJECT_PLACES,
   REFLECTION_FOOTER,
 } from '../__fixtures__/lessons';
 import { formatUsd } from '../chats/agent-activity';
@@ -107,6 +113,7 @@ function outcome(
     rule: LESSON_CORRECTION.rule,
     target: { kind: 'memory', scope: 'project', type: 'feedback' },
     memoryHandle: 'm21',
+    resultRef: null,
     reason: null,
     ...patch,
   };
@@ -421,5 +428,294 @@ describe('LessonsCard — settled', () => {
     });
 
     expect(el.textContent).toContain('Reflection:');
+  });
+});
+
+function optionNamed(label: string): HTMLElement {
+  const found = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes(label));
+  if (!found) {
+    throw new Error(`no option named ${label}`);
+  }
+  return found;
+}
+
+function targetTrigger(el: HTMLElement): HTMLElement {
+  const trigger = el.querySelector<HTMLElement>(
+    '[role="combobox"][aria-label="Save to"]',
+  );
+  if (!trigger) {
+    throw new Error('no target picker');
+  }
+  return trigger;
+}
+
+describe('LessonsCard — the target a waiting lesson goes to', () => {
+  it('names a project-instructions lesson in words, and saves it there', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_PROJECT_RULE],
+      places: PROJECT_PLACES,
+      onSave,
+    });
+
+    expect(el.textContent).toContain('→ Project instructions');
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_PROJECT_RULE.id, {
+      target: { kind: 'project_instructions' },
+    });
+  });
+
+  it('names a member lesson by the member, and saves it to that member', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_MEMBER_RULE],
+      places: PROJECT_PLACES,
+      onSave,
+    });
+
+    expect(el.textContent).toContain('→ Instructions of Reviewer');
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_MEMBER_RULE.id, {
+      target: { kind: 'member_instructions', memberId: 'member-reviewer' },
+    });
+  });
+
+  it('sends the target picked in the picker, not the one proposed', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      places: PROJECT_PLACES,
+      onSave,
+    });
+
+    await press(targetTrigger(el));
+    await press(optionNamed('Project instructions'));
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_CORRECTION.id, {
+      target: { kind: 'project_instructions' },
+    });
+  });
+
+  it('offers no project or member targets for a thread with no project', async () => {
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      places: LESSON_NO_PROJECT_PLACES,
+      onSave: vi.fn(async () => undefined),
+    });
+
+    await press(targetTrigger(el));
+
+    expect(optionNamed('Memory · global')).toBeTruthy();
+    expect(
+      [...document.querySelectorAll('[role="option"]')].some((option) =>
+        option.textContent?.includes('Project instructions'),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads the project documents only once the picker is opened', async () => {
+    const readDocuments = vi.fn(async () => PROJECT_DOCUMENTS);
+    const el = await render({
+      lessons: [LESSON_KNOWLEDGE_PROCEDURE],
+      places: PROJECT_PLACES,
+      readDocuments,
+    });
+
+    expect(readDocuments).not.toHaveBeenCalled();
+
+    await act(async () => {
+      targetTrigger(el).dispatchEvent(
+        new Event('pointerdown', { bubbles: true }),
+      );
+    });
+
+    expect(readDocuments).toHaveBeenCalledWith('proj-1');
+    expect(el.textContent).toContain('→ Knowledge · new document');
+  });
+
+  it('never reads documents for a thread with no project', async () => {
+    const readDocuments = vi.fn(async () => PROJECT_DOCUMENTS);
+    const el = await render({
+      lessons: [LESSON_KNOWLEDGE_PROCEDURE],
+      places: LESSON_NO_PROJECT_PLACES,
+      readDocuments,
+    });
+
+    await act(async () => {
+      targetTrigger(el).dispatchEvent(
+        new Event('pointerdown', { bubbles: true }),
+      );
+    });
+
+    expect(readDocuments).not.toHaveBeenCalled();
+  });
+
+  it('lists a project document in the picker, and saves the lesson to it', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_KNOWLEDGE_PROCEDURE],
+      places: PROJECT_PLACES,
+      readDocuments: vi.fn(async () => PROJECT_DOCUMENTS),
+      onSave,
+    });
+
+    await act(async () => {
+      targetTrigger(el).dispatchEvent(
+        new Event('pointerdown', { bubbles: true }),
+      );
+    });
+    await press(targetTrigger(el));
+    await press(optionNamed('k-release'));
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_KNOWLEDGE_PROCEDURE.id, {
+      target: { kind: 'knowledge', handle: 'k-release' },
+    });
+  });
+
+  it('shows the daemon message in the card when Save is refused', async () => {
+    const el = await render({
+      lessons: [LESSON_MEMBER_RULE],
+      places: PROJECT_PLACES,
+      onSave: vi.fn(async () => {
+        throw new Error('the member is gone from this team');
+      }),
+    });
+
+    await press(buttonNamed(el, 'Save'));
+
+    expect(el.textContent).toContain('the member is gone from this team');
+  });
+});
+
+describe('LessonsCard — a refines or broken-again lesson in memory', () => {
+  it('offers Update rule naming the entry, and calls onUpdateRule', async () => {
+    const onUpdateRule = vi.fn(async () => undefined);
+    const el = await render({ lessons: [LESSON_REFINES], onUpdateRule });
+
+    await press(buttonNamed(el, 'Update m12'));
+
+    expect(onUpdateRule).toHaveBeenCalledWith(LESSON_REFINES.id, {});
+  });
+
+  it('sends the edited title and rule with Update rule', async () => {
+    const onUpdateRule = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      onSave: vi.fn(async () => undefined),
+      onUpdateRule,
+    });
+
+    await press(buttonNamed(el, 'Edit'));
+    typeInto(
+      el.querySelector<HTMLInputElement>('input[aria-label="Lesson title"]')!,
+      'Regenerate the client first',
+    );
+    await press(buttonNamed(el, 'Update m12'));
+
+    expect(onUpdateRule).toHaveBeenCalledWith(
+      LESSON_REFINES.id,
+      expect.objectContaining({ title: 'Regenerate the client first' }),
+    );
+  });
+
+  it('keeps Save as new beside Update rule, so the lesson can be saved apart', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      onSave,
+      onUpdateRule: vi.fn(async () => undefined),
+    });
+
+    await press(buttonNamed(el, 'Save as new'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_REFINES.id, {
+      target: { kind: 'memory', scope: 'project', type: 'feedback' },
+    });
+  });
+
+  it('offers Move up for a broken-again lesson, into the memory index without a project', async () => {
+    const onMoveUp = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_BROKEN_AGAIN],
+      places: LESSON_NO_PROJECT_PLACES,
+      onMoveUp,
+    });
+
+    expect(el.textContent).toContain('Moves the rule into the memory index.');
+    await press(buttonNamed(el, 'Move up'));
+
+    expect(onMoveUp).toHaveBeenCalledWith(LESSON_BROKEN_AGAIN.id);
+  });
+
+  it('says Move up goes into the project instructions when the thread has a project', async () => {
+    const el = await render({
+      lessons: [LESSON_BROKEN_AGAIN],
+      places: PROJECT_PLACES,
+      onMoveUp: vi.fn(async () => undefined),
+    });
+
+    expect(el.textContent).toContain(
+      "Moves the rule into the project's instructions.",
+    );
+  });
+});
+
+describe('LessonsCard — saved outside memory', () => {
+  it('reads a project-instructions save as saved there, with no Undo or Edit', async () => {
+    const el = await render({
+      lessons: [LESSON_PROJECT_RULE],
+      places: PROJECT_PLACES,
+      outcomes: {
+        [LESSON_PROJECT_RULE.id]: outcome(LESSON_PROJECT_RULE.id, {
+          target: { kind: 'project_instructions' },
+          memoryHandle: null,
+        }),
+      },
+      onUndo: vi.fn(async () => undefined),
+      onEdit: vi.fn(async () => undefined),
+    });
+
+    expect(el.textContent).toContain('Saved to project instructions');
+    expect(el.querySelector('button')).toBeNull();
+  });
+
+  it('names the member a member-instructions save went to', async () => {
+    const el = await render({
+      lessons: [LESSON_MEMBER_RULE],
+      places: PROJECT_PLACES,
+      outcomes: {
+        [LESSON_MEMBER_RULE.id]: outcome(LESSON_MEMBER_RULE.id, {
+          target: { kind: 'member_instructions', memberId: 'member-reviewer' },
+          memoryHandle: null,
+        }),
+      },
+    });
+
+    expect(el.textContent).toContain('Saved to Reviewer instructions');
+  });
+
+  it('names the document a knowledge save was appended to', async () => {
+    const el = await render({
+      lessons: [LESSON_KNOWLEDGE_PROCEDURE],
+      places: PROJECT_PLACES,
+      outcomes: {
+        [LESSON_KNOWLEDGE_PROCEDURE.id]: outcome(
+          LESSON_KNOWLEDGE_PROCEDURE.id,
+          {
+            target: { kind: 'knowledge', handle: 'k-release' },
+            resultRef: 'k-release',
+            memoryHandle: null,
+          },
+        ),
+      },
+    });
+
+    expect(el.textContent).toContain('Saved to knowledge · k-release');
   });
 });

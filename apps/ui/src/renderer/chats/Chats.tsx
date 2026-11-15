@@ -4267,7 +4267,6 @@ export function Chats({
       apis.lessons
         .skipLessonSegment({ segmentId: segment.id })
         .catch((err: unknown) => {
-          // The stretch already started: there is nothing left to skip.
           if (daemonErrorStatus(err) === 409) {
             return;
           }

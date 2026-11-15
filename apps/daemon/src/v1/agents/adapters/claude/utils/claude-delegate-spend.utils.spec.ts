@@ -331,6 +331,66 @@ describe('ClaudeDelegateSettler', () => {
     });
   });
 
+  it('reads the transcript again while it lags the stream, then takes it once it has caught up', async () => {
+    const ledger = new ClaudeSessionCostLedger(FLAT);
+    for (const line of backgroundDelegateLines) {
+      mapClaudeMessage(line, ledger);
+    }
+    const lagging: ClaudeDelegateTotals = { ...transcriptTotals, requests: 1 };
+    const reads = [lagging, lagging, transcriptTotals];
+    const waits: number[] = [];
+    const settler = new ClaudeDelegateSettler({
+      tracker: ledger.delegateSpend,
+      launchOfTask: launchOf(ledger),
+      priceNow: () => null,
+      record: () => undefined,
+      readTranscript: () => Promise.resolve(reads.shift() ?? null),
+      wait: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+
+    const events = await settler.settle({
+      sessionId: SESSION,
+      delegateId: BACKGROUND_CALL,
+      agentId: BACKGROUND_AGENT,
+    });
+
+    expect(waits).toHaveLength(2);
+    expect(progressOf(events)[0]?.figures).toMatchObject({
+      requests: 2,
+      outputTokens: 165,
+    });
+  });
+
+  it('never states fewer requests than the stream saw when the transcript never catches up', async () => {
+    const ledger = new ClaudeSessionCostLedger(FLAT);
+    for (const line of backgroundDelegateLines) {
+      mapClaudeMessage(line, ledger);
+    }
+    const settler = new ClaudeDelegateSettler({
+      tracker: ledger.delegateSpend,
+      launchOfTask: launchOf(ledger),
+      priceNow: () => null,
+      record: () => undefined,
+      readTranscript: () =>
+        Promise.resolve({ ...transcriptTotals, requests: 1 }),
+      wait: () => Promise.resolve(),
+    });
+
+    const events = await settler.settle({
+      sessionId: SESSION,
+      delegateId: BACKGROUND_CALL,
+      agentId: BACKGROUND_AGENT,
+    });
+
+    expect(progressOf(events)[0]?.figures).toMatchObject({
+      requests: 2,
+      outputTokens: 20,
+    });
+  });
+
   it('says nothing for a unit it holds no figures for', async () => {
     const ledger = new ClaudeSessionCostLedger(FLAT);
     const events = await settlerFor(ledger, () => Promise.resolve(null)).settle(

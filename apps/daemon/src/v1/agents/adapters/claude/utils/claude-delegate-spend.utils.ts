@@ -44,6 +44,10 @@ interface ClaudeRequestUsage {
   model: string | null;
 }
 
+/** How often, and how far apart, a transcript behind its stream is read again. */
+const TRANSCRIPT_REREADS = 3;
+const TRANSCRIPT_REREAD_MS = 1000;
+
 /** How many delegates the tracker remembers across every live process. */
 const MAX_TRACKED_DELEGATES = 256;
 
@@ -311,6 +315,8 @@ export class ClaudeDelegateSettler {
         sessionId: string,
         agentId: string,
       ) => Promise<ClaudeDelegateTotals | null>;
+      /** How a re-read waits; injected so a spec needs no wall clock. */
+      wait?: (ms: number) => Promise<void>;
     },
   ) {}
 
@@ -328,14 +334,12 @@ export class ClaudeDelegateSettler {
 
   /** The settle itself, exposed so a spec can await it. */
   async settle(end: ClaudeDelegateEnd): Promise<AgentEvent[]> {
-    const read =
-      end.sessionId === null
-        ? null
-        : await this.deps
-            .readTranscript(end.sessionId, end.agentId)
-            .catch(() => null);
+    const streamed = this.deps.tracker.totalsOf(end.sessionId, end.delegateId);
+    const read = await this.readSettled(end, streamed);
     const totals =
-      read ?? this.deps.tracker.totalsOf(end.sessionId, end.delegateId);
+      read !== null && (streamed === null || read.requests >= streamed.requests)
+        ? read
+        : (streamed ?? read);
     if (totals === null) {
       return [];
     }
@@ -358,6 +362,40 @@ export class ClaudeDelegateSettler {
       },
       cumulativeDeclaration(end.delegateId, figures),
     ];
+  }
+
+  /**
+   * The delegate's transcript, read again while it holds fewer requests than
+   * its stream showed: claude announces the end before it has written the
+   * last response to that file (measured: a background delegate's final text
+   * reply, missing from the first read).
+   */
+  private async readSettled(
+    end: ClaudeDelegateEnd,
+    streamed: ClaudeDelegateTotals | null,
+  ): Promise<ClaudeDelegateTotals | null> {
+    if (end.sessionId === null) {
+      return null;
+    }
+    const sessionId = end.sessionId;
+    const read = (): Promise<ClaudeDelegateTotals | null> =>
+      this.deps.readTranscript(sessionId, end.agentId).catch(() => null);
+    const wait =
+      this.deps.wait ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    let totals = await read();
+    for (
+      let attempt = 0;
+      attempt < TRANSCRIPT_REREADS &&
+      totals !== null &&
+      streamed !== null &&
+      totals.requests < streamed.requests;
+      attempt += 1
+    ) {
+      await wait(TRANSCRIPT_REREAD_MS);
+      totals = await read();
+    }
+    return totals;
   }
 
   private schedule(end: ClaudeDelegateEnd): void {

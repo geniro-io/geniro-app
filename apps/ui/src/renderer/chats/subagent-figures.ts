@@ -1,6 +1,6 @@
 import { useContext } from 'react';
 
-import { type LiveDelegateFigures, LiveTextContext } from './live-text';
+import { type LiveDelegateFigures, LiveDelegatesContext } from './live-text';
 import {
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -105,27 +105,11 @@ export function subagentFiguresView(
 }
 
 /**
- * One delegate's live figures, from whichever owner of the run launched it.
- *
- * A delegate is launched under its node's own turn or under one of its call
- * threads, so every owner is scanned; the delegate's id is unique across them.
+ * One delegate's live figures, from whichever owner of the run launched it — the
+ * owners are folded into {@link LiveDelegatesContext} once, so this reads a map.
  */
 export function useSubagentLiveFigures(
   delegateId: string,
 ): LiveDelegateFigures | null {
-  const liveText = useContext(LiveTextContext);
-  if (liveText === null) {
-    return null;
-  }
-  for (const state of liveText.values()) {
-    const delegates = state.delegates;
-    if (
-      delegates !== null &&
-      delegates !== undefined &&
-      Object.hasOwn(delegates, delegateId)
-    ) {
-      return delegates[delegateId] ?? null;
-    }
-  }
-  return null;
+  return useContext(LiveDelegatesContext)?.get(delegateId) ?? null;
 }

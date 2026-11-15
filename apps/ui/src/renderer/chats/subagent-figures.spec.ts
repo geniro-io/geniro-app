@@ -1,12 +1,13 @@
-import { createElement } from 'react';
+import { createElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import {
   type LiveDelegateFigures,
+  LiveDelegatesContext,
   type LiveState,
-  LiveTextContext,
   partialOwnerKey,
+  useLiveDelegates,
 } from './live-text';
 import {
   subagentFiguresView,
@@ -264,6 +265,21 @@ describe('subagentFiguresView', () => {
 });
 
 describe('useSubagentLiveFigures', () => {
+  function PlaneProvider({
+    plane,
+    children,
+  }: {
+    plane: ReadonlyMap<string, LiveState> | null;
+    children?: ReactNode;
+  }): ReactElement {
+    const delegates = useLiveDelegates(plane);
+    return createElement(
+      LiveDelegatesContext.Provider,
+      { value: delegates },
+      children,
+    );
+  }
+
   function Probe({
     id,
     into,
@@ -282,8 +298,8 @@ describe('useSubagentLiveFigures', () => {
     const seen: (LiveDelegateFigures | null)[] = [];
     renderToStaticMarkup(
       createElement(
-        LiveTextContext.Provider,
-        { value: plane },
+        PlaneProvider,
+        { plane },
         createElement(Probe, { id, into: (found) => seen.push(found) }),
       ),
     );

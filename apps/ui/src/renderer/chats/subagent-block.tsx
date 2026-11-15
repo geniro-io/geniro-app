@@ -14,7 +14,6 @@ import {
   blockStatusLabel,
   BlockTitle,
 } from './block-shell';
-import type { CallConversationState } from './call-conversation';
 import { formatElapsed, WorkingRow } from './live-row';
 import { OlderMessagesControl } from './older-messages-control';
 import { untrackedExplanation, untrackedSummary } from './run-status';
@@ -531,31 +530,17 @@ export function SubagentThread({
 }
 
 /**
- * One background sub-agent as a collapsed aside in the conversation.
- *
- * Drawn on the same {@link BlockShell} as the agent-call block, and closed by
- * default unless it holds a card {@link OPENS_BLOCK} names — which is the
- * difference that matters. A delegate's run of work is
- * not part of the conversation the reader is having; it is a thing that
- * happened underneath it. Open, it shows exactly the thread the detail dialog
- * shows, which is exactly the thread the main flow renders — one
- * {@link TranscriptEntryView} pass, so a delegate's messages, tool groups and
- * reasoning look the way they look anywhere else.
+ * The sentence naming how many of the delegate's tool calls the card holds, or
+ * null once it holds all the daemon counts. Held rows include the calls a card
+ * hides, so a finished delegate with a report card never reads as truncated.
  */
-/** The sentence saying which of the delegate's tool calls the card does not hold, or null once it holds them all. */
-function windowNoteOf(
-  block: SubagentBlockEntry,
-  loaded: number,
-  pages: CallConversationState | null,
-): string | null {
+function windowNoteOf(block: SubagentBlockEntry): string | null {
   const daemon = block.durableToolCalls;
-  if (daemon === undefined || daemon <= loaded) {
+  const held = block.heldToolCalls;
+  if (daemon === undefined || held === undefined || daemon <= held) {
     return null;
   }
-  if (pages !== null && !pages.loading && !pages.failed && !pages.hasOlder) {
-    return null;
-  }
-  return `Showing the last ${loaded} of ${daemon} tool calls`;
+  return `Showing the last ${held} of ${daemon} tool calls`;
 }
 
 /**
@@ -620,6 +605,18 @@ function DelegateStepsPager({
   );
 }
 
+/**
+ * One background sub-agent as a collapsed aside in the conversation.
+ *
+ * Drawn on the same {@link BlockShell} as the agent-call block, and closed by
+ * default unless it holds a card {@link OPENS_BLOCK} names — which is the
+ * difference that matters. A delegate's run of work is
+ * not part of the conversation the reader is having; it is a thing that
+ * happened underneath it. Open, it shows exactly the thread the detail dialog
+ * shows, which is exactly the thread the main flow renders — one
+ * {@link TranscriptEntryView} pass, so a delegate's messages, tool groups and
+ * reasoning look the way they look anywhere else.
+ */
 export const SubagentBlock = memo(function SubagentBlock({
   block,
   nodes,
@@ -630,7 +627,6 @@ export const SubagentBlock = memo(function SubagentBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
-  const pages = useContext(DelegateConversationContext);
   const view = subagentFiguresView(block, useSubagentLiveFigures(block.id));
   const title = subagentTitle(block);
   const toolCount = block.durableToolCalls ?? countTools(block.entries);
@@ -640,11 +636,7 @@ export const SubagentBlock = memo(function SubagentBlock({
   const status = shellStatusOf(block);
   const untracked = status === 'untracked';
   const running = status === 'running';
-  const windowNote = windowNoteOf(
-    block,
-    countTools(block.entries),
-    pages?.stateOf(block.id) ?? null,
-  );
+  const windowNote = windowNoteOf(block);
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell

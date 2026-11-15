@@ -84,6 +84,23 @@ export function foldDurableTranscript({
 }
 
 /**
+ * The anchors that place a row but are never drawn as one of their own — see
+ * `anchorOnlyIds`. A sub-agent's own rows are the exception: they build its block,
+ * which draws them, so a page's earlier steps and messages stay in it.
+ */
+function structureOnlyAnchorIds(
+  items: readonly ChatItem[],
+  anchors: readonly ChatItem[],
+): ReadonlySet<string> {
+  const delegateRows = new Set(
+    anchors.filter((row) => subagentIdOf(row) !== null).map((row) => row.id),
+  );
+  return new Set(
+    [...anchorOnlyIds(items, anchors)].filter((id) => !delegateRows.has(id)),
+  );
+}
+
+/**
  * {@link foldDurableTranscript} over a loaded window and its anchors, memoized,
  * with the two inputs every other structural fold reads beside it: the window
  * with its anchors laid in, and which of those rows are anchors only.
@@ -119,7 +136,7 @@ export function useDurableTranscript({
     [items, anchors],
   );
   const anchorIds = useMemo(
-    () => anchorOnlyIds(items, anchors),
+    () => structureOnlyAnchorIds(items, anchors),
     [items, anchors],
   );
   // The rows alone, so a run-state read — every structural row and status
@@ -260,6 +277,8 @@ interface DaemonReading {
   } | null;
   /** Its tool calls over the whole run, plus its rows written since the read. */
   toolCalls: number;
+  /** Its own tool-call rows the client holds, at any seq — the calls a card hides included. */
+  heldToolCalls: number;
   /** The call it was launched in; null for its member's own conversation. */
   callId: string | null;
   /** The read's own word, covered or not. */
@@ -305,12 +324,18 @@ export function daemonSubagentReadings(
   const newest = new Map<string, number>();
   const toolsSinceRead = new Map<string, number>();
   const messagesSinceRead = new Map<string, number>();
+  const heldTools = new Map<string, Set<string>>();
   for (const row of rows) {
     const parent = subagentIdOf(row);
     for (const id of [payloadString(row.payload, 'id'), parent]) {
       if (id !== null) {
         newest.set(id, Math.max(newest.get(id) ?? -1, row.seq));
       }
+    }
+    if (parent !== null && row.kind === 'tool_call') {
+      const held = heldTools.get(parent) ?? new Set<string>();
+      held.add(row.id);
+      heldTools.set(parent, held);
     }
     if (
       parent !== null &&
@@ -341,6 +366,7 @@ export function daemonSubagentReadings(
           }
         : null,
       toolCalls: delegate.toolCalls + (toolsSinceRead.get(delegate.id) ?? 0),
+      heldToolCalls: heldTools.get(delegate.id)?.size ?? 0,
       callId: delegate.callId,
       running: delegate.status === 'running',
       requests: delegate.requests,
@@ -384,6 +410,7 @@ function subagentReadingPatch(
   const { lifecycle } = reading;
   return {
     durableToolCalls: reading.toolCalls,
+    heldToolCalls: reading.heldToolCalls,
     messages: reading.messages,
     ...(reading.cumulative
       ? {

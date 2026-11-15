@@ -519,6 +519,11 @@ export interface SubagentBlockEntry {
    */
   durableToolCalls?: number;
   /**
+   * Its own tool-call rows the client holds — the window's and any a card loaded,
+   * including the calls a card hides. Set with the daemon's read; absent until then.
+   */
+  heldToolCalls?: number;
+  /**
    * That result was an error — `isError` on the `tool_result` payload, which
    * `apps/daemon/src/v1/agents/utils/event-to-item.ts` persists verbatim.
    */

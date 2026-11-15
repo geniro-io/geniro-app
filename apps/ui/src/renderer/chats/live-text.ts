@@ -1,4 +1,4 @@
-import { createContext } from 'react';
+import { createContext, useMemo } from 'react';
 
 import { formatTokens } from './agent-activity';
 
@@ -164,14 +164,49 @@ export interface LiveState {
 }
 
 /**
- * The live plane of the run on screen: every owner's state, as
- * {@link applyLiveText} keeps it. Null outside a provider, where a block reads
- * no live figures and falls back to its own rows.
+ * Every delegate's live figures, by delegate id. Null outside a provider, where
+ * a card falls back to its own rows.
+ *
+ * Derived from the live plane by {@link useLiveDelegates} rather than handed the
+ * plane itself: a card that read the plane would re-render on every streamed
+ * word of every agent.
  */
-export const LiveTextContext = createContext<ReadonlyMap<
+export const LiveDelegatesContext = createContext<ReadonlyMap<
   string,
-  LiveState
+  LiveDelegateFigures
 > | null>(null);
+
+function liveDelegatesKeyOf(
+  plane: ReadonlyMap<string, LiveState> | null,
+): string | null {
+  if (plane === null) {
+    return null;
+  }
+  const entries: [string, LiveDelegateFigures][] = [];
+  for (const state of plane.values()) {
+    entries.push(...Object.entries(state.delegates ?? {}));
+  }
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(entries);
+}
+
+/**
+ * The delegates' live figures as one map object, kept for as long as no
+ * delegate's figures change. A delta to a message's words leaves the same object
+ * in place, so nothing reading the map renders again for it.
+ */
+export function useLiveDelegates(
+  plane: ReadonlyMap<string, LiveState> | null,
+): ReadonlyMap<string, LiveDelegateFigures> | null {
+  const key = liveDelegatesKeyOf(plane);
+  return useMemo(
+    () =>
+      key === null
+        ? null
+        : new Map(JSON.parse(key) as [string, LiveDelegateFigures][]),
+    [key],
+  );
+}
 
 /**
  * Read an `agent_delta` payload, or null when it is not one. Defensive because

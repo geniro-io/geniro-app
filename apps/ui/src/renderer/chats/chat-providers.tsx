@@ -22,7 +22,11 @@ import {
   type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
 import { RunActivityContext, RunSettledContext } from './live-row';
-import { type LiveState, LiveTextContext } from './live-text';
+import {
+  LiveDelegatesContext,
+  type LiveState,
+  useLiveDelegates,
+} from './live-text';
 import {
   type MemberVerdicts,
   MemberVerdictsContext,
@@ -182,8 +186,8 @@ export function ChatProviders({
    */
   delegateConversations?: DelegateConversationLoader | null;
   /**
-   * The live plane of the run on screen — see `LiveTextContext`. A sub-agent
-   * card reads its delegate's live figures from it, wherever the card is drawn.
+   * The live plane of the run on screen. Its delegates' figures are mounted as
+   * {@link LiveDelegatesContext}, which is what a sub-agent card reads.
    */
   liveText?: ReadonlyMap<string, LiveState> | null;
   /**
@@ -218,11 +222,12 @@ export function ChatProviders({
   loadKnowledge?: KnowledgeLoader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const liveDelegates = useLiveDelegates(liveText);
   return (
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          <LiveTextContext.Provider value={liveText}>
+          <LiveDelegatesContext.Provider value={liveDelegates}>
             <DelegateConversationContext.Provider value={delegateConversations}>
               <CallConversationContext.Provider value={callConversations}>
                 <JumpMarkContext.Provider value={jumpMark}>
@@ -281,7 +286,7 @@ export function ChatProviders({
                 </JumpMarkContext.Provider>
               </CallConversationContext.Provider>
             </DelegateConversationContext.Provider>
-          </LiveTextContext.Provider>
+          </LiveDelegatesContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

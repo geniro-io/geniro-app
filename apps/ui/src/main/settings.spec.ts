@@ -782,51 +782,112 @@ describe('lessons settings', () => {
     writeRaw({
       lessons: {
         mode: 'off',
+        reflector: {
+          agent: 'codex',
+          configDir: 'relative/profile',
+          model: 'gpt-6-luna',
+          effort: 'low',
+          contextWindow: null,
+          modelParameters: { speed: 'fast' },
+        },
+        checker: { agent: 'not-a-cli', configDir: null },
+      },
+    });
+
+    expect(readSettings().lessons).toEqual({
+      mode: 'off',
+      reflector: {
+        agent: 'codex',
+        configDir: null,
+        model: 'gpt-6-luna',
+        effort: 'low',
+        contextWindow: null,
+        modelParameters: { speed: 'fast' },
+      },
+      checker: null,
+    });
+  });
+
+  it('a bad mode reads as automatic reflections', () => {
+    writeRaw({
+      lessons: { mode: 'sometimes', reflector: null, checker: null },
+    });
+
+    expect(readSettings().lessons).toEqual({
+      mode: 'auto',
+      reflector: null,
+      checker: null,
+    });
+  });
+
+  it('a dev-stand file in the old shape reads offer as automatic and its agent as the reflector', () => {
+    writeRaw({
+      lessons: {
+        mode: 'offer',
         agentKind: 'codex',
-        model: 42,
+        model: 'gpt-6-luna',
         effort: 'low',
         quietWindowHours: 6,
       },
     });
 
     expect(readSettings().lessons).toEqual({
-      mode: 'off',
-      agentKind: 'codex',
-      model: null,
-      effort: 'low',
-      quietWindowHours: 6,
+      mode: 'auto',
+      reflector: {
+        agent: 'codex',
+        configDir: null,
+        model: 'gpt-6-luna',
+        effort: 'low',
+        contextWindow: null,
+        modelParameters: {},
+      },
+      checker: null,
     });
   });
 
-  it('a quiet window outside 1, 3 and 6 hours falls back to 3 and keeps the other fields', () => {
+  it('a dev-stand file with no agent reads the thread’s own CLI, and a model with no agent is dropped', () => {
     writeRaw({
       lessons: {
         mode: 'off',
         agentKind: null,
-        model: null,
+        model: 'opus',
         effort: null,
-        quietWindowHours: 2,
+        quietWindowHours: 3,
       },
     });
 
     expect(readSettings().lessons).toEqual({
       mode: 'off',
-      agentKind: null,
-      model: null,
-      effort: null,
-      quietWindowHours: 3,
+      reflector: null,
+      checker: null,
     });
   });
 
-  it('a file from before the setting offers reflections on the thread’s own CLI', () => {
+  it('a dev-stand agent field that is not text leaves the reflector on the thread’s own CLI', () => {
+    writeRaw({
+      lessons: {
+        mode: 'offer',
+        agentKind: 42,
+        model: 'opus',
+        effort: 'high',
+        quietWindowHours: 3,
+      },
+    });
+
+    expect(readSettings().lessons).toEqual({
+      mode: 'auto',
+      reflector: null,
+      checker: null,
+    });
+  });
+
+  it('a file from before the setting reflects automatically on the thread’s own CLI', () => {
     writeRaw({});
 
     expect(readSettings().lessons).toEqual({
-      mode: 'offer',
-      agentKind: null,
-      model: null,
-      effort: null,
-      quietWindowHours: 3,
+      mode: 'auto',
+      reflector: null,
+      checker: null,
     });
   });
 });

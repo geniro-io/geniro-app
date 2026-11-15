@@ -397,7 +397,7 @@ describe('TeamMemoryPanel — the team’s lessons setting', () => {
 
   it('hands On to the team’s save as the team’s own value', async () => {
     const onChange = vi.fn();
-    renderWith({ value: undefined, appMode: 'offer', onChange });
+    renderWith({ value: undefined, appMode: 'auto', onChange });
 
     await press(lessonsOption('On'));
 
@@ -407,7 +407,7 @@ describe('TeamMemoryPanel — the team’s lessons setting', () => {
 
   it('hands undefined to the team’s save when Inherit is picked, so the team inherits again', async () => {
     const onChange = vi.fn();
-    renderWith({ value: 'off', appMode: 'offer', onChange });
+    renderWith({ value: 'off', appMode: 'auto', onChange });
 
     await press(lessonsOption('Inherit'));
 
@@ -415,7 +415,7 @@ describe('TeamMemoryPanel — the team’s lessons setting', () => {
   });
 
   it('presses the team’s own value, and says what inherit resolves to from the project and the app', () => {
-    renderWith({ value: 'off', appMode: 'offer', onChange: () => undefined });
+    renderWith({ value: 'off', appMode: 'auto', onChange: () => undefined });
 
     expect(lessonsOption('Off').getAttribute('aria-pressed')).toBe('true');
     expect(

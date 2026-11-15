@@ -13,7 +13,7 @@ function inheritedLabel(appMode: LessonsMode | null): string {
   if (appMode === null) {
     return 'Inherit (app setting)';
   }
-  return appMode === 'offer'
+  return appMode === 'auto'
     ? 'Inherit (On — app setting)'
     : 'Inherit (Off — app setting)';
 }

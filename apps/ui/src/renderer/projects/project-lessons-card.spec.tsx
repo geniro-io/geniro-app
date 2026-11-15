@@ -59,14 +59,14 @@ afterEach(() => {
 
 describe('ProjectLessonsCard', () => {
   it('presses Inherit when the project has no choice of its own', () => {
-    render(null, 'offer', () => undefined);
+    render(null, 'auto', () => undefined);
 
     expect(option('Inherit').getAttribute('aria-pressed')).toBe('true');
     expect(option('On').getAttribute('aria-pressed')).toBe('false');
   });
 
   it('presses the project’s own value when it has one', () => {
-    render('off', 'offer', () => undefined);
+    render('off', 'auto', () => undefined);
 
     expect(option('Off').getAttribute('aria-pressed')).toBe('true');
     expect(option('Inherit').getAttribute('aria-pressed')).toBe('false');
@@ -74,7 +74,7 @@ describe('ProjectLessonsCard', () => {
 
   it('saves On as the project’s lessons value', () => {
     const onUpdate = vi.fn();
-    render(null, 'offer', onUpdate);
+    render(null, 'auto', onUpdate);
 
     act(() => option('On').click());
 
@@ -84,7 +84,7 @@ describe('ProjectLessonsCard', () => {
 
   it('saves Off as the project’s lessons value', () => {
     const onUpdate = vi.fn();
-    render('on', 'offer', onUpdate);
+    render('on', 'auto', onUpdate);
 
     act(() => option('Off').click());
 
@@ -93,7 +93,7 @@ describe('ProjectLessonsCard', () => {
 
   it('saves Inherit as null, so the project follows the app again', () => {
     const onUpdate = vi.fn();
-    render('on', 'offer', onUpdate);
+    render('on', 'auto', onUpdate);
 
     act(() => option('Inherit').click());
 
@@ -101,7 +101,7 @@ describe('ProjectLessonsCard', () => {
   });
 
   it('says what inherit resolves to from the app setting while it is On', () => {
-    render(null, 'offer', () => undefined);
+    render(null, 'auto', () => undefined);
 
     expect(container.textContent).toContain('Inherit (On — app setting)');
   });

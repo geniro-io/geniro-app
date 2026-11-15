@@ -56,11 +56,9 @@ const mocks = vi.hoisted(() => {
     },
     memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: false },
     lessons: {
-      mode: 'offer',
-      agentKind: null,
-      model: null,
-      effort: null,
-      quietWindowHours: 3,
+      mode: 'auto',
+      reflector: null,
+      checker: null,
     },
     knowledge: { enabled: true, agentWrites: 'review' },
     resourceAlerts: {

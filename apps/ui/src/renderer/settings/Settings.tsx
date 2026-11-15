@@ -1247,6 +1247,7 @@ export function Settings({
               capabilitiesLoading={capabilitiesLoading}
               lessonsApi={apis?.lessons ?? null}
               lessonsClient={client}
+              cliDetections={clis}
             />
           ) : section === 'knowledge' ? (
             <Knowledge />

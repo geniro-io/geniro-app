@@ -178,7 +178,11 @@ export function ArtifactFrame({
         }
         return;
       }
+      const userIsInFrame = document.activeElement === frame.current;
       if (message.type === 'picture') {
+        if (!userIsInFrame) {
+          return;
+        }
         const shown = pictureToShow(message.src, message.alt);
         if (shown !== null) {
           setPicture(shown);
@@ -186,7 +190,9 @@ export function ArtifactFrame({
         return;
       }
       if (message.type === 'escape') {
-        closeTopEscapeLayer();
+        if (userIsInFrame) {
+          closeTopEscapeLayer();
+        }
         return;
       }
       if (message.type === 'height' && typeof message.height === 'number') {

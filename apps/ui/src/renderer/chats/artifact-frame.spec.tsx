@@ -320,6 +320,12 @@ async function post(
   });
 }
 
+function focusFrame(): void {
+  act(() => {
+    frame()?.focus();
+  });
+}
+
 const viewer = (): HTMLElement | null =>
   document.body.querySelector<HTMLElement>('[role="dialog"]');
 
@@ -328,6 +334,7 @@ describe('ArtifactFrame — a picture the page asks the host to show', () => {
 
   it('opens the picture in the image viewer, named by its alt text', async () => {
     await render();
+    focusFrame();
     await post({ type: 'picture', src: PICTURE, alt: 'Before' });
     expect(viewer()?.querySelector('img')?.getAttribute('src')).toBe(PICTURE);
     expect(viewer()?.textContent).toContain('Before');
@@ -335,12 +342,14 @@ describe('ArtifactFrame — a picture the page asks the host to show', () => {
 
   it('names the page when the picture has no alt text', async () => {
     await render();
+    focusFrame();
     await post({ type: 'picture', src: PICTURE });
     expect(viewer()?.textContent).toContain('Migration plan');
   });
 
   it('closes the viewer on Escape, which this document sees once the viewer has focus', async () => {
     await render();
+    focusFrame();
     await post({ type: 'picture', src: PICTURE, alt: 'Before' });
     await act(async () => {
       document.dispatchEvent(
@@ -352,6 +361,7 @@ describe('ArtifactFrame — a picture the page asks the host to show', () => {
 
   it('shows nothing for a source that is not one of the page’s own pictures', async () => {
     await render();
+    focusFrame();
     await post({ type: 'picture', src: 'https://example.com/a.png' });
     await post({ type: 'picture', src: 'data:text/html;base64,PHA+' });
     await post({ type: 'picture', src: 'data:image/svg+xml;base64,PHN2Zz4=' });
@@ -361,7 +371,14 @@ describe('ArtifactFrame — a picture the page asks the host to show', () => {
 
   it('ignores a picture posted from anything that is not its own frame', async () => {
     await render();
+    focusFrame();
     await post({ type: 'picture', src: PICTURE }, window);
+    expect(viewer()).toBeNull();
+  });
+
+  it('ignores a picture its own frame posts while the user is not in that frame', async () => {
+    await render();
+    await post({ type: 'picture', src: PICTURE, alt: 'Before' });
     expect(viewer()).toBeNull();
   });
 });
@@ -381,13 +398,21 @@ describe('ArtifactFrame — an Escape the page hands over', () => {
 
   it('closes the overlay on top, as an Escape pressed in this document would', async () => {
     await render();
+    focusFrame();
     await post({ type: 'escape' });
     expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('ignores an Escape posted from anything that is not its own frame', async () => {
     await render();
+    focusFrame();
     await post({ type: 'escape' }, window);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('ignores an Escape its own frame posts while the user is not in that frame', async () => {
+    await render();
+    await post({ type: 'escape' });
     expect(close).not.toHaveBeenCalled();
   });
 });

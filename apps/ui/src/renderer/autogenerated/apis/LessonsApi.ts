@@ -15,7 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
-  AgentKind,
+  EditLessonDto,
   LessonProposal,
   LessonProposalListDto,
   LessonProposalStatus,
@@ -24,8 +24,8 @@ import type {
   LessonSegmentListDto,
   LessonsConfigAckDto,
   LessonsConfigDto,
-  LessonsReflectAllDto,
   LessonsReflectStartedDto,
+  LessonsSpendDto,
   ReflectLessonsDto,
   RejectLessonDto,
   SaveLessonDto,
@@ -33,15 +33,17 @@ import type {
   ThreadLessonsStateDto,
 } from '../models/index';
 
-export interface LessonsApiDismissLessonSegmentRequest {
-    segmentId: string;
+export interface LessonsApiApproveLessonRequest {
+    proposalId: string;
+}
+
+export interface LessonsApiEditLessonRequest {
+    proposalId: string;
+    editLessonDto: EditLessonDto;
 }
 
 export interface LessonsApiEstimateLessonsRequest {
     runId: string;
-    segmentId?: string;
-    agentKind?: AgentKind;
-    model?: string;
 }
 
 export interface LessonsApiGetLessonReflectionRequest {
@@ -81,6 +83,14 @@ export interface LessonsApiSetLessonsConfigRequest {
     lessonsConfigDto: LessonsConfigDto;
 }
 
+export interface LessonsApiSkipLessonSegmentRequest {
+    segmentId: string;
+}
+
+export interface LessonsApiUndoLessonRequest {
+    proposalId: string;
+}
+
 /**
  * 
  */
@@ -89,11 +99,11 @@ export class LessonsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async dismissLessonSegmentRaw(requestParameters: LessonsApiDismissLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonSegment>> {
-        if (requestParameters['segmentId'] == null) {
+    async approveLessonRaw(requestParameters: LessonsApiApproveLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonProposal>> {
+        if (requestParameters['proposalId'] == null) {
             throw new runtime.RequiredError(
-                'segmentId',
-                'Required parameter "segmentId" was null or undefined when calling dismissLessonSegment().'
+                'proposalId',
+                'Required parameter "proposalId" was null or undefined when calling approveLesson().'
             );
         }
 
@@ -110,8 +120,8 @@ export class LessonsApi extends runtime.BaseAPI {
             }
         }
 
-        let urlPath = `/v1/lessons/segments/{segmentId}/dismiss`;
-        urlPath = urlPath.replace(`{${"segmentId"}}`, encodeURIComponent(String(requestParameters['segmentId'])));
+        let urlPath = `/v1/lessons/proposals/{proposalId}/approve`;
+        urlPath = urlPath.replace(`{${"proposalId"}}`, encodeURIComponent(String(requestParameters['proposalId'])));
 
         const response = await this.request({
             path: urlPath,
@@ -126,8 +136,63 @@ export class LessonsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async dismissLessonSegment(requestParameters: LessonsApiDismissLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegment> {
-        const response = await this.dismissLessonSegmentRaw(requestParameters, initOverrides);
+    async approveLesson(requestParameters: LessonsApiApproveLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonProposal> {
+        const response = await this.approveLessonRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async editLessonRaw(requestParameters: LessonsApiEditLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonProposal>> {
+        if (requestParameters['proposalId'] == null) {
+            throw new runtime.RequiredError(
+                'proposalId',
+                'Required parameter "proposalId" was null or undefined when calling editLesson().'
+            );
+        }
+
+        if (requestParameters['editLessonDto'] == null) {
+            throw new runtime.RequiredError(
+                'editLessonDto',
+                'Required parameter "editLessonDto" was null or undefined when calling editLesson().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/proposals/{proposalId}/edit`;
+        urlPath = urlPath.replace(`{${"proposalId"}}`, encodeURIComponent(String(requestParameters['proposalId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['editLessonDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async editLesson(requestParameters: LessonsApiEditLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonProposal> {
+        const response = await this.editLessonRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -146,18 +211,6 @@ export class LessonsApi extends runtime.BaseAPI {
 
         if (requestParameters['runId'] != null) {
             queryParameters['runId'] = requestParameters['runId'];
-        }
-
-        if (requestParameters['segmentId'] != null) {
-            queryParameters['segmentId'] = requestParameters['segmentId'];
-        }
-
-        if (requestParameters['agentKind'] != null) {
-            queryParameters['agentKind'] = requestParameters['agentKind'];
-        }
-
-        if (requestParameters['model'] != null) {
-            queryParameters['model'] = requestParameters['model'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -233,6 +286,43 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async getLessonReflection(requestParameters: LessonsApiGetLessonReflectionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonReflectionFactsDto> {
         const response = await this.getLessonReflectionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getLessonsSpendRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonsSpendDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/spend`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getLessonsSpend(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonsSpendDto> {
+        const response = await this.getLessonsSpendRaw(initOverrides);
         return await response.value();
     }
 
@@ -368,43 +458,6 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async listLessonSegments(requestParameters: LessonsApiListLessonSegmentsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegmentListDto> {
         const response = await this.listLessonSegmentsRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async reflectAllLessonSegmentsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonsReflectAllDto>> {
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/lessons/segments/reflect-all`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'POST',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async reflectAllLessonSegments(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonsReflectAllDto> {
-        const response = await this.reflectAllLessonSegmentsRaw(initOverrides);
         return await response.value();
     }
 
@@ -617,6 +670,96 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async setLessonsConfig(requestParameters: LessonsApiSetLessonsConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonsConfigAckDto> {
         const response = await this.setLessonsConfigRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async skipLessonSegmentRaw(requestParameters: LessonsApiSkipLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonSegment>> {
+        if (requestParameters['segmentId'] == null) {
+            throw new runtime.RequiredError(
+                'segmentId',
+                'Required parameter "segmentId" was null or undefined when calling skipLessonSegment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/segments/{segmentId}/skip`;
+        urlPath = urlPath.replace(`{${"segmentId"}}`, encodeURIComponent(String(requestParameters['segmentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async skipLessonSegment(requestParameters: LessonsApiSkipLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegment> {
+        const response = await this.skipLessonSegmentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async undoLessonRaw(requestParameters: LessonsApiUndoLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonProposal>> {
+        if (requestParameters['proposalId'] == null) {
+            throw new runtime.RequiredError(
+                'proposalId',
+                'Required parameter "proposalId" was null or undefined when calling undoLesson().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/proposals/{proposalId}/undo`;
+        urlPath = urlPath.replace(`{${"proposalId"}}`, encodeURIComponent(String(requestParameters['proposalId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async undoLesson(requestParameters: LessonsApiUndoLessonRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonProposal> {
+        const response = await this.undoLessonRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

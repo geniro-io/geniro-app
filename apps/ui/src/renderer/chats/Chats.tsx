@@ -7868,6 +7868,7 @@ export function Chats({
                 model: member.model ?? null,
                 configDir: member.configDir ?? null,
               })),
+              configuredModel: node.model ?? null,
             }
           : {}),
         ...ownPoolOf(nodeReadings.get(node.id)),

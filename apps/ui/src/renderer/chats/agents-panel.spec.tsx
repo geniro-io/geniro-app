@@ -412,6 +412,8 @@ describe('AgentsPanel', () => {
         agents={[
           {
             ...agents[1]!,
+            model: 'gpt-6.1-sol',
+            configuredModel: 'haiku',
             pool: [{ agent: 'codex', model: 'gpt-6.1-sol', configDir: null }],
             ownPool: { member: 2, pinned: true, next: null },
           },
@@ -438,8 +440,9 @@ describe('AgentsPanel', () => {
     const options = [
       ...document.querySelectorAll<HTMLElement>('[role="option"]'),
     ];
+    // Slot 1 names its own configured model, not the one the last turn ran on.
     expect(options.map((option) => option.textContent)).toEqual([
-      expect.stringMatching(/^Slot 1 of 2 · /),
+      expect.stringMatching(/^Slot 1 of 2 · .+ · haiku$/),
       expect.stringMatching(/^Slot 2 of 2 · .+ · gpt-6\.1-sol$/),
     ]);
     await act(async () => {

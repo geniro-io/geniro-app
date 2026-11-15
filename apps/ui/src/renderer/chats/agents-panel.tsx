@@ -2851,7 +2851,11 @@ export function AgentsPanel({
                     )}
                     {agent.ownPool !== undefined && members.length > 1 ? (
                       <PoolSlotControl
-                        members={members}
+                        members={members.map((member, index) =>
+                          index === 0 && agent.configuredModel !== undefined
+                            ? { ...member, model: agent.configuredModel }
+                            : member,
+                        )}
                         ownPool={agent.ownPool}
                         nameOf={(kind) => agentShortName(identities, kind)}
                         onSelect={

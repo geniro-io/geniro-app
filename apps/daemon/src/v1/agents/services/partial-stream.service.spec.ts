@@ -152,6 +152,38 @@ describe('PartialStreamService — delegate figures', () => {
     expect(delegateStore.of(RUN)).toEqual({ 'call-1': figures });
   });
 
+  it('takes an ENDED delegate off the live plane, leaving the running ones', () => {
+    const figures = figuresWith();
+    service.delegate(RUN, OWNER, null, {
+      delegateId: 'call-1',
+      figures,
+      final: false,
+    });
+    service.delegate(RUN, OWNER, null, {
+      delegateId: 'call-2',
+      figures,
+      final: false,
+    });
+
+    service.delegate(RUN, OWNER, null, {
+      delegateId: 'call-1',
+      figures,
+      final: true,
+    });
+
+    expect(published.at(-1)?.delegates).toEqual({ 'call-2': figures });
+    expect(delegateStore.of(RUN)).toEqual({
+      'call-1': figures,
+      'call-2': figures,
+    });
+    service.delegate(RUN, OWNER, null, {
+      delegateId: 'call-2',
+      figures,
+      final: true,
+    });
+    expect(published.at(-1)?.delegates).toBeUndefined();
+  });
+
   it('an unchanged, non-final reading does not reach the store again', () => {
     const write = vi.spyOn(delegateStore, 'set');
     const figures = figuresWith();

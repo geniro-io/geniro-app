@@ -537,10 +537,17 @@ export class PartialStreamService {
     try {
       const state = this.stateOf(runId, ownerKey);
       const held = state.delegates.get(event.delegateId);
-      if (held !== undefined && sameFigures(held, event.figures)) {
-        if (event.final) {
-          this.delegateSpend.set(runId, event.delegateId, event.figures, true);
+      if (event.final) {
+        // An ended delegate leaves the live plane: its closing `subagent_info`
+        // and the run row carry it from here, and an owner kept on the plane
+        // only for finished delegates would read as still at work.
+        this.delegateSpend.set(runId, event.delegateId, event.figures, true);
+        if (state.delegates.delete(event.delegateId)) {
+          this.publish(this.eventOf(runId, ownerKey, memberId, state));
         }
+        return;
+      }
+      if (held !== undefined && sameFigures(held, event.figures)) {
         return;
       }
       state.delegates.set(event.delegateId, event.figures);
@@ -795,10 +802,9 @@ export class PartialStreamService {
   }
 
   /**
-   * Keep an owner's delegates when its turn ends. They are the run's history —
-   * the store keeps them too — and every event for the owner replaces the whole
-   * record it carries, so dropping them with the turn would blank the older
-   * delegates on the owner's next event.
+   * Keep an owner's still-running delegates when its turn ends: a background
+   * delegate outlives the turn that launched it, and every event for the owner
+   * replaces the whole record it carries.
    */
   private retainDelegates(
     runId: string,

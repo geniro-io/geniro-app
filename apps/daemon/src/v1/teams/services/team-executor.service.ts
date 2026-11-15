@@ -4097,6 +4097,13 @@ export class TeamExecutorService
      * during a wake does not pin every later wake as well.
      */
     let passPersistenceFailed = false;
+    /**
+     * The status the run's last closing `team_<status>` row names, or null
+     * while none has been written. A woken run writes a closing row of its own
+     * only when it settles to a different status, so the feed never ends on
+     * a stale one while a wake that changes nothing adds no row.
+     */
+    let closingRowStatus: RunStatus | null = null;
     /** The run is AWAKE again, for work its own agents started. */
     let reopened = false;
     /**
@@ -4231,12 +4238,20 @@ export class TeamExecutorService
         // A wake the shutdown ended leaves the `running` it wrote, on the
         // roll-up's own terms below.
         if (!endedByShutdown(status)) {
-          // A wake writes no run-level terminal row, so the open thread's
-          // working state is this announce's to end.
+          // Without a closing row the open thread's working state is this
+          // announce's to end; with one, the row ends it, as a pass's does.
+          const closes = status !== closingRowStatus;
           await this.setRunStatus(em, runId, status, {
-            noTerminalItem: true,
+            ...(closes ? {} : { noTerminalItem: true }),
             ...(wokenOnlyByMonitors ? { hostTurn: true } : {}),
           });
+          if (closes) {
+            await persistItem(null, 'turn_complete', null, {
+              usage: null,
+              stopReason: `team_${status}`,
+            });
+            closingRowStatus = status;
+          }
           wokenOnlyByMonitors = false;
           if (status === 'completed' && !this.shuttingDown) {
             this.notifyRunSettledCompleted(runId);
@@ -4343,6 +4358,7 @@ export class TeamExecutorService
             usage: null,
             stopReason: `team_${status}`,
           });
+          closingRowStatus = status;
           if (status === 'completed' && !this.shuttingDown) {
             this.notifyRunSettledCompleted(runId);
           }
@@ -4360,6 +4376,7 @@ export class TeamExecutorService
             );
           },
         );
+        closingRowStatus = 'failed';
         await persistItem(null, 'error', null, {
           message: 'team finalization persistence failed',
         }).catch((itemErr: unknown) => {

@@ -14319,7 +14319,8 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     // working state on. A wake writes none, so without the flag the open
     // thread kept Stop up and queued every message behind an ending that never
     // came.
-    const { service, claude, callBroker, runDao, itemlessSettles } = setup();
+    const { service, claude, callBroker, runDao, itemDao, itemlessSettles } =
+      setup();
     const run = await service.startRun({
       slug: 'bg',
       team: CALL_TEAM,
@@ -14349,7 +14350,25 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
 
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(itemlessSettles).toEqual([run.id]);
+    expect(
+      itemDao.items.filter(
+        (row) =>
+          row.runId === run.id &&
+          row.kind === 'turn_complete' &&
+          row.memberId === null,
+      ),
+    ).toHaveLength(1);
   });
+
+  const closingRows = (ctx: ReturnType<typeof setup>, runId: string) =>
+    ctx.itemDao.items
+      .filter(
+        (row) =>
+          row.runId === runId &&
+          row.kind === 'turn_complete' &&
+          row.memberId === null,
+      )
+      .map((row) => JSON.parse(String(row.payload)).stopReason as string);
 
   describe('a woken run whose pass failed', () => {
     const failedPass = async (ctx: ReturnType<typeof setup>) => {
@@ -14400,6 +14419,27 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       expect(ctx.runDao.runs.get(run.id)?.status).toBe('completed');
     });
 
+    it('closes the feed with one completed row when it settles completed', async () => {
+      const ctx = setup();
+      const run = await failedPass(ctx);
+
+      completeTurn(await wakeForAsyncCall(ctx, run.id), 'reported back');
+      await drain();
+
+      expect(closingRows(ctx, run.id)).toEqual([
+        'team_failed',
+        'team_completed',
+      ]);
+      const last = ctx.itemDao.items
+        .filter((row) => row.runId === run.id)
+        .at(-1);
+      expect(last?.kind).toBe('turn_complete');
+      expect(JSON.parse(String(last?.payload)).stopReason).toBe(
+        'team_completed',
+      );
+      expect(ctx.itemlessSettles).toEqual([]);
+    });
+
     it('settles failed again when the woken turn of the member that failed it fails too', async () => {
       const ctx = setup();
       const run = await failedPass(ctx);
@@ -14430,6 +14470,8 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       expect(ctx.claude.starts).toHaveLength(2);
       expect(ctx.nodeDao.row(run.id, 'a')?.status).toBe('failed');
       expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+      expect(closingRows(ctx, run.id)).toEqual(['team_failed']);
+      expect(ctx.itemlessSettles).toEqual([run.id]);
     });
   });
 
@@ -14462,6 +14504,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     await drain();
 
     expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+    expect(closingRows(ctx, run.id)).toEqual(['team_completed', 'team_failed']);
   });
 
   describe('a woken run whose pass completed', () => {
@@ -14510,6 +14553,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
 
       expect(ctx.nodeDao.row(run.id, 'a')?.status).toBe('completed');
       expect(ctx.runDao.runs.get(run.id)?.status).toBe('failed');
+      expect(closingRows(ctx, run.id)).toEqual([]);
     });
 
     it('settles completed though a transcript write failed during the wake', async () => {

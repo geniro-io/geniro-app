@@ -4366,6 +4366,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         'reasoning_delta',
         'tool_compose',
         'usage_progress',
+        'delegate_progress',
         'cost_progress',
         'context_progress',
       ].includes(event.type)
@@ -4429,6 +4430,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // main thread or was never produced.
       this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
       await this.restatusAfterOffTurnSignal(runId, event, session);
+      return;
+    }
+    if (event.type === 'delegate_progress') {
+      this.partials.delegate(runId, SINGLE_AGENT_NODE, null, event);
       return;
     }
     if (event.type === 'usage_progress') {
@@ -7409,6 +7414,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // `mapClaudeStreamEvent` drops a delegate's frames outright,
               // because this one drives a placeholder in the MAIN transcript.
               this.partials.composing(runId, SINGLE_AGENT_NODE, null, event);
+              return;
+            }
+            if (event.type === 'delegate_progress') {
+              this.partials.delegate(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
             if (event.type === 'usage_progress') {

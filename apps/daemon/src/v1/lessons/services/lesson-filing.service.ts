@@ -225,7 +225,7 @@ export class LessonFilingService {
       }),
     );
     const status =
-      rows.length === 0 ? 'empty' : checking ? 'checking' : 'reflecting';
+      rows.length === 0 ? 'empty' : checking ? 'checking' : 'reflected';
     await em.transactional(async (tx) => {
       for (const row of rows) {
         tx.persist(row);

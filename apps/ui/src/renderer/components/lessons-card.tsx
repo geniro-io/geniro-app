@@ -214,14 +214,47 @@ interface TargetChoice {
   label: string;
   group: TargetGroup;
   target: LessonTarget;
+  /** Why the thread has no place for it; such a choice is shown, never picked. */
+  unavailable: string | null;
+}
+
+/** Why a lesson's thread has no place for this target, or null when it has one. Twin of the daemon's filing refusals. */
+export function unavailableReason(
+  target: LessonTarget,
+  places: LessonPlaces,
+): string | null {
+  switch (target.kind) {
+    case 'memory':
+      if (target.scope === 'project' && !places.project) {
+        return 'this thread belongs to no project';
+      }
+      return target.scope === 'team' && !places.team
+        ? 'this thread is not a team run'
+        : null;
+    case 'project_instructions':
+      return places.project ? null : 'this thread belongs to no project';
+    case 'member_instructions':
+      if (!places.team) {
+        return 'this thread is not a team run';
+      }
+      return places.members.length === 0 ||
+        places.members.some((member) => member.id === target.memberId)
+        ? null
+        : `${target.memberId} is not a member of this team run`;
+    case 'knowledge':
+      return places.projectId === null
+        ? 'this thread belongs to no project'
+        : null;
+  }
 }
 
 /**
  * The targets a lesson can be saved to, as its places allow: memory always
  * (global), this project's and this team's memory, the project's instructions,
  * each member's instructions and the project's knowledge. The lesson's own
- * target is always among them, so the picker can name it before a document
- * list has been read.
+ * target is always among them — so the picker can name it before a document
+ * list has been read — and is marked unavailable when the thread has no
+ * place for it.
  */
 function choicesFor(
   lesson: LessonView,
@@ -254,6 +287,7 @@ function choicesFor(
     label: targetWords(target, places),
     group: targetGroupOf(target),
     target,
+    unavailable: null,
   }));
   if (!choices.some((choice) => choice.key === targetKey(lesson.target))) {
     choices.push({
@@ -261,6 +295,7 @@ function choicesFor(
       label: targetWords(lesson.target, places),
       group: targetGroupOf(lesson.target),
       target: lesson.target,
+      unavailable: unavailableReason(lesson.target, places),
     });
   }
   return choices.map((choice) =>
@@ -288,7 +323,16 @@ function pickerGroups(choices: readonly TargetChoice[]): MenuGroup[] {
   return order.flatMap((group) => {
     const items = choices
       .filter((choice) => choice.group === group)
-      .map((choice) => ({ value: choice.key, label: choice.label }));
+      .map((choice) =>
+        choice.unavailable === null
+          ? { value: choice.key, label: choice.label }
+          : {
+              value: choice.key,
+              label: choice.label,
+              hint: 'unavailable',
+              disabled: true,
+            },
+      );
     return items.length === 0 ? [] : [{ label: group, items }];
   });
 }
@@ -810,8 +854,10 @@ export function LessonRow({
   const [error, setError] = useState<string | null>(null);
 
   const choices = choicesFor(lesson, places, documents);
+  const usable = choices.filter((choice) => choice.unavailable === null);
   const selected =
-    choices.find((choice) => choice.key === targetKeyValue) ?? choices[0];
+    usable.find((choice) => choice.key === targetKeyValue) ?? usable[0];
+  const proposedUnavailable = unavailableReason(lesson.target, places);
   const refines =
     lesson.dedup.verdict === 'refines' && lesson.target.kind === 'memory';
   const busy = request !== null;
@@ -1013,6 +1059,11 @@ export function LessonRow({
           onValueChange={setTargetKeyValue}
         />
       </div>
+      {proposedUnavailable === null ? null : (
+        <p className="m-0 text-xs text-muted-foreground">
+          {`Proposed for ${targetWords(lesson.target, places)}, which is unavailable: ${proposedUnavailable}.`}
+        </p>
+      )}
       {moveUp === null || editing ? null : (
         <p className="m-0 text-xs text-muted-foreground">
           {`Moves the rule ${moveUpHint(moveUp)}.`}

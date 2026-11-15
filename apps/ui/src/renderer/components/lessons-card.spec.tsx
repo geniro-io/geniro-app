@@ -536,6 +536,30 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
     ).toBe(false);
   });
 
+  it('never selects a target the thread has no place for: it falls back to memory and names the proposed one as unavailable', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_PROJECT_RULE],
+      places: LESSON_NO_PROJECT_PLACES,
+      onSave,
+    });
+
+    expect(el.textContent).toContain('→ Memory · global');
+    expect(el.textContent).toContain(
+      'Proposed for Project instructions, which is unavailable: this thread belongs to no project.',
+    );
+    await press(targetTrigger(el));
+    expect(
+      (optionNamed('Project instructions') as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await press(targetTrigger(el));
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_PROJECT_RULE.id, {
+      target: { kind: 'memory', scope: 'global', type: 'feedback' },
+    });
+  });
+
   it('reads the project documents only once the picker is opened', async () => {
     const readDocuments = vi.fn(async () => PROJECT_DOCUMENTS);
     const el = await render({

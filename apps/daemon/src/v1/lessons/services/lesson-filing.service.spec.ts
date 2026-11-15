@@ -634,6 +634,18 @@ describe('LessonFilingService.file', () => {
     expect(fixture.events.publishChanged).toHaveBeenCalledWith('src');
   });
 
+  it('tells the thread it changed once a filed card is delivered', async () => {
+    const fixture = build();
+
+    await fixture.service.file(fixture.turn, [lesson()]);
+
+    expect(fixture.rows.write).toHaveBeenCalledWith(
+      'src',
+      expect.objectContaining({ kind: 'lessons' }),
+    );
+    expect(fixture.events.publishChanged).toHaveBeenCalledWith('src');
+  });
+
   it('files a memory-target lesson through fileLesson as a lesson write and records it saved by auto', async () => {
     const fixture = build();
 

@@ -19,6 +19,7 @@ import {
   withLessonLine,
 } from './lesson-proposal.service';
 import type { LessonRowWriter } from './lesson-row.writer';
+import type { LessonsEventBus } from './lessons-events.bus';
 
 const TARGET_PROJECT = { kind: 'memory', scope: 'project', type: 'feedback' };
 const PROJECT = { id: 'p1', instructionBlocks: [], instructionsRevision: 4 };
@@ -119,6 +120,7 @@ function build(
     get: vi.fn(() => Promise.resolve(null)),
     edit: vi.fn(() => Promise.resolve(applied('k-1'))),
   };
+  const events = { publishChanged: vi.fn() };
   const service = new LessonProposalService(
     em,
     proposals as unknown as LessonProposalDao,
@@ -130,6 +132,7 @@ function build(
     projects as unknown as ProjectsService,
     teamChange as unknown as TeamChangeService,
     knowledge as unknown as KnowledgeService,
+    events as unknown as LessonsEventBus,
   );
   return {
     service,
@@ -143,6 +146,7 @@ function build(
     projects,
     teamChange,
     knowledge,
+    events,
   };
 }
 
@@ -183,6 +187,22 @@ describe('LessonProposalService.save', () => {
         reason: null,
       },
     });
+  });
+
+  it('announces the change of the source thread, so the waiting list re-reads', async () => {
+    const { service, events } = build(proposal());
+
+    await service.save('lp-1', {});
+
+    expect(events.publishChanged).toHaveBeenCalledWith('src');
+  });
+
+  it('announces a rejection too', async () => {
+    const { service, events } = build(proposal());
+
+    await service.reject('lp-1', {});
+
+    expect(events.publishChanged).toHaveBeenCalledWith('src');
   });
 
   it.each([

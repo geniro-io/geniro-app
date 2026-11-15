@@ -41,6 +41,7 @@ import {
 } from '../lessons.types';
 import { billedModelOf } from '../utils/billed-model';
 import { LessonRowWriter } from './lesson-row.writer';
+import { LessonsEventBus } from './lessons-events.bus';
 
 /** The project instruction block saved lessons are appended to. */
 export const LESSONS_BLOCK_ID = 'lessons';
@@ -74,6 +75,7 @@ export class LessonProposalService {
     private readonly projects: ProjectsService,
     private readonly teamChange: TeamChangeService,
     private readonly knowledge: KnowledgeService,
+    private readonly events: LessonsEventBus,
   ) {}
 
   async list(query: LessonProposalListQuery): Promise<LessonProposalWire[]> {
@@ -543,6 +545,7 @@ export class LessonProposalService {
     by: LessonOutcomePayload['by'] = 'user',
     resultRef: string | null = memoryHandle,
   ): Promise<void> {
+    this.events.publishChanged(row.sourceRunId);
     return this.rows.write(row.sourceRunId, {
       kind: 'lesson_outcome',
       payload: {

@@ -333,6 +333,7 @@ export class LessonFilingService {
         payload: outcome,
       });
     }
+    this.events.publishChanged(segment.runId);
   }
 
   /**
@@ -356,6 +357,7 @@ export class LessonFilingService {
       em,
     );
     await this.writeCard(segment, rows[0]?.reflectionRunId ?? '', rows, check);
+    this.events.publishChanged(segment.runId);
   }
 
   private async fileOne(

@@ -303,6 +303,7 @@ export function moveUpOf(
 ): LessonMoveUpPlace | null {
   if (
     lesson.dedup.verdict !== 'broken_again' ||
+    lesson.dedup.handle === null ||
     lesson.target.kind !== 'memory'
   ) {
     return null;

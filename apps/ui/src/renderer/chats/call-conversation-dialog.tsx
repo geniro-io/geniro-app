@@ -13,6 +13,10 @@ import {
   CallConversationContext,
   CallConversationPager,
 } from './call-conversation';
+import {
+  ConversationWorkBar,
+  type ConversationWorkSource,
+} from './conversation-work-chips';
 import { useDurableTranscript } from './durable-transcript';
 import { mergeAnchorRows } from './history-anchors';
 import { callBlockOfConversation, indexCallBlocks } from './transcript-groups';
@@ -87,6 +91,7 @@ function ConversationBody({
   delegateState,
   collapseToolSteps,
   onShowInChat,
+  work,
 }: {
   row: WorkingAgentRow;
   runId: string;
@@ -97,6 +102,7 @@ function ConversationBody({
   delegateState?: Pick<RunStateDto, 'throughSeq' | 'delegates' | 'calls'>;
   collapseToolSteps: boolean;
   onShowInChat: (callId: string) => void;
+  work?: ConversationWorkSource;
 }): React.JSX.Element {
   const [rows, setRows] = useState<ChatItem[]>([]);
   const runIdRef = useRef<string | null>(runId);
@@ -192,6 +198,9 @@ function ConversationBody({
             Show in chat
           </Button>
         </div>
+        {work === undefined ? null : (
+          <ConversationWorkBar row={row} source={work} />
+        )}
       </div>
       <div
         ref={scrollerRef}
@@ -251,6 +260,7 @@ export function CallConversationDialog({
   delegateState?: Pick<RunStateDto, 'throughSeq' | 'delegates' | 'calls'>;
   collapseToolSteps: boolean;
   onShowInChat: (callId: string) => void;
+  work?: ConversationWorkSource;
 }): React.JSX.Element {
   return (
     <Dialog

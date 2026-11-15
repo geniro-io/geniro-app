@@ -46,6 +46,22 @@ describe('LessonSegmentDao (in-memory sqlite)', () => {
     });
   }
 
+  function stretch(
+    runId: string,
+    closedAt: string,
+    status: LessonSegment['status'] = 'queued',
+  ) {
+    return dao.create({
+      runId,
+      fromSeq: -1,
+      toSeq: 4,
+      closedBy: 'archive',
+      closedAt: new Date(closedAt),
+      status,
+      reflectionRunId: null,
+    });
+  }
+
   describe('ofReflection', () => {
     it('answers the segment a reflection was started on, and none for another reflection', async () => {
       const segment = await insert('run-a', 'refl-1');
@@ -56,44 +72,50 @@ describe('LessonSegmentDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('openOf and offerCursorOf', () => {
-    function segment(
-      runId: string,
-      status: LessonSegment['status'],
-      fromSeq: number,
-      toSeq: number,
-    ) {
-      return dao.create({
-        runId,
-        fromSeq,
-        toSeq,
-        closedBy: 'idle',
-        status,
-        reflectionRunId: null,
-      });
-    }
+  describe('queuedOf and listQueued', () => {
+    it('answers the queued stretch of a thread, and none once that stretch is skipped', async () => {
+      const kept = await stretch('run-a', '2026-11-13T10:00:00.000Z');
+      await stretch('run-b', '2026-11-13T11:00:00.000Z', 'skipped');
 
-    it('a dismissed stretch is no longer the open one a later close would extend', async () => {
-      await segment('run-a', 'dismissed', -1, 4);
-
-      expect(await dao.openOf('run-a')).toBeNull();
+      expect((await dao.queuedOf('run-a'))?.id).toBe(kept.id);
+      expect(await dao.queuedOf('run-b')).toBeNull();
+      expect(await dao.queuedOf('run-unknown')).toBeNull();
     });
 
-    it('starts the next offer after the newest dismissed stretch, or after the last reflection when that is later', async () => {
-      await segment('run-a', 'dismissed', -1, 4);
-      await segment('run-a', 'dismissed', 4, 9);
-      await segment('run-a', 'offered', 9, 12);
-      await segment('run-b', 'dismissed', -1, 30);
+    it('lists the queued stretches oldest closed first, the order the runner takes them in', async () => {
+      const newest = await stretch('run-a', '2026-11-13T12:00:00.000Z');
+      const oldest = await stretch('run-b', '2026-11-13T09:00:00.000Z');
+      await stretch('run-c', '2026-11-13T10:00:00.000Z', 'reflected');
+
+      expect((await dao.listQueued()).map((segment) => segment.id)).toEqual([
+        oldest.id,
+        newest.id,
+      ]);
+    });
+  });
+
+  describe('listByStatus', () => {
+    it('lists the segments in the statuses named, newest closed first, for one run or for every run', async () => {
+      const older = await stretch('run-a', '2026-11-13T09:00:00.000Z');
+      const newer = await stretch(
+        'run-a',
+        '2026-11-13T12:00:00.000Z',
+        'reflecting',
+      );
+      const other = await stretch('run-b', '2026-11-13T11:00:00.000Z');
+      await stretch('run-b', '2026-11-13T10:00:00.000Z', 'reflected');
 
       expect(
-        await dao.offerCursorOf({ id: 'run-a', reflectedThroughSeq: null }),
-      ).toBe(9);
+        (await dao.listByStatus(['queued', 'reflecting'], null)).map(
+          (segment) => segment.id,
+        ),
+      ).toEqual([newer.id, other.id, older.id]);
       expect(
-        await dao.offerCursorOf({ id: 'run-a', reflectedThroughSeq: 11 }),
-      ).toBe(11);
-      expect(
-        await dao.offerCursorOf({ id: 'run-c', reflectedThroughSeq: null }),
-      ).toBe(-1);
+        (await dao.listByStatus(['queued', 'reflecting'], 'run-a')).map(
+          (segment) => segment.id,
+        ),
+      ).toEqual([newer.id, older.id]);
+      expect(await dao.listByStatus(['skipped'], null)).toEqual([]);
     });
   });
 

@@ -17,7 +17,7 @@ describe('offersLessons', () => {
   ])(
     'with the app on: project %s and team %s → %s (the team wins)',
     (project, team, expected) => {
-      expect(offersLessons('offer', project, team)).toBe(expected);
+      expect(offersLessons('auto', project, team)).toBe(expected);
     },
   );
 

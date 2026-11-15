@@ -3,14 +3,15 @@ import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDao } from '../../agents/dao/run.dao';
-import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
 import { ExtractLessonsOnDeleteRegistry } from '../../agents/services/extract-lessons-on-delete.registry';
 import type { Run } from '../../runs/entity/run.entity';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
+import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import { LESSON_PENDING_DELETE_MAX_MS } from '../lessons.types';
 import { LessonPendingDeleteService } from './lesson-pending-delete.service';
 import type { LessonReflectionService } from './lesson-reflection.service';
+import { LessonsEventBus } from './lessons-events.bus';
 
 function runOf(overrides: Partial<Run> = {}): Run {
   return {
@@ -42,6 +43,7 @@ function build(
     archiveFails?: Error;
     deleteFails?: Error;
     pendingFails?: Error;
+    stretch?: string;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -89,7 +91,15 @@ function build(
       Promise.resolve(options.running ?? null),
     ),
   };
-  const bus = new AgentEventBus();
+  const segment: { id: string; runId: string; status: string } = {
+    id: 'seg-1',
+    runId: 'src',
+    status: options.stretch ?? 'reflecting',
+  };
+  const segments = {
+    ofReflection: vi.fn(() => Promise.resolve(segment)),
+  };
+  const events = new LessonsEventBus();
   const registry = new ExtractLessonsOnDeleteRegistry();
   const service = new LessonPendingDeleteService(
     em,
@@ -97,8 +107,9 @@ function build(
     chats as unknown as ChatService,
     teamRuns as unknown as TeamExecutorService,
     reflections as unknown as LessonReflectionService,
-    bus,
     registry,
+    segments as unknown as LessonSegmentDao,
+    events,
   );
   return {
     service,
@@ -108,7 +119,8 @@ function build(
     chats,
     teamRuns,
     reflections,
-    bus,
+    segment,
+    events,
     registry,
   };
 }
@@ -116,6 +128,16 @@ function build(
 /** Lets the settle chain's awaited reads and deletes finish, without moving the clock. */
 async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
+}
+
+/** The thread's stretch ends in `status`: the lessons change event follows the write, as the filing does. */
+async function stretchEnds(
+  h: ReturnType<typeof build>,
+  status = 'reflected',
+): Promise<void> {
+  h.segment.status = status;
+  h.events.publishChanged('src');
+  await settle();
 }
 
 describe('LessonPendingDeleteService', () => {
@@ -175,7 +197,7 @@ describe('LessonPendingDeleteService', () => {
       expect(h.reflections.start).not.toHaveBeenCalled();
     });
 
-    it('adopts the reflection already working on the thread: none starts, and the delete waits for that one', async () => {
+    it('adopts the reflection already working on the thread: none starts, and the delete waits for its stretch to end', async () => {
       const h = build({ running: 'refl-running' });
       h.service.onModuleInit();
 
@@ -185,12 +207,11 @@ describe('LessonPendingDeleteService', () => {
       expect(h.reflections.runningReflectionId).toHaveBeenCalledWith('src');
       expect(h.reflections.start).not.toHaveBeenCalled();
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      h.events.publishChanged('src');
       await settle();
       expect(h.chats.delete).not.toHaveBeenCalled();
 
-      h.bus.publishRunStatus({ runId: 'refl-running', status: 'completed' });
-      await settle();
+      await stretchEnds(h);
       expect(h.chats.delete).toHaveBeenCalledWith('src');
     });
 
@@ -224,12 +245,25 @@ describe('LessonPendingDeleteService', () => {
   });
 
   describe('the delete once the reflection settles', () => {
-    it('deletes a chat when its reflection reaches a terminal status', async () => {
+    it.each(['reflected', 'empty', 'failed', 'skipped'])(
+      'deletes a chat once its stretch ends %s',
+      async (status) => {
+        const h = build();
+        h.service.onModuleInit();
+        await h.service.extractThenDelete('src');
+
+        await stretchEnds(h, status);
+
+        expect(h.chats.delete).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('deletes a chat when its stretch ends', async () => {
       const h = build();
       h.service.onModuleInit();
       await h.service.extractThenDelete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
 
       expect(h.chats.delete).toHaveBeenCalledTimes(1);
@@ -242,19 +276,19 @@ describe('LessonPendingDeleteService', () => {
       h.service.onModuleInit();
       await h.service.extractThenDelete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'failed' });
+      await stretchEnds(h, 'failed');
       await settle();
 
       expect(h.teamRuns.deleteRun).toHaveBeenCalledWith('src');
       expect(h.chats.delete).not.toHaveBeenCalled();
     });
 
-    it('does not delete on a reflection status that is not terminal yet', async () => {
+    it('does not delete while its stretch is still being reflected, even when the reflection run has finished', async () => {
       const h = build();
       h.service.onModuleInit();
       await h.service.extractThenDelete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'running' });
+      h.events.publishChanged('src');
       await settle();
 
       expect(h.chats.delete).not.toHaveBeenCalled();
@@ -273,7 +307,7 @@ describe('LessonPendingDeleteService', () => {
       await settle();
       expect(h.chats.delete).toHaveBeenCalledTimes(1);
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
       await vi.advanceTimersByTimeAsync(LESSON_PENDING_DELETE_MAX_MS);
       await settle();
@@ -285,7 +319,7 @@ describe('LessonPendingDeleteService', () => {
       h.service.onModuleInit();
       await h.service.extractThenDelete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
       expect(h.chats.delete).toHaveBeenCalledTimes(1);
 
@@ -300,7 +334,7 @@ describe('LessonPendingDeleteService', () => {
       await h.service.extractThenDelete('src');
       h.runs.delete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
 
       expect(h.chats.delete).not.toHaveBeenCalled();
@@ -317,7 +351,7 @@ describe('LessonPendingDeleteService', () => {
       h.service.onModuleInit();
       await h.service.extractThenDelete('src');
 
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
 
       expect(h.teamRuns.deleteRun).toHaveBeenCalledWith('src');
@@ -383,7 +417,7 @@ describe('LessonPendingDeleteService', () => {
       await h.service.extractThenDelete('src');
 
       h.service.onModuleDestroy();
-      h.bus.publishRunStatus({ runId: 'refl-1', status: 'completed' });
+      await stretchEnds(h);
       await settle();
       await vi.advanceTimersByTimeAsync(LESSON_PENDING_DELETE_MAX_MS);
       await settle();

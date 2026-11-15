@@ -100,6 +100,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         model: 'opus',
         proposals: [],
         places: { project: false, team: false },
+        check: null,
       },
     });
     await writer.write('archived', {
@@ -112,6 +113,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         target: { kind: 'memory', scope: 'global', type: 'feedback' },
         memoryHandle: null,
         reason: 'Too narrow.',
+        by: 'user',
       },
     });
 
@@ -158,6 +160,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         model: 'opus',
         proposals: [],
         places: { project: false, team: false },
+        check: null,
       },
     });
 
@@ -192,6 +195,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         model: 'opus',
         proposals: [],
         places: { project: false, team: false },
+        check: null,
       },
     });
     await writer.write('missing', {
@@ -205,6 +209,7 @@ describe('LessonRowWriter (in-memory sqlite)', () => {
         model: 'opus',
         proposals: [],
         places: { project: false, team: false },
+        check: null,
       },
     });
 

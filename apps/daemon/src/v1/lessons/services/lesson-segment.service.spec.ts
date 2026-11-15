@@ -1,36 +1,20 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { ConflictException, NotFoundException } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type {
-  RunItemEvent,
-  RunWire,
-  StageProgress,
-  ThreadOutcome,
-} from '../../agents/chat.types';
+import type { RunWire } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
-import type { RunStatus } from '../../runs/runs.types';
-import { TaskEventBus } from '../../tasks/services/task-events.bus';
-import type { TaskChangedEvent } from '../../tasks/tasks.types';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
-import {
-  DEFAULT_LESSONS_CONFIG,
-  LESSON_DONE_QUIET_MS,
-  type LessonsConfig,
-} from '../lessons.types';
+import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
 import type { LessonEstimateService } from './lesson-estimate.service';
-import type { LessonRowWriter } from './lesson-row.writer';
-import {
-  LESSON_BOOT_SWEEP_DELAY_MS,
-  LessonSegmentService,
-} from './lesson-segment.service';
+import { LessonSegmentService } from './lesson-segment.service';
 import { LessonsConfigService } from './lessons-config.service';
-
-const HOUR_MS = 3_600_000;
+import { LessonsEventBus } from './lessons-events.bus';
 
 type Item = {
   seq: number;
@@ -39,10 +23,10 @@ type Item = {
   payload: string;
 };
 
-type Written = {
+type StoredSegment = Record<string, unknown> & {
+  id: string;
   runId: string;
-  kind: string;
-  payload: Record<string, unknown>;
+  status: string;
 };
 
 function userMessage(seq: number, text: string): Item {
@@ -58,7 +42,6 @@ function turnComplete(seq: number): Item {
   return { seq, kind: 'turn_complete', role: null, payload: '{}' };
 }
 
-/** A finished turn and a push-back on it: a learning signal in the stretch. */
 function correctionStretch(): Item[] {
   return [turnComplete(1), userMessage(2, 'no, that is wrong')];
 }
@@ -85,35 +68,27 @@ function runOf(overrides: Partial<Run> = {}): Run {
   } as unknown as Run;
 }
 
-function recordedOutcome(): ThreadOutcome {
-  return { kind: 'success', summary: null, source: 'recorded', seq: 5 };
-}
-
-function goalsOutcome(): ThreadOutcome {
-  return { kind: 'success', summary: null, source: 'goals', seq: null };
-}
-
-function userMessageEvent(runId: string): RunItemEvent {
+function queuedSegment(overrides: Partial<StoredSegment> = {}): StoredSegment {
   return {
-    runId,
-    item: { kind: 'message', role: 'user' } as unknown as RunItemEvent['item'],
-  };
-}
-
-function stagesAt(current: string | null): StageProgress {
-  return {
-    rev: 4,
-    current,
-    position: { index: 1, total: 2 },
-    stages: [
-      { id: 'build', title: 'Build', status: 'done', next: ['review'] },
-      {
-        id: 'review',
-        title: 'Review',
-        status: current === null ? 'done' : 'current',
-        next: [],
-      },
-    ],
+    id: 'seg-1',
+    runId: 'src',
+    fromSeq: -1,
+    toSeq: 2,
+    closedBy: 'archive',
+    closedAt: new Date('2026-11-14T10:00:00.000Z'),
+    signals: JSON.stringify([
+      { kind: 'user_correction', seq: 2, excerpt: 'no' },
+    ]),
+    status: 'queued',
+    skipReason: null,
+    leaseUntil: null,
+    reflectionRunId: null,
+    checkRunId: null,
+    failReason: null,
+    estimateTokens: 9_000,
+    estimateUsd: 0.02,
+    attempts: 0,
+    ...overrides,
   };
 }
 
@@ -121,27 +96,31 @@ function build(
   options: {
     runs?: Run[];
     items?: Record<string, Item[]>;
+    segments?: StoredSegment[];
+    reflections?: Run[];
     config?: Partial<LessonsConfig>;
     project?: { lessons: 'on' | 'off' | null } | null;
     teamLessons?: 'on' | 'off' | null;
-    cardRuns?: Run[];
-    candidates?: Run[];
     teamsFail?: boolean;
-    withoutTeams?: boolean;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
   const items = new Map(Object.entries(options.items ?? {}));
   const itemsOf = (runId: string): Item[] => items.get(runId) ?? [];
+  const tx = { tag: 'tx' };
+  const em = {
+    fork: () => em,
+    transactional: vi.fn((work: (inner: typeof tx) => Promise<void>) =>
+      work(tx),
+    ),
+  };
 
-  const em = { fork: () => em } as unknown as EntityManager;
   const runDao = {
     getById: vi.fn((runId: string) => Promise.resolve(runs.get(runId) ?? null)),
-    listOfTask: vi.fn(() => Promise.resolve(options.cardRuns ?? [])),
-    listLessonCandidates: vi.fn(() =>
-      Promise.resolve(options.candidates ?? []),
+    updateById: vi.fn(() => Promise.resolve()),
+    listLessonReflectionsOf: vi.fn(() =>
+      Promise.resolve(options.reflections ?? []),
     ),
-    listLessonReflectionsOf: vi.fn(() => Promise.resolve([])),
   };
   const itemDao = {
     maxSeqExcept: vi.fn((runId: string) =>
@@ -170,55 +149,32 @@ function build(
     ),
   };
 
+  const stored = new Map<string, StoredSegment>(
+    (options.segments ?? []).map((segment) => [segment.id, { ...segment }]),
+  );
   const created: Record<string, unknown>[] = [];
   const updated: { id: string; fields: Record<string, unknown> }[] = [];
-  const stored = new Map<string, Record<string, unknown>>();
   const segments = {
-    openOf: vi.fn((runId: string) =>
+    getById: vi.fn((id: string) => Promise.resolve(stored.get(id) ?? null)),
+    queuedOf: vi.fn((runId: string) =>
       Promise.resolve(
-        [...stored.values()]
-          .filter(
-            (segment) =>
-              segment.runId === runId && segment.status === 'offered',
-          )
-          .at(-1) ?? null,
+        [...stored.values()].find(
+          (segment) => segment.runId === runId && segment.status === 'queued',
+        ) ?? null,
       ),
     ),
-    offerCursorOf: vi.fn(
-      (run: { id: string; reflectedThroughSeq: number | null }) =>
-        Promise.resolve(
-          Math.max(
-            run.reflectedThroughSeq ?? -1,
-            ...[...stored.values()]
-              .filter(
-                (segment) =>
-                  segment.runId === run.id && segment.status === 'dismissed',
-              )
-              .map((segment) => segment.toSeq as number),
-          ),
-        ),
-    ),
     create: vi.fn((input: Record<string, unknown>) => {
-      const segment = { id: `seg-${created.length + 1}`, ...input };
+      const segment = {
+        id: `seg-${created.length + 1}`,
+        ...input,
+      } as StoredSegment;
       created.push(input);
-      stored.set(segment.id as string, segment);
+      stored.set(segment.id, segment);
       return Promise.resolve(segment);
     }),
     updateById: vi.fn((id: string, fields: Record<string, unknown>) => {
       updated.push({ id, fields });
       Object.assign(stored.get(id)!, fields);
-      return Promise.resolve();
-    }),
-  };
-
-  const written: Written[] = [];
-  const rows = {
-    write: vi.fn((runId: string, row: { kind: string; payload: unknown }) => {
-      written.push({
-        runId,
-        kind: row.kind,
-        payload: row.payload as Record<string, unknown>,
-      });
       return Promise.resolve();
     }),
   };
@@ -233,7 +189,6 @@ function build(
       }),
     ),
   };
-
   const projectScope = {
     projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
@@ -249,56 +204,49 @@ function build(
   config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
 
   const bus = new AgentEventBus();
-  const tasks = new TaskEventBus();
+  const events = new LessonsEventBus();
+  const publishChanged = vi.spyOn(events, 'publishChanged');
   const service = new LessonSegmentService(
-    em,
+    em as unknown as EntityManager,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     bus,
-    tasks,
     projectScope as unknown as ProjectScopeService,
     segments as unknown as LessonSegmentDao,
     estimates as unknown as LessonEstimateService,
-    rows as unknown as LessonRowWriter,
     config,
-    options.withoutTeams === true
-      ? undefined
-      : (teams as unknown as TeamStoreService),
+    events,
+    teams as unknown as TeamStoreService,
   );
   return {
     service,
     bus,
-    tasks,
-    runs,
+    tx,
     items,
     created,
     updated,
-    written,
     runDao,
     segments,
-    estimates,
-    projectScope,
-    teams,
-    config,
+    publishChanged,
   };
 }
 
-/** Lets the close chain's awaited reads and writes finish, without moving the clock. */
-async function settle(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
+/** Lets the subscription's queued close finish: every fake resolves at once. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('LessonSegmentService', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
     vi.useRealTimers();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe('archive', () => {
-    it('closes an archived thread at once and writes its lesson_offer row', async () => {
+    it('queues an archived thread’s stretch at once and publishes the change', async () => {
       const h = build({ items: { src: correctionStretch() } });
       h.service.onModuleInit();
 
@@ -314,661 +262,233 @@ describe('LessonSegmentService', () => {
         expect.objectContaining({
           runId: 'src',
           closedBy: 'archive',
-          status: 'offered',
+          status: 'queued',
           fromSeq: -1,
           toSeq: 2,
+          attempts: 0,
+          reflectionRunId: null,
+          checkRunId: null,
+          estimateTokens: 9_000,
+          estimateUsd: 0.02,
         }),
       ]);
-      expect(h.written).toEqual([
-        {
-          runId: 'src',
-          kind: 'lesson_offer',
-          payload: expect.objectContaining({
-            segmentId: 'seg-1',
-            closedBy: 'archive',
-            fromSeq: -1,
-            toSeq: 2,
-            signals: [{ kind: 'user_correction', seq: 2 }],
-          }),
-        },
+      expect(JSON.parse(h.created[0]!.signals as string) as unknown).toEqual([
+        expect.objectContaining({ kind: 'user_correction', seq: 2 }),
       ]);
-      expect(h.service.waiting('src')).toBeNull();
+      expect(h.publishChanged).toHaveBeenCalledWith('src');
     });
 
-    it('writes nothing for an archived thread with no learning signal in it', async () => {
+    it('queues nothing for an archived thread with no learning signal in it', async () => {
       const h = build({
         items: { src: [turnComplete(1), userMessage(2, 'thanks, looks good')] },
       });
+
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toBeNull();
+      expect(h.created).toEqual([]);
+      expect(h.publishChanged).not.toHaveBeenCalled();
+    });
+
+    it('queues nothing for a thread that finished or went idle without being archived', async () => {
+      const h = build({ items: { src: correctionStretch() } });
       h.service.onModuleInit();
 
       h.bus.publishRunsChanged([
         {
           id: 'src',
-          archivedAt: '2026-11-13T10:00:00.000Z',
+          status: 'completed',
+          archivedAt: null,
         } as unknown as RunWire,
       ]);
       await settle();
 
       expect(h.created).toEqual([]);
-      expect(h.written).toEqual([]);
+      expect(h.publishChanged).not.toHaveBeenCalled();
     });
 
-    it('takes over a waiting done close: one offer, and none at the 10-minute mark', async () => {
+    it('extends the queued stretch when a later archive closes more of the thread', async () => {
       const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
+      const first = await h.service.close('src', 'archive');
+      expect(first).toMatchObject({ id: 'seg-1', toSeq: 2 });
 
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: recordedOutcome(),
-      });
-      expect(h.service.waiting('src')).toBe('done');
-
-      h.bus.publishRunsChanged([
-        {
-          id: 'src',
-          archivedAt: '2026-11-13T10:00:00.000Z',
-        } as unknown as RunWire,
+      h.items.set('src', [
+        ...correctionStretch(),
+        turnComplete(3),
+        userMessage(4, 'no, still wrong'),
       ]);
-      await settle();
-      expect(h.service.waiting('src')).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS);
-      await settle();
-      expect(h.created).toHaveLength(1);
-      expect(h.created[0]).toEqual(
-        expect.objectContaining({ closedBy: 'archive' }),
-      );
-    });
-  });
-
-  describe('done close: a recorded outcome, a final stage, a finished card', () => {
-    it('closes the stretch after LESSON_DONE_QUIET_MS and not before', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: recordedOutcome(),
-      });
-      expect(h.service.waiting('src')).toBe('done');
-
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS - 1);
-      await settle();
-      expect(h.created).toEqual([]);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await settle();
-      expect(h.created).toEqual([
-        expect.objectContaining({ runId: 'src', closedBy: 'done' }),
-      ]);
-      expect(h.written).toHaveLength(1);
-      expect(h.written[0]?.kind).toBe('lesson_offer');
-    });
-
-    it('a goals-derived outcome arms nothing', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: goalsOutcome(),
-      });
-      expect(h.service.waiting('src')).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS);
-      await settle();
-      expect(h.created).toEqual([]);
-      expect(h.written).toEqual([]);
-    });
-
-    it('a user message cancels a waiting done close', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: recordedOutcome(),
-      });
-      h.bus.publish(userMessageEvent('src'));
-      expect(h.service.waiting('src')).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS);
-      await settle();
-      expect(h.created).toEqual([]);
-    });
-
-    it('a final stage (no current stage left) arms the done close', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        stages: stagesAt(null),
-      });
-      expect(h.service.waiting('src')).toBe('done');
-    });
-
-    it('a stage still in progress arms nothing', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        stages: stagesAt('review'),
-      });
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it.each(['in_review', 'done'] as const)(
-      'a card moved to %s arms the done close of its runs',
-      async (status) => {
-        const h = build({
-          items: { src: correctionStretch() },
-          cardRuns: [runOf({ id: 'src' })],
-        });
-        h.service.onModuleInit();
-
-        h.tasks.publishTaskChanged({
-          taskId: 'task-1',
-          projectId: 'project-1',
-          status,
-        } as TaskChangedEvent);
-        await settle();
-
-        expect(h.runDao.listOfTask).toHaveBeenCalledWith(
-          'task-1',
-          expect.anything(),
-        );
-        expect(h.service.waiting('src')).toBe('done');
-      },
-    );
-
-    it('a card moved to a status still in progress arms nothing', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        cardRuns: [runOf({ id: 'src' })],
-      });
-      h.service.onModuleInit();
-
-      h.tasks.publishTaskChanged({
-        taskId: 'task-1',
-        projectId: 'project-1',
-        status: 'in_progress',
-      } as TaskChangedEvent);
-      await settle();
-
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it('a card move skips an archived run of the card', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        cardRuns: [runOf({ id: 'src', archivedAt: new Date() })],
-      });
-      h.service.onModuleInit();
-
-      h.tasks.publishTaskChanged({
-        taskId: 'task-1',
-        projectId: 'project-1',
-        status: 'done',
-      } as TaskChangedEvent);
-      await settle();
-
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it.each(['in_review', 'done'] as const)(
-      'a second %s event for the same card arms nothing, so the first deadline still holds',
-      async (status) => {
-        const h = build({
-          items: { src: correctionStretch() },
-          cardRuns: [runOf({ id: 'src' })],
-        });
-        h.service.onModuleInit();
-        const event = {
-          taskId: 'task-1',
-          projectId: 'project-1',
-          status,
-        } as TaskChangedEvent;
-
-        h.tasks.publishTaskChanged(event);
-        await settle();
-        expect(h.service.waiting('src')).toBe('done');
-
-        await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS - 1);
-        h.tasks.publishTaskChanged(event);
-        await settle();
-        expect(h.runDao.listOfTask).toHaveBeenCalledTimes(1);
-
-        await vi.advanceTimersByTimeAsync(1);
-        await settle();
-        expect(h.created).toEqual([
-          expect.objectContaining({ runId: 'src', closedBy: 'done' }),
-        ]);
-      },
-    );
-
-    it('a card moved from in_progress to done arms the done close', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        cardRuns: [runOf({ id: 'src' })],
-      });
-      h.service.onModuleInit();
-
-      h.tasks.publishTaskChanged({
-        taskId: 'task-1',
-        projectId: 'project-1',
-        status: 'in_progress',
-      } as TaskChangedEvent);
-      await settle();
-      expect(h.service.waiting('src')).toBeNull();
-
-      h.tasks.publishTaskChanged({
-        taskId: 'task-1',
-        projectId: 'project-1',
-        status: 'done',
-      } as TaskChangedEvent);
-      await settle();
-      expect(h.service.waiting('src')).toBe('done');
-    });
-
-    it('a host-sourced item during a waiting done close does not cancel it', () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: recordedOutcome(),
-      });
-      h.bus.publish({
-        runId: 'src',
-        item: { kind: 'system', role: null } as unknown as RunItemEvent['item'],
-      });
-
-      expect(h.service.waiting('src')).toBe('done');
-    });
-  });
-
-  describe('idle close after a settle', () => {
-    it('a normal settle arms the idle close at quietWindowHours and not before', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        config: { quietWindowHours: 1 },
-      });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      expect(h.service.waiting('src')).toBe('idle');
-
-      await vi.advanceTimersByTimeAsync(HOUR_MS - 1);
-      await settle();
-      expect(h.created).toEqual([]);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await settle();
-      expect(h.created).toEqual([
-        expect.objectContaining({ runId: 'src', closedBy: 'idle' }),
-      ]);
-    });
-
-    it.each([
-      {
-        name: 'a turn geniro started itself (hostTurn)',
-        flag: { hostTurn: true },
-      },
-      { name: 'a status handed back (restored)', flag: { restored: true } },
-      { name: 'a housekeeping turn', flag: { housekeeping: true } },
-    ])('a settle that is $name does not arm one', ({ flag }) => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed', ...flag });
-
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it('a run that is still working arms nothing', () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'running' as RunStatus });
-
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it('a user message cancels a waiting idle close', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      h.bus.publish(userMessageEvent('src'));
-      expect(h.service.waiting('src')).toBeNull();
-
-      await vi.advanceTimersByTimeAsync(3 * HOUR_MS);
-      await settle();
-      expect(h.created).toEqual([]);
-    });
-
-    it('a deleted thread drops its waiting close', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      h.bus.publishRunDeleted('src');
-      expect(h.service.waiting('src')).toBeNull();
-    });
-
-    it('a settle with no signal in the stretch writes no offer and no row', async () => {
-      const h = build({
-        items: { src: [turnComplete(1), userMessage(2, 'thanks, looks good')] },
-        config: { quietWindowHours: 1 },
-      });
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      await vi.advanceTimersByTimeAsync(HOUR_MS);
-      await settle();
-
-      expect(h.created).toEqual([]);
-      expect(h.written).toEqual([]);
-    });
-
-    it('a settle with nothing new past the reflected watermark writes nothing', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        config: { quietWindowHours: 1 },
-      });
-      h.runs.get('src')!.reflectedThroughSeq = 2;
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      await vi.advanceTimersByTimeAsync(HOUR_MS);
-      await settle();
-
-      expect(h.created).toEqual([]);
-    });
-  });
-
-  describe('a done close that fires while the run is still working', () => {
-    it('waits for the next settle, then the full 10 minutes', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      const run = h.runs.get('src')!;
-      h.service.onModuleInit();
-
-      h.bus.publishRunStatus({
-        runId: 'src',
-        status: null,
-        outcome: recordedOutcome(),
-      });
-      run.status = 'running';
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS);
-      await settle();
-      expect(h.created).toEqual([]);
-      expect(h.service.waiting('src')).toBeNull();
-
-      run.status = 'completed';
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      expect(h.service.waiting('src')).toBe('done');
-
-      await vi.advanceTimersByTimeAsync(LESSON_DONE_QUIET_MS - 1);
-      await settle();
-      expect(h.created).toEqual([]);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await settle();
-      expect(h.created).toEqual([
-        expect.objectContaining({ runId: 'src', closedBy: 'done' }),
-      ]);
-    });
-  });
-
-  describe('the open segment of a thread', () => {
-    it('a second close with nothing new past the open segment writes nothing', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      const first = await h.service.close('src', 'manual');
-      expect(first).not.toBeNull();
-      const second = await h.service.close('src', 'manual');
-
-      expect(second).toBeNull();
-      expect(h.created).toHaveLength(1);
-      expect(h.updated).toEqual([]);
-      expect(h.written).toHaveLength(1);
-    });
-
-    it('a later close with new items extends the open segment and writes a new offer row', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      await h.service.close('src', 'manual');
-      h.items.get('src')!.push(userMessage(3, 'no, still wrong'));
-      await h.service.close('src', 'idle');
+      const second = await h.service.close('src', 'archive');
 
       expect(h.created).toHaveLength(1);
       expect(h.updated).toEqual([
         {
           id: 'seg-1',
-          fields: expect.objectContaining({ toSeq: 3, closedBy: 'idle' }),
+          fields: expect.objectContaining({
+            fromSeq: -1,
+            toSeq: 4,
+            closedBy: 'archive',
+            status: 'queued',
+          }),
         },
       ]);
-      expect(h.written).toHaveLength(2);
-      expect(h.written[1]).toEqual({
-        runId: 'src',
-        kind: 'lesson_offer',
-        payload: expect.objectContaining({
-          segmentId: 'seg-1',
-          fromSeq: -1,
-          toSeq: 3,
-        }),
+      expect(second).toMatchObject({ id: 'seg-1', toSeq: 4 });
+    });
+
+    it('queues nothing while a reflection on the thread is still running', async () => {
+      const h = build({
+        items: { src: correctionStretch() },
+        reflections: [
+          runOf({ id: 'refl', status: 'running', analysisSourceRunId: 'src' }),
+        ],
       });
+
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toBeNull();
+      expect(h.created).toEqual([]);
     });
 
-    it('a close after a dismissed stretch offers only what came after it, with its own signals and price', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
+    it.each([
+      ['a project chat', { editsProjectId: 'proj-1' }],
+      ['a team builder chat', { editsTeamSlug: 'reviewers' }],
+      ['a team analysis', { analysisTeamSlug: 'reviewers' }],
+      ['a thread pending deletion', { pendingDeleteAt: new Date() }],
+    ])('never queues %s', async (_, overrides) => {
+      const h = build({
+        runs: [runOf(overrides as Partial<Run>)],
+        items: { src: correctionStretch() },
+      });
 
-      const first = await h.service.close('src', 'manual');
-      await h.segments.updateById(first!.id, { status: 'dismissed' });
-      h.items.get('src')!.push(userMessage(3, 'no, still wrong'));
-      await h.service.close('src', 'idle');
+      const queued = await h.service.close('src', 'archive');
 
-      expect(h.created).toHaveLength(2);
-      expect(h.created[1]).toEqual(
-        expect.objectContaining({ fromSeq: 2, toSeq: 3, status: 'offered' }),
-      );
-      expect(h.written[1]!.payload).toEqual(
-        expect.objectContaining({
-          segmentId: 'seg-2',
-          fromSeq: 2,
-          toSeq: 3,
-          signals: [expect.objectContaining({ seq: 3 })],
-        }),
-      );
-      expect(h.estimates.estimate).toHaveBeenLastCalledWith(
-        expect.anything(),
-        { fromSeq: 2, toSeq: 3 },
-        {},
-        expect.anything(),
-      );
-    });
-
-    it('a close with nothing new past a dismissed stretch offers nothing', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
-
-      const first = await h.service.close('src', 'manual');
-      await h.segments.updateById(first!.id, { status: 'dismissed' });
-      const again = await h.service.close('src', 'archive');
-
-      expect(again).toBeNull();
-      expect(h.created).toHaveLength(1);
-      expect(h.written).toHaveLength(1);
+      expect(queued).toBeNull();
+      expect(h.created).toEqual([]);
     });
   });
 
-  describe('switches', () => {
-    it('the app setting off writes nothing, however the thread is closed', async () => {
+  describe('lessons on or off', () => {
+    it('queues nothing when the app’s lessons are off', async () => {
       const h = build({
-        items: { src: correctionStretch() },
         config: { mode: 'off' },
-      });
-      h.service.onModuleInit();
-
-      await expect(h.service.close('src', 'manual')).resolves.toBeNull();
-      expect(h.created).toEqual([]);
-      expect(h.written).toEqual([]);
-    });
-
-    it('a project set to off writes nothing', async () => {
-      const h = build({
         items: { src: correctionStretch() },
-        project: { lessons: 'off' },
       });
-      h.service.onModuleInit();
 
-      await expect(h.service.close('src', 'manual')).resolves.toBeNull();
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toBeNull();
       expect(h.created).toEqual([]);
     });
 
-    it('a team set to on is offered even when its project is off', async () => {
+    it('queues nothing when the project’s lessons are off, even with the app on', async () => {
       const h = build({
-        items: { src: correctionStretch() },
-        runs: [runOf({ teamId: 'team-1' })],
         project: { lessons: 'off' },
-        teamLessons: 'on',
+        items: { src: correctionStretch() },
       });
-      h.service.onModuleInit();
 
-      await expect(h.service.close('src', 'manual')).resolves.toMatchObject({
-        runId: 'src',
-        closedBy: 'manual',
-      });
-      expect(h.created).toHaveLength(1);
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toBeNull();
+      expect(h.created).toEqual([]);
     });
 
-    it('a team set to off wins over a project set to on', async () => {
+    it('queues nothing when the team’s lessons are off, even when the project is on', async () => {
       const h = build({
-        items: { src: correctionStretch() },
         runs: [runOf({ teamId: 'team-1' })],
         project: { lessons: 'on' },
         teamLessons: 'off',
+        items: { src: correctionStretch() },
       });
-      h.service.onModuleInit();
 
-      await expect(h.service.close('src', 'manual')).resolves.toBeNull();
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toBeNull();
       expect(h.created).toEqual([]);
     });
 
-    it('a team whose lookup fails is judged by the snapshot it ran with', async () => {
+    it('queues a stretch when the team turns lessons on over a project that has them off', async () => {
       const h = build({
-        items: { src: correctionStretch() },
-        runs: [
-          runOf({
-            teamId: 'team-1',
-            teamSnapshot: JSON.stringify({ lessons: 'off' }),
-          }),
-        ],
-        project: { lessons: 'on' },
-        teamsFail: true,
-      });
-      h.service.onModuleInit();
-
-      await expect(h.service.close('src', 'manual')).resolves.toBeNull();
-      expect(h.created).toEqual([]);
-    });
-
-    it('with no team store, the team snapshot decides', async () => {
-      const h = build({
-        items: { src: correctionStretch() },
-        runs: [
-          runOf({
-            teamId: 'team-1',
-            teamSnapshot: JSON.stringify({ lessons: 'on' }),
-          }),
-        ],
+        runs: [runOf({ teamId: 'team-1' })],
         project: { lessons: 'off' },
-        withoutTeams: true,
+        teamLessons: 'on',
+        items: { src: correctionStretch() },
       });
-      h.service.onModuleInit();
 
-      await expect(h.service.close('src', 'manual')).resolves.toMatchObject({
-        runId: 'src',
-        closedBy: 'manual',
-      });
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).toMatchObject({ id: 'seg-1', toSeq: 2 });
     });
-  });
 
-  describe('start-up sweep', () => {
-    it('closes threads quiet past the window and re-arms the rest', async () => {
-      const start = Date.now();
-      const sweepAt = start + LESSON_BOOT_SWEEP_DELAY_MS;
-      const quietPast = runOf({
-        id: 'quiet',
-        updatedAt: new Date(sweepAt - 4 * HOUR_MS),
-      });
-      const recent = runOf({
-        id: 'recent',
-        updatedAt: new Date(sweepAt - HOUR_MS),
-      });
-      const live = runOf({
-        id: 'live',
-        status: 'running',
-        updatedAt: new Date(sweepAt - 4 * HOUR_MS),
-      });
+    it('reads the team’s setting from the run’s own snapshot when the team cannot be read', async () => {
       const h = build({
-        runs: [quietPast, recent, live],
-        items: {
-          quiet: correctionStretch(),
-          recent: correctionStretch(),
-          live: correctionStretch(),
-        },
-        candidates: [quietPast, recent, live],
+        runs: [runOf({ teamId: 'team-1', teamSnapshot: '{"lessons":"off"}' })],
+        teamsFail: true,
+        items: { src: correctionStretch() },
       });
-      h.service.onModuleInit();
-      h.service.onApplicationBootstrap();
 
-      await vi.advanceTimersByTimeAsync(LESSON_BOOT_SWEEP_DELAY_MS);
-      await settle();
+      const queued = await h.service.close('src', 'archive');
 
-      expect(h.created).toEqual([
-        expect.objectContaining({ runId: 'quiet', closedBy: 'idle' }),
-      ]);
-      expect(h.service.waiting('live')).toBeNull();
-      expect(h.service.waiting('recent')).toBe('idle');
-
-      await vi.advanceTimersByTimeAsync(2 * HOUR_MS - 1);
-      await settle();
-      expect(h.created).toHaveLength(1);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await settle();
-      expect(h.created).toEqual([
-        expect.objectContaining({ runId: 'quiet' }),
-        expect.objectContaining({ runId: 'recent', closedBy: 'idle' }),
-      ]);
+      expect(queued).toBeNull();
+      expect(h.created).toEqual([]);
     });
   });
 
-  describe('teardown', () => {
-    it('clears every waiting close when the module is destroyed', async () => {
-      const h = build({ items: { src: correctionStretch() } });
-      h.service.onModuleInit();
+  describe('skip', () => {
+    it('ends the queued stretch as skipped and moves the watermark past it', async () => {
+      const h = build({
+        segments: [queuedSegment()],
+        items: { src: correctionStretch() },
+      });
 
-      h.bus.publishRunStatus({ runId: 'src', status: 'completed' });
-      h.service.onModuleDestroy();
-      expect(h.service.waiting('src')).toBeNull();
+      const wire = await h.service.skip('seg-1');
 
-      await vi.advanceTimersByTimeAsync(3 * HOUR_MS);
-      await settle();
-      expect(h.created).toEqual([]);
+      expect(wire.status).toBe('skipped');
+      expect(h.segments.updateById).toHaveBeenCalledWith(
+        'seg-1',
+        { status: 'skipped', skipReason: 'user_skipped', leaseUntil: null },
+        h.tx,
+      );
+      expect(h.runDao.updateById).toHaveBeenCalledWith(
+        'src',
+        { reflectedThroughSeq: 2 },
+        h.tx,
+      );
+      expect(h.publishChanged).toHaveBeenCalledWith('src');
+    });
+
+    it('keeps the watermark where it is when it is already past the stretch', async () => {
+      const h = build({
+        runs: [runOf({ reflectedThroughSeq: 5 })],
+        segments: [queuedSegment()],
+        items: { src: correctionStretch() },
+      });
+
+      await h.service.skip('seg-1');
+
+      expect(h.runDao.updateById).not.toHaveBeenCalled();
+    });
+
+    it.each(['reflected', 'skipped', 'reflecting'])(
+      'refuses to skip a stretch that is already %s, with a conflict',
+      async (status) => {
+        const h = build({
+          segments: [queuedSegment({ status })],
+          items: { src: correctionStretch() },
+        });
+
+        await expect(h.service.skip('seg-1')).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+        expect(h.segments.updateById).not.toHaveBeenCalled();
+        expect(h.runDao.updateById).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses to skip a stretch that does not exist', async () => {
+      const h = build();
+
+      await expect(h.service.skip('seg-404')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

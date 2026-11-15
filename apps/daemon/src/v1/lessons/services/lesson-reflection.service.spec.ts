@@ -10,14 +10,20 @@ import { environment } from '../../../environments';
 import type { RunStatusEvent } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
+import type { EffortsService } from '../../agents/services/efforts.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
-import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
+import {
+  DEFAULT_LESSONS_CONFIG,
+  type LessonModelChoice,
+  type LessonsConfig,
+} from '../lessons.types';
 import { LessonReflectionService } from './lesson-reflection.service';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
@@ -66,22 +72,47 @@ function runOf(overrides: Partial<Run>): Run {
   } as unknown as Run;
 }
 
+const QUEUED = {
+  id: 'seg-q',
+  runId: 'src',
+  status: 'queued',
+  attempts: 1,
+  fromSeq: -1,
+  toSeq: 4,
+  closedBy: 'archive',
+};
+
+function choiceOf(overrides: Partial<LessonModelChoice>): LessonModelChoice {
+  return {
+    agent: 'claude',
+    configDir: null,
+    model: null,
+    effort: null,
+    contextWindow: null,
+    modelParameters: {},
+    ...overrides,
+  };
+}
+
 function build(
   options: {
     source?: Partial<Run>;
     maxSeq?: number;
     /** The newest row that is not a lessons row; defaults to `maxSeq`. */
     newestOwn?: number;
-    /** The thread's open stretch, as `openOf` finds it. */
-    open?: Record<string, unknown> | null;
-    /** The stretch a press named, as `getById` finds it. */
-    segment?: Record<string, unknown> | null;
+    /** The thread's queued stretch, as `queuedOf` finds it. */
+    queued?: Record<string, unknown> | null;
     /** The stretch a reflection run belongs to, as `ofReflection` finds it. */
     reflectionSegment?: Record<string, unknown> | null;
     items?: Item[];
     running?: Partial<Run>[];
     project?: { id: string; folder: string } | null;
-    config?: Omit<LessonsConfig, 'quietWindowHours'>;
+    config?: Partial<LessonsConfig>;
+    /** The light model each CLI offers, as its adapter reports it. */
+    lightModels?: Record<string, string | null>;
+    /** The efforts the CLIs accept; none by default. */
+    acceptsEffort?: boolean;
+    runItems?: Item[];
     rejected?: { title: string; rejectReason: string | null }[];
     sendFails?: Error;
     createFails?: Error;
@@ -99,6 +130,7 @@ function build(
   };
   const itemDao = {
     maxSeq: vi.fn(() => Promise.resolve(maxSeq)),
+    getByRun: vi.fn(() => Promise.resolve(options.runItems ?? [])),
     maxSeqExcept: vi.fn(() => Promise.resolve(options.newestOwn ?? maxSeq)),
     analysisPage: vi.fn(
       (
@@ -134,6 +166,7 @@ function build(
         : Promise.reject(options.sendFails),
     ),
     delete: vi.fn((_runId: string) => Promise.resolve({ deleted: true })),
+    cancel: vi.fn((_runId: string) => Promise.resolve()),
   };
   const segments = {
     create: vi.fn((input: Record<string, unknown>) =>
@@ -143,8 +176,7 @@ function build(
     deleteOfRuns: vi.fn((_runIds: readonly string[], _em: unknown) =>
       Promise.resolve(),
     ),
-    openOf: vi.fn(() => Promise.resolve(options.open ?? null)),
-    getById: vi.fn(() => Promise.resolve(options.segment ?? null)),
+    queuedOf: vi.fn(() => Promise.resolve(options.queued ?? null)),
     ofReflection: vi.fn(() =>
       Promise.resolve(options.reflectionSegment ?? null),
     ),
@@ -157,7 +189,16 @@ function build(
   const projectScope = {
     projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
-  const config = new LessonsConfigService();
+  const adapters = {
+    for: (agent: string) => ({
+      getConfig: () => ({ lightModel: options.lightModels?.[agent] ?? null }),
+    }),
+  };
+  const efforts = { accepts: () => options.acceptsEffort ?? false };
+  const config = new LessonsConfigService(
+    adapters as unknown as AgentAdapterRegistry,
+    efforts as unknown as EffortsService,
+  );
   config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
   const events = new LessonsEventBus();
   const service = new LessonReflectionService(
@@ -346,62 +387,145 @@ describe('LessonReflectionService.start', () => {
     expect(brief).toContain('The daemon found no learning signal');
   });
 
-  it('takes the agent, model and effort the input names over the settings', async () => {
+  it('takes the agent, model and effort the input names over the reflector', async () => {
     const fixture = build({
       config: {
-        mode: 'offer',
-        agentKind: 'claude',
-        model: 'haiku',
-        effort: 'low',
+        mode: 'auto',
+        reflector: choiceOf({
+          agent: 'claude',
+          model: 'haiku',
+          effort: 'low',
+          configDir: '/profiles/reflector',
+        }),
       },
     });
 
     await fixture.service.start('src', {
       agentKind: 'codex',
       model: 'gpt-5',
-      effort: 'high',
+      effort: 'medium',
+      configDir: '/profiles/press',
     });
 
     expect(fixture.chats.createChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentKind: 'codex',
         model: 'gpt-5',
-        effort: 'high',
+        effort: 'medium',
+        configDir: '/profiles/press',
       }),
     );
   });
 
-  it('takes the model and effort from the settings when they name no agent', async () => {
+  it('runs as the reflector, profile included, when the input names nothing', async () => {
     const fixture = build({
-      config: { mode: 'offer', agentKind: null, model: 'haiku', effort: 'low' },
+      source: { agentKind: 'claude', configDir: '/profiles/thread' },
+      config: {
+        mode: 'auto',
+        reflector: choiceOf({
+          agent: 'codex',
+          model: 'o3',
+          effort: 'low',
+          configDir: '/profiles/reflector',
+          contextWindow: '200k',
+          modelParameters: { verbosity: 'low' },
+        }),
+      },
     });
 
     await fixture.service.start('src', {});
 
     expect(fixture.chats.createChat).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentKind: 'claude',
-        model: 'haiku',
+        agentKind: 'codex',
+        model: 'o3',
+        effort: 'low',
+        configDir: '/profiles/reflector',
+        contextWindow: '200k',
+        modelParameters: { verbosity: 'low' },
+      }),
+    );
+  });
+
+  it('keeps the reflector’s effort when the input names only a model on the reflector’s CLI', async () => {
+    const fixture = build({
+      config: {
+        mode: 'auto',
+        reflector: choiceOf({ agent: 'codex', model: 'o3', effort: 'low' }),
+      },
+    });
+
+    await fixture.service.start('src', { model: 'gpt-5' });
+
+    expect(fixture.chats.createChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'codex',
+        model: 'gpt-5',
         effort: 'low',
       }),
     );
   });
 
-  it('drops the settings’ model and effort when the input switches to another agent', async () => {
+  it('drops the reflector’s model, effort and profile when the input switches to another agent', async () => {
     const fixture = build({
+      source: { agentKind: 'codex' },
+      lightModels: { claude: 'claude-light' },
+      acceptsEffort: true,
       config: {
-        mode: 'offer',
-        agentKind: 'codex',
-        model: 'o3',
-        effort: 'high',
+        mode: 'auto',
+        reflector: choiceOf({
+          agent: 'codex',
+          model: 'o3',
+          effort: 'low',
+          configDir: '/profiles/reflector',
+          contextWindow: '200k',
+          modelParameters: { verbosity: 'low' },
+        }),
       },
     });
 
     await fixture.service.start('src', { agentKind: 'claude' });
 
     const input = fixture.chats.createChat.mock.calls[0]![0];
-    expect(input).toMatchObject({ agentKind: 'claude' });
-    expect(input.model).toBeUndefined();
+    expect(input).toMatchObject({
+      agentKind: 'claude',
+      model: 'claude-light',
+      effort: 'high',
+    });
+    expect(input.configDir).toBeUndefined();
+    expect(input.contextWindow).toBeUndefined();
+    expect(input.modelParameters).toBeUndefined();
+  });
+
+  it('with no reflector runs as the thread: its CLI and profile on that CLI’s light model at high effort', async () => {
+    const fixture = build({
+      source: { agentKind: 'codex', configDir: '/profiles/thread' },
+      lightModels: { codex: 'codex-light', claude: 'claude-light' },
+      acceptsEffort: true,
+    });
+
+    await fixture.service.start('src', {});
+
+    expect(fixture.chats.createChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'codex',
+        model: 'codex-light',
+        effort: 'high',
+        configDir: '/profiles/thread',
+      }),
+    );
+  });
+
+  it('with no reflector sets no effort when the light model does not accept high', async () => {
+    const fixture = build({
+      lightModels: { claude: 'claude-light' },
+      acceptsEffort: false,
+    });
+
+    await fixture.service.start('src', {});
+
+    const input = fixture.chats.createChat.mock.calls[0]![0];
+    expect(input).toMatchObject({ agentKind: 'claude', model: 'claude-light' });
     expect(input.effort).toBeUndefined();
   });
 
@@ -462,7 +586,7 @@ describe('LessonReflectionService.start', () => {
     });
   });
 
-  it('deletes the new chat and marks its segment failed when the brief cannot be sent', async () => {
+  it('deletes the new chat and puts its stretch back in the queue with the reason when the brief cannot be sent', async () => {
     const fixture = build({ sendFails: new Error('boom') });
 
     await expect(fixture.service.start('src', {})).rejects.toThrow('boom');
@@ -470,12 +594,27 @@ describe('LessonReflectionService.start', () => {
     expect(fixture.chats.delete).toHaveBeenCalledWith('refl-run');
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
       'seg-1',
-      { status: 'failed' },
+      { status: 'queued', failReason: 'boom', leaseUntil: null },
       fixture.em,
     );
   });
 
-  it('marks the segment failed and announces it when the chat cannot be created', async () => {
+  it('leaves a stretch failed with the reason once its last attempt cannot send the brief', async () => {
+    const fixture = build({
+      queued: { ...QUEUED, attempts: 2 },
+      sendFails: new Error('boom'),
+    });
+
+    await expect(fixture.service.start('src', {})).rejects.toThrow('boom');
+
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-q',
+      { status: 'failed', failReason: 'boom', leaseUntil: null },
+      fixture.em,
+    );
+  });
+
+  it('queues the segment again with the reason and announces it when the chat cannot be created', async () => {
     const fixture = build({ createFails: new Error('no agent') });
     const announced: (string | null)[] = [];
     fixture.events
@@ -487,7 +626,7 @@ describe('LessonReflectionService.start', () => {
     expect(fixture.chats.sendMessage).not.toHaveBeenCalled();
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
       'seg-1',
-      { status: 'failed' },
+      { status: 'queued', failReason: 'no agent', leaseUntil: null },
       fixture.em,
     );
     expect(announced).toEqual(['src']);
@@ -551,22 +690,24 @@ describe('LessonReflectionService — review findings', () => {
     expect(fixture.chats.createChat).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to the thread’s own agent when the settings name an agent this app does not know', async () => {
+  it('falls back to the thread’s own agent when the reflector names an agent this app does not know', async () => {
     const fixture = build({
       source: { agentKind: 'claude' },
+      lightModels: { claude: 'claude-light' },
       config: {
-        mode: 'offer',
-        agentKind: 'mystery-cli' as never,
-        model: 'haiku',
-        effort: 'low',
+        mode: 'auto',
+        reflector: choiceOf({
+          agent: 'mystery-cli',
+          model: 'haiku',
+          effort: 'low',
+        }),
       },
     });
 
     await fixture.service.start('src', {});
 
     const input = fixture.chats.createChat.mock.calls[0]![0];
-    expect(input).toMatchObject({ agentKind: 'claude' });
-    expect(input.model).toBeUndefined();
+    expect(input).toMatchObject({ agentKind: 'claude', model: 'claude-light' });
     expect(input.effort).toBeUndefined();
   });
 
@@ -646,125 +787,86 @@ describe('LessonReflectionService.state', () => {
   });
 });
 
-describe('LessonReflectionService.start on a waiting stretch', () => {
-  const OPEN = {
-    id: 'seg-open',
-    runId: 'src',
-    status: 'offered',
-    attempts: 2,
-    fromSeq: -1,
-    toSeq: 4,
-    closedBy: 'idle',
-  };
-
-  it('adopts the open stretch of the thread: no new row, one more attempt, reflecting', async () => {
-    const fixture = build({ open: { ...OPEN } });
+describe('LessonReflectionService.start on a queued stretch', () => {
+  it('takes the thread’s queued stretch: no new row, one more attempt, reflecting with a lease and the closer it was queued with', async () => {
+    const fixture = build({ queued: { ...QUEUED } });
 
     const started = await fixture.service.start('src', {});
 
-    expect(started.segmentId).toBe('seg-open');
+    expect(started.segmentId).toBe('seg-q');
     expect(fixture.segments.create).not.toHaveBeenCalled();
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
-      'seg-open',
+      'seg-q',
       expect.objectContaining({
         status: 'reflecting',
-        attempts: 3,
+        attempts: 2,
         reflectionRunId: null,
+        checkRunId: null,
+        failReason: null,
+        leaseUntil: expect.any(Date),
       }),
       fixture.em,
     );
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
-      'seg-open',
+      'seg-q',
       { reflectionRunId: 'refl-run' },
       fixture.em,
     );
+    expect(fixture.segments.updateById).not.toHaveBeenCalledWith(
+      'seg-q',
+      expect.objectContaining({ closedBy: expect.anything() }),
+      fixture.em,
+    );
   });
 
-  it('adopts the stretch a press named, without looking for the open one', async () => {
+  it('reads from the thread’s watermark to the current end, not the span it was queued with', async () => {
     const fixture = build({
-      segment: { ...OPEN, id: 'seg-named', status: 'failed' },
+      source: { reflectedThroughSeq: 2 },
+      queued: { ...QUEUED, fromSeq: 0, toSeq: 4 },
     });
-
-    const started = await fixture.service.start('src', {
-      segmentId: 'seg-named',
-    });
-
-    expect(started.segmentId).toBe('seg-named');
-    expect(fixture.segments.getById).toHaveBeenCalledWith(
-      'seg-named',
-      fixture.em,
-    );
-    expect(fixture.segments.openOf).not.toHaveBeenCalled();
-    expect(fixture.segments.create).not.toHaveBeenCalled();
-  });
-
-  it('a named stretch that starts after a dismissed part reads from its own start, leaving that part unread', async () => {
-    const fixture = build({ segment: { ...OPEN, fromSeq: 4, toSeq: 7 } });
-
-    const started = await fixture.service.start('src', {
-      segmentId: 'seg-open',
-    });
-
-    expect(started).toEqual(
-      expect.objectContaining({ fromSeq: 4, toSeq: SNAPSHOT_SEQ }),
-    );
-    expect(fixture.segments.updateById).toHaveBeenCalledWith(
-      'seg-open',
-      expect.objectContaining({ fromSeq: 4, status: 'reflecting' }),
-      fixture.em,
-    );
-  });
-
-  it('Reflect now, naming no stretch, reads everything past the last reflection, a dismissed part included', async () => {
-    const fixture = build({ open: { ...OPEN, fromSeq: 4, toSeq: 7 } });
 
     const started = await fixture.service.start('src', {});
 
     expect(started).toEqual(
-      expect.objectContaining({ fromSeq: -1, toSeq: SNAPSHOT_SEQ }),
+      expect.objectContaining({ fromSeq: 2, toSeq: SNAPSHOT_SEQ }),
+    );
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-q',
+      expect.objectContaining({ fromSeq: 2, toSeq: SNAPSHOT_SEQ }),
+      fixture.em,
     );
   });
 
-  it.each(['dismissed', 'reflected', 'reflecting', 'empty'])(
-    'refuses a named stretch that is already %s, with 409 LESSON_SEGMENT_DECIDED',
-    async (status) => {
-      const fixture = build({ segment: { ...OPEN, status } });
+  it.each(['archive', 'manual'] as const)(
+    'opens a stretch of its own for a %s close when none is queued',
+    async (closer) => {
+      const fixture = build();
 
-      await expect(
-        fixture.service.start('src', { segmentId: 'seg-open' }),
-      ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_DECIDED' });
-      expect(fixture.chats.createChat).not.toHaveBeenCalled();
+      await fixture.service.start('src', {}, closer);
+
+      expect(fixture.segments.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          closedBy: closer,
+          attempts: 1,
+          status: 'reflecting',
+          leaseUntil: expect.any(Date),
+        }),
+        fixture.em,
+      );
     },
   );
-
-  it('refuses a named stretch of another thread with 404 LESSON_SEGMENT_NOT_FOUND', async () => {
-    const fixture = build({ segment: { ...OPEN, runId: 'other-thread' } });
-
-    await expect(
-      fixture.service.start('src', { segmentId: 'seg-open' }),
-    ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_NOT_FOUND' });
-    expect(fixture.chats.createChat).not.toHaveBeenCalled();
-  });
-
-  it('refuses a stretch id the thread does not have, with 404 LESSON_SEGMENT_NOT_FOUND', async () => {
-    const fixture = build({ segment: null });
-
-    await expect(
-      fixture.service.start('src', { segmentId: 'missing' }),
-    ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_NOT_FOUND' });
-    expect(fixture.chats.createChat).not.toHaveBeenCalled();
-  });
 });
 
 describe('LessonReflectionService: a reflection that ends without filing', () => {
-  it('marks its stretch failed when its terminal status arrives while the stretch is still reflecting', async () => {
-    const fixture = build({
-      reflectionSegment: {
-        id: 'seg-9',
-        runId: 'src',
-        status: 'reflecting',
-      },
-    });
+  const reflecting = (attempts: number) => ({
+    id: 'seg-9',
+    runId: 'src',
+    status: 'reflecting',
+    attempts,
+  });
+
+  it('puts its stretch back in the queue with the reason when its terminal status arrives while the stretch is still reflecting', async () => {
+    const fixture = build({ reflectionSegment: reflecting(1) });
     fixture.service.onModuleInit();
 
     fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
@@ -772,21 +874,61 @@ describe('LessonReflectionService: a reflection that ends without filing', () =>
     await vi.waitFor(() =>
       expect(fixture.segments.updateById).toHaveBeenCalledWith(
         'seg-9',
-        { status: 'failed' },
+        {
+          status: 'queued',
+          failReason: 'the reflection ended without filing lessons',
+          leaseUntil: null,
+        },
         fixture.em,
       ),
     );
     fixture.service.onModuleDestroy();
   });
 
-  it('announces the failed stretch on its thread', async () => {
+  it('records the reflection’s own error as the reason', async () => {
     const fixture = build({
-      reflectionSegment: {
-        id: 'seg-9',
-        runId: 'src',
-        status: 'reflecting',
-      },
+      reflectionSegment: reflecting(1),
+      runItems: [
+        {
+          seq: 1,
+          kind: 'error',
+          role: null,
+          payload: JSON.stringify({ message: 'rate limited' }),
+        },
+      ],
     });
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'failed' });
+
+    await vi.waitFor(() =>
+      expect(fixture.segments.updateById).toHaveBeenCalledWith(
+        'seg-9',
+        expect.objectContaining({ failReason: 'rate limited' }),
+        fixture.em,
+      ),
+    );
+    fixture.service.onModuleDestroy();
+  });
+
+  it('leaves the stretch failed once its attempts are spent', async () => {
+    const fixture = build({ reflectionSegment: reflecting(3) });
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+
+    await vi.waitFor(() =>
+      expect(fixture.segments.updateById).toHaveBeenCalledWith(
+        'seg-9',
+        expect.objectContaining({ status: 'failed' }),
+        fixture.em,
+      ),
+    );
+    fixture.service.onModuleDestroy();
+  });
+
+  it('announces the stretch on its thread', async () => {
+    const fixture = build({ reflectionSegment: reflecting(1) });
     const announced: (string | null)[] = [];
     fixture.events
       .allChanges()
@@ -799,36 +941,29 @@ describe('LessonReflectionService: a reflection that ends without filing', () =>
     fixture.service.onModuleDestroy();
   });
 
-  it('leaves a stretch that already filed its lessons alone', async () => {
-    const fixture = build({
-      reflectionSegment: {
-        id: 'seg-9',
-        runId: 'src',
-        status: 'reflected',
-      },
-    });
-    fixture.service.onModuleInit();
+  it.each(['reflected', 'checking', 'empty', 'failed', 'queued'])(
+    'leaves a stretch that is already %s alone',
+    async (status) => {
+      const fixture = build({
+        reflectionSegment: { ...reflecting(1), status },
+      });
+      fixture.service.onModuleInit();
 
-    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
-    await vi.waitFor(() =>
-      expect(fixture.segments.ofReflection).toHaveBeenCalledWith(
-        'refl-9',
-        fixture.em,
-      ),
-    );
+      fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+      await vi.waitFor(() =>
+        expect(fixture.segments.ofReflection).toHaveBeenCalledWith(
+          'refl-9',
+          fixture.em,
+        ),
+      );
 
-    expect(fixture.segments.updateById).not.toHaveBeenCalled();
-    fixture.service.onModuleDestroy();
-  });
+      expect(fixture.segments.updateById).not.toHaveBeenCalled();
+      fixture.service.onModuleDestroy();
+    },
+  );
 
   it('leaves a reflection still running alone', async () => {
-    const fixture = build({
-      reflectionSegment: {
-        id: 'seg-9',
-        runId: 'src',
-        status: 'reflecting',
-      },
-    });
+    const fixture = build({ reflectionSegment: reflecting(1) });
     fixture.service.onModuleInit();
 
     fixture.statuses.next({ runId: 'refl-9', status: 'running' });
@@ -836,6 +971,50 @@ describe('LessonReflectionService: a reflection that ends without filing', () =>
     expect(fixture.segments.ofReflection).not.toHaveBeenCalled();
     expect(fixture.segments.updateById).not.toHaveBeenCalled();
     fixture.service.onModuleDestroy();
+  });
+});
+
+describe('LessonReflectionService.abandon', () => {
+  const stretch = (overrides: Record<string, unknown>) =>
+    ({
+      id: 'seg-9',
+      runId: 'src',
+      status: 'reflecting',
+      attempts: 1,
+      reflectionRunId: 'refl-9',
+      ...overrides,
+    }) as never;
+
+  it('cancels the reflection and queues the stretch again with the limit as the reason', async () => {
+    const fixture = build();
+
+    await fixture.service.abandon(stretch({}));
+
+    expect(fixture.chats.cancel).toHaveBeenCalledWith('refl-9');
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-9',
+      {
+        status: 'queued',
+        failReason: 'the reflection ran past its 30-minute limit',
+        leaseUntil: null,
+      },
+      fixture.em,
+    );
+  });
+
+  it('fails the stretch for good on its last attempt, with no chat to cancel when it never started one', async () => {
+    const fixture = build();
+
+    await fixture.service.abandon(
+      stretch({ attempts: 3, reflectionRunId: null }),
+    );
+
+    expect(fixture.chats.cancel).not.toHaveBeenCalled();
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-9',
+      expect.objectContaining({ status: 'failed' }),
+      fixture.em,
+    );
   });
 });
 

@@ -48,6 +48,8 @@ function fakeApis(listed: MemoryEntry[] = [NOTE, WAITING]) {
     ),
     createMemory: vi.fn((_request: unknown) => Promise.resolve(NOTE)),
     updateMemory: vi.fn((_request: unknown) => Promise.resolve(NOTE)),
+    indexMemory: vi.fn((_request: unknown) => Promise.resolve(NOTE)),
+    searchOnlyMemory: vi.fn((_request: unknown) => Promise.resolve(NOTE)),
   };
   return { memories, apis: { memories } as unknown as DaemonApis };
 }
@@ -263,6 +265,26 @@ describe('TeamMemoryPanel', () => {
       memoryId: 'e1',
       updateMemoryDto: { status: 'forgotten' },
     });
+  });
+
+  it('loads an agent’s entry saved at once into every chat, and leaves the team’s own note always loaded', async () => {
+    const savedAtOnce = memoryEntry({
+      id: 'e3',
+      handle: 'm3',
+      title: 'Split reviews by file',
+      teamSlug: 'review-crew',
+      source: { ...WAITING.source },
+    });
+    const { apis, memories } = fakeApis([NOTE, savedAtOnce]);
+    await render(apis);
+
+    expect(rowOf('m3').textContent).toContain('Search only');
+    expect(() => button(rowOf('m3'), 'Approve')).toThrow();
+    expect(rowOf('m1').textContent).toContain('In every chat');
+    expect(() => button(rowOf('m1'), 'Search only')).toThrow();
+    await press(button(rowOf('m3'), 'Load into every chat'));
+
+    expect(memories.indexMemory).toHaveBeenCalledWith({ memoryId: 'e3' });
   });
 
   it('approves a waiting agent entry', async () => {

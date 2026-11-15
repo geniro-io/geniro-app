@@ -9,6 +9,7 @@ import { ConfirmActionButton } from './confirm-action-button';
 import { EmptyState } from './empty-state';
 import { ErrorText } from './error-text';
 import { MemoryRow } from './memory-row';
+import type { MemorySortVerdict } from './memory-sort-panel';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
@@ -210,6 +211,28 @@ function Reasons({
   );
 }
 
+function SortVerdict({
+  verdict,
+}: {
+  verdict: MemorySortVerdict | undefined;
+}): React.JSX.Element | null {
+  if (verdict === undefined) {
+    return null;
+  }
+  return (
+    <div
+      data-slot="memory-cleanup-verdict"
+      className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      <Badge variant={verdict.keep ? 'success' : 'warning'}>
+        {verdict.keep ? 'AI: keep' : 'AI: forget'}
+      </Badge>
+      {verdict.reason === '' ? null : (
+        <span className="min-w-0 break-words">{verdict.reason}</span>
+      )}
+    </div>
+  );
+}
+
 /**
  * The cleanup list over the shared memory: the least used entries to forget
  * in batches, the duplicates and contradictions a check found, the kept ones,
@@ -254,6 +277,8 @@ export function MemoryCleanupDialog({
   projectName,
   teamName,
   checkPanel = null,
+  sortPanel = null,
+  verdicts,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -296,6 +321,10 @@ export function MemoryCleanupDialog({
   projectName: (projectId: string | null) => string | null;
   teamName: (slug: string | null) => string | null;
   checkPanel?: React.ReactNode;
+  /** Least used: the Sort with AI box, absent on a paired device. */
+  sortPanel?: React.ReactNode;
+  /** Least used: what the AI sort said of each entry, by entry id. */
+  verdicts?: ReadonlyMap<string, MemorySortVerdict>;
 }): React.JSX.Element {
   const tabLabel = (label: string, n: number | null) =>
     n === null ? (
@@ -336,6 +365,9 @@ export function MemoryCleanupDialog({
             <>
               <UsageLine row={item} />
               <Reasons row={item} tab={tab} />
+              {tab === 'cold' ? (
+                <SortVerdict verdict={verdicts?.get(entry.id)} />
+              ) : null}
             </>
           }
           onForget={
@@ -511,6 +543,7 @@ export function MemoryCleanupDialog({
             </Button>
           </div>
         ) : null}
+        {tab === 'cold' ? sortPanel : null}
         {tab === 'forgotten' && batches.length > 0 ? (
           <section
             aria-label="Recent cleanups"

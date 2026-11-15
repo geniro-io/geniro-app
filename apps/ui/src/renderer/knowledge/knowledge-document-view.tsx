@@ -30,6 +30,7 @@ export function KnowledgeDocumentView({
   onRestore,
   onDelete,
   onReview,
+  onIndexed,
 }: {
   document: KnowledgeDocumentDetailDto;
   placeName: string;
@@ -43,6 +44,8 @@ export function KnowledgeDocumentView({
   onRestore: () => void;
   onDelete: () => Promise<void>;
   onReview: (head: KnowledgeHead) => void;
+  /** Put the document into every new chat's knowledge index (true), or keep it to search only. */
+  onIndexed: (indexed: boolean) => void;
 }): React.JSX.Element {
   const [moreOpen, setMoreOpen] = useState(false);
   const archived = document.status === 'archived';
@@ -93,9 +96,19 @@ export function KnowledgeDocumentView({
         </KnowledgeNote>
       ) : null}
       {document.status === 'active' && document.approvedAt === null ? (
-        <KnowledgeNote>
-          An agent saved this and you have not reviewed it. Agents read it
-          marked unreviewed, and it stays out of the index.
+        <KnowledgeNote
+          action={
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              title="List it in the knowledge index every new chat starts with"
+              onClick={() => onIndexed(true)}>
+              Load into every chat
+            </Button>
+          }>
+          Search only. An agent saved this; agents find it when they search
+          knowledge, and no chat starts with it in its index.
         </KnowledgeNote>
       ) : null}
       <header className="flex flex-wrap items-start gap-3">
@@ -135,6 +148,10 @@ export function KnowledgeDocumentView({
                     ...(canExport
                       ? [{ value: 'export', label: 'Export as Markdown' }]
                       : []),
+                    ...(document.status === 'active' &&
+                    document.approvedAt !== null
+                      ? [{ value: 'search-only', label: 'Search only' }]
+                      : []),
                     ...(archived
                       ? []
                       : [{ value: 'archive', label: 'Archive' }]),
@@ -149,6 +166,8 @@ export function KnowledgeDocumentView({
                   onExport();
                 } else if (value === 'archive') {
                   onArchive();
+                } else if (value === 'search-only') {
+                  onIndexed(false);
                 }
               }}
               onClose={() => setMoreOpen(false)}

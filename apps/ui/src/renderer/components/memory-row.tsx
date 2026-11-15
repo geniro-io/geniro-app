@@ -18,6 +18,7 @@ export function MemoryRow({
   onForget,
   onRestore,
   onApprove,
+  onIndexed,
   forgetDescription = 'Agents no longer see it. It stays restorable under Forgotten.',
   leading,
   details,
@@ -32,6 +33,8 @@ export function MemoryRow({
   onForget?: () => void | Promise<void>;
   onRestore?: () => void;
   onApprove?: () => void;
+  /** Move the entry into every new chat's index (true) or to search only (false). */
+  onIndexed?: (indexed: boolean) => void;
   /** What the Forget question says will happen. */
   forgetDescription?: string;
   /** Drawn before the row, e.g. a tick for picking it. */
@@ -70,7 +73,7 @@ export function MemoryRow({
           <span className="min-w-0 text-sm font-medium break-words">
             {entry.title}
           </span>
-          <MemoryStatusBadge status={entry.status} />
+          <MemoryStatusBadge status={entry.status} indexed={entry.indexed} />
         </div>
         <ClampedText
           text={entry.body}
@@ -88,6 +91,27 @@ export function MemoryRow({
           {(isActive || isPending) && onApprove !== undefined ? (
             <Button type="button" size="sm" disabled={busy} onClick={onApprove}>
               Approve
+            </Button>
+          ) : null}
+          {isActive && onIndexed !== undefined && !entry.indexed ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              title="List its title in the memory index every new chat starts with"
+              onClick={() => onIndexed(true)}>
+              Load into every chat
+            </Button>
+          ) : null}
+          {isActive && onIndexed !== undefined && entry.indexed ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              title="Take its title out of every new chat's index; agents still find it by searching"
+              onClick={() => onIndexed(false)}>
+              Search only
             </Button>
           ) : null}
           {(isActive || isPending) && onEdit !== undefined ? (

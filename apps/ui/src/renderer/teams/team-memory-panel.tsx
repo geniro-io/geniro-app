@@ -11,6 +11,7 @@ import { Spinner } from '../components/ui/spinner';
 import {
   awaitsApproval,
   type MemoryEditing,
+  movableReach,
   useMemoryEditor,
 } from '../components/use-memory-editor';
 import type { DaemonApis } from '../daemon-api';
@@ -47,6 +48,7 @@ export function TeamMemoryPanel({
     saving,
     busy,
     setStatus,
+    setIndexed,
     submit,
     close,
   } = useMemoryEditor(api, {
@@ -101,6 +103,11 @@ export function TeamMemoryPanel({
         onApprove={
           awaitsApproval(entry)
             ? () => void setStatus(entry, 'active')
+            : undefined
+        }
+        onIndexed={
+          movableReach(entry)
+            ? (indexed) => void setIndexed(entry, indexed)
             : undefined
         }
       />

@@ -227,6 +227,16 @@ export interface AgentDisplay {
     model: string | null;
     configDir: string | null;
   }[];
+  /**
+   * Which pool member its OWN conversation runs on (1-based), whether the
+   * user pinned it there, and the member it moves to at its next turn —
+   * absent for an agent with no pool, or before the daemon has answered.
+   */
+  ownPool?: {
+    member: number;
+    pinned: boolean;
+    next: number | null;
+  };
   status: RunStatusKind;
   activeTurns: number;
   contextTokens: number | null;

@@ -4345,7 +4345,9 @@ export const RunDelegateStateSchema = z
     costUsd: z
       .number()
       .nullable()
-      .describe('calibrated against what the CLI charged; null until it can be'),
+      .describe(
+        'calibrated against what the CLI charged; null until it can be',
+      ),
     estimatedCostUsd: z
       .number()
       .nullable()
@@ -7856,8 +7858,12 @@ export interface HistoryWindow {
   probe?: boolean;
 }
 
-/** One conversation of a team run — `HistoryQueryDto.conversation` / `.call`. */
-export type HistoryConversation = { root: true } | { call: string };
+/**
+ * One slice of a run's transcript — `HistoryQueryDto.conversation` / `.call` /
+ * `.delegate`; the DTO refuses more than one at once.
+ */
+export type HistoryConversation =
+  { root: true } | { call: string } | { delegate: string };
 
 /** One page's first and last seq — the rows its anchors are read around. */
 export interface PageBounds {

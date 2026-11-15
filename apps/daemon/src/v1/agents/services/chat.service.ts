@@ -3836,6 +3836,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     afterSeq = -1,
     window?: HistoryWindow,
     inCalls?: readonly string[],
+    delegateId?: string,
   ): Promise<ItemWire[]> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
@@ -3848,6 +3849,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       em,
       window,
       inCalls,
+      delegateId,
     );
     return items.map(itemToWire);
   }

@@ -1555,9 +1555,9 @@ describe('ChatService', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("hands the history route's conversation to the transcript read", async () => {
-    // The route's `conversation` / `call` reaches the DAO only through here;
-    // dropping it would page a team run's whole transcript again.
+  it("hands the history route's conversation and delegate to the transcript read", async () => {
+    // The route's `conversation` / `call` / `delegate` reaches the DAO only
+    // through here; dropping it would page a team run's whole transcript again.
     const read = vi.spyOn(FakeItemDao.prototype, 'getByRun');
     try {
       const { service } = setup();
@@ -1571,6 +1571,18 @@ describe('ChatService', () => {
         expect.anything(),
         { limit: 10 },
         [''],
+        undefined,
+      );
+
+      await service.getHistory(run.id, -1, { limit: 10 }, undefined, 'toolu_a');
+
+      expect(read).toHaveBeenLastCalledWith(
+        run.id,
+        -1,
+        expect.anything(),
+        { limit: 10 },
+        undefined,
+        'toolu_a',
       );
     } finally {
       read.mockRestore();

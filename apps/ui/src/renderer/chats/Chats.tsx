@@ -9679,6 +9679,7 @@ export function Chats({
         threadId={activeRunId}
         runSettledAt={activeRunSettledAt}
         callConversations={callConversations}
+        liveText={liveText}
         applyRecommendations={applyRecommendations}
         memberVerdicts={memberVerdicts}
         notSent={notSent}

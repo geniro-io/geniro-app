@@ -1,8 +1,9 @@
 import { Bot, Maximize2 } from 'lucide-react';
-import { memo, useContext } from 'react';
+import { memo, useContext, useEffect } from 'react';
 
 import { MemberAvatar } from '../components/member-avatar';
 import { Button } from '../components/ui/button';
+import { Spinner } from '../components/ui/spinner';
 import { formatExactUsd, formatTokens } from './agent-activity';
 import {
   BlockRequest,
@@ -13,10 +14,17 @@ import {
   blockStatusLabel,
   BlockTitle,
 } from './block-shell';
+import type { CallConversationState } from './call-conversation';
 import { formatElapsed, WorkingRow } from './live-row';
+import { OlderMessagesControl } from './older-messages-control';
 import { untrackedExplanation, untrackedSummary } from './run-status';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
-import { SubagentMetaChips } from './subagent-meta';
+import {
+  type SubagentFiguresView,
+  subagentFiguresView,
+  useSubagentLiveFigures,
+} from './subagent-figures';
+import { plural, SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -29,6 +37,7 @@ import {
   type TaskListEntry,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
+import { DelegateConversationContext } from './use-delegate-pages';
 
 function shellStatusOf(block: SubagentBlockEntry): BlockStatus {
   switch (subagentBlockStatus(block)) {
@@ -208,11 +217,15 @@ function SubagentFacts({
   block: SubagentBlockEntry;
   factsStated: boolean;
 }): React.JSX.Element | null {
+  const view = subagentFiguresView(block, useSubagentLiveFigures(block.id));
   const facts = factsStated
     ? []
     : [
         ...(block.model === null ? [] : [block.model]),
-        ...subagentSpendParts(block),
+        ...subagentSpendParts(
+          view,
+          subagentBlockStatus(block) === 'running' ? null : block.durationMs,
+        ),
       ];
   if (facts.length === 0) {
     return null;
@@ -249,20 +262,29 @@ function SubagentFacts({
  * way, which is the required reading — a delegate whose model this build cannot
  * price has an unknown cost, not a zero one.
  */
-function subagentSpendParts(block: SubagentBlockEntry): string[] {
+function subagentSpendParts(
+  view: SubagentFiguresView,
+  durationMs: number | null,
+): string[] {
   const parts: string[] = [];
-  if (block.costUsd !== null) {
-    parts.push(`≈${formatExactUsd(block.costUsd)}`);
+  if (view.requests !== null) {
+    parts.push(plural(view.requests, 'request'));
   }
-  if (block.tokens !== null) {
-    parts.push(`${formatTokens(block.tokens)} tokens`);
+  if (view.messages !== null) {
+    parts.push(plural(view.messages, 'message'));
   }
-  if (block.durationMs !== null) {
+  if (view.tokensProcessed !== null) {
+    parts.push(`${formatTokens(view.tokensProcessed)} tokens processed`);
+  }
+  if (view.costUsd !== null) {
+    parts.push(`≈${formatExactUsd(view.costUsd)}`);
+  }
+  if (durationMs !== null) {
     // `took` stays on the word, header included. A bare `2s` on a row that
-    // already reads `49 tools · 26.1k tokens` is as easily read as an age —
+    // already reads `3 requests · 26.1k tokens` is as easily read as an age —
     // "this happened 2s ago" — which is the one thing it does not mean, and it
     // is the same wording the detail dialog has always used.
-    parts.push(`took ${formatElapsed(block.durationMs)}`);
+    parts.push(`took ${formatElapsed(durationMs)}`);
   }
   return parts;
 }
@@ -520,6 +542,84 @@ export function SubagentThread({
  * {@link TranscriptEntryView} pass, so a delegate's messages, tool groups and
  * reasoning look the way they look anywhere else.
  */
+/** The sentence saying which of the delegate's tool calls the card does not hold, or null once it holds them all. */
+function windowNoteOf(
+  block: SubagentBlockEntry,
+  loaded: number,
+  pages: CallConversationState | null,
+): string | null {
+  const daemon = block.durableToolCalls;
+  if (daemon === undefined || daemon <= loaded) {
+    return null;
+  }
+  if (pages !== null && !pages.loading && !pages.failed && !pages.hasOlder) {
+    return null;
+  }
+  return `Showing the last ${loaded} of ${daemon} tool calls`;
+}
+
+/**
+ * The delegate's own earlier steps, read on demand — see `useDelegatePages`.
+ *
+ * Mounted in the card's body, which draws only while the card is open, so
+ * opening the card is what reads the delegate's rows.
+ */
+function DelegateStepsPager({
+  delegateId,
+}: {
+  delegateId: string;
+}): React.JSX.Element | null {
+  const loader = useContext(DelegateConversationContext);
+  useEffect(() => {
+    loader?.load(delegateId, false);
+  }, [loader, delegateId]);
+  const state = loader?.stateOf(delegateId) ?? null;
+  if (loader === null || state === null) {
+    return null;
+  }
+  if (state.failed) {
+    return (
+      <div
+        role="status"
+        data-slot="delegate-steps-failed"
+        className="flex h-6 items-center gap-1.5 text-xs text-muted-foreground">
+        Couldn’t load this sub-agent’s steps.
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs"
+          onClick={() => loader.retry(delegateId)}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  if (state.loading && !state.hasOlder) {
+    return (
+      <div
+        role="status"
+        data-slot="delegate-steps-loading"
+        className="flex h-6 items-center gap-1.5 text-xs text-muted-foreground">
+        <Spinner />
+        Loading steps…
+      </div>
+    );
+  }
+  if (!state.hasOlder) {
+    return null;
+  }
+  return (
+    <OlderMessagesControl
+      slot="delegate-steps-older"
+      loading={state.loading}
+      label="Show earlier steps"
+      loadingLabel="Loading earlier steps…"
+      onLoad={() => loader.load(delegateId, true)}
+    />
+  );
+}
+
 export const SubagentBlock = memo(function SubagentBlock({
   block,
   nodes,
@@ -530,6 +630,8 @@ export const SubagentBlock = memo(function SubagentBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const openDetail = useContext(SubagentDetailContext);
+  const pages = useContext(DelegateConversationContext);
+  const view = subagentFiguresView(block, useSubagentLiveFigures(block.id));
   const title = subagentTitle(block);
   const toolCount = block.durableToolCalls ?? countTools(block.entries);
   const tasks = subagentTaskProgress(block);
@@ -537,6 +639,12 @@ export const SubagentBlock = memo(function SubagentBlock({
   const cardSummary = renderCardSummary(cards);
   const status = shellStatusOf(block);
   const untracked = status === 'untracked';
+  const running = status === 'running';
+  const windowNote = windowNoteOf(
+    block,
+    countTools(block.entries),
+    pages?.stateOf(block.id) ?? null,
+  );
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
@@ -620,8 +728,11 @@ export const SubagentBlock = memo(function SubagentBlock({
                 the disclosure's own <button>, and a popover trigger inside one
                 is invalid HTML — the same rule this slot exists for. */}
             <SubagentMetaChips
-              block={block}
               title={title}
+              model={block.model}
+              view={view}
+              durationMs={block.durationMs}
+              running={running}
               toolCount={toolCount}
               tasks={tasks}
             />
@@ -639,6 +750,14 @@ export const SubagentBlock = memo(function SubagentBlock({
             ) : null}
           </span>
         }>
+        {windowNote === null ? null : (
+          <p
+            data-slot="subagent-window-note"
+            className="m-0 rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground">
+            {windowNote}
+          </p>
+        )}
+        <DelegateStepsPager delegateId={block.id} />
         <SubagentThread
           block={block}
           nodes={nodes}

@@ -22,6 +22,7 @@ import {
   type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
 import { RunActivityContext, RunSettledContext } from './live-row';
+import { type LiveState, LiveTextContext } from './live-text';
 import {
   type MemberVerdicts,
   MemberVerdictsContext,
@@ -59,6 +60,10 @@ import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
 import { type ChatActions, ChatActionsContext } from './use-chat-actions';
+import {
+  DelegateConversationContext,
+  type DelegateConversationLoader,
+} from './use-delegate-pages';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
@@ -114,6 +119,8 @@ export function ChatProviders({
   runSettledAt,
   loadAttachment = null,
   callConversations = null,
+  delegateConversations = null,
+  liveText = null,
   jumpMark = null,
   applyRecommendations = null,
   memberVerdicts = null,
@@ -170,6 +177,16 @@ export function ChatProviders({
    */
   callConversations?: CallConversationLoader | null;
   /**
+   * How an opened sub-agent card reads its own rows — see
+   * `DelegateConversationContext`. Absent where the window holds every row.
+   */
+  delegateConversations?: DelegateConversationLoader | null;
+  /**
+   * The live plane of the run on screen — see `LiveTextContext`. A sub-agent
+   * card reads its delegate's live figures from it, wherever the card is drawn.
+   */
+  liveText?: ReadonlyMap<string, LiveState> | null;
+  /**
    * Where a jump landed — see `JumpMarkContext`. Here for `callContext`'s
    * reason: the rows that mark themselves are drawn deep inside call cards.
    */
@@ -205,55 +222,66 @@ export function ChatProviders({
     <CliLoginContext.Provider value={signIn}>
       <RetryContext.Provider value={retry}>
         <CalleeContextResolverContext.Provider value={callContext}>
-          <CallConversationContext.Provider value={callConversations}>
-            <JumpMarkContext.Provider value={jumpMark}>
-              <CallMessageChannelContext.Provider value={callChannel}>
-                <ArtifactUrlContext.Provider value={artifactUrl}>
-                  <ArtifactShareContext.Provider value={artifactSharing}>
-                    <ThreadUiMemoryContext.Provider value={threadId}>
-                      <AttachmentLoaderContext.Provider value={loadAttachment}>
-                        <RunSettledContext.Provider value={runSettledAt}>
-                          <RecommendationsApplyContext.Provider
-                            value={applyRecommendations}>
-                            <MemberVerdictsContext.Provider
-                              value={memberVerdicts}>
-                              <NotSentMessagesContext.Provider value={notSent}>
-                                <ChatActionsContext.Provider
-                                  value={chatActions}>
-                                  <MemoryLoaderContext.Provider
-                                    value={loadMemory}>
-                                    <KnowledgeLoaderContext.Provider
-                                      value={loadKnowledge}>
-                                      {children}
-                                      {chatActions === null ? null : (
-                                        <CommandConfirmDialog
-                                          action={chatActions.confirming}
-                                          changed={
-                                            chatActions.confirming !== null &&
-                                            !chatActions.actions.some(
-                                              (a) =>
-                                                a.seq ===
-                                                chatActions.confirming?.seq,
-                                            )
-                                          }
-                                          onCancel={chatActions.cancelCommand}
-                                          onConfirm={chatActions.confirmCommand}
-                                        />
-                                      )}
-                                    </KnowledgeLoaderContext.Provider>
-                                  </MemoryLoaderContext.Provider>
-                                </ChatActionsContext.Provider>
-                              </NotSentMessagesContext.Provider>
-                            </MemberVerdictsContext.Provider>
-                          </RecommendationsApplyContext.Provider>
-                        </RunSettledContext.Provider>
-                      </AttachmentLoaderContext.Provider>
-                    </ThreadUiMemoryContext.Provider>
-                  </ArtifactShareContext.Provider>
-                </ArtifactUrlContext.Provider>
-              </CallMessageChannelContext.Provider>
-            </JumpMarkContext.Provider>
-          </CallConversationContext.Provider>
+          <LiveTextContext.Provider value={liveText}>
+            <DelegateConversationContext.Provider value={delegateConversations}>
+              <CallConversationContext.Provider value={callConversations}>
+                <JumpMarkContext.Provider value={jumpMark}>
+                  <CallMessageChannelContext.Provider value={callChannel}>
+                    <ArtifactUrlContext.Provider value={artifactUrl}>
+                      <ArtifactShareContext.Provider value={artifactSharing}>
+                        <ThreadUiMemoryContext.Provider value={threadId}>
+                          <AttachmentLoaderContext.Provider
+                            value={loadAttachment}>
+                            <RunSettledContext.Provider value={runSettledAt}>
+                              <RecommendationsApplyContext.Provider
+                                value={applyRecommendations}>
+                                <MemberVerdictsContext.Provider
+                                  value={memberVerdicts}>
+                                  <NotSentMessagesContext.Provider
+                                    value={notSent}>
+                                    <ChatActionsContext.Provider
+                                      value={chatActions}>
+                                      <MemoryLoaderContext.Provider
+                                        value={loadMemory}>
+                                        <KnowledgeLoaderContext.Provider
+                                          value={loadKnowledge}>
+                                          {children}
+                                          {chatActions === null ? null : (
+                                            <CommandConfirmDialog
+                                              action={chatActions.confirming}
+                                              changed={
+                                                chatActions.confirming !==
+                                                  null &&
+                                                !chatActions.actions.some(
+                                                  (a) =>
+                                                    a.seq ===
+                                                    chatActions.confirming?.seq,
+                                                )
+                                              }
+                                              onCancel={
+                                                chatActions.cancelCommand
+                                              }
+                                              onConfirm={
+                                                chatActions.confirmCommand
+                                              }
+                                            />
+                                          )}
+                                        </KnowledgeLoaderContext.Provider>
+                                      </MemoryLoaderContext.Provider>
+                                    </ChatActionsContext.Provider>
+                                  </NotSentMessagesContext.Provider>
+                                </MemberVerdictsContext.Provider>
+                              </RecommendationsApplyContext.Provider>
+                            </RunSettledContext.Provider>
+                          </AttachmentLoaderContext.Provider>
+                        </ThreadUiMemoryContext.Provider>
+                      </ArtifactShareContext.Provider>
+                    </ArtifactUrlContext.Provider>
+                  </CallMessageChannelContext.Provider>
+                </JumpMarkContext.Provider>
+              </CallConversationContext.Provider>
+            </DelegateConversationContext.Provider>
+          </LiveTextContext.Provider>
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>

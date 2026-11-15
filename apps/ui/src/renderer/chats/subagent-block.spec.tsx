@@ -173,16 +173,27 @@ describe('SubagentBlock', () => {
       ?.getAttribute('aria-expanded');
 
   it('draws the daemon’s whole-run tool count, not the loaded rows’', () => {
-    // No tool row of this delegate is loaded, so the figure on screen can only
-    // be the daemon's.
+    // The daemon counts 412 calls; the loaded rows hold one. The figure on
+    // screen can only be the daemon's. It lives in the popover — the plate
+    // carries no wrench chip — and the plate needs one figure to exist at all.
     const block = {
-      ...makeBlock({ withResult: false }),
+      ...makeBlock(),
       durableToolCalls: 412,
+      durationMs: 2029,
     };
     act(() => root.render(<TranscriptEntryView entry={block} />));
     expect(
-      container.querySelector('[data-slot="subagent-meta-tools"]')?.textContent,
-    ).toBe('412');
+      container.querySelector('[data-slot="subagent-meta-tools"]'),
+    ).toBeNull();
+    act(() =>
+      container
+        .querySelector<HTMLElement>('[data-slot="subagent-meta"] button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+    );
+    expect(
+      container.querySelector('[data-slot="subagent-meta-detail"]')
+        ?.textContent,
+    ).toContain('Tools412');
   });
 
   it('shows tracking loss and the possibility of continued work from the daemon outcome', () => {
@@ -313,7 +324,7 @@ describe('SubagentBlock', () => {
     act(() =>
       root.render(
         <TranscriptEntryView
-          entry={makeBlock({ model: 'claude-opus-5' })}
+          entry={{ ...makeBlock({ model: 'claude-opus-5' }), durationMs: 2029 }}
           soloAgent
           chatAgentName="claude"
         />,
@@ -600,7 +611,9 @@ describe('SubagentBlock', () => {
     // scanning a column of delegates.
     const block: SubagentBlockEntry = {
       ...makeBlock(),
-      tokens: 26124,
+      cumulative: true,
+      inputTokens: 20_000,
+      outputTokens: 6_124,
       durationMs: 2029,
     };
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
@@ -633,7 +646,9 @@ describe('SubagentBlock', () => {
     // app shows elsewhere, so it is asserted with the number and not beside it.
     const block: SubagentBlockEntry = {
       ...makeBlock(),
-      tokens: 29_388,
+      cumulative: true,
+      inputTokens: 20_000,
+      outputTokens: 9_388,
       durationMs: 1761,
       costUsd: 0.2262808,
     };
@@ -651,8 +666,11 @@ describe('SubagentBlock', () => {
     // tokens would be the one wrong number this feature could produce.
     const block: SubagentBlockEntry = {
       ...makeBlock(),
-      tokens: 29_388,
+      cumulative: true,
+      inputTokens: 20_000,
+      outputTokens: 9_388,
       costUsd: null,
+      estimatedCostUsd: null,
     };
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
 
@@ -1160,5 +1178,224 @@ describe('SubagentDetail', () => {
   it('heads its one section with nothing — the dialog title already names it', () => {
     openDetail();
     expect(container.textContent).not.toContain('Conversation');
+  });
+});
+
+describe('SubagentBlock figures', () => {
+  /** A Claude delegate that finished: every figure the daemon states, cumulative. */
+  const claude = (): SubagentBlockEntry => ({
+    ...makeBlock(),
+    model: 'claude-opus-5',
+    cumulative: true,
+    requests: 3,
+    messages: 5,
+    inputTokens: 100_000,
+    outputTokens: 20_000,
+    cacheReadTokens: 300_000,
+    cacheCreationTokens: 4_000,
+    contextTokens: 60_000,
+    costUsd: 0.42,
+    estimatedCostUsd: 0.42,
+    durationMs: 125_000,
+  });
+
+  function plateSlots(): string[] {
+    return Array.from(
+      container.querySelectorAll(
+        '[data-slot="subagent-meta-chips"] > [data-slot]',
+      ),
+      (chip) => chip.getAttribute('data-slot') ?? '',
+    );
+  }
+
+  function openPlate(): void {
+    act(() =>
+      container
+        .querySelector<HTMLElement>('[data-slot="subagent-meta"] button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+    );
+  }
+
+  function popoverLabels(): string[] {
+    return Array.from(
+      container.querySelectorAll(
+        '[data-slot="subagent-meta-detail"] > div > span:first-child',
+      ),
+      (label) => label.textContent ?? '',
+    );
+  }
+
+  it('states requests, messages, tokens, cost and duration on the plate, in that order', () => {
+    act(() => root.render(<TranscriptEntryView entry={claude()} soloAgent />));
+
+    expect(plateSlots()).toEqual([
+      'subagent-meta-requests',
+      'subagent-meta-messages',
+      'subagent-meta-tokens',
+      'subagent-meta-cost',
+      'subagent-meta-duration',
+    ]);
+    expect(
+      container.querySelector('[data-slot="subagent-meta-tools"]'),
+    ).toBeNull();
+  });
+
+  it.each([
+    [
+      'codex, which counts no requests',
+      {
+        ...makeBlock(),
+        cumulative: true,
+        inputTokens: 20_000,
+        outputTokens: 9_388,
+        costUsd: 0.1,
+        durationMs: 2029,
+      },
+      ['subagent-meta-tokens', 'subagent-meta-cost', 'subagent-meta-duration'],
+    ],
+    [
+      'cursor, which states only its messages and how long it ran',
+      { ...makeBlock(), messages: 3, durationMs: 2029 },
+      ['subagent-meta-messages', 'subagent-meta-duration'],
+    ],
+    [
+      'a model with no price, which states no cost at all',
+      {
+        ...claude(),
+        costUsd: null,
+        estimatedCostUsd: null,
+      },
+      [
+        'subagent-meta-requests',
+        'subagent-meta-messages',
+        'subagent-meta-tokens',
+        'subagent-meta-duration',
+      ],
+    ],
+    [
+      'a row recorded before sub-agents were counted, which states no totals',
+      { ...makeBlock(), messages: 4, durationMs: 2029, tokens: 26_124 },
+      ['subagent-meta-messages', 'subagent-meta-duration'],
+    ],
+  ])('draws only the figures %s measured', (_name, block, slots) => {
+    act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
+
+    expect(plateSlots()).toEqual(slots);
+  });
+
+  it('names the plate’s figures in words for a screen reader, and nothing it does not show', () => {
+    act(() => root.render(<TranscriptEntryView entry={claude()} soloAgent />));
+
+    const name = container
+      .querySelector('[data-slot="subagent-meta"] button')
+      ?.getAttribute('aria-label');
+    expect(name).toContain('3 requests');
+    expect(name).toContain('5 messages');
+    expect(name).toContain('424k tokens processed');
+    expect(name).toContain('about $0.42');
+    expect(name).toContain('took 2m 5s');
+  });
+
+  it('labels the request count as model calls and lists the token split under the total', () => {
+    act(() => root.render(<TranscriptEntryView entry={claude()} soloAgent />));
+    openPlate();
+
+    expect(popoverLabels()).toEqual([
+      'Model',
+      'Requests (model calls)',
+      'Messages',
+      'Tokens processed',
+      'input',
+      'output',
+      'cache write',
+      'cache read',
+      'Context now',
+      'Cost',
+      'Tools',
+      'Took',
+    ]);
+    expect(
+      container.querySelector('[data-slot="subagent-meta-detail"]')
+        ?.textContent,
+    ).not.toContain('Turns');
+  });
+
+  it('says a running cost is a list-price estimate, and states duration only once finished', () => {
+    const running: SubagentBlockEntry = {
+      ...claude(),
+      returned: false,
+      backgroundOpen: true,
+    };
+    act(() => root.render(<TranscriptEntryView entry={running} soloAgent />));
+
+    expect(
+      container.querySelector('[data-slot="subagent-meta-duration"]'),
+    ).toBeNull();
+    openPlate();
+    expect(
+      container.querySelector('[data-slot="subagent-meta-hint"]')?.textContent,
+    ).toBe('Cost is an estimate at list price; corrected when the turn ends.');
+  });
+
+  it('says a model with no price has none, rather than that the delegate cost nothing', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={{ ...claude(), costUsd: null, estimatedCostUsd: null }}
+          soloAgent
+        />,
+      ),
+    );
+    openPlate();
+
+    expect(popoverLabels()).not.toContain('Cost');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-hint"]')?.textContent,
+    ).toBe('No price is known for this model.');
+  });
+
+  it('marks an old row as recorded before the counts, with its last request as context at end', () => {
+    const old: SubagentBlockEntry = {
+      ...makeBlock(),
+      messages: 4,
+      durationMs: 2029,
+      tokens: 26_124,
+    };
+    act(() => root.render(<TranscriptEntryView entry={old} soloAgent />));
+    openPlate();
+
+    expect(popoverLabels()).toContain('Context at end');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-detail"]')
+        ?.textContent,
+    ).toContain('26.1k');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-hint"]')?.textContent,
+    ).toBe('Recorded before requests and tokens were counted for sub-agents.');
+  });
+
+  it('notes the tool calls not shown only while the daemon counts more than the card holds', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={{ ...makeBlock(), durableToolCalls: 412 }}
+          soloAgent
+        />,
+      ),
+    );
+    act(() =>
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+    );
+    expect(
+      container.querySelector('[data-slot="subagent-window-note"]')
+        ?.textContent,
+    ).toBe('Showing the last 1 of 412 tool calls');
+
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} soloAgent />),
+    );
+    expect(
+      container.querySelector('[data-slot="subagent-window-note"]'),
+    ).toBeNull();
   });
 });

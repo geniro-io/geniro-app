@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '../../adapter.types';
 import { catalogClaudePrices } from './__tests__/claude-list-prices';
 import {
+  ClaudeDelegateSettler,
+  readDelegateEnd,
+} from './claude-delegate-spend.utils';
+import {
   mapClaudeMessage,
   mapClaudeStreamEvent,
   mapClaudeThinkingTokens,
 } from './claude-message.utils';
-import {
-  ClaudeDelegateSettler,
-  readDelegateEnd,
-} from './claude-delegate-spend.utils';
 import { ClaudeSessionCostLedger } from './claude-usage.utils';
 
 /** End a delegate the way the driver's settler does, with no transcript on disk. */

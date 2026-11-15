@@ -20,6 +20,7 @@ import {
   CLAUDE_MCP_RECONNECT_FAILED_MESSAGE,
   CLAUDE_MCP_RECONNECTED_MESSAGE,
 } from './claude.const';
+import type { ClaudeDelegateSettler } from './utils/claude-delegate-spend.utils';
 import {
   type ClaudeMcpStatusRow,
   mcpReadingKey,
@@ -33,7 +34,6 @@ import {
   notConnectedMcpServer,
   readMcpReconnectReply,
 } from './utils/claude-mcp-reconnect.utils';
-import type { ClaudeDelegateSettler } from './utils/claude-delegate-spend.utils';
 import { isClaudeApiErrorLine } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import {

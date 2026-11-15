@@ -12,12 +12,12 @@ import {
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
   CLAUDE_TASK_TERMINAL_STATUSES,
 } from '../claude.const';
-import { eachJsonLine, findSessionFile } from './claude-sessions.utils';
 import {
   type ClaudeDelegateSpend,
   type ClaudeListPrices,
   listCostUsd,
 } from './claude-delegate-cost.utils';
+import { eachJsonLine, findSessionFile } from './claude-sessions.utils';
 
 /**
  * One delegate's spend over every model request it made.

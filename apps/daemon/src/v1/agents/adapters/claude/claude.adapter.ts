@@ -179,6 +179,10 @@ import {
 } from './utils/claude-cost-state.utils';
 import { ClaudeCostTotalsFile } from './utils/claude-cost-totals.utils';
 import {
+  ClaudeDelegateSettler,
+  readClaudeDelegateTranscript,
+} from './utils/claude-delegate-spend.utils';
+import {
   fastModeParameter,
   isFastModeCapable,
 } from './utils/claude-fast-mode.utils';
@@ -231,10 +235,6 @@ import {
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
 import { claudeSettingsArgs } from './utils/claude-settings.utils';
-import {
-  ClaudeDelegateSettler,
-  readClaudeDelegateTranscript,
-} from './utils/claude-delegate-spend.utils';
 import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,

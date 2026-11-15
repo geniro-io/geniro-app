@@ -50,7 +50,7 @@ Rank the lessons you keep by how hard their signal is: a failed check or command
 Your brief lists lessons kept out of memory in this project or team — rejected or undone by the user, or dropped by a second-model check — with their reasons. Do not propose one of them again unless this stretch holds new evidence the rejection did not weigh — and then say so in "why".`,
     `## What to send
 
-Call \`${HOST_LESSONS_TOOL}\` exactly once with the lessons you keep — an empty list when none passes. When it refuses with a code, correct what it names and call it again. Then reply in one or two sentences: how many lessons you proposed and why, or why none passed.
+Call \`${HOST_LESSONS_TOOL}\` exactly once with the lessons you keep — an empty list when none passes. A reply that says none passed without that call records nothing. When it refuses with a code, correct what it names and call it again. Then reply in one or two sentences: how many lessons you proposed and why, or why none passed.
 
 Write every lesson in English. Never edit a file, write memory or instructions, or call any tool that changes anything: geniro files your lessons itself.`,
   ].join('\n\n');

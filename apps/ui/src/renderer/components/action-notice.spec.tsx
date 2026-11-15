@@ -18,7 +18,8 @@ function renderNotice(
   act(() => {
     root.render(
       <ActionNotice
-        message="Learning signal in “Refactor the parser”"
+        icon="💡"
+        title="Learning from “Refactor the parser”"
         onDismiss={vi.fn()}
         {...props}
       />,
@@ -60,7 +61,7 @@ afterEach(() => {
 });
 
 describe('ActionNotice', () => {
-  it('withdraws itself after ten seconds by default', () => {
+  it('withdraws itself after eight seconds by default', () => {
     const onDismiss = vi.fn();
     renderNotice({ onDismiss });
 
@@ -112,65 +113,67 @@ describe('ActionNotice', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('draws each action as a button that runs its own handler', () => {
-    const extract = vi.fn();
-    const notNow = vi.fn();
+  it('draws its title and detail each on one line, the detail muted', () => {
     renderNotice({
-      actions: [
-        { label: 'Extract lessons', onAction: extract },
-        { label: 'Not now', onAction: notNow, variant: 'ghost' },
-      ],
+      title: 'Learning from “A very long thread title”',
+      detail: 'claude-haiku-5-5 · ≈$0.02 · $0.12 today',
     });
 
-    const buttons = [
-      ...noticeOf().querySelectorAll<HTMLButtonElement>(
-        '[data-slot="action-notice-actions"] button',
-      ),
-    ];
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-      'Extract lessons',
-      'Not now',
-    ]);
-
-    act(() => buttons[1]!.click());
-    expect(notNow).toHaveBeenCalledTimes(1);
-    expect(extract).not.toHaveBeenCalled();
+    const title = noticeOf().querySelector<HTMLElement>(
+      '[data-slot="action-notice-title"]',
+    )!;
+    const detail = noticeOf().querySelector<HTMLElement>(
+      '[data-slot="action-notice-detail"]',
+    )!;
+    expect(title.textContent).toBe('Learning from “A very long thread title”');
+    expect(title.className).toContain('truncate');
+    expect(detail.textContent).toBe('claude-haiku-5-5 · ≈$0.02 · $0.12 today');
+    expect(detail.className).toContain('text-muted-foreground');
   });
 
-  it('gives the message its own row above the actions, so buttons never squeeze it', () => {
-    renderNotice({
-      actions: [
-        { label: 'Extract lessons', onAction: vi.fn() },
-        { label: 'Change model…', onAction: vi.fn() },
-        { label: 'Not now', onAction: vi.fn(), variant: 'ghost' },
-      ],
-    });
+  it('draws the icon in its own cell, beside the text', () => {
+    renderNotice({ icon: '💡' });
 
-    const message = noticeOf().querySelector(
-      '[data-slot="action-notice-message"]',
-    )!;
-    const actions = noticeOf().querySelector(
-      '[data-slot="action-notice-actions"]',
-    )!;
-    expect(message.parentElement?.contains(actions)).toBe(false);
     expect(
-      message.compareDocumentPosition(actions) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+      noticeOf().querySelector('[data-slot="action-notice-icon"]')?.textContent,
+    ).toBe('💡');
   });
 
-  it('draws no actions row when it has no actions', () => {
+  it('draws no detail line when it has none', () => {
     renderNotice({});
 
     expect(
-      noticeOf().querySelector('[data-slot="action-notice-actions"]'),
+      noticeOf().querySelector('[data-slot="action-notice-detail"]'),
     ).toBeNull();
   });
 
-  it('announces its message politely, as a status', () => {
+  it('draws one quiet action that runs its own handler', () => {
+    const skip = vi.fn();
+    renderNotice({ action: { label: 'Skip', onAction: skip } });
+
+    const buttons = [
+      ...noticeOf().querySelectorAll<HTMLButtonElement>('button'),
+    ];
+    const action = buttons.find((button) => button.textContent === 'Skip')!;
+    expect(action.className).toContain('shrink-0');
+    expect(
+      buttons.filter((button) => button.textContent === 'Skip'),
+    ).toHaveLength(1);
+
+    act(() => action.click());
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws no action when it has none', () => {
+    renderNotice({});
+
+    expect(noticeOf().textContent).not.toContain('Skip');
+  });
+
+  it('announces itself politely, as a status', () => {
     renderNotice({});
 
     expect(noticeOf().getAttribute('role')).toBe('status');
-    expect(noticeOf().textContent).toContain('Learning signal');
+    expect(noticeOf().textContent).toContain('Learning from');
   });
 });

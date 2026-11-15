@@ -6,30 +6,31 @@ import { Button } from './ui/button';
 import { cn } from './ui/utils';
 import { useLatestCallback } from './use-latest-callback';
 
-export const DEFAULT_ACTION_NOTICE_MS = 10_000;
+export const DEFAULT_ACTION_NOTICE_MS = 8_000;
 
 export interface ActionNoticeAction {
   label: string;
   onAction: () => void;
-  variant?: 'default' | 'outline' | 'ghost';
-  disabled?: boolean;
 }
 
-export type ActionNoticeActions =
-  | []
-  | [ActionNoticeAction]
-  | [ActionNoticeAction, ActionNoticeAction]
-  | [ActionNoticeAction, ActionNoticeAction, ActionNoticeAction];
-
+/**
+ * A compact notice: an icon, a title and a detail line, each on one line, at
+ * most one quiet action and a close control. It withdraws itself after
+ * `durationMs`, and the countdown pauses while the pointer is over it.
+ */
 export function ActionNotice({
-  message,
-  actions = [],
+  icon,
+  title,
+  detail,
+  action,
   durationMs = DEFAULT_ACTION_NOTICE_MS,
   onDismiss,
   className,
 }: {
-  message: React.ReactNode;
-  actions?: ActionNoticeActions;
+  icon: React.ReactNode;
+  title: string;
+  detail?: string;
+  action?: ActionNoticeAction;
   durationMs?: number;
   onDismiss: () => void;
   className?: string;
@@ -60,43 +61,51 @@ export function ActionNotice({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={cn(
-        'flex flex-col gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-panel-md',
+        'flex items-center gap-2.5 rounded-lg border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-panel-md',
         className,
       )}>
-      <div className="flex items-start gap-2">
-        <div
-          data-slot="action-notice-message"
-          className="min-w-0 flex-1 self-center break-words">
-          {message}
-        </div>
+      <span
+        aria-hidden
+        data-slot="action-notice-icon"
+        className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-base">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p
+          data-slot="action-notice-title"
+          title={title}
+          className="m-0 truncate text-sm font-medium">
+          {title}
+        </p>
+        {detail === undefined ? null : (
+          <p
+            data-slot="action-notice-detail"
+            title={detail}
+            className="m-0 truncate text-xs text-muted-foreground">
+            {detail}
+          </p>
+        )}
+      </div>
+      {action === undefined ? null : (
         <Button
           type="button"
           variant="ghost"
-          size="icon"
-          className="size-7 shrink-0"
-          aria-label="Dismiss"
-          title="Dismiss"
-          onClick={onDismiss}>
-          <X className="size-3.5" />
+          size="sm"
+          className="shrink-0"
+          onClick={action.onAction}>
+          {action.label}
         </Button>
-      </div>
-      {actions.length === 0 ? null : (
-        <div
-          data-slot="action-notice-actions"
-          className="flex flex-wrap justify-end gap-2">
-          {actions.map((action) => (
-            <Button
-              key={action.label}
-              type="button"
-              variant={action.variant ?? 'outline'}
-              size="sm"
-              disabled={action.disabled}
-              onClick={action.onAction}>
-              {action.label}
-            </Button>
-          ))}
-        </div>
       )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7 shrink-0"
+        aria-label="Dismiss"
+        title="Dismiss"
+        onClick={onDismiss}>
+        <X className="size-3.5" />
+      </Button>
     </div>
   );
 }

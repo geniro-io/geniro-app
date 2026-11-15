@@ -12,7 +12,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -37,7 +36,6 @@ import {
 } from '../../shared/contracts';
 // Value imports: the generated enum OBJECTS are what validate a stored mode
 // string before it reaches a run, and what name the mirror kinds.
-import { AgentIdentityContext } from '../agent-identity';
 import type {
   AgentApprovalCapability,
   AgentSkillDto as AgentSkill,
@@ -232,12 +230,11 @@ import {
   type KnowledgeLookup,
   type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
-import { LessonChangeModelDialog } from './lesson-change-model-dialog';
-import { lessonRunLabel, segmentTitle } from './lesson-labels';
 import {
-  type LessonModelChoice,
-  LessonModelPicker,
-} from './lesson-model-picker';
+  archiveNoticeDetail,
+  lessonCostLabel,
+  segmentTitle,
+} from './lesson-labels';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
   LocalImageLoaderContext,
@@ -573,11 +570,14 @@ function topEntryKey(entries: readonly TranscriptEntry[]): string | null {
  * team it ran (falling back to the slug once the team is deleted),
  * else the agent driving the 1:1 chat.
  */
-const ARCHIVE_LESSON_OFFER_DELAY_MS = 1_000;
+/** How long after an archive the notice waits for the stretch the daemon queues for it. */
+const ARCHIVE_LESSON_WATCH_MS = 10_000;
 
-type ArchiveLessonNotice =
-  | { kind: 'offer'; segment: LessonSegment }
-  | { kind: 'error'; message: string };
+/** The archive notice: the stretch queued for the archived thread, and today's spend. */
+interface ArchiveLessonNotice {
+  segment: LessonSegment;
+  todayUsd: number | null;
+}
 
 function runLabel(run: ChatRun, teamNames: Map<string, string>): string {
   if (run.title) {
@@ -2528,11 +2528,10 @@ export function Chats({
     };
   }, [apis, deletingId]);
 
-  const identities = useContext(AgentIdentityContext);
   const [archiveLessons, setArchiveLessons] =
     useState<ArchiveLessonNotice | null>(null);
-  const [changingLessonModel, setChangingLessonModel] =
-    useState<LessonSegment | null>(null);
+  const stopArchiveLessonWatch = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopArchiveLessonWatch.current?.(), []);
 
   // The chat queued for archiving — ONLY ever a running one (see the dialog).
   const [archiving, setArchiving] = useState<ChatRun | null>(null);
@@ -2581,21 +2580,6 @@ export function Chats({
   // The app's shared answer, and only the data — every read below is a plain
   // `capabilities?.…`, never a loading readout of its own.
   const { capabilities } = useSharedCapabilities(capabilitiesApi);
-  const renderLessonModelPicker = useMemo(
-    () =>
-      (
-        value: LessonModelChoice,
-        onChange: (next: LessonModelChoice) => void,
-      ): React.ReactNode => (
-        <LessonModelPicker
-          value={value}
-          onChange={onChange}
-          agentsApi={apis.agents}
-          capabilities={capabilities}
-        />
-      ),
-    [apis.agents, capabilities],
-  );
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
@@ -4217,48 +4201,80 @@ export function Chats({
     [runsRef],
   );
 
-  const offerArchivedLessons = useLatestCallback(
+  /**
+   * Watches for the stretch the daemon queues when this thread is archived.
+   * Nothing is shown unless one comes back: a thread with no signal, or lessons
+   * switched off, queues none. The watch ends at the first queued stretch, or
+   * after {@link ARCHIVE_LESSON_WATCH_MS}.
+   */
+  const watchArchivedLessons = useLatestCallback(
     (runId: string): void => {
-      window.setTimeout(() => {
+      stopArchiveLessonWatch.current?.();
+      let finished = false;
+      let unsubscribe: () => void = () => undefined;
+      const timer = setTimeout(() => finish(), ARCHIVE_LESSON_WATCH_MS);
+      const finish = (): void => {
+        finished = true;
+        clearTimeout(timer);
+        unsubscribe();
+        stopArchiveLessonWatch.current = null;
+      };
+      const look = (): void => {
+        if (finished) {
+          return;
+        }
         apis.lessons
-          .listLessonSegments({ runId, status: 'offered' })
+          .listLessonSegments({ runId, status: 'queued' })
           .then((answer) => {
-            const latest = answer.segments.reduce<LessonSegment | null>(
+            const segment = answer.segments.reduce<LessonSegment | null>(
               (kept, next) =>
                 kept === null || next.toSeq > kept.toSeq ? next : kept,
               null,
             );
-            setArchiveLessons(
-              latest === null ? null : { kind: 'offer', segment: latest },
-            );
+            if (finished || segment === null) {
+              return;
+            }
+            finish();
+            return apis.lessons
+              .getLessonsSpend()
+              .then(
+                (spend) => spend.todayUsd,
+                () => null,
+              )
+              .then((todayUsd) => setArchiveLessons({ segment, todayUsd }));
           })
-          .catch((err: unknown) =>
-            setArchiveLessons({
-              kind: 'error',
-              message: describeDaemonError(err),
-            }),
-          );
-      }, ARCHIVE_LESSON_OFFER_DELAY_MS);
+          .catch((err: unknown) => {
+            finish();
+            setError(describeDaemonError(err));
+          });
+      };
+      if (client !== null) {
+        unsubscribe = client.onLessonsChanged((event) => {
+          if (event.runId === null || event.runId === runId) {
+            look();
+          }
+        });
+      }
+      stopArchiveLessonWatch.current = finish;
+      look();
     },
-    [apis],
+    [apis, client, setError],
   );
 
-  const extractArchivedLessons = useLatestCallback(
+  const skipArchivedLessons = useLatestCallback(
     (segment: LessonSegment): void => {
       setArchiveLessons(null);
       apis.lessons
-        .reflectLessons({
-          runId: segment.runId,
-          reflectLessonsDto: { segmentId: segment.id },
-        })
-        .catch((err: unknown) =>
-          setArchiveLessons({
-            kind: 'error',
-            message: describeDaemonError(err),
-          }),
-        );
+        .skipLessonSegment({ segmentId: segment.id })
+        .catch((err: unknown) => {
+          // The stretch already started: there is nothing left to skip.
+          if (daemonErrorStatus(err) === 409) {
+            return;
+          }
+          setError(describeDaemonError(err));
+        });
     },
-    [apis],
+    [apis, setError],
   );
 
   const confirmArchive = useLatestCallback(async (): Promise<void> => {
@@ -4270,13 +4286,13 @@ export function Chats({
     try {
       await archiveRun(archiving.id);
       setArchiving(null);
-      offerArchivedLessons(archiving.id);
+      watchArchivedLessons(archiving.id);
     } catch (err) {
       setArchiveError(String(err));
     } finally {
       setArchiveBusy(false);
     }
-  }, [archiving, archiveRun, offerArchivedLessons]);
+  }, [archiving, archiveRun, watchArchivedLessons]);
 
   /**
    * Put an archived chat back, from its SIDEBAR ROW.
@@ -9863,9 +9879,7 @@ export function Chats({
         loadMemory={loadMemory}
         loadKnowledge={loadKnowledge}
         lessonsApi={apis.lessons}
-        lessonsJump={jumpToSeq}
-        lessonsClient={client}
-        lessonsModelPicker={renderLessonModelPicker}>
+        lessonsJump={jumpToSeq}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -11899,59 +11913,22 @@ export function Chats({
                 {archiveLessons === null ? null : (
                   <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
                     <ActionNotice
-                      key={
-                        archiveLessons.kind === 'offer'
-                          ? archiveLessons.segment.id
-                          : archiveLessons.message
-                      }
-                      className="pointer-events-auto w-full max-w-[480px]"
-                      message={
-                        archiveLessons.kind === 'offer'
-                          ? `💡 Learning signal in “${segmentTitle(archiveLessons.segment)}” · ${lessonRunLabel(identities, archiveLessons.segment.estimate)}`
-                          : archiveLessons.message
-                      }
-                      actions={
-                        archiveLessons.kind === 'offer'
-                          ? [
-                              {
-                                label: 'Extract lessons',
-                                onAction: () =>
-                                  extractArchivedLessons(
-                                    archiveLessons.segment,
-                                  ),
-                              },
-                              {
-                                label: 'Change model…',
-                                variant: 'outline',
-                                onAction: () => {
-                                  setChangingLessonModel(
-                                    archiveLessons.segment,
-                                  );
-                                  setArchiveLessons(null);
-                                },
-                              },
-                              {
-                                label: 'Not now',
-                                variant: 'ghost',
-                                onAction: () => setArchiveLessons(null),
-                              },
-                            ]
-                          : []
-                      }
+                      key={archiveLessons.segment.id}
+                      className="pointer-events-auto w-full max-w-[420px]"
+                      icon="💡"
+                      title={`Learning from “${segmentTitle(archiveLessons.segment)}”`}
+                      detail={archiveNoticeDetail(
+                        archiveLessons.segment,
+                        archiveLessons.todayUsd,
+                      )}
+                      action={{
+                        label: 'Skip',
+                        onAction: () =>
+                          skipArchivedLessons(archiveLessons.segment),
+                      }}
                       onDismiss={() => setArchiveLessons(null)}
                     />
                   </div>
-                )}
-                {changingLessonModel === null ? null : (
-                  <LessonChangeModelDialog
-                    key={changingLessonModel.id}
-                    segment={changingLessonModel}
-                    lessonsApi={apis.lessons}
-                    agentsApi={apis.agents}
-                    capabilities={capabilities}
-                    onClose={() => setChangingLessonModel(null)}
-                    onStarted={() => setChangingLessonModel(null)}
-                  />
                 )}
 
                 {/* One dialog for both archives; the COPY is what separates
@@ -12032,8 +12009,7 @@ export function Chats({
                           }
                         />
                         <span>
-                          Extract lessons first ·{' '}
-                          {lessonRunLabel(identities, deleteLessons.estimate)}
+                          {`Extract lessons first · ${lessonCostLabel(deleteLessons.estimate, deleteLessons.check)}`}
                         </span>
                       </label>
                     )}

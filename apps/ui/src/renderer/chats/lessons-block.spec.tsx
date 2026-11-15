@@ -41,6 +41,7 @@ const ENTRY: LessonsEntry = {
     model: 'claude-haiku-5-5',
     proposals: [LESSON_CORRECTION],
     places: { project: true, team: true },
+    check: null,
   },
   outcomes: {},
 };
@@ -49,6 +50,7 @@ const FACTS_DONE: LessonReflectionFactsDto = {
   reflectionRunId: 'refl-1',
   agentKind: 'claude',
   model: 'claude-haiku-5-5',
+  effort: 'high',
   working: false,
   startedAt: '2026-11-12T10:00:00.000Z',
   durationMs: 38_000,
@@ -63,6 +65,9 @@ function lessonsApi(
     getLessonReflection: vi.fn(async () => FACTS_DONE),
     saveLesson: vi.fn(async () => ({})),
     rejectLesson: vi.fn(async () => ({})),
+    undoLesson: vi.fn(async () => ({})),
+    editLesson: vi.fn(async () => ({})),
+    approveLesson: vi.fn(async () => ({})),
     ...overrides,
   } as unknown as DaemonApis['lessons'];
 }
@@ -224,5 +229,125 @@ describe('LessonsBlock', () => {
     });
 
     expect(getLessonReflection).toHaveBeenCalledTimes(1);
+  });
+
+  it('undoes a saved lesson through the API', async () => {
+    const api = lessonsApi();
+    const el = await render(api, {
+      ...ENTRY,
+      outcomes: {
+        'p-correction': {
+          proposalId: 'p-correction',
+          status: 'saved',
+          by: 'auto',
+          title: LESSON_CORRECTION.title,
+          rule: LESSON_CORRECTION.rule,
+          target: { kind: 'memory', scope: 'project', type: 'feedback' },
+          memoryHandle: 'm21',
+          reason: null,
+        },
+      },
+    });
+
+    await press(buttonNamed(el, 'Undo'));
+
+    expect(api.undoLesson).toHaveBeenCalledWith({ proposalId: 'p-correction' });
+  });
+
+  it('approves a lesson waiting for review through the API', async () => {
+    const api = lessonsApi();
+    const el = await render(api, {
+      ...ENTRY,
+      outcomes: {
+        'p-correction': {
+          proposalId: 'p-correction',
+          status: 'pending',
+          by: 'auto',
+          title: LESSON_CORRECTION.title,
+          rule: LESSON_CORRECTION.rule,
+          target: { kind: 'memory', scope: 'project', type: 'feedback' },
+          memoryHandle: null,
+          reason: null,
+        },
+      },
+    });
+
+    await press(buttonNamed(el, 'Approve'));
+
+    expect(api.approveLesson).toHaveBeenCalledWith({
+      proposalId: 'p-correction',
+    });
+  });
+
+  it('edits a saved lesson’s title and rule through the API', async () => {
+    const api = lessonsApi();
+    const el = await render(api, {
+      ...ENTRY,
+      outcomes: {
+        'p-correction': {
+          proposalId: 'p-correction',
+          status: 'saved',
+          by: 'user',
+          title: LESSON_CORRECTION.title,
+          rule: LESSON_CORRECTION.rule,
+          target: { kind: 'memory', scope: 'project', type: 'feedback' },
+          memoryHandle: 'm21',
+          reason: null,
+        },
+      },
+    });
+
+    await press(buttonNamed(el, 'Edit'));
+    const title = el.querySelector<HTMLInputElement>(
+      'input[aria-label="Lesson title"]',
+    )!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!;
+    act(() => {
+      setter.call(title, 'Use pnpm for every test run');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await press(buttonNamed(el, 'Save'));
+
+    expect(api.editLesson).toHaveBeenCalledWith({
+      proposalId: 'p-correction',
+      editLessonDto: {
+        title: 'Use pnpm for every test run',
+        rule: LESSON_CORRECTION.rule,
+      },
+    });
+  });
+
+  it('reads the check’s own run for a second footer line, from the daemon', async () => {
+    const getLessonReflection = vi.fn(
+      async (request: { reflectionRunId: string }) =>
+        request.reflectionRunId === 'chk-1'
+          ? {
+              ...FACTS_DONE,
+              reflectionRunId: 'chk-1',
+              agentKind: 'claude' as const,
+              model: 'claude-opus-5-5',
+              costUsd: 0.27,
+            }
+          : FACTS_DONE,
+    );
+    const api = lessonsApi({
+      getLessonReflection: getLessonReflection as never,
+    });
+    const el = await render(api, {
+      ...ENTRY,
+      card: {
+        ...ENTRY.card,
+        check: { runId: 'chk-1', agentKind: 'claude', model: 'opus' },
+      },
+    });
+
+    expect(getLessonReflection).toHaveBeenCalledWith({
+      reflectionRunId: 'chk-1',
+    });
+    expect(el.textContent).toContain('Check: claude · claude-opus-5-5 · high');
+    expect(el.textContent).toContain('$0.27');
   });
 });

@@ -6,6 +6,8 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { quoteIn } from '../../agents/utils/memory-check-prompt';
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import { placeKeyOf } from '../../knowledge/utils/knowledge-text';
 import {
   memoryHandle,
   type MemorySaveOutcome,
@@ -25,13 +27,15 @@ import {
   LESSON_WHY_MAX_CHARS,
   type LessonDedup,
   type LessonOutcomePayload,
+  type LessonPlaces,
   type LessonProposalCard,
   LESSONS_PER_REFLECTION_MAX,
   type LessonSignalKind,
   type LessonsPayload,
   type LessonTarget,
 } from '../lessons.types';
-import { memoryBodyOf } from './lesson-proposal.service';
+import { placesOfRun } from '../utils/lesson-places';
+import { memoryBodyOf, placesOf } from './lesson-proposal.service';
 import { LessonRowWriter } from './lesson-row.writer';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
@@ -57,7 +61,10 @@ export type LessonRefusalCode =
   | 'QUOTE_NOT_FOUND'
   | 'CONTAINS_SECRET'
   | 'UNKNOWN_HANDLE'
-  | 'NEAR_DUPLICATE';
+  | 'NEAR_DUPLICATE'
+  | 'NO_PLACE_FOR_TARGET'
+  | 'UNKNOWN_MEMBER'
+  | 'UNKNOWN_DOCUMENT';
 
 export type LessonFiled =
   | { status: 'recorded'; count: number }
@@ -106,6 +113,7 @@ export class LessonFilingService {
     private readonly rows: LessonRowWriter,
     private readonly config: LessonsConfigService,
     private readonly events: LessonsEventBus,
+    private readonly knowledge: KnowledgeService,
   ) {}
 
   /** Register the check; the returned function unregisters it. */
@@ -154,6 +162,7 @@ export class LessonFilingService {
     }
     const project = await this.projectScope.projectOfRun(source);
     const place = { projectId: project?.id ?? null, teamSlug: source.teamId };
+    const places = placesOfRun(place, source);
     const visible = await this.memory.listVisible(place);
     const problems: { code: LessonRefusalCode; reason: string }[] = [];
     for (const [index, lesson] of lessons.entries()) {
@@ -162,6 +171,13 @@ export class LessonFilingService {
         problems.push({
           code: problem.code,
           reason: `${at}: ${problem.reason}`,
+        });
+      }
+      const misplaced = await this.targetProblem(lesson.target, places);
+      if (misplaced !== null) {
+        problems.push({
+          code: misplaced.code,
+          reason: `${at}: ${misplaced.reason}`,
         });
       }
       const { seq, quote } = lesson.evidence;
@@ -221,6 +237,7 @@ export class LessonFilingService {
         evidenceQuote: lesson.evidence.quote,
         target: JSON.stringify(lesson.target),
         dedup: JSON.stringify(lesson.dedup),
+        places: JSON.stringify(places),
         status: checking ? ('checking' as const) : ('proposed' as const),
       }),
     );
@@ -350,6 +367,11 @@ export class LessonFilingService {
     } | null,
   ): Promise<LessonOutcomePayload | null> {
     const target = JSON.parse(row.target) as LessonTarget;
+    const dedup = JSON.parse(row.dedup) as LessonDedup;
+    if (target.kind !== 'memory' || dedup.verdict !== 'new') {
+      row.status = 'proposed';
+      return null;
+    }
     const place =
       target.scope === 'global'
         ? { projectId: null, teamSlug: null }
@@ -364,7 +386,6 @@ export class LessonFilingService {
       row.status = 'proposed';
       return null;
     }
-    const dedup = JSON.parse(row.dedup) as LessonDedup;
     const saved: MemorySaveOutcome = await this.memory.fileLesson(
       {
         kind: 'lesson',
@@ -376,9 +397,6 @@ export class LessonFilingService {
         title: row.title,
         body: memoryBodyOf(row, row.rule),
         type: target.type,
-        ...(dedup.verdict !== 'new' && dedup.handle !== null
-          ? { notDuplicateOf: [dedup.handle] }
-          : {}),
       },
       place,
       { sourceRunId: row.sourceRunId, proposalId: row.id },
@@ -429,13 +447,65 @@ export class LessonFilingService {
       agentKind: reflection?.agentKind ?? AgentKind.Claude,
       model: reflection?.model ?? null,
       proposals: rows.map(cardOf),
-      places: {
-        project: (project?.id ?? null) !== null,
-        team: (source?.teamId ?? null) !== null,
-      },
+      places:
+        rows[0] === undefined
+          ? placesOfRun(
+              {
+                projectId: project?.id ?? null,
+                teamSlug: source?.teamId ?? null,
+              },
+              source,
+            )
+          : placesOf(rows[0]),
       check,
     };
     await this.rows.write(segment.runId, { kind: 'lessons', payload });
+  }
+
+  /** Why the thread has no place for a lesson's target, or null when it has. */
+  private async targetProblem(
+    target: LessonTarget,
+    places: LessonPlaces,
+  ): Promise<{ code: LessonRefusalCode; reason: string } | null> {
+    if (target.kind === 'memory') {
+      return null;
+    }
+    if (target.kind === 'member_instructions') {
+      if (!places.team) {
+        return {
+          code: 'NO_PLACE_FOR_TARGET',
+          reason:
+            'this thread is not a team run — a lesson for how a role works goes to memory instead',
+        };
+      }
+      return places.members.some(({ id }) => id === target.memberId)
+        ? null
+        : {
+            code: 'UNKNOWN_MEMBER',
+            reason: `${target.memberId} is not a member of this team run — its members are ${places.members.map(({ id }) => id).join(', ') || 'unreadable'}`,
+          };
+    }
+    if (places.projectId === null) {
+      return {
+        code: 'NO_PLACE_FOR_TARGET',
+        reason: `this thread belongs to no project — ${target.kind === 'knowledge' ? 'a procedure' : 'a rule'} without a project goes to global memory instead`,
+      };
+    }
+    if (target.kind === 'knowledge' && target.handle !== null) {
+      const { documents } = await this.knowledge.list({
+        place: placeKeyOf({ projectId: places.projectId, teamSlug: null }),
+        handle: target.handle,
+        status: 'active',
+        limit: 1,
+      });
+      if (documents.length === 0) {
+        return {
+          code: 'UNKNOWN_DOCUMENT',
+          reason: `the project has no active document ${target.handle} — name one knowledge_search found, or null for a new document`,
+        };
+      }
+    }
+    return null;
   }
 
   private textProblems(
@@ -503,6 +573,7 @@ function outcomeOf(
     rule: row.rule,
     target: JSON.parse(row.target) as LessonTarget,
     memoryHandle,
+    resultRef: memoryHandle,
     reason,
   };
 }

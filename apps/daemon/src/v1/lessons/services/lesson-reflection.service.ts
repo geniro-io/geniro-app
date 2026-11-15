@@ -36,6 +36,7 @@ import {
   lessonsReflectionBrief,
   lessonsReflectionGuide,
 } from '../utils/lessons-reflection-guide';
+import { placesOfRun } from '../utils/lesson-places';
 import { readLessonSignals } from '../utils/read-lesson-signals';
 import { isReflectable } from '../utils/reflectable';
 import { runFailureOf } from '../utils/run-failure';
@@ -295,6 +296,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
             title: proposal.title,
             reason: proposal.rejectReason ?? proposal.checkReason,
           })),
+          places: placesOfRun(place, source),
         }),
       );
     } catch (error) {

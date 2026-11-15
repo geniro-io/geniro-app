@@ -58,6 +58,11 @@ export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
+/** Zero is no figure: a delegate that measured no messages states none. */
+export function shownMessages(messages: number | null): number | null {
+  return messages === null || messages === 0 ? null : messages;
+}
+
 /** The line under the popover's figures that says what they are, when one is needed. */
 function figureHint({
   legacy,
@@ -108,7 +113,8 @@ export function SubagentMetaChips({
   toolCount: number;
   tasks: { done: number; total: number } | null;
 }): React.JSX.Element | null {
-  const { requests, messages, tokensProcessed, costUsd, contextTokens } = view;
+  const { requests, tokensProcessed, costUsd, contextTokens } = view;
+  const messages = shownMessages(view.messages);
   // An old row's one token figure is the last request's, never a total.
   const legacy = view.contextAtEnd !== null;
   const took = running ? null : durationMs;

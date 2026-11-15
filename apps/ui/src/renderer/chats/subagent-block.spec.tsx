@@ -1186,6 +1186,24 @@ describe('SubagentDetail', () => {
     openDetail();
     expect(container.textContent).not.toContain('Conversation');
   });
+
+  it('says how many of its calls the panel holds, as the card does', () => {
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail
+            block={{ ...makeBlock(), durableToolCalls: 412, heldToolCalls: 1 }}
+            chatAgentName="claude"
+          />
+        </Dialog>,
+      ),
+    );
+
+    expect(
+      container.querySelector('[data-slot="subagent-window-note"]')
+        ?.textContent,
+    ).toBe('Showing the last 1 of 412 tool calls');
+  });
 });
 
 describe('SubagentBlock figures', () => {
@@ -1284,10 +1302,50 @@ describe('SubagentBlock figures', () => {
       { ...makeBlock(), messages: 4, durationMs: 2029, tokens: 26_124 },
       ['subagent-meta-messages', 'subagent-meta-duration'],
     ],
+    [
+      'a delegate that sent no messages, which states its requests alone',
+      { ...claude(), messages: 0 },
+      [
+        'subagent-meta-requests',
+        'subagent-meta-tokens',
+        'subagent-meta-cost',
+        'subagent-meta-duration',
+      ],
+    ],
   ])('draws only the figures %s measured', (_name, block, slots) => {
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
 
     expect(plateSlots()).toEqual(slots);
+  });
+
+  it('draws no plate for a delegate whose only count is zero messages', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={{ ...makeBlock(), messages: 0 }}
+          soloAgent
+        />,
+      ),
+    );
+
+    expect(container.querySelector('[data-slot="subagent-meta"]')).toBeNull();
+  });
+
+  it('draws its messages as the plate’s only chip when they are the one figure measured', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={{ ...makeBlock(), messages: 2 }}
+          soloAgent
+        />,
+      ),
+    );
+
+    expect(plateSlots()).toEqual(['subagent-meta-messages']);
+    expect(
+      container.querySelector('[data-slot="subagent-meta-messages"]')
+        ?.textContent,
+    ).toBe('2');
   });
 
   it('names the plate’s figures in words for a screen reader, and nothing it does not show', () => {

@@ -23,7 +23,7 @@ import {
   subagentFiguresView,
   useSubagentLiveFigures,
 } from './subagent-figures';
-import { plural, SubagentMetaChips } from './subagent-meta';
+import { plural, shownMessages, SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -269,8 +269,9 @@ function subagentSpendParts(
   if (view.requests !== null) {
     parts.push(plural(view.requests, 'request'));
   }
-  if (view.messages !== null) {
-    parts.push(plural(view.messages, 'message'));
+  const messages = shownMessages(view.messages);
+  if (messages !== null) {
+    parts.push(plural(messages, 'message'));
   }
   if (view.tokensProcessed !== null) {
     parts.push(`${formatTokens(view.tokensProcessed)} tokens processed`);
@@ -451,6 +452,7 @@ export function SubagentThread({
   const working = status === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
+      <DelegateWindow block={block} />
       {block.prompt ? (
         <BlockRequest
           label={`Task for ${title}`}
@@ -546,8 +548,8 @@ function windowNoteOf(block: SubagentBlockEntry): string | null {
 /**
  * The delegate's own earlier steps, read on demand — see `useDelegatePages`.
  *
- * Mounted in the card's body, which draws only while the card is open, so
- * opening the card is what reads the delegate's rows.
+ * Mounted in the thread, so the card reads the delegate's rows when it opens and
+ * the panel when it opens; both name the same loader entry, which is read once.
  */
 function DelegateStepsPager({
   delegateId,
@@ -606,6 +608,31 @@ function DelegateStepsPager({
 }
 
 /**
+ * The note naming the calls the delegate's rows hold, and the pager that reads
+ * the rest. Drawn by {@link SubagentThread}, so the card and the detail panel
+ * show the same two rows over the same loader.
+ */
+function DelegateWindow({
+  block,
+}: {
+  block: SubagentBlockEntry;
+}): React.JSX.Element {
+  const windowNote = windowNoteOf(block);
+  return (
+    <>
+      {windowNote === null ? null : (
+        <p
+          data-slot="subagent-window-note"
+          className="m-0 rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground">
+          {windowNote}
+        </p>
+      )}
+      <DelegateStepsPager delegateId={block.id} />
+    </>
+  );
+}
+
+/**
  * One background sub-agent as a collapsed aside in the conversation.
  *
  * Drawn on the same {@link BlockShell} as the agent-call block, and closed by
@@ -636,7 +663,6 @@ export const SubagentBlock = memo(function SubagentBlock({
   const status = shellStatusOf(block);
   const untracked = status === 'untracked';
   const running = status === 'running';
-  const windowNote = windowNoteOf(block);
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
@@ -742,14 +768,6 @@ export const SubagentBlock = memo(function SubagentBlock({
             ) : null}
           </span>
         }>
-        {windowNote === null ? null : (
-          <p
-            data-slot="subagent-window-note"
-            className="m-0 rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground">
-            {windowNote}
-          </p>
-        )}
-        <DelegateStepsPager delegateId={block.id} />
         <SubagentThread
           block={block}
           nodes={nodes}

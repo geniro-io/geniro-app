@@ -112,21 +112,19 @@ export function ConversationWorkChips({
   );
 }
 
+export function hasConversationWork(work: ConversationWork): boolean {
+  return hasCounters(work) || work.notes.length > 0 || work.actions.length > 0;
+}
+
 export function ConversationWorkBar({
   row,
+  work,
   source,
 }: {
   row: WorkingAgentRow;
+  work: ConversationWork;
   source: ConversationWorkSource;
-}): React.JSX.Element | null {
-  const work = source.of(row.callIds);
-  if (
-    !hasCounters(work) &&
-    work.notes.length === 0 &&
-    work.actions.length === 0
-  ) {
-    return null;
-  }
+}): React.JSX.Element {
   return (
     <div
       data-slot="call-conversation-work"

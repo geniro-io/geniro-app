@@ -759,7 +759,7 @@ describe('WorkingAgentsCard', () => {
         return dialog()!;
       }
 
-      it('shows its own terminals, monitors, sub-agents and tasks in the header, and no other run’s', async () => {
+      it('shows its own terminals, monitors, sub-agents and tasks at the bottom, and no other run’s', async () => {
         const el = await renderWithWork(
           [
             named('call-1', 'Engineer', 'working'),
@@ -778,9 +778,10 @@ describe('WorkingAgentsCard', () => {
         );
 
         const popup = await openPopupOf(el, 0);
+        const bottom = slot(popup, 'call-conversation-footer')!;
 
-        expect(slot(popup, 'running-shells')?.textContent).toBe('2');
-        expect(slot(popup, 'open-tasks')?.textContent).toBe('1/2');
+        expect(slot(bottom, 'running-shells')?.textContent).toBe('2');
+        expect(slot(bottom, 'open-tasks')?.textContent).toBe('1/2');
         expect(slot(popup, 'running-monitors')).toBeNull();
       });
 
@@ -817,6 +818,7 @@ describe('WorkingAgentsCard', () => {
 
         expect(dialog()).not.toBeNull();
         expect(slot(popup, 'call-conversation-work')).toBeNull();
+        expect(slot(popup, 'call-conversation-footer')).toBeNull();
       });
 
       it('closes the popup before a terminal opens from it', async () => {

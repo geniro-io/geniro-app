@@ -16,6 +16,7 @@ import {
 import {
   ConversationWorkBar,
   type ConversationWorkSource,
+  hasConversationWork,
 } from './conversation-work-chips';
 import { useDurableTranscript } from './durable-transcript';
 import { mergeAnchorRows } from './history-anchors';
@@ -144,6 +145,11 @@ function ConversationBody({
     () => callBlockOfConversation(indexCallBlocks(entries), row.callIds),
     [entries, row.callIds],
   );
+  const conversationWork = work?.of(row.callIds);
+  const ownWork =
+    conversationWork !== undefined && hasConversationWork(conversationWork)
+      ? conversationWork
+      : null;
   const pages = callConversations.stateOf(row.conversationId);
   const settled = pages?.loading === false;
 
@@ -198,9 +204,6 @@ function ConversationBody({
             Show in chat
           </Button>
         </div>
-        {work === undefined ? null : (
-          <ConversationWorkBar row={row} source={work} />
-        )}
       </div>
       <div
         ref={scrollerRef}
@@ -225,15 +228,20 @@ function ConversationBody({
           )}
         </CallConversationContext.Provider>
       </div>
-      {block === undefined ? null : (
+      {block === undefined && ownWork === null ? null : (
         <div
           data-slot="call-conversation-footer"
           className="flex shrink-0 flex-col gap-2 border-t border-border/60 px-5 py-3">
-          <CallConversationFooter
-            block={block}
-            nodes={nodes}
-            className="border-t-0 pt-0"
-          />
+          {ownWork === null || work === undefined ? null : (
+            <ConversationWorkBar row={row} work={ownWork} source={work} />
+          )}
+          {block === undefined ? null : (
+            <CallConversationFooter
+              block={block}
+              nodes={nodes}
+              className="border-t-0 pt-0"
+            />
+          )}
         </div>
       )}
     </div>

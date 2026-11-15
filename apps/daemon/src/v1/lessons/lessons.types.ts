@@ -536,9 +536,10 @@ export const LessonProposalListSchema = z.object({
 
 export const LessonProposalListQuerySchema = z.object({
   status: z
-    .string()
-    .max(200)
-    .optional()
+    .preprocess(
+      (value) => (Array.isArray(value) ? value.join(',') : value),
+      z.string().max(200).optional(),
+    )
     .describe('Comma-separated statuses; omitted = every status'),
   sourceRunId: z.string().min(1).max(200).optional(),
 });

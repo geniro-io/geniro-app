@@ -120,7 +120,10 @@ export class ClaudeSessionCostLedger {
    * response's `usage`, so only the first may count. A line naming no id
    * always counts.
    */
-  firstLineOfRequest(sessionId: string | null, messageId: string | null): boolean {
+  firstLineOfRequest(
+    sessionId: string | null,
+    messageId: string | null,
+  ): boolean {
     if (messageId === null) {
       return true;
     }

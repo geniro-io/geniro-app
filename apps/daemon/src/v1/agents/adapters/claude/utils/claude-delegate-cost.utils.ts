@@ -129,11 +129,9 @@ export class ClaudeDelegateCostLedger {
   >();
 
   /**
-   * Hold one delegate's breakdown until the turn that ran it reports its price.
-   *
-   * The order is fixed and is why this has to wait at all: a delegate's
-   * `tool_use_result` arrives while the turn is still working, and the `result`
-   * line carrying the only real money figure comes last.
+   * Hold one ENDED delegate's breakdown — every request it made — until the
+   * turn that ran it reports its price. Only an ended delegate is recorded, so
+   * a `result` never prices one still running on partial figures.
    *
    * `sessionId` is the recording LINE's `session_id` — null for a line that
    * names none, which files it with every other such line rather than under a
@@ -221,7 +219,10 @@ export class ClaudeDelegateCostLedger {
    * recent `result` line solved — null before any. The delegate stays pending
    * too, so the turn's own `result` re-prices it with that turn's factor.
    */
-  priceNow(sessionId: string | null, spend: ClaudeDelegateSpend): number | null {
+  priceNow(
+    sessionId: string | null,
+    spend: ClaudeDelegateSpend,
+  ): number | null {
     const calibration = this.calibrations.get(sessionId ?? '');
     return calibration === undefined
       ? null

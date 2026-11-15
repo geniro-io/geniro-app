@@ -287,14 +287,9 @@ function readClaudeTaskUsage(
 }
 
 /**
- * One delegate's bill, off the `tool_use_result` riding the `user` line that
- * closes its launching `Task` call.
- *
- * This is the ONLY channel that breaks a delegate's spend down by token kind
- * and names the model that ran it — `task_notification`, the other channel
- * describing a delegate, reports a `total_tokens` roll-up with neither. Both
- * are needed to price one: the four kinds bill at rates 12.5x apart, so a total
- * cannot be priced, and a rate belongs to a model. Probed on 2.1.251:
+ * What the `tool_use_result` closing a delegate's launching call says about
+ * it: its type, model, duration and tool count, and the usage of its LAST
+ * request. Probed on 2.1.251:
  *
  * ```
  * {"type":"user","tool_use_result":{"status":"completed","agentId":"a8ff…",
@@ -306,9 +301,8 @@ function readClaudeTaskUsage(
  *
  * `agentId` is the discriminator, and it has to be: this same root key carries
  * the rich result of OTHER tools, and a shell's or a search's would otherwise
- * be announced as a sub-agent. `costUsd` is left null here on purpose — the
- * breakdown is recorded against the launching call and priced on the `result`
- * line, which is the first line that says what any of it was charged at.
+ * be announced as a sub-agent. The delegate's spend over every request, and
+ * its price, come from `ClaudeDelegateSettler` when it ends.
  */
 function readClaudeDelegateResult(
   root: Record<string, unknown>,
@@ -1176,7 +1170,9 @@ function mapClaudeLine(
           isError: asBoolean(b.is_error),
         });
         if (soleToolResult) {
-          events.push(...readClaudeDelegateResult(root, toolCallId, costLedger));
+          events.push(
+            ...readClaudeDelegateResult(root, toolCallId, costLedger),
+          );
         }
         // Half of claude's task list is only readable HERE: a created task's id
         // is in its result, and `TaskList`'s result is the only statement of the

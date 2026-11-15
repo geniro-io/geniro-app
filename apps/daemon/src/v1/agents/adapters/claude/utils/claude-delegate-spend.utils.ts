@@ -1,12 +1,13 @@
 import { dirname, join } from 'node:path';
 
-import { asArray, asNumber, asRecord, asString } from '../../../utils/json-util';
+import {
+  asArray,
+  asNumber,
+  asRecord,
+  asString,
+} from '../../../utils/json-util';
 import { isPlainSessionId } from '../../../utils/session-id';
-import type {
-  AgentEvent,
-  DelegateFigures,
-  TurnIo,
-} from '../../adapter.types';
+import type { AgentEvent, DelegateFigures, TurnIo } from '../../adapter.types';
 import {
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
   CLAUDE_TASK_TERMINAL_STATUSES,
@@ -168,7 +169,10 @@ export class ClaudeDelegateSpendTracker {
     };
   }
 
-  private account(sessionId: string | null, delegateId: string): DelegateAccount {
+  private account(
+    sessionId: string | null,
+    delegateId: string,
+  ): DelegateAccount {
     const key = accountKey(sessionId, delegateId);
     let account = this.accounts.get(key);
     if (account === undefined) {
@@ -187,7 +191,7 @@ export class ClaudeDelegateSpendTracker {
 /**
  * Read a delegate's totals from its own transcript, which claude writes beside
  * the session's: `<project>/<sessionId>/subagents/agent-<agentId>.jsonl`.
- * Null when the file cannot be found or read whole, or records no request.
+ * Null when the file cannot be found or read, or records no request.
  */
 export async function readClaudeDelegateTranscript(
   profileDir: string,
@@ -217,8 +221,9 @@ export async function readDelegateTranscriptFile(
 ): Promise<ClaudeDelegateTotals | null> {
   const totals = emptyTotals();
   const seen = new Set<string>();
-  let malformed = false;
   try {
+    // A torn last line (claude still appending) is skipped, not fatal: every
+    // complete request before it is still exactly what was billed.
     const read = await eachJsonLine(
       path,
       null,
@@ -235,12 +240,10 @@ export async function readDelegateTranscriptFile(
         addRequest(totals, request);
         return true;
       },
-      () => {
-        malformed = true;
-      },
+      undefined,
       'assistant',
     );
-    return read && !malformed && totals.requests > 0 ? totals : null;
+    return read && totals.requests > 0 ? totals : null;
   } catch {
     return null;
   }
@@ -269,7 +272,10 @@ export class ClaudeDelegateSettler {
   constructor(
     private readonly deps: {
       tracker: ClaudeDelegateSpendTracker;
-      launchOfTask: (taskId: string, toolCallId: string | null) => string | null;
+      launchOfTask: (
+        taskId: string,
+        toolCallId: string | null,
+      ) => string | null;
       priceNow: (
         sessionId: string | null,
         spend: ClaudeDelegateSpend,
@@ -531,7 +537,10 @@ function accountKey(sessionId: string | null, delegateId: string): string {
   return `${sessionId ?? ''}\u0000${delegateId}`;
 }
 
-function trimOldest<K>(collection: Map<K, unknown> | Set<K>, max: number): void {
+function trimOldest<K>(
+  collection: Map<K, unknown> | Set<K>,
+  max: number,
+): void {
   while (collection.size > max) {
     const oldest = collection.keys().next();
     if (oldest.done === true) {

@@ -41,21 +41,18 @@ export interface SubagentFiguresView {
 /**
  * The figures a sub-agent card draws, decided once.
  *
- * The live channel beats the block's own figures field by field while the
- * delegate is still working, and also when its block has no durable figures to
- * stand on. A finished block whose figures sum every request keeps those instead.
- * A block whose figures are not cumulative contributes none of them, so an old
- * row never reads as a total it does not have.
+ * The live channel beats the block's own figures field by field, and only while
+ * the delegate is still working: once it has ended, a reading left standing (a
+ * cancelled or untracked turn never sends a final one) must not replace the
+ * figures the block holds. A block whose figures are not cumulative contributes
+ * none of them, so an old row never reads as a total it does not have.
  */
 export function subagentFiguresView(
   entry: SubagentBlockEntry,
   live: LiveDelegateFigures | null,
 ): SubagentFiguresView {
   const liveNow =
-    live !== null &&
-    !(entry.cumulative && subagentBlockStatus(entry) !== 'running')
-      ? live
-      : null;
+    live !== null && subagentBlockStatus(entry) === 'running' ? live : null;
   const durable = (value: number | null): number | null =>
     entry.cumulative ? value : null;
 

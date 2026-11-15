@@ -121,6 +121,41 @@ describe('subagentFiguresView', () => {
     });
   });
 
+  it('ignores a live reading a stopped delegate left standing, and keeps its durable figures', () => {
+    const view = subagentFiguresView(
+      block({
+        returned: true,
+        backgroundOutcome: 'stopped',
+        cumulative: true,
+        requests: 4,
+        inputTokens: 400,
+      }),
+      figures({ requests: 9, inputTokens: 900 }),
+    );
+
+    expect(view).toMatchObject({ requests: 4, inputTokens: 400, live: false });
+  });
+
+  it('ignores a live reading an untracked old row left standing, and reads it as its context at the end', () => {
+    const view = subagentFiguresView(
+      block({
+        returned: true,
+        daemonStatus: 'untracked',
+        cumulative: false,
+        tokens: 26_124,
+      }),
+      figures({ requests: 9, inputTokens: 900, contextTokens: 16_000 }),
+    );
+
+    expect(view).toMatchObject({
+      requests: null,
+      inputTokens: null,
+      contextTokens: null,
+      contextAtEnd: 26_124,
+      live: false,
+    });
+  });
+
   it('fills a field the live reading does not state from a cumulative block, and never reads it as zero', () => {
     const view = subagentFiguresView(
       block({

@@ -369,7 +369,7 @@ describe('ClaudeDelegateSettler', () => {
     });
     settler.attach({
       write: () => true,
-      emit: (event) => emitted.push(event),
+      emit: (event: AgentEvent) => emitted.push(event),
     } as unknown as TurnIo);
 
     const end = taskNotification(

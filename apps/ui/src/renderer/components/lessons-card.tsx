@@ -549,7 +549,9 @@ function DecidedRow({
 
   const busy = request !== null;
   const draftValid = title.trim() !== '' && rule.trim() !== '';
-  const inMemory = outcome.target.kind === 'memory';
+  const ownEntry =
+    outcome.target.kind === 'memory' &&
+    outcome.memoryHandle !== lesson.dedup.handle;
 
   const run = (
     kind: 'undo' | 'edit' | 'approve',
@@ -599,7 +601,7 @@ function DecidedRow({
   };
 
   const muted = outcome.status !== 'saved' && outcome.status !== 'pending';
-  const statusText = decidedStatusText(outcome, edited, places);
+  const statusText = decidedStatusText(outcome, edited, places, lesson);
   const undoDisabled = busy || onUndo === undefined;
 
   return (
@@ -653,7 +655,7 @@ function DecidedRow({
             Cancel
           </Button>
         </div>
-      ) : outcome.status === 'saved' && inMemory ? (
+      ) : outcome.status === 'saved' && ownEntry ? (
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -702,10 +704,19 @@ function savedStatusText(
   outcome: LessonOutcomeView,
   edited: boolean,
   places: LessonPlaces,
+  lesson: LessonView,
 ): string {
   const { target } = outcome;
   switch (target.kind) {
     case 'memory':
+      if (
+        outcome.memoryHandle !== null &&
+        outcome.memoryHandle === lesson.dedup.handle
+      ) {
+        return lesson.dedup.verdict === 'broken_again'
+          ? `${outcome.memoryHandle} moved into the memory index`
+          : `Updated ${outcome.memoryHandle}`;
+      }
       return outcome.by === 'auto' && !edited
         ? `Saved to memory · ${target.scope} · Searchable only`
         : `Saved to memory · ${target.scope}`;
@@ -724,10 +735,11 @@ function decidedStatusText(
   outcome: LessonOutcomeView,
   edited: boolean,
   places: LessonPlaces,
+  lesson: LessonView,
 ): string {
   switch (outcome.status) {
     case 'saved':
-      return savedStatusText(outcome, edited, places);
+      return savedStatusText(outcome, edited, places, lesson);
     case 'pending':
       return 'Waiting for review';
     case 'undone':

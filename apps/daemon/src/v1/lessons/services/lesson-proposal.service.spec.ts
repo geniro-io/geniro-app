@@ -19,7 +19,6 @@ import {
   withLessonLine,
 } from './lesson-proposal.service';
 import type { LessonRowWriter } from './lesson-row.writer';
-import type { LessonsEventBus } from './lessons-events.bus';
 
 const TARGET_PROJECT = { kind: 'memory', scope: 'project', type: 'feedback' };
 const PROJECT = { id: 'p1', instructionBlocks: [], instructionsRevision: 4 };
@@ -120,7 +119,6 @@ function build(
     get: vi.fn(() => Promise.resolve(null)),
     edit: vi.fn(() => Promise.resolve(applied('k-1'))),
   };
-  const events = { publishChanged: vi.fn() };
   const service = new LessonProposalService(
     em,
     proposals as unknown as LessonProposalDao,
@@ -132,7 +130,6 @@ function build(
     projects as unknown as ProjectsService,
     teamChange as unknown as TeamChangeService,
     knowledge as unknown as KnowledgeService,
-    events as unknown as LessonsEventBus,
   );
   return {
     service,
@@ -146,7 +143,6 @@ function build(
     projects,
     teamChange,
     knowledge,
-    events,
   };
 }
 
@@ -187,22 +183,6 @@ describe('LessonProposalService.save', () => {
         reason: null,
       },
     });
-  });
-
-  it('announces the change of the source thread, so the waiting list re-reads', async () => {
-    const { service, events } = build(proposal());
-
-    await service.save('lp-1', {});
-
-    expect(events.publishChanged).toHaveBeenCalledWith('src');
-  });
-
-  it('announces a rejection too', async () => {
-    const { service, events } = build(proposal());
-
-    await service.reject('lp-1', {});
-
-    expect(events.publishChanged).toHaveBeenCalledWith('src');
   });
 
   it.each([
@@ -774,6 +754,41 @@ describe('LessonProposalService.save into project instructions', () => {
   });
 });
 
+describe('LessonProposalService decisions', () => {
+  it('refuses a second press while the first still writes, so the rule is appended once', async () => {
+    const row = proposal({ target: JSON.stringify(PROJECT_TARGET) });
+    const { service, projects } = build(row);
+    let release: () => void = () => undefined;
+    projects.update.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const first = service.save('lp-1', {});
+    await vi.waitFor(() => expect(projects.update).toHaveBeenCalled());
+    await expect(service.save('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'LESSON_DECIDING',
+    });
+    release();
+    await first;
+
+    expect(projects.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a rule with invisible characters before writing anything', async () => {
+    const row = proposal({ target: JSON.stringify(PROJECT_TARGET) });
+    const { service, projects, rows } = build(row);
+
+    await expect(
+      service.save('lp-1', { rule: 'Run pnpm​ test first' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_HIDDEN_TEXT' });
+    expect(projects.update).not.toHaveBeenCalled();
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+});
+
 describe('LessonProposalService.save into member instructions', () => {
   it("appends the rule as one line to the member's instructions in the library team, logged as a lesson of its thread", async () => {
     const row = proposal({
@@ -896,6 +911,22 @@ describe('LessonProposalService.save into knowledge', () => {
     expect(rows.write).not.toHaveBeenCalled();
   });
 
+  it("passes on the knowledge store's refusal under a lesson code, leaving the lesson open", async () => {
+    const row = proposal({ target: JSON.stringify(KNOWLEDGE_NEW) });
+    const { service, knowledge, rows } = build(row);
+    knowledge.create.mockResolvedValueOnce({
+      kind: 'refused',
+      code: 'INVALID_DOCUMENT',
+      reason: 'the body is too long',
+    } as never);
+
+    await expect(service.save('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'LESSON_INVALID_DOCUMENT',
+    });
+    expect(row).toMatchObject({ status: 'proposed', resultRef: null });
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+
   it('refuses a document that changed while the lesson was saved, with 409 LESSON_DOCUMENT_CHANGED', async () => {
     const row = proposal({
       target: JSON.stringify({ kind: 'knowledge', handle: 'k-1' }),
@@ -960,6 +991,36 @@ describe('LessonProposalService.updateRule', () => {
         }),
       }),
     );
+  });
+
+  it('refuses Update rule when the refined entry was forgotten, with 409 LESSON_ENTRY_GONE, leaving the lesson open', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory, rows } = build(row, undefined, {
+      ...FILED_ENTRY,
+      status: 'forgotten',
+    });
+
+    await expect(service.updateRule('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'LESSON_ENTRY_GONE',
+    });
+    expect(memory.edit).not.toHaveBeenCalled();
+    expect(rows.write).not.toHaveBeenCalled();
+    expect(row.status).toBe('proposed');
+  });
+
+  it('keeps Undo off the entry an Update rule changed: that entry was not written by the lesson', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory } = build(row);
+    await service.updateRule('lp-1', {});
+
+    await expect(service.undo('lp-1')).rejects.toMatchObject({
+      errorCode: 'LESSON_NOT_FILED',
+    });
+    expect(memory.setStatus).not.toHaveBeenCalled();
   });
 
   it('refuses Update rule on a new lesson with 409 LESSON_NOT_A_REFINEMENT, touching nothing', async () => {

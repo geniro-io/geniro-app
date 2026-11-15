@@ -395,6 +395,17 @@ describe('LessonFilingService.file', () => {
     expect(result).toEqual({ status: 'recorded', count: 1 });
   });
 
+  it('refuses a lesson whose rule hides invisible characters', async () => {
+    const fixture = build();
+
+    const result = await fixture.service.file(fixture.turn, [
+      lesson({ rule: 'Run the tests‮ before you push.' }),
+    ]);
+
+    expect(codesOf(result)).toEqual(['HIDDEN_TEXT']);
+    expectNothingWritten(fixture);
+  });
+
   it('refuses a lesson that carries a secret the daemon knows', async () => {
     registerSecret('ghp_exampleToken0123456789', 'github token');
     const fixture = build();
@@ -631,18 +642,6 @@ describe('LessonFilingService.file', () => {
     expect(result).toEqual({ status: 'recorded', count: 0 });
     expect(fixture.segment.status).toBe('empty');
     expect(fixture.rows.write).not.toHaveBeenCalled();
-    expect(fixture.events.publishChanged).toHaveBeenCalledWith('src');
-  });
-
-  it('tells the thread it changed once a filed card is delivered', async () => {
-    const fixture = build();
-
-    await fixture.service.file(fixture.turn, [lesson()]);
-
-    expect(fixture.rows.write).toHaveBeenCalledWith(
-      'src',
-      expect.objectContaining({ kind: 'lessons' }),
-    );
     expect(fixture.events.publishChanged).toHaveBeenCalledWith('src');
   });
 

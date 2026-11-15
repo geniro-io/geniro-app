@@ -181,6 +181,24 @@ describe('LessonsCard — a lesson saved to memory', () => {
     expect(buttonNamed(el, 'Edit')).toBeTruthy();
   });
 
+  it('names the entry an Update rule changed, and offers no Undo or Edit on it', async () => {
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      outcomes: {
+        [LESSON_REFINES.id]: outcome(LESSON_REFINES.id, {
+          memoryHandle: 'm12',
+          resultRef: 'm12',
+        }),
+      },
+      onUndo: vi.fn(async () => undefined),
+      onEdit: vi.fn(async () => undefined),
+    });
+
+    expect(el.textContent).toContain('Updated m12');
+    expect(() => buttonNamed(el, 'Undo')).toThrow();
+    expect(() => buttonNamed(el, 'Edit')).toThrow();
+  });
+
   it('undoes the lesson when Undo is pressed', async () => {
     const onUndo = vi.fn(async () => undefined);
     const el = await render({

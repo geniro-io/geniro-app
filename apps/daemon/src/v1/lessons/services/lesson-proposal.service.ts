@@ -1,9 +1,14 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
-import { ConflictException, NotFoundException } from '@packages/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { parseJsonColumn } from '../../agents/utils/json-util';
 import {
   KNOWLEDGE_TITLE_MAX_CHARS,
@@ -41,7 +46,6 @@ import {
 } from '../lessons.types';
 import { billedModelOf } from '../utils/billed-model';
 import { LessonRowWriter } from './lesson-row.writer';
-import { LessonsEventBus } from './lessons-events.bus';
 
 /** The project instruction block saved lessons are appended to. */
 export const LESSONS_BLOCK_ID = 'lessons';
@@ -64,6 +68,8 @@ interface Landed {
  */
 @Injectable()
 export class LessonProposalService {
+  private readonly deciding = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly proposals: LessonProposalDao,
@@ -75,7 +81,6 @@ export class LessonProposalService {
     private readonly projects: ProjectsService,
     private readonly teamChange: TeamChangeService,
     private readonly knowledge: KnowledgeService,
-    private readonly events: LessonsEventBus,
   ) {}
 
   async list(query: LessonProposalListQuery): Promise<LessonProposalWire[]> {
@@ -94,18 +99,33 @@ export class LessonProposalService {
     return rows.map((row) => toWire(row, existing.has(row.sourceRunId)));
   }
 
-  async save(id: string, input: SaveLesson): Promise<LessonProposalWire> {
-    const em = this.em.fork();
-    const row = await this.undecided(id, em);
-    const target = input.target ?? targetOf(row);
-    const title = input.title ?? row.title;
-    const rule = input.rule ?? row.rule;
-    const landed = await this.writeTo(row, target, title, rule);
-    return this.decided(row, em, { title, rule, target, landed });
+  save(id: string, input: SaveLesson): Promise<LessonProposalWire> {
+    return this.claimed(id, async () => {
+      const em = this.em.fork();
+      const row = await this.undecided(id, em);
+      const target = input.target ?? targetOf(row);
+      const title = input.title ?? row.title;
+      const rule = input.rule ?? row.rule;
+      const landed = await this.writeTo(row, target, title, rule);
+      return this.decided(row, em, { title, rule, target, landed });
+    });
   }
 
   /** "Update rule" on a `refines` lesson: the entry it refines takes its text, as the user's edit. */
-  async updateRule(
+  updateRule(id: string, input: UpdateLessonRule): Promise<LessonProposalWire> {
+    return this.claimed(id, () => this.updateRuleNow(id, input));
+  }
+
+  /**
+   * "Move up" on a rule that was broken again: into the project's
+   * instructions when the thread has a project, else the entry it names is
+   * approved into the memory index.
+   */
+  moveUp(id: string): Promise<LessonProposalWire> {
+    return this.claimed(id, () => this.moveUpNow(id));
+  }
+
+  private async updateRuleNow(
     id: string,
     input: UpdateLessonRule,
   ): Promise<LessonProposalWire> {
@@ -124,6 +144,7 @@ export class LessonProposalService {
     }
     const title = input.title ?? row.title;
     const rule = input.rule ?? row.rule;
+    refuseHiddenText(title, rule);
     const entry = await this.liveEntry(dedup.handle);
     savedEntryOrThrow(
       await this.memory.edit(entry.id, {
@@ -143,12 +164,7 @@ export class LessonProposalService {
     });
   }
 
-  /**
-   * "Move up" on a rule that was broken again: into the project's
-   * instructions when the thread has a project, else the entry it names is
-   * approved into the memory index.
-   */
-  async moveUp(id: string): Promise<LessonProposalWire> {
+  private async moveUpNow(id: string): Promise<LessonProposalWire> {
     const em = this.em.fork();
     const row = await this.undecided(id, em);
     const place = moveUpOf(row);
@@ -241,7 +257,14 @@ export class LessonProposalService {
     return this.wireOf(row, em);
   }
 
-  async reject(id: string, input: RejectLesson): Promise<LessonProposalWire> {
+  reject(id: string, input: RejectLesson): Promise<LessonProposalWire> {
+    return this.claimed(id, () => this.rejectNow(id, input));
+  }
+
+  private async rejectNow(
+    id: string,
+    input: RejectLesson,
+  ): Promise<LessonProposalWire> {
     const em = this.em.fork();
     const row = await this.undecided(id, em);
     const reason =
@@ -330,6 +353,12 @@ export class LessonProposalService {
         `this lesson is ${row.status}, not saved to memory`,
       );
     }
+    if (row.resultRef === dedupOf(row).handle) {
+      throw new ConflictException(
+        'LESSON_NOT_FILED',
+        `this lesson changed the existing entry ${row.resultRef} — change it in Settings → Memory`,
+      );
+    }
     return row;
   }
 
@@ -392,12 +421,33 @@ export class LessonProposalService {
     return toWire(row, existing.has(row.sourceRunId));
   }
 
+  /**
+   * One decision per lesson at a time: a second press — from the card and the
+   * Waiting list, or a phone — while the first still writes would append the
+   * rule twice, since each write reads the file it appends to afresh.
+   */
+  private async claimed<T>(id: string, work: () => Promise<T>): Promise<T> {
+    if (this.deciding.has(id)) {
+      throw new ConflictException(
+        'LESSON_DECIDING',
+        'this lesson is being saved already',
+      );
+    }
+    this.deciding.add(id);
+    try {
+      return await work();
+    } finally {
+      this.deciding.delete(id);
+    }
+  }
+
   private writeTo(
     row: LessonProposal,
     target: LessonTarget,
     title: string,
     rule: string,
   ): Promise<Landed> {
+    refuseHiddenText(title, rule);
     switch (target.kind) {
       case 'memory':
         return this.toMemory(row, target, title, rule);
@@ -545,7 +595,6 @@ export class LessonProposalService {
     by: LessonOutcomePayload['by'] = 'user',
     resultRef: string | null = memoryHandle,
   ): Promise<void> {
-    this.events.publishChanged(row.sourceRunId);
     return this.rows.write(row.sourceRunId, {
       kind: 'lesson_outcome',
       payload: {
@@ -664,6 +713,16 @@ function landedIn(outcome: KnowledgeSaveOutcome): Landed {
       );
     case 'refused':
       throw new ConflictException(`LESSON_${outcome.code}`, outcome.reason);
+  }
+}
+
+/** A rule and title as one later run reads them: no invisible or format characters the user could not see when saving. */
+function refuseHiddenText(title: string, rule: string): void {
+  if (hasHiddenText(title, false) || hasHiddenText(rule, false)) {
+    throw new BadRequestException(
+      'LESSON_HIDDEN_TEXT',
+      'the lesson holds invisible characters — edit its text before saving',
+    );
   }
 }
 

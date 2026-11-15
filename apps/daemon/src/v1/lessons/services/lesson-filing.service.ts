@@ -4,6 +4,7 @@ import { Injectable } from '@nestjs/common';
 import type { AnalysisTurn } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { quoteIn } from '../../agents/utils/memory-check-prompt';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
@@ -64,7 +65,8 @@ export type LessonRefusalCode =
   | 'NEAR_DUPLICATE'
   | 'NO_PLACE_FOR_TARGET'
   | 'UNKNOWN_MEMBER'
-  | 'UNKNOWN_DOCUMENT';
+  | 'UNKNOWN_DOCUMENT'
+  | 'HIDDEN_TEXT';
 
 export type LessonFiled =
   | { status: 'recorded'; count: number }
@@ -333,7 +335,6 @@ export class LessonFilingService {
         payload: outcome,
       });
     }
-    this.events.publishChanged(segment.runId);
   }
 
   /**
@@ -357,7 +358,6 @@ export class LessonFilingService {
       em,
     );
     await this.writeCard(segment, rows[0]?.reflectionRunId ?? '', rows, check);
-    this.events.publishChanged(segment.runId);
   }
 
   private async fileOne(
@@ -533,6 +533,17 @@ export class LessonFilingService {
       lesson.why,
       lesson.evidence.quote,
     ];
+    if (
+      [lesson.title, lesson.rule, lesson.why].some((text) =>
+        hasHiddenText(text, false),
+      )
+    ) {
+      problems.push({
+        code: 'HIDDEN_TEXT',
+        reason:
+          'it holds invisible or format characters — write the lesson in plain visible text',
+      });
+    }
     if (texts.some((text) => redactSecrets(text) !== text)) {
       problems.push({
         code: 'CONTAINS_SECRET',

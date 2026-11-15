@@ -17,6 +17,7 @@ import {
   groupTranscript,
   pullFileChangesOutOfGroups,
   type RunSettleAt,
+  type SubagentBlockEntry,
   subagentBlockStatus,
   subagentSpokeSince,
   type TranscriptEntry,
@@ -263,6 +264,21 @@ interface DaemonReading {
   callId: string | null;
   /** The read's own word, covered or not. */
   running: boolean;
+  /**
+   * Its figures as the daemon counted them over every request. Applied to the
+   * entry only while {@link cumulative} is true; null is "not measured".
+   */
+  requests: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  contextTokens: number | null;
+  costUsd: number | null;
+  estimatedCostUsd: number | null;
+  cumulative: boolean;
+  /** Its own assistant messages over the run, the window's rows above the read included. */
+  messages: number;
 }
 
 type DaemonReadings = ReadonlyMap<string, DaemonReading>;
@@ -288,6 +304,7 @@ export function daemonSubagentReadings(
   }
   const newest = new Map<string, number>();
   const toolsSinceRead = new Map<string, number>();
+  const messagesSinceRead = new Map<string, number>();
   for (const row of rows) {
     const parent = subagentIdOf(row);
     for (const id of [payloadString(row.payload, 'id'), parent]) {
@@ -301,6 +318,14 @@ export function daemonSubagentReadings(
       row.seq > state.throughSeq
     ) {
       toolsSinceRead.set(parent, (toolsSinceRead.get(parent) ?? 0) + 1);
+    }
+    if (
+      parent !== null &&
+      row.kind === 'message' &&
+      row.role === 'assistant' &&
+      row.seq > state.throughSeq
+    ) {
+      messagesSinceRead.set(parent, (messagesSinceRead.get(parent) ?? 0) + 1);
     }
   }
   const readings = new Map<string, DaemonReading>();
@@ -318,6 +343,16 @@ export function daemonSubagentReadings(
       toolCalls: delegate.toolCalls + (toolsSinceRead.get(delegate.id) ?? 0),
       callId: delegate.callId,
       running: delegate.status === 'running',
+      requests: delegate.requests,
+      inputTokens: delegate.inputTokens,
+      outputTokens: delegate.outputTokens,
+      cacheReadTokens: delegate.cacheReadTokens,
+      cacheCreationTokens: delegate.cacheCreationTokens,
+      contextTokens: delegate.contextTokens,
+      costUsd: delegate.costUsd,
+      estimatedCostUsd: delegate.estimatedCostUsd,
+      cumulative: delegate.cumulative,
+      messages: delegate.messages + (messagesSinceRead.get(delegate.id) ?? 0),
     });
   }
   return readings;
@@ -336,6 +371,49 @@ function readingsOfKey(key: string): DaemonReadings {
   return key === ''
     ? EMPTY_READINGS
     : new Map(JSON.parse(key) as [string, DaemonReading][]);
+}
+
+/**
+ * What a delegate's reading sets on its block. The figures replace the
+ * row-derived ones only when the daemon says they sum every request; the message
+ * count always comes from the reading, since only the daemon sees the whole run.
+ */
+function subagentReadingPatch(
+  reading: DaemonReading,
+): Partial<SubagentBlockEntry> {
+  const { lifecycle } = reading;
+  return {
+    durableToolCalls: reading.toolCalls,
+    messages: reading.messages,
+    ...(reading.cumulative
+      ? {
+          cumulative: true,
+          requests: reading.requests,
+          inputTokens: reading.inputTokens,
+          outputTokens: reading.outputTokens,
+          cacheReadTokens: reading.cacheReadTokens,
+          cacheCreationTokens: reading.cacheCreationTokens,
+          contextTokens: reading.contextTokens,
+          costUsd: reading.costUsd,
+          estimatedCostUsd: reading.estimatedCostUsd,
+        }
+      : {}),
+    ...(lifecycle === null
+      ? {}
+      : {
+          daemonStatus: lifecycle.status,
+          processEnded: lifecycle.processEnded,
+        }),
+  };
+}
+
+function isUnchangedBy(
+  entry: SubagentBlockEntry,
+  patch: Partial<SubagentBlockEntry>,
+): boolean {
+  return (Object.keys(patch) as (keyof SubagentBlockEntry)[]).every(
+    (key) => entry[key] === patch[key],
+  );
 }
 
 /**
@@ -383,27 +461,11 @@ export function applyDaemonReadings(
     const reading =
       entry.type === 'subagent-block' ? readings.get(entry.id) : undefined;
     if (entry.type === 'subagent-block' && reading !== undefined) {
-      const { lifecycle } = reading;
-      if (
-        inner === entry.entries &&
-        entry.durableToolCalls === reading.toolCalls &&
-        (lifecycle === null ||
-          (entry.daemonStatus === lifecycle.status &&
-            entry.processEnded === lifecycle.processEnded))
-      ) {
+      const patch = subagentReadingPatch(reading);
+      if (inner === entry.entries && isUnchangedBy(entry, patch)) {
         return entry;
       }
-      return {
-        ...entry,
-        ...(lifecycle === null
-          ? {}
-          : {
-              daemonStatus: lifecycle.status,
-              processEnded: lifecycle.processEnded,
-            }),
-        durableToolCalls: reading.toolCalls,
-        entries: inner,
-      };
+      return { ...entry, ...patch, entries: inner };
     }
     if (entry.type === 'call-block') {
       const offWindowSubagents = offWindowCount(entry, inner);

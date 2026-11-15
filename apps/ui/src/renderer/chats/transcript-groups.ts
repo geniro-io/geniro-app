@@ -574,6 +574,30 @@ export interface SubagentBlockEntry {
    */
   costUsd: number | null;
   /**
+   * What it cost at the model's list price, shown when no calibrated figure
+   * stands. Null when neither is known.
+   */
+  estimatedCostUsd: number | null;
+  /** Its model requests, when the CLI counts them; null otherwise. */
+  requests: number | null;
+  /** The prompt side of its latest request, summed over the four kinds. */
+  contextTokens: number | null;
+  /**
+   * The four token kinds it spent, when the CLI broke them down. They sum every
+   * request only when {@link cumulative} is true.
+   */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  /** Whether the token figures above sum every request it made. */
+  cumulative: boolean;
+  /**
+   * Its own assistant messages over the run — counted from the window here and
+   * by the daemon in its reading. Null when neither says.
+   */
+  messages: number | null;
+  /**
    * Why this block opens onto no conversation — the daemon's own sentence, from
    * the CLI whose delegate this is.
    *
@@ -2141,6 +2165,16 @@ export function buildSubagentBlocks(
         : mergeSubagentDeclarations(previous, declaration),
     );
   }
+  const assistantMessages = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind !== 'message' || item.role !== 'assistant') {
+      continue;
+    }
+    const id = subagentIdOf(item);
+    if (id !== null) {
+      assistantMessages.set(id, (assistantMessages.get(id) ?? 0) + 1);
+    }
+  }
   const launches = new Map<string, SubagentLaunch>();
   /**
    * Of those launches, the ones whose tool is a DELEGATION by name.
@@ -2241,6 +2275,15 @@ export function buildSubagentBlocks(
       tokens: declared?.tokens ?? null,
       toolUses: declared?.toolUses ?? null,
       costUsd: declared?.costUsd ?? null,
+      estimatedCostUsd: declared?.estimatedCostUsd ?? null,
+      requests: declared?.requests ?? null,
+      contextTokens: declared?.contextTokens ?? null,
+      inputTokens: declared?.inputTokens ?? null,
+      outputTokens: declared?.outputTokens ?? null,
+      cacheReadTokens: declared?.cacheReadTokens ?? null,
+      cacheCreationTokens: declared?.cacheCreationTokens ?? null,
+      cumulative: declared?.cumulative ?? false,
+      messages: assistantMessages.get(subagentId) ?? null,
       stepsUnavailableReason: declared?.stepsUnavailableReason ?? null,
       backgroundOpen: declared?.backgroundOpen ?? null,
       backgroundOutcome: declared?.backgroundOutcome ?? null,

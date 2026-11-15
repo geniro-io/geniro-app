@@ -81,6 +81,16 @@ function buttonContaining(el: HTMLElement, text: string): HTMLButtonElement {
   return found;
 }
 
+function primaryButton(el: HTMLElement): HTMLButtonElement {
+  const found = el.querySelector<HTMLButtonElement>(
+    '[data-slot="split-button"] > button:first-child',
+  );
+  if (!found) {
+    throw new Error('no primary action');
+  }
+  return found;
+}
+
 async function press(target: HTMLElement): Promise<void> {
   await act(async () => {
     target.click();
@@ -124,7 +134,7 @@ describe('LessonsCard — a lesson with no decision yet', () => {
     const onSave = vi.fn(async () => undefined);
     const el = await render({ lessons: [LESSON_CORRECTION], onSave });
 
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_CORRECTION.id, {
       target: { kind: 'memory', scope: 'project', type: 'feedback' },
@@ -140,7 +150,7 @@ describe('LessonsCard — a lesson with no decision yet', () => {
       el.querySelector<HTMLInputElement>('input[aria-label="Lesson title"]')!,
       'Use pnpm for tests',
     );
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(
       LESSON_CORRECTION.id,
@@ -461,7 +471,7 @@ function optionNamed(label: string): HTMLElement {
 
 function targetTrigger(el: HTMLElement): HTMLElement {
   const trigger = el.querySelector<HTMLElement>(
-    '[role="combobox"][aria-label="Save to"]',
+    '[aria-label="Choose where it goes"]',
   );
   if (!trigger) {
     throw new Error('no target picker');
@@ -478,8 +488,8 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
       onSave,
     });
 
-    expect(el.textContent).toContain('→ Project instructions');
-    await press(buttonNamed(el, 'Save'));
+    expect(primaryButton(el).textContent).toBe('Save to Project instructions');
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_PROJECT_RULE.id, {
       target: { kind: 'project_instructions' },
@@ -494,8 +504,10 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
       onSave,
     });
 
-    expect(el.textContent).toContain('→ Instructions of Reviewer');
-    await press(buttonNamed(el, 'Save'));
+    expect(primaryButton(el).textContent).toBe(
+      'Save to Instructions of Reviewer',
+    );
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_MEMBER_RULE.id, {
       target: { kind: 'member_instructions', memberId: 'member-reviewer' },
@@ -512,7 +524,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
 
     await press(targetTrigger(el));
     await press(optionNamed('Project instructions'));
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_CORRECTION.id, {
       target: { kind: 'project_instructions' },
@@ -544,7 +556,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
       onSave,
     });
 
-    expect(el.textContent).toContain('→ Memory · global');
+    expect(primaryButton(el).textContent).toBe('Save to Memory · global');
     expect(el.textContent).toContain(
       'Proposed for Project instructions, which is unavailable: this thread belongs to no project.',
     );
@@ -553,7 +565,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
       (optionNamed('Project instructions') as HTMLButtonElement).disabled,
     ).toBe(true);
     await press(targetTrigger(el));
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_PROJECT_RULE.id, {
       target: { kind: 'memory', scope: 'global', type: 'feedback' },
@@ -577,7 +589,9 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
     });
 
     expect(readDocuments).toHaveBeenCalledWith('proj-1');
-    expect(el.textContent).toContain('→ Knowledge · new document');
+    expect(primaryButton(el).textContent).toBe(
+      'Save to Knowledge · new document',
+    );
   });
 
   it('never reads documents for a thread with no project', async () => {
@@ -613,7 +627,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
     });
     await press(targetTrigger(el));
     await press(optionNamed('k-release'));
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(onSave).toHaveBeenCalledWith(LESSON_KNOWLEDGE_PROCEDURE.id, {
       target: { kind: 'knowledge', handle: 'k-release' },
@@ -629,7 +643,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
       }),
     });
 
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(el.textContent).toContain('the member is gone from this team');
   });
@@ -666,15 +680,22 @@ describe('LessonsCard — a refines or broken-again lesson in memory', () => {
     );
   });
 
-  it('keeps Save as new beside Update rule, so the lesson can be saved apart', async () => {
+  it('offers saving as a new entry from the primary menu, which turns the button into that save', async () => {
     const onSave = vi.fn(async () => undefined);
+    const onUpdateRule = vi.fn(async () => undefined);
     const el = await render({
       lessons: [LESSON_REFINES],
       onSave,
-      onUpdateRule: vi.fn(async () => undefined),
+      onUpdateRule,
     });
 
-    await press(buttonNamed(el, 'Save as new'));
+    expect(() => buttonNamed(el, 'Save as new')).toThrow();
+    await press(targetTrigger(el));
+    await press(optionNamed('Memory · project'));
+    expect(primaryButton(el).textContent).toBe('Save to Memory · project');
+    await press(primaryButton(el));
+
+    expect(onUpdateRule).not.toHaveBeenCalled();
 
     expect(onSave).toHaveBeenCalledWith(LESSON_REFINES.id, {
       target: { kind: 'memory', scope: 'project', type: 'feedback' },
@@ -689,8 +710,7 @@ describe('LessonsCard — a refines or broken-again lesson in memory', () => {
       onMoveUp,
     });
 
-    expect(el.textContent).toContain('Moves the rule into the memory index.');
-    await press(buttonNamed(el, 'Move up'));
+    await press(buttonNamed(el, 'Move up to the memory index'));
 
     expect(onMoveUp).toHaveBeenCalledWith(LESSON_BROKEN_AGAIN.id);
   });
@@ -702,8 +722,8 @@ describe('LessonsCard — a refines or broken-again lesson in memory', () => {
       onMoveUp: vi.fn(async () => undefined),
     });
 
-    expect(el.textContent).toContain(
-      "Moves the rule into the project's instructions.",
+    expect(primaryButton(el).textContent).toBe(
+      'Move up to project instructions',
     );
   });
 });

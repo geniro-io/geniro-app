@@ -96,6 +96,16 @@ async function render(
   return container;
 }
 
+function primaryButton(el: HTMLElement): HTMLButtonElement {
+  const found = el.querySelector<HTMLButtonElement>(
+    '[data-slot="split-button"] > button:first-child',
+  );
+  if (!found) {
+    throw new Error('no primary action');
+  }
+  return found;
+}
+
 function buttonNamed(el: HTMLElement, name: string): HTMLButtonElement {
   const found = [...el.querySelectorAll('button')].find(
     (button) => button.textContent?.trim() === name,
@@ -151,7 +161,7 @@ describe('LessonsBlock', () => {
   it('disables the actions when no lessons API is provided', async () => {
     const el = await render(null);
 
-    expect(buttonNamed(el, 'Save').disabled).toBe(true);
+    expect(primaryButton(el).disabled).toBe(true);
     expect(buttonNamed(el, 'Edit').disabled).toBe(true);
     expect(buttonNamed(el, 'Reject').disabled).toBe(true);
   });
@@ -160,7 +170,7 @@ describe('LessonsBlock', () => {
     const api = lessonsApi();
     const el = await render(api);
 
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(api.saveLesson).toHaveBeenCalledWith({
       proposalId: 'p-correction',
@@ -202,7 +212,7 @@ describe('LessonsBlock', () => {
     });
     const el = await render(api);
 
-    await press(buttonNamed(el, 'Save'));
+    await press(primaryButton(el));
 
     expect(el.textContent).toContain('no project to save to');
   });

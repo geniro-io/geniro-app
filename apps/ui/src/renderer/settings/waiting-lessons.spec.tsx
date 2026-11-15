@@ -258,7 +258,7 @@ describe('WaitingLessons list', () => {
     });
     await flush();
 
-    expect(el.textContent).toContain('→ Instructions of Reviewer');
+    expect(el.textContent).toContain('Save to Instructions of Reviewer');
   });
 
   it('saves a lesson to the target it names, then reads the list again', async () => {
@@ -266,7 +266,11 @@ describe('WaitingLessons list', () => {
     const el = await render({ lessonsApi: asLessonsApi(api) });
     await flush();
 
-    await press(buttonNamed(el, 'Save'));
+    await press(
+      el.querySelector<HTMLButtonElement>(
+        '[data-slot="split-button"] > button:first-child',
+      )!,
+    );
 
     expect(api.saveLesson).toHaveBeenCalledWith({
       proposalId: 'p-1',
@@ -321,10 +325,7 @@ describe('WaitingLessons list', () => {
     const el = await render({ lessonsApi: asLessonsApi(api) });
     await flush();
 
-    expect(el.textContent).toContain(
-      "Moves the rule into the project's instructions.",
-    );
-    await press(buttonNamed(el, 'Move up'));
+    await press(buttonNamed(el, 'Move up to project instructions'));
 
     expect(api.moveLessonUp).toHaveBeenCalledWith({ proposalId: 'p-broken' });
   });
@@ -352,9 +353,9 @@ describe('WaitingLessons list', () => {
     await flush();
 
     await act(async () => {
-      el.querySelector(
-        '[role="combobox"][aria-label="Save to"]',
-      )!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      el.querySelector('[aria-label="Choose where it goes"]')!.dispatchEvent(
+        new Event('pointerdown', { bubbles: true }),
+      );
     });
 
     expect(knowledgeApi.listKnowledge).toHaveBeenCalledWith({

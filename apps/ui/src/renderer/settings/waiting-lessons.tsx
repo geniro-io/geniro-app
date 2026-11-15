@@ -8,6 +8,7 @@ import {
   type LessonSaveRequest,
   type LessonView,
 } from '../components/lessons-card';
+import { Badge } from '../components/ui/badge';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -82,14 +83,16 @@ function SourceLine({
   proposal: LessonProposal;
 }): React.JSX.Element {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+    <span className="inline-flex max-w-full min-w-0 items-center gap-1.5">
       <span className="min-w-0 truncate">
         {proposal.sourceTitle ?? 'Untitled thread'}
       </span>
       {proposal.sourceExists ? null : (
-        <span className="text-[11px]">thread deleted</span>
+        <Badge variant="muted" className="px-1.5 py-0 text-[11px]">
+          thread deleted
+        </Badge>
       )}
-    </div>
+    </span>
   );
 }
 

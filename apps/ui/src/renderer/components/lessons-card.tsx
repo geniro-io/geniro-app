@@ -10,12 +10,10 @@ import type {
 import { ErrorBanner } from './error-banner';
 import { ExpandableTextarea } from './expandable-textarea';
 import { Disclosure } from './recommendations-figures';
-import { Badge } from './ui/badge';
+import { SplitButton } from './split-button';
 import { Button } from './ui/button';
-import { Chip } from './ui/chip';
 import { Input } from './ui/input';
 import type { MenuGroup } from './ui/menu';
-import { Select } from './ui/select';
 
 export type { LessonPlaces };
 
@@ -678,61 +676,70 @@ function DecidedRow({
           {outcome.title}
         </p>
       )}
-      <p className="m-0 text-xs text-muted-foreground">{statusText}</p>
       {editing ? (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={busy || !draftValid || onEdit === undefined}
-            onClick={save}>
-            {request === 'edit' ? 'Saving…' : 'Save'}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => {
-              setTitle(outcome.title);
-              setRule(outcome.rule ?? lesson.rule);
-              setEditing(false);
-            }}>
-            Cancel
-          </Button>
+        <>
+          <p className="m-0 text-xs text-muted-foreground">{statusText}</p>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              size="sm"
+              disabled={busy || !draftValid || onEdit === undefined}
+              onClick={save}>
+              {request === 'edit' ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setTitle(outcome.title);
+                setRule(outcome.rule ?? lesson.rule);
+                setEditing(false);
+              }}>
+              Cancel
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="m-0 min-w-0 flex-1 text-xs text-muted-foreground">
+            {statusText}
+          </p>
+          {outcome.status === 'saved' && ownEntry ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={undoDisabled}
+                onClick={undo}>
+                {request === 'undo' ? 'Undoing…' : 'Undo'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy || onEdit === undefined}
+                onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            </div>
+          ) : outcome.status === 'pending' ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={undoDisabled}
+                onClick={undo}>
+                {request === 'undo' ? 'Undoing…' : 'Undo'}
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy || onApprove === undefined}
+                onClick={approve}>
+                {request === 'approve' ? 'Approving…' : 'Approve'}
+              </Button>
+            </div>
+          ) : null}
         </div>
-      ) : outcome.status === 'saved' && ownEntry ? (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={undoDisabled}
-            onClick={undo}>
-            {request === 'undo' ? 'Undoing…' : 'Undo'}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy || onEdit === undefined}
-            onClick={() => setEditing(true)}>
-            Edit
-          </Button>
-        </div>
-      ) : outcome.status === 'pending' ? (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={busy || onApprove === undefined}
-            onClick={approve}>
-            {request === 'approve' ? 'Approving…' : 'Approve'}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={undoDisabled}
-            onClick={undo}>
-            {request === 'undo' ? 'Undoing…' : 'Undo'}
-          </Button>
-        </div>
-      ) : null}
+      )}
       {error === null ? null : (
         <ErrorBanner
           message={error}
@@ -801,15 +808,56 @@ function decidedStatusText(
   }
 }
 
-function moveUpHint(place: LessonMoveUpPlace): string {
+const UPDATE_CHOICE = 'update';
+const MOVE_UP_CHOICE = 'move-up';
+
+function moveUpLabel(place: LessonMoveUpPlace): string {
   return place === 'project_instructions'
-    ? "into the project's instructions"
-    : 'into the memory index';
+    ? 'Move up to project instructions'
+    : 'Move up to the memory index';
 }
 
 /**
- * One lesson still waiting for the user, with its target picker and its
- * actions. The card and Settings → Memory → Lessons draw it the same way.
+ * What the primary button can do for a lesson: update the entry it refines or
+ * move a rule broken again up, ahead of saving it as a new entry to one of the
+ * targets.
+ */
+function actionGroups(
+  choices: readonly TargetChoice[],
+  updateLabel: string | null,
+  moveUp: LessonMoveUpPlace | null,
+): MenuGroup[] {
+  if (updateLabel === null && moveUp === null) {
+    return pickerGroups(choices);
+  }
+  const first =
+    updateLabel === null
+      ? {
+          label: 'Move up',
+          items: [{ value: MOVE_UP_CHOICE, label: moveUpLabel(moveUp!) }],
+        }
+      : {
+          label: 'Update the entry',
+          items: [{ value: UPDATE_CHOICE, label: updateLabel }],
+        };
+  return [
+    first,
+    {
+      label: 'Or save as a new entry',
+      items: pickerGroups(choices).flatMap((group) => group.items),
+    },
+  ];
+}
+
+function MetaDot(): React.JSX.Element {
+  return <span aria-hidden="true">·</span>;
+}
+
+/**
+ * One lesson still waiting for the user: one line of where it came from, the
+ * lesson itself, and one primary action that names its outcome, whose menu
+ * picks the target. The card and Settings → Memory → Lessons draw it the same
+ * way.
  */
 export function LessonRow({
   lesson,
@@ -827,7 +875,7 @@ export function LessonRow({
   places: LessonPlaces;
   moveUp: LessonMoveUpPlace | null;
   readDocuments?: LessonDocumentsReader | null;
-  /** Drawn above the lesson's title, where a list names the thread it came from. */
+  /** Leads the meta line, where a list names the thread a lesson came from. */
   source?: React.ReactNode;
   onSave?: LessonsCardProps['onSave'];
   onReject?: LessonsCardProps['onReject'];
@@ -835,8 +883,14 @@ export function LessonRow({
   onMoveUp?: LessonsCardProps['onMoveUp'];
   onShowInThread?: LessonsCardProps['onShowInThread'];
 }): React.JSX.Element {
-  const [targetKeyValue, setTargetKeyValue] = useState(() =>
-    targetKey(lesson.target),
+  const refines =
+    lesson.dedup.verdict === 'refines' && lesson.target.kind === 'memory';
+  const [choice, setChoice] = useState(() =>
+    refines
+      ? UPDATE_CHOICE
+      : moveUp !== null
+        ? MOVE_UP_CHOICE
+        : targetKey(lesson.target),
   );
   const [documents, setDocuments] = useState<
     readonly LessonKnowledgeDocument[] | null
@@ -847,27 +901,47 @@ export function LessonRow({
   const [rule, setRule] = useState(lesson.rule);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
-  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [request, setRequest] = useState<
     'save' | 'update' | 'moveUp' | 'reject' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
 
   const choices = choicesFor(lesson, places, documents);
-  const usable = choices.filter((choice) => choice.unavailable === null);
-  const selected =
-    usable.find((choice) => choice.key === targetKeyValue) ?? usable[0];
+  const usable = choices.filter((option) => option.unavailable === null);
+  const updateLabel = refines
+    ? lesson.dedup.handle === null
+      ? 'Update rule'
+      : `Update ${lesson.dedup.handle}`
+    : null;
+  const action =
+    choice === UPDATE_CHOICE && updateLabel !== null
+      ? 'update'
+      : choice === MOVE_UP_CHOICE && moveUp !== null
+        ? 'moveUp'
+        : 'save';
+  const selected = usable.find((option) => option.key === choice) ?? usable[0];
+  const menuValue =
+    action === 'update'
+      ? UPDATE_CHOICE
+      : action === 'moveUp'
+        ? MOVE_UP_CHOICE
+        : (selected?.key ?? '');
   const proposedUnavailable = unavailableReason(lesson.target, places);
-  const refines =
-    lesson.dedup.verdict === 'refines' && lesson.target.kind === 'memory';
   const busy = request !== null;
-  const saveDisabled = onSave === undefined || busy;
   const rejectDisabled = onReject === undefined || busy;
   const draftValid = title.trim() !== '' && rule.trim() !== '';
-  const updateLabel =
-    lesson.dedup.handle === null
-      ? 'Update rule'
-      : `Update ${lesson.dedup.handle}`;
+  const edits = editing ? { title: title.trim(), rule: rule.trim() } : {};
+
+  const settle = (work: Promise<void>): void => {
+    work.then(
+      () => setRequest(null),
+      (err: unknown) => {
+        setRequest(null);
+        setError(messageOf(err));
+      },
+    );
+  };
 
   const loadDocuments = (): void => {
     if (
@@ -891,55 +965,29 @@ export function LessonRow({
     );
   };
 
-  const save = (): void => {
+  const runPrimary = (): void => {
+    setError(null);
+    if (action === 'update') {
+      if (onUpdateRule === undefined) {
+        return;
+      }
+      setRequest('update');
+      settle(onUpdateRule(lesson.id, edits));
+      return;
+    }
+    if (action === 'moveUp') {
+      if (onMoveUp === undefined) {
+        return;
+      }
+      setRequest('moveUp');
+      settle(onMoveUp(lesson.id));
+      return;
+    }
     if (onSave === undefined || selected === undefined) {
       return;
     }
     setRequest('save');
-    setError(null);
-    onSave(lesson.id, {
-      target: selected.target,
-      ...(editing ? { title: title.trim(), rule: rule.trim() } : {}),
-    }).then(
-      () => setRequest(null),
-      (err: unknown) => {
-        setRequest(null);
-        setError(messageOf(err));
-      },
-    );
-  };
-
-  const updateRule = (): void => {
-    if (onUpdateRule === undefined) {
-      return;
-    }
-    setRequest('update');
-    setError(null);
-    onUpdateRule(
-      lesson.id,
-      editing ? { title: title.trim(), rule: rule.trim() } : {},
-    ).then(
-      () => setRequest(null),
-      (err: unknown) => {
-        setRequest(null);
-        setError(messageOf(err));
-      },
-    );
-  };
-
-  const moveUpRule = (): void => {
-    if (onMoveUp === undefined) {
-      return;
-    }
-    setRequest('moveUp');
-    setError(null);
-    onMoveUp(lesson.id).then(
-      () => setRequest(null),
-      (err: unknown) => {
-        setRequest(null);
-        setError(messageOf(err));
-      },
-    );
+    settle(onSave(lesson.id, { target: selected.target, ...edits }));
   };
 
   const reject = (): void => {
@@ -949,51 +997,68 @@ export function LessonRow({
     const trimmed = reason.trim();
     setRequest('reject');
     setError(null);
-    onReject(lesson.id, trimmed === '' ? null : trimmed).then(
-      () => setRequest(null),
-      (err: unknown) => {
-        setRequest(null);
-        setError(messageOf(err));
-      },
-    );
+    settle(onReject(lesson.id, trimmed === '' ? null : trimmed));
   };
 
-  const primary = editing ? (
-    refines ? (
-      <Button
-        size="sm"
-        disabled={busy || !draftValid || onUpdateRule === undefined}
-        onClick={updateRule}>
-        {request === 'update' ? 'Updating…' : updateLabel}
-      </Button>
-    ) : (
-      <Button size="sm" disabled={saveDisabled || !draftValid} onClick={save}>
-        {request === 'save' ? 'Saving…' : 'Save'}
-      </Button>
-    )
-  ) : refines ? (
-    <Button
-      size="sm"
-      disabled={busy || onUpdateRule === undefined}
-      onClick={updateRule}>
-      {request === 'update' ? 'Updating…' : updateLabel}
-    </Button>
-  ) : moveUp !== null ? (
-    <Button
-      size="sm"
-      disabled={busy || onMoveUp === undefined}
-      onClick={moveUpRule}>
-      {request === 'moveUp' ? 'Moving…' : 'Move up'}
-    </Button>
-  ) : (
-    <Button size="sm" disabled={saveDisabled} onClick={save}>
-      {request === 'save' ? 'Saving…' : 'Save'}
-    </Button>
+  const primaryLabel =
+    action === 'update'
+      ? request === 'update'
+        ? 'Updating…'
+        : updateLabel
+      : action === 'moveUp'
+        ? request === 'moveUp'
+          ? 'Moving…'
+          : moveUpLabel(moveUp!)
+        : request === 'save'
+          ? 'Saving…'
+          : `Save to ${selected?.label ?? targetWords(lesson.target, places)}`;
+  const primaryHandler =
+    action === 'update'
+      ? onUpdateRule
+      : action === 'moveUp'
+        ? onMoveUp
+        : onSave;
+  const primaryDisabled =
+    busy ||
+    primaryHandler === undefined ||
+    (action === 'save' && selected === undefined) ||
+    (editing && !draftValid);
+  const menuDisabled =
+    busy || (onSave === undefined && !refines && moveUp === null);
+
+  const primary = (
+    <SplitButton
+      groups={actionGroups(choices, updateLabel, moveUp)}
+      value={menuValue}
+      menuLabel="Choose where it goes"
+      disabled={primaryDisabled}
+      menuDisabled={menuDisabled}
+      onClick={runPrimary}
+      onSelect={setChoice}
+      onMenuOpen={loadDocuments}>
+      {primaryLabel}
+    </SplitButton>
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
-      {source}
+    <div
+      data-slot="lesson-row"
+      className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+        {source === null ? null : (
+          <>
+            {source}
+            <MetaDot />
+          </>
+        )}
+        <span>{SIGNAL_LABELS[lesson.signalKind]}</span>
+        {lesson.dedup.verdict === 'new' ? null : (
+          <>
+            <MetaDot />
+            <span>{dedupLabel(lesson.dedup)}</span>
+          </>
+        )}
+      </div>
       {editing ? (
         <div className="flex min-w-0 flex-col gap-2">
           <Input
@@ -1013,60 +1078,39 @@ export function LessonRow({
           />
         </div>
       ) : (
-        <>
-          <p className="m-0 text-sm font-medium">{lesson.title}</p>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="m-0 text-sm font-medium break-words">{lesson.title}</p>
           {lesson.rule.trim() === lesson.title.trim() ? null : (
-            <p className="m-0 text-xs">{lesson.rule}</p>
+            <p className="m-0 text-sm break-words">{lesson.rule}</p>
           )}
-          <p className="m-0 text-xs text-muted-foreground">{lesson.why}</p>
-        </>
+        </div>
       )}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="outline">{SIGNAL_LABELS[lesson.signalKind]}</Badge>
-        <Badge variant="secondary">{dedupLabel(lesson.dedup)}</Badge>
-        <Chip>{`→ ${targetWords(selected?.target ?? lesson.target, places)}`}</Chip>
-      </div>
       <Disclosure
-        label={`Evidence · message #${lesson.evidence.seq}`}
-        open={evidenceOpen}
-        onToggle={() => setEvidenceOpen((value) => !value)}>
-        <p className="m-0 text-xs text-muted-foreground">
-          {`“${lesson.evidence.quote}”`}
-          {onShowInThread === undefined ? null : (
-            <>
-              {' '}
-              <Button
-                size="sm"
-                variant="link"
-                className="h-auto p-0 text-xs"
-                onClick={() => onShowInThread(lesson.evidence.seq)}>
-                Show in thread
-              </Button>
-            </>
-          )}
-        </p>
+        label={`Why · message #${lesson.evidence.seq}`}
+        open={detailsOpen}
+        onToggle={() => setDetailsOpen((value) => !value)}>
+        <div className="flex min-w-0 flex-col gap-1 text-xs">
+          <p className="m-0">{lesson.why}</p>
+          <p className="m-0 text-muted-foreground">
+            {`“${lesson.evidence.quote}”`}
+            {onShowInThread === undefined ? null : (
+              <>
+                {' '}
+                <Button
+                  size="sm"
+                  variant="link"
+                  className="h-auto p-0 text-xs"
+                  onClick={() => onShowInThread(lesson.evidence.seq)}>
+                  Show in thread
+                </Button>
+              </>
+            )}
+          </p>
+        </div>
       </Disclosure>
-      <div
-        className="flex min-w-0 items-center gap-2"
-        onPointerDown={loadDocuments}
-        onFocus={loadDocuments}>
-        <span className="shrink-0 text-xs text-muted-foreground">Save to</span>
-        <Select
-          aria-label="Save to"
-          groups={pickerGroups(choices)}
-          value={selected?.key ?? null}
-          disabled={saveDisabled}
-          onValueChange={setTargetKeyValue}
-        />
-      </div>
       {proposedUnavailable === null ? null : (
         <p className="m-0 text-xs text-muted-foreground">
           {`Proposed for ${targetWords(lesson.target, places)}, which is unavailable: ${proposedUnavailable}.`}
-        </p>
-      )}
-      {moveUp === null || editing ? null : (
-        <p className="m-0 text-xs text-muted-foreground">
-          {`Moves the rule ${moveUpHint(moveUp)}.`}
         </p>
       )}
       {rejecting ? (
@@ -1079,7 +1123,7 @@ export function LessonRow({
             disabled={rejectDisabled}
             onChange={(event) => setReason(event.target.value)}
           />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-1">
             <Button
               size="sm"
               variant="outline"
@@ -1096,47 +1140,41 @@ export function LessonRow({
             </Button>
           </div>
         </div>
-      ) : editing ? (
-        <div className="flex flex-wrap gap-2">
-          {primary}
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => {
-              setTitle(lesson.title);
-              setRule(lesson.rule);
-              setEditing(false);
-            }}>
-            Cancel
-          </Button>
-        </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
           {primary}
-          {refines ? (
-            <Button size="sm" disabled={saveDisabled} onClick={save}>
-              {request === 'save' ? 'Saving…' : 'Save as new'}
+          {editing ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setTitle(lesson.title);
+                setRule(lesson.rule);
+                setEditing(false);
+              }}>
+              Cancel
             </Button>
-          ) : moveUp === null ? null : (
-            <Button size="sm" disabled={saveDisabled} onClick={save}>
-              {request === 'save' ? 'Saving…' : 'Save'}
-            </Button>
+          ) : (
+            <>
+              {action === 'moveUp' ? null : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || primaryHandler === undefined}
+                  onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={rejectDisabled}
+                onClick={() => setRejecting(true)}>
+                Reject
+              </Button>
+            </>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={saveDisabled}
-            onClick={() => setEditing(true)}>
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={rejectDisabled}
-            onClick={() => setRejecting(true)}>
-            Reject
-          </Button>
         </div>
       )}
       {error === null ? null : (

@@ -184,7 +184,7 @@ describe('TeamMemoryPanel', () => {
     const { apis, memories } = fakeApis();
     await render(apis);
 
-    await press(button(container, 'Add memory'));
+    await press(button(container, 'New memory'));
     const form = container.querySelector<HTMLElement>(
       '[data-slot="memory-form"]',
     )!;
@@ -217,7 +217,7 @@ describe('TeamMemoryPanel', () => {
     );
     await render(apis);
 
-    await press(button(container, 'Add memory'));
+    await press(button(container, 'New memory'));
     const form = container.querySelector<HTMLElement>(
       '[data-slot="memory-form"]',
     )!;

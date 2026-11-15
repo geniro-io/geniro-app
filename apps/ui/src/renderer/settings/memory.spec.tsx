@@ -394,6 +394,21 @@ function rowOf(handle: string): HTMLElement {
   return row;
 }
 
+/** A tab of a tab strip, by its label, with the count it draws after it. */
+function tab(
+  scope: ParentNode,
+  label: string,
+  count: string | null = null,
+): HTMLButtonElement {
+  const found = [
+    ...scope.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  ].find((candidate) => candidate.textContent === `${label}${count ?? ''}`);
+  if (!found) {
+    throw new Error(`no tab "${label}" counting ${count ?? 'nothing'}`);
+  }
+  return found;
+}
+
 function button(scope: ParentNode, label: string): HTMLButtonElement {
   const found = [...scope.querySelectorAll('button')].find(
     (candidate) => candidate.textContent?.trim() === label,
@@ -460,7 +475,7 @@ describe('Memory', () => {
   it('lists the entries of the tab picked, counts what waits for review on its tab, and repeats no tab on a row', async () => {
     const api = await render();
 
-    expect(button(container, 'Waiting for review · 1')).toBeDefined();
+    expect(tab(container, 'Waiting for review', '1')).toBeDefined();
     expect(() => rowOf('m2')).toThrow();
     expect(rowOf('m1').textContent).toContain('Use pnpm');
     expect(rowOf('m1').textContent).not.toContain('In every chat');
@@ -496,7 +511,7 @@ describe('Memory', () => {
     expect(
       container.querySelector('[data-slot="memory-index-fit"]')?.textContent,
     ).toBe('22 of 326 fit · a new chat in Billing');
-    await press(button(container, 'Search only'));
+    await press(tab(container, 'Search only'));
     expect(
       container.querySelector('[data-slot="memory-index-fit"]'),
     ).toBeNull();
@@ -509,7 +524,7 @@ describe('Memory', () => {
   it('narrows the list by each filter it offers', async () => {
     const api = await render();
 
-    await press(button(container, 'Forgotten'));
+    await press(tab(container, 'Forgotten'));
     await choose('Scope', 'Billing');
     await choose('Type', 'Feedback');
     await settle();
@@ -552,9 +567,9 @@ describe('Memory', () => {
 
     await pressMemoryRowAction(rowOf('m1'), 'Forget…');
     await press(confirmInDialog('Forget'));
-    await press(button(container, 'Waiting for review · 1'));
+    await press(tab(container, 'Waiting for review', '1'));
     await press(button(rowOf('m2'), 'Approve'));
-    await press(button(container, 'Forgotten'));
+    await press(tab(container, 'Forgotten'));
     await pressMemoryRowAction(rowOf('m3'), 'Restore');
 
     expect(api.updateMemory.mock.calls.map((call) => call[0])).toEqual([
@@ -631,11 +646,11 @@ describe('Memory', () => {
     expect(await memoryRowActions(rowOf('m1'))).toEqual(['Edit', 'Forget…']);
     expect(() => button(rowOf('m5'), 'Approve')).toThrow();
     await pressMemoryRowAction(rowOf('m5'), 'Search only');
-    await press(button(container, 'Search only'));
+    await press(tab(container, 'Search only'));
 
     expect(() => button(rowOf('m4'), 'Approve')).toThrow();
     await pressMemoryRowAction(rowOf('m4'), 'Load into every chat');
-    await press(button(container, 'Waiting for review · 1'));
+    await press(tab(container, 'Waiting for review', '1'));
 
     expect(
       container.querySelectorAll('[data-memory-handle="m2"]'),
@@ -930,7 +945,7 @@ describe('Memory', () => {
       teams: teams as unknown as React.ComponentProps<typeof Memory>['teams'],
     });
 
-    await press(button(container, 'Add an entry'));
+    await press(button(container, 'New entry'));
     const form = container.querySelector<HTMLElement>(
       '[data-slot="memory-form"]',
     )!;
@@ -1013,7 +1028,7 @@ describe('Memory', () => {
     );
     await render({ api });
 
-    await press(button(container, 'Waiting for review · 1+'));
+    await press(tab(container, 'Waiting for review', '1+'));
 
     expect(api.listMemories).toHaveBeenCalledWith({
       status: 'pending',
@@ -1135,7 +1150,7 @@ describe('Memory', () => {
     );
     await render({ api });
 
-    await press(button(container, 'Add an entry'));
+    await press(button(container, 'New entry'));
     await type(
       container.querySelector<HTMLInputElement>('input[id$="-title"]')!,
       'Use pnpm',
@@ -1461,12 +1476,12 @@ describe('Memory clean up', () => {
     await pressMemoryRowAction(dialogRow('m21'), 'Keep');
     expect(api.keepMemory).toHaveBeenCalledWith({ memoryId: 'c1' });
 
-    await press(button(inDialog(), 'Kept (1)'));
+    await press(tab(inDialog(), 'Kept', '1'));
     expect(api.listMemoryReview).toHaveBeenLastCalledWith({
       tab: 'kept',
       limit: 30,
     });
-    await press(button(inDialog(), 'Forgotten (3)'));
+    await press(tab(inDialog(), 'Forgotten', '3'));
     expect(api.listMemoryBatches).toHaveBeenCalled();
   });
 
@@ -1547,7 +1562,7 @@ describe('Memory clean up', () => {
     await render({ api });
     await press(button(container, 'Review…'));
 
-    await press(button(inDialog(), 'Forgotten (3)'));
+    await press(tab(inDialog(), 'Forgotten', '3'));
     expect(api.listMemoryReview).toHaveBeenLastCalledWith({
       tab: 'forgotten',
       limit: 30,
@@ -1575,7 +1590,7 @@ describe('Memory clean up', () => {
       ),
     });
     await press(button(container, 'Review…'));
-    await press(button(inDialog(), 'Kept (1)'));
+    await press(tab(inDialog(), 'Kept', '1'));
 
     await pressMemoryRowAction(
       inDialog().querySelector<HTMLElement>('[data-slot="memory-row"]')!,
@@ -1702,7 +1717,7 @@ describe('Memory clean up', () => {
   it('deletes a forgotten entry permanently, only after a confirm that says it cannot be undone', async () => {
     const api = await render({ api: fakeApi(undefined, FORGOTTEN_ONLY) });
     await press(button(container, 'Review…'));
-    await press(button(inDialog(), 'Forgotten (3)'));
+    await press(tab(inDialog(), 'Forgotten', '3'));
 
     await pressMemoryRowAction(dialogRow('m3'), 'Delete permanently…');
     expect(lastQuestion()?.textContent).toContain('Delete m3 permanently?');
@@ -1725,7 +1740,7 @@ describe('Memory clean up', () => {
     api.purgeMemory.mockRejectedValue(new Error('only a forgotten memory'));
     await render({ api });
     await press(button(container, 'Review…'));
-    await press(button(inDialog(), 'Forgotten (3)'));
+    await press(tab(inDialog(), 'Forgotten', '3'));
 
     await pressMemoryRowAction(dialogRow('m3'), 'Delete permanently…');
     await press(confirmInDialog('Delete permanently'));
@@ -1747,7 +1762,7 @@ describe('Memory clean up', () => {
       inDialog().querySelector('[data-slot="memory-cleanup-sort"]'),
     ).toBeNull();
     expect(api.listMemoryTriageAgents).not.toHaveBeenCalled();
-    await press(button(inDialog(), 'Forgotten (3)'));
+    await press(tab(inDialog(), 'Forgotten', '3'));
 
     expect(inDialog().textContent).toContain('Old rule');
     expect(await memoryRowActions(dialogRow('m3'))).toEqual(['Restore']);

@@ -175,7 +175,7 @@ export function MemoryRow({
       data-memory-handle={entry.handle}
       data-focused={focused ? '' : undefined}
       className={cn(
-        'group/memory-row flex min-w-0 gap-2 rounded-md px-2 py-2 transition-colors hover:bg-accent/40 focus-within:bg-accent/40',
+        'group/memory-row flex min-w-0 gap-2.5 rounded-md px-2 py-2.5 transition-colors hover:bg-accent/40 focus-within:bg-accent/40',
         focused && 'bg-accent/40 ring-2 ring-ring/60',
       )}>
       {leading}
@@ -194,8 +194,9 @@ export function MemoryRow({
             <Button
               type="button"
               size="sm"
+              variant="outline"
               disabled={busy}
-              className="-my-1 h-7 shrink-0 px-2.5"
+              className="-my-1 h-7 shrink-0 rounded-control px-2.5 text-xs"
               onClick={onApprove}>
               Approve
             </Button>

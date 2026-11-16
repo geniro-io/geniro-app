@@ -85,10 +85,21 @@ export function nextMcpDisabled(
  * writes the CLI's own config.
  */
 export function nodeMcpHint(subject: 'member', hasProfile: boolean): string {
-  const whose = hasProfile
+  return `${whoseServers(subject, hasProfile)} A switch here applies only to this ${subject}'s turns — nothing in the CLI's own config changes. ${RUN_FOLDER_SERVERS}`;
+}
+
+/** The same dialog's words on a project's page, where a member's switches are the team's. */
+export function projectMemberMcpHint(hasProfile: boolean): string {
+  return `${whoseServers('member', hasProfile)} Which of them this member switches off is set on the team's page. ${RUN_FOLDER_SERVERS}`;
+}
+
+const RUN_FOLDER_SERVERS =
+  "The run folder's own project servers are added when it runs.";
+
+function whoseServers(subject: 'member', hasProfile: boolean): string {
+  return hasProfile
     ? `The servers in this ${subject}'s own config directory.`
     : 'Global servers.';
-  return `${whose} A switch here applies only to this ${subject}'s turns — nothing in the CLI's own config changes. The run folder's own project servers are added when it runs.`;
 }
 
 /** Why a row the profile itself switched off has no switch on a member. */

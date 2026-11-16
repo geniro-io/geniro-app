@@ -426,14 +426,12 @@ export function MemberSheet({
             {fieldErrors('settings')}
           </SheetGroup>
 
-          {project === null ? (
-            <SheetGroup title="Tools & MCP">
-              {toolsGroup}
-              <p className="text-sm text-muted-foreground">
-                Every member can call every other member.
-              </p>
-            </SheetGroup>
-          ) : null}
+          <SheetGroup title="Tools & MCP">
+            {toolsGroup}
+            <p className="text-sm text-muted-foreground">
+              Every member can call every other member.
+            </p>
+          </SheetGroup>
 
           <SheetGroup title="Pool" warning={hasIssues(['pool'])}>
             {poolGroup}

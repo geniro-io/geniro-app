@@ -18,9 +18,11 @@ import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import { AgentPoolEditor } from '../teams/agent-pool-editor';
 import { InstructionSizeCard } from '../teams/instruction-size-card';
 import { MemberCard } from '../teams/member-card';
+import { MemberMcpRow } from '../teams/member-mcp-row';
 import { MemberModelGroup } from '../teams/member-model-group';
 import { memberProblemsOf, memberStatusOf } from '../teams/member-problems';
 import { MemberSheet } from '../teams/member-sheet';
+import { projectMemberMcpHint } from '../teams/node-mcp-switches';
 import { type RowScope, ScopedGroup } from '../teams/overridable-row';
 import { ProjectScopeInstructions } from '../teams/project-scope-instructions';
 import { stageTitle } from '../teams/stage-validate';
@@ -42,6 +44,7 @@ import {
 import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { useInstructionSizes } from '../teams/use-instruction-sizes';
 import { useMemberProfileSources } from '../teams/use-member-profile-sources';
+import { useNodeMcp } from '../teams/use-node-mcp';
 import { useTeamHealth } from '../teams/use-team-health';
 import { useTeamOverlay } from '../teams/use-team-overlay';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -195,6 +198,11 @@ export function ProjectTeamOverrides({
       : effectiveMemberOf(selected, overlay);
   const poolOverridden =
     selected !== null && overlay?.members?.[selected.id]?.pool !== undefined;
+  const memberMcp = useNodeMcp(
+    apis.agents,
+    overlay === null ? null : (shown?.agent ?? null),
+    overlay === null ? null : (shown?.configDir ?? null),
+  );
 
   const instructionSizes = useInstructionSizes(
     apis.teams,
@@ -331,7 +339,18 @@ export function ProjectTeamOverrides({
               onPatch={patchModel}
             />
           }
-          toolsGroup={null}
+          toolsGroup={
+            <MemberMcpRow
+              title={`MCP servers — ${selected.name || selected.id}`}
+              mcp={memberMcp}
+              mcpDisabled={shown.mcpDisabled}
+              hint={projectMemberMcpHint(Boolean(shown.configDir))}
+              configDir={shown.configDir ?? null}
+              configDirUnavailableReason={configDirCapability.unavailableReasonFor(
+                shown.agent,
+              )}
+            />
+          }
           poolGroup={
             <ScopedGroup
               label="Fallback members"

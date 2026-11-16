@@ -12473,18 +12473,56 @@ describe('TeamExecutorService — Q&A bridge (M4)', () => {
     await drain();
   });
 
-  it('leaves a lone auto member on plain auto — no ask-mode override when there is no one to call', async () => {
-    const { service, claude } = setup();
-    await service.startRun({
+  it('gives a lone auto member that can call nobody its question tool: ask posture, silent permissions, an answerable card', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.startRun({
       slug: 'plain',
       team: teamOf([member('a')], { name: 'plain' }),
       cwd: dir,
       prompt: 'go',
     });
     await drain();
-    expect(claude.starts[0]!.input.approvalMode).toBe('auto');
-    expect(claude.starts[0]!.input.callSurfacePrompt ?? null).toBeNull();
-    completeTurn(claude.starts[0]!, 'done');
+    const lone = claude.starts[0]!;
+    expect(lone.input.approvalMode).toBe('ask');
+    expect(lone.input.callSurfacePrompt ?? null).toBeNull();
+
+    lone.emit({
+      type: 'approval_request',
+      id: 'p-lone',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await drain();
+    expect(lone.respondApproval).toHaveBeenCalledWith('p-lone', true, {
+      command: 'ls',
+    });
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+
+    lone.emit({
+      type: 'approval_request',
+      id: 'q-lone',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+    expect(
+      approvals.resolve(
+        run.id,
+        cardIdFor(approvals, run.id, 'q-lone'),
+        true,
+        'Blue',
+      ),
+    ).toBe(true);
+    expect(lone.respondApproval).toHaveBeenCalledWith('q-lone', true, {
+      ...QUESTION_INPUT,
+      answers: { 'Which color?': 'Blue' },
+    });
+    completeTurn(lone, 'done');
     await drain();
   });
 

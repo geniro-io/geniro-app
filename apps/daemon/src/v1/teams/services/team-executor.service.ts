@@ -293,7 +293,6 @@ import {
 } from '../utils/caller-key';
 import {
   callToolsAdmitted,
-  holdsCallTools,
   instructionBlocksByMember,
   memberInstructionFields,
 } from '../utils/member-instructions';
@@ -4881,13 +4880,6 @@ export class TeamExecutorService
     const callCapable = (node: TeamMember): boolean =>
       callToolsAdmitted(this.adapterFor(node.agent).getConfig());
 
-    /** Nodes that hold the call tools in THIS run (callers, not callees). */
-    const isCaller = (node: TeamMember): boolean =>
-      holdsCallTools(
-        calleesOf.get(node.id),
-        this.adapterFor(node.agent).getConfig(),
-      );
-
     /**
      * Nodes handed the MCP endpoint: EVERY call-capable agent, not callers
      * alone — otherwise a callee, and any member of an ordinary run, has none of
@@ -5289,19 +5281,17 @@ export class TeamExecutorService
         separateCallState,
       );
       /**
-       * Turns that can raise or relay a question — call-initiated callees AND
-       * caller members — spawn in the CLI's ask mode (stdin control protocol,
-       * stdin held open): headless claude strips its question tool entirely
-       * under --dangerously-skip-permissions (probe-verified on 2.1.202), so
-       * without this an 'auto' callee could never ask and an 'auto' caller
-       * could never escalate. The daemon auto-approves the plain permission
-       * requests in onEvent below, so an 'auto' member keeps today's unattended
-       * semantics. A CLI with no question channel is never question-capable,
-       * so it keeps its requested mode.
+       * Every member's turn can raise a question — a callee's goes to its
+       * caller, any other to the user's card — so every turn spawns in the
+       * CLI's ask mode (stdin control protocol, stdin held open): headless
+       * claude strips its question tool entirely under
+       * --dangerously-skip-permissions (probe-verified on 2.1.202). The daemon
+       * auto-approves the plain permission requests in onEvent below, so an
+       * 'auto' member keeps today's unattended semantics. A CLI with no
+       * question channel is never question-capable, so it keeps its requested
+       * mode.
        */
-      const questionCapable =
-        adapter.getConfig().questionToolName !== null &&
-        (callContext !== undefined || isCaller(node));
+      const questionCapable = adapter.getConfig().questionToolName !== null;
       const approval = resolveApproval(node).mode;
       const nodeWindow = separateCallState
         ? null

@@ -1501,7 +1501,11 @@ export function Memory({
                   ? 'All listed entries sorted'
                   : `Sort ${unsorted.length.toLocaleString('en-US')} listed`
               }
-              startDisabled={checkChoice === null || unsorted.length === 0}
+              startDisabled={
+                checkChoice === null ||
+                unsorted.length === 0 ||
+                cleanup.readingEvery
+              }
               sorted={sortedRows.length > 0}
               onStart={() => sortNotes(unsorted)}
               moreActions={

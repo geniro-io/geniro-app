@@ -1659,24 +1659,21 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(registry.liveCount).toBe(CEILING);
   });
 
-  it('evicts an idle session rather than one still working off-turn', async () => {
-    // The reported defect, as a unit. A CLI carrying on between turns reports
-    // `idle === true` — there is no turn of OURS in flight — so the age scan
-    // took it, and on run 309e0822 it took the session ONE SECOND after its
-    // last row: the thread then read `completed` over eleven pending tasks
-    // until the user typed a message to restart it. `parked` is exempted for
-    // the same reason directly above; this is the third such state.
+  it('evicts a newer idle callee rather than an older one still working off-turn', async () => {
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
+    const heldCallee = callSessionKey('run-caller', 'call-held');
+    const idleCallee = callSessionKey('run-caller', 'call-idle');
 
-    for (let i = 0; i < CEILING; i += 1) {
-      registry.startTurn(`run-${i}`, adapter, INPUT, noop, undefined, noop);
-      await at(sessions, i).endTurn();
-      vi.advanceTimersByTime(1_000);
-    }
-    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn(heldCallee, adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
     at(sessions, 0).emitBetweenTurn('Bash-1');
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn(idleCallee, adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-busy', adapter, INPUT, noop, undefined, noop);
 
     registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
 
@@ -1685,7 +1682,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(registry.liveCount).toBe(CEILING);
   });
 
-  it('goes over the ceiling rather than evicting any session that is working off-turn', async () => {
+  it('goes over the ceiling rather than evicting any callee that is working off-turn', async () => {
     // The exemption cannot become a refusal: with every session working, the
     // scan finds no candidate and the existing all-busy arm takes over. Going
     // over is the lesser harm — the alternative is killing live work to make
@@ -1695,7 +1692,8 @@ describe('AgentSessionRegistry — the ceiling', () => {
     const { adapter, sessions } = fakeAdapter();
 
     for (let i = 0; i < CEILING; i += 1) {
-      registry.startTurn(`run-${i}`, adapter, INPUT, noop, undefined, noop);
+      const callee = callSessionKey('run-caller', `call-${i}`);
+      registry.startTurn(callee, adapter, INPUT, noop, undefined, noop);
       await at(sessions, i).endTurn();
       at(sessions, i).emitBetweenTurn(`Bash-${i}`);
     }
@@ -1978,6 +1976,9 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
   it('starts over the ceiling rather than closing a chat that settled seconds ago', async () => {
     vi.useFakeTimers();
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
@@ -1991,6 +1992,10 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
     expect(at(sessions, 0).closes).toBe(0);
     expect(registry.liveCount).toBe(CEILING + 1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`over the ${CEILING} ceiling`),
+    );
+    warn.mockRestore();
   });
 
   it('goes over the ceiling rather than closing a callee still working off-turn', async () => {
@@ -2121,6 +2126,64 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(at(sessions, 1).closes).toBe(1);
     expect(at(sessions, 2).closes).toBe(0);
     expect(at(sessions, CEILING).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('goes over the ceiling rather than closing a callee parked on a question', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const callee = callSessionKey('run-caller', 'call-parked');
+
+    registry.startTurn(callee, adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).parked = true;
+    registry.startTurn('run-busy-1', adapter, INPUT, noop);
+    registry.startTurn('run-busy-2', adapter, INPUT, noop);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('goes over the ceiling rather than closing a callee with a command still running', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const callee = callSessionKey('run-caller', 'call-command');
+
+    registry.startTurn(callee, adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).shellsRunning = 1;
+    registry.startTurn('run-busy-1', adapter, INPUT, noop);
+    registry.startTurn('run-busy-2', adapter, INPUT, noop);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('closes the less recently used of two recent callees before the newer one', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const olderCallee = callSessionKey('run-caller', 'call-older');
+    const newerCallee = callSessionKey('run-caller', 'call-newer');
+
+    registry.startTurn(olderCallee, adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn(newerCallee, adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-busy', adapter, INPUT, noop);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
     expect(registry.liveCount).toBe(CEILING);
   });
 });

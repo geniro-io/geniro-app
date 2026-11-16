@@ -3806,20 +3806,22 @@ export class TeamExecutorService
       clearTimeout(handingOver.get(memberId));
       handingOver.delete(memberId);
     };
-    /** Leads whose open turn only a running monitor's progress woke. */
-    const monitorProgressTurns = new Set<string>();
     // Every turn the pass started counts: a message sent while the pass is
     // still under way waits for it — only CALLS run on past an idle Manager.
     // Going idle during a cancel is recorded silently: an idle announce is
     // what drains the queue, and Stop must never be answered by sending the
     // next message.
-    const markRootWorking = (memberId: string, on: boolean): void => {
+    const markRootWorking = (
+      memberId: string,
+      on: boolean,
+      monitorProgress = false,
+    ): void => {
       this.setRootWorking(
         runId,
         memberId,
         on,
         on || !cancelRequested,
-        !on && monitorProgressTurns.has(memberId),
+        !on && monitorProgress,
       );
     };
     /**
@@ -4486,7 +4488,9 @@ export class TeamExecutorService
       }
     };
 
-    const finishRunIfSettled = async (): Promise<void> => {
+    const finishRunIfSettled = async (
+      monitorProgress = false,
+    ): Promise<void> => {
       // Sub-turns stay OUT of the denominator, but a live one (a
       // fire-and-forget still streaming) holds the run open until it settles.
       if (runFinished) {
@@ -4573,7 +4577,12 @@ export class TeamExecutorService
             `team run ${runId}: pass ended by the daemon shutting down — left running for the next boot to close as interrupted`,
           );
         } else {
-          await this.setRunStatus(em, runId, status);
+          await this.setRunStatus(
+            em,
+            runId,
+            status,
+            monitorProgress && status === 'completed' ? { hostTurn: true } : {},
+          );
           await persistItem(null, 'turn_complete', null, {
             usage: null,
             stopReason: `team_${status}`,
@@ -7907,9 +7916,6 @@ export class TeamExecutorService
     ): Promise<void> => {
       if (!monitorProgress) {
         wokenOnlyByMonitors = false;
-        monitorProgressTurns.delete(node.id);
-      } else {
-        monitorProgressTurns.add(node.id);
       }
       const starting = reserveContinuation(node.id);
       tookOver(node.id);
@@ -7931,8 +7937,7 @@ export class TeamExecutorService
       } catch (err) {
         startingContinuations.delete(node.id);
         starting.release();
-        markRootWorking(node.id, false);
-        monitorProgressTurns.delete(node.id);
+        markRootWorking(node.id, false, monitorProgress);
         const lastTurn = releaseNodeTurn(node.id);
         const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
         endConversationTurn(node.id);
@@ -8017,10 +8022,9 @@ export class TeamExecutorService
             compactingNodes.delete(node.id);
             liveSubTurns -= 1;
             try {
-              await finishRunIfSettled();
+              await finishRunIfSettled(monitorProgress);
             } finally {
-              markRootWorking(node.id, false);
-              monitorProgressTurns.delete(node.id);
+              markRootWorking(node.id, false, monitorProgress);
             }
           }
         });
@@ -8240,7 +8244,6 @@ export class TeamExecutorService
       };
       // The user drives this stretch now: its settle is theirs to hear about.
       wokenOnlyByMonitors = false;
-      monitorProgressTurns.clear();
       const told: string[] = [];
       for (const root of roots) {
         const running =

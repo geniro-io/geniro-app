@@ -6753,8 +6753,8 @@ export interface RunStatusEvent {
    * banner: a watch reporting step after step would post one per batch. A turn
    * a monitor's end or a host wake opened is news and carries no flag. Also
    * set on the put-back after any host turn that failed to start, and on a
-   * team's leads-idle announce (`rootsWorking: 0`) after a lead turn only such
-   * output woke. Still news for the sidebar's unread mark — the agent said
+   * team's leads-idle announce (`rootsWorking: 0`) and on a live pass's
+   * `completed` roll-up after a lead turn only such output woke. Still news for the sidebar's unread mark — the agent said
    * something new.
    */
   hostTurn?: boolean;

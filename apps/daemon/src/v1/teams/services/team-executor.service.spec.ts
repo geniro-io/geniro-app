@@ -4912,6 +4912,35 @@ describe('TeamExecutorService — follow-up messages', () => {
     expect(idleAnnounces().at(-1)).toEqual({ runId: run.id, rootsWorking: 0 });
   });
 
+  it('announces the lead’s own reply as news and the ending a running monitor’s batch behind it woke as no news', async () => {
+    const { service, claude, rootsEvents, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    service.onConversationTurnEnded((runId, caller) => {
+      if (caller === 'a' && turnsOf(claude, 'role-a').length === 1) {
+        service.wakeConversation(runId, caller, 'step', MONITOR_BATCH_ROW);
+      }
+    });
+    completeTurn(a, 'watching CI');
+    await drain();
+    expect(turnsOf(claude, 'role-a')[1]!.input.prompt).toBe('step');
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'still running');
+    await drain();
+
+    const idles = rootsEvents.filter(
+      (event) => event.runId === run.id && event.rootsWorking === 0,
+    );
+    expect(idles[0]).toEqual({ runId: run.id, rootsWorking: 0 });
+    expect(hostTurnSettles).toEqual([run.id]);
+  });
+
   it('announces a finished run reopened by a monitor that ended as an ordinary settle, banner and all', async () => {
     const { service, claude, runDao, hostTurnSettles } = setup();
     const run = await service.startRun({

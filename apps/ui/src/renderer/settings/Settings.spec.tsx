@@ -97,6 +97,7 @@ const agentsApi = vi.hoisted(() => ({
       automaticLimit: 16,
       sessionMemoryBytes: 1024 ** 3,
       totalMemoryBytes: 128 * 1024 ** 3,
+      recentlyUsedMinutes: 10,
     }),
   ),
 }));
@@ -1741,7 +1742,9 @@ describe('Settings appearance section', () => {
     expect(estimate?.textContent).toBe(
       "Up to ≈ 16 GB of this Mac's 128 GB, at about 1.0 GB per agent.",
     );
-    expect(container.textContent).toContain('Automatic picks 16 for this Mac');
+    expect(container.textContent).toContain(
+      '"Recently" is the last 10 minutes. Automatic picks 16 for this Mac',
+    );
 
     await act(async () => {
       container
@@ -1771,6 +1774,7 @@ describe('Settings appearance section', () => {
       automaticLimit: 4,
       sessionMemoryBytes: 2 * GIB,
       totalMemoryBytes: 32 * GIB,
+      recentlyUsedMinutes: 10,
     });
 
     await mount();

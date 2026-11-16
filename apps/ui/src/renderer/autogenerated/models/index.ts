@@ -5154,6 +5154,12 @@ export interface KeptSessionConfigStateDto {
      * @memberof KeptSessionConfigStateDto
      */
     totalMemoryBytes: number;
+    /**
+     * How long after its last use a chat's own process is never closed for room
+     * @type {number}
+     * @memberof KeptSessionConfigStateDto
+     */
+    recentlyUsedMinutes: number;
 }
 /**
  * 

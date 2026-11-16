@@ -1478,15 +1478,16 @@ export function Settings({
                             Each chat, and each agent of a team, keeps its
                             process open between messages so the next one starts
                             at once. When a new one needs room past this number,
-                            the one idle the longest closes, and the next
-                            message there starts cold, about 10–15 s slower. One
-                            used in the last 10 minutes, or still working, is
+                            an agent that was only called by another closes
+                            first, then the one idle the longest, and the next
+                            message there starts cold, about 10–15 s slower. A
+                            chat used recently, or an agent still working, is
                             never closed for room: Geniro goes over the number
                             instead. More keeps more chats quick and takes more
                             memory.
                             {keptSessionFigures === null
                               ? null
-                              : ` Automatic picks ${keptSessionFigures.automaticLimit} for this Mac, from an eighth of its memory.`}
+                              : ` "Recently" is the last ${keptSessionFigures.recentlyUsedMinutes} minutes. Automatic picks ${keptSessionFigures.automaticLimit} for this Mac, from an eighth of its memory.`}
                           </span>
                           {keptSessionFigures === null ||
                           shownKeptSessionLimit === null ? null : (

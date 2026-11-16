@@ -3866,6 +3866,12 @@ export const KeptSessionConfigStateSchema = z.object({
     .int()
     .describe('What one kept process is estimated to take'),
   totalMemoryBytes: z.number().int().describe("This Mac's memory"),
+  recentlyUsedMinutes: z
+    .number()
+    .int()
+    .describe(
+      "How long after its last use a chat's own process is never closed for room",
+    ),
 });
 export type KeptSessionConfigState = z.infer<
   typeof KeptSessionConfigStateSchema

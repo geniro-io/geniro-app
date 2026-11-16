@@ -20,6 +20,7 @@ describe('KeptSessionsController', () => {
       automaticLimit: 3,
       sessionMemoryBytes: SESSION_MEMORY_COST_BYTES,
       totalMemoryBytes: totalmem(),
+      recentlyUsedMinutes: 10,
     });
     expect(controller.setConfig({ idleMinutes: 5, limit: 24 })).toMatchObject({
       idleMinutes: 5,

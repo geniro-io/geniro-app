@@ -74,9 +74,10 @@ import { currentRunOwner } from './run-process-attribution.service';
  * - The daemon's own idle exit (10 min with no connected client) still takes
  *   everything the moment the app is closed, so this only ever governs a
  *   session whose window the user still has open.
- * - {@link MAX_LIVE_SESSIONS} still caps how many are held at once, derived
- *   from this machine's memory at ~1GB each. Within the window that ceiling is
- *   what closes the oldest IDLE session rather than the clock — which is the
+ * - The ceiling (the user's limit, else {@link MAX_LIVE_SESSIONS}, derived
+ *   from this machine's memory at ~1GB each) still caps how many are held at
+ *   once. Within the window that ceiling is what closes an idle session
+ *   rather than the clock — which is the
  *   better order anyway: it reclaims the process the user is least likely to
  *   come back to, at the moment the memory is actually wanted, instead of on a
  *   timer that cannot see whether anything needs the room.
@@ -176,8 +177,8 @@ export const MAX_LIVE_SESSIONS = sessionCeilingFor(MACHINE_MEMORY_BYTES);
  * how the badge and the process come to disagree about whether a chat is busy.
  *
  * It can only ever push the registry OVER the ceiling, never refuse a turn —
- * `evictIfFull` already has that arm, for the case where every session is busy,
- * and this widens what counts as busy rather than adding a new outcome.
+ * `evictIfFull` already has that arm, for the case where no session may be
+ * closed, and this widens what counts as busy rather than adding a new outcome.
  */
 export const OFF_TURN_ACTIVE_MS = 5 * 60_000;
 
@@ -946,6 +947,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       automaticLimit: this.automaticCeiling,
       sessionMemoryBytes: SESSION_MEMORY_COST_BYTES,
       totalMemoryBytes: MACHINE_MEMORY_BYTES,
+      recentlyUsedMinutes: RECENTLY_USED_MS / 60_000,
     };
   }
 

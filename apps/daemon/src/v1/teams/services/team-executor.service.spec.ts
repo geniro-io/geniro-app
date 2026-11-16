@@ -4937,7 +4937,10 @@ describe('TeamExecutorService — follow-up messages', () => {
     const idles = rootsEvents.filter(
       (event) => event.runId === run.id && event.rootsWorking === 0,
     );
-    expect(idles[0]).toEqual({ runId: run.id, rootsWorking: 0 });
+    expect(idles).toEqual([
+      { runId: run.id, rootsWorking: 0 },
+      { runId: run.id, rootsWorking: 0, hostTurn: true },
+    ]);
     expect(hostTurnSettles).toEqual([run.id]);
   });
 

@@ -4623,7 +4623,7 @@ export class TeamExecutorService
         // After the status: leads going idle under a run still `running` is
         // the Manager replying with calls out, which marks the thread unread.
         for (const memberId of leadIds) {
-          markRootWorking(memberId, false);
+          markRootWorking(memberId, false, monitorProgress);
         }
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.

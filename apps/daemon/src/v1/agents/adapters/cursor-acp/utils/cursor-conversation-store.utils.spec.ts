@@ -35,6 +35,7 @@ const message = (role: string, content: unknown): Uint8Array =>
 function writeStore(
   root: Uint8Array,
   blobs: Record<string, Uint8Array>,
+  latestRootBlobId: string = ROOT_ID,
 ): string {
   const dir = mkdtempSync(join(tmpdir(), 'cursor-conversation-'));
   const path = join(dir, 'store.db');
@@ -42,9 +43,9 @@ function writeStore(
   db.exec('CREATE TABLE meta (value TEXT)');
   db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
   db.prepare('INSERT INTO meta (value) VALUES (?)').run(
-    Buffer.from(
-      JSON.stringify({ latestRootBlobId: ROOT_ID, agentId: 'a' }),
-    ).toString('hex'),
+    Buffer.from(JSON.stringify({ latestRootBlobId, agentId: 'a' })).toString(
+      'hex',
+    ),
   );
   const insert = db.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)');
   insert.run(ROOT_ID, root);
@@ -144,6 +145,15 @@ describe('readCursorConversation', () => {
       '<user_info>',
       'continue',
     ]);
+  });
+
+  it('answers an empty conversation for a session with no checkpoint yet', () => {
+    const path = writeStore(rootOf(ids), blobs, '');
+
+    expect(readCursorConversation(path, 0)).toEqual({
+      messages: 0,
+      userTexts: [],
+    });
   });
 
   it('answers null for a root it does not recognise', () => {

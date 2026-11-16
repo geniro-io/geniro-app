@@ -276,7 +276,11 @@ function firstString(fields: ProtoField[], number: number): string | null {
   return null;
 }
 
-/** The header row cursor writes into `meta`, as far as this reader needs it. */
+/**
+ * The root blob id in the header row cursor writes into `meta`: `''` while the
+ * session has no checkpoint yet (cursor writes the header with an empty id at
+ * `session/new`), null when the row does not read as a header.
+ */
 export function parseStoreHeader(hexOrJson: string): string | null {
   let text = hexOrJson;
   if (/^[0-9a-f]+$/i.test(hexOrJson) && hexOrJson.length % 2 === 0) {
@@ -288,7 +292,7 @@ export function parseStoreHeader(hexOrJson: string): string | null {
       return null;
     }
     const id = (parsed as { latestRootBlobId?: unknown }).latestRootBlobId;
-    return typeof id === 'string' && id.length > 0 ? id : null;
+    return typeof id === 'string' ? id : null;
   } catch {
     return null;
   }
@@ -315,8 +319,9 @@ export function readStoreBlob(db: DatabaseSync, id: string): Uint8Array | null {
 }
 
 /**
- * Open one session's store, hand its root blob to `read`, and answer null for
- * every way that can fail — the ONE impure reader in this adapter's store
+ * Open one session's store, hand its root blob to `read` — or answer
+ * `withoutRoot` for a session with no checkpoint yet — and answer null for
+ * every way that can fail: the ONE impure reader in this adapter's store
  * utils, kept apart from the parsers so they stay drivable by a spec with no
  * database. A session the CLI has not written yet, a store whose schema has
  * moved, a database held open by a running CLI: all of them are "no reading".
@@ -329,6 +334,7 @@ export function readCursorStoreRoot<T>(
   storePath: string,
   warn: ((message: string) => void) | undefined,
   read: (root: Uint8Array, db: DatabaseSync) => T | null,
+  withoutRoot: T | null = null,
 ): T | null {
   let db: DatabaseSync | null = null;
   try {
@@ -342,6 +348,9 @@ export function readCursorStoreRoot<T>(
     const rootId = header === null ? null : parseStoreHeader(header);
     if (rootId === null) {
       return null;
+    }
+    if (rootId === '') {
+      return withoutRoot;
     }
     const root = readStoreBlob(db, rootId);
     return root === null ? null : read(root, db);

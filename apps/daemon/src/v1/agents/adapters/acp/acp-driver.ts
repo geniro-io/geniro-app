@@ -3792,6 +3792,11 @@ export class AcpTurnDriver {
       return false;
     }
     const resendBrief = !this.requestSaved();
+    this.session.options.logger?.debug?.(
+      resendBrief
+        ? 'acp: the resume sends the prompt again, ahead of the continuation'
+        : 'acp: the resume sends the continuation alone',
+    );
     if (
       resendBrief &&
       this.session.deliveredInstructions === this.promptInstructions

@@ -67,26 +67,32 @@ export function cursorUserMessageText(blob: Uint8Array): string | null {
 
 /**
  * How long the saved conversation is, and the text of its user messages from
- * `fromMessage` on — only those blobs are read.
+ * `fromMessage` on — only those blobs are read. A session with no checkpoint
+ * yet has saved nothing.
  */
 export function readCursorConversation(
   storePath: string,
   fromMessage: number,
   warn?: (message: string) => void,
 ): AcpConversationReading | null {
-  return readCursorStoreRoot(storePath, warn, (root, db) => {
-    const ids = cursorConversationMessageIds(root);
-    if (ids === null) {
-      return null;
-    }
-    const userTexts: string[] = [];
-    for (const id of ids.slice(fromMessage)) {
-      const blob = readStoreBlob(db, id);
-      const text = blob === null ? null : cursorUserMessageText(blob);
-      if (text !== null) {
-        userTexts.push(text);
+  return readCursorStoreRoot(
+    storePath,
+    warn,
+    (root, db) => {
+      const ids = cursorConversationMessageIds(root);
+      if (ids === null) {
+        return null;
       }
-    }
-    return { messages: ids.length, userTexts };
-  });
+      const userTexts: string[] = [];
+      for (const id of ids.slice(fromMessage)) {
+        const blob = readStoreBlob(db, id);
+        const text = blob === null ? null : cursorUserMessageText(blob);
+        if (text !== null) {
+          userTexts.push(text);
+        }
+      }
+      return { messages: ids.length, userTexts };
+    },
+    { messages: 0, userTexts: [] },
+  );
 }

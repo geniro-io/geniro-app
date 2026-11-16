@@ -1458,7 +1458,7 @@ export function Settings({
                 <SettingsPanel>
                   <SettingsPanelRow
                     label="Keep an idle agent running for"
-                    description="How long an agent's process, with its MCP servers, stays open after its last message. Within this time the next message starts at once and keeps its prompt cache; after it the process closes, and dev servers and similar processes its agents left running stop with it, so the next message starts them again, cold. Longer keeps chats quick but holds their memory longer; shorter frees it sooner.">
+                    hint="How long an agent's process, with its MCP servers, stays open after its last message. Within this time the next message starts at once and keeps its prompt cache; after it the process closes, and dev servers and similar processes its agents left running stop with it, so the next message starts them again, cold. Longer keeps chats quick but holds their memory longer; shorter frees it sooner.">
                     <Stepper
                       value={keptSessionIdleMinutes}
                       min={MIN_KEPT_SESSION_IDLE_MINUTES}
@@ -1472,32 +1472,31 @@ export function Settings({
                   {remote ? null : (
                     <SettingsPanelRow
                       label="Agents kept running at once"
-                      description={
+                      hint={
                         <>
-                          <span>
-                            Each chat, and each agent of a team, keeps its
-                            process open between messages so the next one starts
-                            at once. When a new one needs room past this number,
-                            an agent that was only called by another closes
-                            first, then the one idle the longest, and the next
-                            message there starts cold, about 10–15 s slower. A
-                            chat used recently, or an agent still working, is
-                            never closed for room: Geniro goes over the number
-                            instead. More keeps more chats quick and takes more
-                            memory.
-                            {keptSessionFigures === null
-                              ? null
-                              : ` "Recently" is the last ${keptSessionFigures.recentlyUsedMinutes} minutes. Automatic picks ${keptSessionFigures.automaticLimit} for this Mac, from an eighth of its memory.`}
-                          </span>
-                          {keptSessionFigures === null ||
-                          shownKeptSessionLimit === null ? null : (
-                            <span
-                              className="block font-medium text-foreground"
-                              data-testid="kept-session-memory-estimate">
-                              {`Up to ≈ ${formatBytes(shownKeptSessionLimit * keptSessionFigures.sessionMemoryBytes)} of this Mac's ${formatBytes(keptSessionFigures.totalMemoryBytes)}, at about ${formatBytes(keptSessionFigures.sessionMemoryBytes)} per agent.`}
-                            </span>
-                          )}
+                          Each chat, and each agent of a team, keeps its process
+                          open between messages so the next one starts at once.
+                          When a new one needs room past this number, an agent
+                          that was only called by another closes first, then the
+                          one idle the longest, and the next message there
+                          starts cold, about 10–15 s slower. A chat used
+                          recently, or an agent still working, is never closed
+                          for room: Geniro goes over the number instead. More
+                          keeps more chats quick and takes more memory.
+                          {keptSessionFigures === null
+                            ? null
+                            : ` "Recently" is the last ${keptSessionFigures.recentlyUsedMinutes} minutes. Automatic picks ${keptSessionFigures.automaticLimit} for this Mac, from an eighth of its memory.`}
                         </>
+                      }
+                      description={
+                        keptSessionFigures === null ||
+                        shownKeptSessionLimit === null ? undefined : (
+                          <span
+                            className="font-medium text-foreground"
+                            data-testid="kept-session-memory-estimate">
+                            {`Up to ≈ ${formatBytes(shownKeptSessionLimit * keptSessionFigures.sessionMemoryBytes)} of this Mac's ${formatBytes(keptSessionFigures.totalMemoryBytes)}, at about ${formatBytes(keptSessionFigures.sessionMemoryBytes)} per agent.`}
+                          </span>
+                        )
                       }>
                       {shownKeptSessionLimit === null ? null : (
                         <Stepper
@@ -1526,7 +1525,7 @@ export function Settings({
                   <SettingsPanelRow
                     label="Keep the Mac awake while agents work"
                     htmlFor="settings-prevent-sleep"
-                    description="While an agent works the Mac does not go to idle sleep; while it only waits for you, it may. A command an agent left running counts as work for an hour after its last turn. The display still turns off, and closing the lid still sleeps the Mac. Off, the Mac sleeps on its usual schedule and a working agent stops until it wakes.">
+                    hint="While an agent works the Mac does not go to idle sleep; while it only waits for you, it may. A command an agent left running counts as work for an hour after its last turn. The display still turns off, and closing the lid still sleeps the Mac. Off, the Mac sleeps on its usual schedule and a working agent stops until it wakes.">
                     <Switch
                       id="settings-prevent-sleep"
                       checked={preventSleepWhileWorking}

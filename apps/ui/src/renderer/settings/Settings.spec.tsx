@@ -1742,9 +1742,30 @@ describe('Settings appearance section', () => {
     expect(estimate?.textContent).toBe(
       "Up to ≈ 16 GB of this Mac's 128 GB, at about 1.0 GB per agent.",
     );
-    expect(container.textContent).toContain(
+    expect(container.textContent).not.toContain('"Recently" is the last');
+    const hint = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="About Agents kept running at once"]',
+    );
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+      hint!.focus();
+    });
+    expect(
+      container.querySelector('[data-slot="popover-panel"]')?.textContent,
+    ).toContain(
       '"Recently" is the last 10 minutes. Automatic picks 16 for this Mac',
     );
+    act(() => hint!.blur());
+    for (const label of [
+      'Keep an idle agent running for',
+      'Keep the Mac awake while agents work',
+    ]) {
+      expect(
+        container.querySelector(`button[aria-label="About ${label}"]`),
+      ).not.toBeNull();
+    }
+    expect(container.textContent).not.toContain('keeps its prompt cache');
+    expect(container.textContent).not.toContain('does not go to idle sleep');
 
     await act(async () => {
       container

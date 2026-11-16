@@ -166,6 +166,15 @@ export class ChatMetricsService implements OnModuleInit {
    */
   private readonly planLedger = new PlanLimitsLedger();
 
+  /**
+   * The one-shot plan reading in flight for each account, shared by every
+   * refresh that arrives while it runs, so presses never start a process each.
+   */
+  private readonly planProbes = new Map<
+    string,
+    Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>
+  >();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -920,16 +929,16 @@ export class ChatMetricsService implements OnModuleInit {
         : null,
       askedPlan
         ? this.attempt(runId, 'plan limits', () =>
-            adapter.readPlanLimits(
-              planOneShot
-                ? {
+            planOneShot && target.account !== null
+              ? this.probePlan(target.account.key, () =>
+                  adapter.readPlanLimits({
                     ...input,
                     live: null,
                     configDir: target.account?.dir ?? null,
-                    oneShot: true,
-                  }
-                : { ...input, live: planLive },
-            ),
+                    mayProbe: true,
+                  }),
+                )
+              : adapter.readPlanLimits({ ...input, live: planLive }),
           )
         : null,
     ]);
@@ -1238,6 +1247,19 @@ export class ChatMetricsService implements OnModuleInit {
       onAccount[0]?.session ??
       null
     );
+  }
+
+  private probePlan(
+    account: string,
+    read: () => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>,
+  ): Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null> {
+    const running = this.planProbes.get(account);
+    if (running !== undefined) {
+      return running;
+    }
+    const probe = read().finally(() => this.planProbes.delete(account));
+    this.planProbes.set(account, probe);
+    return probe;
   }
 
   /** One adapter question, whose failure is a null reading and a log line. */

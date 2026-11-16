@@ -109,7 +109,7 @@ function build(opts: {
   readPlanLimits?: (input: {
     live: unknown;
     configDir: string | null;
-    oneShot?: boolean;
+    mayProbe?: boolean;
   }) => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>;
   planReading?: UsageReading;
   /** Each run's profile — overrides `configDir`. */
@@ -729,6 +729,20 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
   }
 
   const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
+
+  it('reads a team member’s plan from a one-shot process on a refresh while its own process is gone', async () => {
+    const built = buildCall({ oneShotPlan: true, plan: PLAN });
+
+    const metrics = await built.service.read('run-1', 'engineer', null, true);
+
+    expect(built.readPlanLimits).toHaveBeenCalledTimes(1);
+    expect(built.readPlanLimits.mock.calls[0]?.[0]).toMatchObject({
+      live: null,
+      mayProbe: true,
+    });
+    expect(metrics.plan).toEqual(PLAN);
+    expect(metrics.planTakenAt).not.toBeNull();
+  });
 
   it('spawns no one-shot plan reading on a refresh of a conversation whose account is unknown', async () => {
     const built = buildCall({
@@ -2215,7 +2229,7 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
     type PlanInput = {
       live: unknown;
       configDir: string | null;
-      oneShot?: boolean;
+      mayProbe?: boolean;
     };
     const ONE_SHOT: UsageReading = {
       kind: 'reads',
@@ -2249,7 +2263,7 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
         expect(readPlanLimits.mock.calls[0]?.[0]).toMatchObject({
           live: null,
           configDir: null,
-          oneShot: true,
+          mayProbe: true,
         });
         expect(pressed.plan?.windows[0]?.percent).toBe(41);
         expect(pressed.planTakenAt).toBe('2026-11-16T05:42:00.000Z');
@@ -2257,6 +2271,36 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('shares one one-shot process between refreshes that overlap on an account', async () => {
+      let answer: (reading: PlanLimitsWire) => void = () => undefined;
+      const readPlanLimits = vi
+        .fn<(input: PlanInput) => Promise<PlanLimitsWire | null>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        )
+        .mockResolvedValue(reading(52, false));
+      const { service } = build({
+        planReading: ONE_SHOT,
+        peek: () => null,
+        readPlanLimits,
+      });
+
+      const first = service.read('run-1', null, null, true);
+      const second = service.read('run-2', null, null, true);
+      await vi.waitFor(() => expect(readPlanLimits).toHaveBeenCalledTimes(1));
+      answer(reading(41, false));
+      const [a, b] = await Promise.all([first, second]);
+      const later = await service.read('run-1', null, null, true);
+
+      expect(a.plan?.windows[0]?.percent).toBe(41);
+      expect(b.plan?.windows[0]?.percent).toBe(41);
+      expect(readPlanLimits).toHaveBeenCalledTimes(2);
+      expect(later.plan?.windows[0]?.percent).toBe(52);
     });
 
     it('runs the one-shot process under the folder’s pinned profile', async () => {
@@ -2301,7 +2345,7 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
 
       expect(readPlanLimits).toHaveBeenCalledTimes(1);
       expect(readPlanLimits.mock.calls[0]?.[0].live).toBe(otherProcess);
-      expect(readPlanLimits.mock.calls[0]?.[0].oneShot).toBeUndefined();
+      expect(readPlanLimits.mock.calls[0]?.[0].mayProbe).toBeUndefined();
     });
 
     it('spawns nothing on the idle farewell', async () => {

@@ -500,10 +500,11 @@ export interface AgentSessionReadInput {
   /** The profile the run's agent runs under, null for the CLI's default. */
   configDir: string | null;
   /**
-   * With no `live` process, take the reading from a short-lived one under
-   * `configDir`, for a CLI whose reading declares `oneShot`.
+   * The caller permits starting a short-lived process of this CLI under
+   * `configDir` when there is no `live` one, for a CLI whose reading declares
+   * `oneShot`.
    */
-  oneShot?: boolean;
+  mayProbe?: boolean;
 }
 
 /** Durable identity used only to read a lost delegate's existing CLI record. */

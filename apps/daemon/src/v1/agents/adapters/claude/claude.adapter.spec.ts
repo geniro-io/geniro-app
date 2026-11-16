@@ -4723,7 +4723,7 @@ describe('ClaudeAdapter — plan limits from a one-shot process', () => {
       live: null,
       sessionId: null,
       configDir: '/profiles/work',
-      oneShot: true,
+      mayProbe: true,
     });
 
     expect(reading).toEqual({
@@ -4775,7 +4775,7 @@ describe('ClaudeAdapter — plan limits from a one-shot process', () => {
         live: null,
         sessionId: null,
         configDir: null,
-        oneShot: true,
+        mayProbe: true,
       }),
     ).toBeNull();
   });

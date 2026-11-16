@@ -1323,7 +1323,7 @@ export class ClaudeAdapter extends AgentAdapter {
     // to ask. The account's plan is not a property of the conversation, but
     // the only way to ASK about it here is through the conversation's process.
     if (!input.live) {
-      return input.oneShot
+      return input.mayProbe
         ? this.probePlanLimits(input.configDir)
         : Promise.resolve(null);
     }

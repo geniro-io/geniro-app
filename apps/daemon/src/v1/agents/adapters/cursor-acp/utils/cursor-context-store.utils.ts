@@ -294,23 +294,42 @@ export function parseStoreHeader(hexOrJson: string): string | null {
   }
 }
 
+/** Read one session's breakdown off disk, or null for every way that can fail. */
+export function readCursorContextUsage(
+  storePath: string,
+  warn?: (message: string) => void,
+): AgentContextUsage | null {
+  return readCursorStoreRoot(storePath, warn, (root) =>
+    parseCursorContextBlob(root),
+  );
+}
+
+/** One blob of an open store, or null when it is missing or not bytes. */
+export function readStoreBlob(db: DatabaseSync, id: string): Uint8Array | null {
+  const row = db.prepare('SELECT data FROM blobs WHERE id = ?').get(id) as
+    { data?: unknown } | undefined;
+  const blob = row?.data;
+  return blob instanceof Uint8Array || Buffer.isBuffer(blob)
+    ? new Uint8Array(blob)
+    : null;
+}
+
 /**
- * Read one session's breakdown off disk, or null for every way that can fail.
- *
- * The ONE impure function in this file, kept apart from the parsers above so
- * they stay drivable by a spec with no database. It is deliberately total:
- * a session the CLI has not written yet, a store whose schema has moved, a
- * database held open by a running CLI — all of them are "no reading", and a
- * readout is not worth an exception.
+ * Open one session's store, hand its root blob to `read`, and answer null for
+ * every way that can fail — the ONE impure reader in this adapter's store
+ * utils, kept apart from the parsers so they stay drivable by a spec with no
+ * database. A session the CLI has not written yet, a store whose schema has
+ * moved, a database held open by a running CLI: all of them are "no reading".
  *
  * Opened READ-ONLY. geniro owns this directory (the per-turn profile symlinks
  * into it so a conversation survives the profile) but not the format, and
  * nothing here may ever write to another program's store.
  */
-export function readCursorContextUsage(
+export function readCursorStoreRoot<T>(
   storePath: string,
-  warn?: (message: string) => void,
-): AgentContextUsage | null {
+  warn: ((message: string) => void) | undefined,
+  read: (root: Uint8Array, db: DatabaseSync) => T | null,
+): T | null {
   let db: DatabaseSync | null = null;
   try {
     // node's OWN sqlite, not the daemon's `better-sqlite3`: this reads a file
@@ -324,20 +343,14 @@ export function readCursorContextUsage(
     if (rootId === null) {
       return null;
     }
-    const row = db
-      .prepare('SELECT data FROM blobs WHERE id = ?')
-      .get(rootId) as { data?: unknown } | undefined;
-    const blob = row?.data;
-    if (!(blob instanceof Uint8Array) && !Buffer.isBuffer(blob)) {
-      return null;
-    }
-    return parseCursorContextBlob(new Uint8Array(blob));
+    const root = readStoreBlob(db, rootId);
+    return root === null ? null : read(root, db);
   } catch (err) {
     // Debug-level in spirit, warn in practice for the same reason the rest of
     // this adapter warns: when the format moves, the panel goes quiet, and the
     // only way anyone learns why is a line saying so.
     warn?.(
-      `cursor-agent: could not read the context store at ${storePath}: ${
+      `cursor-agent: could not read the session store at ${storePath}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

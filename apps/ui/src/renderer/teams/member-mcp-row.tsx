@@ -3,8 +3,8 @@ import { type ComponentProps, useState } from 'react';
 import { ErrorText } from '../components/error-text';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { NoteBox } from '../components/note-box';
-import { SettingRow } from '../components/setting-row';
 import { withNodeSwitches } from './node-mcp-switches';
+import { type RowScope, ScopedSettingRow } from './overridable-row';
 import type { NodeMcpState } from './use-node-mcp';
 
 type DialogActions = Pick<
@@ -19,8 +19,8 @@ type DialogActions = Pick<
 
 /**
  * A member's MCP row: the servers its profile loads with its own switches laid
- * over them, or the daemon's refusal of its config directory. Rows stay
- * read-only unless the caller passes `onSetEnabled`.
+ * over them, or the daemon's refusal of its config directory. In a project's
+ * scope the switches are an override of the team's, marked as one.
  */
 export function MemberMcpRow({
   title,
@@ -29,6 +29,7 @@ export function MemberMcpRow({
   hint,
   configDir,
   configDirUnavailableReason,
+  scope = null,
   ...actions
 }: {
   title: string;
@@ -37,13 +38,14 @@ export function MemberMcpRow({
   hint: string;
   configDir: string | null;
   configDirUnavailableReason: string | null | undefined;
+  scope?: RowScope | null;
 } & DialogActions): React.JSX.Element {
   const [open, setOpen] = useState(false);
   return (
     <>
       {mcp.invalidConfigDir === null ? (
         <div className="@container flex flex-col rounded-card bg-card ring-1 ring-border">
-          <SettingRow width="compact" label="MCP">
+          <ScopedSettingRow label="MCP" scope={scope}>
             <McpDialogButton
               variant="chip"
               chipNamesItself={false}
@@ -56,7 +58,7 @@ export function MemberMcpRow({
               onRefresh={mcp.refresh}
               {...actions}
             />
-          </SettingRow>
+          </ScopedSettingRow>
         </div>
       ) : (
         <ErrorText id="member-config-dir-error" className="text-xs break-words">

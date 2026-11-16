@@ -65,8 +65,17 @@ export const Editable: Story = {
   args: { onSetEnabled: () => {} },
 };
 
-export const ReadOnlyInAProject: Story = {
-  args: { hint: projectMemberMcpHint(true) },
+export const OverriddenInAProject: Story = {
+  args: {
+    onSetEnabled: () => {},
+    hint: projectMemberMcpHint(true),
+    scope: {
+      projectName: 'Billing API',
+      overridden: true,
+      teamValue: 'every server on',
+      onReset: () => {},
+    },
+  },
 };
 
 export const RefusedConfigDirectory: Story = {

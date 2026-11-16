@@ -29,7 +29,7 @@ import { AnalysisDialog } from '../chats/analysis-dialog';
 import { AnalyzeThreadDialog } from '../chats/analyze-thread-dialog';
 import { Chats } from '../chats/Chats';
 import { mcpConfigActions } from '../chats/mcp-config-actions';
-import { CliLoginProgress } from '../components/cli-login-progress';
+import { CliServerLoginProgress } from '../components/cli-login-progress';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
@@ -1156,18 +1156,7 @@ export function Teams({
     configDir: string | null;
   } | null>(null);
   const [poolMcpSettled, setPoolMcpSettled] = useState(0);
-  const mcpLoginPanel =
-    login.login && login.login.server !== null ? (
-      <CliLoginProgress
-        session={login.login.session}
-        onSubmitCode={(code) => void login.submitCode(code)}
-        onCancel={() => void login.cancel()}
-        onDismiss={login.dismiss}
-        error={login.error}
-        variant="inline"
-        scope="server"
-      />
-    ) : null;
+  const mcpLoginPanel = <CliServerLoginProgress login={login} />;
 
   const configDirCapability = configDirCapabilityFrom(
     capabilities,

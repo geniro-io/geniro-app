@@ -1676,8 +1676,6 @@ describe('AgentSessionRegistry — the ceiling', () => {
       vi.advanceTimersByTime(1_000);
     }
     vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
-    // The others are past the window, so both are ordinary candidates; run-0 has
-    // just written a row, which spares it while the row is fresh.
     at(sessions, 0).emitBetweenTurn('Bash-1');
 
     registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
@@ -1979,8 +1977,6 @@ describe('AgentSessionRegistry — the ceiling', () => {
   });
 
   it('starts over the ceiling rather than closing a chat that settled seconds ago', async () => {
-    // Every other session is mid-turn, so the chat is the only one the scan
-    // could take — and it is the answer the person is still reading.
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
@@ -2020,8 +2016,6 @@ describe('AgentSessionRegistry — the ceiling', () => {
   });
 
   it('closes a recently used callee conversation ahead of a recently used chat', async () => {
-    // A callee's call has returned, so the window that holds the chats does not
-    // hold it: it goes first even though it is the newest of the three.
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
@@ -2050,9 +2044,6 @@ describe('AgentSessionRegistry — the ceiling', () => {
   });
 
   it('closes a chat past the window before a callee still inside it', async () => {
-    // The first half cannot be told apart from plain least-recently-used: a
-    // session past the window is always older than one inside it. Kept as the
-    // guard that the rank order does not invert.
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
@@ -2159,8 +2150,6 @@ describe('AgentSessionRegistry — the user’s session limit', () => {
   }
 
   it('closes idle sessions past the window when the limit is lowered, and keeps a recent chat and a busy one above it', async () => {
-    // Below the number of sessions the exemptions protect, so the recent chat is
-    // the one a plain least-recently-used close would reach next.
     const { registry, sessions } = await fourSessions();
 
     registry.setLimit(1);

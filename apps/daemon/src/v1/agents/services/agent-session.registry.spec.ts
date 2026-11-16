@@ -35,6 +35,7 @@ import { SessionfulAdapter } from './__tests__/sessionful-adapter';
 import {
   AgentSessionRegistry,
   OFF_TURN_ACTIVE_MS,
+  RECENTLY_USED_MS,
   SESSION_IDLE_MS,
   SESSION_MEMORY_COST_BYTES,
   sessionCeilingFor,
@@ -1623,6 +1624,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
       // rather than map-insertion luck.
       vi.advanceTimersByTime(1_000);
     }
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
 
     registry.startTurn('run-new', adapter, INPUT, noop);
 
@@ -1646,6 +1648,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
       await at(sessions, i).endTurn();
       vi.advanceTimersByTime(1_000);
     }
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
     at(sessions, 0).parked = true;
 
     registry.startTurn('run-new', adapter, INPUT, noop);
@@ -1656,7 +1659,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(registry.liveCount).toBe(CEILING);
   });
 
-  it('evicts a newer idle session rather than the oldest one still working off-turn', async () => {
+  it('evicts an idle session rather than one still working off-turn', async () => {
     // The reported defect, as a unit. A CLI carrying on between turns reports
     // `idle === true` — there is no turn of OURS in flight — so the age scan
     // took it, and on run 309e0822 it took the session ONE SECOND after its
@@ -1672,17 +1675,10 @@ describe('AgentSessionRegistry — the ceiling', () => {
       await at(sessions, i).endTurn();
       vi.advanceTimersByTime(1_000);
     }
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    // The others are past the window, so both are ordinary candidates; run-0 has
+    // just written a row, which spares it while the row is fresh.
     at(sessions, 0).emitBetweenTurn('Bash-1');
-    // The other two are then USED, which is what makes run-0 the oldest by age
-    // while being the one still working — the production shape, and the only
-    // arrangement that tests anything. An off-turn row refreshes `lastUsedAt`
-    // as a settling turn does, so simply touching run-0 makes it the NEWEST and
-    // the scan would spare it whether or not the exemption exists.
-    for (const index of [1, 2]) {
-      vi.advanceTimersByTime(1_000);
-      registry.startTurn(`run-${index}`, adapter, INPUT, noop, undefined, noop);
-      await at(sessions, index).endTurn();
-    }
 
     registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
 
@@ -1728,7 +1724,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
       vi.advanceTimersByTime(1_000);
     }
     at(sessions, 0).emitBetweenTurn('Bash-1');
-    vi.advanceTimersByTime(OFF_TURN_ACTIVE_MS + 1_000);
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
     // The one that worked is now the LEAST attractive candidate by age — an
     // off-turn row refreshes `lastUsedAt` as a settling turn does — so the
     // other two are parked to leave it as the only one the scan can reach.
@@ -1980,6 +1976,267 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
     expect(sessions.every((s) => s.closes === 0)).toBe(true);
     expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('starts over the ceiling rather than closing a chat that settled seconds ago', async () => {
+    // Every other session is mid-turn, so the chat is the only one the scan
+    // could take — and it is the answer the person is still reading.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-settled', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(5_000);
+    registry.startTurn('run-busy-1', adapter, INPUT, noop);
+    registry.startTurn('run-busy-2', adapter, INPUT, noop);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('goes over the ceiling rather than closing a callee still working off-turn', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const callee = callSessionKey('run-caller', 'call-1');
+
+    registry.startTurn('run-chat', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn(callee, adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 1).endTurn();
+    at(sessions, 1).emitBetweenTurn('Bash-1');
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-other', adapter, INPUT, noop);
+    await at(sessions, 2).endTurn();
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('closes a recently used callee conversation ahead of a recently used chat', async () => {
+    // A callee's call has returned, so the window that holds the chats does not
+    // hold it: it goes first even though it is the newest of the three.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-chat', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-other', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn(
+      callSessionKey('run-caller', 'call-1'),
+      adapter,
+      INPUT,
+      noop,
+    );
+    await at(sessions, 2).endTurn();
+    vi.advanceTimersByTime(1_000);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 2).closes).toBe(1);
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('closes a chat past the window before a callee still inside it', async () => {
+    // The first half cannot be told apart from plain least-recently-used: a
+    // session past the window is always older than one inside it. Kept as the
+    // guard that the rank order does not invert.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-chat', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn(
+      callSessionKey('run-caller', 'call-1'),
+      adapter,
+      INPUT,
+      noop,
+    );
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-other', adapter, INPUT, noop);
+    await at(sessions, 2).endTurn();
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(at(sessions, 2).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('closes an idle callee past the window before an older chat past it', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-chat', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn(
+      callSessionKey('run-caller', 'call-1'),
+      adapter,
+      INPUT,
+      noop,
+    );
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-other', adapter, INPUT, noop);
+    await at(sessions, 2).endTurn();
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 1).closes).toBe(1);
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(at(sessions, 2).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('starts over the ceiling while every session is recent, and evicts back to it once the window passes', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    registry.startTurn('run-over', adapter, INPUT, noop);
+    await at(sessions, CEILING).endTurn();
+
+    expect(sessions.every((s) => s.closes === 0)).toBe(true);
+    expect(registry.liveCount).toBe(CEILING + 1);
+
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn('run-next', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(1);
+    expect(at(sessions, 2).closes).toBe(0);
+    expect(at(sessions, CEILING).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+});
+
+describe('AgentSessionRegistry — the user’s session limit', () => {
+  async function fourSessions(): Promise<{
+    registry: AgentSessionRegistry;
+    sessions: FakeSession[];
+  }> {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    registry.setLimit(4);
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-old', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(1_000);
+    registry.startTurn('run-mid', adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn('run-recent', adapter, INPUT, noop);
+    await at(sessions, 2).endTurn();
+    registry.startTurn('run-busy', adapter, INPUT, noop);
+
+    expect(registry.liveCount).toBe(4);
+    return { registry, sessions };
+  }
+
+  it('closes idle sessions past the window when the limit is lowered, and keeps a recent chat and a busy one above it', async () => {
+    // Below the number of sessions the exemptions protect, so the recent chat is
+    // the one a plain least-recently-used close would reach next.
+    const { registry, sessions } = await fourSessions();
+
+    registry.setLimit(1);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(1);
+    expect(at(sessions, 2).closes).toBe(0);
+    expect(at(sessions, 3).closes).toBe(0);
+    expect(registry.liveCount).toBe(2);
+  });
+
+  it('stops closing once the lowered limit is reached', async () => {
+    const { registry, sessions } = await fourSessions();
+
+    registry.setLimit(3);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.liveCount).toBe(3);
+  });
+
+  it('lets a raised limit keep more sessions live than the constructor ceiling', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    registry.setLimit(CEILING + 1);
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(sessions.every((s) => s.closes === 0)).toBe(true);
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('hands the ceiling back to the constructor value on setLimit(null)', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.setLimit(2);
+    registry.setLimit(null);
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    vi.advanceTimersByTime(RECENTLY_USED_MS + 1_000);
+    registry.startTurn('run-new', adapter, INPUT, noop);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('reports the automatic ceiling until a limit is set, then the user’s limit', () => {
+    const registry = new AgentSessionRegistry(CEILING);
+
+    expect(registry.config).toMatchObject({
+      limit: null,
+      automaticLimit: CEILING,
+    });
+    registry.setLimit(5);
+    expect(registry.config).toMatchObject({
+      limit: 5,
+      automaticLimit: CEILING,
+    });
+    registry.setLimit(null);
+    expect(registry.config).toMatchObject({
+      limit: null,
+      automaticLimit: CEILING,
+    });
   });
 });
 

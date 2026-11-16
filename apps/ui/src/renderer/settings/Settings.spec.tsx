@@ -84,9 +84,22 @@ const projectsApi = vi.hoisted(() => ({
     Promise.reject(new Error('not stubbed')),
   ),
 }));
+const GIB = 1024 ** 3;
+const agentsApi = vi.hoisted(() => ({
+  getKeptSessionConfig: vi.fn(() =>
+    Promise.resolve({
+      idleMinutes: 60,
+      limit: null,
+      automaticLimit: 16,
+      sessionMemoryBytes: 1024 ** 3,
+      totalMemoryBytes: 128 * 1024 ** 3,
+    }),
+  ),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
+    agents: agentsApi,
     cliAuth: cliAuthApi,
     capabilities: capabilitiesApi,
     chats: chatsApi,
@@ -1709,6 +1722,96 @@ describe('Settings appearance section', () => {
         'button[aria-label="Decrease Minutes to keep an idle agent running"]',
       )?.disabled,
     ).toBe(true);
+  });
+
+  it('shows the automatic session limit and its memory from the daemon, and saves a step', async () => {
+    await mount();
+
+    const value = container.querySelector(
+      '[role="spinbutton"][aria-label="Agents to keep running at once"]',
+    );
+    expect(value?.textContent).toBe('16');
+    const estimate = container.querySelector(
+      '[data-testid="kept-session-memory-estimate"]',
+    );
+    expect(estimate?.textContent).toBe(
+      "Up to ≈ 16 GB of this Mac's 128 GB, at about 1.0 GB per agent.",
+    );
+    expect(container.textContent).toContain('Automatic picks 16 for this Mac');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Increase Agents to keep running at once"]',
+        )!
+        .click();
+    });
+
+    expect(value?.textContent).toBe('17');
+    expect(estimate?.textContent).toBe(
+      "Up to ≈ 17 GB of this Mac's 128 GB, at about 1.0 GB per agent.",
+    );
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      keptSessionLimit: 17,
+    });
+  });
+
+  it('opens a stored session limit, recomputes its memory, and goes back to automatic', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      keptSessionLimit: 12,
+    });
+    agentsApi.getKeptSessionConfig.mockResolvedValueOnce({
+      idleMinutes: 60,
+      limit: 12,
+      automaticLimit: 4,
+      sessionMemoryBytes: 2 * GIB,
+      totalMemoryBytes: 32 * GIB,
+    });
+
+    await mount();
+
+    expect(
+      container.querySelector(
+        '[role="spinbutton"][aria-label="Agents to keep running at once"]',
+      )?.textContent,
+    ).toBe('12');
+    expect(
+      container.querySelector('[data-testid="kept-session-memory-estimate"]')
+        ?.textContent,
+    ).toBe("Up to ≈ 24 GB of this Mac's 32 GB, at about 2.0 GB per agent.");
+
+    const automatic = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Use automatic',
+    );
+    await act(async () => {
+      automatic!.click();
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      keptSessionLimit: null,
+    });
+    expect(
+      container.querySelector(
+        '[role="spinbutton"][aria-label="Agents to keep running at once"]',
+      )?.textContent,
+    ).toBe('4');
+  });
+
+  it('leaves the session limit off a paired device, where the daemon will not answer it', async () => {
+    runtime.remote = true;
+    agentsApi.getKeptSessionConfig.mockClear();
+    try {
+      await mount();
+      expect(
+        container.querySelector(
+          '[aria-label="Agents to keep running at once"]',
+        ),
+      ).toBeNull();
+      expect(agentsApi.getKeptSessionConfig).not.toHaveBeenCalled();
+    } finally {
+      runtime.remote = false;
+    }
   });
 
   it('opens the keep-awake switch on the stored value and saves a flip', async () => {

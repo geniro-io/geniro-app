@@ -91,14 +91,6 @@ import { RunKindRowsCache } from './run-kind-rows.cache';
  * there is none is that adapter's own sentence — nothing here knows which CLI
  * it is talking to, or how one accounts for its window.
  */
-/** One CLI account: its ledger key and the config directory it runs from. */
-interface AgentAccount {
-  /** {@link accountKeyOf} of {@link dir}. */
-  key: string;
-  /** The effective config directory, null for the CLI's default login. */
-  dir: string | null;
-}
-
 /**
  * WHOSE readout is being taken — a chat's one agent, or one member of a team
  * run — with everything that differs between the two resolved once.
@@ -143,6 +135,14 @@ interface ReadingTarget {
   atSeq: number;
   /** The bill polled for THIS agent's account, which its turns do not carry. */
   polled: PolledSpend;
+}
+
+/** One CLI account: its ledger key and the config directory it runs from. */
+interface AgentAccount {
+  /** {@link accountKeyOf} of {@link dir}. */
+  key: string;
+  /** The effective config directory, null for the CLI's default login. */
+  dir: string | null;
 }
 
 @Injectable()

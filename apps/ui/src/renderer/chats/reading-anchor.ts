@@ -21,12 +21,14 @@
  * after React commits the page. There is ONE hold per scroller: a second load
  * joins it, since two holds would each pay back the same shift.
  *
- * While a finger or a fling owns the scroll (`gestureOwnsScroll`), nothing is
- * written: mobile WebKit ignores a `scrollTop` write under a dragging finger,
+ * While a finger or a fling owns the scroll (`gestureOwnsScroll`), `scrollTop`
+ * is not written: mobile WebKit ignores the write under a dragging finger,
  * stops a fling dead on it (iOS 26 and earlier), and from Safari 27 lets the
- * fling carry on past it. The shift is owed instead and written in
- * one go on the first frame the gesture has let go, and the hold outlives its
- * settle and its cap until it is.
+ * fling carry on past it. The content is lifted instead, by a negative top
+ * margin on the scroller's first child, so the reader sees nothing move; once
+ * the gesture has let go the lift is taken off and paid back as one
+ * `scrollTop` write in the same frame. The hold outlives its settle and its cap
+ * while a lift stands.
  */
 
 /** A row that has not moved for this long after the page landed has settled. */
@@ -58,7 +60,8 @@ interface Hold {
   holders: number;
   releasedAt: number | null;
   lastShiftAt: number;
-  owed: boolean;
+  lift: number;
+  liftHost: HTMLElement | null;
   gestureOwnsScroll: () => boolean;
 }
 
@@ -108,6 +111,22 @@ function contentOffset(scroller: HTMLElement, row: HTMLElement): number {
   );
 }
 
+function liftContent(scroller: HTMLElement, hold: Hold, by: number): void {
+  const first =
+    scroller.firstElementChild instanceof HTMLElement
+      ? scroller.firstElementChild
+      : null;
+  if (hold.liftHost !== null && (by === 0 || hold.liftHost !== first)) {
+    hold.liftHost.style.marginTop = '';
+    hold.liftHost = null;
+  }
+  hold.lift = by;
+  if (by !== 0 && first !== null) {
+    first.style.marginTop = `${-by}px`;
+    hold.liftHost = first;
+  }
+}
+
 function anchorOn(
   scroller: HTMLElement,
   hold: Hold,
@@ -136,7 +155,8 @@ export function holdReadingPlace(
     holders: 0,
     releasedAt: null,
     lastShiftAt: clock.now(),
-    owed: false,
+    lift: 0,
+    liftHost: null,
     gestureOwnsScroll,
   };
   hold.holders += 1;
@@ -178,28 +198,33 @@ export function holdReadingPlace(
         `[${SEQ_ATTRIBUTE}="${hold.seq}"]`,
       );
     }
-    hold.owed = false;
+    if (hold.lift !== 0 && hold.liftHost !== scroller.firstElementChild) {
+      liftContent(scroller, hold, hold.lift);
+    }
     if (hold.anchor === null || !hold.anchor.isConnected) {
       anchorOn(scroller, hold, pickAnchor(scroller));
     } else {
-      const now = contentOffset(scroller, hold.anchor);
-      const shift = now - hold.last;
+      const shift =
+        contentOffset(scroller, hold.anchor) + hold.lift - hold.last;
       if (Math.abs(shift) < 0.5) {
-        hold.last = now;
-      } else {
-        hold.lastShiftAt = clock.now();
-        if (hold.gestureOwnsScroll()) {
-          hold.owed = true;
-        } else {
-          scroller.scrollTop += shift;
-          hold.last = now;
+        liftContent(scroller, hold, 0);
+        hold.last = contentOffset(scroller, hold.anchor);
+      } else if (hold.gestureOwnsScroll()) {
+        if (Math.abs(shift - hold.lift) >= 0.5) {
+          liftContent(scroller, hold, shift);
+          hold.lastShiftAt = clock.now();
         }
+      } else {
+        liftContent(scroller, hold, 0);
+        scroller.scrollTop += shift;
+        hold.last = contentOffset(scroller, hold.anchor);
+        hold.lastShiftAt = clock.now();
       }
     }
     const at = clock.now();
     if (
       hold.releasedAt !== null &&
-      !hold.owed &&
+      hold.lift === 0 &&
       (at - hold.lastShiftAt >= READING_ANCHOR_SETTLE_MS ||
         at - hold.releasedAt >= READING_ANCHOR_MAX_MS)
     ) {

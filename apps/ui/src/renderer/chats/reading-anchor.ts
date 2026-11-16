@@ -20,6 +20,13 @@
  * fixed number of frames — markdown images and artifact frames settle long
  * after React commits the page. There is ONE hold per scroller: a second load
  * joins it, since two holds would each pay back the same shift.
+ *
+ * While a finger or a fling owns the scroll (`gestureOwnsScroll`), nothing is
+ * written: mobile WebKit ignores a `scrollTop` write under a dragging finger,
+ * stops a fling dead on it (iOS 26 and earlier), and from Safari 27 lets the
+ * fling carry on past it. The shift is owed instead and written in
+ * one go on the first frame the gesture has let go, and the hold outlives its
+ * settle and its cap until it is.
  */
 
 /** A row that has not moved for this long after the page landed has settled. */
@@ -51,7 +58,11 @@ interface Hold {
   holders: number;
   releasedAt: number | null;
   lastShiftAt: number;
+  owed: boolean;
+  gestureOwnsScroll: () => boolean;
 }
+
+const NO_GESTURE = (): boolean => false;
 
 const active = new WeakMap<HTMLElement, Hold>();
 
@@ -115,6 +126,7 @@ function anchorOn(
 export function holdReadingPlace(
   scroller: HTMLElement,
   clock: ReadingAnchorClock = DEFAULT_CLOCK,
+  gestureOwnsScroll: () => boolean = NO_GESTURE,
 ): { release: () => void } {
   const existing = active.get(scroller);
   const hold: Hold = existing ?? {
@@ -124,6 +136,8 @@ export function holdReadingPlace(
     holders: 0,
     releasedAt: null,
     lastShiftAt: clock.now(),
+    owed: false,
+    gestureOwnsScroll,
   };
   hold.holders += 1;
   hold.releasedAt = null;
@@ -164,20 +178,28 @@ export function holdReadingPlace(
         `[${SEQ_ATTRIBUTE}="${hold.seq}"]`,
       );
     }
+    hold.owed = false;
     if (hold.anchor === null || !hold.anchor.isConnected) {
       anchorOn(scroller, hold, pickAnchor(scroller));
     } else {
       const now = contentOffset(scroller, hold.anchor);
       const shift = now - hold.last;
-      if (Math.abs(shift) >= 0.5) {
-        scroller.scrollTop += shift;
+      if (Math.abs(shift) < 0.5) {
+        hold.last = now;
+      } else {
         hold.lastShiftAt = clock.now();
+        if (hold.gestureOwnsScroll()) {
+          hold.owed = true;
+        } else {
+          scroller.scrollTop += shift;
+          hold.last = now;
+        }
       }
-      hold.last = now;
     }
     const at = clock.now();
     if (
       hold.releasedAt !== null &&
+      !hold.owed &&
       (at - hold.lastShiftAt >= READING_ANCHOR_SETTLE_MS ||
         at - hold.releasedAt >= READING_ANCHOR_MAX_MS)
     ) {

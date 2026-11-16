@@ -84,6 +84,34 @@ describe('holdReadingPlace', () => {
     expect(scroller.scrollTop).toBe(5_470);
   });
 
+  it('writes nothing while a gesture owns the scroll, then pays the whole shift back once it lets go', () => {
+    const { scroller, setOffset } = makeScroller([0, 300, 1_000]);
+    scroller.scrollTop = 350;
+    const clock = manualClock();
+    let gesture = true;
+    const hold = holdReadingPlace(scroller, clock, () => gesture);
+
+    setOffset(1, 5_300);
+    setOffset(2, 6_000);
+    clock.step();
+    expect(scroller.scrollTop).toBe(350);
+
+    // The finger keeps dragging while the shift is owed, and the hold outlives
+    // its settle and its cap rather than drop what it owes.
+    scroller.scrollTop = 300;
+    hold.release();
+    clock.step(READING_ANCHOR_SETTLE_MS);
+    expect(clock.pending()).toBe(1);
+    clock.step(READING_ANCHOR_MAX_MS);
+    expect(scroller.scrollTop).toBe(300);
+    expect(clock.pending()).toBe(1);
+
+    gesture = false;
+    clock.step();
+    expect(scroller.scrollTop).toBe(5_300);
+    expect(clock.pending()).toBe(0);
+  });
+
   it('ignores growth BELOW the reader, which a height-delta correction paid back too', () => {
     const { scroller, setOffset } = makeScroller([0, 300, 1_000]);
     scroller.scrollTop = 350;

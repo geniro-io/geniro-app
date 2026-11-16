@@ -4436,6 +4436,33 @@ const LEAD_AND_PEER: Team = teamOf(
   { name: 'lead and peer' },
 );
 
+/** A wake row carrying one batch of a monitor that is still running. */
+const MONITOR_BATCH_ROW: HostRowWire = {
+  severity: 'info',
+  message: 'CI · monitor m1: 1 line.',
+  monitors: [
+    { id: 'm1', description: 'CI', event: 'batch', lines: ['ok'], omitted: 0 },
+  ],
+  woke: true,
+};
+
+/** A wake row carrying the end of that monitor. */
+const MONITOR_END_ROW: HostRowWire = {
+  severity: 'info',
+  message: 'CI · monitor m1 ended.',
+  monitors: [
+    {
+      id: 'm1',
+      description: 'CI',
+      event: 'end',
+      end: { kind: 'exit', code: 0 },
+      lines: ['done'],
+      omitted: 0,
+    },
+  ],
+  woke: true,
+};
+
 /** The turns one member was given, told apart by the instructions each carries. */
 function turnsOf(adapter: FakeAdapter, instructions: string): FakeTurn[] {
   return adapter.starts.filter(
@@ -4818,7 +4845,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     expect(runDao.runs.get(run.id)?.status).toBe('running');
   });
 
-  it('settles a finished run reopened only by monitor output as a host turn, so no banner is posted', async () => {
+  it('settles a finished run reopened only by output of a monitor still running as a host turn, so no banner is posted', async () => {
     const { service, claude, runDao, hostTurnSettles } = setup();
     const run = await service.startRun({
       slug: 'two',
@@ -4835,12 +4862,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     expect(hostTurnSettles).toEqual([]);
 
     expect(
-      service.wakeConversation(run.id, 'a', 'CI is green', {
-        severity: 'info',
-        message: '',
-        monitors: [],
-        woke: true,
-      }),
+      service.wakeConversation(run.id, 'a', 'CI is green', MONITOR_BATCH_ROW),
     ).toBe('woken');
     await drain();
     completeTurn(turnsOf(claude, 'role-a')[1]!, 'noted');
@@ -4850,7 +4872,64 @@ describe('TeamExecutorService — follow-up messages', () => {
     expect(hostTurnSettles).toEqual([run.id]);
   });
 
-  it('settles a finished run reopened by a host wake (a share the agent asked for) as a host turn too', async () => {
+  it('announces a finished run reopened by a monitor that ended as an ordinary settle, banner and all', async () => {
+    const { service, claude, runDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    await drain();
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'CI finished', MONITOR_END_ROW),
+    ).toBe('woken');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'PR is green, done');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([]);
+  });
+
+  it('announces a stretch a running monitor reopened as an ordinary settle once its monitor ends inside it', async () => {
+    const { service, claude, runDao, hostTurnSettles } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    await drain();
+    expect(
+      service.wakeConversation(run.id, 'a', 'first', MONITOR_BATCH_ROW),
+    ).toBe('woken');
+    await drain();
+    service.onConversationTurnEnded((runId, caller) => {
+      if (caller === 'a' && turnsOf(claude, 'role-a').length === 2) {
+        service.wakeConversation(runId, caller, 'ended', MONITOR_END_ROW);
+      }
+    });
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'noted');
+    await drain();
+    expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('ended');
+    completeTurn(turnsOf(claude, 'role-a')[2]!, 'all done');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(hostTurnSettles).toEqual([]);
+  });
+
+  it('announces a finished run reopened by a host wake (a share the agent asked for) as an ordinary settle, banner and all', async () => {
     const { service, claude, itemDao, hostTurnSettles } = setup();
     const run = await service.startRun({
       slug: 'two',
@@ -4886,7 +4965,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     completeTurn(turnsOf(claude, 'role-a')[1]!, 'posted');
     await drain();
 
-    expect(hostTurnSettles).toEqual([run.id]);
+    expect(hostTurnSettles).toEqual([]);
     // Its opening row is the share row, never a user row carrying the link.
     expect(userTexts(itemDao, run.id)).toEqual(['go']);
   });
@@ -4955,7 +5034,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     ).toBe(false);
   });
 
-  it('keeps a stretch that monitor output alone drives a host turn across a second wake', async () => {
+  it('keeps a stretch that output of a running monitor alone drives a host turn across a second wake', async () => {
     const { service, claude, runDao, hostTurnSettles } = setup();
     const run = await service.startRun({
       slug: 'two',
@@ -4968,12 +5047,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     a.emit({ type: 'session', sessionId: 'sess-a' });
     completeTurn(a, 'A1');
     await drain();
-    const output = {
-      severity: 'info' as const,
-      message: '',
-      monitors: [],
-      woke: true,
-    };
+    const output = MONITOR_BATCH_ROW;
     expect(service.wakeConversation(run.id, 'a', 'first', output)).toBe(
       'woken',
     );
@@ -5012,12 +5086,7 @@ describe('TeamExecutorService — follow-up messages', () => {
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(
-      service.wakeConversation(run.id, 'a', 'CI is green', {
-        severity: 'info',
-        message: '',
-        monitors: [],
-        woke: true,
-      }),
+      service.wakeConversation(run.id, 'a', 'CI is green', MONITOR_BATCH_ROW),
     ).toBe('woken');
     await drain();
     const woken = claude.starts[1]!;

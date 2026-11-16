@@ -98,7 +98,6 @@ import {
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
-  type StandingHostQuestion,
   type TeamProposalOutcome,
   type UnanswerableWire,
 } from '../chat.types';

@@ -1231,7 +1231,7 @@ function setup(
   awaitingEvents: { runId: string; awaiting: string | null }[];
   countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
   /** Every ROOTS-WORKING announce, in order. */
-  rootsEvents: { runId: string; rootsWorking: number }[];
+  rootsEvents: { runId: string; rootsWorking: number; hostTurn?: true }[];
   /** Every PREVIEW announce (status null, `preview` set), in order. */
   previewEvents: { runId: string; preview: string }[];
   deletedRuns: string[];
@@ -1333,7 +1333,11 @@ function setup(
   }[] = [];
   // ROOTS-WORKING announces (status null, `rootsWorking` set) likewise: what
   // the composer reads to decide whether a message queues.
-  const rootsEvents: { runId: string; rootsWorking: number }[] = [];
+  const rootsEvents: {
+    runId: string;
+    rootsWorking: number;
+    hostTurn?: true;
+  }[] = [];
   // PREVIEW announces (status null, `preview` set): the sidebar line a
   // persisted message moves, filed apart because they say nothing about status.
   const previewEvents: { runId: string; preview: string }[] = [];
@@ -1346,6 +1350,7 @@ function setup(
       rootsEvents.push({
         runId: event.runId,
         rootsWorking: event.rootsWorking,
+        ...(event.hostTurn === true ? { hostTurn: true as const } : {}),
       });
       return;
     }
@@ -4870,6 +4875,41 @@ describe('TeamExecutorService — follow-up messages', () => {
 
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(hostTurnSettles).toEqual([run.id]);
+  });
+
+  it('says its lead went idle as no news after a turn only a running monitor woke, and as news after one a monitor end woke', async () => {
+    const { service, claude, rootsEvents } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    await drain();
+    const idleAnnounces = () =>
+      rootsEvents.filter(
+        (event) => event.runId === run.id && event.rootsWorking === 0,
+      );
+
+    service.wakeConversation(run.id, 'a', 'step', MONITOR_BATCH_ROW);
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'noted');
+    await drain();
+    expect(idleAnnounces().at(-1)).toEqual({
+      runId: run.id,
+      rootsWorking: 0,
+      hostTurn: true,
+    });
+
+    service.wakeConversation(run.id, 'a', 'done', MONITOR_END_ROW);
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[2]!, 'all green');
+    await drain();
+    expect(idleAnnounces().at(-1)).toEqual({ runId: run.id, rootsWorking: 0 });
   });
 
   it('announces a finished run reopened by a monitor that ended as an ordinary settle, banner and all', async () => {

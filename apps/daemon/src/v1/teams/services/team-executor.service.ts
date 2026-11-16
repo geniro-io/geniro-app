@@ -1098,6 +1098,7 @@ export class TeamExecutorService
     memberId: string,
     on: boolean,
     announce = true,
+    monitorProgress = false,
   ): void {
     const roots = this.workingRoots.get(runId) ?? new Set<string>();
     if (roots.has(memberId) === on) {
@@ -1117,6 +1118,7 @@ export class TeamExecutorService
         runId,
         status: null,
         rootsWorking: roots.size,
+        ...(monitorProgress && roots.size === 0 ? { hostTurn: true } : {}),
       });
     }
   }
@@ -3804,13 +3806,21 @@ export class TeamExecutorService
       clearTimeout(handingOver.get(memberId));
       handingOver.delete(memberId);
     };
+    /** Leads whose open turn only a running monitor's progress woke. */
+    const monitorProgressTurns = new Set<string>();
     // Every turn the pass started counts: a message sent while the pass is
     // still under way waits for it — only CALLS run on past an idle Manager.
     // Going idle during a cancel is recorded silently: an idle announce is
     // what drains the queue, and Stop must never be answered by sending the
     // next message.
     const markRootWorking = (memberId: string, on: boolean): void => {
-      this.setRootWorking(runId, memberId, on, on || !cancelRequested);
+      this.setRootWorking(
+        runId,
+        memberId,
+        on,
+        on || !cancelRequested,
+        !on && monitorProgressTurns.has(memberId),
+      );
     };
     /**
      * Follow-up turns on agents whose own turn has ended, keyed by member — see
@@ -7897,6 +7907,9 @@ export class TeamExecutorService
     ): Promise<void> => {
       if (!monitorProgress) {
         wokenOnlyByMonitors = false;
+        monitorProgressTurns.delete(node.id);
+      } else {
+        monitorProgressTurns.add(node.id);
       }
       const starting = reserveContinuation(node.id);
       tookOver(node.id);
@@ -7919,6 +7932,7 @@ export class TeamExecutorService
         startingContinuations.delete(node.id);
         starting.release();
         markRootWorking(node.id, false);
+        monitorProgressTurns.delete(node.id);
         const lastTurn = releaseNodeTurn(node.id);
         const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
         endConversationTurn(node.id);
@@ -8006,6 +8020,7 @@ export class TeamExecutorService
               await finishRunIfSettled();
             } finally {
               markRootWorking(node.id, false);
+              monitorProgressTurns.delete(node.id);
             }
           }
         });
@@ -8225,6 +8240,7 @@ export class TeamExecutorService
       };
       // The user drives this stretch now: its settle is theirs to hear about.
       wokenOnlyByMonitors = false;
+      monitorProgressTurns.clear();
       const told: string[] = [];
       for (const root of roots) {
         const running =

@@ -612,7 +612,8 @@ export interface RunStatusEvent {
    * True when geniro started the turn itself with output of monitors still
    * running — a settle that posts no banner (one per batch would be noise),
    * though it still marks the thread unread. A turn a monitor's end or a host
-   * wake opened carries it only on the put-back after a failed start.
+   * wake opened carries it only on the put-back after a failed start. Also
+   * carried by a team's leads-idle announce (`rootsWorking: 0`) that is no news.
    */
   hostTurn?: boolean;
   /**

@@ -15,7 +15,12 @@ import {
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { ContactState } from './contact-edge';
 import { FIXTURE_NOW, graphThreadsOf } from './graph-fixtures';
-import { GraphView, MAX_THREAD_NODES, shownThreads } from './graph-view';
+import {
+  GraphView,
+  MAX_THREAD_NODES,
+  shownThreads,
+  widthFit,
+} from './graph-view';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -30,6 +35,25 @@ const settle = async (): Promise<void> => {
     });
   }
 };
+
+describe('widthFit', () => {
+  it('shrinks a wide graph to the canvas width, from the top, never under the minimum zoom', () => {
+    expect(widthFit({ width: 2000 }, { width: 1016 })).toEqual({
+      x: 16,
+      y: 16,
+      zoom: 0.492,
+    });
+    expect(widthFit({ width: 40_000 }, { width: 1016 }).zoom).toBe(0.25);
+  });
+
+  it('centres a narrow graph at its own size rather than zooming it in', () => {
+    expect(widthFit({ width: 400 }, { width: 1000 })).toEqual({
+      x: 300,
+      y: 16,
+      zoom: 1,
+    });
+  });
+});
 
 describe('GraphView', () => {
   let container: HTMLDivElement;
@@ -50,6 +74,8 @@ describe('GraphView', () => {
   });
 
   beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -120,6 +146,32 @@ describe('GraphView', () => {
     const managerY = nodeY('graph-manager');
     for (const id of ['thread-1', 'thread-2', 'thread-3', 'thread-4']) {
       expect(nodeY('graph-thread', id)).toBeGreaterThan(managerY);
+    }
+  });
+
+  it('wraps many threads into rows under the manager, so the fitted cards stay readable', async () => {
+    await draw({ threads: graphThreadsOf(13) });
+
+    const graph = all('command-center-graph')[0]!;
+    expect(graph.dataset.layout).toBe('rows');
+    expect(graph.dataset.columns).toBe('4');
+    const rows = new Set(
+      graphThreadsOf(13).map((thread) => nodeY('graph-thread', thread.id)),
+    );
+    expect(rows.size).toBe(4);
+    expect(Math.min(...rows)).toBeGreaterThan(nodeY('graph-manager'));
+    expect(all('contact-edge')).toHaveLength(13);
+  });
+
+  it('lets the pointer reach every node, so a card answers the mouse', async () => {
+    await draw({ threads: graphThreadsOf(2) });
+
+    const wrappers = Array.from(
+      container.querySelectorAll<HTMLElement>('.react-flow__node'),
+    );
+    expect(wrappers.length).toBeGreaterThan(0);
+    for (const wrapper of wrappers) {
+      expect(wrapper.style.pointerEvents).toBe('all');
     }
   });
 

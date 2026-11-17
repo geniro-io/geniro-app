@@ -264,5 +264,5 @@ One home for each concern:
 - Landing-view centring on the window.
 - The run's folder in the composer: it belongs in the header.
 - A horizontal timeline strip on the chat screen, or a timeline inside `subagent-block.tsx`. (The command center's thread cards carry one — `components/timeline-strip.tsx`, user decision — and it stays there.)
-- A second view of the command center (cards grid, board columns): the page is one graph, user decision. It is React Flow laid out by the stage graph's ELK module (`layoutTreeGraph`, `layoutTreeColumn` on a phone) — the manager on top, each thread a fixed-size `ThreadCard` under it, a thread's board card (`CommandCenterCard.task`, the card it works, nothing else) folded under it — never a layout of its own.
+- A second view of the command center (cards grid, board columns): the page is one graph, user decision. It is React Flow, the team graph's library, laid out by `command-center/graph-layout.ts` — the manager on top, the threads in rows under it (`columnsFor` keeps a fitted card readable; one indented column on a phone), each a fixed-size `ThreadCard`, a thread's board card (`CommandCenterCard.task`, the card it works, nothing else) folded under it. Its nodes get `onNodeClick`, or React Flow sets `pointer-events: none` on them and no card answers the mouse.
 - Always-visible controls for an absent axis.

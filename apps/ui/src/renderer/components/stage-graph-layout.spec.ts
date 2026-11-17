@@ -4,105 +4,11 @@ import { PILL_HEIGHT, stageEdgeKey } from './stage-graph';
 import {
   arrowHeadPath,
   layoutStageGraph,
-  layoutTreeColumn,
-  layoutTreeGraph,
   type Point,
   roundedPath,
   type StageGraphGeometry,
   type StageLink,
-  type TreeBox,
-  type TreeGraphGeometry,
 } from './stage-graph-layout';
-
-const TREE: TreeBox[] = [
-  { id: 'root', width: 300, height: 64, parent: null },
-  { id: 'a', width: 300, height: 150, parent: 'root' },
-  { id: 'a-task', width: 260, height: 60, parent: 'a' },
-  { id: 'b', width: 300, height: 120, parent: 'root' },
-  { id: 'c', width: 300, height: 150, parent: 'root' },
-];
-
-function overlaps(geometry: TreeGraphGeometry): string[] {
-  const boxes = [...geometry.boxes.values()];
-  const hits: string[] = [];
-  boxes.forEach((one, index) => {
-    for (const other of boxes.slice(index + 1)) {
-      if (
-        one.x < other.x + other.width &&
-        other.x < one.x + one.width &&
-        one.y < other.y + other.height &&
-        other.y < one.y + one.height
-      ) {
-        hits.push(`${one.id}/${other.id}`);
-      }
-    }
-  });
-  return hits;
-}
-
-describe('layoutTreeGraph', () => {
-  it('puts the root above every box, each child below its parent, with no two boxes overlapping', async () => {
-    const geometry = await layoutTreeGraph(TREE);
-    const at = (id: string) => geometry.boxes.get(id)!;
-
-    for (const box of TREE.filter((one) => one.parent !== null)) {
-      const parent = at(box.parent!);
-      expect(at(box.id).y).toBeGreaterThanOrEqual(parent.y + parent.height);
-    }
-    expect(at('a').y).toBe(at('b').y);
-    expect(at('b').y).toBe(at('c').y);
-    expect(overlaps(geometry)).toEqual([]);
-  });
-
-  it('keeps the threads in the order given, left to right', async () => {
-    const geometry = await layoutTreeGraph(TREE);
-    const x = (id: string) => geometry.boxes.get(id)!.x;
-
-    expect(x('a')).toBeLessThan(x('b'));
-    expect(x('b')).toBeLessThan(x('c'));
-  });
-
-  it('routes a wire from each parent’s bottom edge down into its child’s top edge', async () => {
-    const geometry = await layoutTreeGraph(TREE);
-
-    for (const box of TREE.filter((one) => one.parent !== null)) {
-      const route = geometry.routes.get(box.id)!;
-      const parent = geometry.boxes.get(box.parent!)!;
-      const child = geometry.boxes.get(box.id)!;
-      expect(route[0]!.y).toBeCloseTo(parent.y + parent.height, 0);
-      expect(route.at(-1)!.y).toBeCloseTo(child.y, 0);
-    }
-  });
-});
-
-describe('layoutTreeColumn', () => {
-  it('stacks every box in one column, in order, each level indented, none overlapping', () => {
-    const geometry = layoutTreeColumn(TREE);
-    const at = (id: string) => geometry.boxes.get(id)!;
-
-    const order = [...geometry.boxes.values()]
-      .sort((a, b) => a.y - b.y)
-      .map((box) => box.id);
-    expect(order).toEqual(['root', 'a', 'a-task', 'b', 'c']);
-    expect(at('a').x).toBeGreaterThan(at('root').x);
-    expect(at('a-task').x).toBeGreaterThan(at('a').x);
-    expect(at('b').x).toBe(at('a').x);
-    expect(overlaps(geometry)).toEqual([]);
-    expect(geometry.width).toBeLessThanOrEqual(390);
-  });
-
-  it('runs each wire down its parent’s left edge and turns it into the child', () => {
-    const geometry = layoutTreeColumn(TREE);
-    const route = geometry.routes.get('c')!;
-    const root = geometry.boxes.get('root')!;
-    const c = geometry.boxes.get('c')!;
-
-    expect(route[0]).toEqual({ x: route[1]!.x, y: root.y + root.height });
-    expect(route.at(-1)!.x).toBe(c.x);
-    expect(route.at(-1)!.y).toBeGreaterThan(c.y);
-    expect(route.at(-1)!.y).toBeLessThan(c.y + c.height);
-  });
-});
 
 const linksOf = (graph: Record<string, string[]>): StageLink[] =>
   Object.entries(graph).flatMap(([from, nexts]) =>

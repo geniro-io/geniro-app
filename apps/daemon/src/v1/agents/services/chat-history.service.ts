@@ -1,3 +1,5 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
@@ -343,13 +345,18 @@ export class ChatHistoryService {
       return [];
     }
     const em = this.em.fork();
-    const newest = (
+    // A turn of the event loop between reads: each one is a whole synchronous
+    // statement, and a cold page of a long run reads seconds of them.
+    const newest = async (
       pick: Parameters<ItemDao['newestRowsInCalls']>[2],
       calls: readonly string[] = callIds,
-    ): Promise<WireRow[]> =>
-      calls.length === 0
-        ? Promise.resolve([])
-        : this.itemDao.newestRowsInCalls(runId, calls, pick, em);
+    ): Promise<WireRow[]> => {
+      if (calls.length === 0) {
+        return [];
+      }
+      await yieldToEventLoop();
+      return this.itemDao.newestRowsInCalls(runId, calls, pick, em);
+    };
     const rows: WireRow[] = [];
     for (const read of CARD_READS) {
       rows.push(...(await newest(read)));
@@ -431,6 +438,7 @@ export class ChatHistoryService {
         toolIds.set(row.inCall, [...(toolIds.get(row.inCall) ?? []), id]);
       }
     }
+    await yieldToEventLoop();
     for (const row of [
       ...(await this.itemDao.rowsInCallsById(
         runId,

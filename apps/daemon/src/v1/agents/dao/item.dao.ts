@@ -94,33 +94,10 @@ const NOT_IN_A_CALL = {
 const PAYLOAD_ID_BATCH = 1000;
 
 /**
- * How many calls one {@link ItemDao.newestRowsInCalls} statement covers. A call
- * with a seq bound is its own `OR` term, each an index seek on
- * `(runId, inCall, seq)`.
+ * How many `UNION ALL` arms one {@link ItemDao.newestRowsInCalls} statement
+ * holds — one per call and kind — under SQLite's 500-arm compound limit.
  */
-const CALLS_PER_READ = 200;
-
-/** {@link ItemDao.newestRowsInCalls}' rows of `callIds`, each from its own `fromSeq`. */
-function inCallsFrom(
-  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
-  runId: string,
-  callIds: readonly string[],
-  fromSeq: ReadonlyMap<string, number> | undefined,
-): Expression<SqlBool> {
-  if (fromSeq === undefined) {
-    return eb.and([eb('run_id', '=', runId), eb('in_call', 'in', [...callIds])]);
-  }
-  return eb.or(
-    callIds.map((callId) => {
-      const from = fromSeq.get(callId);
-      return eb.and([
-        eb('run_id', '=', runId),
-        eb('in_call', '=', callId),
-        ...(from === undefined ? [] : [eb('seq', '>=', from)]),
-      ]);
-    }),
-  );
-}
+const ARMS_PER_READ = 400;
 
 /** The filter for rows on the asked side of a page. */
 function seqFilter(range: SeqRange | undefined): {
@@ -1950,9 +1927,11 @@ export class ItemDao extends BaseDao<Item> {
    * its seq there (a call it does not name keeps all of them), and `snapshot`
    * only task lists that state the whole list (`mode: 'snapshot'`).
    *
-   * One statement per {@link CALLS_PER_READ} calls, however many there are:
+   * One statement per {@link ARMS_PER_READ} calls and kinds, however many:
    * every statement holds the event loop, and a page anchors dozens of calls.
-   * The ranking reads ids alone; payloads are read only for the rows it keeps.
+   * Each call is walked newest first off the `(runId, inCall, kind, seq)`
+   * index only as far as `limit` matching rows, by ids alone; payloads are read
+   * only for the rows kept.
    */
   async newestRowsInCalls(
     runId: string,
@@ -1971,23 +1950,12 @@ export class ItemDao extends BaseDao<Item> {
     const em = txEm ?? this.em.fork();
     const stamped = await this.payloadRefsStamped(runId, em);
     const db = em.getKysely<ChatTextDatabase>({ convertValues: false });
-    const found: WireRow[] = [];
-    const calls = [...new Set(callIds)];
-    for (let at = 0; at < calls.length; at += CALLS_PER_READ) {
-      if (at > 0) {
-        await yieldToEventLoop();
-      }
-      const batch = calls.slice(at, at + CALLS_PER_READ);
-      let ranked = db
+    const newestOf = ([callId, kind]: readonly [string, ItemKind | null]) => {
+      let heads = db
         .selectFrom('items')
-        .select((eb) => [
-          'id',
-          eb.fn
-            .agg<number>('row_number')
-            .over((ob) => ob.partitionBy('in_call').orderBy('seq', 'desc'))
-            .as('rank'),
-        ])
-        .where((eb) => inCallsFrom(eb, runId, batch, pick.fromSeq))
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('in_call', '=', callId)
         .where('deleted_at', 'is', null)
         .where((eb) =>
           eb.or([
@@ -1996,18 +1964,22 @@ export class ItemDao extends BaseDao<Item> {
             eb('role', '!=', 'user'),
           ]),
         );
-      if (pick.kinds !== undefined) {
-        ranked = ranked.where('kind', 'in', [...pick.kinds]);
+      if (kind !== null) {
+        heads = heads.where('kind', '=', kind);
+      }
+      const fromSeq = pick.fromSeq?.get(callId);
+      if (fromSeq !== undefined) {
+        heads = heads.where('seq', '>=', fromSeq);
       }
       if (pick.ownThread === true) {
-        ranked = ranked.where(
+        heads = heads.where(
           (eb) => payloadRef(eb, 'parent_tool_use_id', stamped),
           'is',
           null,
         );
       }
       if (pick.snapshot === true) {
-        ranked = ranked.where(
+        heads = heads.where(
           (eb) => payloadField<string>(eb, '$.mode'),
           '=',
           'snapshot',
@@ -2017,7 +1989,7 @@ export class ItemDao extends BaseDao<Item> {
       if (said !== undefined) {
         // Every kind of blank, as the renderer's `String.trim` reads one: SQLite's
         // one-argument `trim` strips spaces only.
-        ranked = ranked.where(
+        heads = heads.where(
           (eb) =>
             eb.fn<string>('trim', [
               eb.fn<string>('coalesce', [
@@ -2032,19 +2004,39 @@ export class ItemDao extends BaseDao<Item> {
           '',
         );
       }
-      const kept = ranked.as('ranked');
+      return db
+        .selectFrom(heads.orderBy('seq', 'desc').limit(pick.limit).as('arm'))
+        .select('arm.id');
+    };
+    // One arm per kind: `kind IN (…)` ordered by seq walks every row of the
+    // call, where one kind walks the `(runId, inCall, kind, seq)` index.
+    const kinds = pick.kinds === undefined ? [null] : [...new Set(pick.kinds)];
+    const arms = [...new Set(callIds)].flatMap((callId) =>
+      kinds.map((kind) => [callId, kind] as const),
+    );
+    const read: WireRow[] = [];
+    for (let at = 0; at < arms.length; at += ARMS_PER_READ) {
+      if (at > 0) {
+        await yieldToEventLoop();
+      }
+      const [first, ...rest] = arms.slice(at, at + ARMS_PER_READ).map(newestOf);
+      const ids = rest.reduce((union, arm) => union.unionAll(arm), first!);
       const rows = await db
         .selectFrom('items')
         .select([...WIRE_COLUMNS])
-        .where('id', 'in', (eb) =>
-          eb
-            .selectFrom(kept)
-            .select('ranked.id')
-            .where('ranked.rank', '<=', pick.limit),
-        )
+        .where('id', 'in', ids)
         .execute();
-      found.push(...rows.map(wireRowOf));
+      read.push(...rows.map(wireRowOf));
     }
+    const perCall = new Map<string | null, WireRow[]>();
+    for (const row of read) {
+      const rows = perCall.get(row.inCall) ?? [];
+      rows.push(row);
+      perCall.set(row.inCall, rows);
+    }
+    const found = [...perCall.values()].flatMap((rows) =>
+      rows.sort((a, b) => b.seq - a.seq).slice(0, pick.limit),
+    );
     return found.sort((a, b) => a.seq - b.seq);
   }
 

@@ -8,6 +8,7 @@ import type {
   RunItemEvent,
   RunStatusEvent,
   RunWire,
+  ThreadMessageSent,
   ThreadMessagesChange,
 } from '../chat.types';
 import { RunContextRegistry } from './run-context.registry';
@@ -34,6 +35,7 @@ export class AgentEventBus {
   private readonly statuses = new Subject<RunStatusEvent>();
   private readonly deleted = new Subject<string>();
   private readonly threadMessageChanges = new Subject<ThreadMessagesChange>();
+  private readonly threadMessagesSent = new Subject<ThreadMessageSent>();
   private readonly changed = new Subject<RunWire[]>();
   private readonly groupsChanged = new Subject<void>();
   private readonly runCreated = new Subject<RunCreatedEvent>();
@@ -122,6 +124,15 @@ export class AgentEventBus {
 
   allThreadMessageChanges(): Observable<ThreadMessagesChange> {
     return this.threadMessageChanges.asObservable();
+  }
+
+  /** A message between threads was written. Names both ends, never the text. */
+  publishThreadMessageSent(sent: ThreadMessageSent): void {
+    this.threadMessagesSent.next(sent);
+  }
+
+  allThreadMessagesSent(): Observable<ThreadMessageSent> {
+    return this.threadMessagesSent.asObservable();
   }
 
   /** All run-status changes, for the single fan-out subscriber. */

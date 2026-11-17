@@ -10,6 +10,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import type {
   HostWakeOwner,
+  ThreadContact,
   ThreadMessageReason,
   ThreadMessageRowEntry,
   WaitingMessageWire,
@@ -43,6 +44,8 @@ export interface ThreadMessageDraft {
   toRunId: string;
   text: string;
   wake: boolean;
+  /** Until when the first reply from the receiver may wake the sender past its budgets. */
+  replyCreditUntil?: Date | null;
 }
 
 /**
@@ -152,10 +155,18 @@ export class ThreadInboxService {
         toRunId: draft.toRunId,
         text,
         wake: draft.wake,
+        replyCreditUntil: draft.replyCreditUntil ?? null,
       },
       em,
     );
     this.bus.publishThreadMessagesChanged(draft.toRunId);
+    this.bus.publishThreadMessageSent({
+      messageId: row.id,
+      fromRunId,
+      toRunId: draft.toRunId,
+      at: row.createdAt,
+      expectsReply: row.replyCreditUntil !== null,
+    });
     return row;
   }
 
@@ -231,6 +242,28 @@ export class ThreadInboxService {
 
   wakesInLastHour(runId: string): Promise<number> {
     return this.messages.sumWakesSince(runId, new Date(Date.now() - HOUR_MS));
+  }
+
+  /** Spend the reply credit `managerRunId` holds on `threadRunId`; true when one was live. */
+  spendReplyCredit(
+    managerRunId: string,
+    threadRunId: string,
+  ): Promise<boolean> {
+    return this.messages.spendReplyCredit(
+      managerRunId,
+      threadRunId,
+      new Date(),
+    );
+  }
+
+  /** Every message to or from `runId` since `since`, oldest first — ends and credit only. */
+  contactsOf(runId: string, since: Date): Promise<ThreadContact[]> {
+    return this.messages.contactsOf(runId, since);
+  }
+
+  /** The threads `fromRunId` still waits on a reply from, by live reply credit. */
+  awaitingRepliesFrom(fromRunId: string): Promise<Set<string>> {
+    return this.messages.awaitingRepliesFrom(fromRunId, new Date());
   }
 
   joinsInLastHour(runId: string): Promise<number> {

@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { ThreadMessage } from '../../runs/entity/thread-message.entity';
-import type { ThreadMessageReason } from '../chat.types';
+import type { ThreadContact, ThreadMessageReason } from '../chat.types';
 
 /** What a turn still owes and a wake may open one for. */
 const OWED = {
@@ -185,6 +185,69 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
       { id: { $in: [...ids] } },
       { status: 'cancelled', reason: null },
     );
+  }
+
+  /**
+   * Spend every live reply credit `fromRunId` holds on `toRunId` — rows it
+   * sent with a credit that has neither expired nor been spent. Answers
+   * whether one was spent; a second reply finds none.
+   */
+  async spendReplyCredit(
+    fromRunId: string,
+    toRunId: string,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const spent = await (txEm ?? this.em.fork()).nativeUpdate(
+      ThreadMessage,
+      {
+        fromRunId,
+        toRunId,
+        replyCreditUntil: { $gt: at },
+        replyCreditSpentAt: null,
+      },
+      { replyCreditSpentAt: at },
+    );
+    return spent > 0;
+  }
+
+  /** Every message to or from `runId` since `since`, oldest first. */
+  async contactsOf(
+    runId: string,
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<ThreadContact[]> {
+    return this.getRepo(txEm ?? this.em.fork()).find(
+      {
+        $or: [{ fromRunId: runId }, { toRunId: runId }],
+        createdAt: { $gte: since },
+      },
+      {
+        fields: [
+          'id',
+          'fromRunId',
+          'toRunId',
+          'createdAt',
+          'replyCreditUntil',
+          'replyCreditSpentAt',
+        ],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /** The receivers `fromRunId` holds a live reply credit on at `at`. */
+  async awaitingRepliesFrom(
+    fromRunId: string,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<Set<string>> {
+    const rows = await this.getRepo(txEm ?? this.em.fork()).find(
+      { fromRunId, replyCreditUntil: { $gt: at }, replyCreditSpentAt: null },
+      { fields: ['toRunId'], disableIdentityMap: true },
+    );
+    return new Set(rows.map((row) => row.toRunId));
   }
 
   /** Every row addressed to a thread being deleted. */

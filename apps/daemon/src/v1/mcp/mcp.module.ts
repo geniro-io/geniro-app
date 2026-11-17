@@ -21,6 +21,8 @@ import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
+import { CommandCenterBroker } from '../agents/services/command-center.broker';
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
@@ -126,6 +128,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         lessons: LessonFilingService,
         lessonChecks: LessonCheckService,
         artifactAnswers: ChatArtifactsService,
+        commandCenters: CommandCenterBroker,
+        commandCenterOps: CommandCenterOpsBroker,
       ) =>
         createMcpTools({
           calls,
@@ -171,6 +175,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           knowledgeItems,
           lessons,
           lessonChecks,
+          commandCenters,
+          commandCenterOps,
         }),
       inject: [
         CallBroker,
@@ -216,6 +222,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         LessonFilingService,
         LessonCheckService,
         ChatArtifactsService,
+        CommandCenterBroker,
+        CommandCenterOpsBroker,
       ],
     },
     McpServerService,

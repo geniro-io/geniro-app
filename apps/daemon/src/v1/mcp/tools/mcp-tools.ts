@@ -18,6 +18,8 @@ import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
+import type { CommandCenterBroker } from '../../agents/services/command-center.broker';
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
@@ -68,6 +70,9 @@ import { MemorySaveTool } from './memory-save/memory-save.tool';
 import { MemorySearchTool } from './memory-search/memory-search.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { MessageThreadTool } from './message-thread/message-thread.tool';
+import { NoteThreadTool } from './note-thread/note-thread.tool';
+import { StartThreadTool } from './start-thread/start-thread.tool';
+import { TellThreadsTool } from './tell-threads/tell-threads.tool';
 import { MonitorTool } from './monitor/monitor.tool';
 import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
@@ -143,6 +148,8 @@ export interface McpToolDeps {
   teamProposals: TeamProposalService;
   shares: ShareService;
   threadDelivery: ThreadDeliveryService;
+  commandCenters: CommandCenterBroker;
+  commandCenterOps: CommandCenterOpsBroker;
 }
 
 /**
@@ -195,6 +202,9 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new ReadChatContextTool(deps.history),
     new ListThreadsTool(deps.threadDelivery, deps),
     new MessageThreadTool(deps.threadDelivery, deps),
+    new TellThreadsTool(deps.commandCenters, deps.commandCenterOps),
+    new NoteThreadTool(deps.commandCenters, deps.commandCenterOps),
+    new StartThreadTool(deps.commandCenters, deps.commandCenterOps),
     new MemorySearchTool(deps.memory),
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),

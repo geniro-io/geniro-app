@@ -27,6 +27,7 @@ import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
 import { StorageModule } from './v1/storage/storage.module';
 import { TasksModule } from './v1/tasks/tasks.module';
+import { CommandCenterModule } from './v1/command-center/command-center.module';
 import { TeamsModule } from './v1/teams/teams.module';
 
 export interface AppModuleOptions {
@@ -58,6 +59,7 @@ export class AppModule {
         StatsModule,
         ProjectsModule,
         TasksModule,
+        CommandCenterModule,
         SharesModule,
         MemoryModule,
         LessonsModule,

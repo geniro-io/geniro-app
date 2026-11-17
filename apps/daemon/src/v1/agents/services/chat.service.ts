@@ -88,6 +88,7 @@ import {
   type HostQuestionOutcome,
   type HostRowWire,
   type ItemWire,
+  type CommandCenterSource,
   type ProjectChatSource,
   type RecommendationApply,
   type RunAwaiting,
@@ -220,6 +221,10 @@ import {
   serializePendingQuestion,
 } from '../utils/pending-question';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
+import {
+  isCommandCenterChat,
+  isHostCommandCenterMessageCall,
+} from '../utils/host-command-center';
 import { isProjectChat } from '../utils/project-chat';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -288,6 +293,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { CommandCenterBroker } from './command-center.broker';
 import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import { ProjectInstructionsChangeService } from './project-instructions-change.service';
@@ -846,6 +852,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     | null = null;
 
   private projectChatSource: ProjectChatSource | null = null;
+  private commandCenterSource: CommandCenterSource | null = null;
 
   constructor(
     private readonly em: EntityManager,
@@ -929,6 +936,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly browser?: BrowserBroker,
     /** Wakes for commands that end between turns. Optional for the positional specs. */
     @Optional() private readonly commandEndWakes?: CommandEndWakeService,
+    /** The command center's manager turns, installed per turn. Optional for the positional specs. */
+    @Optional() private readonly commandCenters?: CommandCenterBroker,
   ) {}
 
   /**
@@ -2299,6 +2308,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     editsTeamSlug?: string;
     /** The project whose overlay of that team the chat edits beside it; with no team, the project this chat is the own chat of. */
     editsProjectId?: string | null;
+    /** Marks the command center's manager chat (`Run.commandCenter`). */
+    commandCenter?: boolean;
     teamInstructions?: string;
     /**
      * The user's per-CLI switches, snapshotted like the instructions above;
@@ -2440,6 +2451,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         taskInstructions: input.taskInstructions?.trim() || null,
         editsTeamSlug: input.editsTeamSlug ?? null,
         editsProjectId: input.editsProjectId ?? null,
+        commandCenter: input.commandCenter === true ? true : null,
         teamInstructions: input.teamInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         groupId,
@@ -3308,6 +3320,81 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   useProjectChat(source: ProjectChatSource): void {
     this.projectChatSource = source;
+  }
+
+  /**
+   * Install what the command center's manager is briefed from — installed
+   * rather than injected because the command-center module depends on this one.
+   */
+  useCommandCenter(source: CommandCenterSource): void {
+    this.commandCenterSource = source;
+  }
+
+  /** The command center's manager chat, or null — newest wins, as in {@link findTeamChat}. */
+  async findCommandCenterChat(): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const [run] = await this.runDao.listCommandCenterChats(em);
+    if (!run) {
+      return null;
+    }
+    const previews = await this.wireReads([run], em);
+    return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /**
+   * **Destructive and irreversible**: delete every command-center manager
+   * chat, answering with the count — {@link deleteTeamChats}' terms.
+   */
+  async deleteCommandCenterChats(): Promise<{ deleted: number }> {
+    let deleted = 0;
+    for (const run of await this.runDao.listCommandCenterChats(
+      this.em.fork(),
+    )) {
+      try {
+        if ((await this.delete(run.id)).deleted) {
+          deleted += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `could not delete command center chat ${run.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return { deleted };
+  }
+
+  /** Re-brief the manager from its roster as it stands before each turn. */
+  private async rebriefCommandCenter(runId: string): Promise<void> {
+    if (this.commandCenterSource === null) {
+      return;
+    }
+    try {
+      await this.refreshTeamInstructions(
+        runId,
+        await this.commandCenterSource.brief(runId),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `command center ${runId} keeps its brief: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** The manager's per-turn status table, or null when there is none to give. */
+  private async commandCenterSuffix(runId: string): Promise<string | null> {
+    if (this.commandCenterSource === null) {
+      return null;
+    }
+    try {
+      return await this.commandCenterSource.statusSuffix(runId);
+    } catch (err) {
+      this.logger.warn(
+        `command center ${runId} turn has no status table: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /** A project's own chat, or null if it has none — newest wins, as in {@link findTeamChat}. */
@@ -6076,6 +6163,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         );
       } else if (isProjectChat(run)) {
         await this.rebriefProjectChat(runId, run.editsProjectId, cwd);
+      } else if (isCommandCenterChat(run)) {
+        await this.rebriefCommandCenter(runId);
       }
 
       // Re-read the committed settings from a FRESH fork now that the claim is
@@ -6196,6 +6285,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           isHostBuilderTeamCall(hostServerName, toolName)) ||
         ((isProjectChat(run) || isAnalysisRun(run)) &&
           isHostLibraryReadCall(hostServerName, toolName)) ||
+        // The manager's messages to the threads it manages: the user delegated
+        // them by opening the command center (user decision), and each send is
+        // a row on both transcripts. Never `message_thread`, in any chat.
+        (isCommandCenterChat(run) &&
+          isHostCommandCenterMessageCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6378,6 +6472,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * The take is read-and-clear, so the column cannot ride a second prompt —
        * including this one's own retry.
        */
+      const commandCenterSuffix =
+        options.resumeOnly === true || !isCommandCenterChat(run)
+          ? null
+          : await this.commandCenterSuffix(runId);
+      const promptText =
+        commandCenterSuffix === null
+          ? text
+          : `${text}\n\n${commandCenterSuffix}`;
       const turnPrompt =
         options.resumeOnly === true
           ? // Nothing is composed for a turn that sends no prompt — and the
@@ -6391,8 +6493,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               threadMessages.length === 0
                 ? geniroCommand
                   ? geniroCommand.prompt
-                  : text
-                : `${text}\n\n${threadMessagesPrompt(threadMessages)}`,
+                  : promptText
+                : `${promptText}\n\n${threadMessagesPrompt(threadMessages)}`,
             );
 
       const node = await this.nodeStateDao.getByRunNode(
@@ -7238,6 +7340,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               projectId: run.editsProjectId,
             })
           : null;
+      const disposeCommandCenter =
+        mcpEndpoint &&
+        isCommandCenterChat(run) &&
+        this.commandCenters !== undefined
+          ? this.commandCenters.register(runId, SINGLE_AGENT_NODE, {
+              managerRunId: runId,
+            })
+          : null;
       const disposeProjectCards =
         mcpEndpoint && this.projectInstructionCards !== undefined
           ? this.projectInstructionCards.register(
@@ -7263,6 +7373,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeAnalysis?.();
         disposeProjectCards?.();
         disposeProjectChat?.();
+        disposeCommandCenter?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

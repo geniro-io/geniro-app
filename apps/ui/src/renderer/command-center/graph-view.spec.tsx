@@ -189,4 +189,40 @@ describe('GraphView', () => {
     expect(threadNode('thread-1').dataset.contact).toBe('lit');
     expect(threadNode('thread-2').dataset.contact).toBe('lit');
   });
+
+  it('keeps every edge drawn when a reply rebuilds the nodes, its state moving from awaiting to lit', () => {
+    const edges = (): HTMLElement[] =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>('[data-slot="contact-edge"]'),
+      );
+    const threads = threadsOf(3);
+    const sentAt = new Date(NOW - MINUTE).toISOString();
+    draw({
+      threads,
+      contacts: { 'thread-1': { lastAt: sentAt, awaitingReply: true } },
+    });
+    expect(edges()).toHaveLength(3);
+    expect(
+      container
+        .querySelector('[data-edge="contact:thread-1"]')
+        ?.getAttribute('data-state'),
+    ).toBe('awaiting');
+
+    draw({
+      threads: threads.map((thread) => ({ ...thread })),
+      contacts: {
+        'thread-1': {
+          lastAt: new Date(NOW).toISOString(),
+          awaitingReply: false,
+        },
+      },
+    });
+
+    expect(edges()).toHaveLength(3);
+    expect(
+      container
+        .querySelector('[data-edge="contact:thread-1"]')
+        ?.getAttribute('data-state'),
+    ).toBe('lit');
+  });
 });

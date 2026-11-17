@@ -3,6 +3,7 @@ import '@xyflow/react/dist/style.css';
 import {
   Handle,
   type Node,
+  type NodeHandle,
   type NodeProps,
   Position,
   ReactFlow,
@@ -254,6 +255,33 @@ function summaryOf(
   );
 }
 
+/**
+ * A handle at the node's centre, declared on the node itself so its edges are
+ * drawn from the first render and stay drawn when the node is rebuilt, without
+ * waiting for the DOM to be measured again.
+ */
+function centreHandle(
+  id: string,
+  type: NodeHandle['type'],
+  position: Position,
+  sizePx: number,
+): NodeHandle {
+  return {
+    id,
+    type,
+    position,
+    x: sizePx / 2,
+    y: sizePx / 2,
+    width: 0,
+    height: 0,
+  };
+}
+
+const MANAGER_HANDLES = [
+  centreHandle('out', 'source', Position.Right, MANAGER_PX),
+];
+const THREAD_HANDLES = [centreHandle('in', 'target', Position.Left, THREAD_PX)];
+
 function topLeftOf(
   x: number,
   y: number,
@@ -290,6 +318,7 @@ export function GraphView({
         position: topLeftOf(0, 0, MANAGER_PX),
         width: MANAGER_PX,
         height: MANAGER_PX,
+        handles: MANAGER_HANDLES,
         data: { label: manager.label },
         selectable: false,
         draggable: false,
@@ -311,6 +340,7 @@ export function GraphView({
         position: topLeftOf(x, y, THREAD_PX),
         width: THREAD_PX,
         height: THREAD_PX,
+        handles: THREAD_HANDLES,
         data: {
           threadId: thread.id,
           label: thread.label,

@@ -19,7 +19,7 @@ export type { LessonPlaces };
 
 export type LessonScope = LessonMemoryTarget['scope'];
 export type LessonDedupVerdict = LessonDedup['verdict'];
-export type LessonMoveUpPlace = 'project_instructions' | 'memory_index';
+export type LessonMoveUpPlace = 'memory_index';
 
 /** One proposed lesson as the card draws it. */
 export interface LessonView {
@@ -336,13 +336,11 @@ function pickerGroups(choices: readonly TargetChoice[]): MenuGroup[] {
 }
 
 /**
- * Where "Move up" puts a rule broken again: the project's instructions when the
- * thread has a project, else the memory index. Twin of the daemon's `moveUpOf`.
+ * Where "Move up" puts a rule broken again: its entry into every chat's memory
+ * index, the least-reaching step; the project's instructions stay a target in
+ * the menu. Twin of the daemon's `moveUpOf`.
  */
-export function moveUpOf(
-  lesson: LessonView,
-  places: LessonPlaces,
-): LessonMoveUpPlace | null {
+export function moveUpOf(lesson: LessonView): LessonMoveUpPlace | null {
   if (
     lesson.dedup.verdict !== 'broken_again' ||
     lesson.dedup.handle === null ||
@@ -350,7 +348,7 @@ export function moveUpOf(
   ) {
     return null;
   }
-  return places.projectId === null ? 'memory_index' : 'project_instructions';
+  return 'memory_index';
 }
 
 function dedupLabel(dedup: LessonView['dedup']): string {
@@ -474,7 +472,7 @@ export function LessonsCard({
             key={lesson.id}
             lesson={lesson}
             places={places}
-            moveUp={moveUpOf(lesson, places)}
+            moveUp={moveUpOf(lesson)}
             readDocuments={readDocuments}
             onSave={onSave}
             onReject={onReject}
@@ -565,7 +563,7 @@ function DroppedGroup({
   );
 }
 
-function DecidedRow({
+export function DecidedRow({
   lesson,
   outcome,
   places,
@@ -811,11 +809,7 @@ function decidedStatusText(
 const UPDATE_CHOICE = 'update';
 const MOVE_UP_CHOICE = 'move-up';
 
-function moveUpLabel(place: LessonMoveUpPlace): string {
-  return place === 'project_instructions'
-    ? 'Move up to project instructions'
-    : 'Move up to the memory index';
-}
+const MOVE_UP_LABEL = 'Move up to the memory index';
 
 /**
  * What the primary button can do for a lesson: update the entry it refines or
@@ -834,7 +828,7 @@ function actionGroups(
     updateLabel === null
       ? {
           label: 'Move up',
-          items: [{ value: MOVE_UP_CHOICE, label: moveUpLabel(moveUp!) }],
+          items: [{ value: MOVE_UP_CHOICE, label: MOVE_UP_LABEL }],
         }
       : {
           label: 'Update the entry',
@@ -1008,7 +1002,7 @@ export function LessonRow({
       : action === 'moveUp'
         ? request === 'moveUp'
           ? 'Moving…'
-          : moveUpLabel(moveUp!)
+          : MOVE_UP_LABEL
         : request === 'save'
           ? 'Saving…'
           : `Save to ${selected?.label ?? targetWords(lesson.target, places)}`;

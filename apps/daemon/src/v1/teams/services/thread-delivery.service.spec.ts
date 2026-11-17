@@ -139,7 +139,7 @@ function harness(
         }
         const row: Row = {
           id: `m${(nextId += 1)}`,
-          fromRunId: SENDER,
+          fromRunId: draft.from.runId,
           fromTitle: 'Sender',
           fromMember: null,
           text: draft.text,
@@ -231,6 +231,19 @@ function harness(
       credit.spent = true;
       return true;
     }),
+    awaitingRepliesFrom: vi.fn(
+      async (fromRunId: string) =>
+        new Set(
+          credits
+            .filter(
+              (row) =>
+                row.fromRunId === fromRunId &&
+                !row.spent &&
+                row.until.getTime() > Date.now(),
+            )
+            .map((row) => row.toRunId),
+        ),
+    ),
     wakesInLastHour: vi.fn(async () => opts.wakes ?? 0),
     joinsInLastHour: vi.fn(async () => opts.joins ?? 0),
   };
@@ -316,6 +329,7 @@ function harness(
   return {
     service,
     runs,
+    credits,
     listThreads,
     messages,
     inbox,
@@ -1376,6 +1390,27 @@ describe('ThreadDeliveryService: the reply credit', () => {
       title: 'Sender',
     });
     expect(managerWakes(h)).toHaveLength(0);
+    expect(h.credits).toEqual([expect.objectContaining({ spent: false })]);
+  });
+
+  it('keeps the credit of a reply a cold, large manager held back, and spends it on the next one that reaches it', async () => {
+    const h = harness({}, { wakes: THREAD_WAKES_PER_HOUR });
+    const manager = h.runs.get(SENDER)!;
+    Object.assign(manager, {
+      promptCacheExpiresAt: new Date(Date.now() - HOUR_MS),
+      promptCacheTtlMs: 5 * MINUTE_MS,
+      contextTokens: 150_000,
+      contextWindowTokens: 200_000,
+    });
+    await askTarget(h, new Date(Date.now() + 2 * HOUR_MS));
+    await replyToManager(h, 'held back');
+    Object.assign(manager, { contextTokens: 1_000 });
+
+    const next = await replyToManager(h, 'rebase is green');
+
+    expect(next).toEqual({ outcome: 'woken', title: 'Sender' });
+    expect(managerWakes(h)).toHaveLength(1);
+    expect(h.credits).toEqual([expect.objectContaining({ spent: true })]);
   });
 
   it('wakes a manager still under its budget on a reply, with or without credit', async () => {

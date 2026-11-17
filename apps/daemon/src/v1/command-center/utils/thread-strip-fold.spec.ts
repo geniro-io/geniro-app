@@ -67,6 +67,28 @@ describe('foldThreadStrip: work spans', () => {
     expect(spans).toEqual([{ kind: 'work', start: iso(10), end: null }]);
   });
 
+  it('ends a running turn’s work where an open card starts its wait, as the chat’s clock does', () => {
+    const { spans } = fold({
+      rows: [
+        row('status', 10, { status: 'running' }),
+        row('approval_request', 30, { id: 'a1', toolName: 'Bash' }),
+      ],
+      running: true,
+      awaiting: true,
+    });
+
+    expect(spans).toEqual([
+      { kind: 'work', start: iso(10), end: iso(30) },
+      { kind: 'waiting', start: iso(30), end: null },
+    ]);
+  });
+
+  it('draws no work for a running turn that has waited on the user since the window opened', () => {
+    expect(fold({ running: true, awaiting: true }).spans).toEqual([
+      { kind: 'waiting', start: iso(0), end: null },
+    ]);
+  });
+
   it('opens a work span at the window’s start when the run is running and no running row was read', () => {
     expect(fold({ running: true }).spans).toEqual([
       { kind: 'work', start: iso(0), end: null },

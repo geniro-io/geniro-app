@@ -3,6 +3,7 @@ description: Host tools — the brokers and sinks behind geniro's own tools
 paths:
   - "apps/daemon/src/v1/mcp/**"
   - "apps/daemon/src/v1/browser/**"
+  - "apps/daemon/src/v1/command-center/**"
   - "apps/daemon/src/v1/agents/**/host-*"
   - "apps/daemon/src/v1/agents/**/*.broker*"
   - "apps/daemon/src/v1/agents/**/artifact-*"

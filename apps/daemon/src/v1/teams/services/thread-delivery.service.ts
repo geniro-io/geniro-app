@@ -64,11 +64,6 @@ interface RouteTerms {
   resending: boolean;
   /** The user's own press, which no cost or rate limit holds back. */
   pressed?: boolean;
-  /**
-   * A reply spending the receiver's reply credit: past the join and wake
-   * budgets once, never past cold-and-large.
-   */
-  credited?: boolean;
 }
 
 interface Routed {
@@ -267,15 +262,10 @@ export class ThreadDeliveryService implements OnModuleInit {
           )
         : null;
     const accepted = await this.inbox.accept({ ...draft, fromMember });
-    const credited = await this.inbox.spendReplyCredit(
-      draft.toRunId,
-      draft.from.runId,
-    );
     const routed = await this.routing.run(draft.toRunId, () =>
       this.route(draft.toRunId, [accepted], {
         mayJoin: true,
         resending: false,
-        credited,
       }),
     );
     const target = await this.runDao.getById(draft.toRunId, this.em.fork());
@@ -375,13 +365,62 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async route(
     runId: string,
     messages: readonly Routable[],
-    { mayJoin, resending, pressed = false, credited = false }: RouteTerms,
+    { mayJoin, resending, pressed = false }: RouteTerms,
   ): Promise<Routed> {
     const run = await this.runDao.getById(runId, this.em.fork());
     const [first] = messages;
     if (run === null || run.archivedAt !== null || first === undefined) {
       return { outcome: 'waiting', reason: null };
     }
+    const creditors = await this.repliesOnCredit(runId, messages);
+    const routed = await this.routeTo(run, first, messages, {
+      mayJoin,
+      resending,
+      pressed,
+      credited: creditors.length > 0,
+    });
+    if (routed.outcome === 'joined' || routed.outcome === 'woken') {
+      for (const threadRunId of creditors) {
+        await this.inbox.spendReplyCredit(runId, threadRunId);
+      }
+    }
+    return routed;
+  }
+
+  /**
+   * The senders among `messages` that `runId` still holds a live reply credit
+   * on. A credit is spent only once its reply reached the receiver, so a reply
+   * held back (cold and large, a running turn) keeps it for the next attempt.
+   */
+  private async repliesOnCredit(
+    runId: string,
+    messages: readonly Routable[],
+  ): Promise<string[]> {
+    const awaited = await this.inbox.awaitingRepliesFrom(runId);
+    if (awaited.size === 0) {
+      return [];
+    }
+    return [
+      ...new Set(
+        messages
+          .map((message) => message.fromRunId)
+          .filter((fromRunId) => awaited.has(fromRunId)),
+      ),
+    ];
+  }
+
+  private async routeTo(
+    run: Run,
+    first: Routable,
+    messages: readonly Routable[],
+    {
+      mayJoin,
+      resending,
+      pressed,
+      credited,
+    }: Required<RouteTerms> & { credited: boolean },
+  ): Promise<Routed> {
+    const runId = run.id;
     if (mayJoin) {
       const overBudget =
         !pressed &&

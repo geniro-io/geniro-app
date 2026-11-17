@@ -2,6 +2,7 @@
 description: Chats page — the transcript window, sending and the queue, run status, calls, cards, artifacts, shells, the composer, session picker
 paths:
   - "apps/ui/src/renderer/chats/**"
+  - "apps/ui/src/renderer/command-center/**"
   - "apps/ui/src/renderer/settings/fast-actions*"
   - "apps/ui/src/renderer/settings/config-profiles*"
   - "apps/ui/src/renderer/components/stage-graph*"

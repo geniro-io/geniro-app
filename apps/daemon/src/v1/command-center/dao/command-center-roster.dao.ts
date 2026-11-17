@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
+import { KeyedChain } from '../../agents/utils/keyed-chain';
 import type { RosterReason } from '../command-center.types';
 import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 
@@ -10,6 +11,9 @@ const HANDLE_PATTERN = /^t(\d+)$/;
 /** `command_center_roster` — the threads each manager holds. */
 @Injectable()
 export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
+  /** One manager's joins in turn: each reads the handles the last one wrote. */
+  private readonly joins = new KeyedChain();
+
   constructor(em: EntityManager) {
     super(em, CommandCenterRosterEntry);
   }
@@ -41,6 +45,17 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
     if (threadRunIds.length === 0) {
       return false;
     }
+    return this.joins.run(managerRunId, () =>
+      this.joinNow(managerRunId, threadRunIds, reason, at),
+    );
+  }
+
+  private joinNow(
+    managerRunId: string,
+    threadRunIds: readonly string[],
+    reason: RosterReason,
+    at: Date,
+  ): Promise<boolean> {
     return this.em.fork().transactional(async (tx) => {
       const rows = await this.listOf(managerRunId, tx);
       const byThread = new Map(rows.map((row) => [row.threadRunId, row]));

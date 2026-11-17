@@ -151,16 +151,17 @@ export function foldThreadStrip(input: StripInput): ThreadStrip {
   const paused = pausedSpansFrom(rows);
   const work = clipped(activeSpansFrom(rows, paused), 'work', start, now);
   const waiting = clipped(paused, 'waiting', start, now);
-  const turnSince = openTurnStart(rows);
-  if (input.running) {
-    work.push({
-      kind: 'work',
-      start: iso(Math.max(start, turnSince ?? start)),
-      end: null,
-    });
-  }
   if (input.awaiting && !waiting.some((span) => span.end === null)) {
     waiting.push({ kind: 'waiting', start: iso(start), end: null });
+  }
+  if (input.running) {
+    const turnFrom = Math.max(start, openTurnStart(rows) ?? start);
+    const openWait = waiting.find((span) => span.end === null);
+    if (openWait === undefined) {
+      work.push({ kind: 'work', start: iso(turnFrom), end: null });
+    } else if (Date.parse(openWait.start) > turnFrom) {
+      work.push({ kind: 'work', start: iso(turnFrom), end: openWait.start });
+    }
   }
   const markers: StripMarker[] = [];
   for (const row of rows) {

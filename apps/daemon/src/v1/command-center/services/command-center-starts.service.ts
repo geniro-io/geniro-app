@@ -293,11 +293,20 @@ export class CommandCenterStartsService
     if (managerRunId === null || task.runId === null) {
       return;
     }
-    await this.taskDao.clearStartRequester(task.id, this.em.fork());
-    await this.managers.addToRoster(managerRunId, [task.runId], 'manager');
-    const handle = (await this.managers.rosterThreads(managerRunId)).find(
-      ({ entry }) => entry.threadRunId === task.runId,
-    )?.entry.handle;
+    const em = this.em.fork();
+    if (!(await this.taskDao.claimStartReport(task.id, managerRunId, em))) {
+      return;
+    }
+    let handle: string | undefined;
+    try {
+      await this.managers.addToRoster(managerRunId, [task.runId], 'manager');
+      handle = (await this.managers.rosterThreads(managerRunId)).find(
+        ({ entry }) => entry.threadRunId === task.runId,
+      )?.entry.handle;
+    } catch (error) {
+      await this.taskDao.releaseStartReport(task.id, managerRunId, em);
+      throw error;
+    }
     this.wakeManager(
       managerRunId,
       `started:${task.id}`,

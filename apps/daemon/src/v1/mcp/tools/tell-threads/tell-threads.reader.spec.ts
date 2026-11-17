@@ -144,6 +144,41 @@ describe('tellThreadsResultText', () => {
       'Nothing was sent. Ask the user which threads they meant',
     );
   });
+
+  it('names the threads that did not get the message, and those it waits at, instead of saying every thread got it', () => {
+    const mixed: TellThreadsAnswer = {
+      sent: [
+        {
+          to: 't1',
+          runId: 'thread-1',
+          title: 'A',
+          outcome: 'woken',
+          code: null,
+        },
+        {
+          to: 't2',
+          runId: 'thread-2',
+          title: 'B',
+          outcome: 'refused',
+          code: 'INBOX_FULL',
+        },
+        {
+          to: 't3',
+          runId: 'thread-3',
+          title: 'C',
+          outcome: 'waiting',
+          code: 'running_turn',
+        },
+      ],
+      unresolved: [],
+    };
+
+    const text = tellThreadsResultText(mixed);
+
+    expect(text).toContain('Not delivered to t2 (INBOX_FULL)');
+    expect(text).toContain('Waiting at t3 (running_turn)');
+    expect(text).not.toContain('Each thread above got the message');
+  });
 });
 
 describe('TellThreadsTool', () => {

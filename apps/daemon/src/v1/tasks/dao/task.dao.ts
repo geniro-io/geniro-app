@@ -395,6 +395,35 @@ export class TaskDao extends BaseDao<Task> {
     );
   }
 
+  /**
+   * Take the report of a started card for `managerRunId`: true for the one
+   * caller that cleared the requester, so a start is told once however many
+   * task events race to tell it.
+   */
+  async claimStartReport(
+    taskId: string,
+    managerRunId: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const claimed = await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, startRequestedByRunId: managerRunId } as FilterQuery<Task>,
+      { startRequestedByRunId: null } as EntityData<Task>,
+    );
+    return claimed > 0;
+  }
+
+  /** Give a claimed report back when telling the manager failed, so it is tried again. */
+  async releaseStartReport(
+    taskId: string,
+    managerRunId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, startRequestedByRunId: null } as FilterQuery<Task>,
+      { startRequestedByRunId: managerRunId } as EntityData<Task>,
+    );
+  }
+
   /** Cards whose start request was approved and not yet started, oldest first. */
   async listApprovedStarts(txEm?: EntityManager): Promise<Task[]> {
     return this.getRepo(txEm).find(

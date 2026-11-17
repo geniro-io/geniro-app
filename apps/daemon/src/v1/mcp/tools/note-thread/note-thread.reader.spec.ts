@@ -99,9 +99,19 @@ describe('readNoteThreadArgs', () => {
     });
   });
 
-  it('refuses no thread, a missing note, a note over the limit and an unknown key', () => {
+  it('reads a null or missing note as clearing it', () => {
+    expect(readNoteThreadArgs({ thread: 't1', note: null })).toEqual({
+      ok: true,
+      query: { thread: 't1' },
+    });
+    expect(readNoteThreadArgs({ thread: 't1' })).toEqual({
+      ok: true,
+      query: { thread: 't1' },
+    });
+  });
+
+  it('refuses no thread, a note over the limit and an unknown key', () => {
     expect(readNoteThreadArgs({ thread: '', note: 'x' }).ok).toBe(false);
-    expect(readNoteThreadArgs({ thread: 't1' }).ok).toBe(false);
     expect(
       readNoteThreadArgs({
         thread: 't1',

@@ -130,6 +130,23 @@ describe('CommandCenterChatService', () => {
       ]);
     });
 
+    it('writes the manager’s note on the thread it adds, and announces it', async () => {
+      await service.addToRoster(
+        MANAGER,
+        ['thread-1'],
+        'manager',
+        'watch billing',
+      );
+
+      expect(
+        (await roster.listOf(MANAGER)).map((row) => [
+          row.threadRunId,
+          row.note,
+        ]),
+      ).toEqual([['thread-1', 'watch billing']]);
+      expect(events.publishChanged).toHaveBeenCalledTimes(1);
+    });
+
     it('announces nothing for a thread already on the roster', async () => {
       await service.addToRoster(MANAGER, ['thread-1'], 'manager');
       await service.addToRoster(MANAGER, ['thread-1'], 'manager');

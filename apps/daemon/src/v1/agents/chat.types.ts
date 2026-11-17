@@ -8659,9 +8659,9 @@ export const NoteThreadSchema = z.object({
   note: z
     .string()
     .max(THREAD_NOTE_MAX_CHARS)
-    .nullable()
+    .nullish()
     .describe(
-      `Your own note on that thread, up to ${THREAD_NOTE_MAX_CHARS} characters; null clears it.`,
+      `Your own note on that thread, up to ${THREAD_NOTE_MAX_CHARS} characters; null, empty or left out clears it.`,
     ),
 });
 export type NoteThreadInput = z.infer<typeof NoteThreadSchema>;

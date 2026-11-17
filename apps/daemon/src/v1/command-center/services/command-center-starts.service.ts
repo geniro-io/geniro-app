@@ -129,6 +129,7 @@ export class CommandCenterStartsService
         requestedAt,
         byRunId: managerRunId,
         approvedAt: auto ? requestedAt : null,
+        note: input.note?.trim() ? input.note.trim() : null,
       },
       em,
     );
@@ -233,7 +234,13 @@ export class CommandCenterStartsService
 
   private responderFor(managerRunId: string, taskId: string, title: string) {
     return (allow: boolean, answer?: string): void => {
-      void this.carryOutVerdict(managerRunId, taskId, title, allow, answer);
+      this.carryOutVerdict(managerRunId, taskId, title, allow, answer).catch(
+        (error: unknown) => {
+          this.logger.error(
+            `run ${managerRunId} Start card verdict for ${taskId} not carried out: ${messageOf(error)}`,
+          );
+        },
+      );
     };
   }
 
@@ -265,7 +272,7 @@ export class CommandCenterStartsService
         requestedAt === null
           ? `command-center-start:${taskId}`
           : startCardId(taskId, requestedAt),
-        allow,
+        allow && requestedAt !== null,
         note === '' ? message : `${message}\nThe user's note: ${note}`,
         answer,
       );
@@ -299,7 +306,12 @@ export class CommandCenterStartsService
     }
     let handle: string | undefined;
     try {
-      await this.managers.addToRoster(managerRunId, [task.runId], 'manager');
+      await this.managers.addToRoster(
+        managerRunId,
+        [task.runId],
+        'manager',
+        task.startRequestNote,
+      );
       handle = (await this.managers.rosterThreads(managerRunId)).find(
         ({ entry }) => entry.threadRunId === task.runId,
       )?.entry.handle;

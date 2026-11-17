@@ -102,15 +102,25 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
     return this.chats.deleteCommandCenterChats();
   }
 
-  /** Put threads on a manager's roster now, for a reason other than activity. */
+  /** Put threads on a manager's roster now, for a reason other than activity, with the manager's note when it gave one. */
   async addToRoster(
     managerRunId: string,
     threadRunIds: readonly string[],
     reason: RosterReason,
+    note: string | null = null,
   ): Promise<void> {
-    if (
-      await this.roster.join(managerRunId, threadRunIds, reason, new Date())
-    ) {
+    const joined = await this.roster.join(
+      managerRunId,
+      threadRunIds,
+      reason,
+      new Date(),
+    );
+    if (note !== null) {
+      for (const threadRunId of threadRunIds) {
+        await this.roster.setNote(managerRunId, threadRunId, note);
+      }
+    }
+    if (joined || note !== null) {
       this.events.publishChanged([...threadRunIds], 'roster');
     }
   }

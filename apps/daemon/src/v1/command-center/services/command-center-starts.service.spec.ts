@@ -202,6 +202,29 @@ describe('CommandCenterStartsService', () => {
       expect(task.startRequestedByRunId).toBe(AUTO_MANAGER);
     });
 
+    it('keeps the manager’s note for the thread until the start is reported, then puts it on the roster', async () => {
+      rosterThreads.mockResolvedValue([]);
+      const answer = await service.start(
+        AUTO_MANAGER,
+        input({ note: '  watch billing  ' }),
+      );
+      const taskId = taskIdOf(answer);
+      expect((await taskOf(taskId)).startRequestNote).toBe('watch billing');
+      await taskDao.settleStartRequest(taskId);
+      await taskDao.updateById(taskId, { runId: THREAD });
+
+      startedEvent(taskId);
+
+      await vi.waitFor(() =>
+        expect(addToRoster).toHaveBeenCalledWith(
+          AUTO_MANAGER,
+          [THREAD],
+          'manager',
+          'watch billing',
+        ),
+      );
+    });
+
     it('puts the Start card to the user in ask mode and leaves the card unapproved', async () => {
       const answer = await service.start(MANAGER, input());
       const taskId = taskIdOf(answer);
@@ -451,7 +474,12 @@ describe('CommandCenterStartsService', () => {
       startedEvent(task.id);
 
       await vi.waitFor(() => expect(wakePublish).toHaveBeenCalledTimes(1));
-      expect(addToRoster).toHaveBeenCalledWith(MANAGER, [THREAD], 'manager');
+      expect(addToRoster).toHaveBeenCalledWith(
+        MANAGER,
+        [THREAD],
+        'manager',
+        null,
+      );
       expect(wakePublish).toHaveBeenCalledWith(
         expect.objectContaining({
           key: `command-center:started:${task.id}`,

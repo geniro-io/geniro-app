@@ -6,12 +6,14 @@ import { TasksModule } from '../tasks/tasks.module';
 import { TeamsModule } from '../teams/teams.module';
 import { CommandCenterController } from './controllers/command-center.controller';
 import { CommandCenterRosterDao } from './dao/command-center-roster.dao';
+import { CommandCenterTimelineDao } from './dao/command-center-timeline.dao';
 import { CommandCenterService } from './services/command-center.service';
 import { CommandCenterChatService } from './services/command-center-chat.service';
 import { CommandCenterEventBus } from './services/command-center-events.bus';
 import { CommandCenterEventsService } from './services/command-center-events.service';
 import { CommandCenterOpsService } from './services/command-center-ops.service';
 import { CommandCenterStartsService } from './services/command-center-starts.service';
+import { CommandCenterTimelineService } from './services/command-center-timeline.service';
 
 /**
  * The command center: one board over every active thread, and the manager
@@ -29,12 +31,14 @@ import { CommandCenterStartsService } from './services/command-center-starts.ser
   controllers: [CommandCenterController],
   providers: [
     CommandCenterRosterDao,
+    CommandCenterTimelineDao,
     CommandCenterEventBus,
     CommandCenterService,
     CommandCenterChatService,
     CommandCenterStartsService,
     CommandCenterOpsService,
     CommandCenterEventsService,
+    CommandCenterTimelineService,
   ],
   exports: [CommandCenterEventBus],
 })

@@ -16,6 +16,7 @@ import { RunDto } from '../../agents/dto/chat.dto';
 import type {
   CommandCenterBoard,
   CommandCenterStart,
+  CommandCenterTimeline,
 } from '../command-center.types';
 import {
   CommandCenterBoardDto,
@@ -24,11 +25,14 @@ import {
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
   CommandCenterStartsQueryDto,
+  CommandCenterTimelineDto,
+  CommandCenterTimelineQueryDto,
   StartCommandCenterChatDto,
 } from '../dto/command-center.dto';
 import { CommandCenterService } from '../services/command-center.service';
 import { CommandCenterChatService } from '../services/command-center-chat.service';
 import { CommandCenterStartsService } from '../services/command-center-starts.service';
+import { CommandCenterTimelineService } from '../services/command-center-timeline.service';
 
 @Controller('v1/command-center')
 @ApiTags('command-center')
@@ -38,6 +42,7 @@ export class CommandCenterController {
     private readonly board: CommandCenterService,
     private readonly managers: CommandCenterChatService,
     private readonly starts: CommandCenterStartsService,
+    private readonly timelines: CommandCenterTimelineService,
   ) {}
 
   /** Every active thread as a card, or just the named ones. */
@@ -48,6 +53,18 @@ export class CommandCenterController {
     @Query() query: CommandCenterBoardQueryDto,
   ): Promise<CommandCenterBoard> {
     return this.board.board(query.runIds);
+  }
+
+  @Get('timeline')
+  @ApiOperation({ operationId: 'listCommandCenterTimeline' })
+  @ZodResponse({ status: 200, type: CommandCenterTimelineDto })
+  timeline(
+    @Query() query: CommandCenterTimelineQueryDto,
+  ): Promise<CommandCenterTimeline> {
+    return this.timelines.page(
+      query.before === undefined ? null : new Date(query.before),
+      query.limit,
+    );
   }
 
   /** The manager's chat — the one that exists, or a new one with these chips. */

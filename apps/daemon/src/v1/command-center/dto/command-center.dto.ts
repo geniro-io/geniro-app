@@ -5,8 +5,11 @@ import {
   CommandCenterBoardSchema,
   CommandCenterChatsDiscardedSchema,
   CommandCenterStartsSchema,
+  CommandCenterTimelineSchema,
   START_FAILURE_MAX_CHARS,
   StartCommandCenterChatSchema,
+  TIMELINE_LIMIT_DEFAULT,
+  TIMELINE_LIMIT_MAX,
 } from '../command-center.types';
 
 /** The most run ids one subset re-read may name. */
@@ -54,6 +57,28 @@ export class CommandCenterStartsQueryDto extends createZodDto(
 
 export class CommandCenterStartsDto extends createZodDto(
   CommandCenterStartsSchema,
+) {}
+
+export const commandCenterTimelineQuerySchema = z.object({
+  before: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .describe(
+      'Only events strictly older than this instant: the nextBefore of the page before',
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(TIMELINE_LIMIT_MAX)
+    .default(TIMELINE_LIMIT_DEFAULT),
+});
+export class CommandCenterTimelineQueryDto extends createZodDto(
+  commandCenterTimelineQuerySchema,
+) {}
+
+export class CommandCenterTimelineDto extends createZodDto(
+  CommandCenterTimelineSchema,
 ) {}
 
 /** TWIN PARSER: `MAX_PREPARE_FAILURE_CHARS` in `apps/ui/src/main/task-run-start.ts` cuts to the same length. */

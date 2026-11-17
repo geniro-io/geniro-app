@@ -10,6 +10,7 @@ import mikroOrmConfig from '../../../db/mikro-orm.config';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { ThreadMessage } from '../../runs/entity/thread-message.entity';
+import { UsageActivity } from '../../stats/entity/usage-activity.entity';
 import { Task } from '../../tasks/entity/task.entity';
 import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 
@@ -18,7 +19,14 @@ export async function commandCenterDb() {
   const orm = await MikroORM.init(
     defineConfig({
       dbName: ':memory:',
-      entities: [Run, Item, Task, ThreadMessage, CommandCenterRosterEntry],
+      entities: [
+        Run,
+        Item,
+        Task,
+        ThreadMessage,
+        UsageActivity,
+        CommandCenterRosterEntry,
+      ],
       allowGlobalContext: true,
       namingStrategy: UnderscoreNamingStrategy,
       discovery: { checkDuplicateFieldNames: false },

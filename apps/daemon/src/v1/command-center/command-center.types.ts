@@ -119,6 +119,68 @@ export const CommandCenterStartsSchema = z.object({
 /** The longest failure reason a start drain reports. */
 export const START_FAILURE_MAX_CHARS = 1000;
 
+export const TIMELINE_TEXT_MAX_CHARS = 200;
+export const TIMELINE_LIMIT_DEFAULT = 100;
+export const TIMELINE_LIMIT_MAX = 200;
+
+export const CommandCenterTimelineKindSchema = z
+  .enum([
+    'user_message',
+    'manager_message',
+    'thread_message',
+    'thread_started',
+    'start_requested',
+    'pull_request',
+    'question',
+    'approval',
+    'stage',
+    'outcome',
+    'failed',
+  ])
+  .meta({ id: 'CommandCenterTimelineKind' });
+export type CommandCenterTimelineKind = z.infer<
+  typeof CommandCenterTimelineKindSchema
+>;
+
+export const CommandCenterTimelineEventSchema = z
+  .object({
+    id: z.string().describe('`<kind>:<source row id>`, stable across pages'),
+    at: z.string().describe('When it happened, ISO 8601'),
+    kind: CommandCenterTimelineKindSchema,
+    threadRunId: z
+      .string()
+      .nullable()
+      .describe(
+        "The thread it is about; null for the manager's own message and a start not yet made",
+      ),
+    threadTitle: z
+      .string()
+      .nullable()
+      .describe("The thread's title, or null with no thread"),
+    text: z.string().nullable().describe('One line, at most 200 characters'),
+    detail: z
+      .string()
+      .nullable()
+      .describe('A stage title, an outcome kind, a PR number or a start state'),
+    awaitingReply: z
+      .boolean()
+      .describe('The manager waits on the thread to answer this message'),
+  })
+  .meta({ id: 'CommandCenterTimelineEvent' });
+export type CommandCenterTimelineEvent = z.infer<
+  typeof CommandCenterTimelineEventSchema
+>;
+
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export const CommandCenterTimelineSchema = z.object({
+  events: z.array(CommandCenterTimelineEventSchema),
+  nextBefore: z
+    .string()
+    .nullable()
+    .describe('Pass as `before` for the next, older page; null on the last'),
+});
+export type CommandCenterTimeline = z.infer<typeof CommandCenterTimelineSchema>;
+
 /** Why the roster holds a thread. */
 export const RosterReasonSchema = z.enum(['auto', 'manager', 'user']);
 export type RosterReason = z.infer<typeof RosterReasonSchema>;

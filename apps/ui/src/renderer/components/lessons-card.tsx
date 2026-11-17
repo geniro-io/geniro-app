@@ -109,6 +109,11 @@ export interface LessonsCardProps {
   check?: LessonsReflectionView | null;
   places?: LessonPlaces;
   readDocuments?: LessonDocumentsReader | null;
+  /**
+   * The daemon's own "Move up" per lesson id, which knows whether the entry is
+   * already in the memory index; a lesson it does not name reads `moveUpOf`.
+   */
+  moveUps?: Readonly<Record<string, LessonMoveUpPlace | null>> | null;
   onSave?: (proposalId: string, request: LessonSaveRequest) => Promise<void>;
   onReject?: (proposalId: string, reason: string | null) => Promise<void>;
   onUpdateRule?: (proposalId: string, edit: LessonRuleEdit) => Promise<void>;
@@ -419,6 +424,7 @@ export function LessonsCard({
   check = null,
   places = EVERY_PLACE,
   readDocuments = null,
+  moveUps = null,
   onSave,
   onReject,
   onUpdateRule,
@@ -472,7 +478,11 @@ export function LessonsCard({
             key={lesson.id}
             lesson={lesson}
             places={places}
-            moveUp={moveUpOf(lesson)}
+            moveUp={
+              moveUps !== null && lesson.id in moveUps
+                ? (moveUps[lesson.id] ?? null)
+                : moveUpOf(lesson)
+            }
             readDocuments={readDocuments}
             onSave={onSave}
             onReject={onReject}
@@ -914,7 +924,10 @@ export function LessonRow({
       : choice === MOVE_UP_CHOICE && moveUp !== null
         ? 'moveUp'
         : 'save';
-  const selected = usable.find((option) => option.key === choice) ?? usable[0];
+  const selected =
+    usable.find((option) => option.key === choice) ??
+    usable.find((option) => option.key === targetKey(lesson.target)) ??
+    usable[0];
   const menuValue =
     action === 'update'
       ? UPDATE_CHOICE

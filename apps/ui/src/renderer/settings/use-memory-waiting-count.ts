@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 
+import { WAITING_LESSON_STATUSES } from '../chats/lessons-api-context';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
-import { WAITING_LESSON_STATUSES } from './waiting-lessons';
 
 /** Null until both reads answer, and again when one fails, so a stale count is never drawn. */
 export function useMemoryWaitingCount(

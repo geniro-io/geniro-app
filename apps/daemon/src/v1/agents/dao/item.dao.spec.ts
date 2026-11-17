@@ -1819,7 +1819,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         'reasoning',
       ]);
 
-      const [{ sql, parameters }] = execute.mock.calls.map(([query]) => query);
+      const { sql, parameters } = execute.mock.calls[0]![0];
       execute.mockRestore();
       const plan = await connection.executeQuery<{ detail: string }>(
         CompiledQuery.raw(`explain query plan ${sql}`, [...parameters]),

@@ -1,5 +1,3 @@
-import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
-
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
@@ -16,6 +14,7 @@ import type {
 import { ItemDao } from '../dao/item.dao';
 import { OUTSIDE_ANY_CALL } from '../utils/call-membership';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
+import { eventLoopSlicer } from '../utils/event-loop-slices';
 import {
   anchorNeedsOf,
   callRowsIn,
@@ -345,8 +344,9 @@ export class ChatHistoryService {
       return [];
     }
     const em = this.em.fork();
-    // A turn of the event loop between reads: each one is a whole synchronous
-    // statement, and a cold page of a long run reads seconds of them.
+    // Each read is a whole synchronous statement, and a cold page of a long
+    // run reads seconds of them.
+    const slice = eventLoopSlicer();
     const newest = async (
       pick: Parameters<ItemDao['newestRowsInCalls']>[2],
       calls: readonly string[] = callIds,
@@ -354,7 +354,7 @@ export class ChatHistoryService {
       if (calls.length === 0) {
         return [];
       }
-      await yieldToEventLoop();
+      await slice();
       return this.itemDao.newestRowsInCalls(runId, calls, pick, em);
     };
     const rows: WireRow[] = [];
@@ -438,7 +438,7 @@ export class ChatHistoryService {
         toolIds.set(row.inCall, [...(toolIds.get(row.inCall) ?? []), id]);
       }
     }
-    await yieldToEventLoop();
+    await slice();
     for (const row of [
       ...(await this.itemDao.rowsInCallsById(
         runId,

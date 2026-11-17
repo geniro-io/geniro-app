@@ -73,6 +73,20 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     );
   }
 
+  async lastSentBefore(
+    fromRunId: string,
+    toRunId: string,
+    before: Date,
+    txEm?: EntityManager,
+  ): Promise<ThreadMessage | null> {
+    return (txEm ?? this.em.fork())
+      .createQueryBuilder(ThreadMessage)
+      .where({ fromRunId, toRunId, createdAt: { $lt: before } })
+      .orderBy({ createdAt: 'desc', id: 'desc' })
+      .limit(1)
+      .getSingleResult();
+  }
+
   /** Wakes spent on a thread's messages last woken since `since`. */
   async sumWakesSince(
     toRunId: string,

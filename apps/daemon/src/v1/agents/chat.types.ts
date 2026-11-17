@@ -5227,12 +5227,18 @@ export const THREAD_MESSAGE_REASONS = [
 /** `joined` a running turn, `woken` a turn of its own, or left `waiting`. */
 export type ThreadMessageOutcome = 'joined' | 'woken' | 'waiting';
 
+export interface ThreadMessageReply {
+  text: string;
+  at: string;
+}
+
 export interface ThreadMessageRowEntry {
   id: string;
   fromRunId: string;
   fromTitle: string;
   fromMember: string | null;
   text: string;
+  inReplyTo?: ThreadMessageReply | null;
 }
 
 export interface ThreadMessageSentRow {

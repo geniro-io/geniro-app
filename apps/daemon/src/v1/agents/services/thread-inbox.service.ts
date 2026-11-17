@@ -12,6 +12,7 @@ import type {
   HostWakeOwner,
   ThreadContact,
   ThreadMessageReason,
+  ThreadMessageReply,
   ThreadMessageRowEntry,
   WaitingMessageWire,
 } from '../chat.types';
@@ -24,6 +25,7 @@ import {
   THREAD_MESSAGE_REPEAT_WINDOW_MS,
   THREAD_MESSAGES_PER_MINUTE,
   THREAD_MESSAGES_TURN_MAX_CHARS,
+  threadMessageExcerpt,
   threadMessageNotDeliveredNote,
   threadMessageNotDeliveredSentence,
   UNTITLED_THREAD,
@@ -185,9 +187,30 @@ export class ThreadInboxService {
         break;
       }
       this.takenAt.set(message.id, now);
-      taken.push(rowEntryOf(message));
+      taken.push({
+        ...rowEntryOf(message),
+        inReplyTo: await this.replyBefore(message, txEm),
+      });
     }
     return taken;
+  }
+
+  private async replyBefore(
+    message: ThreadMessage,
+    txEm?: EntityManager,
+  ): Promise<ThreadMessageReply | null> {
+    const reply = await this.messages.lastSentBefore(
+      message.toRunId,
+      message.fromRunId,
+      message.createdAt,
+      txEm,
+    );
+    return reply === null
+      ? null
+      : {
+          text: threadMessageExcerpt(reply.text),
+          at: reply.createdAt.toISOString(),
+        };
   }
 
   async markDelivered(

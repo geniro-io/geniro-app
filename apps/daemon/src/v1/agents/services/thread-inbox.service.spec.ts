@@ -332,6 +332,93 @@ describe('ThreadInboxService.takeForTurn', () => {
       (await h.service.takeForTurn(TARGET)).map((message) => message.text),
     ).toEqual(['c']);
   });
+
+  it('gives each taken message the newest message the thread sent its sender before it, and null when it sent none', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    await h.seedMessage({
+      fromRunId: 'other',
+      fromTitle: 'Other',
+      text: 'unrelated',
+      createdAt: new Date(T0.getTime()),
+    });
+    await h.seedMessage({
+      fromRunId: TARGET,
+      toRunId: 'sender',
+      fromTitle: TARGET,
+      text: 'earlier reply',
+      createdAt: new Date(T0.getTime() + 1_000),
+    });
+    await h.seedMessage({
+      fromRunId: TARGET,
+      toRunId: 'sender',
+      fromTitle: TARGET,
+      text: 'newest reply before',
+      createdAt: new Date(T0.getTime() + 3_000),
+    });
+    await h.seedMessage({
+      fromRunId: TARGET,
+      toRunId: 'other',
+      fromTitle: TARGET,
+      text: 'reply to someone else',
+      createdAt: new Date(T0.getTime() + 3_500),
+    });
+    await h.seedMessage({
+      fromRunId: 'sender',
+      toRunId: TARGET,
+      fromTitle: 'Sender',
+      text: 'the question',
+      createdAt: new Date(T0.getTime() + 5_000),
+    });
+    await h.seedMessage({
+      fromRunId: TARGET,
+      toRunId: 'sender',
+      fromTitle: TARGET,
+      text: 'reply after',
+      createdAt: new Date(T0.getTime() + 9_000),
+    });
+
+    expect(
+      (await h.service.takeForTurn(TARGET)).map(({ text, inReplyTo }) => ({
+        text,
+        inReplyTo,
+      })),
+    ).toEqual([
+      { text: 'unrelated', inReplyTo: null },
+      {
+        text: 'the question',
+        inReplyTo: {
+          text: 'newest reply before',
+          at: new Date(T0.getTime() + 3_000).toISOString(),
+        },
+      },
+    ]);
+  });
+
+  it('cuts a long reply to one line of 200 characters, ending in an ellipsis', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    await h.seedMessage({
+      fromRunId: TARGET,
+      toRunId: 'sender',
+      fromTitle: TARGET,
+      text: `first line\n${'x'.repeat(400)}`,
+      createdAt: new Date(T0.getTime() + 1_000),
+    });
+    await h.seedMessage({
+      fromRunId: 'sender',
+      toRunId: TARGET,
+      fromTitle: 'Sender',
+      text: 'the question',
+      createdAt: new Date(T0.getTime() + 2_000),
+    });
+
+    const [taken] = await h.service.takeForTurn(TARGET);
+    const excerpt = taken?.inReplyTo?.text ?? '';
+    expect(excerpt).toHaveLength(200);
+    expect(excerpt.startsWith('first line x')).toBe(true);
+    expect(excerpt.endsWith('…')).toBe(true);
+  });
 });
 
 describe('ThreadInboxService.markDelivered and returnDropped', () => {

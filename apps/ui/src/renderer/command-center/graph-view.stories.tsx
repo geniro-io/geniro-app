@@ -40,7 +40,6 @@ const meta = {
     now: FIXTURE_NOW,
     narrow: false,
     onOpen: () => {},
-    onManager: () => {},
     className: 'h-full',
   },
   decorators: [
@@ -51,18 +50,18 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A few threads stand in one line under the manager: one lit, one amber awaiting a reply. */
-export const OneLine: Story = {};
+/** A few threads, one band each: blocked on top, then working, a question, quiet. */
+export const Few: Story = {};
 
-/** Eight threads: two lines, the second shifted under the gaps of the first. */
-export const TwoLines: Story = { args: { threads: graphThreadsOf(8) } };
+/** Twelve threads in their attention bands, the still ones greyed at the bottom. */
+export const Bands: Story = { args: { threads: graphThreadsOf(12) } };
 
-/** Thirty threads: three lines of the 24 most recently active and one "+6 more". */
-export const ThreeLines: Story = {
+/** Thirty threads: the 24 that need the user most, and one "+6 more". */
+export const Crowded: Story = {
   args: { threads: graphThreadsOf(30), contacts: {} },
 };
 
-/** No manager chat yet: its node still heads the tree and opens the chat. */
+/** No manager chat yet: its node still heads the tree. */
 export const ManagerNotStarted: Story = {
   args: { manager: null, pendingStarts: 0, contacts: {} },
 };

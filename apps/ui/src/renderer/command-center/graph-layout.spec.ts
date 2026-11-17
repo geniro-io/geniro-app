@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bandRows,
   type GraphBox,
   type GraphGeometry,
   layoutColumn,
-  layoutLines,
-  linesFor,
+  layoutRows,
+  perLineFor,
 } from './graph-layout';
 
 const ROOT: GraphBox = { id: 'root', width: 360, height: 112 };
@@ -68,25 +69,38 @@ const linesOf = (geometry: GraphGeometry): number =>
       .map((box) => box.y),
   ).size;
 
-describe('linesFor', () => {
-  it('stands a few threads in one line, a handful in two and more in three', () => {
-    expect(linesFor(1)).toBe(1);
-    expect(linesFor(4)).toBe(1);
-    expect(linesFor(5)).toBe(2);
-    expect(linesFor(10)).toBe(2);
-    expect(linesFor(11)).toBe(3);
-    expect(linesFor(25)).toBe(3);
+function rowsOf(count: number, perLine: number): GraphBox[][] {
+  return bandRows([itemsOf(count)], perLine);
+}
+
+describe('perLineFor', () => {
+  it('puts four to a line on a small board and at most six on a big one', () => {
+    expect(perLineFor(1)).toBe(4);
+    expect(perLineFor(12)).toBe(4);
+    expect(perLineFor(15)).toBe(5);
+    expect(perLineFor(24)).toBe(6);
+    expect(perLineFor(60)).toBe(6);
   });
 });
 
-describe('layoutLines', () => {
-  it('centres the root on top, every item below it, in the lines asked for, none overlapping', () => {
-    for (const [count, lines] of [
-      [3, 1],
-      [8, 2],
-      [25, 3],
+describe('bandRows', () => {
+  it('starts every band on a line of its own, in band order, wrapping a long one', () => {
+    expect(bandRows([['a', 'b'], [], ['c', 'd', 'e', 'f', 'g']], 4)).toEqual([
+      ['a', 'b'],
+      ['c', 'd', 'e', 'f'],
+      ['g'],
+    ]);
+  });
+});
+
+describe('layoutRows', () => {
+  it('centres the root on top, every row below it in order, none overlapping', () => {
+    for (const [count, perLine, lines] of [
+      [3, 4, 1],
+      [8, 4, 2],
+      [24, 6, 4],
     ] as const) {
-      const geometry = layoutLines(ROOT, itemsOf(count), lines);
+      const geometry = layoutRows(ROOT, rowsOf(count, perLine));
       const root = geometry.boxes.get('root')!;
 
       expect(linesOf(geometry)).toBe(lines);
@@ -102,8 +116,23 @@ describe('layoutLines', () => {
     }
   });
 
-  it('shifts every other line half a box, so it sits under the gaps above', () => {
-    const geometry = layoutLines(ROOT, itemsOf(8), 2);
+  it('makes each row as tall as its tallest box, with no row borrowing another’s height', () => {
+    const geometry = layoutRows(ROOT, [
+      [
+        { id: 'a', width: 272, height: 120 },
+        { id: 'b', width: 272, height: 90 },
+      ],
+      [{ id: 'c', width: 272, height: 90 }],
+    ]);
+    const y = (id: string) => geometry.boxes.get(id)!.y;
+
+    expect(y('a')).toBe(y('b'));
+    expect(y('c') - y('a')).toBe(120 + 72);
+    expect(geometry.height).toBe(y('c') + 90 + 24);
+  });
+
+  it('shifts every other row half a box, so it sits under the gaps above', () => {
+    const geometry = layoutRows(ROOT, rowsOf(8, 4));
     const x = (id: string) => geometry.boxes.get(id)!.x;
     const step = x('t1') - x('t0');
 
@@ -111,12 +140,12 @@ describe('layoutLines', () => {
   });
 
   it('routes every wire from the root’s bottom into its box’s top, through no box', () => {
-    for (const [count, lines] of [
-      [4, 1],
-      [9, 2],
-      [24, 3],
+    for (const [count, perLine] of [
+      [4, 4],
+      [9, 4],
+      [24, 6],
     ] as const) {
-      const geometry = layoutLines(ROOT, itemsOf(count), lines);
+      const geometry = layoutRows(ROOT, rowsOf(count, perLine));
       const root = geometry.boxes.get('root')!;
 
       for (const box of itemsOf(count)) {

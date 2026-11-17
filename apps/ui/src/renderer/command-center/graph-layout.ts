@@ -27,12 +27,23 @@ const INDENT = 28;
 const STACK_GAP = 16;
 const STUB = 14;
 
-/** How many lines the items stand in: one for a few, two for a handful, three past that. */
-export function linesFor(count: number): number {
-  if (count <= 4) {
-    return 1;
+/** The most cards a line holds: a few to a line for a small board, at most six. */
+export function perLineFor(count: number): number {
+  return Math.min(6, Math.max(4, Math.ceil(count / 3)));
+}
+
+/** Each band on lines of its own, in band order, a band longer than `perLine` wrapped. */
+export function bandRows<T>(
+  bands: readonly (readonly T[])[],
+  perLine: number,
+): T[][] {
+  const rows: T[][] = [];
+  for (const band of bands) {
+    for (let start = 0; start < band.length; start += perLine) {
+      rows.push(band.slice(start, start + perLine));
+    }
   }
-  return count <= 10 ? 2 : 3;
+  return rows;
 }
 
 function withoutRepeats(points: readonly Point[]): Point[] {
@@ -61,28 +72,23 @@ function passageNear(line: readonly PlacedBox[], target: number): number {
 }
 
 /**
- * The root centred on top and the items under it in `lines` horizontal lines
- * of equal count, every other line shifted half a box so it sits under the
- * gaps of the line above. A wire leaves the root's bottom, runs along the gap
- * above the first line, passes each line above its own through the nearest
- * gap, and drops into its box's top — so no wire crosses a box.
+ * The root centred on top and the rows under it, each centred and every
+ * other one shifted half a box so it sits under the gaps of the row above. A
+ * row is as tall as its tallest box. A wire leaves the root's bottom, runs
+ * along the gap above the first row, passes each row above its own through
+ * the nearest gap, and drops into its box's top — so no wire crosses a box.
  */
-export function layoutLines(
+export function layoutRows(
   root: GraphBox,
-  items: readonly GraphBox[],
-  lines: number,
+  rows: readonly (readonly GraphBox[])[],
 ): GraphGeometry {
-  const cell = Math.max(0, ...items.map((item) => item.width));
-  const height = Math.max(0, ...items.map((item) => item.height));
-  const perLine = Math.max(1, Math.ceil(items.length / Math.max(1, lines)));
-  const rows: GraphBox[][] = [];
-  for (let start = 0; start < items.length; start += perLine) {
-    rows.push(items.slice(start, start + perLine));
-  }
+  const filled = rows.filter((row) => row.length > 0);
+  const cell = Math.max(0, ...filled.flat().map((item) => item.width));
   const step = cell + COLUMN_GAP;
-  const stagger = rows.length > 1 ? step / 2 : 0;
+  const stagger = filled.length > 1 ? step / 2 : 0;
   const widest =
-    Math.max(0, ...rows.map((row) => row.length * step - COLUMN_GAP)) + stagger;
+    Math.max(0, ...filled.map((row) => row.length * step - COLUMN_GAP)) +
+    stagger;
   const width = Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
@@ -96,16 +102,21 @@ export function layoutLines(
   boxes.set(root.id, placedRoot);
   const rootBottom = MARGIN + root.height;
 
-  const placedRows: PlacedBox[][] = rows.map((row, index) => {
-    const top = rootBottom + LINE_GAP + index * (height + LINE_GAP);
+  let top = rootBottom + LINE_GAP;
+  let bottom = rootBottom;
+  const placedRows: PlacedBox[][] = filled.map((row, index) => {
     const span = row.length * step - COLUMN_GAP;
     const left =
       centre - span / 2 + (index % 2 === 1 ? stagger / 2 : -stagger / 2);
+    const rowTop = top;
+    const tallest = Math.max(...row.map((item) => item.height));
+    top += tallest + LINE_GAP;
+    bottom = rowTop + tallest;
     return row.map((item, column) => {
       const placed = {
         ...item,
         x: left + column * step + (cell - item.width) / 2,
-        y: top,
+        y: rowTop,
       };
       boxes.set(item.id, placed);
       return placed;
@@ -133,8 +144,6 @@ export function layoutLines(
     }
   });
 
-  const bottom =
-    placedRows.length === 0 ? rootBottom : placedRows.at(-1)![0]!.y + height;
   return { width, height: bottom + MARGIN, boxes, routes };
 }
 

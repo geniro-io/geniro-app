@@ -15,6 +15,7 @@ import {
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { ContactState } from './contact-edge';
 import { FIXTURE_NOW, graphThreadsOf } from './graph-fixtures';
+import type { GraphThread } from './graph-view';
 import {
   GraphView,
   MAX_THREAD_NODES,
@@ -108,7 +109,6 @@ describe('GraphView', () => {
           now={FIXTURE_NOW}
           narrow={false}
           onOpen={() => undefined}
-          onManager={() => undefined}
           {...overrides}
         />,
       );
@@ -157,30 +157,49 @@ describe('GraphView', () => {
     }
   });
 
-  it('stands the threads in one, two or three lines by how many there are', async () => {
-    for (const [count, lines] of [
-      [3, '1'],
-      [8, '2'],
-      [13, '3'],
-    ] as const) {
-      await draw({ threads: graphThreadsOf(count) });
+  it('stands the threads in bands by attention: blocked on top, then working, questions, quiet, inactive last', async () => {
+    const threads = graphThreadsOf(10);
+    await draw({ threads });
 
-      const graph = all('command-center-graph')[0]!;
-      expect(graph.dataset.layout).toBe('lines');
-      expect(graph.dataset.lines).toBe(lines);
-      const ys = new Set(
-        graphThreadsOf(count).map((thread) => nodeY('graph-thread', thread.id)),
+    const graph = all('command-center-graph')[0]!;
+    expect(graph.dataset.layout).toBe('bands');
+    const order = [
+      'blocked',
+      'working',
+      'question',
+      'quiet',
+      'inactive',
+    ] as const;
+    const bandY = (attention: (typeof order)[number]): number[] =>
+      threads
+        .filter((thread) => thread.view.attention === attention)
+        .map((thread) => nodeY('graph-thread', thread.id));
+    for (let band = 1; band < order.length; band += 1) {
+      expect(Math.min(...bandY(order[band]!))).toBeGreaterThan(
+        Math.max(...bandY(order[band - 1]!)),
       );
-      expect(String(ys.size)).toBe(lines);
     }
   });
 
-  it('gives every thread card one height, so the lines stay even', async () => {
+  it('sizes each card to what it shows, with no padding to a common height', async () => {
     await draw({ threads: graphThreadsOf(6) });
 
     expect(
       new Set(all('thread-card').map((card) => card.style.height)).size,
-    ).toBe(1);
+    ).toBeGreaterThan(1);
+  });
+
+  it('keys the colours in a legend, with how many threads stand in each band', async () => {
+    await draw({ threads: graphThreadsOf(10) });
+
+    const items = all('graph-legend-item').map((item) => item.textContent);
+    expect(items).toEqual([
+      'Blocked2',
+      'Working2',
+      'Question2',
+      'Quiet2',
+      'Inactive a day+2',
+    ]);
   });
 
   it('shows on the manager what it runs: its agent, threads, working, awaiting replies and starts waiting', async () => {
@@ -212,15 +231,20 @@ describe('GraphView', () => {
     expect(all('graph-manager-starts')[0]!.textContent).toBe('2Starts waiting');
   });
 
-  it('keeps the manager on top before its chat exists, and opens the chat on a press', async () => {
-    const onManager = vi.fn();
-    await draw({ manager: null, threads: graphThreadsOf(2), onManager });
+  it('keeps the manager on top before its chat exists', async () => {
+    await draw({ manager: null, threads: graphThreadsOf(2) });
     const manager = all('graph-manager')[0]!;
 
     expect(manager.dataset.started).toBe('false');
     expect(manager.textContent).toContain('Not started');
-    act(() => manager.click());
-    expect(onManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens nothing from the manager node: it is a summary, not a button', async () => {
+    await draw({ threads: graphThreadsOf(2) });
+    const manager = all('graph-manager')[0]!;
+
+    expect(manager.tagName).toBe('SECTION');
+    expect(manager.querySelector('button')).toBeNull();
   });
 
   it('draws at most 24 thread cards and one "+N more" node for the rest', async () => {
@@ -230,16 +254,21 @@ describe('GraphView', () => {
     expect(all('graph-more')[0]?.textContent).toBe('+6 more threads');
   });
 
-  it('draws the 24 most recently active, oldest first so a card keeps its place', () => {
-    const threads = graphThreadsOf(30).reverse();
-    const shown = shownThreads(threads);
+  it('draws the 24 that need the user most, the still ones left to "+N more"', () => {
+    const shown = shownThreads(graphThreadsOf(30));
+    const rank = (thread: GraphThread): number =>
+      ['blocked', 'working', 'question', 'quiet', 'inactive'].indexOf(
+        thread.view.attention,
+      );
 
     expect(shown).toHaveLength(MAX_THREAD_NODES);
-    expect(shown.map((thread) => thread.id)).toEqual(
-      threads
-        .slice(0, MAX_THREAD_NODES)
-        .map((thread) => thread.id)
-        .reverse(),
+    expect(shown.map(rank)).toEqual([...shown.map(rank)].sort((a, b) => a - b));
+    expect(
+      shown.filter((thread) => thread.view.attention === 'inactive').length,
+    ).toBeLessThan(
+      graphThreadsOf(30).filter(
+        (thread) => thread.view.attention === 'inactive',
+      ).length,
     );
   });
 
@@ -292,7 +321,7 @@ describe('GraphView', () => {
         ?.getAttribute('data-state');
 
     expect(threadCard('thread-2').getAttribute('aria-label')).toBe(
-      'Rebase billing on main, Waiting on you, awaiting a reply, last contact 40m ago',
+      'Rebase billing on main, Waiting on you, Question, awaiting a reply, last contact 40m ago',
     );
     expect(state('thread-1')).toBe('lit');
     expect(state('thread-2')).toBe('awaiting');
@@ -338,13 +367,14 @@ describe('GraphView', () => {
     }
   });
 
-  it('lays a phone out as one column it scrolls, every card under the manager', async () => {
-    await draw({ threads: graphThreadsOf(4), narrow: true });
+  it('lays a phone out as one column it scrolls, every card under the manager in attention order', async () => {
+    const threads = graphThreadsOf(4);
+    await draw({ threads, narrow: true });
 
     const graph = all('command-center-graph')[0]!;
     expect(graph.dataset.layout).toBe('column');
-    const ys = ['thread-1', 'thread-2', 'thread-3', 'thread-4'].map((id) =>
-      nodeY('graph-thread', id),
+    const ys = shownThreads(threads).map((thread) =>
+      nodeY('graph-thread', thread.id),
     );
     expect(ys).toEqual([...ys].sort((a, b) => a - b));
     expect(ys[0]).toBeGreaterThan(nodeY('graph-manager'));

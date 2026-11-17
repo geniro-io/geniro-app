@@ -4,11 +4,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type ThreadAttention,
   ThreadCard,
   threadCardHeight,
   type ThreadCardProps,
   type ThreadCardStatus,
 } from './thread-card';
+
+const NOW = Date.parse('2026-11-17T12:00:00Z');
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -30,14 +33,17 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
   return {
     title: 'Fix the login redirect',
     status: 'working',
-    handle: null,
+    attention: 'working',
     project: 'Geniro',
-    agentLabel: 'Claude',
+    agentLabel: 'claude',
+    isTeam: false,
     pullRequest: null,
     note: null,
-    activity: null,
+    lastMessage: null,
     boardCard: null,
     idleDays: null,
+    lastAt: new Date(NOW - 5 * 60_000).toISOString(),
+    now: NOW,
     onGo: vi.fn(),
     ...over,
   };
@@ -104,15 +110,28 @@ describe('ThreadCard — content', () => {
 
   it('pulses its dot only while the thread works', () => {
     expect(
-      render({ status: 'working' }).querySelector(
+      render({ attention: 'working' }).querySelector(
         '[data-slot="thread-card-dot-ping"]',
       ),
     ).not.toBeNull();
     expect(
-      render({ status: 'idle' }).querySelector(
+      render({ attention: 'quiet' }).querySelector(
         '[data-slot="thread-card-dot-ping"]',
       ),
     ).toBeNull();
+  });
+
+  it.each<[ThreadAttention, string]>([
+    ['blocked', 'bg-destructive/5'],
+    ['working', 'bg-success/5'],
+    ['question', 'bg-warning/10'],
+    ['quiet', 'bg-card'],
+    ['inactive', 'opacity-70'],
+  ])('colours a %s card by where it stands', (attention, tint) => {
+    const el = render({ attention });
+
+    expect(el.dataset.attention).toBe(attention);
+    expect(el.classList.contains(tint)).toBe(true);
   });
 
   it('keeps a long title on one line, whole in its tooltip', () => {
@@ -126,21 +145,20 @@ describe('ThreadCard — content', () => {
     expect(title.title).toBe(long);
   });
 
-  it('is exactly as tall as the graph laid it out for what it shows', () => {
-    const el = render({
-      note: 'watch billing',
-      activity: 'running tests',
-      idleDays: 4,
-    });
+  it('is exactly as tall as the graph laid it out for what it shows, and no taller', () => {
+    const view = { note: 'watch billing', lastMessage: 'running tests' };
+    const el = render({ ...view, idleDays: 4 });
 
-    expect(el.style.height).toBe(
-      `${threadCardHeight({ labels: true, note: true, activity: true })}px`,
-    );
-    expect(
-      threadCardHeight({ labels: false, note: false, activity: false }),
-    ).toBeLessThan(
-      threadCardHeight({ labels: true, note: true, activity: true }),
-    );
+    expect(el.style.height).toBe(`${threadCardHeight(view)}px`);
+    const bare = threadCardHeight({ note: null, lastMessage: null });
+    const oneLine = threadCardHeight({ note: null, lastMessage: 'short' });
+    const twoLines = threadCardHeight({
+      note: null,
+      lastMessage:
+        'a longer message that cannot fit on a single line of the card',
+    });
+    expect(bare).toBeLessThan(oneLine);
+    expect(oneLine).toBeLessThan(twoLines);
   });
 
   it('draws the manager note when there is one, and nothing when there is not', () => {
@@ -171,54 +189,60 @@ describe('ThreadCard — content', () => {
     ).toBeNull();
   });
 
-  it('puts the status, handle, project and agent on one line', () => {
-    const el = render({
-      status: 'idle',
-      handle: 't3',
-      project: 'Geniro',
-      agentLabel: 'Claude',
-    });
+  it('labels the agent, or the team by its name, and the project — never the roster handle', () => {
+    const el = render({ agentLabel: 'claude', project: 'Geniro' });
 
     expect(
-      el.querySelector('[data-slot="thread-card-status"]')!.textContent,
-    ).toBe('Idle · t3 · Geniro · Claude');
+      el.querySelector('[data-slot="thread-card-agent"]')!.textContent,
+    ).toBe('claude');
+    expect(
+      el.querySelector('[data-slot="thread-card-project"]')!.textContent,
+    ).toBe('Geniro');
+    expect(el.textContent).not.toMatch(/\bt\d+\b/);
+    expect(
+      render({ agentLabel: 'dev-team', isTeam: true })
+        .querySelector('[data-slot="thread-card-agent"]')!
+        .getAttribute('title'),
+    ).toBe('Team dev-team');
   });
 
-  it('says what the thread is doing now, when it is doing anything', () => {
+  it('previews the latest message as the thread list does, when there is one', () => {
     expect(
-      render({ activity: 'running the test suite' }).querySelector(
-        '[data-slot="thread-card-activity"]',
+      render({ lastMessage: 'running the test suite' }).querySelector(
+        '[data-slot="thread-card-message"]',
       )!.textContent,
-    ).toBe('Now: running the test suite');
+    ).toBe('running the test suite');
     expect(
-      render({ activity: null }).querySelector(
-        '[data-slot="thread-card-activity"]',
+      render({ lastMessage: null }).querySelector(
+        '[data-slot="thread-card-message"]',
       ),
     ).toBeNull();
   });
 
-  it('says it as plain text, with no markdown markers', () => {
+  it('previews it as plain text, with no markdown markers', () => {
     const line = render({
-      activity: '**Rebased** on `main` — see [the PR](https://x.test/1)',
-    }).querySelector('[data-slot="thread-card-activity"]')!;
+      lastMessage: '**Rebased** on `main` — see [the PR](https://x.test/1)',
+    }).querySelector('[data-slot="thread-card-message"]')!;
 
-    expect(line.textContent).toBe('Now: Rebased on main — see the PR');
+    expect(line.textContent).toBe('Rebased on main — see the PR');
   });
 
   it('drops a backtick a cut-off code span left open', () => {
     const line = render({
-      activity: 'Told `8bbdf9e6-0a39-4d4d-a…',
-    }).querySelector('[data-slot="thread-card-activity"]')!;
+      lastMessage: 'Told `8bbdf9e6-0a39-4d4d-a…',
+    }).querySelector('[data-slot="thread-card-message"]')!;
 
-    expect(line.textContent).toBe('Now: Told 8bbdf9e6-0a39-4d4d-a…');
+    expect(line.textContent).toBe('Told 8bbdf9e6-0a39-4d4d-a…');
+  });
+
+  it('says when the thread last moved beside its Go to thread button', () => {
+    expect(
+      render().querySelector('[data-slot="thread-card-time"]')!.textContent,
+    ).toBe('5m ago');
   });
 
   it('stands as tall as its row asks, but never shorter than its content', () => {
-    const own = threadCardHeight({
-      labels: false,
-      note: false,
-      activity: false,
-    });
+    const own = threadCardHeight({ note: null, lastMessage: null });
 
     expect(render({ height: own + 40 }).style.height).toBe(`${own + 40}px`);
     expect(render({ height: own - 40 }).style.height).toBe(`${own}px`);
@@ -239,7 +263,8 @@ describe('ThreadCard — labels', () => {
       },
     }).querySelector('[data-slot="thread-card-board-card"]')!;
 
-    expect(label.textContent).toBe('GEN-412· In progress');
+    expect(label.textContent).toBe('GEN-412');
+    expect(label.getAttribute('title')).toContain('In progress');
     expect(
       render({ boardCard: null }).querySelector(
         '[data-slot="thread-card-board-card"]',
@@ -251,7 +276,7 @@ describe('ThreadCard — labels', () => {
     expect(
       render({ idleDays: 6 }).querySelector('[data-slot="thread-card-idle"]')!
         .textContent,
-    ).toBe('Idle 6 days');
+    ).toBe('6d');
     expect(
       render({ idleDays: null }).querySelector(
         '[data-slot="thread-card-idle"]',

@@ -8,14 +8,18 @@ const meta = {
   args: {
     title: 'Fix the login redirect',
     status: 'working',
-    handle: 't1',
+    attention: 'working',
     project: 'Geniro',
-    agentLabel: 'Claude Code',
+    agentLabel: 'claude',
+    isTeam: false,
     pullRequest: null,
     note: null,
-    activity: 'running the **test suite**',
+    lastMessage:
+      'Rebased on **main** and re-ran the suite; two flaky specs left, looking at them now',
     boardCard: null,
     idleDays: null,
+    lastAt: new Date(Date.parse('2026-11-17T11:55:00Z')).toISOString(),
+    now: Date.parse('2026-11-17T12:00:00Z'),
     onGo: () => {},
   },
   decorators: [(story) => <div className="p-4">{story()}</div>],
@@ -37,21 +41,45 @@ export const WithBoardCard: Story = {
   },
 };
 
-/** Nobody has touched it for days: the idle mark says how many. */
-export const IdleForDays: Story = {
-  args: { status: 'idle', activity: null, idleDays: 6 },
-};
-
-export const WaitingOnYou: Story = {
+/** Nobody has touched it for days: greyed out, and the idle mark says how many. */
+export const InactiveForDays: Story = {
   args: {
-    status: 'waiting',
-    title: 'Pick the migration strategy',
-    activity: null,
+    status: 'idle',
+    attention: 'inactive',
+    lastMessage: 'Done — PR is up',
+    idleDays: 6,
+    lastAt: '2026-11-11T12:00:00Z',
   },
 };
 
-export const Failed: Story = {
-  args: { status: 'failed', title: 'Release notes', activity: null },
+/** Waiting on a question: yellow. */
+export const Question: Story = {
+  args: {
+    status: 'waiting',
+    attention: 'question',
+    title: 'Pick the migration strategy',
+    lastMessage: 'Should the backfill run before or after the column rename?',
+  },
+};
+
+/** Blocked on a press — a failure or an approval: red. */
+export const Blocked: Story = {
+  args: {
+    status: 'failed',
+    attention: 'blocked',
+    title: 'Release notes',
+    lastMessage: 'The CLI exited: usage limit reached',
+  },
+};
+
+/** A team run wears its team's name. */
+export const Team: Story = {
+  args: {
+    agentLabel: 'dev-team',
+    isTeam: true,
+    attention: 'quiet',
+    status: 'idle',
+  },
 };
 
 export const WithPullRequestAndNote: Story = {

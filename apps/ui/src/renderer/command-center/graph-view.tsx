@@ -27,7 +27,11 @@ import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
-import type { ThreadCardView } from './card-view';
+import {
+  ATTENTION_ORDER,
+  orderByAttention,
+  type ThreadCardView,
+} from './card-view';
 import {
   ContactEdge,
   type ContactFlowEdge,
@@ -39,17 +43,19 @@ import {
   usePrefersReducedMotion,
 } from './contact-edge';
 import {
+  bandRows,
   type GraphBox,
   type GraphGeometry,
   layoutColumn,
-  layoutLines,
-  linesFor,
+  layoutRows,
+  perLineFor,
 } from './graph-layout';
 import {
-  activityLine,
-  hasLabels,
+  ATTENTION_TEXT,
+  attentionDotVariants,
   THREAD_CARD_WIDTH,
   THREAD_STATUS_TEXT,
+  type ThreadAttention,
   ThreadCard,
   threadCardHeight,
 } from './thread-card';
@@ -74,7 +80,7 @@ export interface GraphViewProps {
   manager: GraphManager | null;
   /** Threads the manager asked to start that wait on the user's Start. */
   pendingStarts: number;
-  /** Newest activity first; the first {@link MAX_THREAD_NODES} are drawn. */
+  /** Every thread; drawn by attention, the first {@link MAX_THREAD_NODES} of that order. */
   threads: readonly GraphThread[];
   contacts: Readonly<Record<string, ContactState>>;
   pulses: readonly ContactPulse[];
@@ -82,15 +88,14 @@ export interface GraphViewProps {
   /** One column for a narrow screen, scrolled rather than panned. */
   narrow: boolean;
   onOpen: (threadId: string) => void;
-  onManager: () => void;
   className?: string;
 }
 
 const MANAGER_ID = 'manager';
 const MORE_ID = 'more';
-const MANAGER_WIDTH = 440;
+const MANAGER_WIDTH = 380;
 const MANAGER_WIDTH_NARROW = THREAD_CARD_WIDTH;
-const MANAGER_HEIGHT = 112;
+const MANAGER_HEIGHT = 84;
 const MORE_WIDTH = 160;
 const MORE_HEIGHT = 32;
 const MIN_ZOOM = 0.25;
@@ -125,7 +130,6 @@ interface ManagerNodeData extends Record<string, unknown> {
 interface ThreadNodeData extends Record<string, unknown> {
   thread: GraphThread;
   summary: string;
-  height: number;
 }
 
 interface MoreNodeData extends Record<string, unknown> {
@@ -144,12 +148,10 @@ type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
   open: (threadId: string) => void;
-  manager: () => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
   open: () => undefined,
-  manager: () => undefined,
 });
 
 const HIDDEN_HANDLE = { opacity: 0, pointerEvents: 'none' } as const;
@@ -214,7 +216,6 @@ function Stat({
 }
 
 function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
-  const { manager: openManager } = useContext(GraphActionsContext);
   const { manager, threads, working, awaiting, pendingStarts, now } = data;
   const started = manager !== null;
   const line = started
@@ -232,15 +233,13 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
   return (
     <>
       <WireEnds />
-      <button
-        type="button"
+      <section
         data-slot="graph-manager"
         data-started={started}
-        aria-label={`Manager, ${state}: ${threads} threads, ${working} working, ${awaiting} awaiting a reply, ${pendingStarts} waiting to start. Open the chat`}
-        onClick={openManager}
-        className="flex size-full flex-col justify-between gap-2 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card p-3 text-left shadow-md outline-none transition-[box-shadow,translate] duration-200 hover:-translate-y-px hover:shadow-lg focus-visible:ring-[3px] focus-visible:ring-ring/60 motion-reduce:transition-none motion-reduce:hover:translate-y-0">
+        aria-label={`Manager, ${state}: ${threads} threads, ${working} working, ${awaiting} awaiting a reply, ${pendingStarts} waiting to start`}
+        className="flex size-full flex-col gap-2.5 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card px-3 py-2.5 text-left shadow-md">
         <span className="flex min-w-0 items-center gap-3">
-          <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+          <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
             <RadioTower aria-hidden="true" className="size-4.5" />
             {started && manager.working ? (
               <span className="absolute -top-0.5 -right-0.5 size-2.5 animate-pulse rounded-full bg-primary ring-2 ring-card motion-reduce:animate-none" />
@@ -251,7 +250,12 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
               <span className="text-sm font-semibold">Manager</span>
               <span
                 data-slot="graph-manager-state"
-                className="rounded-pill bg-muted px-1.5 text-xs text-muted-foreground">
+                className={cn(
+                  'rounded-pill px-1.5 text-xs',
+                  started && manager.working
+                    ? 'bg-primary/15 text-primary'
+                    : 'bg-muted text-foreground/80',
+                )}>
                 {state}
               </span>
             </span>
@@ -294,21 +298,20 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
             />
           ) : null}
         </span>
-      </button>
+      </section>
     </>
   );
 }
 
 function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
   const { open } = useContext(GraphActionsContext);
-  const { thread, summary, height } = data;
+  const { thread, summary } = data;
   return (
     <div data-slot="graph-thread" data-thread-id={thread.id}>
       <WireEnds />
       <ThreadCard
         {...thread.view}
         summary={summary}
-        height={height}
         onGo={() => open(thread.id)}
       />
     </div>
@@ -374,6 +377,7 @@ function summaryOf(
   return [
     view.title,
     THREAD_STATUS_TEXT[view.status],
+    ATTENTION_TEXT[view.attention],
     ...(view.idleDays === null ? [] : [`idle ${view.idleDays} days`]),
     ...(state === 'awaiting' ? ['awaiting a reply'] : []),
     lastAt === null
@@ -382,43 +386,77 @@ function summaryOf(
   ].join(', ');
 }
 
-/** One height for every thread card, the tallest one's, so the lines stay even. */
-export function cardHeightOf(shown: readonly GraphThread[]): number {
-  return Math.max(
-    0,
-    ...shown.map(({ view }) =>
-      threadCardHeight({
-        labels: hasLabels(view),
-        note: view.note !== null,
-        activity: activityLine(view.activity) !== '',
-      }),
-    ),
-  );
-}
-
-/** What hangs under the manager, in the order it stands: each thread, then "+N more". */
-export function graphItems(
+/** The threads in bands by attention, each band on lines of its own, then "+N more" alone. */
+export function graphRows(
   shown: readonly GraphThread[],
   hidden: number,
-): GraphBox[] {
-  const height = cardHeightOf(shown);
+): GraphBox[][] {
+  const boxOf = (thread: GraphThread): GraphBox => ({
+    id: `thread:${thread.id}`,
+    width: THREAD_CARD_WIDTH,
+    height: threadCardHeight(thread.view),
+  });
+  const bands = ATTENTION_ORDER.map((attention) =>
+    shown.filter((thread) => thread.view.attention === attention).map(boxOf),
+  );
   return [
-    ...shown.map((thread) => ({
-      id: `thread:${thread.id}`,
-      width: THREAD_CARD_WIDTH,
-      height,
-    })),
+    ...bandRows(bands, perLineFor(shown.length)),
     ...(hidden > 0
-      ? [{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }]
+      ? [[{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }]]
       : []),
   ];
 }
 
-/** Which threads get a node: the newest by activity, then oldest first, so a node keeps its place. */
+/** Which threads get a node: the first {@link MAX_THREAD_NODES} by attention. */
 export function shownThreads(threads: readonly GraphThread[]): GraphThread[] {
-  return threads
-    .slice(0, MAX_THREAD_NODES)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return orderByAttention(threads).slice(0, MAX_THREAD_NODES);
+}
+
+/** How many threads stand in each attention band. */
+export function attentionCounts(
+  threads: readonly GraphThread[],
+): ReadonlyMap<ThreadAttention, number> {
+  const counts = new Map<ThreadAttention, number>();
+  for (const thread of threads) {
+    counts.set(
+      thread.view.attention,
+      (counts.get(thread.view.attention) ?? 0) + 1,
+    );
+  }
+  return counts;
+}
+
+function AttentionLegend({
+  threads,
+}: {
+  threads: readonly GraphThread[];
+}): React.JSX.Element {
+  const counts = attentionCounts(threads);
+  return (
+    <ul
+      aria-label="Threads by attention"
+      data-slot="graph-legend"
+      className="pointer-events-none absolute top-3 left-3 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-control border border-border bg-card/90 px-2.5 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+      {ATTENTION_ORDER.filter(
+        (attention) => (counts.get(attention) ?? 0) > 0,
+      ).map((attention) => (
+        <li
+          key={attention}
+          data-slot="graph-legend-item"
+          data-attention={attention}
+          className="flex items-center gap-1.5 text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className={attentionDotVariants({ attention })}
+          />
+          {ATTENTION_TEXT[attention]}
+          <span className="font-semibold text-foreground tabular-nums">
+            {counts.get(attention)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /**
@@ -524,7 +562,6 @@ function GraphCanvas({
   now,
   narrow,
   onOpen,
-  onManager,
   className,
 }: GraphViewProps): React.JSX.Element {
   const flow = useReactFlow();
@@ -534,24 +571,22 @@ function GraphCanvas({
 
   const shown = shownThreads(threads);
   const hidden = threads.length - shown.length;
-  const items = graphItems(shown, hidden);
-  const cardHeight = cardHeightOf(shown);
-  const lines = linesFor(items.length);
+  const rows = graphRows(shown, hidden);
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
     height: MANAGER_HEIGHT,
   };
   const drawn: GraphGeometry = narrow
-    ? layoutColumn(root, items)
-    : layoutLines(root, items, lines);
+    ? layoutColumn(root, rows.flat())
+    : layoutRows(root, rows);
 
   const fit = useLatestCallback((animate: boolean) => {
     void flow.setViewport(widthFit(drawn, size), {
       duration: animate && !reduced ? FIT_MS : 0,
     });
   }, []);
-  const fitKey = `${lines}:${items.length}#${Math.round(size.width)}x${Math.round(size.height)}`;
+  const fitKey = `${Math.round(drawn.width)}#${Math.round(size.width)}x${Math.round(size.height)}`;
   useLayoutEffect(() => {
     if (narrow || size.width === 0 || fitted.current === fitKey) {
       return;
@@ -562,7 +597,6 @@ function GraphCanvas({
   }, [fitKey, narrow, size.width, fit]);
 
   const open = useLatestCallback(onOpen, []);
-  const openManager = useLatestCallback(onManager, []);
 
   const states = new Map(
     shown.map((thread) => {
@@ -625,7 +659,6 @@ function GraphCanvas({
       type: 'thread',
       data: {
         thread,
-        height: cardHeight,
         summary: summaryOf(
           thread.view,
           entry.state,
@@ -696,7 +729,7 @@ function GraphCanvas({
   };
 
   return (
-    <GraphActionsContext.Provider value={{ open, manager: openManager }}>
+    <GraphActionsContext.Provider value={{ open }}>
       {narrow ? (
         <div
           role="group"
@@ -725,8 +758,8 @@ function GraphCanvas({
           role="group"
           aria-label={label}
           data-slot="command-center-graph"
-          data-layout="lines"
-          data-lines={lines}
+          data-layout="bands"
+          data-rows={rows.length}
           className={cn('relative', className)}>
           {size.width === 0 ? null : (
             <>
@@ -745,6 +778,7 @@ function GraphCanvas({
                 zoomOnPinch
                 zoomOnDoubleClick={false}
               />
+              <AttentionLegend threads={threads} />
               <ZoomControls onFit={() => fit(true)} />
             </>
           )}

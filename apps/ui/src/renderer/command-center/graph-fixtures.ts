@@ -1,9 +1,19 @@
 import type { GraphThread } from './graph-view';
-import type { ThreadCardStatus } from './thread-card';
+import type { ThreadAttention, ThreadCardStatus } from './thread-card';
 
 export const FIXTURE_NOW = Date.parse('2026-11-17T12:00:00Z');
 
 const STATUSES: ThreadCardStatus[] = ['working', 'waiting', 'idle', 'failed'];
+
+const ATTENTION_OF: Record<ThreadCardStatus, ThreadAttention> = {
+  working: 'working',
+  waiting: 'question',
+  idle: 'quiet',
+  failed: 'blocked',
+  done: 'quiet',
+};
+
+const HOUR = 60 * 60_000;
 
 const TITLES = [
   'Fix the login redirect',
@@ -14,23 +24,34 @@ const TITLES = [
   'Wire the start conductor',
 ];
 
-/** Synthetic threads for the graph's stories and specs; every second one works a board card, every fifth is idle for days. */
+/**
+ * Synthetic threads for the graph's stories and specs: statuses in turn, every
+ * second one works a board card, every fifth has gone still for days.
+ */
 export function graphThreadsOf(count: number): GraphThread[] {
   return Array.from({ length: count }, (_, index) => {
     const n = index + 1;
+    const status = STATUSES[index % STATUSES.length]!;
+    const still = index % 5 === 4;
     return {
       id: `thread-${n}`,
       createdAt: new Date(FIXTURE_NOW - (count - index) * 60_000).toISOString(),
       view: {
         title: TITLES[index % TITLES.length]!,
-        status: STATUSES[index % STATUSES.length]!,
-        handle: `t${n}`,
+        status,
+        attention: still ? 'inactive' : ATTENTION_OF[status],
         project: index % 2 === 0 ? 'QA Billing' : 'QA Cache',
-        agentLabel: 'Claude',
+        agentLabel: index % 4 === 3 ? 'dev-team' : 'claude',
+        isTeam: index % 4 === 3,
         pullRequest:
           index % 3 === 0 ? { number: 400 + n, state: 'open' } : null,
         note: index === 1 ? 'waits for billing API v2' : null,
-        activity: index % 2 === 0 ? 'running the **test suite**' : null,
+        lastMessage:
+          index % 2 === 0
+            ? 'Rebased on **main** and re-ran the suite; two flaky specs left, looking at them now'
+            : index % 3 === 0
+              ? 'Done — PR is up'
+              : null,
         boardCard:
           index % 2 === 0
             ? {
@@ -39,7 +60,11 @@ export function graphThreadsOf(count: number): GraphThread[] {
                 status: 'in_progress',
               }
             : null,
-        idleDays: index % 5 === 4 ? 6 : null,
+        idleDays: still ? 6 : null,
+        lastAt: new Date(
+          FIXTURE_NOW - (still ? 6 * 24 * HOUR : (index + 1) * 0.1 * HOUR),
+        ).toISOString(),
+        now: FIXTURE_NOW,
       },
     };
   });

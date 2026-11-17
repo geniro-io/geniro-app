@@ -1,12 +1,15 @@
 import { cva } from 'class-variance-authority';
 import {
   ArrowUpRight,
+  Bot,
+  Folder,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
   type LucideIcon,
   Moon,
+  Users,
 } from 'lucide-react';
 
 import { plainPreview } from '../chats/brief-text';
@@ -14,9 +17,14 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { taskStatusMeta } from '../tasks/task-status';
+import { formatUpdated } from '../teams/format-updated';
 
 export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
+
+/** Where a thread stands for the user, which colours its card and places it on the graph. */
+export type ThreadAttention =
+  'blocked' | 'working' | 'question' | 'quiet' | 'inactive';
 
 export type ThreadCardPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 
@@ -30,52 +38,64 @@ export interface ThreadCardBoardCard {
 export interface ThreadCardProps {
   title: string;
   status: ThreadCardStatus;
-  handle: string | null;
+  attention: ThreadAttention;
   project: string | null;
+  /** The agent's short name, or the team's name for a team run. */
   agentLabel: string | null;
+  isTeam: boolean;
   pullRequest: { number: number; state: ThreadCardPullRequestState } | null;
   note: string | null;
-  activity: string | null;
+  /** The thread's latest message, as the thread list previews it. */
+  lastMessage: string | null;
   boardCard: ThreadCardBoardCard | null;
   /** Whole days nobody has touched it, once it counts as idle; else null. */
   idleDays: number | null;
+  /** When the thread last moved. */
+  lastAt: string;
+  now: number;
   /** What a screen reader hears for the whole card. */
   summary?: string;
-  /** A taller height to stand in, so a line of cards lines up; never shorter than its content. */
+  /** A taller height to stand in; never shorter than its content. */
   height?: number;
   onGo: () => void;
 }
 
-export const THREAD_CARD_WIDTH = 300;
+export const THREAD_CARD_WIDTH = 272;
 
-const PAD_PX = 12;
-const GAP_PX = 8;
+const PAD_PX = 10;
+const GAP_PX = 6;
 const BORDER_PX = 1;
-const ROW_PX = {
-  header: 20,
-  meta: 16,
-  labels: 20,
-  note: 24,
-  activity: 16,
-  footer: 24,
-} as const;
+const LINE_PX = 16;
+const ROW_PX = { header: 20, labels: 20, note: 20, footer: 24 } as const;
+
+/** About how many characters of the preview fit one line of the card. */
+const MESSAGE_LINE_CHARS = 42;
+
+/** The latest message as the card shows it: one line of plain text, or empty. */
+export function previewLine(message: string | null): string {
+  return message === null ? '' : plainPreview(message).replace(/`/g, '');
+}
+
+/** How many lines the preview takes: none, one, or two at most. */
+export function previewLines(message: string | null): 0 | 1 | 2 {
+  const text = previewLine(message);
+  if (text === '') {
+    return 0;
+  }
+  return text.length <= MESSAGE_LINE_CHARS ? 1 : 2;
+}
 
 /** The card's height for what it shows, so the graph can lay it out before it is drawn. */
-export function threadCardHeight({
-  labels,
-  note,
-  activity,
-}: {
-  labels: boolean;
-  note: boolean;
-  activity: boolean;
+export function threadCardHeight(view: {
+  note: string | null;
+  lastMessage: string | null;
 }): number {
+  const lines = previewLines(view.lastMessage);
   const rows = [
     ROW_PX.header,
-    ROW_PX.meta,
-    ...(labels ? [ROW_PX.labels] : []),
-    ...(note ? [ROW_PX.note] : []),
-    ...(activity ? [ROW_PX.activity] : []),
+    ROW_PX.labels,
+    ...(view.note === null ? [] : [ROW_PX.note]),
+    ...(lines === 0 ? [] : [lines * LINE_PX]),
     ROW_PX.footer,
   ];
   return (
@@ -86,19 +106,6 @@ export function threadCardHeight({
   );
 }
 
-/** The "Now:" line as the card shows it: one line of plain text, or empty. */
-export function activityLine(activity: string | null): string {
-  return activity === null ? '' : plainPreview(activity).replace(/`/g, '');
-}
-
-/** Whether the card carries its label row: a board card, or an idle mark. */
-export function hasLabels(view: {
-  boardCard: ThreadCardBoardCard | null;
-  idleDays: number | null;
-}): boolean {
-  return view.boardCard !== null || view.idleDays !== null;
-}
-
 export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
   working: 'Working',
   waiting: 'Waiting on you',
@@ -107,47 +114,67 @@ export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
   done: 'Done',
 };
 
+export const ATTENTION_TEXT: Record<ThreadAttention, string> = {
+  blocked: 'Blocked',
+  working: 'Working',
+  question: 'Question',
+  quiet: 'Quiet',
+  inactive: 'Inactive a day+',
+};
+
 const cardVariants = cva(
-  'flex flex-col overflow-hidden rounded-card border bg-card text-left shadow-sm transition-[border-color,box-shadow] duration-200 hover:shadow-md motion-reduce:transition-none',
+  'flex flex-col overflow-hidden rounded-card border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md motion-reduce:transition-none',
   {
     variants: {
-      status: {
-        working: 'border-primary/60',
-        waiting: 'border-warning/70',
-        idle: 'border-border',
-        failed: 'border-destructive/60',
-        done: 'border-success/50',
-      } satisfies Record<ThreadCardStatus, string>,
+      attention: {
+        blocked: 'border-destructive/50 bg-destructive/5',
+        working: 'border-success/50 bg-success/5',
+        question: 'border-warning/50 bg-warning/10',
+        quiet: 'border-border bg-card',
+        inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
+      } satisfies Record<ThreadAttention, string>,
     },
   },
 );
 
-const dotVariants = cva('relative size-2 shrink-0 rounded-full', {
+export const attentionDotVariants = cva('size-2 shrink-0 rounded-full', {
   variants: {
-    status: {
-      working: 'bg-primary',
-      waiting: 'bg-warning',
-      idle: 'bg-muted-foreground/50',
-      failed: 'bg-destructive',
-      done: 'bg-success',
-    } satisfies Record<ThreadCardStatus, string>,
+    attention: {
+      blocked: 'bg-destructive',
+      working: 'bg-success',
+      question: 'bg-warning',
+      quiet: 'bg-muted-foreground/60',
+      inactive: 'bg-muted-foreground/30',
+    } satisfies Record<ThreadAttention, string>,
+  },
+});
+
+const statusChipVariants = cva('shrink-0 px-1.5 py-0 font-medium', {
+  variants: {
+    attention: {
+      blocked: 'bg-destructive/10 text-destructive',
+      working: 'bg-success/10 text-success',
+      question: 'bg-warning/15 text-warning',
+      quiet: 'bg-muted text-muted-foreground',
+      inactive: 'bg-muted text-muted-foreground',
+    } satisfies Record<ThreadAttention, string>,
   },
 });
 
 function StatusDot({
-  status,
+  attention,
 }: {
-  status: ThreadCardStatus;
+  attention: ThreadAttention;
 }): React.JSX.Element {
   return (
     <span
       aria-hidden="true"
       data-slot="thread-card-dot"
-      className={dotVariants({ status })}>
-      {status === 'working' ? (
+      className={cn('relative', attentionDotVariants({ attention }))}>
+      {attention === 'working' ? (
         <span
           data-slot="thread-card-dot-ping"
-          className="absolute inset-0 animate-ping rounded-full bg-primary/60 motion-reduce:animate-none"
+          className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none"
         />
       ) : null}
     </span>
@@ -217,7 +244,30 @@ function BoardCardLabel({
       <span className="truncate font-mono tabular-nums">
         {card.identifier ?? card.title}
       </span>
-      <span className="shrink-0 text-muted-foreground">· {meta.label}</span>
+    </Badge>
+  );
+}
+
+function LabelChip({
+  slot,
+  icon,
+  text,
+  title,
+}: {
+  slot: string;
+  icon: LucideIcon;
+  text: string;
+  title: string;
+}): React.JSX.Element {
+  const Icon = icon;
+  return (
+    <Badge
+      data-slot={slot}
+      variant="muted"
+      title={title}
+      className="min-w-0 shrink gap-1 px-1.5 py-0 font-normal">
+      <Icon aria-hidden="true" className="size-3 shrink-0" />
+      <span className="truncate">{text}</span>
     </Badge>
   );
 }
@@ -229,47 +279,45 @@ function IdleMark({ days }: { days: number }): React.JSX.Element {
       variant="muted"
       title={`Nobody has touched this thread for ${days} days`}
       className="shrink-0 gap-1 px-1.5 py-0 font-normal text-muted-foreground">
-      <Moon aria-hidden="true" className="size-3.5 shrink-0" />
-      Idle {days} days
+      <Moon aria-hidden="true" className="size-3 shrink-0" />
+      {days}d
     </Badge>
   );
 }
 
 /**
- * One thread as a card of fixed size — a node of the command center's graph.
- * The card itself opens nothing; its Go to thread button does.
+ * One thread as a card — a node of the command center's graph: its title and
+ * pull request, its state and labels, the manager's note, its latest message,
+ * and a Go to thread button. The card itself opens nothing.
  */
 export function ThreadCard({
   title,
   status,
-  handle,
+  attention,
   project,
   agentLabel,
+  isTeam,
   pullRequest,
   note,
-  activity,
+  lastMessage,
   boardCard,
   idleDays,
+  lastAt,
+  now,
   summary,
   height,
   onGo,
 }: ThreadCardProps): React.JSX.Element {
-  const meta = [THREAD_STATUS_TEXT[status], handle, project, agentLabel]
-    .filter((part) => part !== null && part !== '')
-    .join(' · ');
-  const now = activityLine(activity);
-  const labels = hasLabels({ boardCard, idleDays });
-  const ownHeight = threadCardHeight({
-    labels,
-    note: note !== null,
-    activity: now !== '',
-  });
+  const preview = previewLine(lastMessage);
+  const lines = previewLines(lastMessage);
+  const ownHeight = threadCardHeight({ note, lastMessage });
   return (
     <article
       aria-label={summary ?? title}
       data-slot="thread-card"
       data-status={status}
-      className={cardVariants({ status })}
+      data-attention={attention}
+      className={cardVariants({ attention })}
       style={{
         width: THREAD_CARD_WIDTH,
         height: Math.max(ownHeight, height ?? 0),
@@ -277,7 +325,7 @@ export function ThreadCard({
         gap: GAP_PX,
       }}>
       <div className="flex h-5 min-w-0 shrink-0 items-center gap-2">
-        <StatusDot status={status} />
+        <StatusDot attention={attention} />
         <span
           data-slot="thread-card-title"
           title={title}
@@ -291,40 +339,65 @@ export function ThreadCard({
           />
         )}
       </div>
-      <p
-        data-slot="thread-card-status"
-        className="h-4 shrink-0 truncate text-xs leading-4 text-muted-foreground">
-        {meta}
-      </p>
-      {labels ? (
-        <div className="flex h-5 min-w-0 shrink-0 items-center gap-1.5">
-          {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
-          {idleDays === null ? null : <IdleMark days={idleDays} />}
-        </div>
-      ) : null}
+      <div
+        data-slot="thread-card-labels"
+        className="flex h-5 min-w-0 shrink-0 items-center gap-1 overflow-hidden">
+        <Badge
+          data-slot="thread-card-status"
+          variant="muted"
+          className={statusChipVariants({ attention })}>
+          {THREAD_STATUS_TEXT[status]}
+        </Badge>
+        {agentLabel === null ? null : (
+          <LabelChip
+            slot="thread-card-agent"
+            icon={isTeam ? Users : Bot}
+            text={agentLabel}
+            title={isTeam ? `Team ${agentLabel}` : `Agent ${agentLabel}`}
+          />
+        )}
+        {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
+        {project === null ? null : (
+          <LabelChip
+            slot="thread-card-project"
+            icon={Folder}
+            text={project}
+            title={`Project ${project}`}
+          />
+        )}
+        {idleDays === null ? null : <IdleMark days={idleDays} />}
+      </div>
       {note === null ? null : (
         <p
           data-slot="thread-card-note"
           title={note}
-          className="h-6 shrink-0 truncate border-l-2 border-primary/50 pl-2 text-xs leading-6 text-foreground/80 italic">
+          className="h-5 shrink-0 truncate border-l-2 border-primary/50 pl-2 text-xs leading-5 text-foreground/80 italic">
           {note}
         </p>
       )}
-      {now === '' ? null : (
+      {lines === 0 ? null : (
         <p
-          data-slot="thread-card-activity"
-          title={now}
-          className="h-4 shrink-0 truncate text-xs leading-4 text-muted-foreground">
-          Now: {now}
+          data-slot="thread-card-message"
+          title={preview}
+          className={cn(
+            'shrink-0 text-xs leading-4 text-muted-foreground',
+            lines === 1 ? 'h-4 truncate' : 'line-clamp-2 h-8',
+          )}>
+          {preview}
         </p>
       )}
-      <div className="mt-auto flex h-6 shrink-0 justify-end">
+      <div className="flex h-6 shrink-0 items-center justify-between gap-2">
+        <span
+          data-slot="thread-card-time"
+          className="truncate text-xs text-muted-foreground tabular-nums">
+          {formatUpdated(lastAt, now)}
+        </span>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           data-slot="thread-card-go"
-          className="h-6 gap-1 px-2 text-xs"
+          className="h-6 shrink-0 gap-1 px-2 text-xs"
           onClick={onGo}>
           Go to thread
           <ArrowUpRight aria-hidden="true" className="size-3.5" />

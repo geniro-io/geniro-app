@@ -1,4 +1,4 @@
-import { MessageSquare, Network } from 'lucide-react';
+import { Columns2, MessageSquare, Network } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -18,8 +18,11 @@ import {
 } from '../chats/use-thread-pull-requests';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
+import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
+import { SegmentedControl } from '../components/ui/segmented-control';
 import { Select } from '../components/ui/select';
+import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -37,7 +40,42 @@ const ALL_PROJECTS = '__all__';
 /** How often the idle marks and the graph's lit edges move on. */
 const CLOCK_TICK_MS = 30_000;
 
-type CommandCenterView = 'chat' | 'graph';
+export type CommandCenterView = 'chat' | 'both' | 'graph';
+
+const VIEW_KEY = 'commandCenter.view';
+const VIEWS: readonly CommandCenterView[] = ['chat', 'both', 'graph'];
+
+/** The view the viewer last picked, or the split when they never did. */
+export function readStoredView(): CommandCenterView {
+  try {
+    const stored = localStorage.getItem(VIEW_KEY);
+    return VIEWS.find((view) => view === stored) ?? 'both';
+  } catch {
+    return 'both';
+  }
+}
+
+function storeView(view: CommandCenterView): void {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    return;
+  }
+}
+
+const VIEW_OPTIONS = [
+  {
+    id: 'chat' as const,
+    label: 'Chat',
+    icon: <MessageSquare aria-hidden="true" />,
+  },
+  { id: 'both' as const, label: 'Both', icon: <Columns2 aria-hidden="true" /> },
+  {
+    id: 'graph' as const,
+    label: 'Graph',
+    icon: <Network aria-hidden="true" />,
+  },
+];
 
 function useClock(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -66,7 +104,37 @@ export function CommandCenter({
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();
-  const [view, setView] = useState<CommandCenterView>('chat');
+  const [storedView, setStoredView] = useState(readStoredView);
+  const view: CommandCenterView =
+    narrow && storedView === 'both' ? 'chat' : storedView;
+  const pickView = (next: CommandCenterView): void => {
+    setStoredView(next);
+    storeView(next);
+  };
+  const chatWidth = usePanelWidth({
+    storageKey: 'commandCenter.chatWidth',
+    defaultWidth: 560,
+    minWidth: 360,
+    maxWidth: 1100,
+    handleEdge: 'right',
+  });
+  const [teamNames, setTeamNames] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    let live = true;
+    void apis.teams
+      .listTeams()
+      .then((teams) => {
+        if (live) {
+          setTeamNames(new Map(teams.map((team) => [team.slug, team.name])));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [apis]);
   const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
   const [managerAgent, setManagerAgent] = useState<AgentKind>(
     () => (identities[0]?.agent ?? CLI_KINDS[0]!) as AgentKind,
@@ -93,6 +161,7 @@ export function CommandCenter({
       card,
       rowPullRequestOf(card.run, pullRequests.byKey),
       identities,
+      teamNames,
       now,
     );
 
@@ -142,14 +211,47 @@ export function CommandCenter({
       ],
     },
   ];
-  const graphShown = view === 'graph';
+  const graphShown = view !== 'chat';
+  const chatShown = view !== 'graph';
+  const split = view === 'both';
+
+  const graph = (
+    <main
+      className={cn(
+        'flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar/40',
+        split && 'border-l border-border',
+      )}>
+      {board.cards === null ? (
+        <p className="p-6 text-sm text-muted-foreground">Loading threads…</p>
+      ) : shown.length === 0 ? (
+        <EmptyState className="m-auto">
+          No active threads. Ask the manager to start one.
+        </EmptyState>
+      ) : (
+        <Suspense
+          fallback={
+            <p className="p-6 text-sm text-muted-foreground">Loading graph…</p>
+          }>
+          <GraphView
+            className="min-h-[18rem] flex-1"
+            manager={manager}
+            pendingStarts={board.pendingStarts}
+            threads={graphThreads}
+            contacts={contacts}
+            pulses={pulses}
+            now={now}
+            narrow={narrow}
+            onOpen={onOpenThread}
+          />
+        </Suspense>
+      )}
+    </main>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <h1 className="mr-2 truncate text-sm font-semibold">
-          {graphShown ? 'Threads' : 'Manager'}
-        </h1>
+        <h1 className="mr-2 truncate text-sm font-semibold">Command center</h1>
         {graphShown ? (
           <Select
             aria-label="Project"
@@ -160,22 +262,18 @@ export function CommandCenter({
             onValueChange={setProjectFilter}
           />
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="ml-auto size-8"
-          data-slot="command-center-view-toggle"
-          aria-pressed={graphShown}
-          aria-label={graphShown ? 'Show the manager chat' : 'Show the graph'}
-          title={graphShown ? 'Show the manager chat' : 'Show the graph'}
-          onClick={() => setView(graphShown ? 'chat' : 'graph')}>
-          {graphShown ? (
-            <MessageSquare aria-hidden="true" />
-          ) : (
-            <Network aria-hidden="true" />
-          )}
-        </Button>
+        <SegmentedControl
+          ariaLabel="View"
+          size="sm"
+          className="ml-auto"
+          options={
+            narrow
+              ? VIEW_OPTIONS.filter((option) => option.id !== 'both')
+              : VIEW_OPTIONS
+          }
+          value={view}
+          onSelect={pickView}
+        />
       </header>
       {board.error === null ? null : (
         <ErrorBanner
@@ -192,88 +290,78 @@ export function CommandCenter({
           }
         />
       )}
-      {graphShown ? (
-        <main className="flex min-h-0 flex-1 flex-col bg-sidebar/40">
-          {board.cards === null ? (
-            <p className="p-6 text-sm text-muted-foreground">
-              Loading threads…
-            </p>
-          ) : shown.length === 0 ? (
-            <EmptyState className="m-auto">
-              No active threads. Ask the manager to start one.
-            </EmptyState>
-          ) : (
-            <Suspense
-              fallback={
-                <p className="p-6 text-sm text-muted-foreground">
-                  Loading graph…
-                </p>
-              }>
-              <GraphView
-                className="min-h-[18rem] flex-1"
-                manager={manager}
-                pendingStarts={board.pendingStarts}
-                threads={graphThreads}
-                contacts={contacts}
-                pulses={pulses}
-                now={now}
-                narrow={narrow}
-                onOpen={onOpenThread}
-                onManager={() => setView('chat')}
-              />
-            </Suspense>
+      <div className="flex min-h-0 flex-1">
+        <div
+          hidden={!chatShown}
+          data-slot="command-center-chat"
+          className={cn(
+            'relative min-h-0 min-w-0 flex-col',
+            chatShown && 'flex',
+            split ? 'shrink-0' : 'flex-1',
           )}
-        </main>
-      ) : null}
-      {!graphShown && managerRunId === null ? (
-        <section
-          aria-label="Open the manager"
-          className="m-auto flex max-w-md flex-col items-center gap-3 p-6 text-center text-sm">
-          <p className="text-muted-foreground">
-            The manager watches and messages every thread for you, and starts
-            new ones when you ask. Run it on
-          </p>
-          <div className="flex items-center gap-2">
-            <Select
-              aria-label="Manager agent"
-              variant="ghost"
-              side="bottom"
-              groups={[
-                {
-                  items: identities.map((identity) => ({
-                    value: identity.agent,
-                    label: identity.displayName,
-                  })),
-                },
-              ]}
-              value={managerAgent}
-              onValueChange={(value) => setManagerAgent(value as AgentKind)}
+          style={split ? { width: chatWidth.width } : undefined}>
+          {managerRunId === null ? (
+            <section
+              aria-label="Open the manager"
+              className="m-auto flex max-w-md flex-col items-center gap-3 p-6 text-center text-sm">
+              <p className="text-muted-foreground">
+                The manager watches and messages every thread for you, and
+                starts new ones when you ask. Run it on
+              </p>
+              <div className="flex items-center gap-2">
+                <Select
+                  aria-label="Manager agent"
+                  variant="ghost"
+                  side="bottom"
+                  groups={[
+                    {
+                      items: identities.map((identity) => ({
+                        value: identity.agent,
+                        label: identity.displayName,
+                      })),
+                    },
+                  ]}
+                  value={managerAgent}
+                  onValueChange={(value) => setManagerAgent(value as AgentKind)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    void apis.commandCenter
+                      .openCommandCenterChat({
+                        startCommandCenterChatDto: { agentKind: managerAgent },
+                      })
+                      .then(board.reload);
+                  }}>
+                  Open the manager
+                </Button>
+              </div>
+            </section>
+          ) : client === null ? null : (
+            <ManagerDock
+              apis={apis}
+              handle={handle}
+              client={client}
+              agentKind={managerAgent}
+              hidden={!chatShown}
+              onTurnSettled={board.reload}
             />
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                void apis.commandCenter
-                  .openCommandCenterChat({
-                    startCommandCenterChatDto: { agentKind: managerAgent },
-                  })
-                  .then(board.reload);
-              }}>
-              Open the manager
-            </Button>
-          </div>
-        </section>
-      ) : null}
-      {managerRunId !== null && client !== null ? (
-        <ManagerDock
-          apis={apis}
-          handle={handle}
-          client={client}
-          agentKind={managerAgent}
-          hidden={graphShown}
-          onTurnSettled={board.reload}
-        />
-      ) : null}
+          )}
+          {split ? (
+            <PanelResizeHandle
+              edge="right"
+              label="Resize the manager chat"
+              onMouseDown={chatWidth.startResize}
+              value={chatWidth.width}
+              min={chatWidth.minWidth}
+              max={chatWidth.maxWidth}
+              onResize={chatWidth.resizeTo}
+            />
+          ) : null}
+        </div>
+        {graphShown ? graph : null}
+      </div>
     </div>
   );
 }

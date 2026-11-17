@@ -26,7 +26,6 @@ type Handler = (
 
 interface SeenRequest {
   authorization: string | undefined;
-  connection: string | undefined;
   body: string;
 }
 
@@ -34,6 +33,7 @@ let server: Server;
 let port: number;
 let handler: Handler;
 let seen: SeenRequest[];
+let connections: number;
 
 const silent: Handler = () => undefined;
 
@@ -55,13 +55,12 @@ beforeAll(async () => {
       body += chunk;
     });
     request.on('end', () => {
-      seen.push({
-        authorization: request.headers.authorization,
-        connection: request.headers.connection,
-        body,
-      });
+      seen.push({ authorization: request.headers.authorization, body });
       handler(request, response, seen.length);
     });
+  });
+  server.on('connection', () => {
+    connections += 1;
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = (server.address() as AddressInfo).port;
@@ -69,6 +68,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   seen = [];
+  connections = 0;
   handler = (_request, response) => answerOk(response);
 });
 
@@ -103,32 +103,27 @@ describe('probeCallEndpoint', () => {
     expect(seen).toHaveLength(1);
   });
 
-  it('reports a refused connection with the fetch error message at once, without waiting out a budget', async () => {
+  it('reports a refused connection with its error at once, without waiting out a budget', async () => {
     const closed = createServer();
     await new Promise<void>((resolve) =>
       closed.listen(0, '127.0.0.1', resolve),
     );
     const freePort = (closed.address() as AddressInfo).port;
     await new Promise<void>((resolve) => closed.close(() => resolve()));
-    const url = `http://127.0.0.1:${freePort}/mcp`;
-
-    const refusal = await fetch(url, { method: 'POST' }).then(
-      () => null,
-      (err: unknown) => (err instanceof Error ? err.message : String(err)),
-    );
-    expect(refusal).not.toBeNull();
 
     await expect(
-      probeCallEndpoint({ url, token: 'call-token' }, [5_000, 5_000]),
-    ).resolves.toBe(refusal);
+      probeCallEndpoint(
+        { url: `http://127.0.0.1:${freePort}/mcp`, token: 'call-token' },
+        [5_000, 5_000],
+      ),
+    ).resolves.toBe(`connect ECONNREFUSED 127.0.0.1:${freePort}`);
   });
 
-  it('answers on a fresh connection after the server has dropped every open one', async () => {
+  it('opens a connection of its own for every probe, never a pooled keep-alive one', async () => {
     await expect(probeCallEndpoint(target())).resolves.toBeNull();
-    server.closeAllConnections();
-
     await expect(probeCallEndpoint(target())).resolves.toBeNull();
     expect(seen).toHaveLength(2);
+    expect(connections).toBe(2);
   });
 
   it('gives up after every budget has timed out and names the attempt count', async () => {
@@ -139,13 +134,12 @@ describe('probeCallEndpoint', () => {
     expect(failure).toMatch(/^timed out after 2 attempts/);
   });
 
-  it('sends the bearer token and an initialize request on a connection of its own, and reports nothing on success', async () => {
+  it('sends the bearer token and an initialize request, and reports nothing on success', async () => {
     await expect(probeCallEndpoint(target())).resolves.toBeNull();
 
     expect(seen).toHaveLength(1);
     const [first] = seen;
     expect(first?.authorization).toBe('Bearer call-token');
-    expect(first?.connection).toBe('close');
     expect(JSON.parse(first?.body ?? '{}')).toMatchObject({
       method: 'initialize',
     });

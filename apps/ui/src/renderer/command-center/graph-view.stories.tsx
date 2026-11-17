@@ -40,6 +40,8 @@ const meta = {
     now: FIXTURE_NOW,
     narrow: false,
     onOpen: () => {},
+    askingIds: new Set(['thread-2']),
+    onAnswer: () => {},
     className: 'h-full',
   },
   decorators: [

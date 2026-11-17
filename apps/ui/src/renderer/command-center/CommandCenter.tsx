@@ -1,4 +1,11 @@
-import { Columns2, History, MessageSquare, Network } from 'lucide-react';
+import {
+  History,
+  MessageCircleQuestion,
+  MessageSquare,
+  Network,
+  Rows2,
+  X,
+} from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -19,6 +26,7 @@ import {
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { Select } from '../components/ui/select';
@@ -29,9 +37,11 @@ import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
 import { threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
+import { NeedsYouPanel } from './needs-you-panel';
 import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
 import { useCommandCenterTimeline } from './use-command-center-timeline';
+import { type AskingThread, useOpenRequests } from './use-open-requests';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
@@ -45,6 +55,15 @@ const CLOCK_TICK_MS = 30_000;
 export type CommandCenterView = 'chat' | 'both' | 'graph';
 
 const VIEW_KEY = 'commandCenter.view';
+
+type SidebarTab = 'needs' | 'timeline';
+
+/** The graph's height in the split before the viewer drags it: about half of the page under the header. */
+function defaultGraphHeight(): number {
+  return typeof window === 'undefined'
+    ? 420
+    : Math.max(240, Math.round((window.innerHeight - 96) / 2));
+}
 const VIEWS: readonly CommandCenterView[] = ['chat', 'both', 'graph'];
 
 /** The view the viewer last picked, or the split when they never did. */
@@ -71,7 +90,7 @@ const VIEW_OPTIONS = [
     label: 'Chat',
     icon: <MessageSquare aria-hidden="true" />,
   },
-  { id: 'both' as const, label: 'Both', icon: <Columns2 aria-hidden="true" /> },
+  { id: 'both' as const, label: 'Both', icon: <Rows2 aria-hidden="true" /> },
   {
     id: 'graph' as const,
     label: 'Graph',
@@ -113,12 +132,12 @@ export function CommandCenter({
     setStoredView(next);
     storeView(next);
   };
-  const chatWidth = usePanelWidth({
-    storageKey: 'commandCenter.chatWidth',
-    defaultWidth: 560,
-    minWidth: 360,
-    maxWidth: 1100,
-    handleEdge: 'right',
+  const graphHeight = usePanelWidth({
+    storageKey: 'commandCenter.graphHeight',
+    defaultWidth: defaultGraphHeight(),
+    minWidth: 200,
+    maxWidth: 1600,
+    handleEdge: 'bottom',
   });
   const [teamNames, setTeamNames] = useState<ReadonlyMap<string, string>>(
     () => new Map(),
@@ -142,8 +161,41 @@ export function CommandCenter({
     () => (identities[0]?.agent ?? CLI_KINDS[0]!) as AgentKind,
   );
   const board = useCommandCenterBoard(apis, client);
-  const [timelineOpen, setTimelineOpen] = useState(false);
-  const timeline = useCommandCenterTimeline(apis, client, timelineOpen);
+  const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
+  const [focusRunId, setFocusRunId] = useState<string | null>(null);
+  const timeline = useCommandCenterTimeline(
+    apis,
+    client,
+    sidebar === 'timeline',
+  );
+  const asking = useMemo(
+    () =>
+      (board.cards ?? []).flatMap((card): AskingThread[] =>
+        card.run.awaiting == null
+          ? []
+          : [
+              {
+                runId: card.run.id,
+                title: card.run.title ?? 'Untitled thread',
+                isTeam: card.run.teamId != null,
+                awaiting: card.run.awaiting,
+                lastActivityAt: card.run.lastActivityAt ?? card.run.createdAt,
+              },
+            ],
+      ),
+    [board.cards],
+  );
+  const openRequests = useOpenRequests(apis, client, asking);
+  const askingIds = useMemo(
+    () => new Set(openRequests.requests.map((request) => request.runId)),
+    [openRequests.requests],
+  );
+  const toggleSidebar = (tab: SidebarTab): void =>
+    setSidebar((open) => (open === tab ? null : tab));
+  const answerFrom = (runId: string): void => {
+    setFocusRunId(runId);
+    setSidebar('needs');
+  };
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -236,13 +288,16 @@ export function CommandCenter({
   const graphShown = view !== 'chat';
   const chatShown = view !== 'graph';
   const split = view === 'both';
+  const needsCount = openRequests.requests.length;
 
   const graph = (
     <main
+      data-slot="command-center-graph-pane"
       className={cn(
-        'flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar/40',
-        split && 'border-l border-border',
-      )}>
+        'relative flex min-h-0 min-w-0 flex-col bg-sidebar/40',
+        split ? 'shrink-0 border-b border-border' : 'flex-1',
+      )}
+      style={split ? { height: graphHeight.width } : undefined}>
       {board.cards === null ? (
         <p className="p-6 text-sm text-muted-foreground">Loading threads…</p>
       ) : shown.length === 0 ? (
@@ -255,7 +310,7 @@ export function CommandCenter({
             <p className="p-6 text-sm text-muted-foreground">Loading graph…</p>
           }>
           <GraphView
-            className="min-h-[18rem] flex-1"
+            className="min-h-0 flex-1"
             manager={manager}
             pendingStarts={board.pendingStarts}
             threads={graphThreads}
@@ -264,32 +319,46 @@ export function CommandCenter({
             now={now}
             narrow={narrow}
             onOpen={onOpenThread}
+            askingIds={askingIds}
+            onAnswer={answerFrom}
           />
         </Suspense>
       )}
+      {split ? (
+        <PanelResizeHandle
+          edge="bottom"
+          label="Resize the graph"
+          onMouseDown={graphHeight.startResize}
+          value={graphHeight.width}
+          min={graphHeight.minWidth}
+          max={graphHeight.maxWidth}
+          onResize={graphHeight.resizeTo}
+        />
+      ) : null}
     </main>
   );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <h1 className="mr-2 truncate text-sm font-semibold max-sm:hidden">
-          Command center
-        </h1>
-        {graphShown ? (
-          <Select
-            aria-label="Project"
-            variant="ghost"
-            side="bottom"
-            groups={projectGroups}
-            value={projectFilter}
-            onValueChange={setProjectFilter}
-          />
-        ) : null}
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="truncate text-sm font-semibold max-sm:hidden">
+            Command center
+          </h1>
+          {graphShown ? (
+            <Select
+              aria-label="Project"
+              variant="ghost"
+              side="bottom"
+              groups={projectGroups}
+              value={projectFilter}
+              onValueChange={setProjectFilter}
+            />
+          ) : null}
+        </div>
         <SegmentedControl
           ariaLabel="View"
           size="sm"
-          className="ml-auto"
           options={
             narrow
               ? VIEW_OPTIONS.filter((option) => option.id !== 'both')
@@ -298,18 +367,43 @@ export function CommandCenter({
           value={view}
           onSelect={pickView}
         />
-        <Button
-          type="button"
-          variant={timelineOpen ? 'secondary' : 'ghost'}
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-xs"
-          data-slot="command-center-timeline-toggle"
-          aria-pressed={timelineOpen}
-          title="Everything the manager and its threads did, newest first"
-          onClick={() => setTimelineOpen((was) => !was)}>
-          <History aria-hidden="true" className="size-3.5" />
-          <span className="max-sm:sr-only">Timeline</span>
-        </Button>
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          <Button
+            type="button"
+            variant={sidebar === 'needs' ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            data-slot="command-center-needs-toggle"
+            aria-pressed={sidebar === 'needs'}
+            title="Questions and approvals your threads wait on — answer them here"
+            onClick={() => {
+              setFocusRunId(null);
+              toggleSidebar('needs');
+            }}>
+            <MessageCircleQuestion aria-hidden="true" className="size-3.5" />
+            <span className="max-sm:sr-only">Needs you</span>
+            {needsCount === 0 ? null : (
+              <Badge
+                variant="warning"
+                data-slot="command-center-needs-count"
+                className="px-1.5 py-0 tabular-nums">
+                {needsCount}
+              </Badge>
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant={sidebar === 'timeline' ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            data-slot="command-center-timeline-toggle"
+            aria-pressed={sidebar === 'timeline'}
+            title="Everything the manager and its threads did, newest first"
+            onClick={() => toggleSidebar('timeline')}>
+            <History aria-hidden="true" className="size-3.5" />
+            <span className="max-sm:sr-only">Timeline</span>
+          </Button>
+        </div>
       </header>
       {board.error === null ? null : (
         <ErrorBanner
@@ -327,97 +421,128 @@ export function CommandCenter({
         />
       )}
       <div className="relative flex min-h-0 flex-1">
-        <div
-          hidden={!chatShown}
-          data-slot="command-center-chat"
-          className={cn(
-            'relative min-h-0 min-w-0 flex-col',
-            chatShown && 'flex',
-            split ? 'shrink-0' : 'flex-1',
-          )}
-          style={split ? { width: chatWidth.width } : undefined}>
-          {managerRunId === null ? (
-            <section
-              aria-label="Open the manager"
-              className="m-auto flex max-w-md flex-col items-center gap-3 p-6 text-center text-sm">
-              <p className="text-muted-foreground">
-                The manager watches and messages every thread for you, and
-                starts new ones when you ask. Run it on
-              </p>
-              <div className="flex items-center gap-2">
-                <Select
-                  aria-label="Manager agent"
-                  variant="ghost"
-                  side="bottom"
-                  groups={[
-                    {
-                      items: identities.map((identity) => ({
-                        value: identity.agent,
-                        label: identity.displayName,
-                      })),
-                    },
-                  ]}
-                  value={managerAgent}
-                  onValueChange={(value) => setManagerAgent(value as AgentKind)}
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => {
-                    void apis.commandCenter
-                      .openCommandCenterChat({
-                        startCommandCenterChatDto: { agentKind: managerAgent },
-                      })
-                      .then(board.reload);
-                  }}>
-                  Open the manager
-                </Button>
-              </div>
-            </section>
-          ) : client === null ? null : (
-            <ManagerDock
-              apis={apis}
-              handle={handle}
-              client={client}
-              agentKind={managerAgent}
-              hidden={!chatShown}
-              workingThreads={workingThreads}
-              onOpenThread={onOpenThread}
-              onTurnSettled={board.reload}
-            />
-          )}
-          {split ? (
-            <PanelResizeHandle
-              edge="right"
-              label="Resize the manager chat"
-              onMouseDown={chatWidth.startResize}
-              value={chatWidth.width}
-              min={chatWidth.minWidth}
-              max={chatWidth.maxWidth}
-              onResize={chatWidth.resizeTo}
-            />
-          ) : null}
-        </div>
-        {graphShown ? graph : null}
-        {timelineOpen ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {graphShown ? graph : null}
           <div
-            data-slot="command-center-timeline-column"
+            hidden={!chatShown}
+            data-slot="command-center-chat"
             className={cn(
-              'flex min-h-0 flex-col border-l border-border bg-background',
-              narrow ? 'absolute inset-0 z-30' : 'w-[380px] shrink-0',
+              'relative min-h-0 min-w-0 flex-1 flex-col',
+              chatShown && 'flex',
             )}>
-            <TimelinePanel
-              events={timeline.events}
-              loading={timeline.loading}
-              error={timeline.error}
-              hasMore={timeline.hasMore}
-              onLoadOlder={timeline.loadOlder}
-              onOpenThread={onOpenThread}
-              onClose={() => setTimelineOpen(false)}
-              now={now}
-            />
+            {managerRunId === null ? (
+              <section
+                aria-label="Open the manager"
+                className="m-auto flex max-w-md flex-col items-center gap-3 p-6 text-center text-sm">
+                <p className="text-muted-foreground">
+                  The manager watches and messages every thread for you, and
+                  starts new ones when you ask. Run it on
+                </p>
+                <div className="flex items-center gap-2">
+                  <Select
+                    aria-label="Manager agent"
+                    variant="ghost"
+                    side="bottom"
+                    groups={[
+                      {
+                        items: identities.map((identity) => ({
+                          value: identity.agent,
+                          label: identity.displayName,
+                        })),
+                      },
+                    ]}
+                    value={managerAgent}
+                    onValueChange={(value) =>
+                      setManagerAgent(value as AgentKind)
+                    }
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      void apis.commandCenter
+                        .openCommandCenterChat({
+                          startCommandCenterChatDto: {
+                            agentKind: managerAgent,
+                          },
+                        })
+                        .then(board.reload);
+                    }}>
+                    Open the manager
+                  </Button>
+                </div>
+              </section>
+            ) : client === null ? null : (
+              <ManagerDock
+                apis={apis}
+                handle={handle}
+                client={client}
+                agentKind={managerAgent}
+                hidden={!chatShown}
+                workingThreads={workingThreads}
+                onOpenThread={onOpenThread}
+                onTurnSettled={board.reload}
+              />
+            )}
           </div>
-        ) : null}
+        </div>
+        {sidebar === null ? null : (
+          <aside
+            aria-label="Command center sidebar"
+            data-slot="command-center-sidebar"
+            className={cn(
+              'flex min-h-0 flex-col border-l border-border bg-card',
+              narrow ? 'absolute inset-0 z-30' : 'w-[400px] shrink-0',
+            )}>
+            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+              <SegmentedControl
+                ariaLabel="Sidebar"
+                size="sm"
+                options={[
+                  {
+                    id: 'needs' as const,
+                    label:
+                      needsCount === 0
+                        ? 'Needs you'
+                        : `Needs you · ${needsCount}`,
+                  },
+                  { id: 'timeline' as const, label: 'Timeline' },
+                ]}
+                value={sidebar}
+                onSelect={setSidebar}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="ml-auto size-7"
+                aria-label="Close the sidebar"
+                title="Close"
+                onClick={() => setSidebar(null)}>
+                <X aria-hidden="true" className="size-4" />
+              </Button>
+            </div>
+            {sidebar === 'needs' ? (
+              <NeedsYouPanel
+                requests={openRequests.requests}
+                error={openRequests.error}
+                focusRunId={focusRunId}
+                onAnswer={openRequests.answer}
+                onOpenThread={onOpenThread}
+              />
+            ) : (
+              <TimelinePanel
+                events={timeline.events}
+                loading={timeline.loading}
+                error={timeline.error}
+                hasMore={timeline.hasMore}
+                onLoadOlder={timeline.loadOlder}
+                onOpenThread={onOpenThread}
+                now={now}
+              />
+            )}
+          </aside>
+        )}
       </div>
     </div>
   );

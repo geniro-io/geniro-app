@@ -13,9 +13,8 @@ import {
   Rocket,
   Send,
   ShieldAlert,
-  X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import type {
   CommandCenterTimelineEvent,
@@ -26,63 +25,11 @@ import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { SegmentedControl } from '../components/ui/segmented-control';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 
 export type TimelineEvent = CommandCenterTimelineEvent;
 export type TimelineEventKind = CommandCenterTimelineKind;
-
-export type TimelineFilter = 'all' | 'messages' | 'threads' | 'needs';
-
-export const TIMELINE_FILTERS: readonly {
-  id: TimelineFilter;
-  label: string;
-}[] = [
-  { id: 'all', label: 'All' },
-  { id: 'messages', label: 'Messages' },
-  { id: 'threads', label: 'Threads' },
-  { id: 'needs', label: 'Needs you' },
-];
-
-const MESSAGE_KINDS: ReadonlySet<TimelineEventKind> = new Set([
-  'user_message',
-  'manager_message',
-  'thread_message',
-]);
-
-const THREAD_KINDS: ReadonlySet<TimelineEventKind> = new Set([
-  'thread_started',
-  'start_requested',
-  'pull_request',
-  'stage',
-  'outcome',
-]);
-
-const NEEDS_KINDS: ReadonlySet<TimelineEventKind> = new Set([
-  'question',
-  'approval',
-  'failed',
-]);
-
-export function matchesTimelineFilter(
-  filter: TimelineFilter,
-  event: TimelineEvent,
-): boolean {
-  switch (filter) {
-    case 'all':
-      return true;
-    case 'messages':
-      return MESSAGE_KINDS.has(event.kind);
-    case 'threads':
-      return THREAD_KINDS.has(event.kind);
-    case 'needs':
-      return (
-        NEEDS_KINDS.has(event.kind) ||
-        (event.kind === 'manager_message' && event.awaitingReply)
-      );
-  }
-}
 
 const OUTCOME_FAILURE = /fail|error|cancel|abort/i;
 
@@ -233,7 +180,6 @@ export interface TimelinePanelProps {
   hasMore: boolean;
   onLoadOlder: () => void;
   onOpenThread: (runId: string) => void;
-  onClose: () => void;
   now: number;
   className?: string;
 }
@@ -331,19 +277,10 @@ export function TimelinePanel({
   hasMore,
   onLoadOlder,
   onOpenThread,
-  onClose,
   now,
   className,
 }: TimelinePanelProps): React.JSX.Element {
-  const [filter, setFilter] = useState<TimelineFilter>('all');
-  const days = useMemo(
-    () =>
-      groupTimelineDays(
-        events.filter((event) => matchesTimelineFilter(filter, event)),
-        now,
-      ),
-    [events, filter, now],
-  );
+  const days = useMemo(() => groupTimelineDays(events, now), [events, now]);
   const initialLoad = loading && events.length === 0;
   const showEmpty = days.length === 0 && !initialLoad && error === null;
   const showLoadOlder = hasMore && !initialLoad;
@@ -353,37 +290,15 @@ export function TimelinePanel({
       aria-label="Timeline"
       data-slot="command-center-timeline"
       className={cn(
-        'flex h-full w-full flex-col bg-card text-card-foreground',
+        'flex min-h-0 w-full flex-1 flex-col bg-card text-card-foreground',
         className,
       )}>
-      <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
-        <h2 className="min-w-0 flex-1 text-sm font-semibold">Timeline</h2>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Close the timeline"
-          title="Close"
-          className="size-7"
-          onClick={onClose}>
-          <X className="size-4" />
-        </Button>
-      </header>
-      <div data-slot="timeline-filter" className="shrink-0 px-4 pt-3 pb-2">
-        <SegmentedControl
-          ariaLabel="Filter the timeline"
-          size="sm"
-          options={TIMELINE_FILTERS}
-          value={filter}
-          onSelect={setFilter}
-        />
-      </div>
       {error === null ? null : (
         <ErrorText className="mx-4 mb-2 shrink-0 rounded-md bg-destructive/10 px-3 py-2 text-sm">
           {error}
         </ErrorText>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-2 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-4">
         {initialLoad ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
             <Spinner className="size-4" />

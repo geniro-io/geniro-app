@@ -109,6 +109,8 @@ describe('GraphView', () => {
           now={FIXTURE_NOW}
           narrow={false}
           onOpen={() => undefined}
+          askingIds={new Set<string>()}
+          onAnswer={() => undefined}
           {...overrides}
         />,
       );
@@ -285,6 +287,28 @@ describe('GraphView', () => {
         .click(),
     );
     expect(onOpen).toHaveBeenCalledWith('thread-2');
+  });
+
+  it('offers Answer only on a thread holding a card for the user, and answers it here rather than opening it', async () => {
+    const onAnswer = vi.fn();
+    const onOpen = vi.fn();
+    await draw({
+      threads: graphThreadsOf(3),
+      askingIds: new Set(['thread-2']),
+      onAnswer,
+      onOpen,
+    });
+
+    expect(
+      threadCard('thread-1').querySelector('[data-slot="thread-card-answer"]'),
+    ).toBeNull();
+    act(() =>
+      threadCard('thread-2')
+        .querySelector<HTMLButtonElement>('[data-slot="thread-card-answer"]')!
+        .click(),
+    );
+    expect(onAnswer).toHaveBeenCalledWith('thread-2');
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it('shows a thread’s board card as a label on its node, with no node of its own', async () => {

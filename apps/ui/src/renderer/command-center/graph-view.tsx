@@ -87,6 +87,9 @@ export interface GraphViewProps {
   /** One column for a narrow screen, scrolled rather than panned. */
   narrow: boolean;
   onOpen: (threadId: string) => void;
+  /** Threads holding a question or approval the user can answer here. */
+  askingIds: ReadonlySet<string>;
+  onAnswer: (threadId: string) => void;
   className?: string;
 }
 
@@ -130,6 +133,7 @@ interface ManagerNodeData extends Record<string, unknown> {
 interface ThreadNodeData extends Record<string, unknown> {
   thread: GraphThread;
   summary: string;
+  asking: boolean;
 }
 
 interface MoreNodeData extends Record<string, unknown> {
@@ -148,10 +152,12 @@ type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
   open: (threadId: string) => void;
+  answer: (threadId: string) => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
   open: () => undefined,
+  answer: () => undefined,
 });
 
 const HIDDEN_HANDLE = { opacity: 0, pointerEvents: 'none' } as const;
@@ -304,8 +310,8 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
 }
 
 function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
-  const { open } = useContext(GraphActionsContext);
-  const { thread, summary } = data;
+  const { open, answer } = useContext(GraphActionsContext);
+  const { thread, summary, asking } = data;
   return (
     <div data-slot="graph-thread" data-thread-id={thread.id}>
       <WireEnds />
@@ -313,6 +319,7 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
         {...thread.view}
         summary={summary}
         onGo={() => open(thread.id)}
+        onAnswer={asking ? () => answer(thread.id) : undefined}
       />
     </div>
   );
@@ -566,6 +573,8 @@ function GraphCanvas({
   now,
   narrow,
   onOpen,
+  askingIds,
+  onAnswer,
   className,
 }: GraphViewProps): React.JSX.Element {
   const flow = useReactFlow();
@@ -601,6 +610,7 @@ function GraphCanvas({
   }, [fitKey, narrow, size.width, fit]);
 
   const open = useLatestCallback(onOpen, []);
+  const answer = useLatestCallback(onAnswer, []);
 
   const states = new Map(
     shown.map((thread) => {
@@ -663,6 +673,7 @@ function GraphCanvas({
       type: 'thread',
       data: {
         thread,
+        asking: askingIds.has(thread.id),
         summary: summaryOf(
           thread.view,
           entry.state,
@@ -733,7 +744,7 @@ function GraphCanvas({
   };
 
   return (
-    <GraphActionsContext.Provider value={{ open }}>
+    <GraphActionsContext.Provider value={{ open, answer }}>
       {narrow ? (
         <div
           role="group"

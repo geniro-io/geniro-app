@@ -34,7 +34,6 @@ function props(over: Partial<TimelinePanelProps> = {}): TimelinePanelProps {
     hasMore: true,
     onLoadOlder: vi.fn(),
     onOpenThread: vi.fn(),
-    onClose: vi.fn(),
     now: TIMELINE_FIXTURE_NOW,
     ...over,
   };
@@ -56,18 +55,6 @@ function render(over: Partial<TimelinePanelProps> = {}): HTMLElement {
   )!;
 }
 
-function filterButton(el: HTMLElement, label: string): HTMLButtonElement {
-  const button = [
-    ...el.querySelectorAll<HTMLButtonElement>(
-      '[data-slot="timeline-filter"] button',
-    ),
-  ].find((candidate) => candidate.textContent === label);
-  if (button === undefined) {
-    throw new Error(`no filter named ${label}`);
-  }
-  return button;
-}
-
 function shownKinds(el: HTMLElement): string[] {
   return [
     ...el.querySelectorAll<HTMLElement>('[data-slot="timeline-event"]'),
@@ -81,13 +68,13 @@ function rowOf(el: HTMLElement, kind: TimelineEvent['kind']): HTMLElement {
 }
 
 describe('TimelinePanel — structure', () => {
-  it('is a named region with a header, a filter, and an ordered list of rows', () => {
+  it('is a named region with an ordered list of rows and no filter', () => {
     const el = render();
 
     expect(el.tagName).toBe('SECTION');
     expect(el.getAttribute('aria-label')).toBe('Timeline');
-    expect(el.querySelector('h2')!.textContent).toBe('Timeline');
-    expect(el.querySelector('[data-slot="timeline-filter"]')).not.toBeNull();
+    expect(el.querySelector('[data-slot="timeline-filter"]')).toBeNull();
+    expect(el.querySelector('[data-slot="segmented-control"]')).toBeNull();
     const days = el.querySelectorAll('[data-slot="timeline-days"] > li');
     expect(days.length).toBe(4);
     for (const row of el.querySelectorAll('[data-slot="timeline-event"]')) {
@@ -115,19 +102,6 @@ describe('TimelinePanel — structure', () => {
         'failed',
       ]),
     );
-  });
-
-  it('closes from its close button', () => {
-    const onClose = vi.fn();
-    const el = render({ onClose });
-
-    act(() => {
-      el.querySelector<HTMLButtonElement>(
-        'button[aria-label="Close the timeline"]',
-      )!.click();
-    });
-
-    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -169,81 +143,9 @@ describe('TimelinePanel — days', () => {
   });
 });
 
-describe('TimelinePanel — filters', () => {
-  it('shows everything under All, and remembers nothing when it mounts again', () => {
-    const el = render();
-    act(() => {
-      filterButton(el, 'Threads').click();
-    });
-
-    const again = render();
-
-    expect(shownKinds(again)).toHaveLength(timelineFixtures().length);
-    expect(filterButton(again, 'All').getAttribute('aria-pressed')).toBe(
-      'true',
-    );
-  });
-
-  it('narrows to messages', () => {
-    const el = render();
-    act(() => {
-      filterButton(el, 'Messages').click();
-    });
-
-    expect(new Set(shownKinds(el))).toEqual(
-      new Set(['user_message', 'manager_message', 'thread_message']),
-    );
-  });
-
-  it('narrows to threads', () => {
-    const el = render();
-    act(() => {
-      filterButton(el, 'Threads').click();
-    });
-
-    expect(new Set(shownKinds(el))).toEqual(
-      new Set([
-        'thread_started',
-        'start_requested',
-        'pull_request',
-        'stage',
-        'outcome',
-      ]),
-    );
-  });
-
-  it('narrows to what needs the user: questions, approvals, failures and manager messages awaiting a reply', () => {
-    const el = render();
-    act(() => {
-      filterButton(el, 'Needs you').click();
-    });
-
-    expect(shownKinds(el).sort()).toEqual(
-      [
-        'approval',
-        'failed',
-        'manager_message',
-        'manager_message',
-        'question',
-      ].sort(),
-    );
-    expect(el.querySelectorAll('[data-kind="manager_message"]')).toHaveLength(
-      2,
-    );
-    expect(
-      [...el.querySelectorAll('[data-kind="manager_message"]')].every((row) =>
-        row.textContent!.includes('awaiting reply'),
-      ),
-    ).toBe(true);
-  });
-
-  it('says nothing is here when a filter matches no event', () => {
-    const el = render({
-      events: [timelineFixtures()[5]!],
-    });
-    act(() => {
-      filterButton(el, 'Needs you').click();
-    });
+describe('TimelinePanel — empty', () => {
+  it('says nothing is here when there is no event', () => {
+    const el = render({ events: [], hasMore: false });
 
     expect(shownKinds(el)).toEqual([]);
     expect(el.textContent).toContain('Nothing here yet');

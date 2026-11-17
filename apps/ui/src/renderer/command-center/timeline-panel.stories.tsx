@@ -13,7 +13,6 @@ const meta = {
     hasMore: true,
     onLoadOlder: () => {},
     onOpenThread: () => {},
-    onClose: () => {},
     now: TIMELINE_FIXTURE_NOW,
   },
   decorators: [

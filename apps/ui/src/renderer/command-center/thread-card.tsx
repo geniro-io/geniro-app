@@ -1,6 +1,6 @@
 import { cva } from 'class-variance-authority';
 import {
-  ArrowUpRight,
+  ArrowRight,
   Bot,
   Folder,
   GitMerge,
@@ -8,6 +8,8 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   type LucideIcon,
+  MessageCircleQuestion,
+  MessageSquareText,
   Moon,
   Users,
 } from 'lucide-react';
@@ -60,6 +62,8 @@ export interface ThreadCardProps {
   /** A taller height to stand in; never shorter than its content. */
   height?: number;
   onGo: () => void;
+  /** Open the thread's waiting question or approval in the command center; absent when it holds none. */
+  onAnswer?: () => void;
 }
 
 export const THREAD_CARD_WIDTH = 272;
@@ -309,6 +313,30 @@ function LabelChip({
   );
 }
 
+/** The way into a thread: a small outlined pill with the thread's glyph and an arrow. */
+export function GoToThreadButton({
+  onGo,
+}: {
+  onGo: () => void;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-slot="thread-card-go"
+      className="group/go h-6 shrink-0 gap-1 rounded-full px-2.5 text-xs font-medium"
+      onClick={onGo}>
+      <MessageSquareText aria-hidden="true" className="size-3.5" />
+      Go to thread
+      <ArrowRight
+        aria-hidden="true"
+        className="size-3 transition-transform group-hover/go:translate-x-0.5 motion-reduce:transition-none"
+      />
+    </Button>
+  );
+}
+
 /**
  * One thread as a card — a node of the command center's graph: its title and
  * pull request, its state and labels, the manager's note, its latest message,
@@ -332,6 +360,7 @@ export function ThreadCard({
   summary,
   height,
   onGo,
+  onAnswer,
 }: ThreadCardProps): React.JSX.Element {
   const preview = previewLine(lastMessage);
   const lines = previewLines(lastMessage);
@@ -426,16 +455,20 @@ export function ThreadCard({
           )}
           {formatRelativeTime(lastAt, now)}
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-slot="thread-card-go"
-          className="h-6 shrink-0 gap-1 px-2 text-xs"
-          onClick={onGo}>
-          Go to thread
-          <ArrowUpRight aria-hidden="true" className="size-3.5" />
-        </Button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {onAnswer === undefined ? null : (
+            <Button
+              type="button"
+              size="sm"
+              data-slot="thread-card-answer"
+              className="h-6 gap-1 rounded-full px-2.5 text-xs"
+              onClick={onAnswer}>
+              <MessageCircleQuestion aria-hidden="true" className="size-3.5" />
+              Answer
+            </Button>
+          )}
+          <GoToThreadButton onGo={onGo} />
+        </span>
       </div>
     </article>
   );

@@ -5399,6 +5399,12 @@ export interface ThreadMessageSent {
   expectsReply: boolean;
 }
 
+/** A reply reached the thread that asked for it: the asker no longer awaits it. */
+export interface ReplyCreditSpent {
+  fromRunId: string;
+  toRunId: string;
+}
+
 /** One message waiting for a thread, as its chip lists it. */
 export const WaitingMessageSchema = z.object({
   id: z.string(),

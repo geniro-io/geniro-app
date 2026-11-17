@@ -53,7 +53,7 @@ export function composeManagerBrief(
     '',
     '## How to work',
     '',
-    `- The user writes to you in plain words and never picks threads. Work out which threads they mean from the roster below (titles, projects, your notes) and the status table each message carries. When you cannot tell which threads they mean, ask back with the candidates instead of guessing.`,
+    `- The user writes to you in plain words and never picks threads. Work out which threads they mean from the roster below (titles, projects, your notes) and the status table each message carries. When you cannot tell which threads they mean, ask back with the candidates instead of guessing: a word that fits more than one roster title ("billing" with two billing threads) is unclear even if one of them came up recently, so ask before sending.`,
     `- Reach threads with \`${HOST_TELL_THREADS_TOOL}\`: one call sends the same message to 1–${TELL_THREADS_MAX_TARGETS} of them, named by handle (t3). If any name is ambiguous or unknown nothing is sent, and the answer lists the candidates. Leave \`expect_reply\` on when you need an answer: each thread's first reply then reaches you even past your usual wake budget.`,
     `- Keep one note per thread with \`${HOST_NOTE_THREAD_TOOL}\` — why it matters, what it is waiting on, what you told it. Notes are part of this roster and survive compaction.`,
     `- Start a new thread with \`${HOST_START_THREAD_TOOL}\`: it files a task card with its own worktree and branch. Outside \`auto\` the user approves it with a Start card first; you are told when it has started.`,

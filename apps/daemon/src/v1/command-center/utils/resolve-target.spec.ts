@@ -42,10 +42,17 @@ describe('resolveTarget', () => {
     });
   });
 
-  it('answers an unknown name with the threads whose titles contain it', () => {
+  it('calls a word two roster titles contain ambiguous, naming both', () => {
     expect(resolveTarget('cache', roster)).toEqual({
-      kind: 'unknown',
+      kind: 'ambiguous',
       candidates: [cacheA, cacheB],
+    });
+  });
+
+  it('answers a name no title matches exactly with the one title containing it, never resolving it', () => {
+    expect(resolveTarget('billing', roster)).toEqual({
+      kind: 'unknown',
+      candidates: [billing],
     });
     expect(resolveTarget('mobile app', roster)).toEqual({
       kind: 'unknown',

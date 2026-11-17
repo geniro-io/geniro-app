@@ -716,3 +716,35 @@ describe('ThreadInboxService.requestWake', () => {
     ).rejects.toMatchObject({ errorCode: 'THREAD_MESSAGE_NOT_FOUND' });
   });
 });
+
+describe('ThreadInboxService.spendReplyCredit', () => {
+  it('announces a spent credit once, naming the asker and the thread that replied', async () => {
+    const h = await threadInboxDb();
+    const spent: { fromRunId: string; toRunId: string }[] = [];
+    h.bus.allReplyCreditsSpent().subscribe((event) => spent.push(event));
+    await h.seedMessage({
+      fromRunId: 'manager',
+      toRunId: 'thread',
+      replyCreditUntil: new Date(T0.getTime() + 60 * MINUTE),
+    });
+
+    expect(await h.service.spendReplyCredit('manager', 'thread')).toBe(true);
+    expect(await h.service.spendReplyCredit('manager', 'thread')).toBe(false);
+
+    expect(spent).toEqual([{ fromRunId: 'manager', toRunId: 'thread' }]);
+  });
+
+  it('announces nothing when no live credit is held', async () => {
+    const h = await threadInboxDb();
+    const spent: unknown[] = [];
+    h.bus.allReplyCreditsSpent().subscribe((event) => spent.push(event));
+    await h.seedMessage({
+      fromRunId: 'manager',
+      toRunId: 'thread',
+      replyCreditUntil: new Date(T0.getTime() - MINUTE),
+    });
+
+    expect(await h.service.spendReplyCredit('manager', 'thread')).toBe(false);
+    expect(spent).toEqual([]);
+  });
+});

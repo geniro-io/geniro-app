@@ -245,15 +245,22 @@ export class ThreadInboxService {
   }
 
   /** Spend the reply credit `managerRunId` holds on `threadRunId`; true when one was live. */
-  spendReplyCredit(
+  async spendReplyCredit(
     managerRunId: string,
     threadRunId: string,
   ): Promise<boolean> {
-    return this.messages.spendReplyCredit(
+    const spent = await this.messages.spendReplyCredit(
       managerRunId,
       threadRunId,
       new Date(),
     );
+    if (spent) {
+      this.bus.publishReplyCreditSpent({
+        fromRunId: managerRunId,
+        toRunId: threadRunId,
+      });
+    }
+    return spent;
   }
 
   /** Every message to or from `runId` since `since`, oldest first — ends and credit only. */

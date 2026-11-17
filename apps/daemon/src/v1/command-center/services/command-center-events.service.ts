@@ -69,6 +69,9 @@ export class CommandCenterEventsService
       this.agents.allThreadMessagesSent().subscribe((sent) => {
         void this.messageSent(sent);
       }),
+      this.agents.allReplyCreditsSpent().subscribe(({ toRunId }) => {
+        this.events.publishChanged([toRunId], 'items');
+      }),
     );
   }
 

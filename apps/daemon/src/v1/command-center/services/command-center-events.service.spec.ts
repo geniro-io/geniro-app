@@ -93,6 +93,12 @@ describe('CommandCenterEventsService', () => {
     );
   });
 
+  it("re-reads a thread's card once the manager's reply credit on it is spent", () => {
+    agents.publishReplyCreditSpent({ fromRunId: MANAGER, toRunId: 'thread-1' });
+
+    expect(contacts.publishChanged).toHaveBeenCalledWith(['thread-1'], 'items');
+  });
+
   it('relays nothing for a message between two threads', async () => {
     agents.publishThreadMessageSent({
       messageId: 'm-3',

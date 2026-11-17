@@ -1329,10 +1329,14 @@ export class ItemDao extends BaseDao<Item> {
   ): Promise<RailRow[]> {
     return (
       await this.railQuery(runId, txEm)
-        .where('kind', 'in', [...kinds])
+        .where('kind', 'in', kindList(kinds))
+        .orderBy('run_id', 'asc')
+        .orderBy('kind', 'asc')
         .orderBy('seq', 'asc')
         .execute()
-    ).map(railRowOf);
+    )
+      .map(railRowOf)
+      .sort((a, b) => a.seq - b.seq);
   }
 
   /**

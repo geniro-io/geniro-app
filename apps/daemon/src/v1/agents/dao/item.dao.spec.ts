@@ -1806,6 +1806,34 @@ describe('ItemDao (in-memory sqlite)', () => {
       ).toMatch(/^SEARCH i0 USING INDEX items_run_id_kind_seq_index /);
     });
 
+    it('reads the rail’s kinds through the (run, kind, seq) index and answers them in seq order', async () => {
+      await insert('run-a', 0, 'message', '{"text":"a"}');
+      await insert('run-a', 1, 'reasoning');
+      await insert('run-a', 2, 'tool_call');
+      await insert('run-a', 3, 'message', '{"text":"b"}');
+      const connection = await kyselyConnection();
+      const execute = vi.spyOn(connection, 'executeQuery');
+
+      const rows = await dao.spineRowsOfKinds('run-a', [
+        'message',
+        'reasoning',
+      ]);
+
+      const [{ sql, parameters }] = execute.mock.calls.map(([query]) => query);
+      execute.mockRestore();
+      const plan = await connection.executeQuery<{ detail: string }>(
+        CompiledQuery.raw(`explain query plan ${sql}`, [...parameters]),
+      );
+      expect(plan.rows.map((step) => step.detail).join(' | ')).toMatch(
+        /^SEARCH items USING INDEX items_run_id_kind_seq_index /,
+      );
+      expect(rows.map((row) => [row.seq, row.kind])).toEqual([
+        [0, 'message'],
+        [1, 'reasoning'],
+        [3, 'message'],
+      ]);
+    });
+
     it('answers a single kind without repeating a row', async () => {
       await insert('run-a', 0, 'subagent_info', '{"id":"d1"}');
       await insert('run-a', 1, 'message');

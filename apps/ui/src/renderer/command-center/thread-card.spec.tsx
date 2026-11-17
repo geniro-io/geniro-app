@@ -249,6 +249,21 @@ describe('ThreadCard — content', () => {
     expect(line.textContent).toBe('Now: Rebased on main — see the PR');
   });
 
+  it('drops a backtick a cut-off code span left open', () => {
+    const line = render({
+      activity: 'Told `8bbdf9e6-0a39-4d4d-a…',
+    }).querySelector('[data-slot="thread-card-activity"]')!;
+
+    expect(line.textContent).toBe('Now: Told 8bbdf9e6-0a39-4d4d-a…');
+  });
+
+  it('stands as tall as its row asks, but never shorter than its content', () => {
+    const own = threadCardHeight({ note: false, activity: false, task: false });
+
+    expect(render({ height: own + 40 }).style.height).toBe(`${own + 40}px`);
+    expect(render({ height: own - 40 }).style.height).toBe(`${own}px`);
+  });
+
   it('draws the timeline strip', () => {
     const el = render();
 

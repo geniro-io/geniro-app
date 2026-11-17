@@ -41,6 +41,8 @@ export interface ThreadCardProps {
   task: ThreadCardTask | null;
   /** What a screen reader hears for the whole card. */
   summary?: string;
+  /** A taller height to stand in, so a row of cards lines up; never shorter than its content. */
+  height?: number;
   onOpen: () => void;
 }
 
@@ -86,7 +88,7 @@ export function threadCardHeight({
 
 /** The "Now:" line as the card shows it: one line of plain text, or empty. */
 export function activityLine(activity: string | null): string {
-  return activity === null ? '' : plainPreview(activity);
+  return activity === null ? '' : plainPreview(activity).replace(/`/g, '');
 }
 
 export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
@@ -213,12 +215,18 @@ export function ThreadCard({
   strip,
   task,
   summary,
+  height,
   onOpen,
 }: ThreadCardProps): React.JSX.Element {
   const meta = [THREAD_STATUS_TEXT[status], handle, project, agentLabel]
     .filter((part) => part !== null && part !== '')
     .join(' · ');
   const now = activityLine(activity);
+  const ownHeight = threadCardHeight({
+    note: note !== null,
+    activity: now !== '',
+    task: task !== null,
+  });
   return (
     <div
       role="button"
@@ -236,11 +244,7 @@ export function ThreadCard({
       className={cardVariants({ status })}
       style={{
         width: THREAD_CARD_WIDTH,
-        height: threadCardHeight({
-          note: note !== null,
-          activity: now !== '',
-          task: task !== null,
-        }),
+        height: Math.max(ownHeight, height ?? 0),
         padding: PAD_PX,
         gap: GAP_PX,
       }}>
@@ -268,7 +272,7 @@ export function ThreadCard({
         <p
           data-slot="thread-card-note"
           title={note}
-          className="h-6 shrink-0 truncate rounded-control bg-muted/60 px-2 text-xs leading-6">
+          className="h-6 shrink-0 truncate border-l-2 border-primary/50 pl-2 text-xs leading-6 text-foreground/80 italic">
           {note}
         </p>
       )}
@@ -296,7 +300,7 @@ export function ThreadCard({
             task.onToggle();
           }}
           onKeyDown={(event) => event.stopPropagation()}
-          className="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/60 focus-visible:outline-none">
+          className="mt-auto flex h-6 w-full shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/60 focus-visible:outline-none">
           <ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
           <span className="flex-1 text-left">
             {task.expanded ? 'Hide its board card' : 'Show its board card'}

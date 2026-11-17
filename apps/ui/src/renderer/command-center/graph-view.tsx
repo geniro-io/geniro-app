@@ -81,7 +81,7 @@ const MANAGER_ID = 'manager';
 const MORE_ID = 'more';
 const MANAGER_WIDTH = THREAD_CARD_WIDTH;
 const MANAGER_HEIGHT = 64;
-const TASK_WIDTH = 260;
+const TASK_WIDTH_NARROW = 260;
 const TASK_HEIGHT = 60;
 const MORE_WIDTH = 160;
 const MORE_HEIGHT = 32;
@@ -111,6 +111,7 @@ interface ThreadNodeData extends Record<string, unknown> {
   thread: GraphThread;
   expanded: boolean;
   summary: string;
+  height: number;
 }
 
 interface TaskNodeData extends Record<string, unknown> {
@@ -211,7 +212,7 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
 
 function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
   const { open, toggle } = useContext(GraphActionsContext);
-  const { thread, expanded, summary } = data;
+  const { thread, expanded, summary, height } = data;
   const { task, ...view } = thread.view;
   return (
     <div data-slot="graph-thread" data-thread-id={thread.id}>
@@ -219,6 +220,7 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
       <ThreadCard
         {...view}
         summary={summary}
+        height={height}
         task={
           task === null ? null : { expanded, onToggle: () => toggle(thread.id) }
         }
@@ -358,22 +360,26 @@ const MANAGER_BOX: GraphBox = {
   height: MANAGER_HEIGHT,
 };
 
+/** One height for every thread card, the tallest one's, so the rows line up. */
+export function cardHeightOf(shown: readonly GraphThread[]): number {
+  return Math.max(0, ...shown.map((thread) => threadHeight(thread.view)));
+}
+
 /** What hangs under the manager, in the order it stands: each thread with its card if unfolded, then "+N more". */
 export function graphItems(
   shown: readonly GraphThread[],
   hidden: number,
   expanded: ReadonlySet<string>,
+  narrow: boolean,
 ): GraphItem[] {
+  const height = cardHeightOf(shown);
+  const taskWidth = narrow ? TASK_WIDTH_NARROW : THREAD_CARD_WIDTH;
   return [
     ...shown.map((thread): GraphItem => ({
-      box: {
-        id: `thread:${thread.id}`,
-        width: THREAD_CARD_WIDTH,
-        height: threadHeight(thread.view),
-      },
+      box: { id: `thread:${thread.id}`, width: THREAD_CARD_WIDTH, height },
       child:
         thread.view.task !== null && expanded.has(thread.id)
-          ? { id: `task:${thread.id}`, width: TASK_WIDTH, height: TASK_HEIGHT }
+          ? { id: `task:${thread.id}`, width: taskWidth, height: TASK_HEIGHT }
           : null,
     })),
     ...(hidden > 0
@@ -512,22 +518,19 @@ function GraphCanvas({
 
   const shown = shownThreads(threads);
   const hidden = threads.length - shown.length;
-  const items = graphItems(shown, hidden, expanded);
+  const items = graphItems(shown, hidden, expanded, narrow);
+  const cardHeight = cardHeightOf(shown);
+  const columns = columnsFor(size.width, THREAD_CARD_WIDTH, items.length);
   const drawn: GraphGeometry = narrow
     ? layoutColumn(MANAGER_BOX, items)
-    : layoutRows(
-        MANAGER_BOX,
-        items,
-        columnsFor(size.width, THREAD_CARD_WIDTH, items.length),
-      );
+    : layoutRows(MANAGER_BOX, items, columns);
 
   const fit = useLatestCallback((animate: boolean) => {
     void flow.setViewport(widthFit(drawn, size), {
       duration: animate && !reduced ? FIT_MS : 0,
     });
   }, []);
-  const structure = [...drawn.boxes.keys()].sort().join('|');
-  const fitKey = `${structure}#${Math.round(size.width)}x${Math.round(size.height)}`;
+  const fitKey = `${columns}:${items.length}#${Math.round(size.width)}x${Math.round(size.height)}`;
   useLayoutEffect(() => {
     if (narrow || size.width === 0 || fitted.current === fitKey) {
       return;
@@ -619,6 +622,7 @@ function GraphCanvas({
       data: {
         thread,
         expanded: expanded.has(thread.id),
+        height: cardHeight,
         summary: summaryOf(
           thread.view,
           entry.state,
@@ -716,7 +720,7 @@ function GraphCanvas({
           aria-label={label}
           data-slot="command-center-graph"
           data-layout="rows"
-          data-columns={columnsFor(size.width, THREAD_CARD_WIDTH, items.length)}
+          data-columns={columns}
           className={cn('relative', className)}>
           {size.width === 0 ? null : (
             <>

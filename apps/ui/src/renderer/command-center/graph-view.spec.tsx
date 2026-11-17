@@ -163,6 +163,15 @@ describe('GraphView', () => {
     expect(all('contact-edge')).toHaveLength(13);
   });
 
+  it('gives every thread card one height, so the rows line up', async () => {
+    await draw({ threads: graphThreadsOf(6) });
+
+    const heights = new Set(
+      all('thread-card').map((card) => card.style.height),
+    );
+    expect(heights.size).toBe(1);
+  });
+
   it('lets the pointer reach every node, so a card answers the mouse', async () => {
     await draw({ threads: graphThreadsOf(2) });
 

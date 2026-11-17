@@ -3,7 +3,15 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -616,6 +624,54 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(await anchoredOf('call-2', ['tool_call'])).toContain(10);
     });
 
+    it("anchors a call's tool calls from its own newest running turn on, delegates included, and no earlier unnamed one", async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'eng', { id: 'a-old', callId: 'call-1' });
+      await row(11, 'status', 'eng', { callId: 'call-1', status: 'running' });
+      await row(12, 'tool_call', 'eng', {
+        id: 'a-bash',
+        name: 'Bash',
+        callId: 'call-1',
+      });
+      await row(13, 'tool_call', 'eng', {
+        id: 'a-delegate',
+        name: 'Read',
+        callId: 'call-1',
+        parentToolUseId: 'd1',
+      });
+      await row(14, 'tool_call', 'eng', {
+        id: 'a-edit',
+        name: 'Edit',
+        callId: 'call-1',
+      });
+      await row(15, 'status', 'qa', { callId: 'call-2', status: 'completed' });
+      for (let seq = 16; seq < 26; seq += 1) {
+        await row(seq, 'tool_call', 'qa', {
+          id: `b${seq}`,
+          name: 'Grep',
+          callId: 'call-2',
+        });
+      }
+
+      expect(await anchoredOf('call-1', ['tool_call'])).toEqual([12, 13, 14]);
+      expect(await anchoredOf('call-2', ['tool_call'])).toEqual([
+        18, 19, 20, 21, 22, 23, 24, 25,
+      ]);
+    });
+
+    it("anchors each call's task lists from its newest whole one, and a call with none from its first", async () => {
+      await teamRun();
+      await row(9, 'task_list', 'eng', { callId: 'call-1', mode: 'patch' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(11, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(12, 'task_list', 'eng', { callId: 'call-1', mode: 'snapshot' });
+      await row(13, 'task_list', 'eng', { callId: 'call-1', mode: 'patch' });
+
+      expect(await anchoredOf('call-1', ['task_list'])).toEqual([12, 13]);
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual([10, 11]);
+    });
+
     it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {
       await teamRun();
       // call-2 settles before the page, call-4 below it; call-1 (continued by
@@ -807,6 +863,61 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(items.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     });
 
+    it('makes the same DAO reads for a page of one call as for a page of twelve', async () => {
+      const rootPageReads = async (
+        runId: string,
+        calls: number,
+      ): Promise<number[]> => {
+        await new RunDao(orm.em.fork()).create({
+          id: runId,
+          teamId: 'dev-team',
+        });
+        for (let i = 0; i < calls; i += 1) {
+          const seq = 1 + 3 * i;
+          await dao.create({
+            runId,
+            seq,
+            kind: 'call_started',
+            memberId: 'manager',
+            payload: JSON.stringify({
+              callId: `call-${i}`,
+              calleeNodeId: 'eng',
+            }),
+          });
+          await dao.create({
+            runId,
+            seq: seq + 1,
+            kind: 'tool_call',
+            memberId: 'eng',
+            payload: JSON.stringify({
+              id: `t${i}`,
+              name: 'Bash',
+              callId: `call-${i}`,
+            }),
+          });
+          await dao.create({
+            runId,
+            seq: seq + 2,
+            kind: 'tool_result',
+            memberId: 'eng',
+            payload: JSON.stringify({ id: `t${i}`, callId: `call-${i}` }),
+          });
+        }
+        const newest = vi.spyOn(dao, 'newestRowsInCalls');
+        const byId = vi.spyOn(dao, 'rowsInCallsById');
+        await readingService().read(runId, -1, { limit: 50 }, { root: true });
+        const counts = [newest.mock.calls.length, byId.mock.calls.length];
+        newest.mockRestore();
+        byId.mockRestore();
+        return counts;
+      };
+
+      const onePage = await rootPageReads('run-one', 1);
+
+      expect(onePage[0]).toBeGreaterThan(0);
+      expect(await rootPageReads('run-twelve', 12)).toEqual(onePage);
+    });
+
     describe('callMessages', () => {
       const reply = (
         seq: number,
@@ -862,6 +973,23 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
 
         expect(messages.map((item) => item.seq)).toEqual([8, 9, 10]);
         expect(hasOlder).toBe(false);
+      });
+
+      it('says more are older when the newest words of the chain all sit under one of its calls', async () => {
+        await teamRun();
+        await reply(10, 'call-3', 'two');
+        await reply(11, 'call-3', 'three');
+        await reply(12, 'call-3', 'four');
+        await reply(13, 'call-3', 'five');
+
+        const { messages, hasOlder } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          3,
+        );
+
+        expect(texts(messages)).toEqual(['three', 'four', 'five']);
+        expect(hasOlder).toBe(true);
       });
 
       it("reaches a message older than the run's newest page", async () => {

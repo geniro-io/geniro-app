@@ -7,12 +7,12 @@ import { TeamsModule } from '../teams/teams.module';
 import { CommandCenterController } from './controllers/command-center.controller';
 import { CommandCenterRosterDao } from './dao/command-center-roster.dao';
 import { CommandCenterStripDao } from './dao/command-center-strip.dao';
+import { CommandCenterService } from './services/command-center.service';
 import { CommandCenterChatService } from './services/command-center-chat.service';
 import { CommandCenterEventBus } from './services/command-center-events.bus';
 import { CommandCenterEventsService } from './services/command-center-events.service';
 import { CommandCenterOpsService } from './services/command-center-ops.service';
 import { CommandCenterStartsService } from './services/command-center-starts.service';
-import { CommandCenterService } from './services/command-center.service';
 
 /**
  * The command center: one board over every active thread, and the manager

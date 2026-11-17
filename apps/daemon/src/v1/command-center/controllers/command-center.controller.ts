@@ -26,9 +26,9 @@ import {
   CommandCenterStartsQueryDto,
   StartCommandCenterChatDto,
 } from '../dto/command-center.dto';
+import { CommandCenterService } from '../services/command-center.service';
 import { CommandCenterChatService } from '../services/command-center-chat.service';
 import { CommandCenterStartsService } from '../services/command-center-starts.service';
-import { CommandCenterService } from '../services/command-center.service';
 
 @Controller('v1/command-center')
 @ApiTags('command-center')

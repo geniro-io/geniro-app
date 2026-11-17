@@ -23,8 +23,8 @@ import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { composeManagerBrief } from '../utils/manager-brief';
 import { composeStatusSuffix } from '../utils/status-suffix';
-import { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterService } from './command-center.service';
+import { CommandCenterEventBus } from './command-center-events.bus';
 
 const MANAGER_TITLE = 'Command center';
 

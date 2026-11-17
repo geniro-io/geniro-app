@@ -30,6 +30,7 @@ import {
 } from '../../agents/utils/ws-payload';
 import { BROWSER_REPLY_MAX_BYTES } from '../../browser/browser.types';
 import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
+import { CommandCenterEventBus } from '../../command-center/services/command-center-events.bus';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { LessonsEventBus } from '../../lessons/services/lessons-events.bus';
@@ -37,7 +38,6 @@ import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
-import { CommandCenterEventBus } from '../../command-center/services/command-center-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 

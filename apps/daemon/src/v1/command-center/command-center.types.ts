@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 import { RunWireSchema } from '../agents/chat.types';
-import { chatChipsSchema } from '../teams/teams.types';
 import { TaskStatusSchema } from '../tasks/tasks.types';
+import { chatChipsSchema } from '../teams/teams.types';
 
 const HOUR_MS = 60 * 60_000;
 

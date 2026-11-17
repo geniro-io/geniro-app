@@ -47,7 +47,7 @@ const MIXED_CONTACTS = {
 };
 
 const meta = {
-  title: 'CommandCenter/GraphView',
+  title: 'Command center/GraphView',
   component: GraphView,
   args: {
     manager: MANAGER,

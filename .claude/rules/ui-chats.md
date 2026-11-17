@@ -270,5 +270,5 @@ One home for each concern:
 
 - Landing-view centring on the window.
 - The run's folder in the composer: it belongs in the header.
-- A horizontal timeline strip, or a timeline inside `subagent-block.tsx`.
+- A horizontal timeline strip on the chat screen, or a timeline inside `subagent-block.tsx`. (The command center's thread cards carry one — `components/timeline-strip.tsx`, user decision — and it stays there.)
 - Always-visible controls for an absent axis.

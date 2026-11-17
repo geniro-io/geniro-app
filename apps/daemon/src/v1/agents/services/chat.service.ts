@@ -54,6 +54,7 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ChatListScope,
+  type CommandCenterSource,
   type DeferredCard,
   type DeferredCardResponder,
   type FollowUpBackgroundWork,
@@ -88,7 +89,6 @@ import {
   type HostQuestionOutcome,
   type HostRowWire,
   type ItemWire,
-  type CommandCenterSource,
   type ProjectChatSource,
   type RecommendationApply,
   type RunAwaiting,
@@ -157,6 +157,10 @@ import {
 import { isHostBoardCall } from '../utils/host-board';
 import { isHostBrowserCall } from '../utils/host-browser';
 import { isHostChartCall } from '../utils/host-chart';
+import {
+  isCommandCenterChat,
+  isHostCommandCenterMessageCall,
+} from '../utils/host-command-center';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { hostEndpointPath } from '../utils/host-endpoint';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -221,10 +225,6 @@ import {
   serializePendingQuestion,
 } from '../utils/pending-question';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
-import {
-  isCommandCenterChat,
-  isHostCommandCenterMessageCall,
-} from '../utils/host-command-center';
 import { isProjectChat } from '../utils/project-chat';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -271,6 +271,7 @@ import {
 } from './browser.broker';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
+import { CommandCenterBroker } from './command-center.broker';
 import {
   chatWakeOwner,
   CommandEndWakeService,
@@ -293,7 +294,6 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
-import { CommandCenterBroker } from './command-center.broker';
 import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import { ProjectInstructionsChangeService } from './project-instructions-change.service';

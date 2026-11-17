@@ -9,8 +9,8 @@ import type {
 import { BaseMcpTool } from '../base-mcp-tool';
 import { tellThreadsInstructions } from './tell-threads.instructions';
 import {
-  tellThreadsResultText,
   readTellThreadsArgs,
+  tellThreadsResultText,
 } from './tell-threads.reader';
 import { tellThreadsSchema } from './tell-threads.schema';
 

@@ -14,8 +14,8 @@ import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
 import type { ItemKind } from '../../runs/runs.types';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
-import { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterService } from './command-center.service';
+import { CommandCenterEventBus } from './command-center-events.bus';
 
 /** The rows that move a card: its strip, its column or its activity line. */
 const CARD_KINDS = new Set<ItemKind>([

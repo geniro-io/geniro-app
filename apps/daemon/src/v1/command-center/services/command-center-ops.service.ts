@@ -21,8 +21,8 @@ import { ThreadDeliveryService } from '../../teams/services/thread-delivery.serv
 import { REPLY_CREDIT_MS } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import { type NameableThread, resolveTarget } from '../utils/resolve-target';
-import { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterChatService } from './command-center-chat.service';
+import { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterStartsService } from './command-center-starts.service';
 
 type Unresolved = TellThreadsAnswer['unresolved'][number];

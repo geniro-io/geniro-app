@@ -9,8 +9,8 @@ import type {
 import { BaseMcpTool } from '../base-mcp-tool';
 import { startThreadInstructions } from './start-thread.instructions';
 import {
-  startThreadResultText,
   readStartThreadArgs,
+  startThreadResultText,
 } from './start-thread.reader';
 import { startThreadSchema } from './start-thread.schema';
 

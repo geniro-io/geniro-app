@@ -1,6 +1,8 @@
 import { ChevronDown, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 import type { DaemonHandle } from '../../shared/contracts';
+import { ConfirmDialog } from '../components/confirm-dialog';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { useLatestCallback } from '../components/use-latest-callback';
@@ -29,6 +31,7 @@ export function HostedChatDock({
   client,
   hidden = false,
   active = true,
+  confirmStartOver,
   onClose,
 }: {
   thread: Omit<HostedThread, 'headerActions'>;
@@ -44,8 +47,13 @@ export function HostedChatDock({
   hidden?: boolean;
   /** Whether the page is on screen. */
   active?: boolean;
+  /** Ask before Start over throws the conversation away, with what is lost. */
+  confirmStartOver?: { title: string; body: string; confirmLabel: string };
   onClose: () => void;
 }): React.JSX.Element {
+  const [pendingStartOver, setPendingStartOver] = useState<(() => void) | null>(
+    null,
+  );
   const {
     width: height,
     minWidth,
@@ -70,7 +78,16 @@ export function HostedChatDock({
           aria-label="Start a new conversation"
           title="Throw this conversation away and start a new one"
           disabled={startOver === null}
-          onClick={() => startOver?.()}>
+          onClick={() => {
+            if (startOver === null) {
+              return;
+            }
+            if (confirmStartOver === undefined) {
+              startOver();
+            } else {
+              setPendingStartOver(() => startOver);
+            }
+          }}>
           <Trash2 className="size-3.5 shrink-0" />
         </Button>
         <Button
@@ -85,7 +102,7 @@ export function HostedChatDock({
         </Button>
       </>
     ),
-    [onClose],
+    [onClose, confirmStartOver],
   );
 
   return (
@@ -111,6 +128,21 @@ export function HostedChatDock({
           hosted={{ ...thread, headerActions }}
         />
       </div>
+      {confirmStartOver === undefined ? null : (
+        <ConfirmDialog
+          open={pendingStartOver !== null}
+          title={confirmStartOver.title}
+          confirmLabel={confirmStartOver.confirmLabel}
+          busyLabel={confirmStartOver.confirmLabel}
+          onCancel={() => setPendingStartOver(null)}
+          onConfirm={() => {
+            const startOver = pendingStartOver;
+            setPendingStartOver(null);
+            startOver?.();
+          }}>
+          {confirmStartOver.body}
+        </ConfirmDialog>
+      )}
     </aside>
   );
 }

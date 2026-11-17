@@ -12,6 +12,7 @@ import { AgentsModule } from './v1/agents/agents.module';
 import { AgentSessionRegistry } from './v1/agents/services/agent-session.registry';
 import { ProcessRegistry } from './v1/agents/services/process-registry';
 import { AuthModule } from './v1/auth/auth.module';
+import { CommandCenterModule } from './v1/command-center/command-center.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { KnowledgeModule } from './v1/knowledge/knowledge.module';
@@ -27,7 +28,6 @@ import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
 import { StorageModule } from './v1/storage/storage.module';
 import { TasksModule } from './v1/tasks/tasks.module';
-import { CommandCenterModule } from './v1/command-center/command-center.module';
 import { TeamsModule } from './v1/teams/teams.module';
 
 export interface AppModuleOptions {

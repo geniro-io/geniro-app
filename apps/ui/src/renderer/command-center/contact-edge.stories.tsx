@@ -5,7 +5,7 @@ import { ContactEdgeLine } from './contact-edge';
 const NOW = Date.parse('2026-11-17T12:00:00Z');
 
 const meta = {
-  title: 'CommandCenter/ContactEdge',
+  title: 'Command center/ContactEdge',
   component: ContactEdgeLine,
   args: {
     id: 'contact:thread',

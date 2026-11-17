@@ -8,8 +8,8 @@ import type {
   RunItemEvent,
   RunStatusEvent,
   RunWire,
-  ThreadMessageSent,
   ThreadMessagesChange,
+  ThreadMessageSent,
 } from '../chat.types';
 import { RunContextRegistry } from './run-context.registry';
 

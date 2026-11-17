@@ -8,6 +8,8 @@ import { AttachmentStoreService } from '../agents/services/attachment-store.serv
 import { BrowserBroker } from '../agents/services/browser.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
 import { ChatArtifactsService } from '../agents/services/chat-artifacts.service';
+import { CommandCenterBroker } from '../agents/services/command-center.broker';
+import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
@@ -21,8 +23,6 @@ import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
-import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
-import { CommandCenterBroker } from '../agents/services/command-center.broker';
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';

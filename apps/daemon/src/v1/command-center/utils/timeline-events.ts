@@ -126,7 +126,7 @@ export function pullRequestEvent(
       row.prOwner === null || row.prRepo === null
         ? null
         : `${row.prOwner}/${row.prRepo}`,
-    detail: row.prNumber === null ? null : `#${row.prNumber}`,
+    detail: row.prNumber === null ? null : String(row.prNumber),
   });
 }
 

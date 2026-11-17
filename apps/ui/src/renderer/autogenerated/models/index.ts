@@ -3687,6 +3687,102 @@ export interface CommandCenterTaskRef {
 /**
  * 
  * @export
+ * @interface CommandCenterTimelineDto
+ */
+export interface CommandCenterTimelineDto {
+    /**
+     * 
+     * @type {Array<CommandCenterTimelineEvent>}
+     * @memberof CommandCenterTimelineDto
+     */
+    events: Array<CommandCenterTimelineEvent>;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTimelineDto
+     */
+    nextBefore: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface CommandCenterTimelineEvent
+ */
+export interface CommandCenterTimelineEvent {
+    /**
+     * `<kind>:<source row id>`, stable across pages
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    id: string;
+    /**
+     * When it happened, ISO 8601
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    at: string;
+    /**
+     * 
+     * @type {CommandCenterTimelineKind}
+     * @memberof CommandCenterTimelineEvent
+     */
+    kind: CommandCenterTimelineKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    threadRunId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    threadTitle: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    text: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTimelineEvent
+     */
+    detail: string | null;
+    /**
+     * The manager waits on the thread to answer this message
+     * @type {boolean}
+     * @memberof CommandCenterTimelineEvent
+     */
+    awaitingReply: boolean;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const CommandCenterTimelineKind = {
+    UserMessage: 'user_message',
+    ManagerMessage: 'manager_message',
+    ThreadMessage: 'thread_message',
+    ThreadStarted: 'thread_started',
+    StartRequested: 'start_requested',
+    PullRequest: 'pull_request',
+    Question: 'question',
+    Approval: 'approval',
+    Stage: 'stage',
+    Outcome: 'outcome',
+    Failed: 'failed'
+} as const;
+export type CommandCenterTimelineKind = typeof CommandCenterTimelineKind[keyof typeof CommandCenterTimelineKind];
+
+/**
+ * 
+ * @export
  * @interface ConfigDirPin
  */
 export interface ConfigDirPin {

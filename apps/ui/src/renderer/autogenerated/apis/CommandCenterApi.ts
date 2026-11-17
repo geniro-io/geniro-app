@@ -19,12 +19,18 @@ import type {
   CommandCenterChatsDiscardedDto,
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
+  CommandCenterTimelineDto,
   RunDto,
   StartCommandCenterChatDto,
 } from '../models/index';
 
 export interface CommandCenterApiListCommandCenterStartsRequest {
     state: ListCommandCenterStartsStateEnum;
+}
+
+export interface CommandCenterApiListCommandCenterTimelineRequest {
+    before?: string;
+    limit?: number;
 }
 
 export interface CommandCenterApiOpenCommandCenterChatRequest {
@@ -127,6 +133,51 @@ export class CommandCenterApi extends runtime.BaseAPI {
      */
     async listCommandCenterStarts(requestParameters: CommandCenterApiListCommandCenterStartsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterStartsDto> {
         const response = await this.listCommandCenterStartsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listCommandCenterTimelineRaw(requestParameters: CommandCenterApiListCommandCenterTimelineRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CommandCenterTimelineDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['before'] != null) {
+            queryParameters['before'] = requestParameters['before'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/command-center/timeline`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listCommandCenterTimeline(requestParameters: CommandCenterApiListCommandCenterTimelineRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterTimelineDto> {
+        const response = await this.listCommandCenterTimelineRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

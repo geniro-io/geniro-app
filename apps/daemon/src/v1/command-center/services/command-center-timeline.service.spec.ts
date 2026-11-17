@@ -316,7 +316,7 @@ describe('CommandCenterTimelineService', () => {
         threadRunId: 'thread-a',
         threadTitle: 'Build A',
         text: 'geniro-io/geniro-app',
-        detail: '#532',
+        detail: '532',
       }),
     ]);
     expect(ofKind('question')).toEqual([

@@ -1,4 +1,4 @@
-import { Columns2, MessageSquare, Network } from 'lucide-react';
+import { Columns2, History, MessageSquare, Network } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -29,7 +29,9 @@ import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
 import { threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
+import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
+import { useCommandCenterTimeline } from './use-command-center-timeline';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
@@ -140,6 +142,8 @@ export function CommandCenter({
     () => (identities[0]?.agent ?? CLI_KINDS[0]!) as AgentKind,
   );
   const board = useCommandCenterBoard(apis, client);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const timeline = useCommandCenterTimeline(apis, client, timelineOpen);
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -164,6 +168,24 @@ export function CommandCenter({
       teamNames,
       now,
     );
+
+  const workingThreads = (board.cards ?? []).flatMap((card) =>
+    card.column === 'working' || card.column === 'waiting'
+      ? [
+          {
+            runId: card.run.id,
+            title: card.run.title ?? 'Untitled thread',
+            agentLabel: viewOf(card).agentLabel,
+            agentKind: card.run.agentKind ?? null,
+            startedAt: null,
+            status:
+              card.column === 'working'
+                ? ('working' as const)
+                : ('waiting' as const),
+          },
+        ]
+      : [],
+  );
 
   const graphThreads = shown.map((card) => ({
     id: card.run.id,
@@ -274,6 +296,18 @@ export function CommandCenter({
           value={view}
           onSelect={pickView}
         />
+        <Button
+          type="button"
+          variant={timelineOpen ? 'secondary' : 'ghost'}
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs"
+          data-slot="command-center-timeline-toggle"
+          aria-pressed={timelineOpen}
+          title="Everything the manager and its threads did, newest first"
+          onClick={() => setTimelineOpen((was) => !was)}>
+          <History aria-hidden="true" className="size-3.5" />
+          Timeline
+        </Button>
       </header>
       {board.error === null ? null : (
         <ErrorBanner
@@ -290,7 +324,7 @@ export function CommandCenter({
           }
         />
       )}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <div
           hidden={!chatShown}
           data-slot="command-center-chat"
@@ -345,6 +379,8 @@ export function CommandCenter({
               client={client}
               agentKind={managerAgent}
               hidden={!chatShown}
+              workingThreads={workingThreads}
+              onOpenThread={onOpenThread}
               onTurnSettled={board.reload}
             />
           )}
@@ -361,6 +397,25 @@ export function CommandCenter({
           ) : null}
         </div>
         {graphShown ? graph : null}
+        {timelineOpen ? (
+          <div
+            data-slot="command-center-timeline-column"
+            className={cn(
+              'flex min-h-0 flex-col border-l border-border bg-background',
+              narrow ? 'absolute inset-0 z-30' : 'w-[380px] shrink-0',
+            )}>
+            <TimelinePanel
+              events={timeline.events}
+              loading={timeline.loading}
+              error={timeline.error}
+              hasMore={timeline.hasMore}
+              onLoadOlder={timeline.loadOlder}
+              onOpenThread={onOpenThread}
+              onClose={() => setTimelineOpen(false)}
+              now={now}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );

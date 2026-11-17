@@ -14,23 +14,22 @@ import {
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { ContactState } from './contact-edge';
-import { type GraphThread, GraphView, MAX_THREAD_NODES } from './graph-view';
+import { FIXTURE_NOW, graphThreadsOf } from './graph-fixtures';
+import { GraphView, MAX_THREAD_NODES, shownThreads } from './graph-view';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const NOW = Date.parse('2026-11-17T12:00:00Z');
 const MINUTE = 60_000;
-const MANAGER = { id: 'manager-run', label: 'Manager' };
 
-function threadsOf(count: number): GraphThread[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: `thread-${index + 1}`,
-    label: `Thread ${index + 1}`,
-    status: 'working',
-  }));
-}
+const settle = async (): Promise<void> => {
+  for (let round = 0; round < 40; round += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  }
+};
 
 describe('GraphView', () => {
   let container: HTMLDivElement;
@@ -62,167 +61,224 @@ describe('GraphView', () => {
     vi.restoreAllMocks();
   });
 
-  function draw(
+  async function draw(
     overrides: Partial<React.ComponentProps<typeof GraphView>> = {},
-  ): void {
+  ): Promise<void> {
     act(() => {
       root.render(
         <GraphView
-          manager={MANAGER}
+          managerStarted
           threads={[]}
           contacts={{}}
           pulses={[]}
-          now={NOW}
+          now={FIXTURE_NOW}
+          narrow={false}
           onOpen={() => undefined}
+          onManager={() => undefined}
           {...overrides}
         />,
       );
     });
+    await settle();
   }
 
-  function threadNodes(): HTMLElement[] {
-    return Array.from(
-      container.querySelectorAll<HTMLElement>('[data-slot="graph-thread"]'),
+  const all = (slot: string): HTMLElement[] =>
+    Array.from(
+      container.querySelectorAll<HTMLElement>(`[data-slot="${slot}"]`),
     );
-  }
 
-  function threadNode(threadId: string): HTMLElement {
-    const node = container.querySelector<HTMLElement>(
-      `[data-slot="graph-thread"][data-thread-id="${threadId}"]`,
+  function threadCard(threadId: string): HTMLElement {
+    const card = container.querySelector<HTMLElement>(
+      `[data-slot="graph-thread"][data-thread-id="${threadId}"] [data-slot="thread-card"]`,
     );
-    if (node === null) {
-      throw new Error(`no thread node for ${threadId}`);
+    if (card === null) {
+      throw new Error(`no thread card for ${threadId}`);
     }
-    return node;
+    return card;
   }
 
-  it('draws at most 24 thread nodes and one "+N more" node for the rest', () => {
-    draw({ threads: threadsOf(30) });
-    expect(threadNodes()).toHaveLength(MAX_THREAD_NODES);
-    expect(
-      container.querySelector('[data-slot="graph-more"]')?.textContent,
-    ).toBe('+6 more');
+  function nodeY(slot: string, id?: string): number {
+    const inner = container.querySelector<HTMLElement>(
+      id === undefined
+        ? `[data-slot="${slot}"]`
+        : `[data-slot="${slot}"][data-thread-id="${id}"]`,
+    )!;
+    const wrapper = inner.closest<HTMLElement>('.react-flow__node')!;
+    return Number(
+      /translate\(\s*[-\d.]+px,\s*([-\d.]+)px\)/.exec(
+        wrapper.style.transform,
+      )![1],
+    );
+  }
+
+  it('heads the tree with the manager and hangs every thread under it as a card, edges going down', async () => {
+    await draw({ threads: graphThreadsOf(4) });
+
+    expect(all('graph-manager')).toHaveLength(1);
+    expect(all('graph-thread')).toHaveLength(4);
+    expect(all('contact-edge')).toHaveLength(4);
+    const managerY = nodeY('graph-manager');
+    for (const id of ['thread-1', 'thread-2', 'thread-3', 'thread-4']) {
+      expect(nodeY('graph-thread', id)).toBeGreaterThan(managerY);
+    }
   });
 
-  it('draws no "+N more" node while the threads fit under the cap', () => {
-    draw({ threads: threadsOf(MAX_THREAD_NODES) });
-    expect(threadNodes()).toHaveLength(MAX_THREAD_NODES);
-    expect(container.querySelector('[data-slot="graph-more"]')).toBeNull();
+  it('keeps the manager on top before its chat exists, and opens it on a press', async () => {
+    const onManager = vi.fn();
+    await draw({
+      managerStarted: false,
+      threads: graphThreadsOf(2),
+      onManager,
+    });
+    const manager = all('graph-manager')[0]!;
+
+    expect(manager.dataset.started).toBe('false');
+    expect(manager.textContent).toContain('Not started');
+    act(() => manager.click());
+    expect(onManager).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the empty line instead of a graph when there is no manager', () => {
-    draw({ manager: null, threads: threadsOf(2) });
-    expect(
-      container.querySelector('[data-slot="command-center-graph-empty"]'),
-    ).not.toBeNull();
-    expect(container.querySelector('.react-flow')).toBeNull();
-    expect(threadNodes()).toHaveLength(0);
+  it('draws at most 24 thread cards and one "+N more" node for the rest', async () => {
+    await draw({ threads: graphThreadsOf(30) });
+
+    expect(all('graph-thread')).toHaveLength(MAX_THREAD_NODES);
+    expect(all('graph-more')[0]?.textContent).toBe('+6 more threads');
   });
 
-  it('opens the thread when Enter is pressed on its node', () => {
+  it('draws the 24 most recently active, oldest first so a card keeps its place', () => {
+    const threads = graphThreadsOf(30).reverse();
+    const shown = shownThreads(threads);
+
+    expect(shown).toHaveLength(MAX_THREAD_NODES);
+    expect(shown.map((thread) => thread.id)).toEqual(
+      threads
+        .slice(0, MAX_THREAD_NODES)
+        .map((thread) => thread.id)
+        .reverse(),
+    );
+  });
+
+  it('folds a thread’s board card by default and unfolds it under the thread on its toggle', async () => {
+    await draw({ threads: graphThreadsOf(3) });
+    expect(all('graph-task')).toHaveLength(0);
+
+    const toggle = threadCard('thread-1').querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-task-toggle"]',
+    )!;
+    act(() => toggle.click());
+    await settle();
+
+    const task = all('graph-task');
+    expect(task).toHaveLength(1);
+    expect(task[0]!.textContent).toContain('QA-1');
+    expect(task[0]!.textContent).toContain('In progress');
+    expect(all('graph-link').map((edge) => edge.dataset.edge)).toContain(
+      'link:task:thread-1',
+    );
+    const taskWrapper = task[0]!.closest<HTMLElement>('.react-flow__node')!;
+    const taskY = Number(
+      /translate\(\s*[-\d.]+px,\s*([-\d.]+)px\)/.exec(
+        taskWrapper.style.transform,
+      )![1],
+    );
+    expect(taskY).toBeGreaterThan(nodeY('graph-thread', 'thread-1'));
+
+    act(() => toggle.click());
+    await settle();
+    expect(all('graph-task')).toHaveLength(0);
+  });
+
+  it('opens the thread on a click of its card, on Enter, and on a click of its board card', async () => {
     const onOpen = vi.fn();
-    draw({ threads: threadsOf(3), onOpen });
+    await draw({ threads: graphThreadsOf(3), onOpen });
+
+    act(() => threadCard('thread-2').click());
     act(() => {
-      threadNode('thread-2').dispatchEvent(
+      threadCard('thread-3').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
       );
     });
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(onOpen).toHaveBeenCalledWith('thread-2');
+    act(() =>
+      threadCard('thread-1')
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-card-task-toggle"]',
+        )!
+        .click(),
+    );
+    await settle();
+    act(() => all('graph-task')[0]!.click());
+
+    expect(onOpen.mock.calls).toEqual([
+      ['thread-2'],
+      ['thread-3'],
+      ['thread-1'],
+    ]);
   });
 
-  it('opens the thread on a click of its node', () => {
-    const onOpen = vi.fn();
-    draw({ threads: threadsOf(2), onOpen });
-    act(() => {
-      threadNode('thread-1').click();
-    });
-    expect(onOpen).toHaveBeenCalledWith('thread-1');
-  });
-
-  it('names the focused node and its contact state in the details line', () => {
+  it('names each card’s contact state for a screen reader, and paints its edge to match', async () => {
     const contacts: Record<string, ContactState> = {
+      'thread-1': {
+        lastAt: new Date(FIXTURE_NOW - 2 * MINUTE).toISOString(),
+        awaitingReply: false,
+      },
       'thread-2': {
-        lastAt: new Date(NOW - 40 * MINUTE).toISOString(),
+        lastAt: new Date(FIXTURE_NOW - 40 * MINUTE).toISOString(),
         awaitingReply: true,
       },
     };
-    const threads: GraphThread[] = [
-      { id: 'thread-1', label: 'Thread 1', status: 'idle' },
-      { id: 'thread-2', label: 'Thread 2', status: 'waiting' },
-    ];
-    draw({ threads, contacts });
-    const details = container.querySelector(
-      '[data-slot="command-center-graph-details"]',
-    );
-    expect(details?.getAttribute('aria-live')).toBe('polite');
-    expect(details?.textContent).toMatch(/^Focus a thread/);
+    await draw({ threads: graphThreadsOf(3), contacts });
+    const state = (id: string) =>
+      container
+        .querySelector(`[data-edge="contact:${id}"]`)
+        ?.getAttribute('data-state');
 
-    act(() => {
-      threadNode('thread-2').focus();
-    });
-    expect(details?.textContent).toBe(
-      'Thread 2, waiting, awaiting a reply, last contact 40 min ago',
+    expect(threadCard('thread-2').getAttribute('aria-label')).toBe(
+      'Rebase billing on main, Waiting on you, awaiting a reply, last contact 40 min ago',
     );
-    expect(threadNode('thread-2').dataset.contact).toBe('awaiting');
-    expect(threadNode('thread-1').dataset.contact).toBe('idle');
+    expect(state('thread-1')).toBe('lit');
+    expect(state('thread-2')).toBe('awaiting');
+    expect(state('thread-3')).toBe('idle');
+    expect(all('graph-manager-awaiting')[0]?.textContent).toBe('1 awaiting');
   });
 
-  it('marks a thread contacted within five minutes as lit', () => {
-    draw({
-      threads: threadsOf(2),
-      contacts: {
-        'thread-1': {
-          lastAt: new Date(NOW - 2 * MINUTE).toISOString(),
-          awaitingReply: false,
-        },
-      },
-      pulses: [
-        {
-          id: 'p',
-          threadId: 'thread-2',
-          at: new Date(NOW).toISOString(),
-          direction: 'out',
-        },
-      ],
-    });
-    expect(threadNode('thread-1').dataset.contact).toBe('lit');
-    expect(threadNode('thread-2').dataset.contact).toBe('lit');
-  });
-
-  it('keeps every edge drawn when a reply rebuilds the nodes, its state moving from awaiting to lit', () => {
-    const edges = (): HTMLElement[] =>
-      Array.from(
-        container.querySelectorAll<HTMLElement>('[data-slot="contact-edge"]'),
-      );
-    const threads = threadsOf(3);
-    const sentAt = new Date(NOW - MINUTE).toISOString();
-    draw({
+  it('keeps every edge drawn when a reply rebuilds the cards, its state moving from awaiting to lit', async () => {
+    const threads = graphThreadsOf(3);
+    const sentAt = new Date(FIXTURE_NOW - MINUTE).toISOString();
+    await draw({
       threads,
       contacts: { 'thread-1': { lastAt: sentAt, awaitingReply: true } },
     });
-    expect(edges()).toHaveLength(3);
-    expect(
-      container
-        .querySelector('[data-edge="contact:thread-1"]')
-        ?.getAttribute('data-state'),
-    ).toBe('awaiting');
+    expect(all('contact-edge')).toHaveLength(3);
 
-    draw({
+    await draw({
       threads: threads.map((thread) => ({ ...thread })),
       contacts: {
         'thread-1': {
-          lastAt: new Date(NOW).toISOString(),
+          lastAt: new Date(FIXTURE_NOW).toISOString(),
           awaitingReply: false,
         },
       },
     });
 
-    expect(edges()).toHaveLength(3);
+    expect(all('contact-edge')).toHaveLength(3);
     expect(
       container
         .querySelector('[data-edge="contact:thread-1"]')
         ?.getAttribute('data-state'),
     ).toBe('lit');
+  });
+
+  it('lays a phone out as one column it scrolls, every card under the manager', async () => {
+    await draw({ threads: graphThreadsOf(4), narrow: true });
+
+    const graph = all('command-center-graph')[0]!;
+    expect(graph.dataset.layout).toBe('column');
+    expect(all('graph-thread')).toHaveLength(4);
+    const ys = ['thread-1', 'thread-2', 'thread-3', 'thread-4'].map((id) =>
+      nodeY('graph-thread', id),
+    );
+    expect(ys).toEqual([...ys].sort((a, b) => a - b));
+    expect(ys[0]).toBeGreaterThan(nodeY('graph-manager'));
+    expect(all('contact-edge')).toHaveLength(4);
   });
 });

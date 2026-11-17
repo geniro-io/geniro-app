@@ -7,7 +7,6 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { TaskDao } from '../../tasks/dao/task.dao';
-import type { TaskStatus } from '../../tasks/tasks.types';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
 import {
   COMMAND_CENTER_WINDOW_MS,
@@ -131,9 +130,9 @@ export class CommandCenterService {
         ? Promise.resolve(new Set<string>())
         : this.inbox.awaitingRepliesFrom(managerRunId),
     ]);
-    const taskStatus = new Map<string, TaskStatus>(
+    const taskOf = new Map(
       tasks.flatMap((task) =>
-        task.runId === null ? [] : [[task.runId, task.status] as const],
+        task.runId === null ? [] : [[task.runId, task] as const],
       ),
     );
     const onRoster = new Map(
@@ -153,11 +152,21 @@ export class CommandCenterService {
         });
         const entry = onRoster.get(run.id);
         const lastMail = mail.at(-1)?.at ?? null;
+        const task = taskOf.get(run.id) ?? null;
         return {
           run,
+          task:
+            task === null
+              ? null
+              : {
+                  id: task.id,
+                  identifier: run.taskIdentifier,
+                  title: task.title,
+                  status: task.status,
+                },
           handle: entry?.handle ?? null,
           note: entry?.note ?? null,
-          column: boardColumnOf(run, taskStatus.get(run.id) ?? null),
+          column: boardColumnOf(run, task?.status ?? null),
           activity: activityOf(run),
           strip: await this.stripOf(run, start, now, mail, em),
           contact: {

@@ -33,6 +33,7 @@ function wireOf(run: Run, awaiting: ReadonlySet<string>): RunWire {
     lastMessage: null,
     lastActivityAt: null,
     createdAt: run.createdAt.toISOString(),
+    taskIdentifier: run.taskIdentifier,
   } as unknown as RunWire;
 }
 
@@ -186,6 +187,25 @@ describe('CommandCenterService.board', () => {
       'review-card': 'in_review',
       'idle-card': 'idle',
     });
+  });
+
+  it('names the board card each thread works, and none for a thread no card started', async () => {
+    await seedChatAged('card-run', HOUR, { taskIdentifier: 'GEN-12' });
+    await db.seedTask('card-run', 'in_progress', { title: 'Fix login' });
+    await seedChatAged('loose-run', HOUR);
+
+    const board = await service.board('24h');
+    const taskOf = Object.fromEntries(
+      board.cards.map((card) => [card.run.id, card.task]),
+    );
+
+    expect(taskOf['card-run']).toEqual({
+      id: expect.any(String),
+      identifier: 'GEN-12',
+      title: 'Fix login',
+      status: 'in_progress',
+    });
+    expect(taskOf['loose-run']).toBeNull();
   });
 
   it('folds a strip over every row of the eight hours, past any listing cap, and none older', async () => {

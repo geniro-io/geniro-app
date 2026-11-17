@@ -352,12 +352,12 @@ Claude Code's own messaging between sessions stays closed on Geniro's turns: a t
 
 One screen for every thread at work, and one agent that runs them for you. Open **Command center** in the rail.
 
-- **Every active thread at a glance.** A card per thread that is working, waiting on you, or was active in the last 24 hours (or 7 days): its status, project and agent or team, its pull request, the manager's note on it, what it is doing now, and a strip of its last 8 hours — when it worked, when it waited on you, and markers for your messages, its questions, pull requests opened and merged, stage changes, failures and messages to and from the manager. Click a card to open the thread.
-- **Board and graph.** The same threads in five columns the app works out — Working, Waiting on you, Idle, In review, Done — and as a live graph with the manager in the middle: an edge lights up for five minutes after a message either way, a dot travels along it as each message goes, and it turns amber while the manager waits for that thread's reply.
+- **One live graph.** The manager sits on top and every thread at work hangs under it as a card — working, waiting on you, or active in the last 24 hours (or 7 days). Each card shows its status, project and agent or team, its pull request, the manager's note on it, what it is doing now, and a strip of its last 8 hours: when it worked, when it waited on you, and markers for your messages, its questions, pull requests opened and merged, stage changes, failures and messages to and from the manager. Click a card to open the thread; unfold it to see the board card it works underneath. Drag to pan, pinch or use the zoom buttons.
+- **Contact you can see.** A wire lights up for five minutes after a message either way, a dot travels along it as each message goes, and it turns amber while the manager waits for that thread's reply. The tree lays itself out again, smoothly, as threads come and go.
 - **A manager you talk to in plain words.** One manager chat for the whole app, docked under the page, on the agent you pick. Write "ask billing and cache to rebase on main" and it works out which threads you mean, sends them one message in a single step, and asks back when a name is ambiguous. Its messages to the threads it manages go out without a card; starting a new thread shows you a **Start** card first, unless the manager runs in `auto`. A thread's reply to its question wakes the manager even past its usual wake budget.
 - **New threads from here.** **New thread** files a card on the project's board with its own worktree and branch and starts it; the manager can do the same with `start_thread`, and is told when the thread has started.
 - **It does not forget.** The manager's roster — which threads, why, and its note on each — lives in its instructions and survives compaction; each of its turns also carries a fresh status of every thread.
-- **On your phone too**, in one column, with the manager a tap away.
+- **On your phone too**, as one column — the manager first, each thread indented under it — with the manager chat a tap away.
 
 ## 🔬 Thread analyzer
 

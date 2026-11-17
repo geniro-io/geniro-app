@@ -1,13 +1,15 @@
+import { cva } from 'class-variance-authority';
 import {
+  ChevronDown,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  ListTodo,
   type LucideIcon,
 } from 'lucide-react';
 
-import { RunStatusIcon, type RunStatusKind } from '../chats/run-status';
-import { CARD_BUTTON_CLASS } from '../components/card-hover';
+import { plainPreview } from '../chats/brief-text';
 import {
   TimelineStrip,
   type TimelineStripProps,
@@ -20,28 +22,127 @@ export type ThreadCardStatus =
 
 export type ThreadCardPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 
+export interface ThreadCardTask {
+  expanded: boolean;
+  onToggle: () => void;
+}
+
 export interface ThreadCardProps {
   title: string;
   status: ThreadCardStatus;
+  handle: string | null;
   project: string | null;
   agentLabel: string | null;
   pullRequest: { number: number; state: ThreadCardPullRequestState } | null;
   note: string | null;
   activity: string | null;
   strip: TimelineStripProps;
+  /** The board card this thread works, folded under it; null when it has none. */
+  task: ThreadCardTask | null;
+  /** What a screen reader hears for the whole card. */
+  summary?: string;
   onOpen: () => void;
 }
 
-const STATUS_META: Record<
-  ThreadCardStatus,
-  { text: string; icon: RunStatusKind }
-> = {
-  working: { text: 'Working', icon: 'held' },
-  waiting: { text: 'Waiting on you', icon: 'needs-input' },
-  idle: { text: 'Idle', icon: 'skipped' },
-  failed: { text: 'Failed', icon: 'failed' },
-  done: { text: 'Done', icon: 'completed' },
+export const THREAD_CARD_WIDTH = 300;
+
+const PAD_PX = 12;
+const GAP_PX = 8;
+const BORDER_PX = 1;
+const ROW_PX = {
+  header: 20,
+  meta: 16,
+  note: 24,
+  strip: 20,
+  activity: 16,
+  task: 24,
+} as const;
+
+/** The card's height for what it shows, so the graph can lay it out before it is drawn. */
+export function threadCardHeight({
+  note,
+  activity,
+  task,
+}: {
+  note: boolean;
+  activity: boolean;
+  task: boolean;
+}): number {
+  const rows = [
+    ROW_PX.header,
+    ROW_PX.meta,
+    ...(note ? [ROW_PX.note] : []),
+    ROW_PX.strip,
+    ...(activity ? [ROW_PX.activity] : []),
+    ...(task ? [ROW_PX.task] : []),
+  ];
+  return (
+    PAD_PX * 2 +
+    BORDER_PX * 2 +
+    rows.reduce((sum, row) => sum + row, 0) +
+    GAP_PX * (rows.length - 1)
+  );
+}
+
+/** The "Now:" line as the card shows it: one line of plain text, or empty. */
+export function activityLine(activity: string | null): string {
+  return activity === null ? '' : plainPreview(activity);
+}
+
+export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
+  working: 'Working',
+  waiting: 'Waiting on you',
+  idle: 'Idle',
+  failed: 'Failed',
+  done: 'Done',
 };
+
+const cardVariants = cva(
+  'flex cursor-pointer flex-col overflow-hidden rounded-card border bg-card text-left shadow-sm outline-none transition-[border-color,box-shadow,translate] duration-200 hover:-translate-y-px hover:shadow-md focus-visible:ring-[3px] focus-visible:ring-ring/60 motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+  {
+    variants: {
+      status: {
+        working: 'border-primary/60',
+        waiting: 'border-warning/70',
+        idle: 'border-border',
+        failed: 'border-destructive/60',
+        done: 'border-success/50',
+      } satisfies Record<ThreadCardStatus, string>,
+    },
+  },
+);
+
+const dotVariants = cva('relative size-2 shrink-0 rounded-full', {
+  variants: {
+    status: {
+      working: 'bg-primary',
+      waiting: 'bg-warning',
+      idle: 'bg-muted-foreground/50',
+      failed: 'bg-destructive',
+      done: 'bg-success',
+    } satisfies Record<ThreadCardStatus, string>,
+  },
+});
+
+function StatusDot({
+  status,
+}: {
+  status: ThreadCardStatus;
+}): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="thread-card-dot"
+      className={dotVariants({ status })}>
+      {status === 'working' ? (
+        <span
+          data-slot="thread-card-dot-ping"
+          className="absolute inset-0 animate-ping rounded-full bg-primary/60 motion-reduce:animate-none"
+        />
+      ) : null}
+    </span>
+  );
+}
 
 const PULL_REQUEST_META: Record<
   ThreadCardPullRequestState,
@@ -87,10 +188,10 @@ function PullRequestChip({
 }
 
 /**
- * A marker or any other control inside the strip answers its own press; the
+ * A marker or any other control inside the card answers its own press; the
  * click and the key must not also open the thread that holds them.
  */
-function keepPressesInStrip(event: React.SyntheticEvent<HTMLDivElement>): void {
+function keepPressesInside(event: React.SyntheticEvent<HTMLElement>): void {
   if (
     event.target instanceof Element &&
     event.target.closest('button') !== null
@@ -99,25 +200,30 @@ function keepPressesInStrip(event: React.SyntheticEvent<HTMLDivElement>): void {
   }
 }
 
+/** One running thread as a card of fixed size — a node of the command center's graph. */
 export function ThreadCard({
   title,
   status,
+  handle,
   project,
   agentLabel,
   pullRequest,
   note,
   activity,
   strip,
+  task,
+  summary,
   onOpen,
 }: ThreadCardProps): React.JSX.Element {
-  const meta = STATUS_META[status];
-  const context = [project, agentLabel]
-    .filter((part) => part !== null)
+  const meta = [THREAD_STATUS_TEXT[status], handle, project, agentLabel]
+    .filter((part) => part !== null && part !== '')
     .join(' · ');
+  const now = activityLine(activity);
   return (
     <div
       role="button"
       tabIndex={0}
+      aria-label={summary ?? title}
       data-slot="thread-card"
       data-status={status}
       onClick={onOpen}
@@ -127,14 +233,23 @@ export function ThreadCard({
           onOpen();
         }
       }}
-      className={cn(
-        'flex w-full min-w-0 cursor-pointer flex-col gap-2 rounded-card bg-card p-3 text-left ring-1 ring-border',
-        CARD_BUTTON_CLASS,
-      )}>
-      <div className="flex min-w-0 items-start gap-2">
+      className={cardVariants({ status })}
+      style={{
+        width: THREAD_CARD_WIDTH,
+        height: threadCardHeight({
+          note: note !== null,
+          activity: now !== '',
+          task: task !== null,
+        }),
+        padding: PAD_PX,
+        gap: GAP_PX,
+      }}>
+      <div className="flex h-5 min-w-0 shrink-0 items-center gap-2">
+        <StatusDot status={status} />
         <span
           data-slot="thread-card-title"
-          className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium">
+          title={title}
+          className="min-w-0 flex-1 truncate text-sm font-semibold">
           {title}
         </span>
         {pullRequest === null ? null : (
@@ -144,31 +259,56 @@ export function ThreadCard({
           />
         )}
       </div>
-      <div
+      <p
         data-slot="thread-card-status"
-        className="flex min-w-0 items-center gap-1.5 text-xs">
-        <RunStatusIcon status={meta.icon} />
-        <span className="font-medium">{meta.text}</span>
-      </div>
-      {context === '' ? null : (
-        <p className="truncate text-xs text-muted-foreground">{context}</p>
-      )}
+        className="h-4 shrink-0 truncate text-xs leading-4 text-muted-foreground">
+        {meta}
+      </p>
       {note === null ? null : (
         <p
           data-slot="thread-card-note"
-          className="line-clamp-2 break-words rounded-control bg-muted/50 px-2 py-1 text-xs">
+          title={note}
+          className="h-6 shrink-0 truncate rounded-control bg-muted/60 px-2 text-xs leading-6">
           {note}
         </p>
       )}
-      <div onClick={keepPressesInStrip} onKeyDown={keepPressesInStrip}>
+      <div
+        className="h-5 shrink-0"
+        onClick={keepPressesInside}
+        onKeyDown={keepPressesInside}>
         <TimelineStrip {...strip} />
       </div>
-      {activity === null ? null : (
+      {now === '' ? null : (
         <p
           data-slot="thread-card-activity"
-          className="truncate text-xs text-muted-foreground">
-          Now: {activity}
+          title={now}
+          className="h-4 shrink-0 truncate text-xs leading-4 text-muted-foreground">
+          Now: {now}
         </p>
+      )}
+      {task === null ? null : (
+        <button
+          type="button"
+          data-slot="thread-card-task-toggle"
+          aria-expanded={task.expanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            task.onToggle();
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          className="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/60 focus-visible:outline-none">
+          <ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="flex-1 text-left">
+            {task.expanded ? 'Hide its board card' : 'Show its board card'}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              'size-3.5 shrink-0 transition-transform duration-200 motion-reduce:transition-none',
+              task.expanded && 'rotate-180',
+            )}
+          />
+        </button>
       )}
     </div>
   );

@@ -1,6 +1,8 @@
-import { type Edge, type EdgeProps, getStraightPath } from '@xyflow/react';
+import type { Edge, EdgeProps } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
 import { useEffect, useState } from 'react';
+
+import { type Point, roundedPath } from '../components/stage-graph-layout';
 
 export const CONTACT_LIT_MS = 5 * 60 * 1000;
 export const PULSE_TRAVEL_MS = 1200;
@@ -45,7 +47,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-function usePrefersReducedMotion(): boolean {
+export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(prefersReducedMotion);
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') {
@@ -59,15 +61,23 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-const edgeVariants = cva('fill-none transition-[opacity,stroke] duration-200', {
-  variants: {
-    state: {
-      lit: 'stroke-foreground/70 opacity-100',
-      awaiting: 'stroke-warning opacity-100',
-      idle: 'stroke-border-strong opacity-50',
-    } satisfies Record<EdgeState, string>,
+const edgeVariants = cva(
+  'fill-none transition-[opacity,stroke,d] duration-300 ease-out motion-reduce:transition-none',
+  {
+    variants: {
+      state: {
+        lit: 'stroke-foreground/70 opacity-100',
+        awaiting: 'stroke-warning opacity-100',
+        idle: 'stroke-border-strong opacity-60',
+      } satisfies Record<EdgeState, string>,
+    },
   },
-});
+);
+
+/** The path as a CSS value too, so a wire moved by a new layout glides with its boxes. */
+export function pathStyle(path: string): React.CSSProperties {
+  return { d: `path('${path}')` } as React.CSSProperties;
+}
 
 function TravelDot({
   path,
@@ -125,6 +135,7 @@ export function ContactEdgeLine({
       <path
         aria-hidden="true"
         d={path}
+        style={pathStyle(path)}
         className={edgeVariants({ state })}
         strokeWidth={state === 'idle' ? 1.25 : 2}
         strokeDasharray={state === 'idle' ? '4 4' : undefined}
@@ -142,6 +153,7 @@ export function ContactEdgeLine({
 }
 
 export interface ContactEdgeData extends Record<string, unknown> {
+  route: readonly Point[];
   state: EdgeState;
   pulses: readonly ContactPulse[];
   now: number;
@@ -151,18 +163,13 @@ export type ContactFlowEdge = Edge<ContactEdgeData, 'contact'>;
 
 export function ContactEdge({
   id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
   data,
 }: EdgeProps<ContactFlowEdge>): React.JSX.Element {
-  const [path] = getStraightPath({ sourceX, sourceY, targetX, targetY });
-  const { state, pulses, now } = data!;
+  const { route, state, pulses, now } = data!;
   return (
     <ContactEdgeLine
       id={id}
-      path={path}
+      path={roundedPath(route, 10)}
       state={state}
       pulses={pulses}
       now={now}

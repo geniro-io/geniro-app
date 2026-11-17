@@ -43,23 +43,32 @@ const meta = {
   args: {
     title: 'Fix the login redirect',
     status: 'working',
+    handle: 't1',
     project: 'Geniro',
     agentLabel: 'Claude Code',
     pullRequest: null,
     note: null,
-    activity: 'running the test suite',
+    activity: 'running the **test suite**',
     strip: STRIP,
+    task: null,
     onOpen: () => {},
   },
-  decorators: [
-    (story) => <div className="w-full max-w-[360px] p-4">{story()}</div>,
-  ],
+  decorators: [(story) => <div className="p-4">{story()}</div>],
 } satisfies Meta<typeof ThreadCard>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Working: Story = {};
+
+/** A thread working a board card: the toggle folds the card under it in the graph. */
+export const WithBoardCard: Story = {
+  args: { task: { expanded: false, onToggle: () => {} } },
+};
+
+export const WithBoardCardUnfolded: Story = {
+  args: { task: { expanded: true, onToggle: () => {} } },
+};
 
 export const WaitingOnYou: Story = {
   args: {

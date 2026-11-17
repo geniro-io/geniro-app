@@ -104,29 +104,60 @@ export function fitWidths(natural: number[], budget: number): number[] {
   return natural.map((width) => Math.min(width, low));
 }
 
-async function runElk(
-  boxes: readonly StageBox[],
+interface SizedBox {
+  id: string;
+  width: number;
+  height: number;
+}
+
+function runLayered(
+  id: string,
+  boxes: readonly SizedBox[],
   links: readonly StageLink[],
-  gap: LayerGap,
+  layoutOptions: Record<string, string>,
 ): Promise<ElkNode> {
   return elk.layout({
-    id: 'stages',
-    layoutOptions: {
-      ...LAYOUT_OPTIONS,
-      'elk.layered.spacing.nodeNodeBetweenLayers': LAYER_GAPS[gap].nodes,
-      'elk.layered.spacing.edgeNodeBetweenLayers': LAYER_GAPS[gap].edges,
-    },
-    children: boxes.map((box) => ({
-      id: box.id,
-      width: box.width,
-      height: PILL_HEIGHT,
-    })),
+    id,
+    layoutOptions,
+    children: boxes.map((box) => ({ ...box })),
     edges: links.map((link) => ({
       id: link.key,
       sources: [link.from],
       targets: [link.to],
     })),
   });
+}
+
+function runElk(
+  boxes: readonly StageBox[],
+  links: readonly StageLink[],
+  gap: LayerGap,
+): Promise<ElkNode> {
+  return runLayered(
+    'stages',
+    boxes.map((box) => ({ ...box, height: PILL_HEIGHT })),
+    links,
+    {
+      ...LAYOUT_OPTIONS,
+      'elk.layered.spacing.nodeNodeBetweenLayers': LAYER_GAPS[gap].nodes,
+      'elk.layered.spacing.edgeNodeBetweenLayers': LAYER_GAPS[gap].edges,
+    },
+  );
+}
+
+function routesOf(graph: ElkNode): Map<string, Point[]> {
+  const routes = new Map<string, Point[]>();
+  for (const edge of graph.edges ?? []) {
+    const section = edge.sections?.[0];
+    if (section !== undefined) {
+      routes.set(edge.id, [
+        section.startPoint,
+        ...(section.bendPoints ?? []),
+        section.endPoint,
+      ]);
+    }
+  }
+  return routes;
 }
 
 function columnsOf(graph: ElkNode): Map<string, number> {
@@ -194,21 +225,148 @@ export async function layoutStageGraph(
       column: columns.get(child.id) ?? 0,
     });
   }
-  const routes = new Map<string, Point[]>();
-  for (const edge of graph.edges ?? []) {
-    const section = edge.sections?.[0];
-    if (section !== undefined) {
-      routes.set(edge.id, [
-        section.startPoint,
-        ...(section.bendPoints ?? []),
-        section.endPoint,
-      ]);
-    }
-  }
   return {
     width: graph.width ?? 0,
     height: graph.height ?? 0,
     boxes: boxesOut,
+    routes: routesOf(graph),
+  };
+}
+
+export interface TreeBox {
+  id: string;
+  width: number;
+  height: number;
+  /** The box this one hangs under; none for the root. */
+  parent: string | null;
+}
+
+export interface PlacedTreeBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TreeGraphGeometry {
+  width: number;
+  height: number;
+  boxes: ReadonlyMap<string, PlacedTreeBox>;
+  /** Keyed by the child's id: the wire from its parent down to it. */
+  routes: ReadonlyMap<string, readonly Point[]>;
+}
+
+const TREE_MARGIN = 16;
+
+const TREE_OPTIONS: Record<string, string> = {
+  'elk.algorithm': 'layered',
+  'elk.direction': 'DOWN',
+  'elk.edgeRouting': 'ORTHOGONAL',
+  'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+  'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
+  'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
+  'elk.layered.mergeEdges': 'true',
+  'elk.spacing.nodeNode': '24',
+  'elk.spacing.edgeNode': '16',
+  'elk.spacing.edgeEdge': '10',
+  'elk.layered.spacing.nodeNodeBetweenLayers': '56',
+  'elk.layered.spacing.edgeNodeBetweenLayers': '24',
+  'elk.padding': `[top=${TREE_MARGIN},left=${TREE_MARGIN},bottom=${TREE_MARGIN},right=${TREE_MARGIN}]`,
+};
+
+function treeLinks(boxes: readonly TreeBox[]): StageLink[] {
+  return boxes.flatMap((box) =>
+    box.parent === null ? [] : [{ key: box.id, from: box.parent, to: box.id }],
+  );
+}
+
+function placedBoxes(
+  boxes: readonly TreeBox[],
+  at: (box: TreeBox) => { x: number; y: number },
+): Map<string, PlacedTreeBox> {
+  return new Map(
+    boxes.map((box) => [
+      box.id,
+      { id: box.id, width: box.width, height: box.height, ...at(box) },
+    ]),
+  );
+}
+
+/**
+ * A tree drawn top-down by ELK: each layer one row, every child under its
+ * parent, wires routed at right angles so none crosses a box. Boxes are
+ * listed in the order they should stand left to right.
+ */
+export async function layoutTreeGraph(
+  boxes: readonly TreeBox[],
+): Promise<TreeGraphGeometry> {
+  const graph = await runLayered('tree', boxes, treeLinks(boxes), TREE_OPTIONS);
+  const placed = new Map(
+    (graph.children ?? []).map((child) => [
+      child.id,
+      { x: child.x ?? 0, y: child.y ?? 0 },
+    ]),
+  );
+  return {
+    width: graph.width ?? 0,
+    height: graph.height ?? 0,
+    boxes: placedBoxes(boxes, (box) => placed.get(box.id) ?? { x: 0, y: 0 }),
+    routes: routesOf(graph),
+  };
+}
+
+const COLUMN_GAP = 16;
+const COLUMN_INDENT = 24;
+const COLUMN_SPINE = 12;
+
+/**
+ * The same tree as one column, for a narrow screen: the root on top, every
+ * box below it in order, each indented one step per level, and a wire running
+ * down the parent's left edge and turning into each child.
+ */
+export function layoutTreeColumn(boxes: readonly TreeBox[]): TreeGraphGeometry {
+  const depth = new Map<string, number>();
+  const depthOf = (box: TreeBox): number => {
+    const known = depth.get(box.id);
+    if (known !== undefined) {
+      return known;
+    }
+    const parent =
+      box.parent === null ? undefined : boxes.find((b) => b.id === box.parent);
+    const value = parent === undefined ? 0 : depthOf(parent) + 1;
+    depth.set(box.id, value);
+    return value;
+  };
+  let y = TREE_MARGIN;
+  let width = 0;
+  const tops = new Map<string, { x: number; y: number }>();
+  for (const box of boxes) {
+    const x = TREE_MARGIN + depthOf(box) * COLUMN_INDENT;
+    tops.set(box.id, { x, y });
+    y += box.height + COLUMN_GAP;
+    width = Math.max(width, x + box.width + TREE_MARGIN);
+  }
+  const placed = placedBoxes(boxes, (box) => tops.get(box.id)!);
+  const routes = new Map<string, Point[]>();
+  for (const box of boxes) {
+    const parent = box.parent === null ? undefined : placed.get(box.parent);
+    const child = placed.get(box.id)!;
+    if (parent === undefined) {
+      continue;
+    }
+    const spineX = parent.x + COLUMN_SPINE;
+    const middle = child.y + Math.min(child.height / 2, 28);
+    routes.set(box.id, [
+      { x: spineX, y: parent.y + parent.height },
+      { x: spineX, y: middle },
+      { x: child.x, y: middle },
+    ]);
+  }
+  return {
+    width,
+    height: y - COLUMN_GAP + TREE_MARGIN,
+    boxes: placed,
     routes,
   };
 }

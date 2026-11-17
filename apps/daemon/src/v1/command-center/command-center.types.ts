@@ -78,9 +78,25 @@ export const ThreadStripSchema = z
   .meta({ id: 'CommandCenterStrip' });
 export type ThreadStrip = z.infer<typeof ThreadStripSchema>;
 
+export const CommandCenterTaskRefSchema = z
+  .object({
+    id: z.string(),
+    identifier: z
+      .string()
+      .nullable()
+      .describe("The card's identifier (GEN-12), or null when none is known"),
+    title: z.string(),
+    status: TaskStatusSchema,
+  })
+  .meta({ id: 'CommandCenterTaskRef' });
+export type CommandCenterTaskRef = z.infer<typeof CommandCenterTaskRefSchema>;
+
 export const CommandCenterCardSchema = z
   .object({
     run: RunWireSchema,
+    task: CommandCenterTaskRefSchema.nullable().describe(
+      'The board card this thread works, or null',
+    ),
     handle: z
       .string()
       .nullable()

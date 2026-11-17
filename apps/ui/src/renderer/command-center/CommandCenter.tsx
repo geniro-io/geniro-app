@@ -28,18 +28,14 @@ import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
-import { BoardView } from './board-view';
 import { threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
 import { NewThreadDialog } from './new-thread-dialog';
-import { ThreadCard } from './thread-card';
 import { useCommandCenterBoard } from './use-command-center-board';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
 );
-
-type CommandCenterTab = 'cards' | 'board' | 'graph';
 
 const ALL_PROJECTS = '__all__';
 
@@ -56,10 +52,10 @@ function useClock(): number {
 }
 
 /**
- * The command center: every active thread on one screen — as cards with an
- * 8-hour strip, as a board of computed columns, or as a live graph of the
- * manager's contacts — with the manager docked underneath. The daemon folds
- * everything; this page only draws it and asks again when a card moves.
+ * The command center: one live graph with the manager on top and every active
+ * thread hanging under it as a card, each thread's board card folded beneath
+ * it — with the manager docked underneath. The daemon folds everything; this
+ * page only draws it and asks again when a card moves.
  */
 export function CommandCenter({
   handle,
@@ -73,7 +69,6 @@ export function CommandCenter({
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();
-  const [tab, setTab] = useState<CommandCenterTab>('cards');
   const [window, setWindow] = useState<CommandCenterWindow>('24h');
   const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
@@ -108,14 +103,13 @@ export function CommandCenter({
       { start: stripStart, end: stripEnd },
     );
 
-  const managed = shown.filter((card) => card.handle != null);
-  const graphThreads = managed.map((card) => ({
+  const graphThreads = shown.map((card) => ({
     id: card.run.id,
-    label: `${card.handle} · ${card.run.title ?? 'Untitled thread'}`,
-    status: viewOf(card).status,
+    createdAt: card.run.createdAt,
+    view: viewOf(card),
   }));
   const contacts = Object.fromEntries(
-    managed.map((card) => [
+    shown.map((card) => [
       card.run.id,
       {
         lastAt: card.contact.lastAt ?? null,
@@ -155,17 +149,6 @@ export function CommandCenter({
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
         <h1 className="mr-2 text-sm font-semibold">Command center</h1>
-        <SegmentedControl
-          ariaLabel="View"
-          size="sm"
-          options={[
-            { id: 'cards', label: 'Cards' },
-            { id: 'board', label: 'Board' },
-            { id: 'graph', label: 'Graph' },
-          ]}
-          value={tab}
-          onSelect={setTab}
-        />
         <Select
           aria-label="Project"
           variant="ghost"
@@ -221,7 +204,7 @@ export function CommandCenter({
           }
         />
       )}
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <main className="flex min-h-0 flex-1 flex-col bg-sidebar/40">
         {board.cards === null ? (
           <p className="p-6 text-sm text-muted-foreground">Loading threads…</p>
         ) : shown.length === 0 ? (
@@ -230,25 +213,6 @@ export function CommandCenter({
             {window === '24h' ? ' in the last 24 hours' : ' in the last 7 days'}
             . Start one with New thread, or ask the manager.
           </EmptyState>
-        ) : tab === 'cards' ? (
-          <div className="grid gap-3 p-4 [grid-template-columns:repeat(auto-fill,minmax(18rem,1fr))] max-[640px]:grid-cols-1">
-            {shown.map((card) => (
-              <ThreadCard
-                key={card.run.id}
-                {...viewOf(card)}
-                onOpen={() => onOpenThread(card.run.id)}
-              />
-            ))}
-          </div>
-        ) : tab === 'board' ? (
-          <BoardView
-            entries={shown.map((card) => ({
-              runId: card.run.id,
-              column: card.column,
-              view: viewOf(card),
-            }))}
-            onOpen={onOpenThread}
-          />
         ) : (
           <Suspense
             fallback={
@@ -257,17 +221,15 @@ export function CommandCenter({
               </p>
             }>
             <GraphView
-              className="min-h-[24rem] flex-1"
-              manager={
-                board.managerRunId === null
-                  ? null
-                  : { id: board.managerRunId, label: 'Manager' }
-              }
+              className="min-h-[18rem] flex-1"
+              managerStarted={board.managerRunId !== null}
               threads={graphThreads}
               contacts={contacts}
               pulses={pulses}
               now={now}
+              narrow={narrow}
               onOpen={onOpenThread}
+              onManager={() => setManagerShown((was) => !was)}
             />
           </Suspense>
         )}

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ThreadCard,
+  threadCardHeight,
   type ThreadCardProps,
   type ThreadCardStatus,
 } from './thread-card';
@@ -38,12 +39,14 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
   return {
     title: 'Fix the login redirect',
     status: 'working',
+    handle: null,
     project: 'Geniro',
     agentLabel: 'Claude',
     pullRequest: null,
     note: null,
     activity: null,
     strip: STRIP,
+    task: null,
     onOpen: vi.fn(),
     ...over,
   };
@@ -141,17 +144,47 @@ describe('ThreadCard — content', () => {
     )!;
     expect(line.textContent).toContain(text);
     expect(el.dataset.status).toBe(status);
-    expect(line.querySelector('[data-status]')).not.toBeNull();
   });
 
-  it('clamps the title to two lines', () => {
-    const el = render({ title: 'A long thread title '.repeat(12) });
+  it('pulses its dot only while the thread works', () => {
+    expect(
+      render({ status: 'working' }).querySelector(
+        '[data-slot="thread-card-dot-ping"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      render({ status: 'idle' }).querySelector(
+        '[data-slot="thread-card-dot-ping"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps a long title on one line, whole in its tooltip', () => {
+    const long = 'A long thread title '.repeat(12).trim();
+    const el = render({ title: long });
 
     const title = el.querySelector<HTMLElement>(
       '[data-slot="thread-card-title"]',
     )!;
-    expect(title.classList.contains('line-clamp-2')).toBe(true);
-    expect(title.textContent).toContain('A long thread title');
+    expect(title.classList.contains('truncate')).toBe(true);
+    expect(title.title).toBe(long);
+  });
+
+  it('is exactly as tall as the graph laid it out for what it shows', () => {
+    const el = render({
+      note: 'watch billing',
+      activity: 'running tests',
+      task: { expanded: false, onToggle: vi.fn() },
+    });
+
+    expect(el.style.height).toBe(
+      `${threadCardHeight({ note: true, activity: true, task: true })}px`,
+    );
+    expect(
+      threadCardHeight({ note: false, activity: false, task: false }),
+    ).toBeLessThan(
+      threadCardHeight({ note: true, activity: true, task: true }),
+    );
   });
 
   it('draws the manager note when there is one, and nothing when there is not', () => {
@@ -182,10 +215,17 @@ describe('ThreadCard — content', () => {
     ).toBeNull();
   });
 
-  it('puts the project and the agent on one line', () => {
-    const el = render({ project: 'Geniro', agentLabel: 'Claude' });
+  it('puts the status, handle, project and agent on one line', () => {
+    const el = render({
+      status: 'idle',
+      handle: 't3',
+      project: 'Geniro',
+      agentLabel: 'Claude',
+    });
 
-    expect(el.textContent).toContain('Geniro · Claude');
+    expect(
+      el.querySelector('[data-slot="thread-card-status"]')!.textContent,
+    ).toBe('Idle · t3 · Geniro · Claude');
   });
 
   it('says what the thread is doing now, when it is doing anything', () => {
@@ -201,9 +241,51 @@ describe('ThreadCard — content', () => {
     ).toBeNull();
   });
 
+  it('says it as plain text, with no markdown markers', () => {
+    const line = render({
+      activity: '**Rebased** on `main` — see [the PR](https://x.test/1)',
+    }).querySelector('[data-slot="thread-card-activity"]')!;
+
+    expect(line.textContent).toBe('Now: Rebased on main — see the PR');
+  });
+
   it('draws the timeline strip', () => {
     const el = render();
 
     expect(el.querySelector('[data-slot="timeline-strip"]')).not.toBeNull();
+  });
+});
+
+describe('ThreadCard — its board card', () => {
+  const toggleOf = (el: HTMLElement): HTMLButtonElement | null =>
+    el.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-task-toggle"]',
+    );
+
+  it('offers no toggle for a thread that works no board card', () => {
+    expect(toggleOf(render({ task: null }))).toBeNull();
+  });
+
+  it('folds and unfolds the board card without opening the thread', () => {
+    const onOpen = vi.fn();
+    const onToggle = vi.fn();
+    const el = render({ onOpen, task: { expanded: false, onToggle } });
+    const toggle = toggleOf(el)!;
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    act(() => {
+      toggle.click();
+    });
+    press(toggle, 'Enter');
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('says it is unfolded while it is', () => {
+    const el = render({ task: { expanded: true, onToggle: vi.fn() } });
+
+    expect(toggleOf(el)!.getAttribute('aria-expanded')).toBe('true');
+    expect(toggleOf(el)!.textContent).toContain('Hide its board card');
   });
 });

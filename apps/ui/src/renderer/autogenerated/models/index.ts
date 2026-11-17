@@ -3164,6 +3164,12 @@ export interface CommandCenterCard {
     run: CommandCenterCardRun;
     /**
      * 
+     * @type {CommandCenterTaskRef}
+     * @memberof CommandCenterCard
+     */
+    task: CommandCenterTaskRef | null;
+    /**
+     * 
      * @type {string}
      * @memberof CommandCenterCard
      */
@@ -3748,6 +3754,39 @@ export const CommandCenterStripSpanKindEnum = {
     Waiting: 'waiting'
 } as const;
 export type CommandCenterStripSpanKindEnum = typeof CommandCenterStripSpanKindEnum[keyof typeof CommandCenterStripSpanKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface CommandCenterTaskRef
+ */
+export interface CommandCenterTaskRef {
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTaskRef
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTaskRef
+     */
+    identifier: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterTaskRef
+     */
+    title: string;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof CommandCenterTaskRef
+     */
+    status: TaskStatus;
+}
+
 
 
 /**

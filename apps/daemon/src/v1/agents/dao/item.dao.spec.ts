@@ -18,7 +18,12 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { ChatTextDatabase, HistoryWindow, SeqRange } from '../chat.types';
+import type {
+  ChatTextDatabase,
+  HistoryWindow,
+  SeqRange,
+  WireRow,
+} from '../chat.types';
 import { PULL_REQUEST_NAMING_KINDS } from '../utils/pull-request-capture';
 import { ItemDao } from './item.dao';
 import { RunDao } from './run.dao';
@@ -2333,23 +2338,50 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(seqsOf(rows)).toEqual([1, 4]);
     });
 
-    it('returns one row per call across more than one read, for more calls than one statement names', async () => {
+    it('reads more calls and kinds than one statement holds in two statements, with a turn of the event loop between them', async () => {
       await stampedRun();
-      const calls = Array.from({ length: 205 }, (_, i) => `call-${i}`);
+      const calls = Array.from({ length: 401 }, (_, i) => `call-${i}`);
       await place(
         calls.flatMap((inCall, i) =>
           rowsAt('run-a', [2 * i + 1, 2 * i + 2], 'tool_call', { inCall }),
         ),
       );
-
-      const rows = await dao.newestRowsInCalls('run-a', calls, {
-        kinds: ['tool_call'],
-        limit: 1,
+      await dao.payloadRefsStamped('run-a');
+      let turned = false;
+      setImmediate(() => {
+        turned = true;
       });
 
+      let rows: WireRow[] = [];
+      const statements = await statementsOf(async () => {
+        rows = await dao.newestRowsInCalls('run-a', calls, {
+          kinds: ['tool_call'],
+          limit: 1,
+        });
+      });
+
+      expect(statements).toBe(2);
+      expect(turned).toBe(true);
       expect(seqsOf(rows)).toEqual(
-        Array.from({ length: 205 }, (_, i) => 2 * i + 2),
+        Array.from({ length: 401 }, (_, i) => 2 * i + 2),
       );
+    });
+
+    it('keeps the newest limit rows of each call across every kind it names', async () => {
+      await stampedRun();
+      await place([
+        ...rowsAt('run-a', [1, 4, 5], 'tool_call', { inCall: 'call-1' }),
+        ...rowsAt('run-a', [2, 3, 6], 'status', { inCall: 'call-1' }),
+        ...rowsAt('run-a', [7, 10], 'tool_call', { inCall: 'call-2' }),
+        ...rowsAt('run-a', [8, 9], 'status', { inCall: 'call-2' }),
+      ]);
+
+      const rows = await dao.newestRowsInCalls('run-a', ['call-1', 'call-2'], {
+        kinds: ['tool_call', 'status'],
+        limit: 2,
+      });
+
+      expect(seqsOf(rows)).toEqual([5, 6, 9, 10]);
     });
 
     it('sends one statement however many calls it names', async () => {

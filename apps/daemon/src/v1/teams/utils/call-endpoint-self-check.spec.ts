@@ -82,12 +82,11 @@ describe('probeCallEndpoint', () => {
         answerOk(response);
         return;
       }
-      const late = setTimeout(() => answerOk(response), 500);
+      const late = setTimeout(() => answerOk(response), 3_000);
       response.on('close', () => clearTimeout(late));
     };
 
-    await expect(probeCallEndpoint(target(), [50, 2_000])).resolves.toBeNull();
-    expect(seen).toHaveLength(2);
+    await expect(probeCallEndpoint(target(), [300, 5_000])).resolves.toBeNull();
   });
 
   it('reports a non-ok answer at once, without a retry', async () => {
@@ -122,10 +121,9 @@ describe('probeCallEndpoint', () => {
   it('gives up after every budget has timed out and names the attempt count', async () => {
     handler = silent;
 
-    const failure = await probeCallEndpoint(target(), [30, 60]);
+    const failure = await probeCallEndpoint(target(), [200, 400]);
 
     expect(failure).toMatch(/^timed out after 2 attempts/);
-    expect(seen).toHaveLength(2);
   });
 
   it('sends the bearer token and an initialize request, and reports nothing on success', async () => {

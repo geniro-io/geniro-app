@@ -938,6 +938,29 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(await rootPageReads('run-twelve', 12)).toEqual(onePage);
     });
 
+    it("gives the event loop a turn between a page's call-card reads once they have held it for a slice", async () => {
+      await teamRun();
+      const page = (await dao.getByRun('run-a', -1, orm.em.fork())).map(
+        itemToWire,
+      );
+      const read = () =>
+        service(page).read('run-a', -1, { limit: 50 }, { root: true });
+      await read();
+      let clock = 0;
+      const now = vi
+        .spyOn(performance, 'now')
+        .mockImplementation(() => (clock += 60));
+      let turned = false;
+      setImmediate(() => {
+        turned = true;
+      });
+
+      await read();
+      now.mockRestore();
+
+      expect(turned).toBe(true);
+    });
+
     describe('callMessages', () => {
       const reply = (
         seq: number,

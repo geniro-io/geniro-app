@@ -2,36 +2,36 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isCommandCenterChat,
-  isHostCommandCenterMessageCall,
+  isHostCommandCenterCall,
 } from './host-command-center';
 
 const SERVER = 'geniro-75a31aea';
 
-describe('isHostCommandCenterMessageCall', () => {
-  it('matches tell_threads and note_thread on this run’s server, in both spellings', () => {
-    for (const tool of ['tell_threads', 'note_thread']) {
+describe('isHostCommandCenterCall', () => {
+  it('matches tell_threads, note_thread and start_thread on this run’s server, in both spellings', () => {
+    for (const tool of ['tell_threads', 'note_thread', 'start_thread']) {
+      expect(isHostCommandCenterCall(SERVER, `mcp__${SERVER}__${tool}`)).toBe(
+        true,
+      );
       expect(
-        isHostCommandCenterMessageCall(SERVER, `mcp__${SERVER}__${tool}`),
-      ).toBe(true);
-      expect(
-        isHostCommandCenterMessageCall(SERVER, `${SERVER}-${tool}: ${tool}`),
+        isHostCommandCenterCall(SERVER, `${SERVER}-${tool}: ${tool}`),
       ).toBe(true);
     }
   });
 
-  it('refuses start_thread, message_thread, another server and no server', () => {
+  it('refuses message_thread, list_threads, another server and no server', () => {
     expect(
-      isHostCommandCenterMessageCall(SERVER, `mcp__${SERVER}__start_thread`),
+      isHostCommandCenterCall(SERVER, `mcp__${SERVER}__message_thread`),
     ).toBe(false);
     expect(
-      isHostCommandCenterMessageCall(SERVER, `mcp__${SERVER}__message_thread`),
+      isHostCommandCenterCall(SERVER, `mcp__${SERVER}__list_threads`),
     ).toBe(false);
-    expect(
-      isHostCommandCenterMessageCall(SERVER, 'mcp__other__tell_threads'),
-    ).toBe(false);
-    expect(
-      isHostCommandCenterMessageCall(null, `mcp__${SERVER}__tell_threads`),
-    ).toBe(false);
+    expect(isHostCommandCenterCall(SERVER, 'mcp__other__start_thread')).toBe(
+      false,
+    );
+    expect(isHostCommandCenterCall(null, `mcp__${SERVER}__tell_threads`)).toBe(
+      false,
+    );
   });
 });
 

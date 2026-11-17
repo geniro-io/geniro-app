@@ -159,7 +159,7 @@ import { isHostBrowserCall } from '../utils/host-browser';
 import { isHostChartCall } from '../utils/host-chart';
 import {
   isCommandCenterChat,
-  isHostCommandCenterMessageCall,
+  isHostCommandCenterCall,
 } from '../utils/host-command-center';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { hostEndpointPath } from '../utils/host-endpoint';
@@ -6285,11 +6285,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           isHostBuilderTeamCall(hostServerName, toolName)) ||
         ((isProjectChat(run) || isAnalysisRun(run)) &&
           isHostLibraryReadCall(hostServerName, toolName)) ||
-        // The manager's messages to the threads it manages: the user delegated
-        // them by opening the command center (user decision), and each send is
-        // a row on both transcripts. Never `message_thread`, in any chat.
+        // The manager's own tools: the user delegated messaging the threads it
+        // manages by opening the command center (user decision), each send is
+        // a row on both transcripts, and `start_thread`'s Start card is the
+        // one approval of a start. Never `message_thread`, in any chat.
         (isCommandCenterChat(run) &&
-          isHostCommandCenterMessageCall(hostServerName, toolName)) ||
+          isHostCommandCenterCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited

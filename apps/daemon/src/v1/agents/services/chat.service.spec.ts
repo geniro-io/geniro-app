@@ -17933,6 +17933,60 @@ describe('ChatService — the command center manager', () => {
     expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 
+  const START = { title: 'Fix the billing export', prompt: 'fix it' };
+
+  it('approves start_thread in a command-center ask chat with no permission card, leaving the Start card as the one approval', async () => {
+    const { service, claude, itemDao, approvals } = setup({
+      threadInbox: inbox,
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+      commandCenter: true,
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-start',
+      toolName: `mcp__${hostMcpServerName(run.id)}__start_thread`,
+      input: START,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-start',
+      true,
+      START,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((item) => item.kind === 'approval_request')).toBe(
+      false,
+    );
+  });
+
+  it('draws a card for start_thread in an ordinary ask chat, and approves nothing', async () => {
+    const { service, claude, approvals } = setup({ threadInbox: inbox });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-start',
+      toolName: `mcp__${hostMcpServerName(run.id)}__start_thread`,
+      input: START,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
   it('states the threads’ status in each turn’s prompt, and rewrites the brief only when it changes', async () => {
     const { service, claude, runDao } = setup({ threadInbox: inbox });
     let brief = 'Brief one';

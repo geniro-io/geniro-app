@@ -65,8 +65,8 @@ function ThreadStatusDot({
       data-slot="working-thread-dot"
       data-status={status}
       className="relative mt-1.5 flex size-2 shrink-0">
-      <span className="absolute inset-0 animate-ping rounded-full bg-primary/60 motion-reduce:animate-none" />
-      <span className="relative size-2 rounded-full bg-primary" />
+      <span className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none" />
+      <span className="relative size-2 rounded-full bg-success" />
     </span>
   );
 }
@@ -196,7 +196,7 @@ export function WorkingThreadsCard({
                 live={anyWorking}
                 className={cn(
                   'size-3.5 shrink-0',
-                  anyWorking && 'text-primary',
+                  anyWorking && 'text-success',
                 )}
               />
               <span className="shrink-0 text-sm font-semibold text-foreground">

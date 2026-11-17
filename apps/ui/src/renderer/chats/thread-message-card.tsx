@@ -3,6 +3,7 @@ import { createContext, useContext } from 'react';
 
 import { ClampedText } from '../components/clamped-text';
 import { cn } from '../components/ui/utils';
+import { plainPreview } from './brief-text';
 import { MessageBubble } from './message-bubble';
 import type { ReceivedThreadMessage } from './thread-message-payload';
 
@@ -90,11 +91,11 @@ export function ThreadMessageCard({
             {message.inReplyTo === null ? null : (
               <p
                 data-slot="thread-message-reply-to"
-                title={message.inReplyTo.text}
+                title={plainPreview(message.inReplyTo.text)}
                 className="flex min-w-0 items-baseline gap-1 text-xs text-muted-foreground">
                 <span className="shrink-0">↳ replying to your message</span>
                 <span className="min-w-0 truncate italic">
-                  {message.inReplyTo.text}
+                  {plainPreview(message.inReplyTo.text)}
                 </span>
               </p>
             )}

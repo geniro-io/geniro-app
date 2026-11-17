@@ -33,6 +33,7 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
   return {
     title: 'Fix the login redirect',
     status: 'working',
+    statusText: 'Working',
     attention: 'working',
     project: 'Geniro',
     agentLabel: 'claude',
@@ -94,19 +95,22 @@ describe('ThreadCard — going to the thread', () => {
 describe('ThreadCard — content', () => {
   it.each<[ThreadCardStatus, string]>([
     ['working', 'Working'],
-    ['waiting', 'Waiting on you'],
+    ['waiting', 'Awaiting reply'],
     ['idle', 'Idle'],
-    ['failed', 'Failed'],
+    ['failed', 'Needs approval'],
     ['done', 'Done'],
-  ])('names the %s status in words', (status, text) => {
-    const el = render({ status });
+  ])(
+    'puts the words it is given for the %s status on its chip',
+    (status, text) => {
+      const el = render({ status, statusText: text });
 
-    const line = el.querySelector<HTMLElement>(
-      '[data-slot="thread-card-status"]',
-    )!;
-    expect(line.textContent).toContain(text);
-    expect(el.dataset.status).toBe(status);
-  });
+      const line = el.querySelector<HTMLElement>(
+        '[data-slot="thread-card-status"]',
+      )!;
+      expect(line.textContent).toContain(text);
+      expect(el.dataset.status).toBe(status);
+    },
+  );
 
   it('pulses its dot only while the thread works', () => {
     expect(
@@ -238,7 +242,15 @@ describe('ThreadCard — content', () => {
   it('says when the thread last moved beside its Go to thread button', () => {
     expect(
       render().querySelector('[data-slot="thread-card-time"]')!.textContent,
-    ).toBe('5m ago');
+    ).toBe('5m');
+  });
+
+  it('dates a thread older than a week the way the thread list does', () => {
+    expect(
+      render({ lastAt: '2026-11-02T12:00:00Z', idleDays: 15 }).querySelector(
+        '[data-slot="thread-card-time"]',
+      )!.textContent,
+    ).toBe('Nov 2');
   });
 
   it('stands as tall as its row asks, but never shorter than its content', () => {
@@ -272,11 +284,12 @@ describe('ThreadCard — labels', () => {
     ).toBeNull();
   });
 
-  it('marks a thread nobody touched for days with how many, and only such a thread', () => {
+  it('marks a thread nobody touched for days with a moon by its time, and only such a thread', () => {
     expect(
-      render({ idleDays: 6 }).querySelector('[data-slot="thread-card-idle"]')!
-        .textContent,
-    ).toBe('6d');
+      render({ idleDays: 6 })
+        .querySelector('[data-slot="thread-card-idle"]')!
+        .getAttribute('aria-label'),
+    ).toBe('Nobody has touched this thread for 6 days');
     expect(
       render({ idleDays: null }).querySelector(
         '[data-slot="thread-card-idle"]',

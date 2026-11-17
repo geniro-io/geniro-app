@@ -8,6 +8,7 @@ const meta = {
   args: {
     title: 'Fix the login redirect',
     status: 'working',
+    statusText: 'Working',
     attention: 'working',
     project: 'Geniro',
     agentLabel: 'claude',
@@ -45,6 +46,7 @@ export const WithBoardCard: Story = {
 export const InactiveForDays: Story = {
   args: {
     status: 'idle',
+    statusText: 'Idle',
     attention: 'inactive',
     lastMessage: 'Done — PR is up',
     idleDays: 6,
@@ -56,6 +58,7 @@ export const InactiveForDays: Story = {
 export const Question: Story = {
   args: {
     status: 'waiting',
+    statusText: 'Question for you',
     attention: 'question',
     title: 'Pick the migration strategy',
     lastMessage: 'Should the backfill run before or after the column rename?',
@@ -66,6 +69,7 @@ export const Question: Story = {
 export const Blocked: Story = {
   args: {
     status: 'failed',
+    statusText: 'Failed',
     attention: 'blocked',
     title: 'Release notes',
     lastMessage: 'The CLI exited: usage limit reached',

@@ -9,6 +9,7 @@ import {
   parseJsonColumn,
   payloadString,
 } from '../../agents/utils/json-util';
+import { bareToolName } from '../../agents/utils/mcp-tool-name';
 import type { Run } from '../../runs/entity/run.entity';
 import type { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import type { UsageActivity } from '../../stats/entity/usage-activity.entity';
@@ -142,7 +143,13 @@ export function approvalEvent(row: ItemRow): TimelineCandidate {
   );
   return candidate(isQuestion ? 'question' : 'approval', row.id, itemAt(row), {
     threadRunId: row.run_id,
-    text: oneLine(isQuestion ? (questionText ?? toolName) : toolName),
+    text: oneLine(
+      isQuestion
+        ? (questionText ?? toolName)
+        : toolName === null
+          ? null
+          : bareToolName(toolName),
+    ),
   });
 }
 

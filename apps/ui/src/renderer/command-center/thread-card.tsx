@@ -13,11 +13,11 @@ import {
 } from 'lucide-react';
 
 import { plainPreview } from '../chats/brief-text';
+import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { taskStatusMeta } from '../tasks/task-status';
-import { formatUpdated } from '../teams/format-updated';
 
 export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
@@ -38,6 +38,8 @@ export interface ThreadCardBoardCard {
 export interface ThreadCardProps {
   title: string;
   status: ThreadCardStatus;
+  /** The status chip's words, which say why the card stands in its band. */
+  statusText: string;
   attention: ThreadAttention;
   project: string | null;
   /** The agent's short name, or the team's name for a team run. */
@@ -68,8 +70,33 @@ const BORDER_PX = 1;
 const LINE_PX = 16;
 const ROW_PX = { header: 20, labels: 20, note: 20, footer: 24 } as const;
 
-/** About how many characters of the preview fit one line of the card. */
-const MESSAGE_LINE_CHARS = 42;
+const MESSAGE_WIDTH_PX = THREAD_CARD_WIDTH - PAD_PX * 2 - BORDER_PX * 2;
+
+/** About how many characters fit one line where text cannot be measured. */
+const MESSAGE_LINE_CHARS = 44;
+
+let measureContext: CanvasRenderingContext2D | null | undefined;
+
+/** How wide `text` runs in the card's preview font, or null where nothing can measure it. */
+function textWidth(text: string): number | null {
+  if (measureContext === undefined) {
+    try {
+      measureContext =
+        typeof document === 'undefined'
+          ? null
+          : document.createElement('canvas').getContext('2d');
+    } catch {
+      measureContext = null;
+    }
+    if (measureContext !== null && measureContext !== undefined) {
+      const family = getComputedStyle(document.body).fontFamily;
+      measureContext.font = `12px ${family === '' ? 'sans-serif' : family}`;
+    }
+  }
+  return measureContext === null || measureContext === undefined
+    ? null
+    : measureContext.measureText(text).width;
+}
 
 /** The latest message as the card shows it: one line of plain text, or empty. */
 export function previewLine(message: string | null): string {
@@ -82,7 +109,11 @@ export function previewLines(message: string | null): 0 | 1 | 2 {
   if (text === '') {
     return 0;
   }
-  return text.length <= MESSAGE_LINE_CHARS ? 1 : 2;
+  const width = textWidth(text);
+  if (width === null) {
+    return text.length <= MESSAGE_LINE_CHARS ? 1 : 2;
+  }
+  return width <= MESSAGE_WIDTH_PX ? 1 : 2;
 }
 
 /** The card's height for what it shows, so the graph can lay it out before it is drawn. */
@@ -272,19 +303,6 @@ function LabelChip({
   );
 }
 
-function IdleMark({ days }: { days: number }): React.JSX.Element {
-  return (
-    <Badge
-      data-slot="thread-card-idle"
-      variant="muted"
-      title={`Nobody has touched this thread for ${days} days`}
-      className="shrink-0 gap-1 px-1.5 py-0 font-normal text-muted-foreground">
-      <Moon aria-hidden="true" className="size-3 shrink-0" />
-      {days}d
-    </Badge>
-  );
-}
-
 /**
  * One thread as a card — a node of the command center's graph: its title and
  * pull request, its state and labels, the manager's note, its latest message,
@@ -293,6 +311,7 @@ function IdleMark({ days }: { days: number }): React.JSX.Element {
 export function ThreadCard({
   title,
   status,
+  statusText,
   attention,
   project,
   agentLabel,
@@ -346,7 +365,7 @@ export function ThreadCard({
           data-slot="thread-card-status"
           variant="muted"
           className={statusChipVariants({ attention })}>
-          {THREAD_STATUS_TEXT[status]}
+          {statusText}
         </Badge>
         {agentLabel === null ? null : (
           <LabelChip
@@ -365,7 +384,6 @@ export function ThreadCard({
             title={`Project ${project}`}
           />
         )}
-        {idleDays === null ? null : <IdleMark days={idleDays} />}
       </div>
       {note === null ? null : (
         <p
@@ -389,8 +407,16 @@ export function ThreadCard({
       <div className="flex h-6 shrink-0 items-center justify-between gap-2">
         <span
           data-slot="thread-card-time"
-          className="truncate text-xs text-muted-foreground tabular-nums">
-          {formatUpdated(lastAt, now)}
+          title={formatDateTime(lastAt)}
+          className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground tabular-nums">
+          {idleDays === null ? null : (
+            <Moon
+              aria-label={`Nobody has touched this thread for ${idleDays} days`}
+              data-slot="thread-card-idle"
+              className="size-3 shrink-0"
+            />
+          )}
+          {formatRelativeTime(lastAt, now)}
         </span>
         <Button
           type="button"

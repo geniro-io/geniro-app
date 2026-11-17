@@ -54,7 +54,6 @@ import {
   ATTENTION_TEXT,
   attentionDotVariants,
   THREAD_CARD_WIDTH,
-  THREAD_STATUS_TEXT,
   type ThreadAttention,
   ThreadCard,
   threadCardHeight,
@@ -96,6 +95,7 @@ const MORE_ID = 'more';
 const MANAGER_WIDTH = 380;
 const MANAGER_WIDTH_NARROW = THREAD_CARD_WIDTH;
 const MANAGER_HEIGHT = 84;
+const MANAGER_HEIGHT_NARROW = 112;
 const MORE_WIDTH = 160;
 const MORE_HEIGHT = 32;
 const MIN_ZOOM = 0.25;
@@ -376,7 +376,7 @@ function summaryOf(
 ): string {
   return [
     view.title,
-    THREAD_STATUS_TEXT[view.status],
+    view.statusText,
     ATTENTION_TEXT[view.attention],
     ...(view.idleDays === null ? [] : [`idle ${view.idleDays} days`]),
     ...(state === 'awaiting' ? ['awaiting a reply'] : []),
@@ -390,6 +390,7 @@ function summaryOf(
 export function graphRows(
   shown: readonly GraphThread[],
   hidden: number,
+  canvasWidth = 0,
 ): GraphBox[][] {
   const boxOf = (thread: GraphThread): GraphBox => ({
     id: `thread:${thread.id}`,
@@ -400,7 +401,10 @@ export function graphRows(
     shown.filter((thread) => thread.view.attention === attention).map(boxOf),
   );
   return [
-    ...bandRows(bands, perLineFor(shown.length)),
+    ...bandRows(
+      bands,
+      perLineFor(shown.length, canvasWidth, THREAD_CARD_WIDTH),
+    ),
     ...(hidden > 0
       ? [[{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }]]
       : []),
@@ -428,15 +432,22 @@ export function attentionCounts(
 
 function AttentionLegend({
   threads,
+  floating,
 }: {
   threads: readonly GraphThread[];
+  floating: boolean;
 }): React.JSX.Element {
   const counts = attentionCounts(threads);
   return (
     <ul
       aria-label="Threads by attention"
       data-slot="graph-legend"
-      className="pointer-events-none absolute top-3 left-3 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-control border border-border bg-card/90 px-2.5 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs',
+        floating
+          ? 'pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-5rem)] rounded-control border border-border bg-card/90 px-2.5 py-1.5 shadow-sm backdrop-blur-sm'
+          : 'px-4 pt-3',
+      )}>
       {ATTENTION_ORDER.filter(
         (attention) => (counts.get(attention) ?? 0) > 0,
       ).map((attention) => (
@@ -571,11 +582,11 @@ function GraphCanvas({
 
   const shown = shownThreads(threads);
   const hidden = threads.length - shown.length;
-  const rows = graphRows(shown, hidden);
+  const rows = graphRows(shown, hidden, narrow ? 0 : size.width);
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
-    height: MANAGER_HEIGHT,
+    height: narrow ? MANAGER_HEIGHT_NARROW : MANAGER_HEIGHT,
   };
   const drawn: GraphGeometry = narrow
     ? layoutColumn(root, rows.flat())
@@ -737,6 +748,7 @@ function GraphCanvas({
           data-slot="command-center-graph"
           data-layout="column"
           className={cn('overflow-y-auto', className)}>
+          <AttentionLegend threads={threads} floating={false} />
           <div
             className="mx-auto"
             style={{ width: drawn.width, height: drawn.height }}>
@@ -778,7 +790,7 @@ function GraphCanvas({
                 zoomOnPinch
                 zoomOnDoubleClick={false}
               />
-              <AttentionLegend threads={threads} />
+              <AttentionLegend threads={threads} floating />
               <ZoomControls onFit={() => fit(true)} />
             </>
           )}

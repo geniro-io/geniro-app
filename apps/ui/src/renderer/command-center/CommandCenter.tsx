@@ -273,7 +273,9 @@ export function CommandCenter({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <h1 className="mr-2 truncate text-sm font-semibold">Command center</h1>
+        <h1 className="mr-2 truncate text-sm font-semibold max-sm:hidden">
+          Command center
+        </h1>
         {graphShown ? (
           <Select
             aria-label="Project"
@@ -306,7 +308,7 @@ export function CommandCenter({
           title="Everything the manager and its threads did, newest first"
           onClick={() => setTimelineOpen((was) => !was)}>
           <History aria-hidden="true" className="size-3.5" />
-          Timeline
+          <span className="max-sm:sr-only">Timeline</span>
         </Button>
       </header>
       {board.error === null ? null : (

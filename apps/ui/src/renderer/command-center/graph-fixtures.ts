@@ -1,5 +1,9 @@
 import type { GraphThread } from './graph-view';
-import type { ThreadAttention, ThreadCardStatus } from './thread-card';
+import {
+  THREAD_STATUS_TEXT,
+  type ThreadAttention,
+  type ThreadCardStatus,
+} from './thread-card';
 
 export const FIXTURE_NOW = Date.parse('2026-11-17T12:00:00Z');
 
@@ -39,6 +43,7 @@ export function graphThreadsOf(count: number): GraphThread[] {
       view: {
         title: TITLES[index % TITLES.length]!,
         status,
+        statusText: THREAD_STATUS_TEXT[status],
         attention: still ? 'inactive' : ATTENTION_OF[status],
         project: index % 2 === 0 ? 'QA Billing' : 'QA Cache',
         agentLabel: index % 4 === 3 ? 'dev-team' : 'claude',

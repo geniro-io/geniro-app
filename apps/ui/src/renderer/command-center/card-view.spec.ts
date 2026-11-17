@@ -5,6 +5,7 @@ import {
   IDLE_AFTER_DAYS,
   idleDaysOf,
   orderByAttention,
+  statusTextOf,
 } from './card-view';
 
 const NOW = Date.parse('2026-11-17T12:00:00Z');
@@ -113,5 +114,25 @@ describe('orderByAttention', () => {
       'old-quiet',
       'inactive',
     ]);
+  });
+});
+
+describe('statusTextOf', () => {
+  it('says why a blocked or questioned thread stands in its band', () => {
+    const card = (over: Parameters<typeof cardOf>[0]) => cardOf(over);
+
+    expect(statusTextOf(card({ status: 'failed' }), 'failed', 'blocked')).toBe(
+      'Failed',
+    );
+    expect(
+      statusTextOf(card({ awaiting: 'approval' }), 'waiting', 'blocked'),
+    ).toBe('Needs approval');
+    expect(
+      statusTextOf(card({ awaiting: 'question' }), 'waiting', 'question'),
+    ).toBe('Question for you');
+    expect(
+      statusTextOf(card({ awaitingReply: true }), 'idle', 'question'),
+    ).toBe('Awaiting reply');
+    expect(statusTextOf(card({}), 'idle', 'quiet')).toBe('Idle');
   });
 });

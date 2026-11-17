@@ -27,9 +27,27 @@ const INDENT = 28;
 const STACK_GAP = 16;
 const STUB = 14;
 
-/** The most cards a line holds: a few to a line for a small board, at most six. */
-export function perLineFor(count: number): number {
-  return Math.min(6, Math.max(4, Math.ceil(count / 3)));
+/** The zoom a card stays readable at, which caps how many stand in a line of a narrow canvas. */
+const READABLE_ZOOM = 0.8;
+
+/**
+ * The most cards a line holds: four to six by how many there are, and no more
+ * than `cardWidth` cards fit a `canvasWidth` canvas at a readable zoom (0 when
+ * not measured), never under two.
+ */
+export function perLineFor(
+  count: number,
+  canvasWidth = 0,
+  cardWidth = 0,
+): number {
+  const byCount = Math.min(6, Math.max(4, Math.ceil(count / 3)));
+  if (canvasWidth <= 0 || cardWidth <= 0) {
+    return byCount;
+  }
+  const step = cardWidth + COLUMN_GAP;
+  const room = canvasWidth / READABLE_ZOOM - MARGIN * 2 - step / 2;
+  const fits = Math.floor((room + COLUMN_GAP) / step);
+  return Math.max(2, Math.min(byCount, fits));
 }
 
 /** Each band on lines of its own, in band order, a band longer than `perLine` wrapped. */

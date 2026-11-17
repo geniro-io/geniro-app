@@ -10969,7 +10969,11 @@ export function Chats({
                       openTeamNote={
                         activeRun?.teamId != null ? openTeamNote : null
                       }
-                      openThread={isHosted ? null : handleActivateRun}
+                      openThread={
+                        isHosted
+                          ? (hosted?.onOpenThread ?? null)
+                          : handleActivateRun
+                      }
                       openMemory={onOpenMemory ?? null}
                       openKnowledge={onOpenKnowledge ? openKnowledge : null}
                       collapseToolSteps={collapseToolSteps}

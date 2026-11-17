@@ -165,11 +165,10 @@ describe('ItemDao (in-memory sqlite)', () => {
           }),
         ),
         byIdInCall: seqs(
-          await dao.rowsInCallById(
+          await dao.rowsInCallsById(
             runId,
-            'call-1',
             ['tool_result'],
-            ['toolu_1'],
+            new Map([['call-1', ['toolu_1']]]),
           ),
         ),
         callsById: (await dao.toolCallsByIds(runId, ['toolu_1'])).length,
@@ -181,7 +180,7 @@ describe('ItemDao (in-memory sqlite)', () => {
           c.lastSeq,
         ]),
         ownThread: seqs(
-          await dao.newestRowsInCall(runId, 'call-1', {
+          await dao.newestRowsInCalls(runId, ['call-1'], {
             kinds: ['tool_call'],
             ownThread: true,
             limit: 10,

@@ -93,6 +93,35 @@ const NOT_IN_A_CALL = {
  */
 const PAYLOAD_ID_BATCH = 1000;
 
+/**
+ * How many calls one {@link ItemDao.newestRowsInCalls} statement covers. A call
+ * with a seq bound is its own `OR` term, each an index seek on
+ * `(runId, inCall, seq)`.
+ */
+const CALLS_PER_READ = 200;
+
+/** {@link ItemDao.newestRowsInCalls}' rows of `callIds`, each from its own `fromSeq`. */
+function inCallsFrom(
+  eb: ExpressionBuilder<ChatTextDatabase, 'items'>,
+  runId: string,
+  callIds: readonly string[],
+  fromSeq: ReadonlyMap<string, number> | undefined,
+): Expression<SqlBool> {
+  if (fromSeq === undefined) {
+    return eb.and([eb('run_id', '=', runId), eb('in_call', 'in', [...callIds])]);
+  }
+  return eb.or(
+    callIds.map((callId) => {
+      const from = fromSeq.get(callId);
+      return eb.and([
+        eb('run_id', '=', runId),
+        eb('in_call', '=', callId),
+        ...(from === undefined ? [] : [eb('seq', '>=', from)]),
+      ]);
+    }),
+  );
+}
+
 /** The filter for rows on the asked side of a page. */
 function seqFilter(range: SeqRange | undefined): {
   $or?: FilterQuery<Item>[];
@@ -1914,22 +1943,24 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * The newest `limit` rows of ONE call (`inCall`), returned in seq order — of
-   * `kinds` when given, with a non-blank `said` field when named, and never a
+   * The newest `limit` rows of EACH of `callIds` (by `inCall`), in seq order —
+   * of `kinds` when given, with a non-blank `said` field when named, and never a
    * message the user wrote: a person writing to a quiet callee is not the
-   * callee producing anything. Read newest first off the
-   * `(runId, inCall, kind, seq)` index, so a long call is walked only as far as
-   * `limit` matching rows. `fromSeq` keeps only rows at or after that seq, and
-   * `snapshot` only task lists that state the whole list (`mode: 'snapshot'`).
-   * One statement, read as plain rows: a page anchors hundreds of these.
+   * callee producing anything. `fromSeq` keeps only a call's rows at or after
+   * its seq there (a call it does not name keeps all of them), and `snapshot`
+   * only task lists that state the whole list (`mode: 'snapshot'`).
+   *
+   * One statement per {@link CALLS_PER_READ} calls, however many there are:
+   * every statement holds the event loop, and a page anchors dozens of calls.
+   * The ranking reads ids alone; payloads are read only for the rows it keeps.
    */
-  async newestRowsInCall(
+  async newestRowsInCalls(
     runId: string,
-    callId: string,
+    callIds: readonly string[],
     pick: {
       kinds?: readonly ItemKind[];
       said?: 'name' | 'text';
-      fromSeq?: number;
+      fromSeq?: ReadonlyMap<string, number>;
       snapshot?: boolean;
       /** Only the callee's own rows, never a delegate's (`parentToolUseId`). */
       ownThread?: boolean;
@@ -1939,89 +1970,122 @@ export class ItemDao extends BaseDao<Item> {
   ): Promise<WireRow[]> {
     const em = txEm ?? this.em.fork();
     const stamped = await this.payloadRefsStamped(runId, em);
-    let heads = em
-      .getKysely<ChatTextDatabase>({ convertValues: false })
-      .selectFrom('items')
-      .select([...WIRE_COLUMNS])
-      .where('run_id', '=', runId)
-      .where('in_call', '=', callId)
-      .where('deleted_at', 'is', null)
-      .where((eb) =>
-        eb.or([
-          eb('kind', '!=', 'message'),
-          eb('role', 'is', null),
-          eb('role', '!=', 'user'),
-        ]),
-      );
-    if (pick.kinds !== undefined) {
-      heads = heads.where('kind', 'in', [...pick.kinds]);
-    }
-    if (pick.fromSeq !== undefined) {
-      heads = heads.where('seq', '>=', pick.fromSeq);
-    }
-    if (pick.ownThread === true) {
-      heads = heads.where(
-        (eb) => payloadRef(eb, 'parent_tool_use_id', stamped),
-        'is',
-        null,
-      );
-    }
-    if (pick.snapshot === true) {
-      heads = heads.where(
-        (eb) => payloadField<string>(eb, '$.mode'),
-        '=',
-        'snapshot',
-      );
-    }
-    const said = pick.said;
-    if (said !== undefined) {
-      // Every kind of blank, as the renderer's `String.trim` reads one: SQLite's
-      // one-argument `trim` strips spaces only.
-      heads = heads.where(
-        (eb) =>
-          eb.fn<string>('trim', [
-            eb.fn<string>('coalesce', [
-              said === 'name'
-                ? payloadRef(eb, 'tool_name_lower', stamped)
-                : payloadField<string>(eb, `$.${said}`),
-              eb.val(''),
-            ]),
-            eb.val(' \t\n\r'),
+    const db = em.getKysely<ChatTextDatabase>({ convertValues: false });
+    const found: WireRow[] = [];
+    const calls = [...new Set(callIds)];
+    for (let at = 0; at < calls.length; at += CALLS_PER_READ) {
+      if (at > 0) {
+        await yieldToEventLoop();
+      }
+      const batch = calls.slice(at, at + CALLS_PER_READ);
+      let ranked = db
+        .selectFrom('items')
+        .select((eb) => [
+          'id',
+          eb.fn
+            .agg<number>('row_number')
+            .over((ob) => ob.partitionBy('in_call').orderBy('seq', 'desc'))
+            .as('rank'),
+        ])
+        .where((eb) => inCallsFrom(eb, runId, batch, pick.fromSeq))
+        .where('deleted_at', 'is', null)
+        .where((eb) =>
+          eb.or([
+            eb('kind', '!=', 'message'),
+            eb('role', 'is', null),
+            eb('role', '!=', 'user'),
           ]),
-        '!=',
-        '',
-      );
+        );
+      if (pick.kinds !== undefined) {
+        ranked = ranked.where('kind', 'in', [...pick.kinds]);
+      }
+      if (pick.ownThread === true) {
+        ranked = ranked.where(
+          (eb) => payloadRef(eb, 'parent_tool_use_id', stamped),
+          'is',
+          null,
+        );
+      }
+      if (pick.snapshot === true) {
+        ranked = ranked.where(
+          (eb) => payloadField<string>(eb, '$.mode'),
+          '=',
+          'snapshot',
+        );
+      }
+      const said = pick.said;
+      if (said !== undefined) {
+        // Every kind of blank, as the renderer's `String.trim` reads one: SQLite's
+        // one-argument `trim` strips spaces only.
+        ranked = ranked.where(
+          (eb) =>
+            eb.fn<string>('trim', [
+              eb.fn<string>('coalesce', [
+                said === 'name'
+                  ? payloadRef(eb, 'tool_name_lower', stamped)
+                  : payloadField<string>(eb, `$.${said}`),
+                eb.val(''),
+              ]),
+              eb.val(' \t\n\r'),
+            ]),
+          '!=',
+          '',
+        );
+      }
+      const kept = ranked.as('ranked');
+      const rows = await db
+        .selectFrom('items')
+        .select([...WIRE_COLUMNS])
+        .where('id', 'in', (eb) =>
+          eb
+            .selectFrom(kept)
+            .select('ranked.id')
+            .where('ranked.rank', '<=', pick.limit),
+        )
+        .execute();
+      found.push(...rows.map(wireRowOf));
     }
-    return (await heads.orderBy('seq', 'desc').limit(pick.limit).execute())
-      .map(wireRowOf)
-      .reverse();
+    return found.sort((a, b) => a.seq - b.seq);
   }
 
   /**
-   * ONE call's rows of `kinds` whose payload's top-level `id` is one of `ids` —
-   * the replies to tool calls a card anchors, read off the
-   * `(runId, inCall, kind, seq)` index rather than over the whole run.
+   * Each call's rows of `kinds` whose payload's top-level `id` is one of the
+   * ids `idsByCall` names for THAT call — the replies to the tool calls a card
+   * anchors. Ids are matched per call: an ACP tool call id restarts with every
+   * session, so another call's reply can carry the same one.
    */
-  async rowsInCallById(
+  async rowsInCallsById(
     runId: string,
-    callId: string,
     kinds: readonly ItemKind[],
-    ids: readonly string[],
+    idsByCall: ReadonlyMap<string, readonly string[]>,
     txEm?: EntityManager,
   ): Promise<WireRow[]> {
-    if (ids.length === 0) {
+    const wanted = new Map(
+      [...idsByCall]
+        .filter(([, ids]) => ids.length > 0)
+        .map(([callId, ids]) => [callId, new Set(ids)] as const),
+    );
+    if (wanted.size === 0) {
       return [];
     }
     const em = txEm ?? this.em.fork();
     const stamped = await this.payloadRefsStamped(runId, em);
+    const calls = [...wanted.keys()];
+    const ids = [...new Set([...wanted.values()].flatMap((set) => [...set]))];
     const found: WireRow[] = [];
     for (let at = 0; at < ids.length; at += PAYLOAD_ID_BATCH) {
+      if (at > 0) {
+        await yieldToEventLoop();
+      }
       const rows = await em
         .getKysely<ChatTextDatabase>({ convertValues: false })
         .selectFrom('items')
-        .select([...WIRE_COLUMNS])
+        .select((eb) => [
+          ...WIRE_COLUMNS,
+          payloadRef(eb, 'payload_id', stamped).as('reply_to'),
+        ])
         .where('run_id', '=', runId)
-        .where('in_call', '=', callId)
+        .where('in_call', 'in', calls)
         .where('kind', 'in', [...kinds])
         .where('deleted_at', 'is', null)
         .where(
@@ -2030,7 +2094,15 @@ export class ItemDao extends BaseDao<Item> {
           ids.slice(at, at + PAYLOAD_ID_BATCH),
         )
         .execute();
-      found.push(...rows.map(wireRowOf));
+      for (const row of rows) {
+        if (
+          row.in_call !== null &&
+          row.reply_to !== null &&
+          wanted.get(row.in_call)?.has(row.reply_to) === true
+        ) {
+          found.push(wireRowOf(row));
+        }
+      }
     }
     return found.sort((a, b) => a.seq - b.seq);
   }
@@ -3071,11 +3143,10 @@ export class ItemDao extends BaseDao<Item> {
             { after: calls[0]!.seq },
             em,
           )
-        : await this.rowsInCallById(
+        : await this.rowsInCallsById(
             runId,
-            conversation.inCall,
             ['tool_result'],
-            ids,
+            new Map([[conversation.inCall, ids]]),
             em,
           );
     const answered = new Set(

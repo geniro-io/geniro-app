@@ -3299,6 +3299,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * Move an idle chat to another working folder. A CLI keeps its conversation
+   * per folder, so the next turn starts a fresh one there; the transcript
+   * stays. Answers false when nothing moved: already there, or mid-turn.
+   */
+  async moveChatFolder(runId: string, folder: string): Promise<boolean> {
+    const cwd = resolveValidCwd(folder);
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    if (run.cwd === cwd || run.status === 'running') {
+      return false;
+    }
+    await this.runDao.updateWithoutActivity(runId, { cwd }, em);
+    await this.nodeStateDao.clearConversation(runId, SINGLE_AGENT_NODE, em);
+    return true;
+  }
+
+  /**
    * Install where a team builder chat's brief is composed — installed rather
    * than injected because `TeamsModule`, which owns the library, depends on
    * this module.

@@ -817,6 +817,11 @@ class FakeNodeStateDao {
     this.cleared.push({ runId, memberId });
     this.state = null;
   }
+  readonly conversationsCleared: { runId: string; memberId: string }[] = [];
+  async clearConversation(runId: string, memberId: string): Promise<void> {
+    this.conversationsCleared.push({ runId, memberId });
+    this.state = null;
+  }
 }
 
 function fakeAdapter(
@@ -10335,6 +10340,63 @@ describe('ChatService', () => {
     it('404s on an unknown run', async () => {
       const { service } = setup();
       await expect(service.setColor('nope', 'blue')).rejects.toThrow(
+        /RUN_NOT_FOUND|not found/,
+      );
+    });
+  });
+
+  describe('moveChatFolder', () => {
+    let elsewhere: string;
+    beforeAll(() => {
+      elsewhere = mkdtempSync(join(tmpdir(), 'geniro-chat-move-'));
+    });
+    afterAll(() => {
+      rmSync(elsewhere, { recursive: true, force: true });
+    });
+
+    it('moves an idle chat to the folder and forgets its CLI conversation, without activity', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, 'session-home');
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      const moved = await service.moveChatFolder(run.id, elsewhere);
+
+      expect(moved).toBe(true);
+      expect((await runDao.getById(run.id))?.cwd).toBe(realpathSync(elsewhere));
+      expect(quiet).toHaveBeenCalledWith(
+        run.id,
+        { cwd: realpathSync(elsewhere) },
+        expect.anything(),
+      );
+      expect(nodeDao.conversationsCleared).toEqual([
+        { runId: run.id, memberId: SINGLE_AGENT_NODE },
+      ]);
+    });
+
+    it('writes nothing when the chat is already in that folder', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      expect(await service.moveChatFolder(run.id, dir)).toBe(false);
+      expect(quiet).not.toHaveBeenCalled();
+      expect(nodeDao.conversationsCleared).toEqual([]);
+    });
+
+    it('leaves a chat mid-turn where it is', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await runDao.updateWithoutActivity(run.id, { status: 'running' });
+
+      expect(await service.moveChatFolder(run.id, elsewhere)).toBe(false);
+      expect((await runDao.getById(run.id))?.cwd).toBe(realpathSync(dir));
+      expect(nodeDao.conversationsCleared).toEqual([]);
+    });
+
+    it('404s on an unknown run', async () => {
+      const { service } = setup();
+      await expect(service.moveChatFolder('nope', dir)).rejects.toThrow(
         /RUN_NOT_FOUND|not found/,
       );
     });

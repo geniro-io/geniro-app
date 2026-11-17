@@ -1,5 +1,3 @@
-import { homedir } from 'node:os';
-
 import { EntityManager } from '@mikro-orm/sqlite';
 import {
   Injectable,
@@ -22,6 +20,7 @@ import {
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { composeManagerBrief } from '../utils/manager-brief';
+import { ensureManagerFolder } from '../utils/manager-folder';
 import { composeStatusSuffix } from '../utils/status-suffix';
 import { CommandCenterService } from './command-center.service';
 import { CommandCenterEventBus } from './command-center-events.bus';
@@ -151,18 +150,22 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async openOnce(input: StartCommandCenterChatInput): Promise<RunWire> {
+    const folder = ensureManagerFolder();
     const existing = await this.chats.findCommandCenterChat();
     if (existing !== null) {
       await this.chats.refreshTeamInstructions(
         existing.id,
         await this.briefFor(existing.id),
       );
-      return existing;
+      const moved = await this.chats.moveChatFolder(existing.id, folder);
+      return moved
+        ? ((await this.chats.findCommandCenterChat()) ?? existing)
+        : existing;
     }
     return this.chats.createChat({
       ...input,
       approval: this.chats.offeredApproval(input.agentKind, input.approval),
-      cwd: homedir(),
+      cwd: folder,
       title: MANAGER_TITLE,
       projectId: null,
       groupId: null,

@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
@@ -7,6 +10,7 @@ import type { TeamExecutorService } from '../../teams/services/team-executor.ser
 import { commandCenterDb } from '../__tests__/command-center-db';
 import type { StartCommandCenterChatInput } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
+import { managerFolderPath } from '../utils/manager-folder';
 import type { CommandCenterService } from './command-center.service';
 import { CommandCenterChatService } from './command-center-chat.service';
 import type { CommandCenterEventBus } from './command-center-events.bus';
@@ -26,6 +30,7 @@ describe('CommandCenterChatService', () => {
     refreshTeamInstructions: ReturnType<typeof vi.fn>;
     offeredApproval: ReturnType<typeof vi.fn>;
     deleteCommandCenterChats: ReturnType<typeof vi.fn>;
+    moveChatFolder: ReturnType<typeof vi.fn>;
   };
   let board: { activeThreads: ReturnType<typeof vi.fn> };
   let events: { publishChanged: ReturnType<typeof vi.fn> };
@@ -62,6 +67,7 @@ describe('CommandCenterChatService', () => {
       refreshTeamInstructions: vi.fn(() => Promise.resolve()),
       offeredApproval: vi.fn(() => undefined),
       deleteCommandCenterChats: vi.fn(() => Promise.resolve({ deleted: 2 })),
+      moveChatFolder: vi.fn(() => Promise.resolve(false)),
     };
     board = {
       activeThreads: vi.fn(() =>
@@ -102,8 +108,11 @@ describe('CommandCenterChatService', () => {
           commandCenter: true,
           projectId: null,
           title: 'Command center',
+          cwd: managerFolderPath(),
         }),
       );
+      expect(existsSync(managerFolderPath())).toBe(true);
+      expect(managerFolderPath()).not.toBe(homedir());
 
       const again = await service.open(START);
 
@@ -113,6 +122,27 @@ describe('CommandCenterChatService', () => {
         MANAGER,
         expect.any(String),
       );
+    });
+
+    it('moves an existing manager chat into its own folder and answers it as moved', async () => {
+      current = { id: MANAGER, cwd: homedir() } as unknown as RunWire;
+      const moved = {
+        id: MANAGER,
+        cwd: managerFolderPath(),
+      } as unknown as RunWire;
+      chats.moveChatFolder.mockImplementation(() => {
+        current = moved;
+        return Promise.resolve(true);
+      });
+
+      const opened = await service.open(START);
+
+      expect(chats.moveChatFolder).toHaveBeenCalledWith(
+        MANAGER,
+        managerFolderPath(),
+      );
+      expect(opened).toBe(moved);
+      expect(chats.createChat).not.toHaveBeenCalled();
     });
   });
 

@@ -26,6 +26,7 @@ type Handler = (
 
 interface SeenRequest {
   authorization: string | undefined;
+  connection: string | undefined;
   body: string;
 }
 
@@ -54,7 +55,11 @@ beforeAll(async () => {
       body += chunk;
     });
     request.on('end', () => {
-      seen.push({ authorization: request.headers.authorization, body });
+      seen.push({
+        authorization: request.headers.authorization,
+        connection: request.headers.connection,
+        body,
+      });
       handler(request, response, seen.length);
     });
   });
@@ -118,6 +123,14 @@ describe('probeCallEndpoint', () => {
     ).resolves.toBe(refusal);
   });
 
+  it('answers on a fresh connection after the server has dropped every open one', async () => {
+    await expect(probeCallEndpoint(target())).resolves.toBeNull();
+    server.closeAllConnections();
+
+    await expect(probeCallEndpoint(target())).resolves.toBeNull();
+    expect(seen).toHaveLength(2);
+  });
+
   it('gives up after every budget has timed out and names the attempt count', async () => {
     handler = silent;
 
@@ -126,12 +139,13 @@ describe('probeCallEndpoint', () => {
     expect(failure).toMatch(/^timed out after 2 attempts/);
   });
 
-  it('sends the bearer token and an initialize request, and reports nothing on success', async () => {
+  it('sends the bearer token and an initialize request on a connection of its own, and reports nothing on success', async () => {
     await expect(probeCallEndpoint(target())).resolves.toBeNull();
 
     expect(seen).toHaveLength(1);
     const [first] = seen;
     expect(first?.authorization).toBe('Bearer call-token');
+    expect(first?.connection).toBe('close');
     expect(JSON.parse(first?.body ?? '{}')).toMatchObject({
       method: 'initialize',
     });

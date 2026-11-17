@@ -9,6 +9,8 @@ function isTimeout(err: unknown): boolean {
 /**
  * JSON-RPC `initialize` against a run's MCP endpoint: null when it answers 2xx,
  * else why not. A timeout moves on to the next budget; any other failure is final.
+ * Every attempt asks for its own connection: a pooled keep-alive socket the
+ * server has already closed would otherwise fail it with `fetch failed`.
  */
 export async function probeCallEndpoint(
   endpoint: { url: string; token: string },
@@ -22,6 +24,7 @@ export async function probeCallEndpoint(
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
           authorization: `Bearer ${endpoint.token}`,
+          connection: 'close',
         },
         body: JSON.stringify({
           jsonrpc: '2.0',

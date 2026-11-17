@@ -159,6 +159,22 @@ export function CommandCenter({
   const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
+  const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
+  const [managerAgent, setManagerAgent] = useState<AgentKind>(
+    () => (identities[0]?.agent ?? CLI_KINDS[0]!) as AgentKind,
+  );
+  const board = useCommandCenterBoard(apis, client);
+  const unknownTeams = [
+    ...new Set(
+      (board.cards ?? []).flatMap((card) =>
+        card.run.teamId != null && !teamFaces.has(card.run.teamId)
+          ? [card.run.teamId]
+          : [],
+      ),
+    ),
+  ]
+    .sort()
+    .join(',');
   useEffect(() => {
     let live = true;
     void apis.teams
@@ -172,12 +188,7 @@ export function CommandCenter({
     return () => {
       live = false;
     };
-  }, [apis]);
-  const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
-  const [managerAgent, setManagerAgent] = useState<AgentKind>(
-    () => (identities[0]?.agent ?? CLI_KINDS[0]!) as AgentKind,
-  );
-  const board = useCommandCenterBoard(apis, client);
+  }, [apis, unknownTeams]);
   const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
   const [focusRunId, setFocusRunId] = useState<string | null>(null);
   const timeline = useCommandCenterTimeline(

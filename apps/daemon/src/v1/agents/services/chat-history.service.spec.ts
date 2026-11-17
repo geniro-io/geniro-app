@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   defineConfig,
   MikroORM,
@@ -21,6 +25,7 @@ import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import type { ItemWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { CALL_MEMBERSHIP_VERSION } from '../utils/call-membership';
 import { itemToWire } from '../utils/item-wire';
 import type { ChatService } from './chat.service';
 import { ChatHistoryService } from './chat-history.service';
@@ -33,8 +38,17 @@ import { ItemCallIndexService } from './item-call-index.service';
 describe('ChatHistoryService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let dao: ItemDao;
+  let markerDir: string;
 
   beforeAll(async () => {
+    // The call-membership rule marked current: a re-stamp pass started by one
+    // test would otherwise outlive it and write its stamps by rowid into the
+    // next test's rows, which reuse those rowids after `schema.clear()`.
+    markerDir = mkdtempSync(join(tmpdir(), 'chat-history-'));
+    writeFileSync(
+      join(markerDir, 'call-membership'),
+      `${CALL_MEMBERSHIP_VERSION}\n`,
+    );
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
@@ -50,6 +64,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
 
   afterAll(async () => {
     await orm.close(true);
+    rmSync(markerDir, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -81,7 +96,12 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
   }
 
   function callIndex(): ItemCallIndexService {
-    return new ItemCallIndexService(dao, new RunDao(orm.em.fork()), orm.em);
+    return new ItemCallIndexService(
+      dao,
+      new RunDao(orm.em.fork()),
+      orm.em,
+      join(markerDir, 'call-membership'),
+    );
   }
 
   /** The service with `getHistory` reading the real DAO, as `ChatService`'s does. */

@@ -181,11 +181,12 @@ describe('layoutColumn', () => {
 });
 
 describe('perLineFor on a measured canvas', () => {
-  it('stands fewer cards to a line on a narrow canvas, so they stay readable, never under two', () => {
+  it('stands fewer cards to a line on a narrow canvas, so they stay readable, down to one', () => {
     expect(perLineFor(24, 2400, 272)).toBe(6);
     expect(perLineFor(24, 1200, 272)).toBe(4);
     expect(perLineFor(24, 1500, 272)).toBe(5);
-    expect(perLineFor(24, 300, 272)).toBe(2);
+    expect(perLineFor(24, 430, 272)).toBe(1);
+    expect(perLineFor(24, 900, 272)).toBe(3);
     expect(perLineFor(3, 2400, 272)).toBe(4);
   });
 });

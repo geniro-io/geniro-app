@@ -267,7 +267,7 @@ function BoardCardLabel({
       data-slot="thread-card-board-card"
       variant="muted"
       title={`${card.identifier ?? 'Board card'} · ${card.title} · ${meta.label}`}
-      className="min-w-0 shrink gap-1 px-1.5 py-0 font-normal">
+      className="max-w-24 shrink-0 gap-1 px-1.5 py-0 font-normal">
       <Icon
         aria-hidden="true"
         className={cn('size-3.5 shrink-0', meta.className)}
@@ -284,11 +284,14 @@ function LabelChip({
   icon,
   text,
   title,
+  yields,
 }: {
   slot: string;
   icon: LucideIcon;
   text: string;
   title: string;
+  /** Gives up its room first when the row runs out of it. */
+  yields: boolean;
 }): React.JSX.Element {
   const Icon = icon;
   return (
@@ -296,7 +299,10 @@ function LabelChip({
       data-slot={slot}
       variant="muted"
       title={title}
-      className="min-w-0 shrink gap-1 px-1.5 py-0 font-normal">
+      className={cn(
+        'gap-1 px-1.5 py-0 font-normal',
+        yields ? 'min-w-0 shrink' : 'max-w-28 shrink-0',
+      )}>
       <Icon aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{text}</span>
     </Badge>
@@ -373,6 +379,7 @@ export function ThreadCard({
             icon={isTeam ? Users : Bot}
             text={agentLabel}
             title={isTeam ? `Team ${agentLabel}` : `Agent ${agentLabel}`}
+            yields={false}
           />
         )}
         {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
@@ -382,6 +389,7 @@ export function ThreadCard({
             icon={Folder}
             text={project}
             title={`Project ${project}`}
+            yields
           />
         )}
       </div>

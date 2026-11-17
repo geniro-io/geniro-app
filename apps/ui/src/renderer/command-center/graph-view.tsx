@@ -432,22 +432,15 @@ export function attentionCounts(
 
 function AttentionLegend({
   threads,
-  floating,
 }: {
   threads: readonly GraphThread[];
-  floating: boolean;
 }): React.JSX.Element {
   const counts = attentionCounts(threads);
   return (
     <ul
       aria-label="Threads by attention"
       data-slot="graph-legend"
-      className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs',
-        floating
-          ? 'pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-5rem)] rounded-control border border-border bg-card/90 px-2.5 py-1.5 shadow-sm backdrop-blur-sm'
-          : 'px-4 pt-3',
-      )}>
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 text-xs">
       {ATTENTION_ORDER.filter(
         (attention) => (counts.get(attention) ?? 0) > 0,
       ).map((attention) => (
@@ -748,7 +741,7 @@ function GraphCanvas({
           data-slot="command-center-graph"
           data-layout="column"
           className={cn('overflow-y-auto', className)}>
-          <AttentionLegend threads={threads} floating={false} />
+          <AttentionLegend threads={threads} />
           <div
             className="mx-auto"
             style={{ width: drawn.width, height: drawn.height }}>
@@ -766,34 +759,35 @@ function GraphCanvas({
         </div>
       ) : (
         <div
-          ref={measure}
           role="group"
           aria-label={label}
           data-slot="command-center-graph"
           data-layout="bands"
           data-rows={rows.length}
-          className={cn('relative', className)}>
-          {size.width === 0 ? null : (
-            <>
-              <ReactFlow
-                {...flowProps}
-                defaultViewport={widthFit(drawn, size)}
-                minZoom={MIN_ZOOM}
-                maxZoom={MAX_ZOOM}
-                translateExtent={[
-                  [-PAN_ROOM, -PAN_ROOM],
-                  [drawn.width + PAN_ROOM, drawn.height + PAN_ROOM],
-                ]}
-                panOnDrag
-                panOnScroll
-                zoomOnScroll={false}
-                zoomOnPinch
-                zoomOnDoubleClick={false}
-              />
-              <AttentionLegend threads={threads} floating />
-              <ZoomControls onFit={() => fit(true)} />
-            </>
-          )}
+          className={cn('flex flex-col', className)}>
+          <AttentionLegend threads={threads} />
+          <div ref={measure} className="relative min-h-0 flex-1">
+            {size.width === 0 ? null : (
+              <>
+                <ReactFlow
+                  {...flowProps}
+                  defaultViewport={widthFit(drawn, size)}
+                  minZoom={MIN_ZOOM}
+                  maxZoom={MAX_ZOOM}
+                  translateExtent={[
+                    [-PAN_ROOM, -PAN_ROOM],
+                    [drawn.width + PAN_ROOM, drawn.height + PAN_ROOM],
+                  ]}
+                  panOnDrag
+                  panOnScroll
+                  zoomOnScroll={false}
+                  zoomOnPinch
+                  zoomOnDoubleClick={false}
+                />
+                <ZoomControls onFit={() => fit(true)} />
+              </>
+            )}
+          </div>
         </div>
       )}
     </GraphActionsContext.Provider>

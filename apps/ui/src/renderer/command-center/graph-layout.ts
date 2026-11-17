@@ -33,7 +33,7 @@ const READABLE_ZOOM = 0.8;
 /**
  * The most cards a line holds: four to six by how many there are, and no more
  * than `cardWidth` cards fit a `canvasWidth` canvas at a readable zoom (0 when
- * not measured), never under two.
+ * not measured), never under one.
  */
 export function perLineFor(
   count: number,
@@ -47,7 +47,7 @@ export function perLineFor(
   const step = cardWidth + COLUMN_GAP;
   const room = canvasWidth / READABLE_ZOOM - MARGIN * 2 - step / 2;
   const fits = Math.floor((room + COLUMN_GAP) / step);
-  return Math.max(2, Math.min(byCount, fits));
+  return Math.max(1, Math.min(byCount, fits));
 }
 
 /** Each band on lines of its own, in band order, a band longer than `perLine` wrapped. */

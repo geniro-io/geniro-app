@@ -254,6 +254,18 @@ describe('Lessons settings', () => {
     expect(picker('Model and its settings')).not.toBeNull();
   });
 
+  it('going back to Same as the thread saves no memory model', async () => {
+    install({ ...DEFAULT_SETTINGS.lessons, reflector: REFLECTOR });
+    await render();
+
+    await press(segment('Memory model', 'Same as the thread'));
+
+    expect(writes).toEqual([
+      { lessons: { ...DEFAULT_SETTINGS.lessons, reflector: null } },
+    ]);
+    expect(text()).toContain("Each reflection runs on the thread's own CLI");
+  });
+
   it('a new CLI for the reflection starts from its own default, not the last model', async () => {
     install({ ...DEFAULT_SETTINGS.lessons, reflector: REFLECTOR });
     await render();

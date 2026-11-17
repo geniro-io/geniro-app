@@ -26,15 +26,6 @@ afterEach(() => {
   container = null;
 });
 
-const STRIP: ThreadCardProps['strip'] = {
-  start: '2026-11-17T10:00:00.000Z',
-  end: '2026-11-17T14:00:00.000Z',
-  spans: [{ kind: 'work', start: '2026-11-17T11:00:00.000Z', end: null }],
-  markers: [
-    { kind: 'user_message', at: '2026-11-17T11:00:00.000Z', label: 'Start' },
-  ],
-};
-
 function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
   return {
     title: 'Fix the login redirect',
@@ -45,9 +36,9 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
     pullRequest: null,
     note: null,
     activity: null,
-    strip: STRIP,
-    task: null,
-    onOpen: vi.fn(),
+    boardCard: null,
+    idleDays: null,
+    onGo: vi.fn(),
     ...over,
   };
 }
@@ -66,66 +57,31 @@ function render(over: Partial<ThreadCardProps> = {}): HTMLElement {
   return container.querySelector<HTMLElement>('[data-slot="thread-card"]')!;
 }
 
-const press = (el: HTMLElement, key: string): void => {
-  act(() => {
-    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-  });
-};
-
-describe('ThreadCard — opening', () => {
-  it('opens the thread on click', () => {
-    const onOpen = vi.fn();
-    const el = render({ onOpen });
+describe('ThreadCard — going to the thread', () => {
+  it('opens nothing when the card itself is clicked', () => {
+    const onGo = vi.fn();
+    const el = render({ onGo });
 
     act(() => {
       el.click();
     });
 
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onGo).not.toHaveBeenCalled();
+    expect(el.getAttribute('role')).toBeNull();
   });
 
-  it('opens the thread on Enter and on Space', () => {
-    const onOpen = vi.fn();
-    const el = render({ onOpen });
-
-    press(el, 'Enter');
-    press(el, ' ');
-
-    expect(onOpen).toHaveBeenCalledTimes(2);
-  });
-
-  it('ignores other keys', () => {
-    const onOpen = vi.fn();
-    const el = render({ onOpen });
-
-    press(el, 'a');
-    press(el, 'Tab');
-
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  it('is a focusable button-like element', () => {
-    const el = render();
-
-    expect(el.getAttribute('role')).toBe('button');
-    expect(el.tabIndex).toBe(0);
-  });
-
-  it('answers a press on a marker in its strip without opening the thread', () => {
-    const onOpen = vi.fn();
-    const onMarker = vi.fn();
-    const el = render({ onOpen, strip: { ...STRIP, onMarker } });
-
-    const marker = el.querySelector<HTMLButtonElement>(
-      '[data-slot="timeline-marker"]',
+  it('goes to the thread from its Go to thread button', () => {
+    const onGo = vi.fn();
+    const button = render({ onGo }).querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-go"]',
     )!;
-    act(() => {
-      marker.click();
-    });
-    press(marker, 'Enter');
 
-    expect(onMarker).toHaveBeenCalledTimes(1);
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(button.textContent).toContain('Go to thread');
+    act(() => {
+      button.click();
+    });
+
+    expect(onGo).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -174,16 +130,16 @@ describe('ThreadCard — content', () => {
     const el = render({
       note: 'watch billing',
       activity: 'running tests',
-      task: { expanded: false, onToggle: vi.fn() },
+      idleDays: 4,
     });
 
     expect(el.style.height).toBe(
-      `${threadCardHeight({ note: true, activity: true, task: true })}px`,
+      `${threadCardHeight({ labels: true, note: true, activity: true })}px`,
     );
     expect(
-      threadCardHeight({ note: false, activity: false, task: false }),
+      threadCardHeight({ labels: false, note: false, activity: false }),
     ).toBeLessThan(
-      threadCardHeight({ note: true, activity: true, task: true }),
+      threadCardHeight({ labels: true, note: true, activity: true }),
     );
   });
 
@@ -258,49 +214,48 @@ describe('ThreadCard — content', () => {
   });
 
   it('stands as tall as its row asks, but never shorter than its content', () => {
-    const own = threadCardHeight({ note: false, activity: false, task: false });
+    const own = threadCardHeight({
+      labels: false,
+      note: false,
+      activity: false,
+    });
 
     expect(render({ height: own + 40 }).style.height).toBe(`${own + 40}px`);
     expect(render({ height: own - 40 }).style.height).toBe(`${own}px`);
   });
 
-  it('draws the timeline strip', () => {
-    const el = render();
-
-    expect(el.querySelector('[data-slot="timeline-strip"]')).not.toBeNull();
+  it('draws no timeline strip', () => {
+    expect(render().querySelector('[data-slot="timeline-strip"]')).toBeNull();
   });
 });
 
-describe('ThreadCard — its board card', () => {
-  const toggleOf = (el: HTMLElement): HTMLButtonElement | null =>
-    el.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-task-toggle"]',
-    );
+describe('ThreadCard — labels', () => {
+  it('shows the board card it works as a label, and none for a thread without one', () => {
+    const label = render({
+      boardCard: {
+        identifier: 'GEN-412',
+        title: 'Fix login',
+        status: 'in_progress',
+      },
+    }).querySelector('[data-slot="thread-card-board-card"]')!;
 
-  it('offers no toggle for a thread that works no board card', () => {
-    expect(toggleOf(render({ task: null }))).toBeNull();
+    expect(label.textContent).toBe('GEN-412· In progress');
+    expect(
+      render({ boardCard: null }).querySelector(
+        '[data-slot="thread-card-board-card"]',
+      ),
+    ).toBeNull();
   });
 
-  it('folds and unfolds the board card without opening the thread', () => {
-    const onOpen = vi.fn();
-    const onToggle = vi.fn();
-    const el = render({ onOpen, task: { expanded: false, onToggle } });
-    const toggle = toggleOf(el)!;
-
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    act(() => {
-      toggle.click();
-    });
-    press(toggle, 'Enter');
-
-    expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  it('says it is unfolded while it is', () => {
-    const el = render({ task: { expanded: true, onToggle: vi.fn() } });
-
-    expect(toggleOf(el)!.getAttribute('aria-expanded')).toBe('true');
-    expect(toggleOf(el)!.textContent).toContain('Hide its board card');
+  it('marks a thread nobody touched for days with how many, and only such a thread', () => {
+    expect(
+      render({ idleDays: 6 }).querySelector('[data-slot="thread-card-idle"]')!
+        .textContent,
+    ).toBe('Idle 6 days');
+    expect(
+      render({ idleDays: null }).querySelector(
+        '[data-slot="thread-card-idle"]',
+      ),
+    ).toBeNull();
   });
 });

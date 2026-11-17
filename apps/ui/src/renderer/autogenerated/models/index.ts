@@ -3133,16 +3133,16 @@ export interface CommandCenterBoardDto {
     generatedAt: string;
     /**
      * 
-     * @type {string}
+     * @type {ThreadOverviewDtoAnalysisAnalysis}
      * @memberof CommandCenterBoardDto
      */
-    stripStart: string;
+    manager: ThreadOverviewDtoAnalysisAnalysis | null;
     /**
-     * 
-     * @type {string}
+     * Threads the manager asked to start that wait on the user's Start
+     * @type {number}
      * @memberof CommandCenterBoardDto
      */
-    managerRunId: string | null;
+    pendingStarts: number;
     /**
      * 
      * @type {Array<CommandCenterCard>}
@@ -3192,12 +3192,6 @@ export interface CommandCenterCard {
      * @memberof CommandCenterCard
      */
     activity: string | null;
-    /**
-     * 
-     * @type {CommandCenterStrip}
-     * @memberof CommandCenterCard
-     */
-    strip: CommandCenterStrip;
     /**
      * 
      * @type {CommandCenterCardContact}
@@ -3660,104 +3654,6 @@ export interface CommandCenterStartsDto {
 /**
  * 
  * @export
- * @interface CommandCenterStrip
- */
-export interface CommandCenterStrip {
-    /**
-     * 
-     * @type {Array<CommandCenterStripSpan>}
-     * @memberof CommandCenterStrip
-     */
-    spans: Array<CommandCenterStripSpan>;
-    /**
-     * 
-     * @type {Array<CommandCenterStripMarker>}
-     * @memberof CommandCenterStrip
-     */
-    markers: Array<CommandCenterStripMarker>;
-}
-/**
- * 
- * @export
- * @interface CommandCenterStripMarker
- */
-export interface CommandCenterStripMarker {
-    /**
-     * 
-     * @type {CommandCenterStripMarkerKind}
-     * @memberof CommandCenterStripMarker
-     */
-    kind: CommandCenterStripMarkerKind;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStripMarker
-     */
-    at: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStripMarker
-     */
-    label: string | null;
-}
-
-
-
-/**
- * 
- * @export
- */
-export const CommandCenterStripMarkerKind = {
-    UserMessage: 'user_message',
-    Question: 'question',
-    PrOpened: 'pr_opened',
-    Stage: 'stage',
-    Failure: 'failure',
-    ManagerOut: 'manager_out',
-    ManagerIn: 'manager_in'
-} as const;
-export type CommandCenterStripMarkerKind = typeof CommandCenterStripMarkerKind[keyof typeof CommandCenterStripMarkerKind];
-
-/**
- * 
- * @export
- * @interface CommandCenterStripSpan
- */
-export interface CommandCenterStripSpan {
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStripSpan
-     */
-    kind: CommandCenterStripSpanKindEnum;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStripSpan
-     */
-    start: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStripSpan
-     */
-    end: string | null;
-}
-
-
-/**
- * @export
- */
-export const CommandCenterStripSpanKindEnum = {
-    Work: 'work',
-    Waiting: 'waiting'
-} as const;
-export type CommandCenterStripSpanKindEnum = typeof CommandCenterStripSpanKindEnum[keyof typeof CommandCenterStripSpanKindEnum];
-
-/**
- * 
- * @export
  * @interface CommandCenterTaskRef
  */
 export interface CommandCenterTaskRef {
@@ -3787,17 +3683,6 @@ export interface CommandCenterTaskRef {
     status: TaskStatus;
 }
 
-
-
-/**
- * 
- * @export
- */
-export const CommandCenterWindow = {
-    _24h: '24h',
-    _7d: '7d'
-} as const;
-export type CommandCenterWindow = typeof CommandCenterWindow[keyof typeof CommandCenterWindow];
 
 /**
  * 

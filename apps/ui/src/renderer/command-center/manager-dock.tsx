@@ -7,8 +7,8 @@ import type { DaemonClient } from '../daemon-client';
 import { currentRunSettings } from '../run-settings';
 
 /**
- * The command center's manager, docked under the page: one conversation for
- * the whole app. The user writes in plain words and the manager works out
+ * The command center's manager, filling the page: one conversation for the
+ * whole app. The user writes in plain words and the manager works out
  * which threads they mean. Opening it with `agentKind` matters only the first
  * time — an existing manager keeps its own agent and settings.
  */
@@ -18,7 +18,6 @@ export function ManagerDock({
   client,
   agentKind,
   hidden,
-  onClose,
   onTurnSettled,
 }: {
   apis: DaemonApis;
@@ -26,7 +25,6 @@ export function ManagerDock({
   client: DaemonClient;
   agentKind: AgentKind;
   hidden: boolean;
-  onClose: () => void;
   onTurnSettled: () => void;
 }): React.JSX.Element {
   const open = useLatestCallback(
@@ -51,7 +49,7 @@ export function ManagerDock({
       handle={handle}
       client={client}
       hidden={hidden}
-      onClose={onClose}
+      fill
       confirmStartOver={{
         title: 'Reset the manager?',
         body: 'Its conversation and its roster — the threads it manages and its notes on them — are deleted. The threads themselves are not touched. This cannot be undone.',

@@ -47,7 +47,7 @@ export class CommandCenterController {
   read(
     @Query() query: CommandCenterBoardQueryDto,
   ): Promise<CommandCenterBoard> {
-    return this.board.board(query.window, query.runIds);
+    return this.board.board(query.runIds);
   }
 
   /** The manager's chat — the one that exists, or a new one with these chips. */

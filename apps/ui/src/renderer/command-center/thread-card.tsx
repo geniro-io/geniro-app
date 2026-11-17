@@ -1,30 +1,30 @@
 import { cva } from 'class-variance-authority';
 import {
-  ChevronDown,
+  ArrowUpRight,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
-  ListTodo,
   type LucideIcon,
+  Moon,
 } from 'lucide-react';
 
 import { plainPreview } from '../chats/brief-text';
-import {
-  TimelineStrip,
-  type TimelineStripProps,
-} from '../components/timeline-strip';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import { taskStatusMeta } from '../tasks/task-status';
 
 export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
 
 export type ThreadCardPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 
-export interface ThreadCardTask {
-  expanded: boolean;
-  onToggle: () => void;
+/** The board card a thread works, shown on it as a label. */
+export interface ThreadCardBoardCard {
+  identifier: string | null;
+  title: string;
+  status: string;
 }
 
 export interface ThreadCardProps {
@@ -36,14 +36,14 @@ export interface ThreadCardProps {
   pullRequest: { number: number; state: ThreadCardPullRequestState } | null;
   note: string | null;
   activity: string | null;
-  strip: TimelineStripProps;
-  /** The board card this thread works, folded under it; null when it has none. */
-  task: ThreadCardTask | null;
+  boardCard: ThreadCardBoardCard | null;
+  /** Whole days nobody has touched it, once it counts as idle; else null. */
+  idleDays: number | null;
   /** What a screen reader hears for the whole card. */
   summary?: string;
-  /** A taller height to stand in, so a row of cards lines up; never shorter than its content. */
+  /** A taller height to stand in, so a line of cards lines up; never shorter than its content. */
   height?: number;
-  onOpen: () => void;
+  onGo: () => void;
 }
 
 export const THREAD_CARD_WIDTH = 300;
@@ -54,29 +54,29 @@ const BORDER_PX = 1;
 const ROW_PX = {
   header: 20,
   meta: 16,
+  labels: 20,
   note: 24,
-  strip: 20,
   activity: 16,
-  task: 24,
+  footer: 24,
 } as const;
 
 /** The card's height for what it shows, so the graph can lay it out before it is drawn. */
 export function threadCardHeight({
+  labels,
   note,
   activity,
-  task,
 }: {
+  labels: boolean;
   note: boolean;
   activity: boolean;
-  task: boolean;
 }): number {
   const rows = [
     ROW_PX.header,
     ROW_PX.meta,
+    ...(labels ? [ROW_PX.labels] : []),
     ...(note ? [ROW_PX.note] : []),
-    ROW_PX.strip,
     ...(activity ? [ROW_PX.activity] : []),
-    ...(task ? [ROW_PX.task] : []),
+    ROW_PX.footer,
   ];
   return (
     PAD_PX * 2 +
@@ -91,6 +91,14 @@ export function activityLine(activity: string | null): string {
   return activity === null ? '' : plainPreview(activity).replace(/`/g, '');
 }
 
+/** Whether the card carries its label row: a board card, or an idle mark. */
+export function hasLabels(view: {
+  boardCard: ThreadCardBoardCard | null;
+  idleDays: number | null;
+}): boolean {
+  return view.boardCard !== null || view.idleDays !== null;
+}
+
 export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
   working: 'Working',
   waiting: 'Waiting on you',
@@ -100,7 +108,7 @@ export const THREAD_STATUS_TEXT: Record<ThreadCardStatus, string> = {
 };
 
 const cardVariants = cva(
-  'flex cursor-pointer flex-col overflow-hidden rounded-card border bg-card text-left shadow-sm outline-none transition-[border-color,box-shadow,translate] duration-200 hover:-translate-y-px hover:shadow-md focus-visible:ring-[3px] focus-visible:ring-ring/60 motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+  'flex flex-col overflow-hidden rounded-card border bg-card text-left shadow-sm transition-[border-color,box-shadow] duration-200 hover:shadow-md motion-reduce:transition-none',
   {
     variants: {
       status: {
@@ -189,20 +197,48 @@ function PullRequestChip({
   );
 }
 
-/**
- * A marker or any other control inside the card answers its own press; the
- * click and the key must not also open the thread that holds them.
- */
-function keepPressesInside(event: React.SyntheticEvent<HTMLElement>): void {
-  if (
-    event.target instanceof Element &&
-    event.target.closest('button') !== null
-  ) {
-    event.stopPropagation();
-  }
+function BoardCardLabel({
+  card,
+}: {
+  card: ThreadCardBoardCard;
+}): React.JSX.Element {
+  const meta = taskStatusMeta(card.status);
+  const Icon = meta.icon;
+  return (
+    <Badge
+      data-slot="thread-card-board-card"
+      variant="muted"
+      title={`${card.identifier ?? 'Board card'} · ${card.title} · ${meta.label}`}
+      className="min-w-0 shrink gap-1 px-1.5 py-0 font-normal">
+      <Icon
+        aria-hidden="true"
+        className={cn('size-3.5 shrink-0', meta.className)}
+      />
+      <span className="truncate font-mono tabular-nums">
+        {card.identifier ?? card.title}
+      </span>
+      <span className="shrink-0 text-muted-foreground">· {meta.label}</span>
+    </Badge>
+  );
 }
 
-/** One running thread as a card of fixed size — a node of the command center's graph. */
+function IdleMark({ days }: { days: number }): React.JSX.Element {
+  return (
+    <Badge
+      data-slot="thread-card-idle"
+      variant="muted"
+      title={`Nobody has touched this thread for ${days} days`}
+      className="shrink-0 gap-1 px-1.5 py-0 font-normal text-muted-foreground">
+      <Moon aria-hidden="true" className="size-3.5 shrink-0" />
+      Idle {days} days
+    </Badge>
+  );
+}
+
+/**
+ * One thread as a card of fixed size — a node of the command center's graph.
+ * The card itself opens nothing; its Go to thread button does.
+ */
 export function ThreadCard({
   title,
   status,
@@ -212,35 +248,27 @@ export function ThreadCard({
   pullRequest,
   note,
   activity,
-  strip,
-  task,
+  boardCard,
+  idleDays,
   summary,
   height,
-  onOpen,
+  onGo,
 }: ThreadCardProps): React.JSX.Element {
   const meta = [THREAD_STATUS_TEXT[status], handle, project, agentLabel]
     .filter((part) => part !== null && part !== '')
     .join(' · ');
   const now = activityLine(activity);
+  const labels = hasLabels({ boardCard, idleDays });
   const ownHeight = threadCardHeight({
+    labels,
     note: note !== null,
     activity: now !== '',
-    task: task !== null,
   });
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <article
       aria-label={summary ?? title}
       data-slot="thread-card"
       data-status={status}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
       className={cardVariants({ status })}
       style={{
         width: THREAD_CARD_WIDTH,
@@ -268,6 +296,12 @@ export function ThreadCard({
         className="h-4 shrink-0 truncate text-xs leading-4 text-muted-foreground">
         {meta}
       </p>
+      {labels ? (
+        <div className="flex h-5 min-w-0 shrink-0 items-center gap-1.5">
+          {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
+          {idleDays === null ? null : <IdleMark days={idleDays} />}
+        </div>
+      ) : null}
       {note === null ? null : (
         <p
           data-slot="thread-card-note"
@@ -276,12 +310,6 @@ export function ThreadCard({
           {note}
         </p>
       )}
-      <div
-        className="h-5 shrink-0"
-        onClick={keepPressesInside}
-        onKeyDown={keepPressesInside}>
-        <TimelineStrip {...strip} />
-      </div>
       {now === '' ? null : (
         <p
           data-slot="thread-card-activity"
@@ -290,30 +318,18 @@ export function ThreadCard({
           Now: {now}
         </p>
       )}
-      {task === null ? null : (
-        <button
+      <div className="mt-auto flex h-6 shrink-0 justify-end">
+        <Button
           type="button"
-          data-slot="thread-card-task-toggle"
-          aria-expanded={task.expanded}
-          onClick={(event) => {
-            event.stopPropagation();
-            task.onToggle();
-          }}
-          onKeyDown={(event) => event.stopPropagation()}
-          className="mt-auto flex h-6 w-full shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/60 focus-visible:outline-none">
-          <ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="flex-1 text-left">
-            {task.expanded ? 'Hide its board card' : 'Show its board card'}
-          </span>
-          <ChevronDown
-            aria-hidden="true"
-            className={cn(
-              'size-3.5 shrink-0 transition-transform duration-200 motion-reduce:transition-none',
-              task.expanded && 'rotate-180',
-            )}
-          />
-        </button>
-      )}
-    </div>
+          variant="ghost"
+          size="sm"
+          data-slot="thread-card-go"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={onGo}>
+          Go to thread
+          <ArrowUpRight aria-hidden="true" className="size-3.5" />
+        </Button>
+      </div>
+    </article>
   );
 }

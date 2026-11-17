@@ -21,12 +21,20 @@ const MIXED_CONTACTS = {
   'thread-4': { lastAt: null, awaitingReply: false },
 };
 
+const MANAGER = {
+  agentLabel: 'Claude',
+  model: 'opus',
+  working: true,
+  lastActivityAt: new Date(FIXTURE_NOW - 3 * MINUTE).toISOString(),
+};
+
 const meta = {
   title: 'Command center/GraphView',
   component: GraphView,
   args: {
-    managerStarted: true,
-    threads: graphThreadsOf(5),
+    manager: MANAGER,
+    pendingStarts: 1,
+    threads: graphThreadsOf(4),
     contacts: MIXED_CONTACTS,
     pulses: [],
     now: FIXTURE_NOW,
@@ -43,17 +51,20 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The manager on top, five threads under it: one lit, one amber awaiting a reply, the rest quiet. */
-export const ManagerAndThreads: Story = {};
+/** A few threads stand in one line under the manager: one lit, one amber awaiting a reply. */
+export const OneLine: Story = {};
 
-/** No manager chat yet: its node still heads the tree and opens it on a press. */
-export const ManagerNotStarted: Story = {
-  args: { managerStarted: false, contacts: {} },
+/** Eight threads: two lines, the second shifted under the gaps of the first. */
+export const TwoLines: Story = { args: { threads: graphThreadsOf(8) } };
+
+/** Thirty threads: three lines of the 24 most recently active and one "+6 more". */
+export const ThreeLines: Story = {
+  args: { threads: graphThreadsOf(30), contacts: {} },
 };
 
-/** Thirty threads: the graph draws the 24 most recently active and one "+6 more" node. */
-export const ThirtyThreads: Story = {
-  args: { threads: graphThreadsOf(30), contacts: {} },
+/** No manager chat yet: its node still heads the tree and opens the chat. */
+export const ManagerNotStarted: Story = {
+  args: { manager: null, pendingStarts: 0, contacts: {} },
 };
 
 /** A phone: one column, the manager first and each thread indented under it. */

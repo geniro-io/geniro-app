@@ -6,19 +6,8 @@ import { chatChipsSchema } from '../teams/teams.types';
 
 const HOUR_MS = 60 * 60_000;
 
-/** How far back the board reaches for threads that are neither working nor waiting. */
-export const CommandCenterWindowSchema = z
-  .enum(['24h', '7d'])
-  .meta({ id: 'CommandCenterWindow' });
-export type CommandCenterWindow = z.infer<typeof CommandCenterWindowSchema>;
-
-export const COMMAND_CENTER_WINDOW_MS: Record<CommandCenterWindow, number> = {
-  '24h': 24 * HOUR_MS,
-  '7d': 7 * 24 * HOUR_MS,
-};
-
-/** The stretch each card's timeline strip covers (user decision: the last 8 hours). */
-export const STRIP_SPAN_MS = 8 * HOUR_MS;
+/** How far back a card's newest contact with the manager is looked for. */
+export const CONTACT_LOOKBACK_MS = 24 * HOUR_MS;
 
 /** How long a reply credit lasts after the manager's message. */
 export const REPLY_CREDIT_MS = 2 * HOUR_MS;
@@ -30,53 +19,11 @@ export const ROSTER_REMOVAL_INTERVAL_MS = 6 * HOUR_MS;
 export const STATUS_SUFFIX_MAX_LINES = 40;
 export const STATUS_SUFFIX_LINE_MAX = 160;
 
-/** The most markers one strip carries — the newest are kept. */
-export const STRIP_MAX_MARKERS = 80;
-
 /** The board's computed columns; never dragged. */
 export const CommandCenterColumnSchema = z
   .enum(['working', 'waiting', 'idle', 'in_review', 'done'])
   .meta({ id: 'CommandCenterColumn' });
 export type CommandCenterColumn = z.infer<typeof CommandCenterColumnSchema>;
-
-export const StripSpanSchema = z
-  .object({
-    kind: z.enum(['work', 'waiting']),
-    start: z.string(),
-    end: z.string().nullable().describe('Null while the span is still open'),
-  })
-  .meta({ id: 'CommandCenterStripSpan' });
-export type StripSpan = z.infer<typeof StripSpanSchema>;
-
-export const StripMarkerKindSchema = z
-  .enum([
-    'user_message',
-    'question',
-    'pr_opened',
-    'stage',
-    'failure',
-    'manager_out',
-    'manager_in',
-  ])
-  .meta({ id: 'CommandCenterStripMarkerKind' });
-export type StripMarkerKind = z.infer<typeof StripMarkerKindSchema>;
-
-export const StripMarkerSchema = z
-  .object({
-    kind: StripMarkerKindSchema,
-    at: z.string(),
-    label: z.string().nullable(),
-  })
-  .meta({ id: 'CommandCenterStripMarker' });
-export type StripMarker = z.infer<typeof StripMarkerSchema>;
-
-export const ThreadStripSchema = z
-  .object({
-    spans: z.array(StripSpanSchema),
-    markers: z.array(StripMarkerSchema),
-  })
-  .meta({ id: 'CommandCenterStrip' });
-export type ThreadStrip = z.infer<typeof ThreadStripSchema>;
 
 export const CommandCenterTaskRefSchema = z
   .object({
@@ -107,7 +54,6 @@ export const CommandCenterCardSchema = z
       .string()
       .nullable()
       .describe('What the thread is doing now, one line'),
-    strip: ThreadStripSchema,
     contact: z.object({
       lastAt: z
         .string()
@@ -124,8 +70,15 @@ export type CommandCenterCard = z.infer<typeof CommandCenterCardSchema>;
 // No `.meta({ id })` — a RESPONSE DTO ROOT.
 export const CommandCenterBoardSchema = z.object({
   generatedAt: z.string(),
-  stripStart: z.string(),
-  managerRunId: z.string().nullable(),
+  manager: RunWireSchema.nullable().describe(
+    "The manager's own chat, or null while there is none",
+  ),
+  pendingStarts: z
+    .number()
+    .int()
+    .describe(
+      "Threads the manager asked to start that wait on the user's Start",
+    ),
   cards: z.array(CommandCenterCardSchema),
 });
 export type CommandCenterBoard = z.infer<typeof CommandCenterBoardSchema>;

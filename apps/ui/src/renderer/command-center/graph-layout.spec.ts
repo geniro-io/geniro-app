@@ -1,22 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  columnsFor,
   type GraphBox,
   type GraphGeometry,
-  type GraphItem,
   layoutColumn,
-  layoutRows,
+  layoutLines,
+  linesFor,
 } from './graph-layout';
 
-const ROOT: GraphBox = { id: 'root', width: 300, height: 64 };
+const ROOT: GraphBox = { id: 'root', width: 360, height: 112 };
 
-function itemsOf(count: number, childAt: number[] = []): GraphItem[] {
+function itemsOf(count: number): GraphBox[] {
   return Array.from({ length: count }, (_, index) => ({
-    box: { id: `t${index}`, width: 300, height: 120 + (index % 3) * 20 },
-    child: childAt.includes(index)
-      ? { id: `c${index}`, width: 260, height: 60 }
-      : null,
+    id: `t${index}`,
+    width: 300,
+    height: 170,
   }));
 }
 
@@ -38,7 +36,7 @@ function overlaps(geometry: GraphGeometry): string[] {
   return hits;
 }
 
-/** Does any straight segment of a wire pass through a box other than its own ends? */
+/** Does any straight segment of a wire pass through a box other than its own end? */
 function wiresThroughBoxes(geometry: GraphGeometry): string[] {
   const hits: string[] = [];
   for (const [id, route] of geometry.routes) {
@@ -49,15 +47,11 @@ function wiresThroughBoxes(geometry: GraphGeometry): string[] {
         if (box.id === id) {
           continue;
         }
-        const left = Math.min(a.x, b.x);
-        const right = Math.max(a.x, b.x);
-        const top = Math.min(a.y, b.y);
-        const bottom = Math.max(a.y, b.y);
         if (
-          left < box.x + box.width - 1 &&
-          right > box.x + 1 &&
-          top < box.y + box.height - 1 &&
-          bottom > box.y + 1
+          Math.min(a.x, b.x) < box.x + box.width - 1 &&
+          Math.max(a.x, b.x) > box.x + 1 &&
+          Math.min(a.y, b.y) < box.y + box.height - 1 &&
+          Math.max(a.y, b.y) > box.y + 1
         ) {
           hits.push(`${id} through ${box.id}`);
         }
@@ -67,92 +61,92 @@ function wiresThroughBoxes(geometry: GraphGeometry): string[] {
   return hits;
 }
 
-describe('columnsFor', () => {
-  it('fits as many cards a row as stay readable when fitted, at most six', () => {
-    expect(columnsFor(1200, 300, 13)).toBe(4);
-    expect(columnsFor(4000, 300, 24)).toBe(6);
-    expect(columnsFor(1200, 300, 2)).toBe(2);
-    expect(columnsFor(0, 300, 13)).toBe(1);
+const linesOf = (geometry: GraphGeometry): number =>
+  new Set(
+    [...geometry.boxes.values()]
+      .filter((box) => box.id !== 'root')
+      .map((box) => box.y),
+  ).size;
+
+describe('linesFor', () => {
+  it('stands a few threads in one line, a handful in two and more in three', () => {
+    expect(linesFor(1)).toBe(1);
+    expect(linesFor(4)).toBe(1);
+    expect(linesFor(5)).toBe(2);
+    expect(linesFor(10)).toBe(2);
+    expect(linesFor(11)).toBe(3);
+    expect(linesFor(25)).toBe(3);
   });
 });
 
-describe('layoutRows', () => {
-  it('puts the root on top, centred over the rows, and every item below it', () => {
-    const geometry = layoutRows(ROOT, itemsOf(5), 3);
-    const root = geometry.boxes.get('root')!;
-    const firstRow = ['t0', 't1', 't2'].map((id) => geometry.boxes.get(id)!);
+describe('layoutLines', () => {
+  it('centres the root on top, every item below it, in the lines asked for, none overlapping', () => {
+    for (const [count, lines] of [
+      [3, 1],
+      [8, 2],
+      [25, 3],
+    ] as const) {
+      const geometry = layoutLines(ROOT, itemsOf(count), lines);
+      const root = geometry.boxes.get('root')!;
 
-    for (const box of [...geometry.boxes.values()].filter(
-      (one) => one.id !== 'root',
-    )) {
-      expect(box.y).toBeGreaterThan(root.y + root.height);
+      expect(linesOf(geometry)).toBe(lines);
+      expect(root.x + root.width / 2).toBeCloseTo(geometry.width / 2, 5);
+      for (const box of geometry.boxes.values()) {
+        if (box.id !== 'root') {
+          expect(box.y).toBeGreaterThan(root.y + root.height);
+        }
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(geometry.width);
+      }
+      expect(overlaps(geometry)).toEqual([]);
     }
-    const rowCentre =
-      (firstRow[0]!.x + firstRow[2]!.x + firstRow[2]!.width) / 2;
-    expect(root.x + root.width / 2).toBeCloseTo(rowCentre, 5);
   });
 
-  it('wraps the items into rows of the given width, in order, none overlapping', () => {
-    const geometry = layoutRows(ROOT, itemsOf(7, [1, 5]), 3);
-    const y = (id: string) => geometry.boxes.get(id)!.y;
+  it('shifts every other line half a box, so it sits under the gaps above', () => {
+    const geometry = layoutLines(ROOT, itemsOf(8), 2);
     const x = (id: string) => geometry.boxes.get(id)!.x;
+    const step = x('t1') - x('t0');
 
-    expect(new Set([y('t0'), y('t1'), y('t2')]).size).toBe(1);
-    expect(y('t3')).toBeGreaterThan(y('t0'));
-    expect(y('t6')).toBeGreaterThan(y('t3'));
-    expect(x('t0')).toBeLessThan(x('t1'));
-    expect(x('t3')).toBe(x('t0'));
-    expect(overlaps(geometry)).toEqual([]);
+    expect(x('t4') - x('t0')).toBeCloseTo(step / 2, 5);
   });
 
-  it('hangs a child under its item, and starts the next row below the child', () => {
-    const geometry = layoutRows(ROOT, itemsOf(4, [0]), 3);
-    const item = geometry.boxes.get('t0')!;
-    const child = geometry.boxes.get('c0')!;
+  it('routes every wire from the root’s bottom into its box’s top, through no box', () => {
+    for (const [count, lines] of [
+      [4, 1],
+      [9, 2],
+      [24, 3],
+    ] as const) {
+      const geometry = layoutLines(ROOT, itemsOf(count), lines);
+      const root = geometry.boxes.get('root')!;
 
-    expect(child.y).toBeGreaterThan(item.y + item.height);
-    expect(child.x + child.width / 2).toBeCloseTo(item.x + item.width / 2, 5);
-    expect(geometry.boxes.get('t3')!.y).toBeGreaterThan(child.y + child.height);
-  });
-
-  it('routes every wire from the root’s bottom down into its item’s top, through no box', () => {
-    const geometry = layoutRows(ROOT, itemsOf(8, [2, 4]), 3);
-    const root = geometry.boxes.get('root')!;
-
-    for (const id of ['t0', 't4', 't7']) {
-      const route = geometry.routes.get(id)!;
-      expect(route[0]!.y).toBe(root.y + root.height);
-      expect(route.at(-1)!.y).toBe(geometry.boxes.get(id)!.y);
+      for (const box of itemsOf(count)) {
+        const route = geometry.routes.get(box.id)!;
+        expect(route[0]).toEqual({
+          x: root.x + root.width / 2,
+          y: root.y + root.height,
+        });
+        expect(route.at(-1)!.y).toBe(geometry.boxes.get(box.id)!.y);
+      }
+      expect(wiresThroughBoxes(geometry)).toEqual([]);
     }
-    expect(wiresThroughBoxes(geometry)).toEqual([]);
   });
 });
 
 describe('layoutColumn', () => {
-  it('stacks every box in one column, in order, each level indented, none overlapping, phone-wide', () => {
-    const geometry = layoutColumn(ROOT, itemsOf(3, [0]));
-    const at = (id: string) => geometry.boxes.get(id)!;
+  it('stacks every box in one column, in order, indented under the root, none overlapping, phone-wide', () => {
+    const geometry = layoutColumn(
+      { id: 'root', width: 300, height: 112 },
+      itemsOf(3),
+    );
 
     expect(
       [...geometry.boxes.values()].sort((a, b) => a.y - b.y).map((b) => b.id),
-    ).toEqual(['root', 't0', 'c0', 't1', 't2']);
-    expect(at('t0').x).toBeGreaterThan(at('root').x);
-    expect(at('c0').x).toBeGreaterThan(at('t0').x);
-    expect(at('t1').x).toBe(at('t0').x);
+    ).toEqual(['root', 't0', 't1', 't2']);
+    expect(geometry.boxes.get('t0')!.x).toBeGreaterThan(
+      geometry.boxes.get('root')!.x,
+    );
     expect(overlaps(geometry)).toEqual([]);
-    expect(geometry.width).toBeLessThanOrEqual(390);
-  });
-
-  it('runs each wire down its parent’s left edge and turns it into the box', () => {
-    const geometry = layoutColumn(ROOT, itemsOf(3));
-    const route = geometry.routes.get('t2')!;
-    const root = geometry.boxes.get('root')!;
-    const box = geometry.boxes.get('t2')!;
-
-    expect(route[0]).toEqual({ x: route[1]!.x, y: root.y + root.height });
-    expect(route.at(-1)!.x).toBe(box.x);
-    expect(route.at(-1)!.y).toBeGreaterThan(box.y);
-    expect(route.at(-1)!.y).toBeLessThan(box.y + box.height);
     expect(wiresThroughBoxes(geometry)).toEqual([]);
+    expect(geometry.width).toBeLessThanOrEqual(390);
   });
 });

@@ -5,6 +5,7 @@ import type { DaemonHandle } from '../../shared/contracts';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
+import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonClient } from '../daemon-client';
 import { Chats } from './Chats';
@@ -32,6 +33,7 @@ export function HostedChatDock({
   hidden = false,
   active = true,
   confirmStartOver,
+  fill = false,
   onClose,
 }: {
   thread: Omit<HostedThread, 'headerActions'>;
@@ -49,7 +51,10 @@ export function HostedChatDock({
   active?: boolean;
   /** Ask before Start over throws the conversation away, with what is lost. */
   confirmStartOver?: { title: string; body: string; confirmLabel: string };
-  onClose: () => void;
+  /** Take the page's whole height, with no resize handle. */
+  fill?: boolean;
+  /** Hide the dock; without it the dock offers no Hide. */
+  onClose?: () => void;
 }): React.JSX.Element {
   const [pendingStartOver, setPendingStartOver] = useState<(() => void) | null>(
     null,
@@ -90,16 +95,18 @@ export function HostedChatDock({
           }}>
           <Trash2 className="size-3.5 shrink-0" />
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-6"
-          aria-label={`Hide the ${panelName}`}
-          title="Hide — the conversation is kept"
-          onClick={onClose}>
-          <ChevronDown className="size-3.5 shrink-0" />
-        </Button>
+        {onClose === undefined ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            aria-label={`Hide the ${panelName}`}
+            title="Hide — the conversation is kept"
+            onClick={onClose}>
+            <ChevronDown className="size-3.5 shrink-0" />
+          </Button>
+        )}
       </>
     ),
     [onClose, confirmStartOver],
@@ -108,18 +115,23 @@ export function HostedChatDock({
   return (
     <aside
       hidden={hidden}
-      className="relative flex shrink-0 flex-col border-t border-border bg-sidebar"
-      style={{ height }}
+      className={cn(
+        'relative flex flex-col bg-sidebar',
+        fill ? 'min-h-0 flex-1' : 'shrink-0 border-t border-border',
+      )}
+      style={fill ? undefined : { height }}
       aria-label={label}>
-      <PanelResizeHandle
-        edge="top"
-        label={`Resize the ${panelName}`}
-        onMouseDown={startResize}
-        value={height}
-        min={minWidth}
-        max={maxWidth}
-        onResize={resizeTo}
-      />
+      {fill ? null : (
+        <PanelResizeHandle
+          edge="top"
+          label={`Resize the ${panelName}`}
+          onMouseDown={startResize}
+          value={height}
+          min={minWidth}
+          max={maxWidth}
+          onResize={resizeTo}
+        />
+      )}
       <div className="min-h-0 flex-1">
         <Chats
           client={client}

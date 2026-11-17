@@ -4,16 +4,13 @@ import type { RunWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ThreadMessageDao } from '../../agents/dao/thread-message.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import type { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import type { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
 import { commandCenterDb } from '../__tests__/command-center-db';
-import { STRIP_SPAN_MS } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
-import { CommandCenterStripDao } from '../dao/command-center-strip.dao';
 import { CommandCenterService } from './command-center.service';
 
 const HOUR = 60 * 60_000;
@@ -41,7 +38,10 @@ describe('CommandCenterService.board', () => {
   let db: Db;
   let now: number;
   let pending: Set<string>;
-  let chats: { listChats: ReturnType<typeof vi.fn> };
+  let chats: {
+    listChats: ReturnType<typeof vi.fn>;
+    findCommandCenterChat: ReturnType<typeof vi.fn>;
+  };
   let executor: { listRuns: ReturnType<typeof vi.fn> };
   let service: CommandCenterService;
 
@@ -57,6 +57,10 @@ describe('CommandCenterService.board', () => {
             wireOf(run, pending),
           ),
       ),
+      findCommandCenterChat: vi.fn(async () => {
+        const [run] = await runDao.listCommandCenterChats(db.em.fork());
+        return run === undefined ? null : wireOf(run, pending);
+      }),
     };
     executor = {
       listRuns: vi.fn(
@@ -80,13 +84,9 @@ describe('CommandCenterService.board', () => {
       runDao,
       chats as unknown as ChatService,
       executor as unknown as TeamExecutorService,
-      {
-        runIdsWithPending: () => [...pending],
-      } as unknown as ApprovalRegistry,
       inbox,
       new TaskDao(db.em),
       new CommandCenterRosterDao(db.em),
-      new CommandCenterStripDao(db.em),
     );
   });
 
@@ -113,31 +113,21 @@ describe('CommandCenterService.board', () => {
     );
   }
 
-  it('includes a chat active 23 hours ago in the day window, and excludes one active 25 hours ago until the week window', async () => {
-    await seedChatAged('recent', 23 * HOUR);
-    await seedChatAged('stale', 25 * HOUR);
-
-    const day = await service.board('24h');
-    const week = await service.board('7d');
-
-    expect(day.cards.map((card) => card.run.id)).toEqual(['recent']);
-    expect(week.cards.map((card) => card.run.id).sort()).toEqual([
-      'recent',
-      'stale',
-    ]);
-  });
-
-  it('includes a running thread and one awaiting a card whatever their age, and no other old thread', async () => {
+  it('shows every active thread however long ago it moved, and none archived or finished', async () => {
+    await seedChatAged('recent', HOUR);
+    await seedChatAged('two-weeks', 14 * 24 * HOUR);
     await seedChatAged('running-old', 10 * 24 * HOUR, { status: 'running' });
-    await seedChatAged('waiting-old', 10 * 24 * HOUR);
-    await seedChatAged('idle-old', 10 * 24 * HOUR);
-    pending = new Set(['waiting-old']);
+    await seedChatAged('archived', HOUR, { archivedAt: new Date(now) });
+    await seedChatAged('finished', HOUR);
+    await db.seedTask('finished', 'done');
 
-    const board = await service.board('24h');
+    const board = await service.board();
 
-    expect(
-      Object.fromEntries(board.cards.map((card) => [card.run.id, card.column])),
-    ).toEqual({ 'running-old': 'working', 'waiting-old': 'waiting' });
+    expect(board.cards.map((card) => card.run.id).sort()).toEqual([
+      'recent',
+      'running-old',
+      'two-weeks',
+    ]);
   });
 
   it('never shows the manager or an app-own chat, running or not', async () => {
@@ -161,9 +151,9 @@ describe('CommandCenterService.board', () => {
       note: 'waits for schema',
     });
 
-    const board = await service.board('24h');
+    const board = await service.board();
 
-    expect(board.managerRunId).toBe('manager');
+    expect(board.manager?.id).toBe('manager');
     expect(board.cards.map((card) => card.run.id)).toEqual(['plain-chat']);
     expect(board.cards[0]).toMatchObject({
       handle: 't1',
@@ -171,19 +161,18 @@ describe('CommandCenterService.board', () => {
     });
   });
 
-  it('places each thread in its column: working, waiting, idle, in review, done', async () => {
+  it('places each thread in its column, and leaves a finished one off the board', async () => {
     await seedChatAged('done-card', HOUR);
     await db.seedTask('done-card', 'done');
     await seedChatAged('review-card', HOUR);
     await db.seedTask('review-card', 'in_review');
     await seedChatAged('idle-card', HOUR);
 
-    const board = await service.board('24h');
+    const board = await service.board();
 
     expect(
       Object.fromEntries(board.cards.map((card) => [card.run.id, card.column])),
     ).toEqual({
-      'done-card': 'done',
       'review-card': 'in_review',
       'idle-card': 'idle',
     });
@@ -194,7 +183,7 @@ describe('CommandCenterService.board', () => {
     await db.seedTask('card-run', 'in_progress', { title: 'Fix login' });
     await seedChatAged('loose-run', HOUR);
 
-    const board = await service.board('24h');
+    const board = await service.board();
     const taskOf = Object.fromEntries(
       board.cards.map((card) => [card.run.id, card.task]),
     );
@@ -208,48 +197,36 @@ describe('CommandCenterService.board', () => {
     expect(taskOf['loose-run']).toBeNull();
   });
 
-  it('folds a strip over every row of the eight hours, past any listing cap, and none older', async () => {
-    const pairs = 250;
-    const first = now - 7 * HOUR;
-    await db.seedRun('busy');
-    let seq = 1;
-    await db.seedItem('busy', seq++, new Date(now - 9 * HOUR), 'status', {
-      status: 'running',
+  it('counts the starts the manager asked for that still wait on the user, and no one else’s', async () => {
+    await db.seedRun('manager', { commandCenter: true });
+    await seedChatAged('thread', HOUR);
+    const requested = new Date(now - MINUTE);
+    await db.seedTask('a', 'backlog', {
+      runId: null,
+      startRequestedAt: requested,
+      startRequestedByRunId: 'manager',
     });
-    await db.seedItem(
-      'busy',
-      seq++,
-      new Date(now - 8.5 * HOUR),
-      'turn_complete',
-      {},
-    );
-    for (let index = 0; index < pairs; index += 1) {
-      const start = first + index * 90_000;
-      await db.seedItem('busy', seq++, new Date(start), 'status', {
-        status: 'running',
-      });
-      await db.seedItem(
-        'busy',
-        seq++,
-        new Date(start + MINUTE),
-        'turn_complete',
-        {},
-      );
-    }
+    await db.seedTask('b', 'backlog', {
+      runId: null,
+      startRequestedAt: requested,
+      startRequestedByRunId: 'manager',
+      startApprovedAt: requested,
+    });
+    await db.seedTask('c', 'backlog', {
+      runId: null,
+      startRequestedAt: requested,
+      startRequestedByRunId: 'someone-else',
+    });
 
-    const board = await service.board('24h');
-    const busy = board.cards.find((card) => card.run.id === 'busy');
+    expect((await service.board()).pendingStarts).toBe(1);
+  });
 
-    expect(busy).toBeDefined();
-    const work = busy!.strip.spans.filter((span) => span.kind === 'work');
-    expect(work).toHaveLength(pairs);
-    expect(
-      work.every(
-        (span) => Date.parse(span.start) >= Date.parse(board.stripStart),
-      ),
-    ).toBe(true);
-    expect(Date.parse(board.generatedAt) - Date.parse(board.stripStart)).toBe(
-      STRIP_SPAN_MS,
-    );
+  it('answers no manager and no pending starts while there is no manager chat', async () => {
+    await seedChatAged('thread', HOUR);
+
+    const board = await service.board();
+
+    expect(board.manager).toBeNull();
+    expect(board.pendingStarts).toBe(0);
   });
 });

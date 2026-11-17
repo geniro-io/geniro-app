@@ -181,7 +181,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
    * last removal.
    */
   private async syncRoster(managerRunId: string): Promise<RunWire[]> {
-    const { runs } = await this.board.activeThreads('24h');
+    const { runs } = await this.board.activeThreads();
     const rows = await this.roster.listOf(managerRunId);
     const onRoster = new Set(
       rows.filter((row) => row.leftAt === null).map((row) => row.threadRunId),

@@ -19,7 +19,6 @@ import type {
   CommandCenterChatsDiscardedDto,
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
-  CommandCenterWindow,
   RunDto,
   StartCommandCenterChatDto,
 } from '../models/index';
@@ -33,7 +32,6 @@ export interface CommandCenterApiOpenCommandCenterChatRequest {
 }
 
 export interface CommandCenterApiReadCommandCenterBoardRequest {
-    window?: CommandCenterWindow;
     runIds?: string;
 }
 
@@ -184,10 +182,6 @@ export class CommandCenterApi extends runtime.BaseAPI {
      */
     async readCommandCenterBoardRaw(requestParameters: CommandCenterApiReadCommandCenterBoardRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CommandCenterBoardDto>> {
         const queryParameters: any = {};
-
-        if (requestParameters['window'] != null) {
-            queryParameters['window'] = requestParameters['window'];
-        }
 
         if (requestParameters['runIds'] != null) {
             queryParameters['runIds'] = requestParameters['runIds'];

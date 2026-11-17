@@ -5,7 +5,6 @@ import {
   CommandCenterBoardSchema,
   CommandCenterChatsDiscardedSchema,
   CommandCenterStartsSchema,
-  CommandCenterWindowSchema,
   START_FAILURE_MAX_CHARS,
   StartCommandCenterChatSchema,
 } from '../command-center.types';
@@ -14,7 +13,6 @@ import {
 const BOARD_RUN_IDS_MAX = 200;
 
 export const commandCenterBoardQuerySchema = z.object({
-  window: CommandCenterWindowSchema.default('24h'),
   runIds: z
     .string()
     .optional()

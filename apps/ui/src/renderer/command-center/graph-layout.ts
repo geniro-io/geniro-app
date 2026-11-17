@@ -6,12 +6,6 @@ export interface GraphBox {
   height: number;
 }
 
-/** One box under the root, and the box folded under it, if any. */
-export interface GraphItem {
-  box: GraphBox;
-  child: GraphBox | null;
-}
-
 export interface PlacedBox extends GraphBox {
   x: number;
   y: number;
@@ -21,34 +15,24 @@ export interface GraphGeometry {
   width: number;
   height: number;
   boxes: ReadonlyMap<string, PlacedBox>;
-  /** Keyed by the lower box's id: the wire from the box above down to it. */
+  /** Keyed by the lower box's id: the wire from the root down to it. */
   routes: ReadonlyMap<string, readonly Point[]>;
 }
 
 const MARGIN = 24;
-const SPINE_ROOM = 24;
-const COLUMN_GAP = 32;
-const ROW_GAP = 72;
-const CHILD_GAP = 36;
-const MAX_COLUMNS = 6;
-/** The smallest zoom a fitted row should need, so a card stays readable. */
-const READABLE_ZOOM = 0.8;
+const COLUMN_GAP = 40;
+const LINE_GAP = 72;
 
 const INDENT = 28;
 const STACK_GAP = 16;
 const STUB = 14;
 
-/** How many cards a row holds in a canvas this wide, so the fitted graph stays readable. */
-export function columnsFor(
-  canvasWidth: number,
-  cardWidth: number,
-  count: number,
-): number {
-  const fits = Math.floor(
-    (canvasWidth / READABLE_ZOOM - MARGIN * 2 - SPINE_ROOM + COLUMN_GAP) /
-      (cardWidth + COLUMN_GAP),
-  );
-  return Math.max(1, Math.min(count, MAX_COLUMNS, fits));
+/** How many lines the items stand in: one for a few, two for a handful, three past that. */
+export function linesFor(count: number): number {
+  if (count <= 4) {
+    return 1;
+  }
+  return count <= 10 ? 2 : 3;
 }
 
 function withoutRepeats(points: readonly Point[]): Point[] {
@@ -60,97 +44,108 @@ function withoutRepeats(points: readonly Point[]): Point[] {
   );
 }
 
+/** The x a wire may pass a line at nearest to `target`: a gap between two boxes, or beside the line. */
+function passageNear(line: readonly PlacedBox[], target: number): number {
+  const first = line[0]!;
+  const last = line.at(-1)!;
+  const passages = [
+    first.x - COLUMN_GAP / 2,
+    ...line
+      .slice(1)
+      .map((box, index) => (line[index]!.x + line[index]!.width + box.x) / 2),
+    last.x + last.width + COLUMN_GAP / 2,
+  ];
+  return passages.reduce((best, x) =>
+    Math.abs(x - target) < Math.abs(best - target) ? x : best,
+  );
+}
+
 /**
- * The root centred on top and its items in rows of `columns` under it, each
- * item's child under the item. A wire leaves the root's bottom, runs along a
- * bus in the gap above the first row, down a spine left of the rows to the bus
- * above its own row, and drops into the item's top — so no wire crosses a box.
+ * The root centred on top and the items under it in `lines` horizontal lines
+ * of equal count, every other line shifted half a box so it sits under the
+ * gaps of the line above. A wire leaves the root's bottom, runs along the gap
+ * above the first line, passes each line above its own through the nearest
+ * gap, and drops into its box's top — so no wire crosses a box.
  */
-export function layoutRows(
+export function layoutLines(
   root: GraphBox,
-  items: readonly GraphItem[],
-  columns: number,
+  items: readonly GraphBox[],
+  lines: number,
 ): GraphGeometry {
-  const cell = Math.max(0, ...items.map((item) => item.box.width));
-  const perRow = Math.max(1, columns);
-  const gridLeft = MARGIN + SPINE_ROOM;
-  const used = Math.min(perRow, items.length);
-  const gridWidth = Math.max(0, used * cell + (used - 1) * COLUMN_GAP);
+  const cell = Math.max(0, ...items.map((item) => item.width));
+  const height = Math.max(0, ...items.map((item) => item.height));
+  const perLine = Math.max(1, Math.ceil(items.length / Math.max(1, lines)));
+  const rows: GraphBox[][] = [];
+  for (let start = 0; start < items.length; start += perLine) {
+    rows.push(items.slice(start, start + perLine));
+  }
+  const step = cell + COLUMN_GAP;
+  const stagger = rows.length > 1 ? step / 2 : 0;
+  const widest =
+    Math.max(0, ...rows.map((row) => row.length * step - COLUMN_GAP)) + stagger;
+  const width = Math.max(widest, root.width) + MARGIN * 2;
+  const centre = width / 2;
+
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
-
-  const rootX = gridLeft + Math.max(0, (gridWidth - root.width) / 2);
-  boxes.set(root.id, { ...root, x: rootX, y: MARGIN });
-  const rootBottom = MARGIN + root.height;
-  const trunkX = rootX + root.width / 2;
-  const spineX = MARGIN + SPINE_ROOM / 2;
-  const firstBus = rootBottom + ROW_GAP / 2;
-
-  let rowTop = rootBottom + ROW_GAP;
-  for (let start = 0; start < items.length; start += perRow) {
-    const row = items.slice(start, start + perRow);
-    const bus = rowTop - ROW_GAP / 2;
-    let rowHeight = 0;
-    row.forEach((item, column) => {
-      const cellLeft = gridLeft + column * (cell + COLUMN_GAP);
-      const x = cellLeft + (cell - item.box.width) / 2;
-      boxes.set(item.box.id, { ...item.box, x, y: rowTop });
-      const centre = x + item.box.width / 2;
-      routes.set(
-        item.box.id,
-        withoutRepeats(
-          start === 0
-            ? [
-                { x: trunkX, y: rootBottom },
-                { x: trunkX, y: firstBus },
-                { x: centre, y: firstBus },
-                { x: centre, y: rowTop },
-              ]
-            : [
-                { x: trunkX, y: rootBottom },
-                { x: trunkX, y: firstBus },
-                { x: spineX, y: firstBus },
-                { x: spineX, y: bus },
-                { x: centre, y: bus },
-                { x: centre, y: rowTop },
-              ],
-        ),
-      );
-      let height = item.box.height;
-      if (item.child !== null) {
-        const childTop = rowTop + item.box.height + CHILD_GAP;
-        boxes.set(item.child.id, {
-          ...item.child,
-          x: cellLeft + (cell - item.child.width) / 2,
-          y: childTop,
-        });
-        routes.set(item.child.id, [
-          { x: centre, y: rowTop + item.box.height },
-          { x: centre, y: childTop },
-        ]);
-        height += CHILD_GAP + item.child.height;
-      }
-      rowHeight = Math.max(rowHeight, height);
-    });
-    rowTop += rowHeight + ROW_GAP;
-  }
-
-  return {
-    width: gridLeft + Math.max(gridWidth, root.width) + MARGIN,
-    height: (items.length === 0 ? rootBottom : rowTop - ROW_GAP) + MARGIN,
-    boxes,
-    routes,
+  const placedRoot = {
+    ...root,
+    x: centre - root.width / 2,
+    y: MARGIN,
   };
+  boxes.set(root.id, placedRoot);
+  const rootBottom = MARGIN + root.height;
+
+  const placedRows: PlacedBox[][] = rows.map((row, index) => {
+    const top = rootBottom + LINE_GAP + index * (height + LINE_GAP);
+    const span = row.length * step - COLUMN_GAP;
+    const left =
+      centre - span / 2 + (index % 2 === 1 ? stagger / 2 : -stagger / 2);
+    return row.map((item, column) => {
+      const placed = {
+        ...item,
+        x: left + column * step + (cell - item.width) / 2,
+        y: top,
+      };
+      boxes.set(item.id, placed);
+      return placed;
+    });
+  });
+
+  placedRows.forEach((row, lineIndex) => {
+    for (const box of row) {
+      const target = box.x + box.width / 2;
+      const points: Point[] = [{ x: centre, y: rootBottom }];
+      let x = centre;
+      for (let above = 0; above < lineIndex; above += 1) {
+        const bus = placedRows[above]![0]!.y - LINE_GAP / 2;
+        const passage = passageNear(placedRows[above]!, target);
+        points.push({ x, y: bus }, { x: passage, y: bus });
+        x = passage;
+      }
+      const bus = box.y - LINE_GAP / 2;
+      points.push(
+        { x, y: bus },
+        { x: target, y: bus },
+        { x: target, y: box.y },
+      );
+      routes.set(box.id, withoutRepeats(points));
+    }
+  });
+
+  const bottom =
+    placedRows.length === 0 ? rootBottom : placedRows.at(-1)![0]!.y + height;
+  return { width, height: bottom + MARGIN, boxes, routes };
 }
 
 /**
  * The same tree as one column, for a narrow screen: the root on top, every
- * item below it in order and its child under it, each level indented, and a
- * wire running down the parent's left edge and turning into each box.
+ * item below it in order, indented, and a wire running down the root's left
+ * edge and turning into each box.
  */
 export function layoutColumn(
   root: GraphBox,
-  items: readonly GraphItem[],
+  items: readonly GraphBox[],
 ): GraphGeometry {
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
@@ -163,23 +158,16 @@ export function layoutColumn(
     width = Math.max(width, x + box.width + MARGIN);
     return placed;
   };
-  const turnInto = (parent: PlacedBox, child: PlacedBox): Point[] => {
-    const spine = parent.x + STUB;
-    const middle = child.y + Math.min(child.height / 2, 28);
-    return [
-      { x: spine, y: parent.y + parent.height },
-      { x: spine, y: middle },
-      { x: child.x, y: middle },
-    ];
-  };
   const top = place(root, MARGIN);
+  const spine = top.x + STUB;
   for (const item of items) {
-    const placed = place(item.box, MARGIN + INDENT);
-    routes.set(item.box.id, turnInto(top, placed));
-    if (item.child !== null) {
-      const child = place(item.child, MARGIN + INDENT * 2);
-      routes.set(item.child.id, turnInto(placed, child));
-    }
+    const placed = place(item, MARGIN + INDENT);
+    const middle = placed.y + Math.min(placed.height / 2, 28);
+    routes.set(item.id, [
+      { x: spine, y: top.y + top.height },
+      { x: spine, y: middle },
+      { x: placed.x, y: middle },
+    ]);
   }
   return { width, height: y - STACK_GAP + MARGIN, boxes, routes };
 }

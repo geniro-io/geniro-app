@@ -3,27 +3,21 @@ import { Injectable } from '@nestjs/common';
 
 import type { RunWire, ThreadContact } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
-import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import type { Task } from '../../tasks/entity/task.entity';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
 import {
-  COMMAND_CENTER_WINDOW_MS,
   type CommandCenterBoard,
   type CommandCenterCard,
-  type CommandCenterWindow,
-  STRIP_SPAN_MS,
+  CONTACT_LOOKBACK_MS,
 } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
-import { CommandCenterStripDao } from '../dao/command-center-strip.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
-import { foldThreadStrip } from '../utils/thread-strip-fold';
 
 const ACTIVITY_MAX = 140;
-
-type ManagerMail = { at: number; direction: 'out' | 'in' };
 
 /** The threads a board shows, read once, before anything is folded. */
 export interface ActiveThreads {
@@ -41,11 +35,19 @@ function activityOf(run: RunWire): string | null {
     : line;
 }
 
+function cardsByRun(tasks: readonly Task[]): Map<string, Task> {
+  return new Map(
+    tasks.flatMap((task) =>
+      task.runId === null ? [] : [[task.runId, task] as const],
+    ),
+  );
+}
+
 /**
- * The command center's board: every active thread — working, waiting on the
- * user, or with activity in the window — as a card with its column, its
- * timeline strip and its contact with the manager. Everything is folded here,
- * over every row in range, never in the renderer.
+ * The command center's board: every active thread — every chat and team run
+ * not archived and not finished, however long ago it last moved — as a card
+ * with its column and its contact with the manager. Everything is folded
+ * here, over every row, never in the renderer.
  */
 @Injectable()
 export class CommandCenterService {
@@ -54,11 +56,9 @@ export class CommandCenterService {
     private readonly runDao: RunDao,
     private readonly chats: ChatService,
     private readonly executor: TeamExecutorService,
-    private readonly approvals: ApprovalRegistry,
     private readonly inbox: ThreadInboxService,
     private readonly taskDao: TaskDao,
     private readonly roster: CommandCenterRosterDao,
-    private readonly strips: CommandCenterStripDao,
   ) {}
 
   /** The manager chat's run id, or null while there is none. */
@@ -68,43 +68,52 @@ export class CommandCenterService {
   }
 
   /**
-   * The threads active in `window`, or exactly `runIds` when given (still
-   * held to what the board shows: never an app-own chat, never the manager).
+   * Every active thread, or exactly `runIds` when given — still held to what
+   * the board shows: never an app-own chat, never the manager, never a thread
+   * that is archived or has finished.
    */
-  async activeThreads(
-    window: CommandCenterWindow,
-    runIds?: readonly string[],
-  ): Promise<ActiveThreads> {
-    const em = this.em.fork();
+  async activeThreads(runIds?: readonly string[]): Promise<ActiveThreads> {
     const managerRunId = await this.managerRunId();
-    const ids = runIds ?? [
-      ...new Set([
-        ...(await this.runDao.runIdsActiveIn(
-          { since: new Date(Date.now() - COMMAND_CENTER_WINDOW_MS[window]) },
-          em,
-        )),
-        ...(await this.runDao.runningIds(em)),
-        ...this.approvals.runIdsWithPending(),
-      ]),
-    ];
-    const scoped = ids.filter((id) => id !== managerRunId);
+    const page =
+      runIds === undefined
+        ? {}
+        : { runIds: runIds.filter((id) => id !== managerRunId) };
     const [chats, teams] = await Promise.all([
-      this.chats.listChats('active', { runIds: scoped }),
-      this.executor.listRuns('active', { runIds: scoped }),
+      this.chats.listChats('active', page),
+      this.executor.listRuns('active', page),
     ]);
-    return { managerRunId, runs: [...chats, ...teams] };
+    const runs = [...chats, ...teams].filter((run) => run.id !== managerRunId);
+    const taskOf = cardsByRun(
+      await this.taskDao.listByRunIds(
+        runs.map((run) => run.id),
+        this.em.fork(),
+      ),
+    );
+    return {
+      managerRunId,
+      runs: runs.filter(
+        (run) =>
+          boardColumnOf(run, taskOf.get(run.id)?.status ?? null) !== 'done',
+      ),
+    };
   }
 
-  async board(
-    window: CommandCenterWindow,
-    runIds?: readonly string[],
-  ): Promise<CommandCenterBoard> {
+  async board(runIds?: readonly string[]): Promise<CommandCenterBoard> {
     const now = Date.now();
-    const { managerRunId, runs } = await this.activeThreads(window, runIds);
+    const [{ managerRunId, runs }, manager, pendingStarts] = await Promise.all([
+      this.activeThreads(runIds),
+      this.chats.findCommandCenterChat(),
+      this.taskDao.listPendingStartRequests(this.em.fork()),
+    ]);
     return {
       generatedAt: new Date(now).toISOString(),
-      stripStart: new Date(now - STRIP_SPAN_MS).toISOString(),
-      managerRunId,
+      manager,
+      pendingStarts:
+        managerRunId === null
+          ? 0
+          : pendingStarts.filter(
+              (task) => task.startRequestedByRunId === managerRunId,
+            ).length,
       cards: await this.cardsOf(managerRunId, runs, now),
     };
   }
@@ -116,7 +125,6 @@ export class CommandCenterService {
     now: number,
   ): Promise<CommandCenterCard[]> {
     const em = this.em.fork();
-    const start = now - STRIP_SPAN_MS;
     const runIds = runs.map((run) => run.id);
     const [tasks, rosterRows, contacts, awaiting] = await Promise.all([
       this.taskDao.listByRunIds(runIds, em),
@@ -125,91 +133,56 @@ export class CommandCenterService {
         : this.roster.listOf(managerRunId, em),
       managerRunId === null
         ? Promise.resolve([] as ThreadContact[])
-        : this.inbox.contactsOf(managerRunId, new Date(start)),
+        : this.inbox.contactsOf(
+            managerRunId,
+            new Date(now - CONTACT_LOOKBACK_MS),
+          ),
       managerRunId === null
         ? Promise.resolve(new Set<string>())
         : this.inbox.awaitingRepliesFrom(managerRunId),
     ]);
-    const taskOf = new Map(
-      tasks.flatMap((task) =>
-        task.runId === null ? [] : [[task.runId, task] as const],
-      ),
-    );
+    const taskOf = cardsByRun(tasks);
     const onRoster = new Map(
       rosterRows
         .filter((row) => row.leftAt === null)
         .map((row) => [row.threadRunId, row]),
     );
-    const cards = await Promise.all(
-      runs.map(async (run): Promise<CommandCenterCard> => {
-        const mail = contacts.flatMap((contact): ManagerMail[] => {
-          if (contact.toRunId === run.id) {
-            return [{ at: contact.createdAt.getTime(), direction: 'out' }];
-          }
-          return contact.fromRunId === run.id
-            ? [{ at: contact.createdAt.getTime(), direction: 'in' }]
-            : [];
-        });
-        const entry = onRoster.get(run.id);
-        const lastMail = mail.at(-1)?.at ?? null;
-        const task = taskOf.get(run.id) ?? null;
-        return {
-          run,
-          task:
-            task === null
-              ? null
-              : {
-                  id: task.id,
-                  identifier: run.taskIdentifier,
-                  title: task.title,
-                  status: task.status,
-                },
-          handle: entry?.handle ?? null,
-          note: entry?.note ?? null,
-          column: boardColumnOf(run, task?.status ?? null),
-          activity: activityOf(run),
-          strip: await this.stripOf(run, start, now, mail, em),
-          contact: {
-            lastAt: lastMail === null ? null : new Date(lastMail).toISOString(),
-            awaitingReply: awaiting.has(run.id),
-          },
-        };
-      }),
-    );
+    const lastContact = new Map<string, number>();
+    for (const contact of contacts) {
+      const threadId =
+        contact.toRunId === managerRunId ? contact.fromRunId : contact.toRunId;
+      const at = contact.createdAt.getTime();
+      lastContact.set(threadId, Math.max(lastContact.get(threadId) ?? 0, at));
+    }
+    const cards = runs.map((run): CommandCenterCard => {
+      const entry = onRoster.get(run.id);
+      const lastMail = lastContact.get(run.id) ?? null;
+      const task = taskOf.get(run.id) ?? null;
+      return {
+        run,
+        task:
+          task === null
+            ? null
+            : {
+                id: task.id,
+                identifier: run.taskIdentifier,
+                title: task.title,
+                status: task.status,
+              },
+        handle: entry?.handle ?? null,
+        note: entry?.note ?? null,
+        column: boardColumnOf(run, task?.status ?? null),
+        activity: activityOf(run),
+        contact: {
+          lastAt: lastMail === null ? null : new Date(lastMail).toISOString(),
+          awaitingReply: awaiting.has(run.id),
+        },
+      };
+    });
     return cards.sort((a, b) =>
       (b.run.lastActivityAt ?? b.run.createdAt).localeCompare(
         a.run.lastActivityAt ?? a.run.createdAt,
       ),
     );
-  }
-
-  private async stripOf(
-    run: RunWire,
-    start: number,
-    now: number,
-    mail: readonly ManagerMail[],
-    em: EntityManager,
-  ): Promise<CommandCenterCard['strip']> {
-    const floor = await this.strips.lastSeqBefore(run.id, new Date(start), em);
-    const rows = await this.strips.stripRows(run.id, floor, em);
-    const pullRequests = await Promise.all(
-      run.pullRequests
-        .filter((pullRequest) => pullRequest.opened && pullRequest.seq > floor)
-        .map(async (pullRequest) => {
-          const at = await this.strips.timeAtSeq(run.id, pullRequest.seq, em);
-          return at === null
-            ? []
-            : [{ at: at.getTime(), label: `#${pullRequest.number}` }];
-        }),
-    );
-    return foldThreadStrip({
-      rows,
-      start,
-      now,
-      running: run.status === 'running',
-      awaiting: run.awaiting !== null,
-      pullRequests: pullRequests.flat(),
-      mail,
-    });
   }
 }

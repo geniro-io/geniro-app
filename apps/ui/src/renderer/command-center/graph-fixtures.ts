@@ -48,6 +48,17 @@ export function graphThreadsOf(count: number): GraphThread[] {
         project: index % 2 === 0 ? 'QA Billing' : 'QA Cache',
         agentLabel: index % 4 === 3 ? 'dev-team' : 'claude',
         isTeam: index % 4 === 3,
+        crew:
+          index % 4 === 3
+            ? {
+                people: [
+                  { key: 'lead', name: 'Nick Fury', avatar: null },
+                  { key: 'senior', name: 'Tony Stark', avatar: null },
+                  { key: 'qa', name: 'Thanos', avatar: null },
+                ],
+                total: 5,
+              }
+            : null,
         pullRequest:
           index % 3 === 0 ? { number: 400 + n, state: 'open' } : null,
         note: index === 1 ? 'waits for billing API v2' : null,

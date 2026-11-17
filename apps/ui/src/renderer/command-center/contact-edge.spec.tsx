@@ -151,6 +151,40 @@ describe('ContactEdgeLine travelling dot', () => {
     ).toBe('lit');
   });
 
+  it('streams dots out of the manager on a lit wire, back to it on an awaiting one, and only drifts an idle one', () => {
+    const flow = (): Element | null =>
+      container.querySelector('[data-slot="contact-flow"]');
+    draw({ state: 'lit' });
+    expect(flow()?.getAttribute('class')).toContain('cc-wire-flow');
+    expect(flow()?.getAttribute('class')).not.toContain('cc-wire-flow-back');
+    draw({ state: 'awaiting' });
+    expect(flow()?.getAttribute('class')).toContain('cc-wire-flow-back');
+    draw({ state: 'idle' });
+    expect(flow()).toBeNull();
+    expect(
+      container
+        .querySelector('[data-slot="contact-edge"] path')
+        ?.getAttribute('class'),
+    ).toContain('cc-wire-drift');
+  });
+
+  it('keeps every wire still under prefers-reduced-motion', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    draw({ state: 'lit' });
+    expect(container.querySelector('[data-slot="contact-flow"]')).toBeNull();
+    draw({ state: 'idle' });
+    expect(
+      container
+        .querySelector('[data-slot="contact-edge"] path')
+        ?.getAttribute('class'),
+    ).not.toContain('cc-wire-drift');
+  });
+
   it('does not draw a dot for a pulse older than the travel window', () => {
     draw({ pulses: [pulse('p1', before(PULSE_TRAVEL_MS))] });
     expect(dots()).toHaveLength(0);

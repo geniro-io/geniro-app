@@ -38,6 +38,7 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
     project: 'Geniro',
     agentLabel: 'claude',
     isTeam: false,
+    crew: null,
     pullRequest: null,
     note: null,
     lastMessage: null,
@@ -294,6 +295,46 @@ describe('ThreadCard — labels', () => {
       render({ idleDays: null }).querySelector(
         '[data-slot="thread-card-idle"]',
       ),
+    ).toBeNull();
+  });
+});
+
+describe('ThreadCard — motion and faces', () => {
+  it('breathes while the thread works, and in warning while it waits on the user', () => {
+    expect(
+      render({ attention: 'working' }).classList.contains('cc-breathe-success'),
+    ).toBe(true);
+    const asking = render({ attention: 'question', onAnswer: vi.fn() });
+    expect(asking.classList.contains('cc-breathe-warning')).toBe(true);
+    expect(asking.classList.contains('cc-breathe-success')).toBe(false);
+    expect(
+      render({ attention: 'quiet' }).className.includes('cc-breathe'),
+    ).toBe(false);
+  });
+
+  it('wears a team run’s member faces, and none for one agent', () => {
+    const team = render({
+      isTeam: true,
+      agentLabel: 'dev-team',
+      crew: {
+        people: [
+          { key: 'a', name: 'Nick Fury', avatar: null },
+          { key: 'b', name: 'Tony Stark', avatar: null },
+        ],
+        total: 6,
+      },
+    });
+    const crew = team.querySelector<HTMLElement>(
+      '[data-slot="thread-card-crew"]',
+    )!;
+
+    expect(crew.getAttribute('aria-label')).toBe('6 members');
+    expect(crew.querySelectorAll('[data-slot="avatar"]')).toHaveLength(2);
+    expect(
+      crew.querySelector('[data-slot="avatar-stack-rest"]')!.textContent,
+    ).toBe('+4');
+    expect(
+      render({ crew: null }).querySelector('[data-slot="thread-card-crew"]'),
     ).toBeNull();
   });
 });

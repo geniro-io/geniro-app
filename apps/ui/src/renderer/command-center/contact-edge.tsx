@@ -3,6 +3,7 @@ import { cva } from 'class-variance-authority';
 import { useEffect, useState } from 'react';
 
 import { type Point, roundedPath } from '../components/stage-graph-layout';
+import { cn } from '../components/ui/utils';
 
 export const CONTACT_LIT_MS = 5 * 60 * 1000;
 export const PULSE_TRAVEL_MS = 1200;
@@ -66,10 +67,22 @@ const edgeVariants = cva(
   {
     variants: {
       state: {
-        lit: 'stroke-foreground/70 opacity-100',
-        awaiting: 'stroke-warning opacity-100',
+        lit: 'stroke-foreground/35 opacity-100',
+        awaiting: 'stroke-warning/45 opacity-100',
         idle: 'stroke-border-strong opacity-60',
       } satisfies Record<EdgeState, string>,
+    },
+  },
+);
+
+const flowVariants = cva(
+  'fill-none transition-[d] duration-300 ease-out motion-reduce:transition-none',
+  {
+    variants: {
+      state: {
+        lit: 'cc-wire-flow stroke-foreground/80',
+        awaiting: 'cc-wire-flow-back stroke-warning',
+      },
     },
   },
 );
@@ -136,11 +149,25 @@ export function ContactEdgeLine({
         aria-hidden="true"
         d={path}
         style={pathStyle(path)}
-        className={edgeVariants({ state })}
+        className={cn(
+          edgeVariants({ state }),
+          state === 'idle' && !reducedMotion && 'cc-wire-drift',
+        )}
         strokeWidth={state === 'idle' ? 1.25 : 2}
         strokeDasharray={state === 'idle' ? '4 4' : undefined}
         strokeLinecap="round"
       />
+      {state === 'idle' || reducedMotion ? null : (
+        <path
+          aria-hidden="true"
+          data-slot="contact-flow"
+          d={path}
+          style={pathStyle(path)}
+          className={flowVariants({ state })}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
+      )}
       {travelling.map((pulse) => (
         <TravelDot
           key={pulse.id}

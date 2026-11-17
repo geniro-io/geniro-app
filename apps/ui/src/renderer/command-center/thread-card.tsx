@@ -17,6 +17,7 @@ import {
 
 import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
+import { type AvatarPerson, AvatarStack } from '../components/member-avatar';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
@@ -48,6 +49,8 @@ export interface ThreadCardProps {
   /** The agent's short name, or the team's name for a team run. */
   agentLabel: string | null;
   isTeam: boolean;
+  /** A team run's members, for the faces on its card; null for one agent. */
+  crew: { people: readonly AvatarPerson[]; total: number } | null;
   pullRequest: { number: number; state: ThreadCardPullRequestState } | null;
   note: string | null;
   /** The thread's latest message, as the thread list previews it. */
@@ -353,6 +356,7 @@ export function ThreadCard({
   project,
   agentLabel,
   isTeam,
+  crew,
   pullRequest,
   note,
   lastMessage,
@@ -375,7 +379,11 @@ export function ThreadCard({
       data-slot="thread-card"
       data-status={status}
       data-attention={attention}
-      className={cardVariants({ attention })}
+      className={cn(
+        cardVariants({ attention }),
+        attention === 'working' && 'cc-breathe-success',
+        onAnswer !== undefined && 'cc-breathe-warning',
+      )}
       style={{
         width: THREAD_CARD_WIDTH,
         height: Math.max(ownHeight, height ?? 0),
@@ -390,6 +398,20 @@ export function ThreadCard({
           className="min-w-0 flex-1 truncate text-sm font-semibold">
           {title}
         </span>
+        {crew === null || crew.people.length === 0 ? null : (
+          <span
+            data-slot="thread-card-crew"
+            aria-label={`${crew.total} members`}
+            className="shrink-0">
+            <AvatarStack
+              size={20}
+              max={4}
+              total={crew.total}
+              people={crew.people}
+              ringClassName="ring-card"
+            />
+          </span>
+        )}
         {pullRequest === null ? null : (
           <PullRequestChip
             number={pullRequest.number}

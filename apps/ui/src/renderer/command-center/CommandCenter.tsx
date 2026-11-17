@@ -35,7 +35,7 @@ import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
-import { threadCardViewOf } from './card-view';
+import { type TeamFace, teamFacesOf, threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
 import { NeedsYouPanel } from './needs-you-panel';
 import { TimelinePanel } from './timeline-panel';
@@ -156,7 +156,7 @@ export function CommandCenter({
     maxWidth: maxGraphHeight(),
     handleEdge: 'bottom',
   });
-  const [teamNames, setTeamNames] = useState<ReadonlyMap<string, string>>(
+  const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
   useEffect(() => {
@@ -165,7 +165,7 @@ export function CommandCenter({
       .listTeams()
       .then((teams) => {
         if (live) {
-          setTeamNames(new Map(teams.map((team) => [team.slug, team.name])));
+          setTeamFaces(teamFacesOf(teams));
         }
       })
       .catch(() => undefined);
@@ -246,7 +246,7 @@ export function CommandCenter({
       card,
       rowPullRequestOf(card.run, pullRequests.byKey),
       identities,
-      teamNames,
+      teamFaces,
       now,
     );
 
@@ -527,28 +527,19 @@ export function CommandCenter({
               'flex min-h-0 flex-col border-l border-border bg-card',
               narrow ? 'absolute inset-0 z-30' : 'w-[400px] shrink-0',
             )}>
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-              <SegmentedControl
-                ariaLabel="Sidebar"
-                size="sm"
-                options={[
-                  {
-                    id: 'needs' as const,
-                    label:
-                      needsCount === 0
-                        ? 'Needs you'
-                        : `Needs you · ${needsCount}`,
-                  },
-                  { id: 'timeline' as const, label: 'Timeline' },
-                ]}
-                value={sidebar}
-                onSelect={setSidebar}
-              />
+            <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
+              <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                {sidebar === 'needs'
+                  ? needsCount === 0
+                    ? 'Needs you'
+                    : `Needs you · ${needsCount}`
+                  : 'Timeline'}
+              </h2>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="ml-auto size-7"
+                className="size-7"
                 aria-label="Close the sidebar"
                 title="Close"
                 onClick={() => setSidebar(null)}>

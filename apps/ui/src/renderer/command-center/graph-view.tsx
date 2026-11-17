@@ -243,7 +243,10 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
         data-slot="graph-manager"
         data-started={started}
         aria-label={`Manager, ${state}: ${threads} threads, ${working} working, ${awaiting} awaiting a reply, ${pendingStarts} waiting to start`}
-        className="flex size-full flex-col gap-2.5 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card px-3 py-2.5 text-left shadow-md">
+        className={cn(
+          'flex size-full flex-col gap-2.5 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card px-3 py-2.5 text-left shadow-md',
+          started && manager.working && 'cc-breathe-primary',
+        )}>
         <span className="flex min-w-0 items-center gap-3">
           <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
             <RadioTower aria-hidden="true" className="size-4.5" />
@@ -313,7 +316,10 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
   const { open, answer } = useContext(GraphActionsContext);
   const { thread, summary, asking } = data;
   return (
-    <div data-slot="graph-thread" data-thread-id={thread.id}>
+    <div
+      data-slot="graph-thread"
+      data-thread-id={thread.id}
+      className="cc-node-in">
       <WireEnds />
       <ThreadCard
         {...thread.view}

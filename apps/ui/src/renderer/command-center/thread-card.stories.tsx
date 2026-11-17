@@ -13,6 +13,7 @@ const meta = {
     project: 'Geniro',
     agentLabel: 'claude',
     isTeam: false,
+    crew: null,
     pullRequest: null,
     note: null,
     lastMessage:
@@ -81,6 +82,19 @@ export const Team: Story = {
   args: {
     agentLabel: 'dev-team',
     isTeam: true,
+    crew: {
+      people: [
+        {
+          key: 'lead',
+          name: 'Nick Fury',
+          avatar: { kind: 'emoji', value: '🛰️' },
+        },
+        { key: 'senior', name: 'Tony Stark', avatar: null },
+        { key: 'middle', name: 'Peter Parker', avatar: null },
+        { key: 'qa', name: 'Thanos', avatar: null },
+      ],
+      total: 6,
+    },
     attention: 'quiet',
     status: 'idle',
   },

@@ -40,7 +40,7 @@ const meta = {
     now: FIXTURE_NOW,
     narrow: false,
     onOpen: () => {},
-    askingIds: new Set(['thread-2']),
+    asking: new Map([['thread-2', 'question' as const]]),
     onAnswer: () => {},
     className: 'h-full',
   },

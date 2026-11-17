@@ -11,6 +11,7 @@ import {
   MessageCircleQuestion,
   MessageSquareText,
   Moon,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
 
@@ -64,6 +65,8 @@ export interface ThreadCardProps {
   onGo: () => void;
   /** Open the thread's waiting question or approval in the command center; absent when it holds none. */
   onAnswer?: () => void;
+  /** What the thread holds for the user, which names that button. */
+  answerKind?: 'question' | 'approval' | null;
 }
 
 export const THREAD_CARD_WIDTH = 272;
@@ -305,7 +308,7 @@ function LabelChip({
       title={title}
       className={cn(
         'gap-1 px-1.5 py-0 font-normal',
-        yields ? 'min-w-0 shrink' : 'max-w-28 shrink-0',
+        yields ? 'min-w-14 shrink' : 'max-w-28 shrink-0',
       )}>
       <Icon aria-hidden="true" className="size-3 shrink-0" />
       <span className="truncate">{text}</span>
@@ -361,6 +364,7 @@ export function ThreadCard({
   height,
   onGo,
   onAnswer,
+  answerKind = null,
 }: ThreadCardProps): React.JSX.Element {
   const preview = previewLine(lastMessage);
   const lines = previewLines(lastMessage);
@@ -445,7 +449,7 @@ export function ThreadCard({
         <span
           data-slot="thread-card-time"
           title={formatDateTime(lastAt)}
-          className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground tabular-nums">
+          className="flex min-w-0 shrink-0 items-center gap-1 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
           {idleDays === null ? null : (
             <Moon
               aria-label={`Nobody has touched this thread for ${idleDays} days`}
@@ -463,8 +467,15 @@ export function ThreadCard({
               data-slot="thread-card-answer"
               className="h-6 gap-1 rounded-full px-2.5 text-xs"
               onClick={onAnswer}>
-              <MessageCircleQuestion aria-hidden="true" className="size-3.5" />
-              Answer
+              {answerKind === 'approval' ? (
+                <ShieldCheck aria-hidden="true" className="size-3.5" />
+              ) : (
+                <MessageCircleQuestion
+                  aria-hidden="true"
+                  className="size-3.5"
+                />
+              )}
+              {answerKind === 'approval' ? 'Review' : 'Answer'}
             </Button>
           )}
           <GoToThreadButton onGo={onGo} />

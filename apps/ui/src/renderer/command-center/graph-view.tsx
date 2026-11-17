@@ -87,8 +87,8 @@ export interface GraphViewProps {
   /** One column for a narrow screen, scrolled rather than panned. */
   narrow: boolean;
   onOpen: (threadId: string) => void;
-  /** Threads holding a question or approval the user can answer here. */
-  askingIds: ReadonlySet<string>;
+  /** Threads holding a question or an approval the user can answer here, by what they hold. */
+  asking: ReadonlyMap<string, 'question' | 'approval'>;
   onAnswer: (threadId: string) => void;
   className?: string;
 }
@@ -133,7 +133,7 @@ interface ManagerNodeData extends Record<string, unknown> {
 interface ThreadNodeData extends Record<string, unknown> {
   thread: GraphThread;
   summary: string;
-  asking: boolean;
+  asking: 'question' | 'approval' | null;
 }
 
 interface MoreNodeData extends Record<string, unknown> {
@@ -319,7 +319,8 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
         {...thread.view}
         summary={summary}
         onGo={() => open(thread.id)}
-        onAnswer={asking ? () => answer(thread.id) : undefined}
+        answerKind={asking}
+        onAnswer={asking === null ? undefined : () => answer(thread.id)}
       />
     </div>
   );
@@ -490,6 +491,26 @@ export function widthFit(
   };
 }
 
+/** The view that shows the WHOLE graph in the canvas, centred, never zoomed past 1 — the Fit button's. */
+export function wholeFit(
+  graph: { width: number; height: number },
+  canvas: { width: number; height: number },
+): { x: number; y: number; zoom: number } {
+  const zoom = Math.max(
+    MIN_ZOOM,
+    Math.min(
+      1,
+      (canvas.width - FIT_MARGIN * 2) / Math.max(1, graph.width),
+      (canvas.height - FIT_MARGIN * 2) / Math.max(1, graph.height),
+    ),
+  );
+  return {
+    x: Math.max(FIT_MARGIN, (canvas.width - graph.width * zoom) / 2),
+    y: Math.max(FIT_MARGIN, (canvas.height - graph.height * zoom) / 2),
+    zoom,
+  };
+}
+
 function useElementSize(): [
   (el: HTMLDivElement | null) => void,
   { width: number; height: number },
@@ -573,7 +594,7 @@ function GraphCanvas({
   now,
   narrow,
   onOpen,
-  askingIds,
+  asking,
   onAnswer,
   className,
 }: GraphViewProps): React.JSX.Element {
@@ -673,7 +694,7 @@ function GraphCanvas({
       type: 'thread',
       data: {
         thread,
-        asking: askingIds.has(thread.id),
+        asking: asking.get(thread.id) ?? null,
         summary: summaryOf(
           thread.view,
           entry.state,
@@ -795,7 +816,13 @@ function GraphCanvas({
                   zoomOnPinch
                   zoomOnDoubleClick={false}
                 />
-                <ZoomControls onFit={() => fit(true)} />
+                <ZoomControls
+                  onFit={() =>
+                    void flow.setViewport(wholeFit(drawn, size), {
+                      duration: reduced ? 0 : FIT_MS,
+                    })
+                  }
+                />
               </>
             )}
           </div>

@@ -45,6 +45,32 @@ export interface OpenRequestsState {
   ) => void;
 }
 
+function firstQuestion(payload: unknown): string | null {
+  const questions = (payload as { questions?: unknown } | null)?.questions;
+  const first: unknown = Array.isArray(questions) ? questions[0] : null;
+  const text = (first as { question?: unknown } | null)?.question;
+  return typeof text === 'string' && text.trim() !== '' ? text.trim() : null;
+}
+
+/** Whether the card asks the user something, or holds a tool call for a yes or a no. */
+export function askKindOf(request: OpenRequest): 'question' | 'approval' {
+  return firstQuestion(request.item.payload) === null ? 'approval' : 'question';
+}
+
+/** What the thread's card says it waits on: the question it asks, or the call it wants to make. */
+export function askLineOf(request: OpenRequest): string {
+  const question = firstQuestion(request.item.payload);
+  if (question !== null) {
+    return `Asks: ${question}`;
+  }
+  const tool = payloadString(request.item.payload, 'toolName') ?? 'a tool';
+  const input = (request.item.payload as { input?: unknown } | null)?.input;
+  const command = (input as { command?: unknown } | null)?.command;
+  return typeof command === 'string' && command.trim() !== ''
+    ? `Wants to run: ${command.trim()}`
+    : `Wants to use ${tool}`;
+}
+
 /** What makes the open cards worth reading again: which threads wait, on what, as of when. */
 export function askingKey(threads: readonly AskingThread[]): string {
   return threads

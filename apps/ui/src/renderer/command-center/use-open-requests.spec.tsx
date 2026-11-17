@@ -8,6 +8,8 @@ import type { DaemonClient } from '../daemon-client';
 import {
   askingKey,
   type AskingThread,
+  askKindOf,
+  askLineOf,
   type OpenRequestsState,
   useOpenRequests,
 } from './use-open-requests';
@@ -185,5 +187,37 @@ describe('useOpenRequests', () => {
       runId: 'run-2',
       sendMessageDto: { text: '', images },
     });
+  });
+});
+
+describe('askLineOf and askKindOf', () => {
+  const requestWith = (payload: Record<string, unknown>) => ({
+    runId: 'run-1',
+    title: 'Long worker',
+    isTeam: false,
+    requestId: 'req-1',
+    item: { payload } as never,
+  });
+
+  it('names the question a thread asks', () => {
+    const request = requestWith({
+      toolName: 'AskUserQuestion',
+      questions: [{ question: 'Which colour do you want?', options: [] }],
+    });
+
+    expect(askKindOf(request)).toBe('question');
+    expect(askLineOf(request)).toBe('Asks: Which colour do you want?');
+  });
+
+  it('names the command an approval holds, else the tool', () => {
+    const bash = requestWith({
+      toolName: 'Bash',
+      input: { command: 'ls -la' },
+    });
+    const edit = requestWith({ toolName: 'Edit', input: { file_path: 'a' } });
+
+    expect(askKindOf(bash)).toBe('approval');
+    expect(askLineOf(bash)).toBe('Wants to run: ls -la');
+    expect(askLineOf(edit)).toBe('Wants to use Edit');
   });
 });

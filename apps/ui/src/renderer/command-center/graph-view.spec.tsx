@@ -20,6 +20,7 @@ import {
   GraphView,
   MAX_THREAD_NODES,
   shownThreads,
+  wholeFit,
   widthFit,
 } from './graph-view';
 
@@ -43,6 +44,17 @@ const settle = async (): Promise<void> => {
     });
   }
 };
+
+describe('wholeFit', () => {
+  it('fits the whole graph, the taller side deciding, centred, never past 1', () => {
+    expect(
+      wholeFit({ width: 800, height: 1200 }, { width: 1000, height: 632 }),
+    ).toEqual({ x: 300, y: 16, zoom: 0.5 });
+    expect(
+      wholeFit({ width: 400, height: 300 }, { width: 1000, height: 632 }),
+    ).toEqual({ x: 300, y: 166, zoom: 1 });
+  });
+});
 
 describe('widthFit', () => {
   it('shrinks a wide graph to the canvas width, from the top, never under the minimum zoom', () => {
@@ -109,7 +121,7 @@ describe('GraphView', () => {
           now={FIXTURE_NOW}
           narrow={false}
           onOpen={() => undefined}
-          askingIds={new Set<string>()}
+          asking={new Map()}
           onAnswer={() => undefined}
           {...overrides}
         />,
@@ -294,7 +306,7 @@ describe('GraphView', () => {
     const onOpen = vi.fn();
     await draw({
       threads: graphThreadsOf(3),
-      askingIds: new Set(['thread-2']),
+      asking: new Map([['thread-2', 'approval' as const]]),
       onAnswer,
       onOpen,
     });
@@ -302,6 +314,10 @@ describe('GraphView', () => {
     expect(
       threadCard('thread-1').querySelector('[data-slot="thread-card-answer"]'),
     ).toBeNull();
+    expect(
+      threadCard('thread-2').querySelector('[data-slot="thread-card-answer"]')!
+        .textContent,
+    ).toBe('Review');
     act(() =>
       threadCard('thread-2')
         .querySelector<HTMLButtonElement>('[data-slot="thread-card-answer"]')!

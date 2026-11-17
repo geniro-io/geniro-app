@@ -41,7 +41,13 @@ import { NeedsYouPanel } from './needs-you-panel';
 import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
 import { useCommandCenterTimeline } from './use-command-center-timeline';
-import { type AskingThread, useOpenRequests } from './use-open-requests';
+import {
+  type AskingThread,
+  askKindOf,
+  askLineOf,
+  type OpenRequest,
+  useOpenRequests,
+} from './use-open-requests';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
@@ -58,11 +64,22 @@ const VIEW_KEY = 'commandCenter.view';
 
 type SidebarTab = 'needs' | 'timeline';
 
+/** The room the chat keeps under the graph in the split: its header, a few lines and the composer. */
+const CHAT_MIN_HEIGHT = 320;
+const PAGE_CHROME_HEIGHT = 96;
+
+/** The tallest the graph may grow in the split, so the chat's composer never leaves the window. */
+function maxGraphHeight(): number {
+  return typeof window === 'undefined'
+    ? 1600
+    : Math.max(240, window.innerHeight - PAGE_CHROME_HEIGHT - CHAT_MIN_HEIGHT);
+}
+
 /** The graph's height in the split before the viewer drags it: about half of the page under the header. */
 function defaultGraphHeight(): number {
   return typeof window === 'undefined'
     ? 420
-    : Math.max(240, Math.round((window.innerHeight - 96) / 2));
+    : Math.max(240, Math.round((window.innerHeight - PAGE_CHROME_HEIGHT) / 2));
 }
 const VIEWS: readonly CommandCenterView[] = ['chat', 'both', 'graph'];
 
@@ -136,7 +153,7 @@ export function CommandCenter({
     storageKey: 'commandCenter.graphHeight',
     defaultWidth: defaultGraphHeight(),
     minWidth: 200,
-    maxWidth: 1600,
+    maxWidth: maxGraphHeight(),
     handleEdge: 'bottom',
   });
   const [teamNames, setTeamNames] = useState<ReadonlyMap<string, string>>(
@@ -186,9 +203,21 @@ export function CommandCenter({
     [board.cards],
   );
   const openRequests = useOpenRequests(apis, client, asking);
-  const askingIds = useMemo(
-    () => new Set(openRequests.requests.map((request) => request.runId)),
-    [openRequests.requests],
+  const askingByRun = useMemo(() => {
+    const byRun = new Map<string, OpenRequest>();
+    for (const request of openRequests.requests) {
+      if (!byRun.has(request.runId)) {
+        byRun.set(request.runId, request);
+      }
+    }
+    return byRun;
+  }, [openRequests.requests]);
+  const askingKinds = useMemo(
+    () =>
+      new Map(
+        [...askingByRun].map(([runId, request]) => [runId, askKindOf(request)]),
+      ),
+    [askingByRun],
   );
   const toggleSidebar = (tab: SidebarTab): void =>
     setSidebar((open) => (open === tab ? null : tab));
@@ -239,11 +268,15 @@ export function CommandCenter({
       : [],
   );
 
-  const graphThreads = shown.map((card) => ({
-    id: card.run.id,
-    createdAt: card.run.createdAt,
-    view: viewOf(card),
-  }));
+  const graphThreads = shown.map((card) => {
+    const view = viewOf(card);
+    const ask = askingByRun.get(card.run.id);
+    return {
+      id: card.run.id,
+      createdAt: card.run.createdAt,
+      view: ask === undefined ? view : { ...view, lastMessage: askLineOf(ask) },
+    };
+  });
   const contacts = Object.fromEntries(
     shown.map((card) => [
       card.run.id,
@@ -319,7 +352,7 @@ export function CommandCenter({
             now={now}
             narrow={narrow}
             onOpen={onOpenThread}
-            askingIds={askingIds}
+            asking={askingKinds}
             onAnswer={answerFrom}
           />
         </Suspense>

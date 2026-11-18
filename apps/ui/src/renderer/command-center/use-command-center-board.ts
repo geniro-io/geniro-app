@@ -36,8 +36,8 @@ function byActivity(a: CommandCenterCard, b: CommandCenterCard): number {
  * after a reconnect and every {@link FULL_REFRESH_MS}; on
  * `command_center_changed` only the named cards are read again, and a named
  * card the daemon no longer answers for has left the board. While `active` is
- * false nothing is read: each of those moments only marks the board stale, and
- * the whole board is read again once the page is shown.
+ * false nothing is read, and the whole board is read once each time the page
+ * is shown again: not every change to a card is announced (a rename is not).
  */
 export function useCommandCenterBoard(
   apis: DaemonApis | null,
@@ -113,8 +113,6 @@ export function useCommandCenterBoard(
   const reload = useLatestCallback(() => {
     if (active) {
       readWhole();
-    } else {
-      stale.current = true;
     }
   }, [readWhole]);
 
@@ -122,15 +120,15 @@ export function useCommandCenterBoard(
     (runIds: readonly string[]) => {
       if (active) {
         rereadSome(runIds);
-      } else {
-        stale.current = true;
       }
     },
     [rereadSome],
   );
 
   useEffect(() => {
-    if (active && stale.current) {
+    if (!active) {
+      stale.current = true;
+    } else if (stale.current) {
       readWhole();
     }
   }, [active, readWhole]);

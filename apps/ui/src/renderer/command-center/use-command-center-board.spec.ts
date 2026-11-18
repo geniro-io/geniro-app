@@ -109,6 +109,16 @@ describe('useCommandCenterBoard', () => {
     expect(readCommandCenterBoard.mock.calls).toEqual([[{}]]);
   });
 
+  it('reads the whole board again on every return, even when nothing was announced while hidden', async () => {
+    const { apis, client, readCommandCenterBoard } = fakes();
+
+    await render({ apis, client, active: true });
+    await render({ apis, client, active: false });
+    await render({ apis, client, active: true });
+
+    expect(readCommandCenterBoard.mock.calls).toEqual([[{}], [{}]]);
+  });
+
   it('re-reads only the named cards while shown', async () => {
     const { apis, client, readCommandCenterBoard, announce } = fakes();
 

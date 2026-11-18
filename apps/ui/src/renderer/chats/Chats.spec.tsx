@@ -19,7 +19,6 @@ import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
 import type {
   ItemDto as ChatItem,
-  LessonSegment,
   ProjectDto,
   RunDto as ChatRun,
   RunGroupDto,
@@ -180,7 +179,6 @@ const lessonsApi = vi.hoisted(() => ({
   reflectLessons: vi.fn(),
   estimateLessons: vi.fn(),
   listLessonSegments: vi.fn(),
-  skipLessonSegment: vi.fn(),
   getLessonsSpend: vi.fn(),
 }));
 
@@ -908,11 +906,11 @@ beforeEach(() => {
     },
     check: null,
     signals: 0,
+    lessonsOn: true,
     fromSeq: 0,
     toSeq: 0,
   });
   lessonsApi.listLessonSegments.mockReset().mockResolvedValue({ segments: [] });
-  lessonsApi.skipLessonSegment.mockReset().mockResolvedValue(undefined);
   lessonsApi.getLessonsSpend.mockReset().mockResolvedValue({ todayUsd: 0 });
   lessonsApi.reflectLessons.mockReset().mockResolvedValue({
     reflectionRunId: 'refl-1',
@@ -13363,51 +13361,55 @@ describe('Chats sidebar list', () => {
     ).toBeUndefined();
   });
 
-  describe('the lessons offered when a chat is archived', () => {
-    const QUEUED: LessonSegment = {
-      id: 'seg-1',
-      runId: 'r1',
-      sourceTitle: 'My chat',
-      fromSeq: 0,
-      toSeq: 12,
-      closedBy: 'archive',
-      closedAt: 'then',
-      signals: [{ kind: 'user_correction', seq: 3 }],
-      status: 'queued',
-      reflectionRunId: null,
-      checkRunId: null,
-      failReason: null,
+  describe('the lessons box in the archive dialog', () => {
+    const WITH_SIGNALS = {
       estimate: {
-        agentKind: 'claude',
+        agentKind: 'claude' as const,
         model: 'claude-haiku-5-5',
         tokens: 1200,
         usd: 0.5,
       },
-      checkEstimate: null,
+      check: null,
+      signals: 2,
+      lessonsOn: true,
+      fromSeq: 1,
+      toSeq: 40,
     };
 
-    /** Archive the open chat, then let the daemon's answer reach the screen. */
-    async function archiveThread(): Promise<{
-      container: HTMLElement;
-      fireLessonsChanged: (runId: string | null) => void;
-    }> {
+    async function openArchiveDialog(
+      label = 'Archive My chat',
+    ): Promise<HTMLElement> {
       api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
-      const { client, fireLessonsChanged } = makeClient();
+      const { client } = makeClient();
       const container = await mount(client);
-      await archiveRow(container);
-      for (let turn = 0; turn < 5; turn += 1) {
-        await act(async () => {});
-      }
-      return { container, fireLessonsChanged };
+      await act(async () => {
+        rowAction(container, label)!.dispatchEvent(
+          new MouseEvent('click', { bubbles: true }),
+        );
+      });
+      return container;
     }
 
-    function noticeOf(container: HTMLElement): Element | null {
-      return container.querySelector('[data-slot="action-notice"]');
+    function boxOf(container: HTMLElement): HTMLInputElement | null {
+      return container.querySelector<HTMLInputElement>(
+        '[role="dialog"] input[type="checkbox"]',
+      );
     }
 
-    it('shows the notice for the stretch the archive queued, with the model’s menu name and price on one line and today’s spend in its tooltip', async () => {
-      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [QUEUED] });
-      lessonsApi.getLessonsSpend.mockResolvedValue({ todayUsd: 0.12 });
+    async function press(container: HTMLElement, label: string) {
+      await act(async () => {
+        [
+          ...container.querySelectorAll<HTMLButtonElement>(
+            '[role="dialog"] button',
+          ),
+        ]
+          .find((b) => b.textContent === label)!
+          .click();
+      });
+    }
+
+    it('offers the box ticked when lessons are on for the thread, names the model and price, and asks the daemon to reflect', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue(WITH_SIGNALS);
       agentsApi.listAgentModels.mockResolvedValue([
         {
           id: 'haiku',
@@ -13416,116 +13418,104 @@ describe('Chats sidebar list', () => {
           source: 'cli',
         },
       ]);
+      const container = await openArchiveDialog();
 
-      const { container } = await archiveThread();
+      expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
+      expect(boxOf(container)!.checked).toBe(true);
+      expect(container.querySelector('[role="dialog"]')!.textContent).toContain(
+        'Extract lessons · Haiku 5.5 · ≈$0.50',
+      );
 
-      expect(lessonsApi.listLessonSegments).toHaveBeenCalledWith({
+      await press(container, 'Archive');
+
+      expect(api.archiveChat).toHaveBeenCalledWith({
         runId: 'r1',
-        status: 'queued',
+        lessons: 'reflect',
       });
-      const notice = noticeOf(container)!;
-      expect(notice.textContent).toContain('Learning from “My chat”');
-      const detail = notice.querySelector(
-        '[data-slot="action-notice-detail"]',
-      )!;
-      expect(detail.textContent).toBe('Haiku 5.5 · ≈$0.50');
-      expect(detail.getAttribute('title')).toBe(
-        'Haiku 5.5 · ≈$0.50 · $0.12 spent on lessons today',
+    });
+
+    it('tells the daemon to skip the lessons when the box is unticked', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue(WITH_SIGNALS);
+      const container = await openArchiveDialog();
+
+      await act(async () => {
+        boxOf(container)!.click();
+      });
+      await press(container, 'Archive');
+
+      expect(api.archiveChat).toHaveBeenCalledWith({
+        runId: 'r1',
+        lessons: 'skip',
+      });
+    });
+
+    it('starts unticked when lessons are off for the thread, and reflects once when ticked', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue({
+        ...WITH_SIGNALS,
+        lessonsOn: false,
+      });
+      const container = await openArchiveDialog();
+      expect(boxOf(container)!.checked).toBe(false);
+
+      await act(async () => {
+        boxOf(container)!.click();
+      });
+      await press(container, 'Archive');
+
+      expect(api.archiveChat).toHaveBeenCalledWith({
+        runId: 'r1',
+        lessons: 'reflect',
+      });
+    });
+
+    it('adds the price of the check when the daemon will check what it finds', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue({
+        ...WITH_SIGNALS,
+        estimate: { ...WITH_SIGNALS.estimate, usd: 0.02 },
+        check: {
+          agentKind: 'claude',
+          model: 'claude-opus-5-5',
+          tokens: 9000,
+          usd: 0.27,
+        },
+      });
+      const container = await openArchiveDialog();
+
+      expect(container.querySelector('[role="dialog"]')!.textContent).toContain(
+        'Extract lessons · claude-haiku-5-5 · ≈$0.02 · check ≈$0.27 if a lesson is found',
       );
     });
 
-    it('adds the check’s price when the stretch will be checked', async () => {
-      lessonsApi.listLessonSegments.mockResolvedValue({
-        segments: [
-          {
-            ...QUEUED,
-            checkEstimate: {
-              agentKind: 'claude',
-              model: 'claude-opus-5-5',
-              tokens: 900,
-              usd: 0.27,
-            },
-          },
-        ],
+    it('shows no box and leaves the choice to the settings when the thread has nothing to learn from', async () => {
+      const container = await openArchiveDialog();
+      expect(boxOf(container)).toBeNull();
+
+      await press(container, 'Archive');
+
+      expect(api.archiveChat).toHaveBeenCalledTimes(1);
+      expect(api.archiveChat.mock.calls[0]![0]).toEqual({
+        runId: 'r1',
+        lessons: undefined,
       });
-
-      const { container } = await archiveThread();
-
-      const detail = noticeOf(container)!.querySelector(
-        '[data-slot="action-notice-detail"]',
-      )!;
-      expect(detail.textContent).toBe(
-        'claude-haiku-5-5 · ≈$0.50 + check ≈$0.27',
-      );
-      expect(detail.getAttribute('title')).toContain(
-        'check ≈$0.27 if a lesson is found',
-      );
     });
 
-    it('shows nothing when the archive queued no stretch', async () => {
-      const { container } = await archiveThread();
-
-      expect(lessonsApi.listLessonSegments).toHaveBeenCalled();
-      expect(noticeOf(container)).toBeNull();
-    });
-
-    it('waits for the daemon to announce the queued stretch, and shows the notice then', async () => {
-      lessonsApi.listLessonSegments
-        .mockResolvedValueOnce({ segments: [] })
-        .mockResolvedValue({ segments: [QUEUED] });
-      const { container, fireLessonsChanged } = await archiveThread();
-      expect(noticeOf(container)).toBeNull();
+    it('goes back to the thread’s default when the dialog is reopened after a cancel', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue(WITH_SIGNALS);
+      const container = await openArchiveDialog();
+      await act(async () => {
+        boxOf(container)!.click();
+      });
+      expect(boxOf(container)!.checked).toBe(false);
+      await press(container, 'Cancel');
 
       await act(async () => {
-        fireLessonsChanged('other-run');
-      });
-      expect(noticeOf(container)).toBeNull();
-
-      await act(async () => {
-        fireLessonsChanged('r1');
-      });
-      expect(noticeOf(container)?.textContent).toContain('Learning from');
-    });
-
-    it('skips the stretch the notice names, and calls the daemon for nothing else', async () => {
-      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [QUEUED] });
-      const { container } = await archiveThread();
-
-      await act(async () => {
-        container
-          .querySelector<HTMLButtonElement>(
-            '[data-slot="action-notice"] button:not([aria-label="Dismiss"])',
-          )!
-          .click();
+        rowAction(container, 'Archive My chat')!.dispatchEvent(
+          new MouseEvent('click', { bubbles: true }),
+        );
       });
 
-      expect(lessonsApi.skipLessonSegment).toHaveBeenCalledWith({
-        segmentId: 'seg-1',
-      });
-      expect(lessonsApi.reflectLessons).not.toHaveBeenCalled();
-      expect(noticeOf(container)).toBeNull();
-    });
-
-    it('closes the notice quietly when the stretch had already started', async () => {
-      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [QUEUED] });
-      lessonsApi.skipLessonSegment.mockRejectedValue(
-        new Error(
-          'daemon POST /v1/lessons/segments/seg-1/skip failed (409): LESSON_SEGMENT_DECIDED',
-        ),
-      );
-      const { container } = await archiveThread();
-
-      await act(async () => {
-        container
-          .querySelector<HTMLButtonElement>(
-            '[data-slot="action-notice"] button:not([aria-label="Dismiss"])',
-          )!
-          .click();
-      });
-      await act(async () => {});
-
-      expect(noticeOf(container)).toBeNull();
-      expect(container.textContent).not.toContain('LESSON_SEGMENT_DECIDED');
+      expect(boxOf(container)!.checked).toBe(true);
+      expect(api.archiveChat).not.toHaveBeenCalled();
     });
   });
 
@@ -13894,72 +13884,13 @@ describe('Chats sidebar list', () => {
     ).toBeUndefined();
   });
 
-  it('offers Extract lessons first only when the thread has signals, unticked every time, and asks the daemon to extract only when ticked', async () => {
+  it('offers no lessons box when deleting from the archive: lessons are taken when a thread is archived', async () => {
     api.deleteChat.mockResolvedValue({ deleted: true });
     lessonsApi.estimateLessons.mockResolvedValue({
-      estimate: {
-        agentKind: 'claude',
-        model: 'claude-haiku-5-5',
-        tokens: 1200,
-        usd: 0.5,
-      },
+      estimate: { agentKind: 'claude', model: null, tokens: 1200, usd: 0.5 },
       check: null,
       signals: 2,
-      fromSeq: 1,
-      toSeq: 40,
-    });
-    const { client } = makeClient();
-    agentsApi.listAgentModels.mockResolvedValue([
-      {
-        id: 'haiku',
-        label: 'Haiku 5.5',
-        resolvedModel: 'claude-haiku-5-5',
-        source: 'cli',
-      },
-    ]);
-    const container = await mountArchived(client);
-
-    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
-    expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
-    const box = dialog.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
-    )!;
-    expect(box.checked).toBe(false);
-    expect(dialog.textContent).toContain(
-      'Extract lessons first · Haiku 5.5 · ≈$0.50',
-    );
-
-    await act(async () => {
-      box.click();
-    });
-    await act(async () => {
-      [...dialog.querySelectorAll('button')]
-        .find((b) => b.textContent === 'Delete')!
-        .click();
-    });
-    expect(api.deleteChat).toHaveBeenCalledWith({
-      runId: 'r1',
-      extractLessons: 'true',
-    });
-  });
-
-  it('adds the price of the check to the Extract lessons box when the daemon will check what it finds', async () => {
-    api.deleteChat.mockResolvedValue({ deleted: true });
-    lessonsApi.estimateLessons.mockResolvedValue({
-      estimate: {
-        agentKind: 'claude',
-        model: 'claude-haiku-5-5',
-        tokens: 1200,
-        usd: 0.02,
-      },
-      check: {
-        agentKind: 'claude',
-        model: 'claude-opus-5-5',
-        tokens: 9000,
-        usd: 0.27,
-      },
-      signals: 2,
+      lessonsOn: true,
       fromSeq: 1,
       toSeq: 40,
     });
@@ -13969,102 +13900,8 @@ describe('Chats sidebar list', () => {
     await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     const dialog = container.querySelector('[role="dialog"]')!;
 
-    expect(dialog.textContent).toContain(
-      'Extract lessons first · claude-haiku-5-5 · ≈$0.02 · check ≈$0.27 if a lesson is found',
-    );
-  });
-
-  it('shows no Extract lessons box when the thread has no signals to learn from', async () => {
-    api.deleteChat.mockResolvedValue({ deleted: true });
-    const { client } = makeClient();
-    const container = await mountArchived(client);
-
-    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.querySelector('input[type="checkbox"]')).toBeNull();
-  });
-
-  it('unticks Extract lessons again when the delete dialog is reopened after a cancel', async () => {
-    lessonsApi.estimateLessons.mockResolvedValue({
-      estimate: { agentKind: 'claude', model: null, tokens: 1200, usd: 0.5 },
-      check: null,
-      signals: 2,
-      fromSeq: 1,
-      toSeq: 40,
-    });
-    const { client } = makeClient();
-    const container = await mountArchived(client);
-    const box = () =>
-      container.querySelector<HTMLInputElement>(
-        '[role="dialog"] input[type="checkbox"]',
-      )!;
-
-    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    await act(async () => {
-      box().click();
-    });
-    expect(box().checked).toBe(true);
-    await act(async () => {
-      [
-        ...container.querySelectorAll<HTMLButtonElement>(
-          '[role="dialog"] button',
-        ),
-      ]
-        .find((b) => b.textContent === 'Cancel')!
-        .click();
-    });
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
-
-    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
-    expect(box().checked).toBe(false);
-    expect(api.deleteChat).not.toHaveBeenCalled();
-  });
-
-  it('passes the Extract lessons box on to a TEAM run’s delete when it is ticked', async () => {
-    lessonsApi.estimateLessons.mockResolvedValue({
-      estimate: { agentKind: 'claude', model: null, tokens: 1200, usd: 0.5 },
-      check: null,
-      signals: 2,
-      fromSeq: 1,
-      toSeq: 40,
-    });
-    api.listChats.mockResolvedValue([]);
-    teamApi.listTeamRuns.mockImplementation(
-      (params?: { scope?: string }): Promise<ChatRun[]> =>
-        Promise.resolve(
-          params?.scope === 'archived'
-            ? [
-                {
-                  ...run1,
-                  id: 'wf-run-1',
-                  title: 'Call Demo',
-                  teamId: 'call-demo',
-                  archivedAt: 'then',
-                },
-              ]
-            : [],
-        ),
-    );
-    const { client } = makeClient();
-    const container = await mount(client);
-    await pickScope(container, 'Archived only');
-
-    await clickRowMenu(container, 'Unarchive Call Demo', 'Delete permanently');
-    const dialog = container.querySelector('[role="dialog"]')!;
-    await act(async () => {
-      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
-    });
-    await act(async () => {
-      [...dialog.querySelectorAll('button')]
-        .find((b) => b.textContent === 'Delete')!
-        .click();
-    });
-
-    expect(teamApi.deleteTeamRun).toHaveBeenCalledWith({
-      runId: 'wf-run-1',
-      extractLessons: 'true',
-    });
-    expect(api.deleteChat).not.toHaveBeenCalled();
+    expect(lessonsApi.estimateLessons).not.toHaveBeenCalled();
   });
 
   it('drops the row when ANOTHER client deletes the run', async () => {

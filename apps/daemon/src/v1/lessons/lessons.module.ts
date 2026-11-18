@@ -17,7 +17,6 @@ import { LessonAutoRunner } from './services/lesson-auto-runner.service';
 import { LessonCheckService } from './services/lesson-check.service';
 import { LessonEstimateService } from './services/lesson-estimate.service';
 import { LessonFilingService } from './services/lesson-filing.service';
-import { LessonPendingDeleteService } from './services/lesson-pending-delete.service';
 import { LessonProposalService } from './services/lesson-proposal.service';
 import { LessonReflectionService } from './services/lesson-reflection.service';
 import { LessonRowWriter } from './services/lesson-row.writer';
@@ -65,7 +64,6 @@ import { LessonsEventBus } from './services/lessons-events.bus';
     LessonEstimateService,
     LessonReflectionService,
     LessonSegmentService,
-    LessonPendingDeleteService,
     LessonFilingService,
     LessonCheckService,
     LessonAutoRunner,

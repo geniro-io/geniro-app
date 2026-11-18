@@ -58,6 +58,7 @@ import { AgentVocabularyService } from './services/agent-vocabulary.service';
 import { AnalysisBroker } from './services/analysis.broker';
 import { AnalysisReportsService } from './services/analysis-reports.service';
 import { ApprovalRegistry } from './services/approval-registry';
+import { ArchiveLessonsRegistry } from './services/archive-lessons.registry';
 import { ArtifactBroker } from './services/artifact.broker';
 import { ArtifactPageService } from './services/artifact-page.service';
 import { ArtifactStoreService } from './services/artifact-store.service';
@@ -90,7 +91,6 @@ import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { DelegateSpendStore } from './services/delegate-spend.store';
 import { EffortsService } from './services/efforts.service';
-import { ExtractLessonsOnDeleteRegistry } from './services/extract-lessons-on-delete.registry';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
@@ -214,7 +214,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     DesktopOnlyGuard,
-    ExtractLessonsOnDeleteRegistry,
+    ArchiveLessonsRegistry,
     ChatShellsService,
     ChatHistoryService,
     RunStateService,
@@ -811,7 +811,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // this module, never the reverse, as `TeamsModule` already does.
     ChatService,
     // For the lessons module, which takes a delete with "Extract lessons first".
-    ExtractLessonsOnDeleteRegistry,
+    ArchiveLessonsRegistry,
   ],
 })
 export class AgentsModule {}

@@ -7,6 +7,7 @@ import {
   ActivityWindowFields,
   AgentOptionsSchema,
   AppProcessesWireSchema,
+  ARCHIVE_LESSONS,
   ArtifactAnswersWireSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
@@ -507,15 +508,15 @@ export const listChatsQuerySchema = z
   .refine(isOrderedWindow, { message: UNORDERED_WINDOW_MESSAGE });
 export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 
-export const deleteRunQuerySchema = z.object({
-  extractLessons: z
-    .enum(['true', 'false'])
+export const archiveRunQuerySchema = z.object({
+  lessons: z
+    .enum(ARCHIVE_LESSONS)
     .optional()
     .describe(
-      '"Extract lessons first": hide the run now, reflect on what is unreflected, then delete it. Without it, or with nothing to reflect on, the run is deleted at once',
+      'What becomes of the stretch this archive closes: `reflect` queues its reflection even with lessons off for the thread, `skip` moves past it unreflected. Without it, the lessons settings decide',
     ),
 });
-export class DeleteRunQueryDto extends createZodDto(deleteRunQuerySchema) {}
+export class ArchiveRunQueryDto extends createZodDto(archiveRunQuerySchema) {}
 
 export const searchChatQuerySchema = z.object({
   /**

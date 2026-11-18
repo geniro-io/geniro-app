@@ -23,31 +23,6 @@ export function lessonCostLabel(
   return parts.join(' · ');
 }
 
-export interface ArchiveNoticeDetail {
-  /** The one line the notice shows: "Haiku 5.5 · ≈$0.02", plus " + check ≈$0.27". */
-  detail: string;
-  /** Its tooltip: the full cost sentence, then today's spend when it is known. */
-  hint: string;
-}
-
-export function archiveNoticeDetail(
-  segment: Pick<LessonSegment, 'estimate' | 'checkEstimate'>,
-  todayUsd: number | null,
-  modelName: string | null,
-): ArchiveNoticeDetail {
-  const check = segment.checkEstimate;
-  const price = `${modelName ?? 'default model'} · ${lessonPriceLabel(segment.estimate)}`;
-  const cost = lessonCostLabel(segment.estimate, check, modelName);
-  return {
-    detail:
-      check === null ? price : `${price} + check ${lessonPriceLabel(check)}`,
-    hint:
-      todayUsd === null
-        ? cost
-        : `${cost} · ${formatUsd(todayUsd)} spent on lessons today`,
-  };
-}
-
 export function segmentTitle(
   segment: Pick<LessonSegment, 'sourceTitle'>,
 ): string {

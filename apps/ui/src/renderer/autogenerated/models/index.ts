@@ -17979,6 +17979,12 @@ export interface ThreadLessonEstimateDto {
      */
     signals: number;
     /**
+     * Whether an archive that names no choice reflects on this thread: the lessons settings of the app, then its team, then its project
+     * @type {boolean}
+     * @memberof ThreadLessonEstimateDto
+     */
+    lessonsOn: boolean;
+    /**
      * 
      * @type {number}
      * @memberof ThreadLessonEstimateDto

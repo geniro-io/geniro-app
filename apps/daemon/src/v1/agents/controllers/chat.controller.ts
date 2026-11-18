@@ -55,6 +55,7 @@ import {
   AnalyzeThreadDto,
   ApplyRecommendationsDto,
   AppProcessesDto,
+  ArchiveRunQueryDto,
   ArtifactAnswersDto,
   AttachmentDataDto,
   CallMessagesDto,
@@ -70,7 +71,6 @@ import {
   ChatTotalsDto,
   ChatUploadDto,
   CreateChatDto,
-  DeleteRunQueryDto,
   ForgottenInstructionsDto,
   HistoryQueryDto,
   ItemDto,
@@ -112,6 +112,7 @@ import { SetRunColorDto } from '../dto/run-color.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ActionPressService } from '../services/action-press.service';
+import { ArchiveLessonsRegistry } from '../services/archive-lessons.registry';
 import { ChatService } from '../services/chat.service';
 import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
@@ -124,7 +125,6 @@ import { ChatTeamNotesService } from '../services/chat-team-notes.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { ChatUploadStoreService } from '../services/chat-upload-store.service';
 import { ChatWaterfallService } from '../services/chat-waterfall.service';
-import { ExtractLessonsOnDeleteRegistry } from '../services/extract-lessons-on-delete.registry';
 import { LocalImageService } from '../services/local-image.service';
 import { RecommendationsApplyService } from '../services/recommendations-apply.service';
 import { RunNamedPathsService } from '../services/run-named-paths.service';
@@ -171,7 +171,7 @@ export class ChatController {
     private readonly recommendations: RecommendationsApplyService,
     private readonly actionPresses: ActionPressService,
     @Optional()
-    private readonly extractLessons?: ExtractLessonsOnDeleteRegistry,
+    private readonly archiveLessons?: ArchiveLessonsRegistry,
   ) {}
 
   @Post()
@@ -808,8 +808,19 @@ export class ChatController {
   @Post(':runId/archive')
   @ApiOperation({ operationId: 'archiveChat' })
   @ZodResponse({ status: 200, type: RunDto })
-  archive(@Param('runId') runId: string): Promise<RunWire> {
-    return this.chatService.archive(runId);
+  async archive(
+    @Param('runId') runId: string,
+    @Query() query: ArchiveRunQueryDto,
+  ): Promise<RunWire> {
+    if (query.lessons !== undefined) {
+      this.archiveLessons?.expect(runId, query.lessons);
+    }
+    try {
+      return await this.chatService.archive(runId);
+    } catch (err) {
+      this.archiveLessons?.forget(runId);
+      throw err;
+    }
   }
 
   @Post(':runId/unarchive')
@@ -822,16 +833,7 @@ export class ChatController {
   @Delete(':runId')
   @ApiOperation({ operationId: 'deleteChat' })
   @ZodResponse({ status: 200, type: ChatDeletedDto })
-  async delete(
-    @Param('runId') runId: string,
-    @Query() query: DeleteRunQueryDto,
-  ): Promise<{ deleted: boolean }> {
-    if (query.extractLessons === 'true') {
-      const taken = await this.extractLessons?.extract(runId);
-      if (taken != null) {
-        return taken;
-      }
-    }
+  delete(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
     return this.chatService.delete(runId);
   }
 }

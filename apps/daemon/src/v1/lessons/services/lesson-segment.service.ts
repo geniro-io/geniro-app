@@ -6,12 +6,13 @@ import {
   type OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { ConflictException, NotFoundException } from '@packages/common';
+import { NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ArchiveLessonsRegistry } from '../../agents/services/archive-lessons.registry';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
@@ -44,11 +45,12 @@ const DEFAULT_LIST_STATUSES: readonly LessonSegmentStatus[] =
 
 /**
  * Closes the stretch of a thread a reflection reads and queues it for
- * `LessonAutoRunner`. Archiving a thread closes its stretch at once; a delete
- * with "Extract lessons first" ticked and "Reflect now" start their own
- * reflection. Only the items past the thread's `reflectedThroughSeq` belong
- * to a stretch, a stretch with no learning signal is never queued, and a
- * thread has at most one stretch queued: a later close extends it.
+ * `LessonAutoRunner`. Archiving a thread closes its stretch at once, as the
+ * archive dialog chose (`ArchiveLessonsRegistry`), else as the lessons
+ * settings say; "Reflect now" starts its own reflection. Only the items past
+ * the thread's `reflectedThroughSeq` belong to a stretch, a stretch with no
+ * learning signal is never queued, and a thread has at most one stretch
+ * queued: a later close extends it.
  */
 @Injectable()
 export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
@@ -67,6 +69,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     private readonly config: LessonsConfigService,
     private readonly events: LessonsEventBus,
     @Optional() private readonly teams?: TeamStoreService,
+    @Optional() private readonly archiveChoices?: ArchiveLessonsRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -123,45 +126,6 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** "Skip" on the archive notice: the queued stretch never runs, and the watermark moves past it. */
-  async skip(segmentId: string): Promise<LessonSegmentWire> {
-    const em = this.em.fork();
-    const segment = await this.segments.getById(segmentId, em);
-    if (segment === null) {
-      throw new NotFoundException(
-        'LESSON_SEGMENT_NOT_FOUND',
-        `no stretch ${segmentId}`,
-      );
-    }
-    if (segment.status !== 'queued') {
-      throw new ConflictException(
-        'LESSON_SEGMENT_DECIDED',
-        `this stretch is already ${segment.status}`,
-      );
-    }
-    const run = await this.runDao.getById(segment.runId, em);
-    await em.transactional(async (tx) => {
-      await this.segments.updateById(
-        segment.id,
-        { status: 'skipped', skipReason: 'user_skipped', leaseUntil: null },
-        tx,
-      );
-      if (run !== null && (run.reflectedThroughSeq ?? -1) < segment.toSeq) {
-        await this.runDao.updateById(
-          run.id,
-          { reflectedThroughSeq: segment.toSeq },
-          tx,
-        );
-      }
-    });
-    this.events.publishChanged(segment.runId);
-    const skipped = Object.assign(segment, {
-      status: 'skipped' as const,
-      skipReason: 'user_skipped' as const,
-    });
-    return this.wireOf(skipped, run, em);
-  }
-
   async list(query: LessonSegmentListQuery): Promise<LessonSegmentWire[]> {
     const em = this.em.fork();
     const statuses =
@@ -191,7 +155,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     return wires;
   }
 
-  /** What reflecting on the thread's stretch past its last reflection would cost, for the delete dialog. */
+  /** What reflecting on the thread's stretch past its last reflection would cost, and whether an archive would by itself, for the archive dialog. */
   async threadEstimate(
     query: LessonEstimateQuery,
   ): Promise<ThreadLessonEstimate> {
@@ -205,7 +169,6 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     const reflectable =
       toSeq > fromSeq &&
       isReflectable(run) &&
-      run.pendingDeleteAt === null &&
       !(await this.reflecting(run.id, em));
     const signals = reflectable
       ? await readLessonSignals(this.itemDao, run.id, fromSeq, toSeq, em)
@@ -224,6 +187,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
           ? null
           : await this.estimates.estimate(run, range, checker, em),
       signals: signals.length,
+      lessonsOn: await this.lessonsOnFor(run),
       fromSeq,
       toSeq,
     };
@@ -233,9 +197,11 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     runId: string,
     closedBy: LessonSegmentCloser,
   ): Promise<LessonSegment | null> {
+    const choice =
+      closedBy === 'archive' ? this.archiveChoices?.take(runId) : undefined;
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
-    if (run === null || !isReflectable(run) || run.pendingDeleteAt !== null) {
+    if (run === null || !isReflectable(run)) {
       return null;
     }
     const fromSeq = run.reflectedThroughSeq ?? -1;
@@ -245,6 +211,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     }
     const queued = await this.segments.queuedOf(run.id, em);
     if (
+      choice !== 'skip' &&
       queued !== null &&
       queued.fromSeq === fromSeq &&
       queued.toSeq >= toSeq
@@ -252,7 +219,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
     if (
-      !(await this.lessonsOnFor(run)) ||
+      (choice === undefined && !(await this.lessonsOnFor(run))) ||
       (await this.reflecting(run.id, em))
     ) {
       return null;
@@ -273,29 +240,38 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       this.config.reflectionChoice(run),
       em,
     );
+    const skipped = choice === 'skip';
     const fields = {
       fromSeq,
       toSeq,
       closedBy,
       closedAt: new Date(),
       signals: JSON.stringify(signals),
-      status: 'queued' as const,
+      status: skipped ? ('skipped' as const) : ('queued' as const),
+      skipReason: skipped ? ('user_skipped' as const) : null,
       reflectionRunId: null,
       checkRunId: null,
       failReason: null,
       estimateTokens: estimate.tokens,
       estimateUsd: estimate.usd,
     };
-    let segment: LessonSegment;
-    if (queued === null) {
-      segment = await this.segments.create(
-        { runId: run.id, attempts: 0, ...fields },
-        em,
-      );
-    } else {
-      await this.segments.updateById(queued.id, fields, em);
-      segment = Object.assign(queued, fields);
-    }
+    const segment = await em.transactional(async (tx) => {
+      if (skipped) {
+        await this.runDao.updateById(
+          run.id,
+          { reflectedThroughSeq: toSeq },
+          tx,
+        );
+      }
+      if (queued === null) {
+        return this.segments.create(
+          { runId: run.id, attempts: 0, ...fields },
+          tx,
+        );
+      }
+      await this.segments.updateById(queued.id, fields, tx);
+      return Object.assign(queued, fields);
+    });
     this.events.publishChanged(run.id);
     return segment;
   }

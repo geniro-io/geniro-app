@@ -10,13 +10,9 @@ import {
   type LessonSegmentCloser,
   type LessonSegmentStatus,
 } from '../lessons.types';
-import {
-  LESSON_ARCHIVE_GRACE_MS,
-  LessonAutoRunner,
-} from './lesson-auto-runner.service';
+import { LessonAutoRunner } from './lesson-auto-runner.service';
 import type { LessonCheckService } from './lesson-check.service';
 import type { LessonReflectionService } from './lesson-reflection.service';
-import type { LessonSegmentService } from './lesson-segment.service';
 import { LessonsEventBus } from './lessons-events.bus';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
@@ -52,7 +48,6 @@ function segmentOf(seed: SegmentSeed): LessonSegment {
 function setUp(options: {
   segments: SegmentSeed[];
   runs?: Record<string, RunStatus>;
-  lessonsOn?: boolean;
   startError?: (runId: string) => Error | null;
 }) {
   const rows = new Map(
@@ -89,9 +84,6 @@ function setUp(options: {
       return status === null ? null : { id, status };
     },
   } as unknown as RunDao;
-  const closer = {
-    lessonsOnFor: async () => options.lessonsOn ?? true,
-  } as unknown as LessonSegmentService;
   const reflections = {
     start: async (runId: string, _input: unknown, by: LessonSegmentCloser) => {
       const error = options.startError?.(runId) ?? null;
@@ -118,7 +110,6 @@ function setUp(options: {
     em as never,
     runDao,
     segments,
-    closer,
     reflections,
     checks,
     events,
@@ -178,36 +169,9 @@ describe('LessonAutoRunner', () => {
     expect(started).toEqual([{ runId: 'run-oldest', closer: 'manual' }]);
   });
 
-  it('holds an archive stretch younger than the grace and starts it once the grace has passed', async () => {
-    const { look, started, runner } = setUp({
-      segments: [
-        {
-          id: 'a',
-          closedBy: 'archive',
-          closedAt: new Date(NOW.getTime() - 1_000),
-        },
-      ],
-    });
-
-    await look();
-    expect(started).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(LESSON_ARCHIVE_GRACE_MS);
-    await runner.idle();
-
-    expect(started).toEqual([{ runId: 'run-a', closer: 'archive' }]);
-    runner.onModuleDestroy();
-  });
-
-  it('starts an archive stretch that is exactly as old as the grace', async () => {
+  it('starts an archive stretch the moment it is queued', async () => {
     const { look, started } = setUp({
-      segments: [
-        {
-          id: 'a',
-          closedBy: 'archive',
-          closedAt: new Date(NOW.getTime() - LESSON_ARCHIVE_GRACE_MS),
-        },
-      ],
+      segments: [{ id: 'a', closedBy: 'archive', closedAt: new Date(NOW) }],
     });
 
     await look();
@@ -215,49 +179,21 @@ describe('LessonAutoRunner', () => {
     expect(started).toEqual([{ runId: 'run-a', closer: 'archive' }]);
   });
 
-  it('does not make a manual stretch wait for the grace', async () => {
+  it('passes over a stretch whose thread is gone and starts the next one', async () => {
     const { look, started } = setUp({
-      segments: [{ id: 'm', closedBy: 'manual', closedAt: new Date(NOW) }],
-    });
-
-    await look();
-
-    expect(started).toEqual([{ runId: 'run-m', closer: 'manual' }]);
-  });
-
-  it('skips a queued archive stretch whose thread has lessons off, and starts the next one', async () => {
-    const { look, started, rows, published } = setUp({
-      lessonsOn: false,
       segments: [
         {
-          id: 'a',
-          closedBy: 'archive',
-          closedAt: new Date(NOW.getTime() - 120_000),
+          id: 'gone',
+          runId: 'missing',
+          closedAt: new Date(NOW.getTime() - 9_000),
         },
-        { id: 'm', closedBy: 'manual' },
+        { id: 'next' },
       ],
     });
 
     await look();
 
-    expect(rows.get('a')).toMatchObject({
-      status: 'skipped',
-      skipReason: 'off',
-    });
-    expect(published).toContain('run-a');
-    expect(started).toEqual([{ runId: 'run-m', closer: 'manual' }]);
-  });
-
-  it('does not skip a manual stretch when lessons are off', async () => {
-    const { look, started, rows } = setUp({
-      lessonsOn: false,
-      segments: [{ id: 'm', closedBy: 'manual' }],
-    });
-
-    await look();
-
-    expect(rows.get('m')?.status).toBe('queued');
-    expect(started).toEqual([{ runId: 'run-m', closer: 'manual' }]);
+    expect(started).toEqual([{ runId: 'run-next', closer: 'manual' }]);
   });
 
   it('takes back a reflecting stretch whose lease ran out, then starts the queue', async () => {

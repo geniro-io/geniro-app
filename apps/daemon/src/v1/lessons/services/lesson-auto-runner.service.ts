@@ -18,24 +18,19 @@ import type { LessonSegment } from '../entity/lesson-segment.entity';
 import { LESSON_SEGMENT_MAX_ATTEMPTS } from '../lessons.types';
 import { LessonCheckService } from './lesson-check.service';
 import { LessonReflectionService } from './lesson-reflection.service';
-import { LessonSegmentService } from './lesson-segment.service';
 import { LessonsEventBus } from './lessons-events.bus';
 
-/** How long an archived thread's stretch waits before it runs, so the archive notice's Skip can still stop it. */
-export const LESSON_ARCHIVE_GRACE_MS = 15_000;
 /** How often the runner looks for a lease that ran out with nothing else waking it. */
 export const LESSON_RUNNER_TICK_MS = 60_000;
 
 /**
  * Runs the queued stretches, one reflection (or check) at a time, oldest
- * first — an archived thread's after `LESSON_ARCHIVE_GRACE_MS`. A stretch
- * holds a 30-minute lease while it runs; a lease that runs out is taken back
- * as a failed attempt. At start it takes back what the last launch left
- * running. No spend limit: what each run cost is shown, not capped.
- *
- * Lessons switched off for the app, the project or the team before a queued
- * stretch ran leave it `skipped` (`off`). "Reflect now" and a delete's
- * extraction start their own reflection at once, outside this queue.
+ * first. Whether a stretch runs was decided when it was queued, so the
+ * settings are not read again here. A stretch holds a 30-minute lease while
+ * it runs; a lease that runs out is taken back as a failed attempt. At start
+ * it takes back what the last launch left running. No spend limit: what each
+ * run cost is shown, not capped. "Reflect now" starts its own reflection at
+ * once, outside this queue.
  */
 @Injectable()
 export class LessonAutoRunner
@@ -44,7 +39,6 @@ export class LessonAutoRunner
   private readonly logger = new Logger(LessonAutoRunner.name);
   private subscription: Subscription | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
-  private wake: ReturnType<typeof setTimeout> | null = null;
   private running: Promise<void> = Promise.resolve();
   private again = false;
   private busy = false;
@@ -53,7 +47,6 @@ export class LessonAutoRunner
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly segments: LessonSegmentDao,
-    private readonly closer: LessonSegmentService,
     private readonly reflections: LessonReflectionService,
     private readonly checks: LessonCheckService,
     private readonly events: LessonsEventBus,
@@ -77,9 +70,6 @@ export class LessonAutoRunner
     this.subscription?.unsubscribe();
     if (this.ticker !== null) {
       clearInterval(this.ticker);
-    }
-    if (this.wake !== null) {
-      clearTimeout(this.wake);
     }
   }
 
@@ -125,25 +115,7 @@ export class LessonAutoRunner
       return;
     }
     for (const segment of await this.segments.listQueued(em)) {
-      const run = await this.runDao.getById(segment.runId, em);
-      if (run === null) {
-        continue;
-      }
-      if (
-        segment.closedBy === 'archive' &&
-        !(await this.closer.lessonsOnFor(run))
-      ) {
-        await this.segments.updateById(
-          segment.id,
-          { status: 'skipped', skipReason: 'off' },
-          em,
-        );
-        this.events.publishChanged(segment.runId);
-        continue;
-      }
-      const due = segment.closedAt.getTime() + LESSON_ARCHIVE_GRACE_MS;
-      if (segment.closedBy === 'archive' && due > now) {
-        this.wakeAt(due);
+      if ((await this.runDao.getById(segment.runId, em)) === null) {
         continue;
       }
       try {
@@ -216,20 +188,6 @@ export class LessonAutoRunner
       em,
     );
     this.events.publishChanged(segment.runId);
-  }
-
-  private wakeAt(due: number): void {
-    if (this.wake !== null) {
-      clearTimeout(this.wake);
-    }
-    this.wake = setTimeout(
-      () => {
-        this.wake = null;
-        this.kick();
-      },
-      Math.max(0, due - Date.now()) + 50,
-    );
-    this.wake.unref();
   }
 }
 

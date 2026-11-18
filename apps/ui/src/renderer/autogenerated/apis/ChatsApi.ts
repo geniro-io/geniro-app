@@ -95,6 +95,7 @@ export interface ChatsApiApplyRecommendationsRequest {
 
 export interface ChatsApiArchiveChatRequest {
     runId: string;
+    lessons?: ArchiveChatLessonsEnum;
 }
 
 export interface ChatsApiCancelChatRequest {
@@ -113,7 +114,6 @@ export interface ChatsApiCreateChatRequest {
 
 export interface ChatsApiDeleteChatRequest {
     runId: string;
-    extractLessons?: DeleteChatExtractLessonsEnum;
 }
 
 export interface ChatsApiDeliverWaitingMessageRequest {
@@ -547,6 +547,10 @@ export class ChatsApi extends runtime.BaseAPI {
 
         const queryParameters: any = {};
 
+        if (requestParameters['lessons'] != null) {
+            queryParameters['lessons'] = requestParameters['lessons'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -746,10 +750,6 @@ export class ChatsApi extends runtime.BaseAPI {
         }
 
         const queryParameters: any = {};
-
-        if (requestParameters['extractLessons'] != null) {
-            queryParameters['extractLessons'] = requestParameters['extractLessons'];
-        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -3472,11 +3472,11 @@ export class ChatsApi extends runtime.BaseAPI {
 /**
  * @export
  */
-export const DeleteChatExtractLessonsEnum = {
-    True: 'true',
-    False: 'false'
+export const ArchiveChatLessonsEnum = {
+    Reflect: 'reflect',
+    Skip: 'skip'
 } as const;
-export type DeleteChatExtractLessonsEnum = typeof DeleteChatExtractLessonsEnum[keyof typeof DeleteChatExtractLessonsEnum];
+export type ArchiveChatLessonsEnum = typeof ArchiveChatLessonsEnum[keyof typeof ArchiveChatLessonsEnum];
 /**
  * @export
  */

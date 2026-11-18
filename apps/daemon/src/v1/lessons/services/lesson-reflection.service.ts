@@ -121,13 +121,6 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** The reflection still working on this thread, if any — a delete waits for it rather than starting a second. */
-  async runningReflectionId(sourceRunId: string): Promise<string | null> {
-    return (
-      (await this.runningReflectionOf(sourceRunId, this.em.fork()))?.id ?? null
-    );
-  }
-
   /** Whether "Reflect now" has anything to do on this thread now. */
   async state(sourceRunId: string): Promise<ThreadLessonsState> {
     const em = this.em.fork();
@@ -141,7 +134,6 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     return {
       reflectable:
         isReflectable(source) &&
-        source.pendingDeleteAt === null &&
         running === null &&
         !this.starting.has(source.id) &&
         newest > (source.reflectedThroughSeq ?? -1),
@@ -180,12 +172,6 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       throw new ConflictException(
         'LESSONS_NOT_REFLECTABLE',
         'an analysis, team builder or project chat is never reflected on — reflect on the thread it works on instead',
-      );
-    }
-    if (source.pendingDeleteAt !== null && closedBy !== 'delete') {
-      throw new ConflictException(
-        'LESSONS_NOT_REFLECTABLE',
-        'this thread is being deleted',
       );
     }
     if ((await this.runningReflectionOf(source.id, em)) !== null) {

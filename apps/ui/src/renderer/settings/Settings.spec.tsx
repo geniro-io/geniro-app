@@ -911,6 +911,11 @@ describe('Settings — custom instructions', () => {
         '#settings-command-center-instructions',
       )?.value,
     ).toBe('Lead with the blocked threads.');
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Command center instructions"]',
+      )?.id,
+    ).toBe('settings-command-center-instructions');
   });
 
   it('survives a settings payload with no commandCenterInstructions key at all', async () => {

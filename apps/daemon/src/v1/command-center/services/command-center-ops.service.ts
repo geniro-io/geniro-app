@@ -183,12 +183,25 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     await this.assertManager(managerRunId);
     const rosterThreads = await this.managers.rosterThreads(managerRunId);
     const roster = nameableOf(rosterThreads);
+    const shelved = new Set(
+      rosterThreads
+        .filter(({ run }) => Boolean(run?.archivedAt))
+        .map(({ entry }) => entry.threadRunId),
+    );
+    let shelvedRoster: NameableThread[] | null = null;
     const resolved: { to: string; thread: NameableThread }[] = [];
     const unresolved: Unresolved[] = [];
     for (const to of input.threads) {
       const found = await this.resolve(to, roster);
       if ('thread' in found) {
         resolved.push({ to, thread: found.thread });
+        continue;
+      }
+      shelvedRoster ??= await this.archivedFormerThreads(managerRunId, roster);
+      const former = resolveTarget(to, shelvedRoster);
+      if (former.kind === 'resolved') {
+        shelved.add(former.thread.runId);
+        resolved.push({ to, thread: former.thread });
       } else {
         unresolved.push({ to, ...found });
       }
@@ -196,12 +209,6 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     if (unresolved.length > 0) {
       return { archived: [], unresolved };
     }
-    const shelvedAt = new Map(
-      rosterThreads.map(({ entry, run }) => [
-        entry.threadRunId,
-        run?.archivedAt ?? null,
-      ]),
-    );
     const archived: ArchiveThreadsAnswer['archived'] = [];
     const left: string[] = [];
     const seen = new Set<string>();
@@ -220,7 +227,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
         archived.push({ ...row, outcome: 'refused', code: 'OWN_RUN' });
         continue;
       }
-      if (shelvedAt.get(thread.runId)) {
+      if (shelved.has(thread.runId)) {
         left.push(thread.runId);
         archived.push({ ...row, outcome: 'already_archived', code: null });
         continue;
@@ -243,6 +250,44 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
       this.events.publishChanged(left, 'roster');
     }
     return { archived, unresolved: [] };
+  }
+
+  /**
+   * The threads that left this manager's roster because they were archived —
+   * by an earlier call, or by the user from the sidebar — still nameable, so
+   * archiving one again is answered as already done rather than as unknown.
+   */
+  private async archivedFormerThreads(
+    managerRunId: string,
+    roster: readonly NameableThread[],
+  ): Promise<NameableThread[]> {
+    const onRoster = new Set(roster.map((thread) => thread.runId));
+    const former = (await this.roster.listOf(managerRunId)).filter(
+      (row) => !onRoster.has(row.threadRunId),
+    );
+    if (former.length === 0) {
+      return [];
+    }
+    const archived = await this.runDao.getAll(
+      {
+        id: { $in: former.map((row) => row.threadRunId) },
+        archivedAt: { $ne: null },
+      },
+      undefined,
+      this.em.fork(),
+    );
+    const titles = new Map(archived.map((run) => [run.id, run.title]));
+    return former.flatMap((row) =>
+      titles.has(row.threadRunId)
+        ? [
+            {
+              handle: row.handle,
+              runId: row.threadRunId,
+              title: titles.get(row.threadRunId) ?? UNTITLED_THREAD,
+            },
+          ]
+        : [],
+    );
   }
 
   private async assertManager(managerRunId: string): Promise<void> {

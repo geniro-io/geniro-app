@@ -2113,6 +2113,7 @@ export function Settings({
                       <ExpandableTextarea
                         id="settings-command-center-instructions"
                         title="Command center instructions"
+                        ariaLabel="Command center instructions"
                         value={commandCenterInstructions}
                         onChange={onCommandCenterInstructionsChange}
                         rows={6}

@@ -8,6 +8,7 @@ import {
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
+import { Run } from '../../runs/entity/run.entity';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 import { commandCenterDb } from '../__tests__/command-center-db';
 import { REPLY_CREDIT_MS } from '../command-center.types';
@@ -449,6 +450,97 @@ describe('CommandCenterOpsService', () => {
       ).toEqual([
         ['t1', 'refused', 'ARCHIVE_FAILED'],
         ['t2', 'archived', null],
+      ]);
+    });
+
+    describe('a thread already archived and off the roster', () => {
+      beforeEach(async () => {
+        await db.seedRoster(MANAGER, 'thread-1', 't1');
+        await db.seedRun('thread-3', {
+          title: 'Release',
+          archivedAt: new Date('2026-11-18T10:00:00.000Z'),
+        });
+        await db.seedRoster(MANAGER, 'thread-3', 't3', {
+          leftAt: new Date('2026-11-18T10:00:00.000Z'),
+        });
+      });
+
+      it.each([
+        ['its handle', 't3'],
+        ['its title', 'Release'],
+        ['its id', 'thread-3'],
+      ])(
+        'is answered as already archived when named by %s, and the rest is still archived',
+        async (_how, name) => {
+          const answer = await service.archive(MANAGER, {
+            threads: [name, 't1'],
+          });
+
+          expect(chats.archive.mock.calls).toEqual([['thread-1']]);
+          expect(answer).toEqual({
+            archived: [
+              {
+                to: name,
+                handle: 't3',
+                runId: 'thread-3',
+                title: 'Release',
+                outcome: 'already_archived',
+                code: null,
+              },
+              expect.objectContaining({
+                to: 't1',
+                runId: 'thread-1',
+                outcome: 'archived',
+              }),
+            ],
+            unresolved: [],
+          });
+        },
+      );
+    });
+
+    it('answers a thread the user archived while the call waited for approval as already archived, and archives the other', async () => {
+      await db.seedRoster(MANAGER, 'thread-1', 't1');
+      await db.seedRoster(MANAGER, 'thread-2', 't2', {
+        leftAt: new Date('2026-11-18T10:00:00.000Z'),
+      });
+      await db.em
+        .fork()
+        .nativeUpdate(
+          Run,
+          { id: 'thread-2' },
+          { archivedAt: new Date('2026-11-18T10:00:00.000Z') },
+        );
+      rosterOf([threads[0]!]);
+
+      const answer = await service.archive(MANAGER, {
+        threads: ['t1', 't2'],
+      });
+
+      expect(chats.archive.mock.calls).toEqual([['thread-1']]);
+      expect(
+        answer.archived.map((row) => [row.to, row.runId, row.outcome]),
+      ).toEqual([
+        ['t1', 'thread-1', 'archived'],
+        ['t2', 'thread-2', 'already_archived'],
+      ]);
+      expect(answer.unresolved).toEqual([]);
+    });
+
+    it('still archives nothing for a thread that left the roster without being archived', async () => {
+      await db.seedRoster(MANAGER, 'thread-2', 't2', {
+        leftAt: new Date('2026-11-18T10:00:00.000Z'),
+      });
+      rosterOf([threads[0]!]);
+
+      const answer = await service.archive(MANAGER, {
+        threads: ['t1', 't2'],
+      });
+
+      expect(chats.archive).not.toHaveBeenCalled();
+      expect(answer.archived).toEqual([]);
+      expect(answer.unresolved).toEqual([
+        expect.objectContaining({ to: 't2', code: 'THREAD_NOT_FOUND' }),
       ]);
     });
 

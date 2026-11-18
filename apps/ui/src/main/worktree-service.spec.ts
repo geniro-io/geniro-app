@@ -1407,7 +1407,13 @@ describe('removeWorktreeOnRequest', () => {
 
       expect(outcome.removed).toBe(true);
       expect(
-        git(repo, 'show', '--name-only', '--format=', made.branch).trim(),
+        git(
+          repo,
+          'show',
+          '--name-only',
+          '--format=',
+          taskBranchName('t1'),
+        ).trim(),
       ).toContain('left.txt');
     },
     TIMEOUT_MS,
@@ -1507,7 +1513,7 @@ describe('removeWorktreeOnRequest', () => {
   });
 });
 
-describe("prepareWorktree's repository-folder guard", () => {
+describe('prepareWorktree by what the folder is', () => {
   let plain: string;
 
   beforeEach(() => {
@@ -1518,10 +1524,27 @@ describe("prepareWorktree's repository-folder guard", () => {
     rmSync(plain, { recursive: true, force: true });
   });
 
-  it('names a folder that is not a git repository and the fix, and records nothing', async () => {
+  it('hands back a folder in no repository as the place to work, with no branch, and records nothing', async () => {
     mkdirSync(join(plain, 'back-office'));
+    writeFileSync(join(plain, 'notes.md'), 'mine\n');
 
-    const refusal = await prepareWorktree({ taskId: 't1', folder: plain }).then(
+    const made = await prepareWorktree({ taskId: 't1', folder: plain });
+
+    expect(made).toEqual({ path: plain, branch: null, reused: false });
+    expect(readRegistry()).toEqual([]);
+    expect(existsSync(join(mocks.userData, 'worktrees', 't1'))).toBe(false);
+    expect(await pruneWorktreeForTask('t1')).toBe(false);
+    expect(await settleWorktreeForTask('t1')).toEqual({
+      removed: false,
+      committed: false,
+    });
+    expect(readFileSync(join(plain, 'notes.md'), 'utf8')).toBe('mine\n');
+  });
+
+  it('says a folder that does not exist does not exist, and the fix', async () => {
+    const gone = join(plain, 'moved-away');
+
+    const refusal = await prepareWorktree({ taskId: 't1', folder: gone }).then(
       () => null,
       (error: unknown) => error,
     );
@@ -1529,21 +1552,9 @@ describe("prepareWorktree's repository-folder guard", () => {
     expect(refusal).toBeInstanceOf(Error);
     const message = (refusal as Error).message;
     expect(message).toBe(
-      `${plain} is not a git repository — set this task's folder to the repository it works in (its project's folder is used only when the task names none)`,
+      `the folder ${gone} does not exist — set this task's folder to the folder it works in (its project's folder is used only when the task names none)`,
     );
     expect(gitFailureLine(refusal, message)).toBe(message);
-    expect(readRegistry()).toEqual([]);
-    expect(existsSync(join(mocks.userData, 'worktrees', 't1'))).toBe(false);
-  });
-
-  it('says a folder that does not exist does not exist', async () => {
-    const gone = join(plain, 'moved-away');
-
-    await expect(
-      prepareWorktree({ taskId: 't1', folder: gone }),
-    ).rejects.toThrow(
-      `the folder ${gone} does not exist — set this task's folder to the repository it works in`,
-    );
     expect(readRegistry()).toEqual([]);
   });
 

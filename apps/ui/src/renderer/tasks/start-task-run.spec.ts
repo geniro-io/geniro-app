@@ -92,6 +92,39 @@ describe('startTaskRun', () => {
     expect(pruneTaskWorktree).not.toHaveBeenCalled();
   });
 
+  it('starts a folder in no repository in place, sending no branch', async () => {
+    const { bridge, pruneTaskWorktree } = stubBridge({
+      ok: true,
+      path: '/plain',
+      branch: null,
+      reused: false,
+      error: null,
+    });
+    const startTaskRunApi = vi
+      .fn()
+      .mockResolvedValue(aTask({ id: 't1', status: 'in_progress' }));
+
+    await startTaskRun({
+      apis: stubTasks(startTaskRunApi),
+      bridge,
+      readRunSettings,
+      task: aTask({ id: 't1', status: 'todo', folder: null }),
+      project: aProject({ id: 'p1', folder: '/plain' }),
+    });
+
+    expect(startTaskRunApi).toHaveBeenCalledWith({
+      taskId: 't1',
+      startTaskRunDto: {
+        cwd: '/plain',
+        from: 'todo',
+        startSha: 'abc123',
+        startDirty: false,
+        replyLanguage: 'Russian',
+      },
+    });
+    expect(pruneTaskWorktree).not.toHaveBeenCalled();
+  });
+
   it('prefers the card folder over the project folder', async () => {
     const { bridge, prepareTaskWorktree } = stubBridge();
 

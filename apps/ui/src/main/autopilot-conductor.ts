@@ -8,6 +8,7 @@ import {
   type RunStartDeps,
   type RunTask,
   startRunOn,
+  workPlaceOf,
 } from './task-run-start';
 
 /**
@@ -212,7 +213,9 @@ export class AutopilotConductor {
         startedBy: 'autopilot',
         approval: AUTOPILOT_APPROVAL,
       });
-      this.deps.log(`autopilot started "${task.title}" on ${worktree.branch}`);
+      this.deps.log(
+        `autopilot started "${task.title}" ${workPlaceOf(worktree)}`,
+      );
     } catch (error) {
       // The daemon refusing is the ordinary case, not an incident: another
       // window's conductor got there first, or the card moved. Give the

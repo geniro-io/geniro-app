@@ -15784,17 +15784,17 @@ export interface StartShareSignInDto {
  */
 export interface StartTaskRunDto {
     /**
-     * The worktree the agent works in — already created by the caller, and validated here only as a real directory
+     * The worktree the agent works in — already created by the caller — or the task's own folder when that is in no git repository; validated here only as a real directory
      * @type {string}
      * @memberof StartTaskRunDto
      */
     cwd: string;
     /**
-     * The branch that worktree has checked out
+     * The branch that worktree has checked out; absent when the folder is in no git repository and the run works in it directly
      * @type {string}
      * @memberof StartTaskRunDto
      */
-    branch: string;
+    branch?: string;
     /**
      * 
      * @type {TaskStatus}

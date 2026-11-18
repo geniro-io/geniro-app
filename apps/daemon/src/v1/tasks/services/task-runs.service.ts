@@ -636,7 +636,7 @@ export class TaskRunsService {
   ): Promise<TaskWire> {
     return this.tasks.update(taskId, {
       runId,
-      branch: input.branch,
+      branch: input.branch ?? null,
       worktreePath: input.cwd,
     });
   }

@@ -39,7 +39,7 @@ const ANOTHER_START_HOLDS_IT: ReadonlySet<string> = new Set([
 
 export interface Worktree {
   path: string;
-  branch: string;
+  branch: string | null;
   reused: boolean;
 }
 
@@ -147,7 +147,7 @@ export async function startRunOn(
     `/v1/tasks/${encodeURIComponent(task.taskId)}/runs`,
     {
       cwd: worktree.path,
-      branch: worktree.branch,
+      ...(worktree.branch === null ? {} : { branch: worktree.branch }),
       from: task.status,
       ...(starter.approval === undefined ? {} : { approval: starter.approval }),
       startedBy: starter.startedBy,
@@ -231,6 +231,13 @@ export class DaemonRefusal extends Error {
   ) {
     super(message);
   }
+}
+
+/** Where a started run works, for the log line. */
+export function workPlaceOf(worktree: Worktree): string {
+  return worktree.branch === null
+    ? `in ${worktree.path}, which is not a git repository`
+    : `on ${worktree.branch}`;
 }
 
 export function messageOf(error: unknown): string {

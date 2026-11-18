@@ -271,7 +271,7 @@ export const TaskWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'The worktree that branch is checked out in; null until one runs',
+      "The folder the agent works in: the worktree that branch is checked out in, or the task's own folder when that is in no git repository; null until one runs",
     ),
   runId: z
     .string()
@@ -431,7 +431,7 @@ export type TaskRunStarter = z.infer<typeof TaskRunStarterSchema>;
 
 export interface StartTaskRun {
   cwd: string;
-  branch: string;
+  branch?: string;
   from: TaskStatus;
   /**
    * What the user added to THIS press, on top of the card's own brief.

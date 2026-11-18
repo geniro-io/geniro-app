@@ -52,7 +52,8 @@ export interface WorktreeRecord {
 
 export interface PreparedWorktree {
   path: string;
-  branch: string;
+  /** Null when the folder is in no repository and the run works in it directly. */
+  branch: string | null;
   /**
    * True when this was the task's own worktree, already standing, handed back
    * as it was — see `prepareWorktree`, and why a refused start must then leave
@@ -474,6 +475,10 @@ async function releaseBranchFromMissingWorktree(
  *
  * A worktree just MADE then gets the gitignored files the checkout's
  * `.worktreeinclude` lists (`worktree-include.ts`); a reused one keeps its own.
+ *
+ * A folder in no repository has nothing to cut a worktree from: the run works
+ * in that folder itself, with no branch, and nothing is recorded, so no
+ * clean-up ever reaches the user's folder.
  */
 export async function prepareWorktree(
   input: {
@@ -482,7 +487,15 @@ export async function prepareWorktree(
   },
   options: PrepareWorktreeOptions = {},
 ): Promise<PreparedWorktree> {
-  assertRepositoryFolder(input.folder);
+  const real = realDirectoryOf(input.folder);
+  if (real === null) {
+    throw new Error(
+      `the folder ${input.folder} does not exist — set this task's folder to the folder it works in (its project's folder is used only when the task names none)`,
+    );
+  }
+  if (!isInRepository(real)) {
+    return { path: input.folder, branch: null, reused: false };
+  }
   const branch = taskBranchName(input.taskId);
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
@@ -564,24 +577,17 @@ export async function prepareWorktree(
   return { path, branch, reused: false };
 }
 
-const SET_TASK_FOLDER =
-  "set this task's folder to the repository it works in (its project's folder is used only when the task names none)";
-
 /**
  * Judged on the filesystem: git's refusal is translated prose, and its exit
  * code does not tell "not a repository" from its other failures.
  */
-function assertRepositoryFolder(folder: string): void {
-  const real = realDirectoryOf(folder);
-  if (real === null) {
-    throw new Error(`the folder ${folder} does not exist — ${SET_TASK_FOLDER}`);
-  }
-  for (let dir = real; ; dir = dirname(dir)) {
+function isInRepository(realDir: string): boolean {
+  for (let dir = realDir; ; dir = dirname(dir)) {
     if (existsSync(join(dir, '.git')) || isGitDirectory(dir)) {
-      return;
+      return true;
     }
     if (dirname(dir) === dir) {
-      throw new Error(`${folder} is not a git repository — ${SET_TASK_FOLDER}`);
+      return false;
     }
   }
 }

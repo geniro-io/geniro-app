@@ -63,7 +63,7 @@ export async function startTaskRun({
     // work across several checkouts.
     folder: task.folder ?? project.folder,
   });
-  if (!made.ok || made.path === null || made.branch === null) {
+  if (!made.ok || made.path === null) {
     throw new Error(made.error ?? 'the worktree could not be created');
   }
   try {
@@ -76,7 +76,7 @@ export async function startTaskRun({
       taskId: task.id,
       startTaskRunDto: {
         cwd: made.path,
-        branch: made.branch,
+        ...(made.branch === null ? {} : { branch: made.branch }),
         // The card as the caller last saw it, so a start computed against a card
         // someone else already moved is refused.
         from: task.status,

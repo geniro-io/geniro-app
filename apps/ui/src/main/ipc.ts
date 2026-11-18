@@ -116,7 +116,7 @@ import {
   prepareWorktree,
   pruneWorktreeForTask,
   removeWorktreeOnRequest,
-  settleWorktreeForTask,
+  settleFinishedWorktree,
   worktreesRoot,
 } from './worktree-service';
 
@@ -744,12 +744,21 @@ export function registerIpc(
     },
   );
 
+  // Which cards' work the daemon calls finished, asked right before a removal.
+  const finishedCards = (
+    taskIds: string[],
+  ): Promise<ReadonlySet<string> | null> => {
+    const daemon = supervisor.getHandle();
+    return daemon === null
+      ? Promise.resolve(null)
+      : readFinishedTasks(daemon, taskIds);
+  };
   handle(IPC.pruneTaskWorktree, ALLOW_REMOTELY, (_event, taskId: unknown) =>
     pruneWorktreeForTask(taskIdSchema.parse(taskId)),
   );
 
   handle(IPC.settleTaskWorktree, ALLOW_REMOTELY, (_event, taskId: unknown) =>
-    settleWorktreeForTask(taskIdSchema.parse(taskId)),
+    settleFinishedWorktree(taskIdSchema.parse(taskId), finishedCards),
   );
 
   // All three mutate the USER's own checkout — not an app-owned worktree — with
@@ -801,14 +810,6 @@ export function registerIpc(
 
   // Settings → Storage. Every name is one segment the schema bounds, joined
   // onto the data folder by main; a phone may not delete the Mac's files.
-  const finishedCards = (
-    taskIds: string[],
-  ): Promise<ReadonlySet<string> | null> => {
-    const daemon = supervisor.getHandle();
-    return daemon === null
-      ? Promise.resolve(null)
-      : readFinishedTasks(daemon, taskIds);
-  };
   handle(
     IPC.getAppStorage,
     denyRemotely("reads the computer running geniro's own files"),

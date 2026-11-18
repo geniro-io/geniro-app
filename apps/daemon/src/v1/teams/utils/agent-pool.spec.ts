@@ -292,6 +292,13 @@ describe('fallsThroughPool', () => {
     expect(fallsThroughPool(failed(), false)).toBe(true);
   });
 
+  it('never hands on a failure before work whose working folder is gone, yet still hands on a limit', () => {
+    expect(fallsThroughPool(failed(), false, true)).toBe(false);
+    expect(
+      fallsThroughPool(failed({ failureClass: 'rate_limited' }), false, true),
+    ).toBe(true);
+  });
+
   it('keeps a failure mid-work, and never hands on a success or a cancel', () => {
     expect(fallsThroughPool(failed(), true)).toBe(false);
     expect(

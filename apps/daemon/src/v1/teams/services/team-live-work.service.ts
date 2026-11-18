@@ -35,5 +35,8 @@ export class TeamLiveWorkSources implements OnModuleInit {
     this.liveWork.register('team host wake', (runId) =>
       this.hostWakes.owesWake(runId),
     );
+    this.liveWork.register('team wake opening a turn', (runId) =>
+      this.executor.holdsOpeningWake(runId),
+    );
   }
 }

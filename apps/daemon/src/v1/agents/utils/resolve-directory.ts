@@ -70,9 +70,8 @@ export function resolveValidDirectory(
  * team whose Manager failed on every message with that line and nothing
  * saying what to do.
  *
- * Its own code rather than the caller's: the renderer answers `INVALID_CWD` on
- * a task run by rebuilding the task's worktree (`task-worktree.ts`), which is
- * the wrong repair for a folder that exists and is simply not readable.
+ * Its own code rather than the caller's: the folder exists, so the repair is
+ * the user's privacy grant, never another folder.
  */
 function assertReadable(canonical: string, path: string, noun: string): void {
   try {

@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { HandoffResult } from '../../agents/adapters/adapter.types';
@@ -10,6 +10,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
+import { TurnFolderService } from '../../agents/services/turn-folder.service';
 import {
   CALL_RECORDS,
   readCallSeed,
@@ -56,6 +57,8 @@ export class HandoffService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly sessions: AgentSessionRegistry,
     private readonly kindRows: RunKindRowsCache,
+    /** Where a session continues once its folder is gone. Optional for the positional specs. */
+    @Optional() private readonly turnFolders?: TurnFolderService,
   ) {}
 
   /**
@@ -119,7 +122,10 @@ export class HandoffService {
         `run ${run.id} has no working directory to open a terminal in`,
       );
     }
-    const cwd = resolveValidCwd(run.cwd);
+    const cwd =
+      this.turnFolders === undefined
+        ? resolveValidCwd(run.cwd)
+        : await this.turnFolders.folderFor(run.id, run.cwd);
     return this.command(target, cwd);
   }
 

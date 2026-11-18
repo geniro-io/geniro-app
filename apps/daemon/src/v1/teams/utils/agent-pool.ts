@@ -228,11 +228,14 @@ export function conversationStartMember(input: {
  * running the call again elsewhere duplicates nothing. That second arm is
  * what covers a CLI whose limit wording no adapter recognises yet. A failure
  * mid-work is NOT handed on — running half-done work again from the top on
- * another member could repeat whatever it already did.
+ * another member could repeat whatever it already did. Nor is a failure
+ * before work whose working folder is gone (`folderGone`): every member would
+ * meet it.
  */
 export function fallsThroughPool(
   outcome: CalleeTurnOutcome,
   madeToolCalls: boolean,
+  folderGone = false,
 ): boolean {
   if (outcome.status !== 'failed') {
     return false;
@@ -240,7 +243,7 @@ export function fallsThroughPool(
   return (
     outcome.failureClass === 'rate_limited' ||
     outcome.failureClass === 'auth_expired' ||
-    !madeToolCalls
+    (!madeToolCalls && !folderGone)
   );
 }
 

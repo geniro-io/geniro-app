@@ -171,6 +171,7 @@ import type { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
 import { ThreadInboxService } from './thread-inbox.service';
+import type { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 import type { WriteFailureNotices } from './write-failure.notices';
@@ -1217,6 +1218,11 @@ function setup(
     hostWakes?: HostWakeBus;
     /** Where the chat reports the rows it could not write, when a test watches. */
     writeFailures?: WriteFailureNotices;
+    /** Where a turn starts once the run's folder is gone, when a test drives it. */
+    turnFolders?: Pick<
+      TurnFolderService,
+      'folderFor' | 'onMoved' | 'oweMoveNote'
+    >;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'>;
     knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
@@ -1530,6 +1536,7 @@ function setup(
       : new CommandEndWakeService(opts.hostWakes),
     commandCenters,
     opts.writeFailures,
+    opts.turnFolders as TurnFolderService | undefined,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -6865,6 +6872,42 @@ describe('ChatService', () => {
   it('setGroup 404s for a run that does not exist', async () => {
     const { service } = setup();
     await expect(service.setGroup('nope', null)).rejects.toThrow(/not found/);
+  });
+
+  it('starts a turn in the folder the run moved to once its own was deleted, and announces the moved row', async () => {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'chat-moved-')));
+    const asked: (string | null)[] = [];
+    const owedTo: [string, string][] = [];
+    let moved: ((runId: string) => void) | undefined;
+    const { service, claude, changedRuns } = setup({
+      turnFolders: {
+        oweMoveNote: (runId, key) => {
+          owedTo.push([runId, key]);
+        },
+        folderFor: async (_runId, cwd) => {
+          asked.push(cwd);
+          return elsewhere;
+        },
+        onMoved: (listener) => {
+          moved = listener;
+          return () => undefined;
+        },
+      },
+    });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'hello');
+
+    const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+    expect(asked).toEqual([realpathSync(dir)]);
+    expect(startArg.cwd).toBe(elsewhere);
+    expect(owedTo).toEqual([[run.id, run.id]]);
+
+    changedRuns.length = 0;
+    moved?.(run.id);
+    await vi.waitFor(() =>
+      expect(changedRuns.flat().map((row) => row.id)).toEqual([run.id]),
+    );
   });
 
   it('persists the user message then streams the reply with monotonic seq', async () => {

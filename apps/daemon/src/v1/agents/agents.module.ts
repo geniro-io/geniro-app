@@ -176,6 +176,7 @@ import { ThreadInboxService } from './services/thread-inbox.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
 import { ThreadTimelineService } from './services/thread-timeline.service';
+import { TurnFolderService } from './services/turn-folder.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
@@ -574,6 +575,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       ],
     },
     RunIdleReapService,
+    TurnFolderService,
     RunTeardownService,
     SessionTranscriptsService,
     RunGroupsService,
@@ -763,6 +765,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the task board, which stops what a finished card's agents left
     // running and tells the run, as the idle reap does.
     RunIdleReapService,
+    // For the team executor: a member's turn starts where a chat's does.
+    TurnFolderService,
     // Exported for the team executor: a team run's rows are numbered by
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.

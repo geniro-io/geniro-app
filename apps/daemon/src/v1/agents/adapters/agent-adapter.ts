@@ -3104,15 +3104,13 @@ export abstract class AgentAdapter {
         if (firstTurnTaken && this.sessionKey(turnInput) !== key) {
           return null;
         }
-        // Nor on a process whose working directory was removed under it — a
-        // task's worktree, collected once its card is Done and then cut again
-        // at the SAME path when the chat is continued. The key above cannot
-        // see that (the path is unchanged), but the process still sits in the
-        // deleted directory: codex's app-server answered every turn there with
-        // `invalid cwd: No such file or directory (os error 2)` in 2ms.
-        // REPORTED as a continued task chat that the worktree restore could not
-        // rescue. A fresh spawn starts in the directory that exists now, and
-        // the conversation survives it the way it survives any respawn.
+        // Nor on a process whose working directory was removed under it and
+        // cut again at the SAME path. The key above cannot see that (the path
+        // is unchanged), but the process still sits in the deleted directory:
+        // codex's app-server answered every turn there with `invalid cwd: No
+        // such file or directory (os error 2)` in 2ms. A fresh spawn starts in
+        // the directory that exists now, and the conversation survives it the
+        // way it survives any respawn.
         if (firstTurnTaken && directoryIdentity(turnInput.cwd) !== spawnedCwd) {
           return null;
         }

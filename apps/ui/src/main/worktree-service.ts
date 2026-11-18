@@ -709,7 +709,7 @@ export async function reapFinishedWorktrees(
       kept.push(record.path);
       continue;
     }
-    const outcome = await settleWorktreeForTask(record.taskId);
+    const outcome = await settleFinishedWorktree(record.taskId, isFinished);
     (outcome.removed ? removed : kept).push(record.path);
   }
   return { removed, kept };
@@ -854,6 +854,23 @@ export async function settleWorktreeForTask(taskId: string): Promise<{
   }
   await removeWorktree(record);
   return { removed: true, committed };
+}
+
+/**
+ * {@link settleWorktreeForTask}, once the daemon says, right before it, that
+ * the card's work is finished. The `work-finished` event that asks for it can
+ * be stale by the time it lands — an agent woken meanwhile works in this very
+ * folder — and an answer that could not be had collects nothing.
+ */
+export async function settleFinishedWorktree(
+  taskId: string,
+  isFinished: (taskIds: string[]) => Promise<ReadonlySet<string> | null>,
+): Promise<{ removed: boolean; committed: boolean }> {
+  const finished = await isFinished([taskId]).catch(() => null);
+  if (finished === null || !finished.has(taskId)) {
+    return { removed: false, committed: false };
+  }
+  return settleWorktreeForTask(taskId);
 }
 
 /**

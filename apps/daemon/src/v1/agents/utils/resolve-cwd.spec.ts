@@ -86,7 +86,7 @@ describe('resolveValidCwd', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(BadRequestException);
       const refusal = err as BadRequestException;
-      // Not INVALID_CWD: the renderer rebuilds a task's worktree on that code.
+      // Not INVALID_CWD: the folder exists, and the fix is the user's grant.
       expect(refusal.errorCode).toBe('FOLDER_NOT_READABLE');
       expect(refusal.getMessage()).toContain(dir);
       expect(refusal.getMessage()).toContain('Privacy & Security');

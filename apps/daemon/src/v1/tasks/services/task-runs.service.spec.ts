@@ -20,15 +20,24 @@ import {
 
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
 import { type RunWire } from '../../agents/chat.types';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { RunGroupDao } from '../../agents/dao/run-group.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import type { ChatService } from '../../agents/services/chat.service';
+import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
+import { TurnFolderService } from '../../agents/services/turn-folder.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
+import { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { CallContext } from '../../runs/entity/call-context.entity';
+import { Item } from '../../runs/entity/item.entity';
+import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { RunGroup } from '../../runs/entity/run-group.entity';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
@@ -180,7 +189,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       defineConfig({
         ...GENIRO_ORM_RUNTIME,
         dbName: ':memory:',
-        entities: [Project, Task, Run, RunGroup],
+        entities: [Project, Task, Run, RunGroup, Item, NodeState, CallContext],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -363,6 +372,20 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         ),
       } as unknown as TeamOverlayService,
       runTeams,
+      (() => {
+        const itemDao = new ItemDao(em);
+        return new TurnFolderService(
+          em,
+          runDao,
+          projectDao,
+          new ProjectRootsService(em),
+          itemDao,
+          new AgentEventBus(),
+          new ItemCallIndexService(itemDao, runDao, em),
+          new ItemSeqAllocator(em, itemDao),
+          new AgentSessionRegistry(4),
+        );
+      })(),
     );
     // Asks by default, so a team card is unattended-incapable unless a test
     // says otherwise.
@@ -984,6 +1007,42 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
   });
 
+  it("moves a run its folder's deletion moved back into the worktree this press cut, before the turn", async () => {
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-moved-')));
+    await runDao.rehome(
+      'run-1',
+      worktree,
+      checkout,
+      { startSha: null, startDirty: null },
+      orm.em.fork(),
+    );
+    let atSend: Run | null = null;
+    sendMessage.mockImplementationOnce(async (runId: string) => {
+      atSend = await runDao.getById(runId, orm.em.fork());
+      return {};
+    });
+
+    await service.start(
+      task.id,
+      start({ startSha: 'abc123', startDirty: false }),
+    );
+
+    expect(atSend).toMatchObject({
+      cwd: worktree,
+      startSha: 'abc123',
+      startDirty: false,
+    });
+    const notices = (
+      await orm.em.fork().find(Item, { runId: 'run-1', kind: 'system' })
+    ).map((row) => (JSON.parse(row.payload) as { message: string }).message);
+    expect(notices).toEqual([
+      `This thread works in its card's worktree ${worktree} again.`,
+    ]);
+  });
+
   it('sends a continued thread the user’s OWN words, not the brief again', async () => {
     // The brief is already in this conversation. Repeating it buries the one
     // new sentence under a paragraph the agent has read before.
@@ -1291,6 +1350,27 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   };
 
   describe('a team card run again', () => {
+    it("moves a team run its folder's deletion moved back into the worktree this press cut", async () => {
+      const task = await seed();
+      await runTeamAndReturn(task.id);
+      const checkout = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-moved-team-')),
+      );
+      await runDao.rehome(
+        'wf-run-1',
+        worktree,
+        checkout,
+        { startSha: null, startDirty: null },
+        orm.em.fork(),
+      );
+
+      await service.start(task.id, start({ prompt: 'again' }));
+
+      expect((await runDao.getById('wf-run-1', orm.em.fork()))?.cwd).toBe(
+        worktree,
+      );
+    });
+
     it('continues the run it already has, with the user’s own words, and makes no second run', async () => {
       // Follow up and a second Run press both say they continue the card's
       // thread. A fresh run would make a second thread for one card and a team

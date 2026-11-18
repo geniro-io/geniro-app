@@ -259,7 +259,7 @@ Rate limits are the worst part of a long run. In a member's settings, add an **a
 
 A project board for agents. Write a card and hit start, or let **autopilot** pick up cards by itself.
 
-- **Each card gets its own git worktree** and branch (`geniro/task-<id>`), so agents never step on each other or on you. A card whose folder is not a git repository runs in that folder directly, with no branch; two such cards in one folder share it.
+- **Each card gets its own git worktree** and branch (`geniro/task-<id>`), so agents never step on each other or on you. A card whose folder is not a git repository runs in that folder directly, with no branch; two such cards in one folder share it. A worktree removed once the work is done — by the board when you close the card, or by your own scripts — is never re-created: when an agent of that thread is woken or written to again, it works in the folder the work came from — the card's folder, the repository the folder sat in, or the thread's project folder — and the chat says so in one line. Geniro never moves it into your home folder or a disk's root; with no such folder the turn stops and the chat says the folder was deleted.
 - A card runs a single chat or a whole team. Agents write a report onto the card and attach the pull requests they open.
 - **Autopilot** starts cards from your intake columns, as many at once as you allow. If a run hits your usage limit it waits for the reset and goes on by itself; if runs keep failing it stops until you start it again. Either way the board says so, also when it shows every project.
 - When a card's pull request is merged, the card moves itself to Done.

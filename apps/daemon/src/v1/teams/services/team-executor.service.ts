@@ -112,6 +112,7 @@ import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
+import { TurnFolderService } from '../../agents/services/turn-folder.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { WriteFailureNotices } from '../../agents/services/write-failure.notices';
@@ -237,6 +238,7 @@ import {
   threadMessagesPrompt,
   threadMessagesRow,
 } from '../../agents/utils/thread-message-text';
+import { isFolderGone } from '../../agents/utils/turn-folder';
 import {
   ANSWERABILITY_KINDS,
   unanswerablePayload,
@@ -961,8 +963,17 @@ export class TeamExecutorService
     @Optional() private readonly userQuestions?: UserQuestionBroker,
     /** Tells the thread when its events were not saved, optional on `artifacts`' terms. */
     @Optional() private readonly writeFailures?: WriteFailureNotices,
+    /** Where a turn starts once the run's folder is gone, optional on `artifacts`' terms. */
+    @Optional() private readonly turnFolders?: TurnFolderService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
+  }
+
+  /** The folder a turn of `runId` starts in — see {@link TurnFolderService}. */
+  private turnFolderOf(runId: string, cwd: string): Promise<string> {
+    return this.turnFolders === undefined
+      ? Promise.resolve(resolveValidCwd(cwd))
+      : this.turnFolders.folderFor(runId, cwd);
   }
 
   /**
@@ -1032,6 +1043,9 @@ export class TeamExecutorService
   >();
 
   private readonly wakerStopped = new Map<string, () => boolean>();
+
+  /** Per run, whether a wake it accepted has not opened its turn yet. */
+  private readonly wakesOpening = new Map<string, () => boolean>();
 
   /** Told whenever one of a run's conversations ends its turn. */
   private readonly conversationTurnEndListeners = new Set<
@@ -1726,6 +1740,15 @@ export class TeamExecutorService
     );
   }
 
+  /**
+   * Whether a wake this run took — a monitor's output, a host wake — is still
+   * on its way to the turn it opens, when the run reads neither running nor
+   * as holding the output any more.
+   */
+  holdsOpeningWake(runId: string): boolean {
+    return this.wakesOpening.get(runId)?.() ?? false;
+  }
+
   /** Whether any member still has a detached command or a background sub-agent out. */
   holdsBackgroundWork(runId: string): boolean {
     return (
@@ -2101,7 +2124,7 @@ export class TeamExecutorService
     }
     const stored = await this.runTeams.teamOf(run, em);
     const { team, dropped } = await this.assertRunnable(stored);
-    const cwd = resolveValidCwd(run.cwd);
+    const cwd = await this.turnFolderOf(run.id, run.cwd);
     const resumeSessions = new Map<string, string>();
     const nodePoolMembers = new Map<string, number>();
     const nodePoolPins = new Map<string, boolean>();
@@ -2282,6 +2305,7 @@ export class TeamExecutorService
     }
     this.monitorWakers.delete(runId);
     this.wakerStopped.delete(runId);
+    this.wakesOpening.delete(runId);
     // A browser card is deferred, so no member's settle retires it; the run's
     // destruction does, with nothing written for a transcript that is gone.
     this.approvals.sweepDeferred(runId);
@@ -2470,7 +2494,7 @@ export class TeamExecutorService
   private registerMonitorSinks(
     runId: string,
     nodes: readonly TeamMember[],
-    cwd: string,
+    cwdOf: () => string,
     approvalOf: (node: TeamMember) => string,
   ): void {
     const broker = this.monitorSinks;
@@ -2508,7 +2532,7 @@ export class TeamExecutorService
               callId: this.callBroker.callAnsweredBy(runId, caller),
               target: 'team',
             },
-            cwd,
+            cwd: cwdOf(),
           }),
         }),
       );
@@ -3734,7 +3758,7 @@ export class TeamExecutorService
     dropped: DroppedNodeSetting[],
   ): void {
     const {
-      cwd,
+      cwd: passCwd,
       seedPrompt,
       customInstructions,
       replyLanguage,
@@ -3745,6 +3769,8 @@ export class TeamExecutorService
       taskInstructions,
       agentOptions,
     } = run;
+    // Moves with the run when its folder is deleted mid-pass (`turnFolderOf`).
+    let cwd = passCwd;
     const nodes = team.members;
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
     // What a pass starts: the run's lead as the pass begins, and only it.
@@ -5054,6 +5080,7 @@ export class TeamExecutorService
     }> => {
       const adapter = this.adapterFor(node.agent);
       await adapter.validateModel(node.model);
+      cwd = await this.turnFolderOf(runId, cwd);
       // Until this member has a reading of its own, its model's known window
       // arms the FIRST turn — see `firstTurnWindow`. Asked only of a member that
       // has a threshold, since resolving a model may probe the CLI, and ahead
@@ -6659,6 +6686,7 @@ export class TeamExecutorService
               { answersAtOnce: deferQuestions },
             )
           : null;
+      this.turnFolders?.oweMoveNote(runId, sessionKey);
       let handle: AgentTurnHandle;
       try {
         handle = this.sessions.startTurn(
@@ -7319,7 +7347,12 @@ export class TeamExecutorService
               },
             );
           } catch (err) {
-            if (stopped || cancelRequested || index === attempts.length - 1) {
+            if (
+              stopped ||
+              cancelRequested ||
+              index === attempts.length - 1 ||
+              isFolderGone(cwd)
+            ) {
               throw err;
             }
             await handOn(
@@ -7382,7 +7415,7 @@ export class TeamExecutorService
             stopped ||
             cancelRequested ||
             index === attempts.length - 1 ||
-            !fallsThroughPool(outcome, turn.madeToolCalls)
+            !fallsThroughPool(outcome, turn.madeToolCalls, isFolderGone(cwd))
           ) {
             cooldowns.record(attempts[index]!.node, site, outcome, false);
             finalResult = turn;
@@ -8298,7 +8331,8 @@ export class TeamExecutorService
               ? null
               : (result, madeToolCalls) => {
                   const handing =
-                    !callStopped() && fallsThroughPool(result, madeToolCalls);
+                    !callStopped() &&
+                    fallsThroughPool(result, madeToolCalls, isFolderGone(cwd));
                   callDidWork ||= handing && madeToolCalls;
                   return handing;
                 };
@@ -9022,7 +9056,7 @@ export class TeamExecutorService
     this.registerMonitorSinks(
       runId,
       hostToolNodes,
-      cwd,
+      () => cwd,
       (node) => resolveApproval(node).mode,
     );
     this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
@@ -9048,6 +9082,7 @@ export class TeamExecutorService
      * next pass meanwhile); `onBusy` when the conversation is working again,
      * handed what opens this turn once more; `start` opens it.
      */
+    let wakesOpening = 0;
     const scheduleOwnTurn = (
       memberId: string,
       caller: string,
@@ -9059,6 +9094,7 @@ export class TeamExecutorService
       },
     ): void => {
       liveSubTurns += 1;
+      wakesOpening += 1;
       const deliver = async (): Promise<void> => {
         const starting = startingContinuations.get(memberId);
         if (starting) {
@@ -9067,27 +9103,32 @@ export class TeamExecutorService
           return;
         }
         liveSubTurns -= 1;
-        const woke = cancelRequested
-          ? 'stopped'
-          : runFinished
-            ? await reopenRun(monitorProgress)
-            : 'awake';
-        if (woke !== 'awake') {
-          steps.onStopped(woke);
-          await finishRunIfSettled();
-          return;
+        try {
+          const woke = cancelRequested
+            ? 'stopped'
+            : runFinished
+              ? await reopenRun(monitorProgress)
+              : 'awake';
+          if (woke !== 'awake') {
+            steps.onStopped(woke);
+            await finishRunIfSettled();
+            return;
+          }
+          if (liveConversations.has(caller)) {
+            steps.onBusy(() => {
+              liveSubTurns += 1;
+              wakesOpening += 1;
+              enqueue(deliver);
+            });
+            // This path opens NO turn, so nothing else would put a run that
+            // woke for it back to sleep.
+            await finishRunIfSettled();
+            return;
+          }
+          await steps.start();
+        } finally {
+          wakesOpening -= 1;
         }
-        if (liveConversations.has(caller)) {
-          steps.onBusy(() => {
-            liveSubTurns += 1;
-            enqueue(deliver);
-          });
-          // This path opens NO turn, so nothing else would put a run that
-          // woke for it back to sleep.
-          await finishRunIfSettled();
-          return;
-        }
-        await steps.start();
       };
       enqueue(deliver);
     };
@@ -9096,6 +9137,7 @@ export class TeamExecutorService
     // only where the team can call — and a callee conversation inside the
     // call it holds open.
     this.wakerStopped.set(runId, () => cancelRequested);
+    this.wakesOpening.set(runId, () => wakesOpening > 0);
     this.monitorWakers.set(runId, (caller, prompt, row, onDropped, opener) => {
       if (cancelRequested) {
         return 'refused';
@@ -9165,7 +9207,9 @@ export class TeamExecutorService
         runId,
         {
           calleesOf,
-          cwd,
+          get cwd() {
+            return cwd;
+          },
           messageTargets: leadIds,
           launchCalleeTurn,
           persistItem: (memberId, kind, role, payload) => {

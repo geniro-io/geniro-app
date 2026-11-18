@@ -103,6 +103,9 @@ vi.mock('./daemon-client', () => ({
     onMemoryChanged(): () => void {
       return () => {};
     }
+    onLessonsChanged(): () => void {
+      return () => {};
+    }
     onResourceAlertsChanged(): () => void {
       return () => {};
     }
@@ -111,7 +114,7 @@ vi.mock('./daemon-client', () => ({
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));
 vi.mock('./debug/debug-panel', () => ({ DebugPanel: () => null }));
 
-import type { DaemonHandle } from '../shared/contracts';
+import { CLI_KINDS, type DaemonHandle } from '../shared/contracts';
 import { createPreloadStub } from './__fixtures__/preload-stub';
 import { afterPopstate } from './__tests__/after-popstate';
 import { App } from './App';
@@ -826,10 +829,27 @@ describe('App — the menu counts what waits on you', () => {
   async function bootWithCounts(counts: {
     pending: number;
     knowledgeWaiting: number;
+    cliUpdates?: number;
+    lessonsWaiting?: number;
   }): Promise<void> {
     chatsMock.waits = [];
     window.geniro = createPreloadStub({
       ensureDaemon: () => Promise.resolve(HANDLE),
+      detectClis: () =>
+        Promise.resolve(
+          CLI_KINDS.map((kind, index) => ({
+            kind,
+            found: true,
+            path: `/bin/${kind}`,
+            version: '1.0.0',
+            loggedIn: null,
+            update: {
+              available: index < (counts.cliUpdates ?? 0),
+              latestVersion: null,
+              checkUnavailableReason: null,
+            },
+          })),
+        ),
     });
     vi.stubGlobal(
       'fetch',
@@ -837,6 +857,16 @@ describe('App — the menu counts what waits on you', () => {
         const url = String(input);
         if (url.includes('/v1/memories/review/summary')) {
           return Promise.resolve(jsonResponse({ pending: counts.pending }));
+        }
+        if (url.includes('/v1/lessons/proposals')) {
+          return Promise.resolve(
+            jsonResponse({
+              proposals: Array.from(
+                { length: counts.lessonsWaiting ?? 0 },
+                () => ({}),
+              ),
+            }),
+          );
         }
         if (url.includes('/v1/knowledge/counts')) {
           return Promise.resolve(
@@ -896,6 +926,22 @@ describe('App — the menu counts what waits on you', () => {
     expect(railCount('Projects')).toBeNull();
     expect(railCount('Teams')).toBeNull();
     expect(railCount('Stats')).toBeNull();
+  });
+
+  it('adds the agent CLIs with an update waiting to the Settings count', async () => {
+    await bootWithCounts({ pending: 4, knowledgeWaiting: 0, cliUpdates: 2 });
+
+    expect(railCount('Settings')).toBe('6');
+  });
+
+  it('adds the lessons waiting on a decision to the Settings count', async () => {
+    await bootWithCounts({
+      pending: 4,
+      knowledgeWaiting: 0,
+      lessonsWaiting: 3,
+    });
+
+    expect(railCount('Settings')).toBe('7');
   });
 
   it('draws no count at zero', async () => {

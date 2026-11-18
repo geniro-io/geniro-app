@@ -52,6 +52,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('ConfigProfileList — a new configuration', () => {
+  it('offers signing in to a new configuration beside adding a folder, only when it can', () => {
+    const onCreateNew = vi.fn();
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <ConfigProfileList
+          agent="codex"
+          profiles={[]}
+          onChange={() => undefined}
+          onPickDirectory={async () => null}
+          onCreateNew={onCreateNew}
+        />,
+      );
+    });
+    const labels = [...container.querySelectorAll('button')]
+      .map((b) => b.textContent)
+      .filter((text) => text !== '');
+    expect(labels).toEqual([
+      'Sign in to a new configuration',
+      'Add existing folder',
+    ]);
+
+    act(() => {
+      container
+        .querySelector('button[title^="Makes a new folder"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onCreateNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the single Add configuration button where no sign-in is possible', () => {
+    const { el } = render([]);
+    expect(
+      [...el.querySelectorAll('button')]
+        .map((b) => b.textContent)
+        .filter((text) => text !== ''),
+    ).toEqual(['Add configuration']);
+  });
+});
+
 /**
  * Type into a controlled field the way React's own onChange sees it.
  *
@@ -97,6 +140,19 @@ describe('ConfigProfileList', () => {
     expect(changes).toEqual([
       [expect.objectContaining({ agent: 'claude', dir: '/tmp/work-profile' })],
     ]);
+  });
+
+  it('explains what a configuration is behind a hint beside the heading, and every button says what it does', () => {
+    const { el } = render([profile()]);
+    expect(
+      el.querySelector('button[aria-label="About Configurations"]'),
+    ).not.toBeNull();
+    const remove = el.querySelector('button[aria-label="Remove Work"]');
+    expect(remove?.getAttribute('title')).toContain('login stay on disk');
+    const add = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Add configuration'),
+    );
+    expect(add?.title).toContain('already uses');
   });
 
   it('says what the feature is FOR when there is nothing in it', () => {

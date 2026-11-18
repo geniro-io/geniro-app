@@ -215,6 +215,17 @@ export function installRemoteBridge(): void {
       ) as ReturnType<GeniroApi['detectClis']>,
     updateCli: (kind) =>
       invoke(IPC.updateCli, [kind]) as ReturnType<GeniroApi['updateCli']>,
+    getCliUpdates: () =>
+      invoke(IPC.getCliUpdates) as ReturnType<GeniroApi['getCliUpdates']>,
+    forgetCliUpdateResults: () =>
+      invoke(IPC.forgetCliUpdateResults) as ReturnType<
+        GeniroApi['forgetCliUpdateResults']
+      >,
+    onCliUpdates: () => noSubscription(),
+    createConfigProfileDir: (agent, name) =>
+      invoke(IPC.createConfigProfileDir, [agent, name]) as ReturnType<
+        GeniroApi['createConfigProfileDir']
+      >,
     installCli: (kind) =>
       invoke(IPC.installCli, [kind]) as ReturnType<GeniroApi['installCli']>,
     completeOnboarding: (input) =>
@@ -331,6 +342,10 @@ export function installRemoteBridge(): void {
       >,
     revealPath: (path) =>
       invoke(IPC.revealPath, [path]) as ReturnType<GeniroApi['revealPath']>,
+    openArtifactPath: (path) =>
+      invoke(IPC.openArtifactPath, [path]) as ReturnType<
+        GeniroApi['openArtifactPath']
+      >,
     getAppStorage: (unclaimed) =>
       invoke(IPC.getAppStorage, [unclaimed]) as ReturnType<
         GeniroApi['getAppStorage']

@@ -155,6 +155,9 @@ import {
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
+  CLAUDE_THINKING_DISPLAY_ACCEPTED,
+  CLAUDE_THINKING_DISPLAY_ARGS,
+  CLAUDE_THINKING_DISPLAY_PROBE_ARGS,
   CLAUDE_TITLE_ARGS,
   CLAUDE_TITLE_DIR_PREFIX,
   CLAUDE_TITLE_MODEL,
@@ -207,7 +210,10 @@ import {
   readDisabledServers,
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
-import { claudeDisallowedToolArgs } from './utils/claude-mcp-tool-name.utils';
+import {
+  claudeDisallowedToolArgs,
+  claudeSwitchedOffServers,
+} from './utils/claude-mcp-tool-name.utils';
 import { claudeToolCallMetric } from './utils/claude-mcp-tool-name.utils';
 import { readClaudeMemoryNotes } from './utils/claude-memory.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
@@ -573,6 +579,13 @@ export class ClaudeAdapter extends AgentAdapter {
         /** Utility argv whose stdout is searched for {@link CLAUDE_PARTIAL_MESSAGES_FLAG}. */
         probeArgs: ['--help'],
         flag: CLAUDE_PARTIAL_MESSAGES_FLAG,
+        reasoning: {
+          args: CLAUDE_THINKING_DISPLAY_ARGS,
+          probeArgs: CLAUDE_THINKING_DISPLAY_PROBE_ARGS,
+          accepted: CLAUDE_THINKING_DISPLAY_ACCEPTED,
+          /** The refusal comes in 0.07 s on 2.1.325. */
+          probeTimeoutMs: 3_000,
+        },
       },
       reportedCommands: {
         /** Never reached by the model: the turn is cancelled the moment init lands. */
@@ -635,15 +648,15 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: null,
         /**
-         * Null: a team member's switched-off servers ride
-         * `--disallowedTools mcp__<server>` (`claudeDisallowedToolArgs`).
-         * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
-         * mcp__plugin_playwright_playwright` took the turn's `system/init`
-         * tool list from 125 to 96, every `mcp__codegraph__*` and
-         * `mcp__plugin_playwright_playwright__*` tool gone, while both servers
-         * still reported `connected` — the CLI dials them and the model is
-         * never offered their tools. A server-level rule is the CLI's own
-         * shape (`jHe`'s `isServerLevelDisallowed` in the 2.1.284 bundle).
+         * Null: a team member's switched-off servers are named in the turn's
+         * `--settings` `deniedMcpServers` (`CLAUDE_DENIED_MCP_SERVERS_KEY`), so
+         * the CLI never starts them, and withheld as tools too
+         * (`claudeDisallowedToolArgs`). MEASURED on 2.1.325: the deny list keeps
+         * a server from starting. MEASURED on 2.1.284: `--disallowedTools` alone
+         * took the tool list from 125 to 96 while both servers still reported
+         * `connected`, so the CLI dialled them. A server-level tool rule is the
+         * CLI's own shape (`jHe`'s `isServerLevelDisallowed` in the 2.1.284
+         * bundle).
          */
         turnToggleUnavailableReason: null,
         /**
@@ -2249,6 +2262,9 @@ export class ClaudeAdapter extends AgentAdapter {
     if (input.streamPartials) {
       args.push(CLAUDE_PARTIAL_MESSAGES_FLAG);
     }
+    if (input.streamReasoning) {
+      args.push(...CLAUDE_THINKING_DISPLAY_ARGS);
+    }
     if (input.model) {
       args.push(CLAUDE_MODEL_FLAG, this.modelConfiguration(input.model).model!);
     }
@@ -2315,15 +2331,14 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     // claude's own tools geniro replaces, and a team member's switched-off
     // servers, ride one variadic `--disallowedTools`; geniro's own server is
-    // filtered out inside.
+    // filtered out inside. The settings deny list (`settingsArgs`) keeps a
+    // switched-off server from starting; these rules are the second fence.
     if (input.readOnly === true) {
       args.push(CLAUDE_TOOLS_FLAG, CLAUDE_READ_ONLY_TOOLS.join(','));
     }
     args.push(
       ...claudeDisallowedToolArgs(
-        input.readOnly === true
-          ? [...(input.mcpDisabled ?? []), ...CLAUDE_BUILT_IN_MCP_SERVERS]
-          : input.mcpDisabled,
+        this.switchedOffServers(input),
         input.mcpEndpoint?.serverName ?? null,
       ),
     );
@@ -2465,7 +2480,24 @@ export class ClaudeAdapter extends AgentAdapter {
       modelParameters: input.modelParameters,
       replyLanguage: input.replyLanguage,
       env: this.modelConfiguration(input.model).env,
+      // Sorted, so a reordered list reads as the same settings (`sessionKey`).
+      deniedMcpServers: claudeSwitchedOffServers(
+        this.switchedOffServers(input),
+        input.mcpEndpoint?.serverName ?? null,
+      ).sort(),
     });
+  }
+
+  /**
+   * The servers this turn runs without: a team member's own switches, plus
+   * claude's built-in server on a read-only turn, which the turn withholds.
+   */
+  private switchedOffServers(
+    input: AgentTurnInput,
+  ): readonly string[] | undefined {
+    return input.readOnly === true
+      ? [...(input.mcpDisabled ?? []), ...CLAUDE_BUILT_IN_MCP_SERVERS]
+      : input.mcpDisabled;
   }
 
   /**

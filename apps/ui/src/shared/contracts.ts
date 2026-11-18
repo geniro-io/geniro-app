@@ -402,8 +402,8 @@ export type LessonsMode = 'off' | 'auto';
 
 /**
  * What a lessons reflection and its optional check run as. A null `reflector`
- * reflects as the thread did — its CLI and profile — on that CLI's light model;
- * a null `checker` runs no check.
+ * reflects as the thread ran — its CLI, profile, model, effort, window and
+ * model parameters; a null `checker` runs no check.
  *
  * TWIN PARSER: `LessonsConfigSchema` in `apps/daemon/src/v1/lessons/lessons.types.ts`,
  * which `main/lessons-config-push.ts` pushes this to.
@@ -1137,10 +1137,11 @@ export const CHAT_LIST_WIDTH = 260;
  * keeps the one place that can post a banner the one place that gates it.
  * `share-sign-in` is an agent's share waiting on the user signing in to the
  * place it shares to. `resource-alert` is the daemon's resource watch finding a
- * thread eating memory, or the machine short of memory or disk.
+ * thread eating memory, or the machine short of memory or disk. `lessons` is
+ * a reflection's card landing with lessons saved or waiting on the user.
  */
 export type RunNotificationKind =
-  'question' | 'turn-end' | 'share-sign-in' | 'resource-alert';
+  'question' | 'turn-end' | 'share-sign-in' | 'resource-alert' | 'lessons';
 
 /** One notification the renderer asks main to post. */
 export interface RunNotification {
@@ -1246,6 +1247,16 @@ export interface CliUpdateResult {
    * other than the copy in use".
    */
   reason: string | null;
+}
+
+/**
+ * Every CLI update main is running or has finished, held in main so a window
+ * that left Settings and came back still shows a running update as running.
+ */
+export interface CliUpdates {
+  updating: CliKind[];
+  /** The last finished update per CLI, kept until a fresh reading is asked for. */
+  results: Partial<Record<CliKind, CliUpdateResult>>;
 }
 
 /** What running one CLI's own installer actually did. */
@@ -1808,6 +1819,10 @@ export interface OnboardingInput {
   cliPaths?: Partial<Record<CliKind, string>>;
 }
 
+/** What showing an artifact page's folder or file in Finder did, or why it showed nothing. */
+export type ArtifactPathOutcome =
+  { shown: 'opened' | 'revealed' } | { shown: null; reason: string };
+
 /**
  * The typed API surface the preload exposes on `window.geniro`. The renderer
  * never touches Node or Electron directly — every privileged action is one of
@@ -1907,6 +1922,18 @@ export interface GeniroApi {
    * press against it.
    */
   updateCli(kind: CliKind): Promise<CliUpdateResult>;
+  /** The CLI updates running now and the last one finished per CLI. */
+  getCliUpdates(): Promise<CliUpdates>;
+  /** Drop the finished updates' outcomes, for a fresh reading (`Re-check`). */
+  forgetCliUpdateResults(): Promise<CliUpdates>;
+  /** Subscribe to CLI update changes: one starting, one finishing. */
+  onCliUpdates(listener: (state: CliUpdates) => void): () => void;
+  /**
+   * Make an empty folder for a new configuration of `agent`, under geniro's
+   * own data folder, and answer its path. The name only seeds the folder's
+   * name; a taken one gets a numeric suffix.
+   */
+  createConfigProfileDir(agent: CliKind, name: string): Promise<string>;
   /**
    * Install one agent CLI on a machine that does not have it, by running the
    * VENDOR's own installer (`main/agents/<cli>.ts` → `installer`), and report
@@ -2188,6 +2215,12 @@ export interface GeniroApi {
     path: string,
   ): Promise<{ revealed: boolean; reason: string | null }>;
   /**
+   * Show a folder or file a button on an agent's artifact page names, in Finder: a
+   * plain folder opens, anything else is revealed, so nothing is ever launched.
+   * Desktop only.
+   */
+  openArtifactPath(path: string): Promise<ArtifactPathOutcome>;
+  /**
    * Toggle Chrome DevTools on this window — the same Elements / Console /
    * Network panels a browser gives you, because the renderer IS a browser.
    *
@@ -2435,6 +2468,10 @@ export const IPC = {
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',
   updateCli: 'geniro:updateCli',
+  getCliUpdates: 'geniro:getCliUpdates',
+  forgetCliUpdateResults: 'geniro:forgetCliUpdateResults',
+  onCliUpdates: 'geniro:onCliUpdates',
+  createConfigProfileDir: 'geniro:createConfigProfileDir',
   installCli: 'geniro:installCli',
   completeOnboarding: 'geniro:completeOnboarding',
   pickTeamImport: 'geniro:pickTeamImport',
@@ -2471,6 +2508,7 @@ export const IPC = {
   carryChangesToBranch: 'geniro:carryChangesToBranch',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
+  openArtifactPath: 'geniro:openArtifactPath',
   getAppStorage: 'geniro:getAppStorage',
   removeStorageWorktree: 'geniro:removeStorageWorktree',
   clearBrowserCache: 'geniro:clearBrowserCache',

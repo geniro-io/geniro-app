@@ -80,6 +80,9 @@ import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import type { BrowserBroker } from '../../agents/services/browser.broker';
 import { ChartBroker } from '../../agents/services/chart.broker';
+import type { ChatArtifactsService } from '../../agents/services/chat-artifacts.service';
+import { CommandCenterBroker } from '../../agents/services/command-center.broker';
+import { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
@@ -125,6 +128,7 @@ import { hostEndpointPath } from '../../agents/utils/host-endpoint';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import { RemoteImageError } from '../../agents/utils/remote-image';
 import type { BrowserOp } from '../../browser/browser.types';
+import { BROWSER_NO_WINDOW_REASON } from '../../browser/services/browser-bridge.service';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { LessonCheckService } from '../../lessons/services/lesson-check.service';
 import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
@@ -265,10 +269,14 @@ function service(
   knowledge = fakeKnowledge(false).service,
   // Never listed by the cases that pass none: no browser sink.
   browser = fakeBrowser({ status: 'done', text: '' }, false).broker,
+  // Off unless a case registers a sink: no manager tool is listed.
+  commandCenters = new CommandCenterBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      commandCenters,
+      commandCenterOps: new CommandCenterOpsBroker(),
       calls: callBroker,
       questions,
       findings,
@@ -278,6 +286,7 @@ function service(
       galleries,
       galleryImages,
       artifacts,
+      artifactAnswers: {} as ChatArtifactsService,
       browser,
       attachments: {} as AttachmentStoreService,
       actions,
@@ -3925,7 +3934,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const message = find(tools, HOST_MESSAGE_THREAD_TOOL);
 
     expect(threads).toContain(
-      "archived threads and the app's own builder, project and analysis chats are not listed",
+      "the app's own builder, project and analysis chats are never listed; archived threads only with `includeArchived: true`",
     );
     expect(find(tools, HOST_SEARCH_CHATS_TOOL)).toMatch(/archived/);
     expect(threads).not.toContain('call_agent');
@@ -4703,6 +4712,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     });
     const tools = createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      commandCenters: new CommandCenterBroker(),
+      commandCenterOps: new CommandCenterOpsBroker(),
       browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
@@ -4714,6 +4725,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
+      artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
       patches: new PatchBroker(),
       plans: new PlanBroker(),
@@ -4807,6 +4819,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     return createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      commandCenters: new CommandCenterBroker(),
+      commandCenterOps: new CommandCenterOpsBroker(),
       browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
@@ -4818,6 +4832,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
+      artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
       patches: new PatchBroker(),
       plans: new PlanBroker(),
@@ -5120,6 +5135,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     } as unknown as TeamStoreService;
     const tool = createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      commandCenters: new CommandCenterBroker(),
+      commandCenterOps: new CommandCenterOpsBroker(),
       browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
@@ -5131,6 +5148,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
+      artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
       patches: new PatchBroker(),
       plans: new PlanBroker(),
@@ -5261,6 +5279,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       };
       const tool = createMcpTools({
         threadDelivery: {} as ThreadDeliveryService,
+        commandCenters: new CommandCenterBroker(),
+        commandCenterOps: new CommandCenterOpsBroker(),
         browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
         attachments: {} as AttachmentStoreService,
         calls: new CallBroker(),
@@ -5272,6 +5292,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         galleries: new GalleryBroker(),
         galleryImages: {} as GalleryImageService,
         artifacts: new ArtifactBroker(),
+        artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),
         patches: new PatchBroker(),
         plans: new PlanBroker(),
@@ -5407,6 +5428,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const team = teamOf([member('lead')], { name: 'x' });
     const tools = createMcpTools({
       threadDelivery: {} as ThreadDeliveryService,
+      commandCenters: new CommandCenterBroker(),
+      commandCenterOps: new CommandCenterOpsBroker(),
       browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
@@ -5418,6 +5441,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
       artifacts: new ArtifactBroker(),
+      artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
       patches: new PatchBroker(),
       plans: new PlanBroker(),
@@ -5474,6 +5498,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     ): ReturnType<typeof createMcpTools> =>
       createMcpTools({
         threadDelivery: {} as ThreadDeliveryService,
+        commandCenters: new CommandCenterBroker(),
+        commandCenterOps: new CommandCenterOpsBroker(),
         browser: fakeBrowser({ status: 'done', text: '' }, false).broker,
         attachments: {} as AttachmentStoreService,
         calls: new CallBroker(),
@@ -5485,6 +5511,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         galleries: new GalleryBroker(),
         galleryImages: {} as GalleryImageService,
         artifacts: new ArtifactBroker(),
+        artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),
         patches: new PatchBroker(),
         plans: new PlanBroker(),
@@ -5866,10 +5893,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(example!.startsWith('/tmp/')).toBe(true);
   });
 
-  it('says a click-to-enlarge viewer reads the picture’s own src, the only place a path is copied from', async () => {
+  it('says only <img src> is copied, and that a click on a picture opens it in the app’s own viewer', async () => {
     const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
     expect(description).toContain('Only <img src> is copied');
-    expect(description).toMatch(/click-to-enlarge viewer sets its own src/);
+    expect(description).toContain(
+      'a click on a picture opens it in the app’s own viewer',
+    );
   });
 
   it('says in the html field that a picture goes in by path, and what the html limit is', async () => {
@@ -7015,16 +7044,17 @@ describe('McpServerService — the in-app browser tools', () => {
   });
 
   it('answers at once when no window is registered', async () => {
-    const closed =
-      "Geniro's window on the Mac is closed — the browser is unavailable.";
-    const { subject } = browserService({ status: 'failed', reason: closed });
+    const { subject } = browserService({
+      status: 'failed',
+      reason: BROWSER_NO_WINDOW_REASON,
+    });
 
     const answer = await callTool(subject, HOST_BROWSER_SNAPSHOT_TOOL, {
       tab: 't1',
     });
 
     expect(answer).toEqual({
-      content: [{ type: 'text', text: closed }],
+      content: [{ type: 'text', text: BROWSER_NO_WINDOW_REASON }],
       isError: true,
     });
   });

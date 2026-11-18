@@ -479,6 +479,53 @@ function targetTrigger(el: HTMLElement): HTMLElement {
   return trigger;
 }
 
+describe('LessonsCard — what each choice means', () => {
+  it('says under every target who reads the lesson and where it ends up', async () => {
+    const el = await render({
+      lessons: [LESSON_PROJECT_RULE],
+      places: PROJECT_PLACES,
+      onSave: vi.fn(async () => undefined),
+    });
+
+    await press(targetTrigger(el));
+
+    const sub = (label: string): string | null | undefined =>
+      optionNamed(label).querySelector('[data-slot="menu-item-sublabel"]')
+        ?.textContent;
+    expect(sub('Project instructions')).toBe(
+      'Every agent in this project reads it each chat.',
+    );
+    expect(sub('Memory · project')).toBe(
+      'Agents in this project find it by searching.',
+    );
+    expect(sub('Memory · global')).toBe(
+      'Agents in any chat find it by searching.',
+    );
+    expect(sub('Instructions of Reviewer')).toBe(
+      'Only this team member reads it.',
+    );
+    expect(sub('Knowledge · new document')).toBe(
+      'Starts a new document agents can open.',
+    );
+  });
+
+  it('explains Edit, Reject and Why with a title', async () => {
+    const el = await render({
+      lessons: [LESSON_PROJECT_RULE],
+      places: PROJECT_PLACES,
+      onSave: vi.fn(async () => undefined),
+    });
+
+    expect(buttonNamed(el, 'Edit').title).toBe(
+      'Change the title and rule before saving.',
+    );
+    expect(buttonNamed(el, 'Reject').title).toBe(
+      'Throw this lesson away; nothing is saved.',
+    );
+    expect(el.querySelector('[title^="Why the reflection"]')).not.toBeNull();
+  });
+});
+
 describe('LessonsCard — the target a waiting lesson goes to', () => {
   it('names a project-instructions lesson in words, and saves it there', async () => {
     const onSave = vi.fn(async () => undefined);
@@ -715,16 +762,24 @@ describe('LessonsCard — a refines or broken-again lesson in memory', () => {
     expect(onMoveUp).toHaveBeenCalledWith(LESSON_BROKEN_AGAIN.id);
   });
 
-  it('says Move up goes into the project instructions when the thread has a project', async () => {
+  it('keeps Move up on the memory index when the thread has a project, with the project instructions one pick away', async () => {
+    const onSave = vi.fn(async () => undefined);
     const el = await render({
       lessons: [LESSON_BROKEN_AGAIN],
       places: PROJECT_PLACES,
       onMoveUp: vi.fn(async () => undefined),
+      onSave,
     });
 
-    expect(primaryButton(el).textContent).toBe(
-      'Move up to project instructions',
-    );
+    expect(primaryButton(el).textContent).toBe('Move up to the memory index');
+
+    await press(targetTrigger(el));
+    await press(optionNamed('Project instructions'));
+    await press(primaryButton(el));
+
+    expect(onSave).toHaveBeenCalledWith(LESSON_BROKEN_AGAIN.id, {
+      target: { kind: 'project_instructions' },
+    });
   });
 });
 

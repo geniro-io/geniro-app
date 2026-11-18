@@ -64,7 +64,8 @@ const Teams = lazy(() =>
   import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );
 import type { SettingsSection } from './settings/Settings';
-import { useMemoryPendingCount } from './settings/use-memory-pending-count';
+import { useCliUpdatesAvailable } from './settings/use-cli-updates-available';
+import { useMemoryWaitingCount } from './settings/use-memory-waiting-count';
 
 const Settings = lazy(() =>
   import('./settings/Settings').then((m) => ({ default: m.Settings })),
@@ -81,6 +82,11 @@ const Projects = lazy(() =>
 const Knowledge = lazy(() =>
   import('./knowledge/Knowledge').then((m) => ({ default: m.Knowledge })),
 );
+const CommandCenter = lazy(() =>
+  import('./command-center/CommandCenter').then((m) => ({
+    default: m.CommandCenter,
+  })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -93,6 +99,7 @@ type Phase = 'loading' | 'onboarding' | 'ready';
  */
 const VIEW_TITLE: Record<AppView, string> = {
   chats: 'Chats',
+  'command-center': 'Command center',
   teams: 'Teams',
   tasks: 'Tasks',
   projects: 'Projects',
@@ -133,6 +140,8 @@ function currentRoute(
       return { view: 'projects', projectId: shownProjectId };
     case 'knowledge':
       return { view: 'knowledge', documentId: shownDocumentId };
+    case 'command-center':
+      return { view: 'command-center' };
     case 'settings':
       return { view: 'settings' };
     case 'stats':
@@ -573,7 +582,8 @@ export function App(): React.JSX.Element {
     }
   }, [openRunId]);
   const knowledgeCounts = useKnowledgeCounts(apis, clientRef.current);
-  const memoryPending = useMemoryPendingCount(apis, clientRef.current);
+  const memoryWaiting = useMemoryWaitingCount(apis, clientRef.current);
+  const cliUpdatesAvailable = useCliUpdatesAvailable();
   const agentName = useLatestCallback(
     (kind: string): string => agentShortName(agentIdentities, kind),
     [agentIdentities],
@@ -587,9 +597,9 @@ export function App(): React.JSX.Element {
     () => ({
       chats: owedCount(waiting),
       knowledge: knowledgeCounts?.waiting ?? 0,
-      settings: memoryPending ?? 0,
+      settings: (memoryWaiting ?? 0) + cliUpdatesAvailable,
     }),
-    [waiting, knowledgeCounts, memoryPending],
+    [waiting, knowledgeCounts, memoryWaiting, cliUpdatesAvailable],
   );
   const waitingByRun = useMemo(
     () => new Map(waiting.map((reading) => [reading.runId, reading.state])),
@@ -967,6 +977,20 @@ export function App(): React.JSX.Element {
                       />
                     </div>
                   ) : null}
+                  {view === 'command-center' &&
+                  !showStartup &&
+                  handle !== null ? (
+                    <div className="min-h-0 flex-1">
+                      <CommandCenter
+                        handle={handle}
+                        client={clientRef.current}
+                        onOpenThread={(runId) => {
+                          setThreadRequest(runId);
+                          setView('chats');
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   {view === 'knowledge' && !showStartup ? (
                     <div className="min-h-0 flex-1">
                       <Knowledge
@@ -998,6 +1022,7 @@ export function App(): React.JSX.Element {
                           settingsSection === 'memory' ? memoryFocus : null
                         }
                         onMemoryFocusDone={() => setMemoryFocus(null)}
+                        memoryWaiting={memoryWaiting}
                         onOpenOnboarding={
                           isRemoteRuntime()
                             ? undefined

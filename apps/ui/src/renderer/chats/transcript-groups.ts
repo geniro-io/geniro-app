@@ -29,6 +29,7 @@ import {
   MESSAGE_THREAD,
   SAVE_PROJECT_INSTRUCTIONS,
 } from './geniro-tool';
+import { isCallRow } from './history-anchors';
 import {
   foldLessonOutcomes,
   type LessonsCardData,
@@ -1420,11 +1421,12 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
  * unreportable and the block was downgraded for it. It no longer decides
  * anything about the WORK — a declared-open delegate is working until an
  * outcome says otherwise ({@link subagentBlockStatus}) — and what it decides
- * instead is the BADGE's wording: a delegate writing rows is the run `running`,
- * while one merely declared out is `held`, the same reading a background
- * command gets. A run that has not settled is all live, so everything is
- * audible; a settle nobody can place makes nothing audible, which is the
- * conservative half of {@link RunSettleAt} in its new job.
+ * instead is which reading the turn-end notification takes: a delegate writing
+ * rows keeps the run `running`, while one merely declared out, which the run
+ * row counts (`subagentsOut`), does not. A run that has not settled is all
+ * live, so everything is audible; a settle nobody can place makes nothing
+ * audible, which is the conservative half of {@link RunSettleAt} in its new
+ * job.
  */
 export function subagentSpokeSince(
   block: SubagentBlockEntry,
@@ -2664,6 +2666,24 @@ const UNCLAIMABLE_KINDS = new Set<ChatItem['kind']>([
 
 const BLOCK_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
 
+/**
+ * A row of a call, held only to build that call's card, whose card is not in
+ * the fold yet: a live row that arrived before the anchors its start is asked
+ * for. It is drawn nowhere until the start lands, never as its callee's block
+ * in the run's own flow.
+ */
+function isUnplacedCallRow(
+  item: ChatItem,
+  anchorIds: ReadonlySet<string> | undefined,
+): boolean {
+  return (
+    anchorIds !== undefined &&
+    anchorIds.has(item.id) &&
+    isCallRow(item) &&
+    !UNCLAIMABLE_KINDS.has(item.kind)
+  );
+}
+
 /** A pending agent-call block under assembly (one per call_started). */
 interface CallShell {
   started: ChatItem;
@@ -3003,7 +3023,7 @@ export function groupTranscript(
   const openGroups = new Map<string, ToolGroupEntry>();
 
   for (const item of items) {
-    if (claimed.has(item.id)) {
+    if (claimed.has(item.id) || isUnplacedCallRow(item, anchorIds)) {
       continue;
     }
     if (item.kind === 'call_started') {
@@ -5045,10 +5065,9 @@ export function withLiveText(
       continue;
     }
     // Words render as the assistant message they are about to become; a
-    // reasoning stretch rides the `reasoning` kind, carrying whichever of the
-    // two things its CLI gives — the thinking TEXT where it discloses it, and
-    // otherwise a running token count, which is all a CLI that redacts the
-    // block (headless claude) can offer.
+    // reasoning stretch rides the `reasoning` kind, carrying whatever its CLI
+    // gives — the thinking TEXT where it discloses it, a running token count,
+    // or both.
     //
     // The stretch id is IN the row's identity, which is what makes each wait
     // its own row: React remounts on the new key, so the clock starts at zero

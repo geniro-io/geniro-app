@@ -72,6 +72,12 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
  */
 export const cliKindSchema = cliKind;
 
+export const configProfileNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_CONFIG_PROFILE_NAME);
+
 /** How old a sign-in and install reading the caller will take; absent asks afresh. */
 export const detectClisOptionsSchema = z.strictObject({
   maxAgeMs: z.number().int().min(0).max(3_600_000).optional(),
@@ -724,6 +730,12 @@ export const changesPullRequestsSchema = z
  */
 export const revealPathSchema = absolutePath;
 
+/**
+ * A folder or file an artifact page's button names. Shape only: what may happen to
+ * it — open a plain folder, reveal anything else — is `openArtifactPath`'s call.
+ */
+export const artifactPathSchema = absolutePath;
+
 /** A terminal tab's id — minted by the renderer, so held to a UUID's shape. */
 export const terminalIdSchema = z.uuid();
 
@@ -848,7 +860,13 @@ export type KnowledgeExportSave = z.infer<typeof knowledgeExportSaveSchema>;
  */
 export const notificationSchema = z
   .strictObject({
-    kind: z.enum(['question', 'turn-end', 'share-sign-in', 'resource-alert']),
+    kind: z.enum([
+      'question',
+      'turn-end',
+      'share-sign-in',
+      'resource-alert',
+      'lessons',
+    ]),
     runId: z.string().max(128),
     title: z.string().min(1).max(120),
     body: z.string().max(240),

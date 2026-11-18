@@ -1,6 +1,6 @@
 # apps/ui — main process
 
-The Electron main process (`apps/ui/src/main/`): IPC, git and worktrees, daemon supervision, the terminal panel, the LAN gateway, app updates and the network lockdown. The preload, renderer, design system, chats, teams and settings are in `apps/ui/AGENTS.md`; macOS packaging is in `.claude/rules/packaging-config.md`. Project-wide commands, conventions and constraints are in the root `AGENTS.md`.
+The Electron main process (`apps/ui/src/main/`): IPC, git and worktrees, daemon supervision, the terminal panel, the LAN gateway, app updates and the network lockdown. The preload, renderer, design system and settings keys are in `apps/ui/AGENTS.md`, and the chats, teams and settings pages in `.claude/rules/ui-*.md`; macOS packaging is in `.claude/rules/packaging-config.md`. Project-wide commands, conventions and constraints are in the root `AGENTS.md`.
 
 **Contents**: [Main process](#main-process) (incl. _Git_, _Task worktrees_, **Daemon supervision**, **Terminal panel**, **LAN gateway**) · [App updates](#app-updates) · [Security](#security)
 
@@ -30,6 +30,8 @@ Child processes and environment:
 - `login-shell-path.ts` spawns the interactive shell with stdin on `/dev/null` and SIGKILLs it at its deadline. Otherwise a `.zshrc` that reads stdin hangs daemon start and ⌘Q.
 - `cli-detect.ts`: a `loggedIn` of `null` means unknown, never signed-out. Read a CLI's structured reply where it has one (`cursor-agent status --format json`). Otherwise read the exit code and the wording together (codex answers on stderr).
 - `cli-install.ts` runs the descriptor's `installer` as `curl -fsSL <url> | <shell>`, and only on the user's press. It reports success only once detection resolves the new binary's `--version`.
+- `cli-update-service.ts` owns every CLI update (one run per CLI, a second press joins it) and broadcasts `onCliUpdates`, so a remounted Settings, or a phone polling `getCliUpdates`, still shows one running. `runCliUpdate` keeps reading `--version` after a clean exit while the last detection said a newer version exists (`lastDetection`, never a new probe), and reports a failure when the deadline passes on the old version.
+- `config-profile-dir.ts` makes a new configuration's folder under `<userData>/agent-configs/<cli>/<slug>` (0700, never an existing one). `denyRemotely`.
 - Main's own failures go to the daemon's log (`reportMainLog`, the `ui` channel), never to stdout. A packaged Finder launch discards main's stdout.
 - A window whose renderer dies is reloaded (`shouldReloadAfterRendererGone`), except on `clean-exit`, while quitting, or when it died again within `RENDERER_RELOAD_WINDOW_MS` of the last reload.
 
@@ -58,6 +60,7 @@ Task worktrees (`worktree-service.ts`):
 Background loops in main (main hosts them because a renderer timer dies with the window and is throttled):
 
 - **Autopilot** (`autopilot-conductor.ts`) is a recurring tick that starts what `GET /v1/projects/:id/queue` hands out, with `approval: 'auto'` and `startedBy: 'autopilot'`. It decides nothing about capacity, because the daemon enforces the cap and the breaker at the route. A refusal is the ordinary case: give the worktree back. A worktree it cannot prepare is reported to `POST /v1/tasks/:taskId/prepare-failed` with `gitFailureLine`'s reason; the daemon then holds the card in `blocked` and decides the retry, never the conductor. One failing project never ends the sweep. The tick is `unref`'d.
+- **Command center starts** (`thread-start-conductor.ts`) drain `GET /v1/command-center/starts`: each start the user approved on the manager's Start card (or the manager made in `auto`) gets its worktree prepared and its run started with `startedBy: 'manager'` and the user's default approval, through the same `task-run-start.ts` path autopilot uses. A start it cannot make is reported to `POST /v1/command-center/starts/:taskId/failed`, which ends the request and wakes the manager; a 409 (another start holds the card) is left for the next tick. It holds the daemon keepalive while any approved start waits.
 - **Daemon keepalive** (`daemon-keepalive.ts`) holds one authenticated Socket.IO client while any project is armed, so the daemon's idle exit does not fire with every window closed. It must authenticate, because an unauthenticated client is disconnected and not counted. `before-quit` disposes it.
 - **Keep awake** (`keep-awake.ts`) polls `GET /v1/agents/activity` every `KEEP_AWAKE_POLL_MS` while `Settings.preventSleepWhileWorking` is on, and holds one `powerSaveBlocker` `prevent-app-suspension` id while the answer is `working`. Never a socket: a WS client would hold the daemon off its idle exit. A daemon without the route (404) is asked `defaultCheckBusy`. It lets go when the setting goes off, the daemon is gone, `KEEP_AWAKE_MAX_FAILED_READINGS` readings fail in a row, or `before-quit` disposes it; a failed reading never starts a hold. `daemonCameUp` pokes it.
 - **Merge watcher** (`pull-request-merge-watcher.ts`) reports merges to `POST /v1/tasks/:taskId/pull-request-merged`. The daemon moves the card. Only a merge strictly after the card's `lastDoneAt` counts (`endsCard`, twin of the daemon's `mergedSince`). `readAwaitingMerge` is a twin parser of `TaskAwaitingMergeSchema`.
@@ -68,6 +71,7 @@ Smaller rules:
 - **Clear Agent Cache** runs in the focused renderer. It reloads only after the daemon has answered, and never on a failure. It acts on the press alone, with no confirmation strip.
 - **Component Catalog** appears only when `isDev` (`ELECTRON_RENDERER_URL`) is passed in, and is omitted otherwise. Its port is a twin of `apps/ui/package.json`'s `storybook` script. Main never starts Storybook.
 - `reveal-path.ts` reveals in Finder and never opens.
+- `open-artifact-path.ts` shows an artifact page's folder button in Finder: a plain folder opens, anything else (a file, a folder whose name has an extension — `.Tool.app` too — or that holds `Contents`, judged on the real path) is only revealed, so nothing launches. `denyRemotely`.
 - Settings → Storage (`app-storage.ts`): main sizes only the data-folder names the daemon's `GET /v1/storage` left `unclaimed`, through one `/usr/bin/du -sk` call (hard links counted once, symlinks not followed), and clears only the window's HTTP and code caches (`session.clearCache`, `clearCodeCaches`). Every name arrives through `storageEntryNameSchema` (one path segment). `geniro:restartDaemon` (`denyRemotely`) is the page's restart for a scheduled compaction, the same `restartAndNotify` a settings change uses, refused when `isServingWork` finds a live run (the marker then waits for the next start).
 - `open-terminal.ts` hands off to the user's own terminal through a 0700 `.command` file. `renderer/handoff-open.ts` is its one renderer helper, with one call site in `Chats.tsx`.
 - `navigation-policy.ts` keeps the top frame on the renderer document. `URL.origin` cannot decide this, because it is `null` for every `file:` URL.
@@ -108,6 +112,7 @@ Smaller rules:
 **LAN gateway** (`main/remote/`). The hard rules (daemon stays loopback-only, pairing gate, Origin check, injected token, Host guard, tunnel on a press only) are in the root `AGENTS.md` → _Constraints_. In code:
 
 - `gateway.ts` listens on `REMOTE_PREFERRED_PORT` (47616), with a free-port fallback. Routing order: its own routes, then `/v1/*` and `/health` proxied, then `/ws` upgraded, then the bundle, all behind one path-traversal guard.
+- The one unpaired `/v1` arm is an artifact page's audio or video (`artifact-media-request.ts`, a twin of the daemon's id and media-file shapes): exact path, `key` the only parameter, GET or HEAD, proxied with `proxyHttp(…, { withToken: false })`.
 - Match the upgrade as `/ws` or `/ws/…`. engine.io requests the trailing-slash form, so an exact match breaks live streaming while every unit test still passes.
 - `daemon-proxy.ts` drops any client `x-geniro-via` and stamps `x-geniro-via: remote` on every request and upgrade it forwards (twin of the daemon's `auth/remote-marker.ts`).
 - `host-guard.ts` matches a `*.suffix` at a label boundary.

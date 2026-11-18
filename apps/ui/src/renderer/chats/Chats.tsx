@@ -90,6 +90,7 @@ import { DaemonClient } from '../daemon-client';
 import { reportRendererIssue } from '../debug/report-ui-errors';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import {
+  useLessonsFiledNotifications,
   useRunNotifications,
   useShareSignInNotifications,
 } from '../notifications/use-run-notifications';
@@ -110,6 +111,7 @@ import { useLineSnapshots } from '../stats/use-line-snapshots';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import { ChatActionChips } from './action-chip';
+import { type ActivityPreset, type ActivityWindow } from './activity-window';
 import {
   type AgentActivity,
   type AgentDisplay,
@@ -260,10 +262,13 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
+import { type PendingSend, withPendingSend } from './pending-send';
 import { ProgressChip, ProgressDialog } from './progress-dialog';
 import { ProjectSelect } from './project-select';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
+  type ArtifactAnswersStore,
+  artifactAnswersStore,
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
@@ -469,6 +474,7 @@ import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 import { WaitingMessagesStrip } from './waiting-messages-strip';
 import { type WorkingAgentRow, workingAgentRows } from './working-agents';
 import { WorkingAgentsCard } from './working-agents-card';
+import { WorkingThreadsCard } from './working-threads-card';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -964,6 +970,7 @@ export function Chats({
   const hostedRef = useRef(hosted);
   hostedRef.current = hosted;
   const isHosted = hosted !== null;
+  const hostedWorkingThreads = hosted?.workingThreads ?? [];
   const narrowViewport = useNarrowViewport() && !isHosted;
   /**
    * Whether a phone shows the new-chat COMPOSER page rather than the chat
@@ -1368,6 +1375,7 @@ export function Chats({
     activeRunId,
     activeRunIdRef,
     items,
+    itemsRef,
     anchors,
     callConversations,
     delegateConversations,
@@ -1409,6 +1417,8 @@ export function Chats({
     loadOlderRuns,
     chatScope,
     showScope,
+    activityWindow,
+    showActivityWindow,
     addRun,
     placeRun,
     dropRun,
@@ -1432,6 +1442,8 @@ export function Chats({
     onTurnEndRef,
     pinned: hosted === null ? null : { open: hosted.open },
   });
+
+  const [activityPreset, setActivityPreset] = useState<ActivityPreset>('any');
 
   /**
    * Every turn a hosted conversation starts other than a typed send (a
@@ -3487,10 +3499,25 @@ export function Chats({
         ) {
           showScope('all');
         }
+        if (
+          activityWindow !== null &&
+          !runsRef.current.some((run) => run.id === hit.runId)
+        ) {
+          setActivityPreset('any');
+          showActivityWindow(null);
+        }
         void activateRun(hit.runId);
       }
     },
-    [activateRun, activeRunIdRef, chatScope, showScope],
+    [
+      activateRun,
+      activeRunIdRef,
+      chatScope,
+      showScope,
+      activityWindow,
+      showActivityWindow,
+      runsRef,
+    ],
   );
 
   useEffect(() => {
@@ -4401,13 +4428,25 @@ export function Chats({
   const handleShowScope = useLatestCallback(
     (next: ChatListScope): void => {
       const open = runsRef.current.find((run) => run.id === activeRunId);
-      const kept = open !== undefined && inScope(open, next);
+      const kept = open !== undefined && inScope(open, next, activityWindow);
       if (!kept) {
         deactivateRun();
       }
       showScope(next);
     },
-    [activeRunId, runsRef, deactivateRun, showScope],
+    [activeRunId, runsRef, deactivateRun, showScope, activityWindow],
+  );
+
+  const handleActivityWindow = useLatestCallback(
+    (preset: ActivityPreset, next: ActivityWindow | null): void => {
+      const open = runsRef.current.find((run) => run.id === activeRunId);
+      if (open !== undefined && !inScope(open, chatScope, next)) {
+        deactivateRun();
+      }
+      setActivityPreset(preset);
+      showActivityWindow(next);
+    },
+    [activeRunId, runsRef, deactivateRun, showActivityWindow, chatScope],
   );
 
   const confirmDelete = useLatestCallback(async (): Promise<void> => {
@@ -4514,6 +4553,10 @@ export function Chats({
     [client, refreshGroups],
   );
 
+  const [pendingSends, setPendingSends] = useState<
+    ReadonlyMap<string, PendingSend>
+  >(() => new Map());
+
   /**
    * Start one turn: mark the run working, send, render the user message
    * (addItem de-dupes when the WS copy arrives).
@@ -4578,6 +4621,23 @@ export function Chats({
           run.id === runId ? { ...run, status: 'running' } : run,
         ),
       );
+      let held: PendingSend | null = null;
+      const holdWhileRestoring = (): void => {
+        const pending: PendingSend = {
+          runId,
+          text,
+          imageCount: images?.length ?? 0,
+          sentAt: new Date().toISOString(),
+          // Another run's window says nothing about this run's seqs, so its
+          // own row can only take the place of the held one at the settle.
+          afterSeq:
+            runId === activeRunIdRef.current
+              ? (itemsRef.current.at(-1)?.seq ?? -1)
+              : Number.MAX_SAFE_INTEGER,
+        };
+        held = pending;
+        setPendingSends((prev) => new Map(prev).set(runId, pending));
+      };
       try {
         const sendMessageDto = {
           text,
@@ -4598,6 +4658,7 @@ export function Chats({
               : chatApi.sendChatMessage({ runId, sendMessageDto }),
           run ?? null,
           restoreWorktree,
+          holdWhileRestoring,
         );
         addItem(userItem, true);
       } catch (err) {
@@ -4611,6 +4672,15 @@ export function Chats({
           );
         }
         throw err;
+      } finally {
+        setPendingSends((prev) => {
+          if (held === null || prev.get(runId) !== held) {
+            return prev;
+          }
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
       }
     },
     [chatApi, teamApi, addItem, restoreWorktree],
@@ -4891,7 +4961,7 @@ export function Chats({
     // label reads, so the two cannot say different things about one press.
     //
     // The WHOLE decision is `followUpDelivery` (chats/follow-up-delivery.ts),
-    // summed up in apps/ui/AGENTS.md → "Sending and the queue". A SYNC
+    // summed up in .claude/rules/ui-chats.md → "Sending and the queue". A SYNC
     // sub-agent is the agent's own tool call, so a message typed during one
     // queues.
     //
@@ -6741,14 +6811,12 @@ export function Chats({
   /**
    * A delegate of this run that is AUDIBLE — still writing rows.
    *
-   * Narrowed from "is any delegate out", and the split is the whole of it: a
-   * delegate writing rows is the run `running` (that is work happening,
-   * whatever the stale row says), while one the CLI merely declared out and has
-   * said nothing about since is `held`, which the run ROW answers for every
-   * chat at once (see `subagentsOut` below). Cursor's background delegates are
-   * permanently the second kind — their steps never reach this wire at all —
-   * so collapsing the two put a spinner and the word `running` over an agent
-   * that had finished speaking, and swallowed its turn-end notification with it.
+   * Narrowed from "is any delegate out" for the turn-end notification: the
+   * reading it fires on leaves out a delegate the CLI only declared out, which
+   * the run ROW counts (`subagentsOut`, see below). Cursor's background
+   * delegates are permanently that second kind, since their steps never reach
+   * this wire, so folding them in here would keep a finished cursor run from
+   * ever announcing its end. The badge reads both kinds as `running`.
    */
   const subagentRunning = useMemo(
     () => anySubagentRunning(durableEntries, runStoppedAt),
@@ -6843,6 +6911,8 @@ export function Chats({
     () => runningCallCallees(runState.calls),
     [runState.calls],
   );
+  const activePendingSend =
+    activeRunId === null ? undefined : pendingSends.get(activeRunId);
   const transcriptEntries = useMemo(
     () =>
       // No live rows over a thread whose first page has not landed. The
@@ -6854,7 +6924,7 @@ export function Chats({
       loadingHistory && durableEntries.length === 0
         ? durableEntries
         : withLiveText(
-            durableEntries,
+            withPendingSend(durableEntries, activePendingSend, items),
             liveText,
             workingAgents,
             activeRun?.id ?? null,
@@ -6863,6 +6933,8 @@ export function Chats({
     [
       loadingHistory,
       durableEntries,
+      activePendingSend,
+      items,
       liveText,
       workingAgents,
       activeRun?.id,
@@ -8825,6 +8897,13 @@ export function Chats({
     }
     return artifactUrlBuilder(handle, activeRunId);
   }, [activeRunId, handle]);
+  const artifactAnswers = useMemo<ArtifactAnswersStore | null>(
+    () =>
+      activeRunId === null
+        ? null
+        : artifactAnswersStore(apis.chats, activeRunId),
+    [activeRunId, apis.chats],
+  );
   /**
    * The agents panel stands beside every open chat — there is nothing to open
    * and nothing to close, so this is just "is a chat open".
@@ -9469,6 +9548,12 @@ export function Chats({
     labelOf: notificationLabel,
     activeRunId: active && showsRequestedThread ? activeRunId : null,
   });
+  useLessonsFiledNotifications({
+    client: isRemoteRuntime() || isHosted ? null : client,
+    runs: notifiedRuns,
+    labelOf: notificationLabel,
+    activeRunId: active && showsRequestedThread ? activeRunId : null,
+  });
   // The lasting half of the same signal. A banner is gone in seconds — and on
   // a Mac that is sharing its screen macOS drops every app's silently — so the
   // sidebar keeps the mark until the thread is opened. The mark is the DAEMON's
@@ -9909,6 +9994,7 @@ export function Chats({
         callContext={resolveCallReading}
         callChannel={callChannel}
         artifactUrl={artifactUrl}
+        artifactAnswers={artifactAnswers}
         artifactSharing={artifactSharing}
         // What the reader folded and opened is remembered per THREAD — see
         // `thread-ui-memory.ts`.
@@ -10016,6 +10102,9 @@ export function Chats({
                         <ChatScopeFilter
                           scope={chatScope}
                           onChange={handleShowScope}
+                          window={activityWindow}
+                          preset={activityPreset}
+                          onWindowChange={handleActivityWindow}
                         />
                         <Button
                           type="button"
@@ -10880,7 +10969,11 @@ export function Chats({
                       openTeamNote={
                         activeRun?.teamId != null ? openTeamNote : null
                       }
-                      openThread={isHosted ? null : handleActivateRun}
+                      openThread={
+                        isHosted
+                          ? (hosted?.onOpenThread ?? null)
+                          : handleActivateRun
+                      }
                       openMemory={onOpenMemory ?? null}
                       openKnowledge={onOpenKnowledge ? openKnowledge : null}
                       collapseToolSteps={collapseToolSteps}
@@ -11076,19 +11169,28 @@ export function Chats({
                         <div ref={transcriptEndRef} />
                       </div>
                       {activeRun === null ? null : (
-                        <WorkingAgentsCard
-                          key={activeRun.id}
-                          rows={startedAgents}
-                          runId={activeRun.id}
-                          api={chatApi}
-                          client={client}
-                          onShowInChat={openCall}
-                          nodes={nodeMeta}
-                          chatAgentName={activeRun.agentKind}
-                          delegateState={runState}
-                          collapseToolSteps={collapseToolSteps}
-                          work={startedAgentsWork}
-                        />
+                        <>
+                          {hostedWorkingThreads.length === 0 ? null : (
+                            <WorkingThreadsCard
+                              threads={hostedWorkingThreads}
+                              onOpenThread={hosted?.onOpenThread}
+                              beside={startedAgents.length > 0}
+                            />
+                          )}
+                          <WorkingAgentsCard
+                            key={activeRun.id}
+                            rows={startedAgents}
+                            runId={activeRun.id}
+                            api={chatApi}
+                            client={client}
+                            onShowInChat={openCall}
+                            nodes={nodeMeta}
+                            chatAgentName={activeRun.agentKind}
+                            delegateState={runState}
+                            collapseToolSteps={collapseToolSteps}
+                            work={startedAgentsWork}
+                          />
+                        </>
                       )}
                     </TranscriptContexts>
 

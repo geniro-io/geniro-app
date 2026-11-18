@@ -19,7 +19,7 @@ export type { LessonPlaces };
 
 export type LessonScope = LessonMemoryTarget['scope'];
 export type LessonDedupVerdict = LessonDedup['verdict'];
-export type LessonMoveUpPlace = 'project_instructions' | 'memory_index';
+export type LessonMoveUpPlace = 'memory_index';
 
 /** One proposed lesson as the card draws it. */
 export interface LessonView {
@@ -109,6 +109,11 @@ export interface LessonsCardProps {
   check?: LessonsReflectionView | null;
   places?: LessonPlaces;
   readDocuments?: LessonDocumentsReader | null;
+  /**
+   * The daemon's own "Move up" per lesson id, which knows whether the entry is
+   * already in the memory index; a lesson it does not name reads `moveUpOf`.
+   */
+  moveUps?: Readonly<Record<string, LessonMoveUpPlace | null>> | null;
   onSave?: (proposalId: string, request: LessonSaveRequest) => Promise<void>;
   onReject?: (proposalId: string, reason: string | null) => Promise<void>;
   onUpdateRule?: (proposalId: string, edit: LessonRuleEdit) => Promise<void>;
@@ -162,6 +167,26 @@ function memberName(memberId: string, places: LessonPlaces): string {
   );
 }
 
+/** Where a lesson ends up and who reads it, in plain words. */
+function targetReach(target: LessonTarget): string {
+  switch (target.kind) {
+    case 'memory':
+      return target.scope === 'project'
+        ? 'Agents in this project find it by searching.'
+        : target.scope === 'team'
+          ? 'Agents of this team find it by searching.'
+          : 'Agents in any chat find it by searching.';
+    case 'project_instructions':
+      return 'Every agent in this project reads it each chat.';
+    case 'member_instructions':
+      return 'Only this team member reads it.';
+    case 'knowledge':
+      return target.handle === null
+        ? 'Starts a new document agents can open.'
+        : 'Added to a document agents can open.';
+  }
+}
+
 /** A target in words, as a lesson names where it goes. */
 function targetWords(target: LessonTarget, places: LessonPlaces): string {
   switch (target.kind) {
@@ -210,6 +235,7 @@ function targetGroupOf(target: LessonTarget): TargetGroup {
 interface TargetChoice {
   key: string;
   label: string;
+  subLabel: string;
   group: TargetGroup;
   target: LessonTarget;
   /** Why the thread has no place for it; such a choice is shown, never picked. */
@@ -283,6 +309,7 @@ function choicesFor(
   const choices: TargetChoice[] = targets.map((target) => ({
     key: targetKey(target),
     label: targetWords(target, places),
+    subLabel: targetReach(target),
     group: targetGroupOf(target),
     target,
     unavailable: null,
@@ -291,6 +318,7 @@ function choicesFor(
     choices.push({
       key: targetKey(lesson.target),
       label: targetWords(lesson.target, places),
+      subLabel: targetReach(lesson.target),
       group: targetGroupOf(lesson.target),
       target: lesson.target,
       unavailable: unavailableReason(lesson.target, places),
@@ -323,10 +351,15 @@ function pickerGroups(choices: readonly TargetChoice[]): MenuGroup[] {
       .filter((choice) => choice.group === group)
       .map((choice) =>
         choice.unavailable === null
-          ? { value: choice.key, label: choice.label }
+          ? {
+              value: choice.key,
+              label: choice.label,
+              subLabel: choice.subLabel,
+            }
           : {
               value: choice.key,
               label: choice.label,
+              subLabel: `Unavailable: ${choice.unavailable}.`,
               hint: 'unavailable',
               disabled: true,
             },
@@ -336,13 +369,11 @@ function pickerGroups(choices: readonly TargetChoice[]): MenuGroup[] {
 }
 
 /**
- * Where "Move up" puts a rule broken again: the project's instructions when the
- * thread has a project, else the memory index. Twin of the daemon's `moveUpOf`.
+ * Where "Move up" puts a rule broken again: its entry into every chat's memory
+ * index, the least-reaching step; the project's instructions stay a target in
+ * the menu. Twin of the daemon's `moveUpOf`.
  */
-export function moveUpOf(
-  lesson: LessonView,
-  places: LessonPlaces,
-): LessonMoveUpPlace | null {
+export function moveUpOf(lesson: LessonView): LessonMoveUpPlace | null {
   if (
     lesson.dedup.verdict !== 'broken_again' ||
     lesson.dedup.handle === null ||
@@ -350,7 +381,7 @@ export function moveUpOf(
   ) {
     return null;
   }
-  return places.projectId === null ? 'memory_index' : 'project_instructions';
+  return 'memory_index';
 }
 
 function dedupLabel(dedup: LessonView['dedup']): string {
@@ -421,6 +452,7 @@ export function LessonsCard({
   check = null,
   places = EVERY_PLACE,
   readDocuments = null,
+  moveUps = null,
   onSave,
   onReject,
   onUpdateRule,
@@ -474,7 +506,11 @@ export function LessonsCard({
             key={lesson.id}
             lesson={lesson}
             places={places}
-            moveUp={moveUpOf(lesson, places)}
+            moveUp={
+              moveUps !== null && lesson.id in moveUps
+                ? (moveUps[lesson.id] ?? null)
+                : moveUpOf(lesson)
+            }
             readDocuments={readDocuments}
             onSave={onSave}
             onReject={onReject}
@@ -565,7 +601,7 @@ function DroppedGroup({
   );
 }
 
-function DecidedRow({
+export function DecidedRow({
   lesson,
   outcome,
   places,
@@ -682,6 +718,7 @@ function DecidedRow({
           <div className="flex flex-wrap items-center gap-1">
             <Button
               size="sm"
+              title="Save the edited title and rule."
               disabled={busy || !draftValid || onEdit === undefined}
               onClick={save}>
               {request === 'edit' ? 'Saving…' : 'Save'}
@@ -709,6 +746,7 @@ function DecidedRow({
               <Button
                 size="sm"
                 variant="ghost"
+                title="Forget the memory entry this lesson made."
                 disabled={undoDisabled}
                 onClick={undo}>
                 {request === 'undo' ? 'Undoing…' : 'Undo'}
@@ -716,6 +754,7 @@ function DecidedRow({
               <Button
                 size="sm"
                 variant="ghost"
+                title="Change the title and rule of the saved entry."
                 disabled={busy || onEdit === undefined}
                 onClick={() => setEditing(true)}>
                 Edit
@@ -726,12 +765,14 @@ function DecidedRow({
               <Button
                 size="sm"
                 variant="ghost"
+                title="Forget the memory entry this lesson made."
                 disabled={undoDisabled}
                 onClick={undo}>
                 {request === 'undo' ? 'Undoing…' : 'Undo'}
               </Button>
               <Button
                 size="sm"
+                title="Approve it, so agents can find this entry."
                 disabled={busy || onApprove === undefined}
                 onClick={approve}>
                 {request === 'approve' ? 'Approving…' : 'Approve'}
@@ -811,11 +852,7 @@ function decidedStatusText(
 const UPDATE_CHOICE = 'update';
 const MOVE_UP_CHOICE = 'move-up';
 
-function moveUpLabel(place: LessonMoveUpPlace): string {
-  return place === 'project_instructions'
-    ? 'Move up to project instructions'
-    : 'Move up to the memory index';
-}
+const MOVE_UP_LABEL = 'Move up to the memory index';
 
 /**
  * What the primary button can do for a lesson: update the entry it refines or
@@ -834,11 +871,23 @@ function actionGroups(
     updateLabel === null
       ? {
           label: 'Move up',
-          items: [{ value: MOVE_UP_CHOICE, label: moveUpLabel(moveUp!) }],
+          items: [
+            {
+              value: MOVE_UP_CHOICE,
+              label: MOVE_UP_LABEL,
+              subLabel: 'Every new chat starts with its title.',
+            },
+          ],
         }
       : {
           label: 'Update the entry',
-          items: [{ value: UPDATE_CHOICE, label: updateLabel }],
+          items: [
+            {
+              value: UPDATE_CHOICE,
+              label: updateLabel,
+              subLabel: 'Rewrites the entry this lesson refines.',
+            },
+          ],
         };
   return [
     first,
@@ -920,7 +969,10 @@ export function LessonRow({
       : choice === MOVE_UP_CHOICE && moveUp !== null
         ? 'moveUp'
         : 'save';
-  const selected = usable.find((option) => option.key === choice) ?? usable[0];
+  const selected =
+    usable.find((option) => option.key === choice) ??
+    usable.find((option) => option.key === targetKey(lesson.target)) ??
+    usable[0];
   const menuValue =
     action === 'update'
       ? UPDATE_CHOICE
@@ -1008,7 +1060,7 @@ export function LessonRow({
       : action === 'moveUp'
         ? request === 'moveUp'
           ? 'Moving…'
-          : moveUpLabel(moveUp!)
+          : MOVE_UP_LABEL
         : request === 'save'
           ? 'Saving…'
           : `Save to ${selected?.label ?? targetWords(lesson.target, places)}`;
@@ -1086,7 +1138,11 @@ export function LessonRow({
         </div>
       )}
       <Disclosure
-        label={`Why · message #${lesson.evidence.seq}`}
+        label={
+          <span title="Why the reflection proposed this, and the message it quotes.">
+            {`Why · message #${lesson.evidence.seq}`}
+          </span>
+        }
         open={detailsOpen}
         onToggle={() => setDetailsOpen((value) => !value)}>
         <div className="flex min-w-0 flex-col gap-1 text-xs">
@@ -1099,6 +1155,7 @@ export function LessonRow({
                 <Button
                   size="sm"
                   variant="link"
+                  title="Scroll the chat to the message this lesson is based on."
                   className="h-auto p-0 text-xs"
                   onClick={() => onShowInThread(lesson.evidence.seq)}>
                   Show in thread
@@ -1127,6 +1184,7 @@ export function LessonRow({
             <Button
               size="sm"
               variant="outline"
+              title="Throw this lesson away; nothing is saved."
               disabled={rejectDisabled}
               onClick={reject}>
               {request === 'reject' ? 'Rejecting…' : 'Reject'}
@@ -1161,6 +1219,7 @@ export function LessonRow({
                 <Button
                   size="sm"
                   variant="ghost"
+                  title="Change the title and rule before saving."
                   disabled={busy || primaryHandler === undefined}
                   onClick={() => setEditing(true)}>
                   Edit
@@ -1169,6 +1228,7 @@ export function LessonRow({
               <Button
                 size="sm"
                 variant="ghost"
+                title="Throw this lesson away; nothing is saved."
                 disabled={rejectDisabled}
                 onClick={() => setRejecting(true)}>
                 Reject

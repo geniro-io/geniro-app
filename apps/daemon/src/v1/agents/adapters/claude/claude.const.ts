@@ -54,6 +54,36 @@ export const CLAUDE_BASE_ARGS: readonly string[] = [
 /** The argv flag that turns whole-block output into token-level deltas. */
 export const CLAUDE_PARTIAL_MESSAGES_FLAG = '--include-partial-messages';
 
+/**
+ * Asks for summarized thinking, which `-p` otherwise withholds: without it
+ * every `thinking_delta` and `thinking` block arrives with an empty body.
+ * Measured on 2.1.325: `--settings {"showThinkingSummaries":true}` has no
+ * effect in `-p`, while this flag sends each summary chunk as `thinking_delta`
+ * text and fills the block. The API bills the full thinking either way.
+ */
+export const CLAUDE_THINKING_DISPLAY_ARGS = [
+  '--thinking-display',
+  'summarized',
+] as const;
+
+/**
+ * Whether the binary takes {@link CLAUDE_THINKING_DISPLAY_ARGS}, asked without
+ * starting anything: `--help` hides the flag, so the probe passes a value no
+ * binary accepts and reads the refusal, which comes at argument parsing, before
+ * any hook or request. 2.1.325 answers `argument 'geniro-probe' is invalid.
+ * Allowed choices are summarized, omitted, highlights.`; a binary without the
+ * flag answers `error: unknown option '--thinking-display'`.
+ */
+export const CLAUDE_THINKING_DISPLAY_PROBE_ARGS = [
+  '-p',
+  '--thinking-display',
+  'geniro-probe',
+] as const;
+
+/** The refusal of a binary that takes {@link CLAUDE_THINKING_DISPLAY_ARGS}. */
+export const CLAUDE_THINKING_DISPLAY_ACCEPTED =
+  /Allowed choices are (?:[^\n]*, )?summarized[,.]/;
+
 export const CLAUDE_MODEL_FLAG = '--model';
 export const CLAUDE_EFFORT_FLAG = '--effort';
 export const CLAUDE_RESUME_FLAG = '--resume';
@@ -622,6 +652,35 @@ export const CLAUDE_EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
  * the user sees in their terminal, and vice versa.
  */
 export const CLAUDE_HOME_DISABLED_MCP_KEY = 'disabledMcpServers';
+
+/**
+ * The `--settings` key that keeps a switched-off server from STARTING: each
+ * entry names one server by its config name, and the CLI treats every listed
+ * server as denied for the turn.
+ *
+ * MEASURED on 2.1.325 (2026-11-17), `claude -p --output-format stream-json
+ * --verbose`, reading `system/init` and the process group's `ps`:
+ *
+ * - `--settings '{"deniedMcpServers":[{"serverName":"<name>"}]}'` — the server
+ *   is absent from `mcp_servers` and has no process. Verified for a user-scope
+ *   server, a project `.mcp.json` one, a plugin one
+ *   (`plugin:playwright:playwright`: no `@playwright/mcp` process), a claude.ai
+ *   connector (stderr `Warning: claude.ai MCP server blocked by enterprise
+ *   policy: …`) and `claude-in-chrome`.
+ * - The list in `--settings` UNIONS with a `deniedMcpServers` in the settings
+ *   files; it needs no secret and writes nothing to disk.
+ * - `disabledMcpServers` in `--settings` does nothing: the server still starts.
+ * - Denying a user server that duplicates an account connector (`ticktick` ↔
+ *   `claude.ai TickTick`) makes the CLI load the connector it had hidden as a
+ *   duplicate. A known limit, not handled here.
+ *
+ * The `--disallowedTools` rules for the same servers stay as a second fence
+ * (`claudeDisallowedToolArgs`).
+ */
+export const CLAUDE_DENIED_MCP_SERVERS_KEY = 'deniedMcpServers';
+
+/** The field of each {@link CLAUDE_DENIED_MCP_SERVERS_KEY} entry that names the server. */
+export const CLAUDE_DENIED_MCP_SERVER_NAME_FIELD = 'serverName';
 
 /**
  * The `.mcp.json` REJECTION list, in settings and in the home config.

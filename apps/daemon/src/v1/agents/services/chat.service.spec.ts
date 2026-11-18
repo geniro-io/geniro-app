@@ -130,6 +130,7 @@ import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import { CommandCenterBroker } from './command-center.broker';
 import {
   COMMAND_END_WAKE_BATCH_MS,
   CommandEndWakeService,
@@ -818,6 +819,11 @@ class FakeNodeStateDao {
     this.cleared.push({ runId, memberId });
     this.state = null;
   }
+  readonly conversationsCleared: { runId: string; memberId: string }[] = [];
+  async clearConversation(runId: string, memberId: string): Promise<void> {
+    this.conversationsCleared.push({ runId, memberId });
+    this.state = null;
+  }
 }
 
 function fakeAdapter(
@@ -885,7 +891,7 @@ function fakeAdapter(
 } {
   let onEvent: ((event: AgentEvent) => void) | null = null;
   const resolveCalls: { model: string | null; configDir: string | null }[] = [];
-  /** When set, the pre-spawn probe blocks on it — see supportsLiveStream. */
+  /** When set, the pre-spawn probe blocks on it — see liveStreamSupport. */
   let streamGate: Promise<void> | null = null;
   let resolveDone: (() => void) | null = null;
   const handles: {
@@ -1055,10 +1061,15 @@ function fakeAdapter(
       // Mirrors the real adapters: only claude can stream partial text.
       // A test seam for the claim→register window: the real adapter probes the
       // installed CLI here, so this is where a concurrent delete lands.
-      supportsLiveStream: () =>
-        streamGate === null
-          ? Promise.resolve(kind === 'claude')
-          : streamGate.then(() => kind === 'claude'),
+      liveStreamSupport: () => {
+        const support = {
+          partials: kind === 'claude',
+          reasoning: kind === 'claude',
+        };
+        return streamGate === null
+          ? Promise.resolve(support)
+          : streamGate.then(() => support);
+      },
       listEfforts: () => real.listEfforts(),
       resolveModel: (model: string | null, configDir: string | null) => {
         resolveCalls.push({ model, configDir });
@@ -1198,6 +1209,8 @@ function setup(
     runWrites?: RunWriteQueue;
     /** The mailbox between threads, when a test drives one. */
     threadInbox?: ThreadInboxService;
+    /** The command center's manager turns, when a test drives one. */
+    commandCenters?: CommandCenterBroker;
     /** The in-app browser's tools, when a test drives them. */
     browser?: BrowserBroker;
     /** Where a wake the chat raises outside its turn is published. */
@@ -1292,6 +1305,7 @@ function setup(
   const plans = new PlanBroker();
   const projectCards = new ProjectInstructionsBroker();
   const projectChats = new ProjectChatBroker();
+  const commandCenters = opts.commandCenters ?? new CommandCenterBroker();
   // Its sink is all these cases observe: whether a chat turn offers it.
   const runOutcomes = new RunOutcomeBroker(
     ...([em, runDao, {}, {}, bus] as unknown as ConstructorParameters<
@@ -1514,6 +1528,7 @@ function setup(
     opts.hostWakes === undefined
       ? undefined
       : new CommandEndWakeService(opts.hostWakes),
+    commandCenters,
     opts.writeFailures,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
@@ -1540,6 +1555,7 @@ function setup(
     teamProposals,
     teamBuilders,
     projectChats,
+    commandCenters,
     artifactStore,
     statuses,
     deletedRuns,
@@ -9415,6 +9431,27 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.status).toBe('completed');
   });
 
+  it("keeps a stopped process's late message from taking down the live session's words", async () => {
+    const { service, claude, partials } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    const old = claude.sessions[0]!;
+    await service.cancel(run.id);
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'continue');
+    claude.emit({ type: 'text_delta', text: 'new words' });
+    await drain();
+
+    old.onBetweenTurnEvent?.({ type: 'text', text: 'an old message' });
+    await drain();
+
+    expect(partials.snapshot(run.id)[0]?.text).toBe('new words');
+    claude.finish();
+    await drain();
+  });
+
   it('cancels through the real Claude session and process termination path', async () => {
     const { service, claude, runDao, itemDao } = setup();
     const { child, spawn } = fakeSpawn();
@@ -10358,6 +10395,63 @@ describe('ChatService', () => {
     });
   });
 
+  describe('moveChatFolder', () => {
+    let elsewhere: string;
+    beforeAll(() => {
+      elsewhere = mkdtempSync(join(tmpdir(), 'geniro-chat-move-'));
+    });
+    afterAll(() => {
+      rmSync(elsewhere, { recursive: true, force: true });
+    });
+
+    it('moves an idle chat to the folder and forgets its CLI conversation, without activity', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, 'session-home');
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      const moved = await service.moveChatFolder(run.id, elsewhere);
+
+      expect(moved).toBe(true);
+      expect((await runDao.getById(run.id))?.cwd).toBe(realpathSync(elsewhere));
+      expect(quiet).toHaveBeenCalledWith(
+        run.id,
+        { cwd: realpathSync(elsewhere) },
+        expect.anything(),
+      );
+      expect(nodeDao.conversationsCleared).toEqual([
+        { runId: run.id, memberId: SINGLE_AGENT_NODE },
+      ]);
+    });
+
+    it('writes nothing when the chat is already in that folder', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
+
+      expect(await service.moveChatFolder(run.id, dir)).toBe(false);
+      expect(quiet).not.toHaveBeenCalled();
+      expect(nodeDao.conversationsCleared).toEqual([]);
+    });
+
+    it('leaves a chat mid-turn where it is', async () => {
+      const { service, runDao, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await runDao.updateWithoutActivity(run.id, { status: 'running' });
+
+      expect(await service.moveChatFolder(run.id, elsewhere)).toBe(false);
+      expect((await runDao.getById(run.id))?.cwd).toBe(realpathSync(dir));
+      expect(nodeDao.conversationsCleared).toEqual([]);
+    });
+
+    it('404s on an unknown run', async () => {
+      const { service } = setup();
+      await expect(service.moveChatFolder('nope', dir)).rejects.toThrow(
+        /RUN_NOT_FOUND|not found/,
+      );
+    });
+  });
+
   describe('refreshTeamInstructions', () => {
     async function teamChat(service: ChatService) {
       return service.createChat({
@@ -10950,6 +11044,77 @@ describe('ChatService — approval modes (parity M1)', () => {
 
     claude.finish();
     await drain();
+  });
+
+  it('streams the words of a thinking stretch, and takes them down when a row lands', async () => {
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+
+    claude.emit({ type: 'thinking_progress', tokens: 40 });
+    claude.emit({ type: 'reasoning_delta', text: 'Reading the brief' });
+    await drain();
+    expect(deltas.at(-1)).toMatchObject({
+      runId: run.id,
+      thinkingTokens: 40,
+      thinkingText: 'Reading the brief',
+    });
+
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    await drain();
+    expect(deltas.at(-1)?.thinkingText).toBeNull();
+    expect(deltas.at(-1)?.thinkingStretch).toBeNull();
+
+    claude.finish();
+    await drain();
+  });
+
+  it('streams the thinking of a stretch the CLI runs by itself, and a row it writes ends it', async () => {
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'reasoning_delta',
+      text: 'The build reported back',
+    });
+    await drain();
+    expect(deltas.at(-1)).toMatchObject({
+      runId: run.id,
+      thinkingText: 'The build reported back',
+    });
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'td',
+      name: 'Read',
+      input: {},
+      parentToolUseId: 'toolu_delegate',
+    });
+    await drain();
+    expect(deltas.at(-1)?.thinkingText).toBe('The build reported back');
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 't2',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect(deltas.at(-1)?.thinkingText).toBeNull();
+    expect(deltas.at(-1)?.thinkingStretch).toBeNull();
   });
 
   it('leaves the turn now running alone when a previous turn’s late work ends inside it', async () => {
@@ -12093,6 +12258,12 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(
       (cursor.start.mock.calls[0]![0] as AgentTurnInput).streamPartials,
     ).toBe(false);
+    expect(
+      (claude.start.mock.calls[0]![0] as AgentTurnInput).streamReasoning,
+    ).toBe(true);
+    expect(
+      (cursor.start.mock.calls[0]![0] as AgentTurnInput).streamReasoning,
+    ).toBe(false);
   });
 
   it('lets an AUTO chat ask the user a real question instead of writing prose', async () => {
@@ -12150,6 +12321,33 @@ describe('ChatService — approval modes (parity M1)', () => {
       {
         command: 'ls',
       },
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves reading back a page’s answers on an ASK chat', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-answers',
+      toolName: `mcp__${hostMcpServerName(run.id)}__artifact_answers`,
+      input: {},
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-answers',
+      true,
+      {},
     );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
@@ -17828,5 +18026,198 @@ describe('ChatService — turns geniro starts for a monitor', () => {
 
     expect(monitors.isRunning(run.id)).toBe(false);
     expect(ends).toEqual([false]);
+  });
+});
+
+describe('ChatService — the command center manager', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = realpathSync(
+      mkdtempSync(join(tmpdir(), 'geniro-chat-command-center-')),
+    );
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const TELL = { to: ['t1'], message: 'rebase on main', expect_reply: true };
+  const inbox = {
+    takeForTurn: vi.fn(async () => []),
+    markDelivered: vi.fn(async () => undefined),
+    returnDropped: vi.fn(async () => ({ deliveryIds: [], titles: [] })),
+    cancelFor: vi.fn(async () => undefined),
+  } as unknown as ThreadInboxService;
+
+  it('approves tell_threads in a command-center chat, in an ask chat, with no card', async () => {
+    const { service, claude, itemDao, approvals } = setup({
+      threadInbox: inbox,
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+      commandCenter: true,
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-tell',
+      toolName: `mcp__${hostMcpServerName(run.id)}__tell_threads`,
+      input: TELL,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-tell',
+      true,
+      TELL,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((item) => item.kind === 'approval_request')).toBe(
+      false,
+    );
+  });
+
+  it('still draws a card for message_thread in a command-center chat', async () => {
+    const { service, claude, approvals } = setup({ threadInbox: inbox });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+      commandCenter: true,
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-message',
+      toolName: `mcp__${hostMcpServerName(run.id)}__message_thread`,
+      input: { thread: 'thread-1', message: 'the schema moved' },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it('draws a card for tell_threads in an ordinary ask chat, and approves nothing', async () => {
+    const { service, claude, approvals } = setup({ threadInbox: inbox });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-tell',
+      toolName: `mcp__${hostMcpServerName(run.id)}__tell_threads`,
+      input: TELL,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  const START = { title: 'Fix the billing export', prompt: 'fix it' };
+
+  it('approves start_thread in a command-center ask chat with no permission card, leaving the Start card as the one approval', async () => {
+    const { service, claude, itemDao, approvals } = setup({
+      threadInbox: inbox,
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+      commandCenter: true,
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-start',
+      toolName: `mcp__${hostMcpServerName(run.id)}__start_thread`,
+      input: START,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-start',
+      true,
+      START,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+    expect(itemDao.items.some((item) => item.kind === 'approval_request')).toBe(
+      false,
+    );
+  });
+
+  it('draws a card for start_thread in an ordinary ask chat, and approves nothing', async () => {
+    const { service, claude, approvals } = setup({ threadInbox: inbox });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-start',
+      toolName: `mcp__${hostMcpServerName(run.id)}__start_thread`,
+      input: START,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it('states the threads’ status in each turn’s prompt, and rewrites the brief only when it changes', async () => {
+    const { service, claude, runDao } = setup({ threadInbox: inbox });
+    let brief = 'Brief one';
+    service.useCommandCenter({
+      brief: vi.fn(async () => brief),
+      statusSuffix: vi.fn(
+        async () => '[command center] Thread status now:\n- t1 · working',
+      ),
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+      commandCenter: true,
+    });
+    const writes = vi.spyOn(runDao, 'updateWithoutActivity');
+    const briefWrites = () =>
+      writes.mock.calls
+        .map(([, patch]) => patch as { teamInstructions?: string | null })
+        .filter((patch) => 'teamInstructions' in patch)
+        .map((patch) => patch.teamInstructions);
+
+    await service.sendMessage(run.id, 'which threads are open?');
+    await drain();
+
+    expect((claude.start.mock.calls[0]![0] as AgentTurnInput).prompt).toBe(
+      'which threads are open?\n\n[command center] Thread status now:\n- t1 · working',
+    );
+    expect(briefWrites()).toEqual(['Brief one']);
+
+    await finishTurn(claude);
+    writes.mockClear();
+    await service.sendMessage(run.id, 'and now?');
+    await drain();
+
+    expect(briefWrites()).toEqual([]);
+
+    await finishTurn(claude);
+    brief = 'Brief two';
+    await service.sendMessage(run.id, 'and after the roster moved?');
+    await drain();
+
+    expect(briefWrites()).toEqual(['Brief two']);
   });
 });

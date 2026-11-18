@@ -35,14 +35,15 @@ import {
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
-import type {
-  AgentEvent,
-  AgentMcpServer,
-  AgentSession,
-  AgentUsage,
-  ApprovalOption,
-  SessionCloseCause,
-  TurnAutoCompact,
+import {
+  type AgentEvent,
+  type AgentMcpServer,
+  type AgentSession,
+  type AgentUsage,
+  type ApprovalOption,
+  NO_LIVE_STREAM,
+  type SessionCloseCause,
+  type TurnAutoCompact,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
@@ -54,6 +55,7 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ChatListScope,
+  type CommandCenterSource,
   type DeferredCard,
   type DeferredCardResponder,
   type FollowUpBackgroundWork,
@@ -149,10 +151,17 @@ import {
   isHostLessonsCall,
   isHostRecommendationsCall,
 } from '../utils/host-analysis';
-import { isHostArtifactCall } from '../utils/host-artifact';
+import {
+  isHostArtifactAnswersCall,
+  isHostArtifactCall,
+} from '../utils/host-artifact';
 import { isHostBoardCall } from '../utils/host-board';
 import { isHostBrowserCall } from '../utils/host-browser';
 import { isHostChartCall } from '../utils/host-chart';
+import {
+  isCommandCenterChat,
+  isHostCommandCenterCall,
+} from '../utils/host-command-center';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { hostEndpointPath } from '../utils/host-endpoint';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -190,6 +199,7 @@ import {
 import { threadCardFields } from '../utils/host-thread-message';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
+import { isLiveWordsEvent } from '../utils/live-words';
 import {
   readModelParameters,
   writeModelParameters,
@@ -263,6 +273,7 @@ import {
 } from './browser.broker';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
+import { CommandCenterBroker } from './command-center.broker';
 import {
   chatWakeOwner,
   CommandEndWakeService,
@@ -844,6 +855,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     | null = null;
 
   private projectChatSource: ProjectChatSource | null = null;
+  private commandCenterSource: CommandCenterSource | null = null;
 
   constructor(
     private readonly em: EntityManager,
@@ -927,6 +939,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly browser?: BrowserBroker,
     /** Wakes for commands that end between turns. Optional for the positional specs. */
     @Optional() private readonly commandEndWakes?: CommandEndWakeService,
+    /** The command center's manager turns, installed per turn. Optional for the positional specs. */
+    @Optional() private readonly commandCenters?: CommandCenterBroker,
     /** Tells the thread when its events were not saved. Optional for the positional specs. */
     @Optional() private readonly writeFailures?: WriteFailureNotices,
   ) {}
@@ -2299,6 +2313,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     editsTeamSlug?: string;
     /** The project whose overlay of that team the chat edits beside it; with no team, the project this chat is the own chat of. */
     editsProjectId?: string | null;
+    /** Marks the command center's manager chat (`Run.commandCenter`). */
+    commandCenter?: boolean;
     teamInstructions?: string;
     /**
      * The user's per-CLI switches, snapshotted like the instructions above;
@@ -2440,6 +2456,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         taskInstructions: input.taskInstructions?.trim() || null,
         editsTeamSlug: input.editsTeamSlug ?? null,
         editsProjectId: input.editsProjectId ?? null,
+        commandCenter: input.commandCenter === true ? true : null,
         teamInstructions: input.teamInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         groupId,
@@ -3287,6 +3304,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * Move an idle chat to another working folder. A CLI keeps its conversation
+   * per folder, so the next turn starts a fresh one there; the transcript
+   * stays. Answers false when nothing moved: already there, or mid-turn.
+   */
+  async moveChatFolder(runId: string, folder: string): Promise<boolean> {
+    const cwd = resolveValidCwd(folder);
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    if (run.cwd === cwd || run.status === 'running') {
+      return false;
+    }
+    await this.runDao.updateWithoutActivity(runId, { cwd }, em);
+    await this.nodeStateDao.clearConversation(runId, SINGLE_AGENT_NODE, em);
+    return true;
+  }
+
+  /**
    * Install where a team builder chat's brief is composed — installed rather
    * than injected because `TeamsModule`, which owns the library, depends on
    * this module.
@@ -3308,6 +3345,81 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   useProjectChat(source: ProjectChatSource): void {
     this.projectChatSource = source;
+  }
+
+  /**
+   * Install what the command center's manager is briefed from — installed
+   * rather than injected because the command-center module depends on this one.
+   */
+  useCommandCenter(source: CommandCenterSource): void {
+    this.commandCenterSource = source;
+  }
+
+  /** The command center's manager chat, or null — newest wins, as in {@link findTeamChat}. */
+  async findCommandCenterChat(): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const [run] = await this.runDao.listCommandCenterChats(em);
+    if (!run) {
+      return null;
+    }
+    const previews = await this.wireReads([run], em);
+    return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /**
+   * **Destructive and irreversible**: delete every command-center manager
+   * chat, answering with the count — {@link deleteTeamChats}' terms.
+   */
+  async deleteCommandCenterChats(): Promise<{ deleted: number }> {
+    let deleted = 0;
+    for (const run of await this.runDao.listCommandCenterChats(
+      this.em.fork(),
+    )) {
+      try {
+        if ((await this.delete(run.id)).deleted) {
+          deleted += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `could not delete command center chat ${run.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return { deleted };
+  }
+
+  /** Re-brief the manager from its roster as it stands before each turn. */
+  private async rebriefCommandCenter(runId: string): Promise<void> {
+    if (this.commandCenterSource === null) {
+      return;
+    }
+    try {
+      await this.refreshTeamInstructions(
+        runId,
+        await this.commandCenterSource.brief(runId),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `command center ${runId} keeps its brief: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** The manager's per-turn status table, or null when there is none to give. */
+  private async commandCenterSuffix(runId: string): Promise<string | null> {
+    if (this.commandCenterSource === null) {
+      return null;
+    }
+    try {
+      return await this.commandCenterSource.statusSuffix(runId);
+    } catch (err) {
+      this.logger.warn(
+        `command center ${runId} turn has no status table: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /** A project's own chat, or null if it has none — newest wins, as in {@link findTeamChat}. */
@@ -4430,23 +4542,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // in-turn handler gives them. Without these the transcript grows rows with
     // no live row above them, which is the "it says completed while it works"
     // half of the report seen from the other side.
-    if (event.type === 'text_delta') {
+    if (isLiveWordsEvent(event)) {
       if (event.parentToolUseId === undefined) {
-        this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
-        await this.restatusAfterOffTurnSignal(runId, event, session);
-      }
-      return;
-    }
-    if (event.type === 'thinking_progress') {
-      if (event.parentToolUseId === undefined) {
-        this.partials.thinking(runId, SINGLE_AGENT_NODE, null, event.tokens);
-        await this.restatusAfterOffTurnSignal(runId, event, session);
-      }
-      return;
-    }
-    if (event.type === 'reasoning_delta') {
-      if (event.parentToolUseId === undefined) {
-        this.partials.reasoning(runId, SINGLE_AGENT_NODE, null, event.text);
+        this.partials.feed(runId, SINGLE_AGENT_NODE, null, event);
         await this.restatusAfterOffTurnSignal(runId, event, session);
       }
       return;
@@ -4600,6 +4698,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (!mapped) {
         return;
       }
+      // Anything durable ends a reasoning stretch, as at the in-turn seam.
+      const ownsLivePlane = this.ownsSession(runId, session);
+      if (ownsLivePlane && event.parentToolUseId === undefined) {
+        this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
+      }
       await this.persist(
         em,
         runId,
@@ -4611,7 +4714,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Main thread only, exactly as in the in-turn path above: the tail holds
       // the main agent's words, so a delegate's durable message must not take
       // them away.
-      if (mapped.kind === 'message' && event.parentToolUseId === undefined) {
+      if (
+        ownsLivePlane &&
+        mapped.kind === 'message' &&
+        event.parentToolUseId === undefined
+      ) {
         this.partials.retire(runId, SINGLE_AGENT_NODE, null);
       }
       // The ROW is written whatever produced it — a transcript that hides work
@@ -6076,6 +6183,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         );
       } else if (isProjectChat(run)) {
         await this.rebriefProjectChat(runId, run.editsProjectId, cwd);
+      } else if (isCommandCenterChat(run)) {
+        await this.rebriefCommandCenter(runId);
       }
 
       // Re-read the committed settings from a FRESH fork now that the claim is
@@ -6160,6 +6269,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // `isHostArtifactCall`, which also says why an encrypted share
         // (`share: true`) needs no card either.
         isHostArtifactCall(hostServerName, toolName) ||
+        isHostArtifactAnswersCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.
         isHostNotifyCall(hostServerName, toolName) ||
@@ -6195,6 +6305,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           isHostBuilderTeamCall(hostServerName, toolName)) ||
         ((isProjectChat(run) || isAnalysisRun(run)) &&
           isHostLibraryReadCall(hostServerName, toolName)) ||
+        // The manager's own tools: the user delegated messaging the threads it
+        // manages by opening the command center (user decision), each send is
+        // a row on both transcripts, and `start_thread`'s Start card is the
+        // one approval of a start. Never `message_thread`, in any chat.
+        (isCommandCenterChat(run) &&
+          isHostCommandCenterCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6377,6 +6493,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * The take is read-and-clear, so the column cannot ride a second prompt —
        * including this one's own retry.
        */
+      const commandCenterSuffix =
+        options.resumeOnly === true || !isCommandCenterChat(run)
+          ? null
+          : await this.commandCenterSuffix(runId);
+      const promptText =
+        commandCenterSuffix === null
+          ? text
+          : `${text}\n\n${commandCenterSuffix}`;
       const turnPrompt =
         options.resumeOnly === true
           ? // Nothing is composed for a turn that sends no prompt — and the
@@ -6390,8 +6514,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               threadMessages.length === 0
                 ? geniroCommand
                   ? geniroCommand.prompt
-                  : text
-                : `${text}\n\n${threadMessagesPrompt(threadMessages)}`,
+                  : promptText
+                : `${promptText}\n\n${threadMessagesPrompt(threadMessages)}`,
             );
 
       const node = await this.nodeStateDao.getByRunNode(
@@ -6576,9 +6700,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
       // Asked of the adapter, never inferred from the agent kind: the answer
       // is per-INSTALLED-BINARY (an older claude rejects the flag on argv).
-      const streamPartials = await adapter
-        .supportsLiveStream()
-        .catch(() => false);
+      const liveStream = await adapter
+        .liveStreamSupport()
+        .catch(() => NO_LIVE_STREAM);
       if (!this.registry.canStart(runId)) {
         throw new ConflictException(
           'RUN_STOPPING',
@@ -7238,6 +7362,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               projectId: run.editsProjectId,
             })
           : null;
+      const disposeCommandCenter =
+        mcpEndpoint &&
+        isCommandCenterChat(run) &&
+        this.commandCenters !== undefined
+          ? this.commandCenters.register(runId, SINGLE_AGENT_NODE, {
+              managerRunId: runId,
+            })
+          : null;
       const disposeProjectCards =
         mcpEndpoint && this.projectInstructionCards !== undefined
           ? this.projectInstructionCards.register(
@@ -7263,6 +7395,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeAnalysis?.();
         disposeProjectCards?.();
         disposeProjectChat?.();
+        disposeCommandCenter?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the
@@ -7316,7 +7449,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           // for a CLI whose own model has no way to ask. Null only where the
           // daemon has no bound port to publish.
           ...(mcpEndpoint === null ? {} : { mcpEndpoint }),
-          streamPartials,
+          streamPartials: liveStream.partials,
+          streamReasoning: liveStream.reasoning,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
             mediaType: attachment.mediaType,
@@ -7332,7 +7466,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               await saveSessionId(event.sessionId);
               return;
             }
-            if (event.type === 'text_delta') {
+            if (isLiveWordsEvent(event)) {
               // EPHEMERAL: no seq, no row, no replay — just the live tail.
               //
               // MAIN THREAD ONLY. There is exactly ONE tail per run, so two
@@ -7340,44 +7474,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // character and the result is nobody's words. Skipping them loses
               // nothing durable: the completed `text` event still becomes a row,
               // marked as that sub-agent's. Only the live PREVIEW is reserved
-              // for the agent the user is addressing. Per-thread tails would
-              // need a renderer surface to show them in — a feature, not this.
-              if (event.parentToolUseId !== undefined) {
-                return;
+              // for the agent the user is addressing.
+              if (event.parentToolUseId === undefined) {
+                this.partials.feed(runId, SINGLE_AGENT_NODE, null, event);
               }
-              this.partials.append(runId, SINGLE_AGENT_NODE, null, event.text);
-              return;
-            }
-            if (event.type === 'thinking_progress') {
-              // EPHEMERAL, like a text delta: the only honest signal during a
-              // reasoning stretch this CLI has REDACTED. Main thread only, for
-              // the same reason — one counter per run.
-              if (event.parentToolUseId !== undefined) {
-                return;
-              }
-              this.partials.thinking(
-                runId,
-                SINGLE_AGENT_NODE,
-                null,
-                event.tokens,
-              );
-              return;
-            }
-            if (event.type === 'reasoning_delta') {
-              // The other half of the same answer, for a CLI that DISCLOSES
-              // what it is thinking. EPHEMERAL and main-thread-only on exactly
-              // the terms above — there is one live tail per run, so two
-              // sub-agents reasoning at once would interleave into nobody's
-              // words.
-              if (event.parentToolUseId !== undefined) {
-                return;
-              }
-              this.partials.reasoning(
-                runId,
-                SINGLE_AGENT_NODE,
-                null,
-                event.text,
-              );
               return;
             }
             if (event.type === 'tool_compose') {

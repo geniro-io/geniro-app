@@ -7,6 +7,9 @@ import { ArtifactBroker } from '../agents/services/artifact.broker';
 import { AttachmentStoreService } from '../agents/services/attachment-store.service';
 import { BrowserBroker } from '../agents/services/browser.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
+import { ChatArtifactsService } from '../agents/services/chat-artifacts.service';
+import { CommandCenterBroker } from '../agents/services/command-center.broker';
+import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
@@ -124,6 +127,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         knowledgeItems: KnowledgeItemsService,
         lessons: LessonFilingService,
         lessonChecks: LessonCheckService,
+        artifactAnswers: ChatArtifactsService,
+        commandCenters: CommandCenterBroker,
+        commandCenterOps: CommandCenterOpsBroker,
       ) =>
         createMcpTools({
           calls,
@@ -135,6 +141,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           galleries,
           galleryImages,
           artifacts,
+          artifactAnswers,
           browser,
           attachments,
           actions,
@@ -168,6 +175,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           knowledgeItems,
           lessons,
           lessonChecks,
+          commandCenters,
+          commandCenterOps,
         }),
       inject: [
         CallBroker,
@@ -212,6 +221,9 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         KnowledgeItemsService,
         LessonFilingService,
         LessonCheckService,
+        ChatArtifactsService,
+        CommandCenterBroker,
+        CommandCenterOpsBroker,
       ],
     },
     McpServerService,

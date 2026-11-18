@@ -43,6 +43,12 @@ const geniro = {
   checkForUpdates: vi.fn(),
   installUpdate: vi.fn(),
   onUpdateState: vi.fn().mockReturnValue(() => {}),
+  getCliUpdates: vi.fn(() => Promise.resolve({ updating: [], results: {} })),
+  forgetCliUpdateResults: vi.fn(() =>
+    Promise.resolve({ updating: [], results: {} }),
+  ),
+  onCliUpdates: vi.fn().mockReturnValue(() => {}),
+  createConfigProfileDir: vi.fn(),
   openInTerminal: vi.fn(),
   notify: vi.fn(),
   testNotification: vi.fn(),
@@ -90,6 +96,8 @@ const projectsApi = vi.hoisted(() => ({
 }));
 const GIB = 1024 ** 3;
 const agentsApi = vi.hoisted(() => ({
+  readAgentMcpConfig: vi.fn(),
+  writeAgentMcpConfig: vi.fn(),
   getKeptSessionConfig: vi.fn((): Promise<KeptSessionConfigStateDto> =>
     Promise.resolve({
       idleMinutes: 60,
@@ -201,13 +209,22 @@ function agentOptionsCaps(): unknown {
 let container: HTMLDivElement;
 let root: Root | null;
 
-async function mount(section?: SettingsSection): Promise<void> {
+async function mount(
+  section?: SettingsSection,
+  memoryWaiting: number | null = null,
+): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
   const mountedRoot = createRoot(container);
   root = mountedRoot;
   await act(async () => {
-    mountedRoot.render(<Settings handle={handle} section={section} />);
+    mountedRoot.render(
+      <Settings
+        handle={handle}
+        section={section}
+        memoryWaiting={memoryWaiting}
+      />,
+    );
   });
 }
 
@@ -1296,6 +1313,219 @@ describe('Settings — CLI sign-in', () => {
   });
 });
 
+describe('Settings — sign in to a new configuration', () => {
+  const NEW_DIR = '/data/agent-configs/claude/work';
+
+  it('makes the folder, copies the ticked MCP server into it, lists it and signs in there', async () => {
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      hostPreamble: '',
+      approvals: [],
+      configDirs: [{ agent: 'claude', unavailableReason: null }],
+    } as unknown as Awaited<
+      ReturnType<typeof capabilitiesApi.getCapabilities>
+    >);
+    geniro.detectClis.mockResolvedValue([det('claude')]);
+    geniro.createConfigProfileDir.mockResolvedValue(NEW_DIR);
+    agentsApi.readAgentMcpConfig.mockImplementation(
+      (request: { configDir?: string }) =>
+        Promise.resolve(
+          request.configDir === NEW_DIR
+            ? {
+                servers: {},
+                path: `${NEW_DIR}/.claude.json`,
+                version: 'v-new',
+                unavailableReason: null,
+              }
+            : {
+                servers: { github: { command: 'gh' } },
+                path: '/home/.claude.json',
+                version: 'v0',
+                unavailableReason: null,
+              },
+        ),
+    );
+    agentsApi.writeAgentMcpConfig.mockResolvedValue({
+      servers: { github: { command: 'gh' } },
+      path: `${NEW_DIR}/.claude.json`,
+      version: 'v-new-2',
+      unavailableReason: null,
+    });
+    cliAuthApi.startCliLogin.mockResolvedValue({
+      id: 'login-1',
+      agent: 'claude',
+      status: 'waiting',
+      url: 'https://claude.ai/login',
+      message: 'Waiting',
+    });
+    await mount();
+    const press = async (text: string): Promise<void> => {
+      const target = [...document.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes(text),
+      );
+      expect(target, `no button "${text}"`).toBeDefined();
+      await act(async () => {
+        target!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
+    await press('claude');
+    await press('Sign in to a new configuration');
+    const name = document.querySelector<HTMLInputElement>(
+      '#new-config-profile-name',
+    )!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set?.call(name, 'Work');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await press('github');
+    await press('Create and sign in');
+
+    expect(geniro.createConfigProfileDir).toHaveBeenCalledWith(
+      'claude',
+      'Work',
+    );
+    expect(agentsApi.writeAgentMcpConfig).toHaveBeenCalledWith(
+      {
+        writeMcpConfigDto: {
+          agent: 'claude',
+          configDir: NEW_DIR,
+          servers: { github: { command: 'gh' } },
+          version: 'v-new',
+        },
+      },
+      expect.anything(),
+    );
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      configProfiles: [
+        expect.objectContaining({
+          agent: 'claude',
+          name: 'Work',
+          dir: NEW_DIR,
+        }),
+      ],
+    });
+    expect(cliAuthApi.startCliLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+      configDir: NEW_DIR,
+    });
+    expect(document.querySelector('#new-config-profile-name')).toBeNull();
+  });
+
+  it('keeps and signs in to the new configuration when copying its MCP servers fails, and says so', async () => {
+    capabilitiesApi.getCapabilities.mockResolvedValue({
+      hostPreamble: '',
+      approvals: [],
+      configDirs: [{ agent: 'claude', unavailableReason: null }],
+    } as unknown as Awaited<
+      ReturnType<typeof capabilitiesApi.getCapabilities>
+    >);
+    geniro.detectClis.mockResolvedValue([det('claude')]);
+    geniro.createConfigProfileDir.mockResolvedValue(NEW_DIR);
+    agentsApi.readAgentMcpConfig.mockImplementation(
+      (request: { configDir?: string }) =>
+        Promise.resolve(
+          request.configDir === NEW_DIR
+            ? {
+                servers: {},
+                path: `${NEW_DIR}/.claude.json`,
+                version: 'v-new',
+                unavailableReason: null,
+              }
+            : {
+                servers: { github: { command: 'gh' } },
+                path: '/home/.claude.json',
+                version: 'v0',
+                unavailableReason: null,
+              },
+        ),
+    );
+    agentsApi.writeAgentMcpConfig.mockRejectedValue(new Error('locked'));
+    cliAuthApi.startCliLogin.mockResolvedValue({
+      id: 'login-2',
+      agent: 'claude',
+      status: 'waiting',
+      url: 'https://claude.ai/login',
+      message: 'Waiting',
+    });
+    await mount();
+    const press = async (text: string): Promise<void> => {
+      const target = [...document.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes(text),
+      );
+      await act(async () => {
+        target!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
+    await press('claude');
+    await press('Sign in to a new configuration');
+    const name = document.querySelector<HTMLInputElement>(
+      '#new-config-profile-name',
+    )!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set?.call(name, 'Work');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await press('github');
+    await press('Create and sign in');
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      configProfiles: [expect.objectContaining({ dir: NEW_DIR })],
+    });
+    expect(cliAuthApi.startCliLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+      configDir: NEW_DIR,
+    });
+    expect(container.textContent).toContain(
+      'Work was created, but its MCP servers were not copied',
+    );
+  });
+});
+
+describe('Settings — Re-check', () => {
+  it('drops the kept update outcome before reading the CLIs again', async () => {
+    const kept = {
+      updating: [],
+      results: {
+        claude: {
+          kind: 'claude' as const,
+          ok: true,
+          previousVersion: '2.1.1',
+          version: '2.1.2',
+          output: null,
+          reason: null,
+        },
+      },
+    };
+    geniro.getCliUpdates.mockResolvedValue(kept);
+    geniro.forgetCliUpdateResults.mockResolvedValue({
+      updating: [],
+      results: {},
+    });
+    geniro.detectClis.mockResolvedValue([det('claude')]);
+    await mount();
+    const press = async (text: string): Promise<void> => {
+      const target = [...container.querySelectorAll('button')].find((b) =>
+        b.textContent?.startsWith(text),
+      );
+      await act(async () => {
+        target!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
+    await press('claude');
+    expect(container.textContent).toContain('Updated to 2.1.2');
+
+    await press('Re-check');
+
+    expect(geniro.forgetCliUpdateResults).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('Updated to 2.1.2');
+  });
+});
+
 describe('Settings diagnostics section', () => {
   const inspectToggle = (): HTMLButtonElement =>
     container.querySelector<HTMLButtonElement>('#settings-daemon-inspect')!;
@@ -1423,6 +1653,38 @@ describe('Settings — sections', () => {
     await mount('fast-actions');
     expect(container.textContent).toContain('No fast actions yet');
     expect(container.textContent).not.toContain('Check for updates');
+  });
+
+  it('counts the agent CLIs with an update waiting on the General row', async () => {
+    geniro.detectClis.mockResolvedValue([
+      det('claude', {
+        update: {
+          available: true,
+          latestVersion: '2.1.400',
+          checkUnavailableReason: null,
+        },
+      }),
+      det('cursor-agent'),
+    ]);
+    await mount('fast-actions');
+
+    expect(
+      container.querySelector('[data-slot="section-updates"]')?.textContent,
+    ).toBe('1');
+  });
+
+  it('counts what waits for review on the Memory row', async () => {
+    await mount('fast-actions', 5);
+
+    expect(
+      container.querySelector('[data-slot="section-waiting"]')?.textContent,
+    ).toBe('5');
+  });
+
+  it('draws no Memory count while nothing waits', async () => {
+    await mount('fast-actions', 0);
+
+    expect(container.querySelector('[data-slot="section-waiting"]')).toBeNull();
   });
 
   it('marks the open section for a screen reader, not by colour alone', async () => {
@@ -1950,5 +2212,60 @@ describe('Settings — sections as separate pages on a phone', () => {
     // The tab bar and the phone's back are the way back — the page draws no
     // button of its own.
     expect(back()).toBeNull();
+  });
+});
+
+describe('Settings explains itself', () => {
+  it('gives every labelled setting on General a "?" with its explanation', async () => {
+    await mount('general');
+
+    const labels = [
+      ...container.querySelectorAll('[data-slot="settings-panel-row"] label'),
+    ].map((label) => label.textContent ?? '');
+    expect(labels.length).toBeGreaterThan(8);
+    for (const label of labels) {
+      expect(
+        container.querySelector(`button[aria-label="About ${label}"]`),
+        label,
+      ).not.toBeNull();
+    }
+  });
+
+  it('names each General group, with its own "?"', async () => {
+    await mount('general');
+
+    const groups = [
+      ...container.querySelectorAll('[data-slot="settings-group"]'),
+    ].map((group) => group.getAttribute('aria-label'));
+    expect(groups).toEqual([
+      'Agents',
+      'Notifications',
+      'Appearance',
+      'Archive',
+      'Transcript',
+      'Custom instructions',
+      'Updates',
+      'Diagnostics',
+    ]);
+    for (const group of groups) {
+      expect(
+        container.querySelector(`button[aria-label="About ${group}"]`),
+      ).not.toBeNull();
+    }
+  });
+
+  it('marks every section in the nav with an icon', async () => {
+    await mount('general');
+
+    const items = [
+      ...container.querySelectorAll(
+        'nav[aria-label="Settings sections"] button',
+      ),
+    ];
+    expect(items).toHaveLength(7);
+    for (const item of items) {
+      // The section's own icon, beside the phone-only chevron.
+      expect(item.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(2);
+    }
   });
 });

@@ -1219,10 +1219,18 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
 /** A `lessons_changed` broadcast: the thread whose lesson offers or proposals changed. */
 export interface LessonsChangedEvent {
   runId: string | null;
+  filed?: { saved: number; waiting: number };
+}
+
+function countOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 /**
- * Read a `lessons_changed` payload, or null when it is not one.
+ * Read a `lessons_changed` payload, or null when it is not one. A `filed` that
+ * is not two counts is dropped, never the change itself.
  *
  * TWIN PARSER: mirrors the daemon's `LessonsChangedEvent`
  * (`apps/daemon/src/v1/lessons/lessons.types.ts`).
@@ -1231,11 +1239,19 @@ export function parseLessonsChanged(data: unknown): LessonsChangedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId } = data as Record<string, unknown>;
+  const { runId, filed } = data as Record<string, unknown>;
   if (runId !== null && typeof runId !== 'string') {
     return null;
   }
-  return { runId };
+  if (typeof filed !== 'object' || filed === null) {
+    return { runId };
+  }
+  const { saved, waiting } = filed as Record<string, unknown>;
+  const savedCount = countOf(saved);
+  const waitingCount = countOf(waiting);
+  return savedCount === null || waitingCount === null
+    ? { runId }
+    : { runId, filed: { saved: savedCount, waiting: waitingCount } };
 }
 
 /** One share row written or removed — never its link. */
@@ -1309,6 +1325,81 @@ export function parseThreadMessagesChanged(
   return typeof runId === 'string' ? { runId } : null;
 }
 
+const COMMAND_CENTER_CHANGE_REASONS = [
+  'status',
+  'items',
+  'roster',
+  'task',
+] as const;
+
+/** Cards of the command center that moved: the board re-reads exactly these. */
+export interface CommandCenterChangedEvent {
+  runIds: string[];
+  reason: (typeof COMMAND_CENTER_CHANGE_REASONS)[number];
+}
+
+/**
+ * Read a `command_center_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `CommandCenterChangedEvent`
+ * (`apps/daemon/src/v1/command-center/command-center.types.ts`). Change one
+ * and change the other.
+ */
+export function parseCommandCenterChanged(
+  data: unknown,
+): CommandCenterChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runIds, reason } = data as Record<string, unknown>;
+  if (
+    !Array.isArray(runIds) ||
+    !runIds.every((id): id is string => typeof id === 'string') ||
+    !COMMAND_CENTER_CHANGE_REASONS.some((known) => known === reason)
+  ) {
+    return null;
+  }
+  return {
+    runIds,
+    reason: reason as CommandCenterChangedEvent['reason'],
+  };
+}
+
+/** A message between the command center's manager and a thread: its graph edge lights. */
+export interface CommandCenterContactEvent {
+  messageId: string;
+  fromRunId: string;
+  toRunId: string;
+  at: string;
+  awaitingReply: boolean;
+}
+
+/**
+ * Read a `command_center_contact` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `CommandCenterContactEvent`
+ * (`apps/daemon/src/v1/command-center/command-center.types.ts`). Change one
+ * and change the other.
+ */
+export function parseCommandCenterContact(
+  data: unknown,
+): CommandCenterContactEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { messageId, fromRunId, toRunId, at, awaitingReply } = data as Record<
+    string,
+    unknown
+  >;
+  return typeof messageId === 'string' &&
+    typeof fromRunId === 'string' &&
+    typeof toRunId === 'string' &&
+    typeof at === 'string' &&
+    typeof awaitingReply === 'boolean'
+    ? { messageId, fromRunId, toRunId, at, awaitingReply }
+    : null;
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -1367,6 +1458,12 @@ export class DaemonClient {
   >();
   private readonly threadMessagesChangedListeners = new Set<
     (event: ThreadMessagesChangedEvent) => void
+  >();
+  private readonly commandCenterChangedListeners = new Set<
+    (event: CommandCenterChangedEvent) => void
+  >();
+  private readonly commandCenterContactListeners = new Set<
+    (event: CommandCenterContactEvent) => void
   >();
   private readonly projectsChangedListeners = new Set<
     (event: ProjectsChangedEvent) => void
@@ -1613,6 +1710,22 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'command_center_changed') {
+        const change = parseCommandCenterChanged(data);
+        if (change) {
+          for (const listener of this.commandCenterChangedListeners) {
+            listener(change);
+          }
+        }
+      }
+      if (event === 'command_center_contact') {
+        const contact = parseCommandCenterContact(data);
+        if (contact) {
+          for (const listener of this.commandCenterContactListeners) {
+            listener(contact);
+          }
+        }
+      }
       if (event === 'debug') {
         const entry = parseDebugEntry(data);
         if (entry) {
@@ -1822,6 +1935,26 @@ export class DaemonClient {
     this.threadMessagesChangedListeners.add(listener);
     return () => {
       this.threadMessagesChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to command-center cards moving, client-wide. */
+  onCommandCenterChanged(
+    listener: (event: CommandCenterChangedEvent) => void,
+  ): () => void {
+    this.commandCenterChangedListeners.add(listener);
+    return () => {
+      this.commandCenterChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to messages between the manager and its threads, client-wide. */
+  onCommandCenterContact(
+    listener: (event: CommandCenterContactEvent) => void,
+  ): () => void {
+    this.commandCenterContactListeners.add(listener);
+    return () => {
+      this.commandCenterContactListeners.delete(listener);
     };
   }
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import { ConflictException } from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import {
   type DeliveredWaitingMessageWire,
@@ -11,6 +11,7 @@ import {
   type HostWakeOwner,
   type RunAwaiting,
   SINGLE_AGENT_NODE,
+  type ThreadListAnswer,
   type ThreadListQuery,
   type ThreadListRow,
   type ThreadMessageAnswer,
@@ -31,6 +32,11 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
 import { persistItemAndEmit } from '../../agents/utils/persist-item';
+import { activityWindowOf } from '../../agents/utils/run-activity';
+import {
+  decodeThreadListCursor,
+  encodeThreadListCursor,
+} from '../../agents/utils/thread-list-cursor';
 import {
   THREAD_JOINS_PER_HOUR,
   THREAD_WAKE_PROMPT,
@@ -51,9 +57,6 @@ import {
   TeamExecutorService,
   type ThreadMessageJoinAnswer,
 } from './team-executor.service';
-
-/** How many runs a listing reads before it hides the caller and ranks its project. */
-const THREAD_LIST_WINDOW = 200;
 
 interface RouteTerms {
   mayJoin: boolean;
@@ -131,57 +134,86 @@ export class ThreadDeliveryService implements OnModuleInit {
   }
 
   /**
-   * Whether this run may reach other threads, as the kind of thread it is. Read
-   * from the row, since `tools/call` skips the listing's gate.
+   * Whether this run may reach other threads through `list_threads` and
+   * `message_thread`, as the kind of thread it is. Read from the row, since
+   * `tools/call` skips the listing's gate. The command center's manager is
+   * refused: it reaches its threads through `tell_threads` alone.
    */
   async senderTarget(runId: string): Promise<'chat' | 'team' | null> {
     const run = await this.runDao.getById(runId, this.em.fork());
-    if (run === null || !isMessageableThread(run)) {
+    if (
+      run === null ||
+      !isMessageableThread(run) ||
+      run.commandCenter === true
+    ) {
       return null;
     }
     return run.teamId === null ? 'chat' : 'team';
   }
 
-  /** The other threads an agent can reach, its own project's first. */
+  /**
+   * One page of the other threads an agent can reach, its own project's first,
+   * then the last active.
+   */
   async listThreads(
     callerRunId: string,
     query: ThreadListQuery,
-  ): Promise<ThreadListRow[]> {
+  ): Promise<ThreadListAnswer> {
     const em = this.em.fork();
+    const projects = await this.projectDao.listAll(em);
+    const names = new Map(
+      projects.map((project) => [project.id, project.name]),
+    );
+    const projectId =
+      query.project === undefined
+        ? null
+        : projectNamed(projects, query.project);
+    if (projectId === undefined) {
+      throw new BadRequestException(
+        'PROJECT_NOT_FOUND',
+        `No project has the id or name "${query.project}".`,
+      );
+    }
+    const after =
+      query.page === undefined ? null : decodeThreadListCursor(query.page);
+    if (after === null && query.page !== undefined) {
+      throw new BadRequestException(
+        'INVALID_PAGE',
+        'The page is not one list_threads handed out.',
+      );
+    }
     const caller = await this.runDao.getById(callerRunId, em);
-    const runs = await this.runDao.listThreads(
-      query.query ?? null,
-      THREAD_LIST_WINDOW,
+    const page = await this.runDao.listThreads(
+      {
+        excludeRunId: callerRunId,
+        callerProjectId: caller?.projectId ?? null,
+        query: query.query ?? null,
+        includeArchived: query.includeArchived === true,
+        projectId,
+        window: activityWindowOf(query),
+        after,
+        limit: query.limit,
+      },
       em,
     );
-    const projects = new Map(
-      (await this.projectDao.listAll(em)).map((project) => [
-        project.id,
-        project.name,
-      ]),
-    );
-    const callerProject = caller?.projectId ?? null;
-    const inOwnProject = (run: Run): number =>
-      callerProject !== null && run.projectId === callerProject ? 0 : 1;
-    return runs
-      .filter((run) => run.id !== callerRunId)
-      .sort(
-        (a, b) =>
-          inOwnProject(a) - inOwnProject(b) ||
-          b.updatedAt.getTime() - a.updatedAt.getTime(),
-      )
-      .slice(0, query.limit)
-      .map((run) => ({
+    return {
+      threads: page.runs.map(({ run, lastActivityAt, lastUserMessageAt }) => ({
         thread: run.id,
         title: titleOf(run),
         kind: run.teamId === null ? ('chat' as const) : ('team' as const),
         status: this.statusOf(run),
         agent: run.agentKind ?? null,
         project:
-          run.projectId === null ? null : (projects.get(run.projectId) ?? null),
+          run.projectId === null ? null : (names.get(run.projectId) ?? null),
         folder: run.cwd,
+        createdAt: run.createdAt.toISOString(),
         updatedAt: run.updatedAt.toISOString(),
-      }));
+        lastActivityAt: lastActivityAt?.toISOString() ?? null,
+        lastUserMessageAt: lastUserMessageAt?.toISOString() ?? null,
+        archived: run.archivedAt !== null,
+      })),
+      nextPage: page.next === null ? null : encodeThreadListCursor(page.next),
+    };
   }
 
   /** The card a thread is parked on, leaving out one that stands across turns. */
@@ -200,7 +232,8 @@ export class ThreadDeliveryService implements OnModuleInit {
     );
   }
 
-  private statusOf(run: Run): ThreadListRow['status'] {
+  /** What a thread is doing, as `list_threads` and the command center name it. */
+  statusOf(run: Run): ThreadListRow['status'] {
     if (this.awaitsAnswer(run) || this.parkedOn(run) !== null) {
       return 'needs_user';
     }
@@ -219,6 +252,7 @@ export class ThreadDeliveryService implements OnModuleInit {
     toRunId: string;
     text: string;
     wake: boolean;
+    replyCreditUntil?: Date | null;
   }): Promise<ThreadMessageAnswer> {
     const fromMember =
       draft.from.target === 'team'
@@ -338,13 +372,64 @@ export class ThreadDeliveryService implements OnModuleInit {
     if (run === null || run.archivedAt !== null || first === undefined) {
       return { outcome: 'waiting', reason: null };
     }
+    const creditors = await this.repliesOnCredit(runId, messages);
+    const routed = await this.routeTo(run, first, messages, {
+      mayJoin,
+      resending,
+      pressed,
+      credited: creditors.length > 0,
+    });
+    if (routed.outcome === 'joined' || routed.outcome === 'woken') {
+      for (const threadRunId of creditors) {
+        await this.inbox.spendReplyCredit(runId, threadRunId);
+      }
+    }
+    return routed;
+  }
+
+  /**
+   * The senders among `messages` that `runId` still holds a live reply credit
+   * on. A credit is spent only once its reply reached the receiver, so a reply
+   * held back (cold and large, a running turn) keeps it for the next attempt.
+   */
+  private async repliesOnCredit(
+    runId: string,
+    messages: readonly Routable[],
+  ): Promise<string[]> {
+    const awaited = await this.inbox.awaitingRepliesFrom(runId);
+    if (awaited.size === 0) {
+      return [];
+    }
+    return [
+      ...new Set(
+        messages
+          .map((message) => message.fromRunId)
+          .filter((fromRunId) => awaited.has(fromRunId)),
+      ),
+    ];
+  }
+
+  private async routeTo(
+    run: Run,
+    first: Routable,
+    messages: readonly Routable[],
+    {
+      mayJoin,
+      resending,
+      pressed,
+      credited,
+    }: Required<RouteTerms> & { credited: boolean },
+  ): Promise<Routed> {
+    const runId = run.id;
     if (mayJoin) {
       const overBudget =
+        !pressed &&
+        !credited &&
         (await this.inbox.joinsInLastHour(runId)) >= THREAD_JOINS_PER_HOUR;
       const joined =
         run.teamId === null
-          ? await this.joinChat(run, messages, overBudget && !pressed)
-          : await this.joinTeam(run, messages, overBudget && !pressed);
+          ? await this.joinChat(run, messages, overBudget)
+          : await this.joinTeam(run, messages, overBudget);
       if (joined === 'joined') {
         return { outcome: 'joined', reason: null };
       }
@@ -355,7 +440,13 @@ export class ThreadDeliveryService implements OnModuleInit {
         return this.leave(runId, messages, 'wake_limit');
       }
     }
-    const reason = await this.whyNotWake(run, messages, resending, pressed);
+    const reason = await this.whyNotWake(
+      run,
+      messages,
+      resending,
+      pressed,
+      credited,
+    );
     if (reason !== null) {
       return this.leave(runId, messages, reason);
     }
@@ -491,6 +582,7 @@ export class ThreadDeliveryService implements OnModuleInit {
     messages: readonly Routable[],
     resending: boolean,
     pressed: boolean,
+    credited: boolean,
   ): Promise<ThreadMessageReason | null> {
     if (run.status === 'cancelled') {
       return 'stopped';
@@ -519,6 +611,9 @@ export class ThreadDeliveryService implements OnModuleInit {
     }
     if (await this.isCold(run)) {
       return 'cold_and_large';
+    }
+    if (credited) {
+      return null;
     }
     return (await this.inbox.wakesInLastHour(run.id)) >= THREAD_WAKES_PER_HOUR
       ? 'wake_limit'
@@ -660,4 +755,15 @@ export class ThreadDeliveryService implements OnModuleInit {
       );
     }
   }
+}
+
+function projectNamed(
+  projects: readonly { id: string; name: string }[],
+  wanted: string,
+): string | undefined {
+  const folded = wanted.trim().toLowerCase();
+  return (
+    projects.find((project) => project.id === wanted) ??
+    projects.find((project) => project.name.trim().toLowerCase() === folded)
+  )?.id;
 }

@@ -640,6 +640,67 @@ describe('AgentConfigList — the update band', () => {
     expect(onUpdate).toHaveBeenCalledWith('claude');
   });
 
+  it('says on the Update button what pressing it does', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude'), det('cursor-agent')]}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const button = updateButtons(el)[0]!;
+    expect(button.title).toContain('own updater on this Mac');
+  });
+
+  it('marks an available update in its own colour, on the button and in the card header', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', {
+            update: {
+              available: true,
+              latestVersion: '2.1.255',
+              checkUnavailableReason: null,
+            },
+          }),
+          det('cursor-agent', {
+            update: {
+              available: null,
+              latestVersion: null,
+              checkUnavailableReason: 'cannot be asked',
+            },
+          }),
+        ]}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const [claudeButton, cursorButton] = updateButtons(el);
+    expect(claudeButton!.className).toContain('bg-update');
+    expect(cursorButton!.className).not.toContain('bg-update');
+    const badges = el.querySelectorAll('[data-slot="update-available"]');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]!.textContent).toBe('Update available');
+  });
+
+  it('keeps the header saying "Updating…" while main runs that CLI’s update', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude')]}
+        onUpdate={vi.fn()}
+        updating={new Set(['claude'] as const)}
+      />,
+    );
+
+    expect(
+      el.querySelector('[data-slot="update-available"]')?.textContent,
+    ).toBe('Updating…');
+    expect(updateButtons(el)[0]!.disabled).toBe(true);
+  });
+
   it('offers no update for a binary that was not found', () => {
     // The same gate the sign-in control carries, for its reason: pressing this
     // would run a binary that is not there.
@@ -686,7 +747,7 @@ describe('AgentConfigList — the update band', () => {
           }),
         ]}
         onUpdate={vi.fn()}
-        updating="claude"
+        updating={new Set(['claude'] as const)}
       />,
     );
 
@@ -763,6 +824,21 @@ describe('AgentConfigList — the install band', () => {
       buttons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(onInstall).toHaveBeenCalledWith('cursor-agent');
+  });
+
+  it('explains what Install, the path field and the status mean', () => {
+    const el = render(<AgentConfigList {...baseProps} onInstall={vi.fn()} />);
+
+    expect(installButtons(el)[0]!.title).toContain('installer');
+    expect(
+      el.querySelector('button[aria-label="About Binary path (optional)"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('button[aria-label="About Binary path"]'),
+    ).not.toBeNull();
+    expect(el.querySelectorAll('[data-slot="agent-status-help"]')).toHaveLength(
+      2,
+    );
   });
 
   it('marks the binary path optional only where Install is offered', () => {

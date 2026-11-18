@@ -1,3 +1,4 @@
+import { Lightbulb } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import {
@@ -7,6 +8,7 @@ import {
   DEFAULT_LESSONS,
   type LessonsMode,
   type LessonsSettings,
+  type MemoryAgentWrites,
   type MemoryTriageConfig,
   type Settings,
 } from '../../shared/contracts';
@@ -15,6 +17,7 @@ import { formatUsd } from '../chats/agent-activity';
 import { segmentTitle } from '../chats/lesson-labels';
 import { TargetSelect } from '../chats/target-select';
 import { ErrorBanner } from '../components/error-banner';
+import { SettingsGroup } from '../components/settings-group';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { Switch } from '../components/ui/switch';
@@ -51,23 +54,16 @@ function counted(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function resolvedReflectorWords(
-  installed: readonly CliKind[] | null,
-  capabilities: CapabilitiesDto | null,
-): string {
-  if (installed === null || capabilities === null) {
-    return 'Checking which CLIs are installed and their light models…';
+const SAME_AS_THREAD_WORDS =
+  "Each reflection runs on the thread's own CLI, profile, model and effort — exactly what the thread ran.";
+
+function lessonsDescription(agentWrites: MemoryAgentWrites | null): string {
+  const reads =
+    'A reflection reads an archived thread for what went wrong in it and files at most three lessons, each with the quote it rests on.';
+  if (agentWrites === 'pending') {
+    return `${reads} A lesson for memory waits for your review, as Agent notes above says: no agent sees it until you approve it. Every other lesson waits under Waiting for review too.`;
   }
-  if (installed.length === 0) {
-    return 'No CLI is installed to reflect with.';
-  }
-  const words = installed.map((kind) => {
-    const light =
-      capabilities.agents.find((agent) => agent.agent === kind)?.lightModel ??
-      null;
-    return `${kind}: ${light ?? "no light model known, runs on the CLI's default model"}`;
-  });
-  return `The thread's own CLI and profile, on its light model at high effort — ${words.join(' · ')}`;
+  return `${reads} A lesson for memory is saved at once, as Agent notes above says: agents find it by search right away, and it joins every chat's memory index only once you approve it. Every other lesson waits for you under Waiting for review.`;
 }
 
 function spendSummary(spend: LessonsSpendDto): string {
@@ -132,6 +128,7 @@ export function LessonsSettingsPanel({
   lessonsApi,
   client,
   remote,
+  agentWrites,
 }: {
   agentsApi: DaemonApis['agents'] | null;
   capabilities: CapabilitiesDto | null;
@@ -141,6 +138,7 @@ export function LessonsSettingsPanel({
   lessonsApi: DaemonApis['lessons'] | null;
   client: Pick<DaemonClient, 'onLessonsChanged'> | null;
   remote: boolean;
+  agentWrites: MemoryAgentWrites | null;
 }): React.JSX.Element {
   const [lessons, setLessons] = useState<LessonsSettings | null>(null);
   const [profiles, setProfiles] = useState<Profiles>({
@@ -224,77 +222,133 @@ export function LessonsSettingsPanel({
   const checkOn = current.checker !== null;
 
   return (
-    <SettingsPanel>
-      <SettingsPanelRow
-        layout="block"
-        label="Lessons"
-        description="A reflection reads an archived thread for what went wrong in it and files at most three lessons into searchable memory, each with the quote it rests on. Undo and Edit sit on the lesson's card.">
-        {error === null ? null : (
-          <ErrorBanner
-            message={error}
-            size="sm"
-            onDismiss={() => setError(null)}
-          />
-        )}
-      </SettingsPanelRow>
-      <SettingsPanelRow
-        label="Reflections"
-        description="Reflect now on a thread works either way; Off keeps archived threads from being reflected.">
-        <SegmentedControl
-          ariaLabel="Reflections"
-          options={REFLECTION_MODES}
-          value={current.mode}
-          disabled={disabled}
-          onSelect={(mode) => save({ ...current, mode })}
+    <SettingsGroup
+      icon={<Lightbulb />}
+      title="Lessons"
+      description={lessonsDescription(agentWrites)}
+      hint="When you archive a chat, Geniro can have a model read it and note what went wrong in it, such as a mistake the agent made twice. Each note is a lesson: a short rule with the quote it rests on. A lesson becomes useful once it is saved to memory, to project instructions or to a member's instructions, and you decide which on the card.">
+      {error === null ? null : (
+        <ErrorBanner
+          message={error}
+          size="sm"
+          onDismiss={() => setError(null)}
         />
-      </SettingsPanelRow>
-      <SettingsPanelRow
-        layout="block"
-        label="Reflect with"
-        description="Which CLI, profile, model and effort a reflection runs as. Its cost shows on the thread's lessons card and under Lessons in Stats.">
-        <div
-          className="flex min-w-0 flex-col items-start gap-2"
-          inert={disabled}>
+      )}
+      <SettingsPanel>
+        <SettingsPanelRow
+          label="Reflections"
+          hint="A reflection is a model reading one finished chat to find lessons. Automatically means it happens by itself whenever you archive a chat, and it uses your agent's account, so it costs a little each time. Off stops that. You can still press Reflect now on any chat."
+          description="Reflect now on a thread works either way; Off keeps archived threads from being reflected.">
           <SegmentedControl
-            ariaLabel="Reflect with"
-            options={REFLECTOR_SOURCES}
-            value={reflectorSource}
+            ariaLabel="Reflections"
+            options={REFLECTION_MODES}
+            value={current.mode}
             disabled={disabled}
-            onSelect={(source) => {
-              if (source === 'same') {
-                if (current.reflector !== null) {
-                  save({ ...current, reflector: null });
+            onSelect={(mode) => save({ ...current, mode })}
+          />
+        </SettingsPanelRow>
+        <SettingsPanelRow
+          layout="block"
+          label="Memory model"
+          hint="Which agent and model do the memory work. Same as the thread uses exactly what that chat ran with, so you need to set nothing. Choose an agent lets you pick a cheaper or different one for all reflections; the list shows only agents installed on this Mac."
+          description="The one CLI, profile, model and effort memory work runs on, such as reflecting on a thread for lessons. Its cost shows on the thread's lessons card and under Lessons in Stats.">
+          <div
+            className="flex min-w-0 flex-col items-start gap-2"
+            inert={disabled}>
+            <SegmentedControl
+              ariaLabel="Memory model"
+              options={REFLECTOR_SOURCES}
+              value={reflectorSource}
+              disabled={disabled}
+              onSelect={(source) => {
+                if (source === 'same') {
+                  if (current.reflector !== null) {
+                    save({ ...current, reflector: null });
+                  }
+                  return;
+                }
+                const first = firstChoice();
+                if (current.reflector === null && first !== null) {
+                  save({ ...current, reflector: first });
+                }
+              }}
+            />
+            {current.reflector === null ? (
+              <p
+                data-slot="lessons-default-reflector"
+                className="text-xs text-muted-foreground">
+                {SAME_AS_THREAD_WORDS}
+              </p>
+            ) : (
+              <div className="flex min-w-0 flex-wrap items-center gap-1">
+                <TargetSelect
+                  value={current.reflector.agent}
+                  teams={NO_TEAMS}
+                  cliDetections={cliDetections}
+                  aria-label="Memory model agent"
+                  onChange={(target) =>
+                    pickAgent(target, (choice) =>
+                      save({ ...current, reflector: choice }),
+                    )
+                  }
+                />
+                <ChoiceModelSettings
+                  value={current.reflector}
+                  onChange={(next) => save({ ...current, reflector: next })}
+                  agentsApi={agentsApi}
+                  capabilities={capabilities}
+                  capabilitiesLoading={capabilitiesLoading}
+                  recentConfigDirs={profiles.recentConfigDirs}
+                  configProfiles={profiles.configProfiles}
+                />
+              </div>
+            )}
+          </div>
+        </SettingsPanelRow>
+        <SettingsPanelRow
+          label="Check found lessons with"
+          hint="Turn it on to have a second model double-check each lesson before it is saved. It catches weak or wrong lessons but adds a small cost per lesson. Leave it off if you review lessons yourself anyway."
+          htmlFor="settings-lessons-check"
+          description={CHECK_HINT}>
+          <Switch
+            id="settings-lessons-check"
+            checked={checkOn}
+            disabled={disabled}
+            onCheckedChange={(on) => {
+              const first = firstChoice();
+              if (on) {
+                if (first !== null) {
+                  save({ ...current, checker: first });
                 }
                 return;
               }
-              const first = firstChoice();
-              if (current.reflector === null && first !== null) {
-                save({ ...current, reflector: first });
-              }
+              save({ ...current, checker: null });
             }}
           />
-          {current.reflector === null ? (
-            <p
-              data-slot="lessons-default-reflector"
-              className="text-xs text-muted-foreground">
-              {resolvedReflectorWords(installed, capabilities)}
-            </p>
-          ) : (
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
+        </SettingsPanelRow>
+        {current.checker === null ? null : (
+          <SettingsPanelRow
+            layout="block"
+            label="Checked with"
+            hint="The agent and model that do the double-check. A cheaper one costs less but judges less well. Its cost is counted apart from the reflection's."
+            description="Which CLI, profile, model and effort the check runs as. Its cost shows on the lesson's card, apart from the reflection's.">
+            <div
+              className="flex min-w-0 flex-wrap items-center gap-1"
+              inert={disabled}>
               <TargetSelect
-                value={current.reflector.agent}
+                value={current.checker.agent}
                 teams={NO_TEAMS}
                 cliDetections={cliDetections}
-                aria-label="Reflection agent"
+                aria-label="Check agent"
                 onChange={(target) =>
                   pickAgent(target, (choice) =>
-                    save({ ...current, reflector: choice }),
+                    save({ ...current, checker: choice }),
                   )
                 }
               />
               <ChoiceModelSettings
-                value={current.reflector}
-                onChange={(next) => save({ ...current, reflector: next })}
+                value={current.checker}
+                onChange={(next) => save({ ...current, checker: next })}
                 agentsApi={agentsApi}
                 capabilities={capabilities}
                 capabilitiesLoading={capabilitiesLoading}
@@ -302,66 +356,16 @@ export function LessonsSettingsPanel({
                 configProfiles={profiles.configProfiles}
               />
             </div>
-          )}
-        </div>
-      </SettingsPanelRow>
-      <SettingsPanelRow
-        label="Check found lessons with"
-        htmlFor="settings-lessons-check"
-        description={CHECK_HINT}>
-        <Switch
-          id="settings-lessons-check"
-          checked={checkOn}
-          disabled={disabled}
-          onCheckedChange={(on) => {
-            const first = firstChoice();
-            if (on) {
-              if (first !== null) {
-                save({ ...current, checker: first });
-              }
-              return;
-            }
-            save({ ...current, checker: null });
-          }}
-        />
-      </SettingsPanelRow>
-      {current.checker === null ? null : (
+          </SettingsPanelRow>
+        )}
         <SettingsPanelRow
           layout="block"
-          label="Checked with"
-          description="Which CLI, profile, model and effort the check runs as. Its cost shows on the lesson's card, apart from the reflection's.">
-          <div
-            className="flex min-w-0 flex-wrap items-center gap-1"
-            inert={disabled}>
-            <TargetSelect
-              value={current.checker.agent}
-              teams={NO_TEAMS}
-              cliDetections={cliDetections}
-              aria-label="Check agent"
-              onChange={(target) =>
-                pickAgent(target, (choice) =>
-                  save({ ...current, checker: choice }),
-                )
-              }
-            />
-            <ChoiceModelSettings
-              value={current.checker}
-              onChange={(next) => save({ ...current, checker: next })}
-              agentsApi={agentsApi}
-              capabilities={capabilities}
-              capabilitiesLoading={capabilitiesLoading}
-              recentConfigDirs={profiles.recentConfigDirs}
-              configProfiles={profiles.configProfiles}
-            />
-          </div>
+          label="Spend"
+          hint="How much reflections and checks have cost so far on your agents' accounts, for today and this month. The figures are what each agent reports; a run it gives no cost for counts as nothing and is listed separately."
+          description="What reflections and checks have cost. A run whose CLI reports no cost counts as none.">
+          <SpendReadout spend={spend} />
         </SettingsPanelRow>
-      )}
-      <SettingsPanelRow
-        layout="block"
-        label="Spend"
-        description="What reflections and checks have cost. A run whose CLI reports no cost counts as none.">
-        <SpendReadout spend={spend} />
-      </SettingsPanelRow>
-    </SettingsPanel>
+      </SettingsPanel>
+    </SettingsGroup>
   );
 }

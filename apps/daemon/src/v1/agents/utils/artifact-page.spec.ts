@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ARTIFACT_FRAME_SOURCE,
   ARTIFACT_HOST_SOURCE,
   ARTIFACT_PAGE_CSP,
+  ARTIFACT_SERVED_PAGE_CSP,
   renderArtifactDocument,
   renderArtifactPage,
   withInlineImages,
@@ -80,9 +81,17 @@ describe('ARTIFACT_PAGE_CSP', () => {
     expect(ARTIFACT_PAGE_CSP).not.toContain('unsafe-eval');
   });
 
-  it('allows only inline data for images and media', () => {
+  it('allows only inline data for images and media in the portable policy a share or a saved file carries', () => {
     expect(directive('img-src')).toBe('img-src data:');
     expect(directive('media-src')).toBe('media-src data:');
+  });
+
+  it('serves the framed page the same policy with its own origin added for media alone', () => {
+    expect(ARTIFACT_SERVED_PAGE_CSP).toBe(
+      ARTIFACT_PAGE_CSP.replace('media-src data:', "media-src data: 'self'"),
+    );
+    expect(ARTIFACT_SERVED_PAGE_CSP).toContain("media-src data: 'self';");
+    expect(ARTIFACT_SERVED_PAGE_CSP.match(/'self'/g)).toHaveLength(1);
   });
 
   it('takes fonts inline, from Google Fonts or from the CDNs', () => {
@@ -768,5 +777,117 @@ describe('the injected wrapper script', () => {
     await flush();
     expect(prevented).toBe(false);
     expect(posted.some((m) => m.type === 'link')).toBe(false);
+  });
+
+  const PICTURE = 'data:image/png;base64,iVBORw0KGgo=';
+
+  it('hands a click on a picture to the host, and keeps the page’s own click handler from running', async () => {
+    setup();
+    document.body.innerHTML = `<figure><img id="picture" src="${PICTURE}" alt="Before"></figure>`;
+    const picture = document.getElementById('picture')!;
+    const pageClick = vi.fn();
+    picture.addEventListener('click', pageClick);
+    const event = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+    picture.dispatchEvent(event);
+    await flush();
+    expect(event.defaultPrevented).toBe(true);
+    expect(pageClick).not.toHaveBeenCalled();
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'picture',
+      src: PICTURE,
+      alt: 'Before',
+    });
+  });
+
+  it.each([
+    {
+      control: 'a button',
+      markup: `<button type="button"><img id="picture" src="${PICTURE}" alt="Before"></button>`,
+    },
+    {
+      control: 'an element with role="button"',
+      markup: `<span role="button"><img id="picture" src="${PICTURE}" alt="Before"></span>`,
+    },
+    {
+      control: 'a label',
+      markup: `<label><img id="picture" src="${PICTURE}" alt="Before"></label>`,
+    },
+    {
+      control: 'a summary',
+      markup: `<details><summary><img id="picture" src="${PICTURE}" alt="Before"></summary></details>`,
+    },
+    {
+      control: 'a data-geniro-open element',
+      markup: `<span data-geniro-open="/tmp/shots"><img id="picture" src="${PICTURE}" alt="Before"></span>`,
+    },
+  ])(
+    'leaves a click on a picture inside $control to the page',
+    async ({ markup }) => {
+      setup();
+      document.body.innerHTML = markup;
+      const picture = document.getElementById('picture')!;
+      const pageClick = vi.fn();
+      picture.addEventListener('click', pageClick);
+      picture.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+      );
+      await flush();
+      expect(pageClick).toHaveBeenCalledTimes(1);
+      expect(posted.some((m) => m.type === 'picture')).toBe(false);
+    },
+  );
+
+  it('leaves a click on an image whose source is not one of the page’s pictures to the page', async () => {
+    setup();
+    document.body.innerHTML =
+      '<img id="picture" src="data:image/svg+xml;base64,PHN2Zz4=" alt="">';
+    const picture = document.getElementById('picture')!;
+    const pageClick = vi.fn();
+    picture.addEventListener('click', pageClick);
+    picture.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+    );
+    await flush();
+    expect(pageClick).toHaveBeenCalledTimes(1);
+    expect(posted.some((m) => m.type === 'picture')).toBe(false);
+  });
+
+  it('leaves a right-click on a picture to the page, untouched', async () => {
+    setup();
+    document.body.innerHTML = `<img id="picture" src="${PICTURE}" alt="Before">`;
+    const picture = document.getElementById('picture')!;
+    const pageClick = vi.fn();
+    picture.addEventListener('click', pageClick);
+    const event = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    picture.dispatchEvent(event);
+    await flush();
+    expect(event.defaultPrevented).toBe(false);
+    expect(pageClick).toHaveBeenCalledTimes(1);
+    expect(posted.some((m) => m.type === 'picture')).toBe(false);
+  });
+
+  it('sends a picture inside a web link as the link, not as a picture', async () => {
+    setup();
+    const prevented = click(
+      `<a id="link" href="https://example.com/a"><img id="picture" src="${PICTURE}" alt="Before"></a>`,
+      'picture',
+    );
+    await flush();
+    expect(prevented).toBe(true);
+    expect(posted).toContainEqual({
+      source: ARTIFACT_FRAME_SOURCE,
+      type: 'link',
+      href: 'https://example.com/a',
+    });
+    expect(posted.some((m) => m.type === 'picture')).toBe(false);
   });
 });

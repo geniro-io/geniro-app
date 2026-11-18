@@ -1220,7 +1220,7 @@ function typeInto(input: HTMLInputElement, value: string): void {
  */
 async function pickScope(
   container: HTMLElement,
-  label: 'Active chats' | 'Show all' | 'Archived only',
+  label: 'Active chats' | 'Show all' | 'Archived only' | 'Today',
 ): Promise<void> {
   const trigger = container.querySelector<HTMLButtonElement>(
     'aside button[aria-label="Filter chats"]',
@@ -2090,6 +2090,207 @@ describe('Chats transcript auto-scroll', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain('cwd does not exist');
+  });
+
+  it('shows the message while its collected worktree is being put back', async () => {
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockResolvedValueOnce(msg(10, 'user', 'and this?'));
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    let finishWorktree!: () => void;
+    window.geniro.prepareTaskWorktree = vi.fn(
+      () =>
+        new Promise<
+          Awaited<ReturnType<typeof window.geniro.prepareTaskWorktree>>
+        >((resolve) => {
+          finishWorktree = () =>
+            resolve({
+              ok: true,
+              path: '/userData/worktrees/t1',
+              branch: 'geniro/task-t1',
+              reused: false,
+              error: null,
+            });
+        }),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    const userBubbles = (): (string | null)[] =>
+      [...container.querySelectorAll('[data-role="user"]')].map(
+        (bubble) => bubble.textContent,
+      );
+    expect(window.geniro.prepareTaskWorktree).toHaveBeenCalled();
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(userBubbles()).toEqual(['hi', 'and this?']);
+
+    await act(async () => {
+      finishWorktree();
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(userBubbles()).toEqual(['hi', 'and this?']);
+  });
+
+  it('takes the held message back out when the send after the restore is refused', async () => {
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (500): {"code":"INTERNAL","message":"the agent could not start"}',
+        ),
+      );
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    let finishWorktree!: () => void;
+    window.geniro.prepareTaskWorktree = vi.fn(
+      () =>
+        new Promise<
+          Awaited<ReturnType<typeof window.geniro.prepareTaskWorktree>>
+        >((resolve) => {
+          finishWorktree = () =>
+            resolve({
+              ok: true,
+              path: '/userData/worktrees/t1',
+              branch: 'geniro/task-t1',
+              reused: false,
+              error: null,
+            });
+        }),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    const userBubbles = (): (string | null)[] =>
+      [...container.querySelectorAll('[data-role="user"]')].map(
+        (bubble) => bubble.textContent,
+      );
+    expect(userBubbles()).toEqual(['hi', 'and this?']);
+
+    await act(async () => {
+      finishWorktree();
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(userBubbles()).toEqual(['hi']);
+    expect(container.textContent).toContain('the agent could not start');
+    expect(container.querySelector('textarea')!.value).toBe('and this?');
+  });
+
+  it('takes the held message back out when its worktree cannot be put back', async () => {
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+      ),
+    );
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    let failWorktree!: () => void;
+    window.geniro.prepareTaskWorktree = vi.fn(
+      () =>
+        new Promise<
+          Awaited<ReturnType<typeof window.geniro.prepareTaskWorktree>>
+        >((resolve) => {
+          failWorktree = () =>
+            resolve({
+              ok: false,
+              path: null,
+              branch: null,
+              reused: false,
+              error: 'branch is gone',
+            });
+        }),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    const userBubbles = (): (string | null)[] =>
+      [...container.querySelectorAll('[data-role="user"]')].map(
+        (bubble) => bubble.textContent,
+      );
+    expect(userBubbles()).toEqual(['hi', 'and this?']);
+
+    await act(async () => {
+      failWorktree();
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(userBubbles()).toEqual(['hi']);
+    expect(container.textContent).toContain('cwd does not exist');
+    expect(container.querySelector('textarea')!.value).toBe('and this?');
   });
 
   it('jumps to the newest message when a chat with history is OPENED', async () => {
@@ -13470,6 +13671,40 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).toContain('What are we building?');
   });
 
+  it.each([
+    [
+      'closes a thread last active before the window',
+      '2020-01-01T00:00:00.000Z',
+      true,
+    ],
+    ['keeps a thread active inside the window', null, false],
+  ] as const)(
+    'narrowing to Today %s',
+    async (_label, lastActivityAt, closes) => {
+      const row = {
+        ...run1,
+        status: 'completed' as const,
+        lastActivityAt: lastActivityAt ?? new Date().toISOString(),
+      };
+      api.listChats.mockResolvedValue([row]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      await pickScope(container, 'Today');
+
+      expect(api.listChats).toHaveBeenLastCalledWith(
+        expect.objectContaining({ activeSince: expect.any(String) }),
+      );
+      if (closes) {
+        expect(client.leaveRun).toHaveBeenCalledWith('r1');
+        expect(container.textContent).toContain('What are we building?');
+      } else {
+        expect(client.leaveRun).not.toHaveBeenCalledWith('r1');
+      }
+    },
+  );
+
   it('a failed archive keeps the confirm up with the reason, and the row alive', async () => {
     // Mirrors the delete failure test. `run1` is running, so this goes through
     // the confirm — the path that has somewhere to show the reason.
@@ -17732,23 +17967,17 @@ describe('Chats — background sub-agents', () => {
     expect(block?.textContent).not.toContain('reading the diff now');
   });
 
-  it('says HELD — and still NOTIFIES — while a declared-open delegate is out', async () => {
-    // Two defects that pull in opposite directions, and this is where they
-    // meet. The delegate must stay VISIBLE: a cursor fan-out is nine reviewers
-    // the CLI declares out and never speaks about again, and reading the turn's
-    // end as theirs dropped every one of them off the composer shelf the second
-    // the agent stopped talking. But the badge must not say `running` over an
-    // agent that has finished, and the turn-end notification must still fire —
-    // the rules watch that same reading, so a run that never crosses into a
-    // settled state is never announced, which is the reported "on chats
-    // finishing im not receiving it".
+  it('says RUNNING — and still NOTIFIES — while a declared-open delegate is out', async () => {
+    // A cursor fan-out is nine reviewers the CLI declares out and never speaks
+    // about again. The delegate stays visible and its badge reads `running`
+    // while it is out, but the turn-end notification still fires: it reads the
+    // run without that delegate, because the banner reports the turn ending and
+    // a delegate running on does not undo that.
     //
-    // So a SILENT declared-open delegate answers `held` on the badge (the same
-    // reading a background command gets) and is withheld from the notification
-    // reading entirely. The delegate is ended by the daemon, not by this
-    // transcript: `ChatService.closeStrandedDelegates` states `stopped` for
-    // each one still out when the agent session closes — the moment a cursor
-    // delegate, living inside that process, demonstrably has.
+    // The delegate is ended by the daemon, not by this transcript:
+    // `ChatService.closeStrandedDelegates` states `stopped` for each one still
+    // out when the agent session closes — the moment a cursor delegate, living
+    // inside that process, demonstrably has.
     const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     // `subagentsOut` on the ROW, which is the design point as much as the
     // setup: the count is the daemon's, carried by every run alike, so an
@@ -17775,10 +18004,8 @@ describe('Chats — background sub-agents', () => {
       emitItem({ ...terminal(3), createdAt: SETTLED_AT });
     });
 
-    // `working` is the word `held` wears — never `running`, which would put a
-    // spinner over an agent that has stopped.
-    expect(sidebarRow(container)).toContain('working');
-    expect(sidebarRow(container)).not.toContain('running');
+    expect(sidebarRow(container)).toContain('running');
+    expect(sidebarRow(container)).not.toContain('working');
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'r1', kind: 'turn-end' }),
     );
@@ -21375,6 +21602,45 @@ describe('Chats — one hosted conversation', () => {
     expect(
       container.querySelector('[data-slot="composer-shelf"]'),
     ).not.toBeNull();
+  });
+
+  it('draws the threads its run works through elsewhere, and opens one by its run', async () => {
+    const { client } = makeClient();
+    const onOpenThread = vi.fn();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        workingThreads: [
+          {
+            runId: 'thread-1',
+            title: 'Export the CSV',
+            agentLabel: 'Senior Engineer',
+            agentKind: 'claude',
+            startedAt: null,
+            status: 'working',
+          },
+        ],
+        onOpenThread,
+      }),
+    });
+
+    expect(
+      container.querySelector('[data-slot="working-threads-count"]')
+        ?.textContent,
+    ).toBe('1 working');
+    expect(
+      container.querySelector('[data-slot="working-agents-card"]'),
+    ).toBeNull();
+  });
+
+  it('draws no threads card for a hosted conversation that names none', async () => {
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ workingThreads: [] }),
+    });
+
+    expect(
+      container.querySelector('[data-slot="working-threads-card"]'),
+    ).toBeNull();
   });
 
   it('tells the surface a chip changed the conversation’s settings, and not a refused one', async () => {

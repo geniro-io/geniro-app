@@ -4,8 +4,10 @@ import { z } from 'zod';
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
   ActionPressWireSchema,
+  ActivityWindowFields,
   AgentOptionsSchema,
   AppProcessesWireSchema,
+  ArtifactAnswersWireSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
   CALL_MESSAGES_MAX,
@@ -42,6 +44,7 @@ import {
   RunTeamNotesWireSchema,
   RunWaterfallWireSchema,
   RunWireSchema,
+  SaveArtifactAnswersSchema,
   ShellKillWireSchema,
   ShellOutputWireSchema,
   StopDetachedProcessesSchema,
@@ -51,6 +54,10 @@ import {
   ThreadOverviewWireSchema,
   WaitingMessageSchema,
 } from '../chat.types';
+import {
+  isOrderedWindow,
+  UNORDERED_WINDOW_MESSAGE,
+} from '../utils/run-activity';
 
 /**
  * HTTP DTOs for the chat routes.
@@ -490,12 +497,14 @@ export const listChatsQuerySchema = z
      * client takes in a row it was never handed.
      */
     runId: z.string().min(1).max(200).optional(),
+    ...ActivityWindowFields,
   })
   .refine(
     (query) =>
       (query.beforeCreatedAt === undefined) === (query.beforeId === undefined),
     { message: 'beforeCreatedAt and beforeId name one cursor together' },
-  );
+  )
+  .refine(isOrderedWindow, { message: UNORDERED_WINDOW_MESSAGE });
 export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 
 export const deleteRunQuerySchema = z.object({
@@ -824,6 +833,16 @@ export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}
 
 /** The pages this run published — see `RunArtifactsWireSchema`. */
 export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
+
+/** One page's saved answers — see `ArtifactAnswersWireSchema`. */
+export class ArtifactAnswersDto extends createZodDto(
+  ArtifactAnswersWireSchema,
+) {}
+
+/** The answers a page changed, merged into what was kept — see `SaveArtifactAnswersSchema`. */
+export class SaveArtifactAnswersDto extends createZodDto(
+  SaveArtifactAnswersSchema,
+) {}
 
 /** Every team note of one run — see `RunTeamNotesWireSchema`. */
 export class RunTeamNotesDto extends createZodDto(RunTeamNotesWireSchema) {}

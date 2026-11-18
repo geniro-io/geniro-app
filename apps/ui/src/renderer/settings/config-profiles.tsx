@@ -1,4 +1,4 @@
-import { FolderOpen, Plus, Trash2 } from 'lucide-react';
+import { FolderOpen, LogIn, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import {
@@ -11,6 +11,7 @@ import {
 } from '../../shared/contracts';
 import { shortenPath } from '../chats/directory-select';
 import { AccountButton } from '../components/account-button';
+import { HelpHint, HelpHintPart } from '../components/help-hint';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { PALETTE_LABEL } from '../components/ui/palette';
@@ -51,6 +52,7 @@ export function ConfigProfileList({
   onPickDirectory,
   onSignIn,
   onSignOut,
+  onCreateNew,
   signingIn = null,
   busy = false,
   logins = {},
@@ -101,6 +103,11 @@ export function ConfigProfileList({
    */
   onSignIn?: (dir: string) => void;
   onSignOut?: (dir: string) => void;
+  /**
+   * Start a configuration geniro makes the folder for, signing in there. Absent
+   * where there is no daemon to sign in through.
+   */
+  onCreateNew?: () => void;
   /**
    * The profile whose sign-in has been ASKED for and not yet answered.
    *
@@ -175,22 +182,12 @@ export function ConfigProfileList({
     if (profiles.length >= MAX_CONFIG_PROFILES) {
       return;
     }
+    // The folder's own last segment, which is very often already the answer
+    // (`.claude-work` → `claude-work`). A blank name would fail the schema's
+    // `min(1)` on the very next write, so the row has to open on something real.
     onChange([
       ...profiles,
-      {
-        id: randomId(),
-        agent,
-        // The folder's own last segment, which is very often already the
-        // answer (`.claude-work` → `claude-work`). A blank name would fail the
-        // schema's `min(1)` on the very next write, so the row has to open on
-        // something real rather than on a placeholder.
-        name: defaultName(dir),
-        dir,
-        // Cycled rather than fixed, so a user who adds three in a row gets
-        // three distinguishable rows without touching the colour picker —
-        // which is the whole point of the colour.
-        color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length]!,
-      },
+      newConfigProfile(agent, defaultName(dir), dir, profiles.length),
     ]);
   };
 
@@ -198,7 +195,24 @@ export function ConfigProfileList({
     <div data-slot="config-profiles" className="flex flex-col gap-2">
       {!compact ? (
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium">Configurations</span>
+          <span className="flex items-center gap-1.5 text-sm font-medium">
+            Configurations
+            <HelpHint subject="Configurations">
+              <p>
+                A configuration is a separate folder where {agent} keeps its own
+                login and settings. Use one per account, for example a work one
+                and a personal one.
+              </p>
+              <HelpHintPart title="Where it is used">
+                A chat or a team member picks which configuration it runs as;
+                without a pick it uses the default one.
+              </HelpHintPart>
+              <HelpHintPart title="Adding one">
+                Sign in to a new configuration makes a fresh folder and signs in
+                there. Add existing folder names a folder you already have.
+              </HelpHintPart>
+            </HelpHint>
+          </span>
           <span className="text-sm text-muted-foreground">
             Name the config directories you run {agent} as, so a chat can be
             pointed at an account rather than at a path.
@@ -245,6 +259,7 @@ export function ConfigProfileList({
                   fixed, flexible or shrink-0. */}
               <Select
                 aria-label={`Colour for ${profile.name}`}
+                title="The colour that marks this configuration wherever it is picked."
                 value={profile.color}
                 variant="ghost"
                 className="w-28 shrink-0"
@@ -266,6 +281,7 @@ export function ConfigProfileList({
               />
               <Input
                 aria-label={`Name for ${shortenPath(profile.dir)}`}
+                title="The name shown when you pick this configuration for a chat. Saved when you leave the field."
                 className="h-7 min-w-0 flex-1 text-sm sm:w-40 sm:flex-none sm:shrink-0"
                 maxLength={MAX_CONFIG_PROFILE_NAME}
                 value={
@@ -334,7 +350,7 @@ export function ConfigProfileList({
                 size="icon"
                 className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={`Remove ${profile.name}`}
-                title="Remove"
+                title="Removes this configuration from the list. The folder and its login stay on disk."
                 onClick={() =>
                   onChange(profiles.filter((row) => row.id !== profile.id))
                 }>
@@ -348,18 +364,57 @@ export function ConfigProfileList({
       {/* Withheld at the cap rather than failing on press: the write would be
           refused by the schema and the user would be told nothing. */}
       {profiles.length < MAX_CONFIG_PROFILES ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-fit gap-1.5"
-          onClick={() => void add()}>
-          <Plus className="size-3.5 shrink-0" />
-          {compact ? 'Add profile' : 'Add configuration'}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {onCreateNew ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit gap-1.5"
+              disabled={busy}
+              title={`Makes a new folder for ${agent} in Geniro's data folder and opens the ${agent} sign-in there, in your browser.`}
+              onClick={onCreateNew}>
+              <LogIn className="size-3.5 shrink-0" />
+              Sign in to a new configuration
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-fit gap-1.5"
+            title={`Choose a folder ${agent} already uses as a configuration and add it to this list.`}
+            onClick={() => void add()}>
+            <Plus className="size-3.5 shrink-0" />
+            {compact
+              ? 'Add profile'
+              : onCreateNew
+                ? 'Add existing folder'
+                : 'Add configuration'}
+          </Button>
+        </div>
       ) : null}
     </div>
   );
+}
+
+/**
+ * A new list entry. The colour is cycled by how many the CLI already has, so
+ * three added in a row are told apart without touching the colour picker.
+ */
+export function newConfigProfile(
+  agent: CliKind,
+  name: string,
+  dir: string,
+  existingOfAgent: number,
+): ConfigProfile {
+  return {
+    id: randomId(),
+    agent,
+    name,
+    dir,
+    color: PROFILE_COLORS[existingOfAgent % PROFILE_COLORS.length]!,
+  };
 }
 
 /**

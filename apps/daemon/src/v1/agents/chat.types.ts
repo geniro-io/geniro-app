@@ -15,6 +15,10 @@ import {
 } from '../runs/runs.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
+import {
+  isOrderedWindow,
+  UNORDERED_WINDOW_MESSAGE,
+} from './utils/run-activity';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
 /**
@@ -2240,15 +2244,24 @@ export type BrowserRunOutcome =
  * Everything else is the family's ordinary bargain: the payload is the card, the
  * call answers with a receipt, the row is the only copy, every chat is handed it,
  * and it auto-approves. The page itself reads nothing from this machine: the only
- * local files it ever shows are pictures the store copied at publish, from /tmp,
- * the system temp folder and the run's own folder, the places an agent writes its
- * screenshots. Those copies skip the per-read approval an `ask` run would otherwise
- * ask for, which is a choice made for those folders, not a reading of what the
- * agent could already reach. The page can load scripts and fonts from a fixed list
- * of library CDNs (see ARTIFACT_PAGE_CSP), and a link it posts is only offered to
- * the reader, who opens it with a press of their own.
+ * local files it ever shows are pictures, audio and video the store copied at
+ * publish, from /tmp, the system temp folder and the run's own folder, the places
+ * an agent writes its files. Those copies skip the per-read approval an `ask` run
+ * would otherwise ask for, which is a choice made for those folders, not a reading
+ * of what the agent could already reach. The page can load scripts and fonts from a
+ * fixed list of library CDNs (see ARTIFACT_PAGE_CSP), and hands the host only what
+ * the reader does on it: a link opened, a folder shown in Finder on a click, and
+ * the answers the reader picks, which its agent reads back with
+ * `HOST_ARTIFACT_ANSWERS_TOOL`.
  */
 export const HOST_ARTIFACT_TOOL = 'show_artifact';
+
+/**
+ * geniro's own tool that reads back what the user picked on the run's pages
+ * (`geniro.saveAnswer`, `data-geniro-answer` controls). Read-only and confined to
+ * the calling run, so it auto-approves like the page tool it serves.
+ */
+export const HOST_ARTIFACT_ANSWERS_TOOL = 'artifact_answers';
 
 /**
  * Caps on one artifact. Unlike the gallery's beside them these REFUSE rather than
@@ -2277,6 +2290,22 @@ export const MAX_ARTIFACT_SUMMARY_LENGTH = 200;
  */
 export const MAX_ARTIFACT_ID_LENGTH = 64;
 export const ARTIFACT_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * The most a page's saved answers may hold, as JSON text. The page refuses a save
+ * past it, and the route refuses a save that would take the merged set past it.
+ */
+export const MAX_ARTIFACT_ANSWERS_BYTES = 64 * 1024;
+
+/**
+ * The longest name one answer is saved under. The page runtime refuses a longer
+ * one, and so does the route.
+ *
+ * TWIN PARSER: `MAX_ANSWER_NAME` in `apps/ui/src/renderer/chats/artifact-frame.tsx`,
+ * which drops a longer one before it is sent; `artifact-frame.spec.tsx` reads this
+ * value out of this file and fails when the two disagree.
+ */
+export const MAX_ARTIFACT_ANSWER_NAME_LENGTH = 200;
 
 export interface ArtifactEdit {
   oldString: string;
@@ -3431,6 +3460,68 @@ export const RunArtifactsWireSchema = z.object({
   artifacts: z.array(RunArtifactSchema),
 });
 export type RunArtifactsWire = z.infer<typeof RunArtifactsWireSchema>;
+
+/**
+ * What the user picked on one published page, as the page saved it
+ * (`geniro.saveAnswer`, `data-geniro-answer` controls) — kept for every version of
+ * the artifact, read back by the page when it opens and by the agent's
+ * `artifact_answers` tool. The values are the page's own JSON.
+ *
+ * No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const ArtifactAnswersWireSchema = z.object({
+  values: z
+    .record(z.string(), z.unknown())
+    .describe('each answer by the name the page saved it under'),
+  updatedAt: z
+    .string()
+    .nullable()
+    .describe('when they were last saved, ISO-8601; null when never'),
+});
+export type ArtifactAnswersWire = z.infer<typeof ArtifactAnswersWireSchema>;
+
+/**
+ * The answers a page changed, as the renderer saves them: each name to its new
+ * value, or to null when the page forgot it. Merged into what was kept, never
+ * replacing it, so a second frame of the page cannot undo the first one's picks.
+ */
+export const SaveArtifactAnswersSchema = z.object({
+  changes: z.record(
+    z
+      .string()
+      .min(1)
+      .max(MAX_ARTIFACT_ANSWER_NAME_LENGTH)
+      .refine((name) => name !== '__proto__'),
+    z.unknown(),
+  ),
+});
+export type SaveArtifactAnswers = z.infer<typeof SaveArtifactAnswersSchema>;
+
+/** One page's kept answers, as the store lists them for the agent. */
+export interface KeptArtifactAnswers {
+  artifactId: string;
+  values: Record<string, unknown>;
+  updatedAt: string;
+}
+
+/** {@link KeptArtifactAnswers} with the title the page's newest version carries. */
+export type TitledArtifactAnswers = KeptArtifactAnswers & {
+  title: string | null;
+};
+
+/** One stored audio or video file of a page: where it lies, its size, and its type. */
+export interface ArtifactMediaFile {
+  path: string;
+  size: number;
+  mediaType: string;
+}
+
+/** What the media route sends for one request: a status, its headers, and the bytes. */
+export interface ArtifactMediaResponse {
+  status: 200 | 206 | 404 | 416;
+  headers: Record<string, string>;
+  body: NodeJS.ReadableStream | string;
+}
 
 /**
  * How much of an agent-authored label this card carries.
@@ -5136,12 +5227,18 @@ export const THREAD_MESSAGE_REASONS = [
 /** `joined` a running turn, `woken` a turn of its own, or left `waiting`. */
 export type ThreadMessageOutcome = 'joined' | 'woken' | 'waiting';
 
+export interface ThreadMessageReply {
+  text: string;
+  at: string;
+}
+
 export interface ThreadMessageRowEntry {
   id: string;
   fromRunId: string;
   fromTitle: string;
   fromMember: string | null;
   text: string;
+  inReplyTo?: ThreadMessageReply | null;
 }
 
 export interface ThreadMessageSentRow {
@@ -5158,16 +5255,86 @@ export interface ThreadMessageAnswer {
   title: string;
 }
 
-/** `list_threads`'s arguments. */
-export const ThreadListQuerySchema = z.object({
-  query: z
-    .string()
-    .max(200)
+/** A run with no transcript row has no last activity and falls in no window. */
+export interface ActivityWindow {
+  since?: Date;
+  until?: Date;
+}
+
+export const ActivityWindowFields = {
+  activeSince: z.iso
+    .datetime({ offset: true })
     .optional()
-    .describe('Words in the thread title; omit for the newest threads.'),
-  limit: z.number().int().min(1).max(50).default(20),
-});
+    .describe(
+      'Only threads whose last activity (newest transcript row) is at or after this ISO datetime; inclusive.',
+    ),
+  activeUntil: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .describe(
+      'Only threads whose last activity is before this ISO datetime; exclusive.',
+    ),
+};
+
+/** `list_threads`'s arguments. */
+export const ThreadListQuerySchema = z
+  .object({
+    query: z
+      .string()
+      .max(200)
+      .optional()
+      .describe('Words in the thread title; omit for the newest threads.'),
+    limit: z.number().int().min(1).max(50).default(20),
+    ...ActivityWindowFields,
+    includeArchived: z
+      .boolean()
+      .optional()
+      .describe('Also list archived threads; false when omitted.'),
+    project: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        'Only the threads of this project, named by its id or its name.',
+      ),
+    page: z
+      .string()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe(
+        '`nextPage` from the previous answer, to list the threads after it.',
+      ),
+  })
+  .refine(isOrderedWindow, { message: UNORDERED_WINDOW_MESSAGE });
 export type ThreadListQuery = z.infer<typeof ThreadListQuerySchema>;
+
+export interface ThreadListCursor {
+  rank: number;
+  sortAt: number;
+  id: string;
+}
+
+export interface ThreadListFilter {
+  excludeRunId: string;
+  callerProjectId: string | null;
+  query: string | null;
+  includeArchived: boolean;
+  projectId: string | null;
+  window: ActivityWindow | undefined;
+  after: ThreadListCursor | null;
+  limit: number;
+}
+
+export interface ThreadListPage {
+  runs: {
+    run: Run;
+    lastActivityAt: Date | null;
+    lastUserMessageAt: Date | null;
+  }[];
+  next: ThreadListCursor | null;
+}
 
 /** `message_thread`'s arguments. The text's limit is the inbox's, so it says so. */
 export const ThreadMessageSendSchema = z.object({
@@ -5197,7 +5364,16 @@ export interface ThreadListRow {
   agent: string | null;
   project: string | null;
   folder: string | null;
+  createdAt: string;
   updatedAt: string;
+  lastActivityAt: string | null;
+  lastUserMessageAt: string | null;
+  archived: boolean;
+}
+
+export interface ThreadListAnswer {
+  threads: ThreadListRow[];
+  nextPage: string | null;
 }
 
 /**
@@ -5208,6 +5384,31 @@ export interface ThreadListRow {
  */
 export interface ThreadMessagesChange {
   runId: string;
+}
+
+/** One message's ends and reply credit, as the command center reads its contacts. */
+export interface ThreadContact {
+  id: string;
+  fromRunId: string;
+  toRunId: string;
+  createdAt: Date;
+  replyCreditUntil: Date | null;
+  replyCreditSpentAt: Date | null;
+}
+
+/** One message between threads, as it was written — both ends, never the text. */
+export interface ThreadMessageSent {
+  messageId: string;
+  fromRunId: string;
+  toRunId: string;
+  at: Date;
+  expectsReply: boolean;
+}
+
+/** A reply reached the thread that asked for it: the asker no longer awaits it. */
+export interface ReplyCreditSpent {
+  fromRunId: string;
+  toRunId: string;
 }
 
 /** One message waiting for a thread, as its chip lists it. */
@@ -7030,8 +7231,8 @@ export interface RunDeltaEvent {
    *
    * Rides the SAME event as the text tail rather than a second channel: both
    * answer "what is this agent doing right now", both are ephemeral, and one
-   * mechanism cannot get out of sync with itself. Null for a CLI that
-   * discloses the words instead — see {@link RunDeltaEvent.thinkingText}.
+   * mechanism cannot get out of sync with itself. Null for a CLI that reports
+   * no count — see {@link RunDeltaEvent.thinkingText} for the words.
    *
    * PER STRETCH, not cumulative over the turn: a turn that thinks, runs tools,
    * then thinks again is two separate waits, and each is shown as its own row
@@ -7047,11 +7248,11 @@ export interface RunDeltaEvent {
    * {@link RunDeltaEvent.text}: a client that missed an event is correct again
    * on the next one.
    *
-   * The two reasoning channels are alternatives, not a pair, and which one a
-   * turn uses is a property of the CLI: claude REDACTS its thinking and reports
-   * `thinkingTokens`, cursor streams the words and fills this. Null therefore
-   * means "no text", never "not thinking" — `thinkingStretch` is what answers
-   * that, for both.
+   * Which of the two reasoning channels a turn fills is a property of the CLI:
+   * cursor and codex stream the words, claude reports `thinkingTokens` and
+   * streams its summarized words beside them only when its binary takes
+   * `--thinking-display`. Null therefore means "no text", never "not
+   * thinking" — `thinkingStretch` is what answers that, for every CLI.
    */
   thinkingText: string | null;
   /**
@@ -7923,6 +8124,9 @@ export interface RunListPage {
   limit?: number;
   before?: { createdAt: Date; id: string };
   runId?: string;
+  /** Narrows the listing to these runs; an empty list answers none. */
+  runIds?: readonly string[];
+  active?: ActivityWindow;
 }
 
 /**
@@ -8244,6 +8448,7 @@ export const GlobalChatSearchQuerySchema = z.object({
     .optional()
     .describe('Search only chats in this exact project folder.'),
   includeArchived: z.boolean().default(true),
+  ...ActivityWindowFields,
 });
 export type GlobalChatSearchQuery = z.infer<typeof GlobalChatSearchQuerySchema>;
 
@@ -8352,6 +8557,11 @@ export interface ChatTextDatabase {
     reconciled_through_seq: Run['reconciledThroughSeq'];
     title: Run['title'];
     cwd: Run['cwd'];
+    team_id: Run['teamId'];
+    project_id: Run['projectId'];
+    edits_project_id: Run['editsProjectId'];
+    command_center: Run['commandCenter'];
+    created_at: StoredDate;
     archived_at: StoredDate | null;
     edits_team_slug: Run['editsTeamSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
@@ -8401,6 +8611,142 @@ export const HOST_SEARCH_CHATS_TOOL = 'search_chats';
 /** Wire names of the tools that reach another thread. */
 export const HOST_LIST_THREADS_TOOL = 'list_threads';
 export const HOST_MESSAGE_THREAD_TOOL = 'message_thread';
+
+/** Wire names of the command-center manager's own tools. */
+export const HOST_TELL_THREADS_TOOL = 'tell_threads';
+export const HOST_NOTE_THREAD_TOOL = 'note_thread';
+export const HOST_START_THREAD_TOOL = 'start_thread';
+
+/** How many managed threads one `tell_threads` call may reach. */
+export const TELL_THREADS_MAX_TARGETS = 12;
+/** The longest note `note_thread` keeps for one thread. */
+export const THREAD_NOTE_MAX_CHARS = 500;
+
+/** `tell_threads`' arguments. */
+export const TellThreadsSchema = z.object({
+  to: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(TELL_THREADS_MAX_TARGETS)
+    .describe(
+      `1 to ${TELL_THREADS_MAX_TARGETS} managed threads: each a roster handle (t3), a thread id, or a thread's exact title.`,
+    ),
+  message: z
+    .string()
+    .describe('The text every named thread reads, up to 16,000 characters.'),
+  expect_reply: z
+    .boolean()
+    .default(true)
+    .describe(
+      "True when you want each thread's answer: its first reply wakes you even past your wake budget, within 2 hours.",
+    ),
+});
+export type TellThreadsInput = z.infer<typeof TellThreadsSchema>;
+
+export type TellThreadsUnresolvedCode =
+  'AMBIGUOUS_TARGET' | 'THREAD_NOT_FOUND' | 'NOT_MANAGED';
+
+/** What `tell_threads` did: every target sent, or nothing when any is unresolved. */
+export interface TellThreadsAnswer {
+  sent: {
+    to: string;
+    runId: string;
+    title: string;
+    outcome: ThreadMessageOutcome | 'refused';
+    code: string | null;
+  }[];
+  unresolved: {
+    to: string;
+    code: TellThreadsUnresolvedCode;
+    candidates: { handle: string; title: string }[];
+  }[];
+}
+
+/** `note_thread`'s arguments. */
+export const NoteThreadSchema = z.object({
+  thread: z
+    .string()
+    .min(1)
+    .describe('A managed thread: its roster handle (t3), id, or exact title.'),
+  note: z
+    .string()
+    .max(THREAD_NOTE_MAX_CHARS)
+    .nullish()
+    .describe(
+      `Your own note on that thread, up to ${THREAD_NOTE_MAX_CHARS} characters; null, empty or left out clears it.`,
+    ),
+});
+export type NoteThreadInput = z.infer<typeof NoteThreadSchema>;
+
+export type NoteThreadAnswer =
+  | { status: 'noted'; handle: string; title: string }
+  | {
+      status: 'unresolved';
+      code: TellThreadsUnresolvedCode;
+      candidates: { handle: string; title: string }[];
+    };
+
+/** `start_thread`'s arguments. */
+export const StartThreadSchema = z.object({
+  project: z
+    .string()
+    .min(1)
+    .describe('The project to start the thread in: its id or exact name.'),
+  title: z.string().min(1).max(200).describe("The new thread's title."),
+  brief: z
+    .string()
+    .min(1)
+    .describe('What the new thread is to do — its card description.'),
+  agent: z
+    .string()
+    .optional()
+    .describe(
+      "A CLI to run it on (claude, codex, cursor); the project's default otherwise.",
+    ),
+  team: z
+    .string()
+    .optional()
+    .describe("A library team's slug to run it with, instead of one agent."),
+  note: z
+    .string()
+    .max(THREAD_NOTE_MAX_CHARS)
+    .optional()
+    .describe('Your note on the new thread, kept on your roster.'),
+});
+export type StartThreadInput = z.infer<typeof StartThreadSchema>;
+
+export type StartThreadAnswer =
+  | {
+      status: 'card_shown' | 'starting';
+      taskId: string;
+      identifier: string | null;
+    }
+  | { status: 'refused'; code: string; reason: string };
+
+/**
+ * The command center's operations behind the manager's tools, installed by the
+ * command-center module (`CommandCenterOpsBroker`). Every method answers; a
+ * refusal is an outcome, never a throw.
+ */
+export interface CommandCenterOps {
+  tell(
+    managerRunId: string,
+    input: TellThreadsInput,
+  ): Promise<TellThreadsAnswer>;
+  note(managerRunId: string, input: NoteThreadInput): Promise<NoteThreadAnswer>;
+  start(
+    managerRunId: string,
+    input: StartThreadInput,
+  ): Promise<StartThreadAnswer>;
+}
+
+/** What the command-center module tells the chat service about its manager. */
+export interface CommandCenterSource {
+  /** The manager's standing brief: the roster, rewritten only when it changes. */
+  brief(managerRunId: string): Promise<string>;
+  /** The per-turn status table appended to the manager's prompt, or null. */
+  statusSuffix(managerRunId: string): Promise<string | null>;
+}
 
 /** The first line of every history tool result, ahead of its JSON. */
 export const HISTORY_RESULT_PREFACE =

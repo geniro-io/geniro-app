@@ -409,6 +409,25 @@ describe('teamAnalysisGuide', () => {
     expect(guide).not.toContain('A short summary in your reply');
   });
 
+  it('has the analyst hand sub-agents a fresh, narrow brief, never a fork of its conversation', () => {
+    for (const [guide, ownReads] of [
+      [teamAnalysisGuide(null, true), 'view=history, view=runs and view=team'],
+      [
+        builderChatAnalysisGuide(true, 10),
+        'view=history, view=runs and view=team',
+      ],
+      [threadAnalysisGuide('team', null, true), 'view=overview'],
+    ] as const) {
+      expect(guide).toContain(`Sub-agents. Read ${ownReads} yourself`);
+      expect(guide).toContain(
+        'never one that starts from a copy of your conversation (a fork)',
+      );
+      expect(guide).toContain(
+        "Re-read yourself every row you cite from a sub-agent's report.",
+      );
+    }
+  });
+
   it('files again what a replaced card left unanswered', () => {
     const guide = teamAnalysisGuide(null, true);
 

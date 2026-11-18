@@ -90,7 +90,10 @@ export interface GraphViewProps {
   projects: readonly ProjectColor[];
   /** Threads holding a question or an approval the user can answer here, by what they hold. */
   asking: ReadonlyMap<string, 'question' | 'approval'>;
-  onAnswer: (threadId: string) => void;
+  /** Answer the thread's card from its node's Answer button, the anchor it is shown at. */
+  onAnswer: (threadId: string, anchor: HTMLElement) => void;
+  /** The view started to pan or zoom, which leaves anything hung from a node behind. */
+  onViewportMove?: () => void;
   className?: string;
 }
 
@@ -154,7 +157,7 @@ type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 interface GraphActions {
   open: (threadId: string) => void;
   openHere: (threadId: string) => void;
-  answer: (threadId: string) => void;
+  answer: (threadId: string, anchor: HTMLElement) => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
@@ -330,7 +333,9 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
         onGo={() => open(thread.id)}
         onOpenHere={() => openHere(thread.id)}
         answerKind={asking}
-        onAnswer={asking === null ? undefined : () => answer(thread.id)}
+        onAnswer={
+          asking === null ? undefined : (anchor) => answer(thread.id, anchor)
+        }
       />
     </div>
   );
@@ -615,6 +620,7 @@ function GraphCanvas({
   projects,
   asking,
   onAnswer,
+  onViewportMove,
   className,
 }: GraphViewProps): React.JSX.Element {
   const flow = useReactFlow();
@@ -652,6 +658,7 @@ function GraphCanvas({
   const open = useLatestCallback(onOpen, []);
   const openHere = useLatestCallback(onOpenHere, []);
   const answer = useLatestCallback(onAnswer, []);
+  const viewportMoved = useLatestCallback(() => onViewportMove?.(), []);
 
   const states = new Map(
     shown.map((thread) => {
@@ -836,6 +843,7 @@ function GraphCanvas({
                   zoomOnScroll={false}
                   zoomOnPinch
                   zoomOnDoubleClick={false}
+                  onMoveStart={viewportMoved}
                 />
                 <ProjectLegend
                   projects={projects}

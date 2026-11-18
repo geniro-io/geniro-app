@@ -1,4 +1,4 @@
-import { ArrowUpRight, MessageSquareText } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import type { DaemonHandle, ProfileColor } from '../../shared/contracts';
@@ -12,21 +12,14 @@ import {
   type FloatingRect,
   FloatingWindow,
 } from '../components/floating-window';
-import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { PaletteDot } from '../components/ui/palette-dot';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
-import { NeedsYouPanel, type NeedsYouPanelProps } from './needs-you-panel';
-import type { OpenRequest } from './use-open-requests';
-
-/** What a window over the graph holds: the live thread, or the cards it waits on the user for. */
-export type ThreadWindowMode = 'thread' | 'answer';
 
 export interface ThreadWindow {
   runId: string;
-  mode: ThreadWindowMode;
   rect: FloatingRect;
   /** Higher stands in front; the windows themselves keep the order they opened in. */
   layer: number;
@@ -35,11 +28,10 @@ export interface ThreadWindow {
 export interface ThreadWindows {
   /** In the order they opened, which never changes, so raising one moves no DOM node. */
   windows: readonly ThreadWindow[];
-  open: (runId: string, mode: ThreadWindowMode, bounds: FloatingBounds) => void;
+  open: (runId: string, bounds: FloatingBounds) => void;
   close: (runId: string) => void;
   focus: (runId: string) => void;
   move: (runId: string, rect: FloatingRect) => void;
-  setMode: (runId: string, mode: ThreadWindowMode) => void;
   /** Close every window whose thread is no longer on the board. */
   keepOnly: (runIds: ReadonlySet<string>) => void;
 }
@@ -61,19 +53,16 @@ export function frontWindow(
 function raise(
   rows: readonly ThreadWindow[],
   runId: string,
-  patch: Partial<Pick<ThreadWindow, 'mode'>> = {},
 ): readonly ThreadWindow[] {
-  const row = rows.find((entry) => entry.runId === runId);
-  if (row === undefined) {
+  if (
+    !rows.some((entry) => entry.runId === runId) ||
+    frontWindow(rows)?.runId === runId
+  ) {
     return rows;
   }
-  const inFront = frontWindow(rows)?.runId === runId;
-  if (inFront && (patch.mode === undefined || patch.mode === row.mode)) {
-    return rows;
-  }
-  const layer = inFront ? row.layer : topLayer(rows) + 1;
+  const layer = topLayer(rows) + 1;
   return rows.map((entry) =>
-    entry.runId === runId ? { ...entry, ...patch, layer } : entry,
+    entry.runId === runId ? { ...entry, layer } : entry,
   );
 }
 
@@ -81,13 +70,12 @@ function raise(
 export function useThreadWindows(narrow: boolean): ThreadWindows {
   const [windows, setWindows] = useState<readonly ThreadWindow[]>([]);
   const open = useLatestCallback(
-    (runId: string, mode: ThreadWindowMode, bounds: FloatingBounds): void =>
+    (runId: string, bounds: FloatingBounds): void =>
       setWindows((rows) => {
         if (rows.some((entry) => entry.runId === runId)) {
           return raise(
             narrow ? rows.filter((entry) => entry.runId === runId) : rows,
             runId,
-            { mode },
           );
         }
         const kept = narrow ? [] : rows;
@@ -95,7 +83,6 @@ export function useThreadWindows(narrow: boolean): ThreadWindows {
           ...kept,
           {
             runId,
-            mode,
             rect: cascadeRect(kept.length, bounds),
             layer: topLayer(kept) + 1,
           },
@@ -121,11 +108,6 @@ export function useThreadWindows(narrow: boolean): ThreadWindows {
       ),
     [],
   );
-  const setMode = useLatestCallback(
-    (runId: string, mode: ThreadWindowMode): void =>
-      setWindows((rows) => raise(rows, runId, { mode })),
-    [],
-  );
   const keepOnly = useLatestCallback(
     (runIds: ReadonlySet<string>): void =>
       setWindows((rows) =>
@@ -135,7 +117,7 @@ export function useThreadWindows(narrow: boolean): ThreadWindows {
       ),
     [],
   );
-  return { windows, open, close, focus, move, setMode, keepOnly };
+  return { windows, open, close, focus, move, keepOnly };
 }
 
 /** A thread as its window's header names it. */
@@ -191,9 +173,6 @@ export interface ThreadWindowsLayerProps {
   bounds: FloatingBounds;
   narrow: boolean;
   subjects: ReadonlyMap<string, ThreadWindowSubject>;
-  requests: readonly OpenRequest[];
-  requestsError: string | null;
-  onAnswer: NeedsYouPanelProps['onAnswer'];
   onOpenThread: (runId: string) => void;
   apis: DaemonApis;
   handle: DaemonHandle;
@@ -201,19 +180,15 @@ export interface ThreadWindowsLayerProps {
 }
 
 /**
- * The windows over the command center's graph: each one a thread, drawn by
- * the chat screen itself, or the questions and approvals it waits on, drawn
- * by the Needs you panel — so a thread is read and answered without leaving
- * the graph. A window whose thread has nothing left to answer shows the thread.
+ * The windows over the command center's graph, each one a thread drawn by the
+ * chat screen itself, so several threads are read and written to side by side
+ * without leaving the graph.
  */
 export function ThreadWindowsLayer({
   windows,
   bounds,
   narrow,
   subjects,
-  requests,
-  requestsError,
-  onAnswer,
   onOpenThread,
   apis,
   handle,
@@ -232,10 +207,6 @@ export function ThreadWindowsLayer({
       {shown.map((entry) => {
         const subject = subjects.get(entry.runId);
         const title = subject?.title ?? 'Thread';
-        const runRequests = requests.filter(
-          (request) => request.runId === entry.runId,
-        );
-        const answering = entry.mode === 'answer' && runRequests.length > 0;
         return (
           <FloatingWindow
             key={entry.runId}
@@ -264,63 +235,28 @@ export function ThreadWindowsLayer({
                 <span className="min-w-0 truncate text-sm font-semibold">
                   {title}
                 </span>
-                {answering ? (
-                  <Badge
-                    variant="warning"
-                    className="shrink-0 px-1.5 py-0 text-xs">
-                    Needs you
-                  </Badge>
-                ) : null}
               </span>
             }
             actions={
-              <>
-                {answering ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    data-slot="thread-window-show-thread"
-                    className="h-6 gap-1 px-2 text-xs"
-                    title="Show the live thread in this window"
-                    onClick={() => windows.setMode(entry.runId, 'thread')}>
-                    <MessageSquareText
-                      aria-hidden="true"
-                      className="size-3.5"
-                    />
-                    Show thread
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  data-slot="thread-window-go"
-                  className="size-6"
-                  aria-label={`Go to ${title}`}
-                  title="Go to the thread in Chats"
-                  onClick={() => onOpenThread(entry.runId)}>
-                  <ArrowUpRight aria-hidden="true" className="size-3.5" />
-                </Button>
-              </>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-slot="thread-window-go"
+                className="size-6"
+                aria-label={`Go to ${title}`}
+                title="Go to the thread in Chats"
+                onClick={() => onOpenThread(entry.runId)}>
+                <ArrowUpRight aria-hidden="true" className="size-3.5" />
+              </Button>
             }>
-            {answering ? (
-              <NeedsYouPanel
-                requests={runRequests}
-                error={requestsError}
-                focusRunId={null}
-                onAnswer={onAnswer}
-                onOpenThread={onOpenThread}
-              />
-            ) : (
-              <ThreadWindowChat
-                runId={entry.runId}
-                apis={apis}
-                handle={handle}
-                client={client}
-                onOpenThread={onOpenThread}
-              />
-            )}
+            <ThreadWindowChat
+              runId={entry.runId}
+              apis={apis}
+              handle={handle}
+              client={client}
+              onOpenThread={onOpenThread}
+            />
           </FloatingWindow>
         );
       })}

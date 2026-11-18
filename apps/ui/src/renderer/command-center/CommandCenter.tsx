@@ -37,6 +37,7 @@ import type { DaemonClient } from '../daemon-client';
 import { useProjects } from '../projects/use-projects';
 import { useRunConfigSources } from '../projects/use-run-config-sources';
 import { useSharedCapabilities } from '../use-capabilities';
+import { AnswerPopover } from './answer-popover';
 import { type TeamFace, teamFacesOf, threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
@@ -251,10 +252,25 @@ export function CommandCenter({
   );
   const toggleSidebar = (tab: SidebarTab): void =>
     setSidebar((open) => (open === tab ? null : tab));
-  const answerFrom = (runId: string): void =>
-    windows.open(runId, 'answer', windowArea);
-  const openHere = (runId: string): void =>
-    windows.open(runId, 'thread', windowArea);
+  const [answering, setAnswering] = useState<{
+    runId: string;
+    anchor: HTMLElement;
+  } | null>(null);
+  const answerFrom = (runId: string, anchor: HTMLElement): void =>
+    setAnswering({ runId, anchor });
+  const openHere = (runId: string): void => windows.open(runId, windowArea);
+  const answeringRequests =
+    answering === null
+      ? []
+      : openRequests.requests.filter(
+          (request) => request.runId === answering.runId,
+        );
+  const answeredAll = answering !== null && answeringRequests.length === 0;
+  useEffect(() => {
+    if (answeredAll) {
+      setAnswering(null);
+    }
+  }, [answeredAll]);
   const boardRunIds =
     board.cards === null
       ? null
@@ -425,6 +441,7 @@ export function CommandCenter({
             projects={shownProjects}
             asking={askingKinds}
             onAnswer={answerFrom}
+            onViewportMove={() => setAnswering(null)}
           />
         </Suspense>
       )}
@@ -569,13 +586,28 @@ export function CommandCenter({
               bounds={windowArea}
               narrow={narrow}
               subjects={windowSubjects}
-              requests={openRequests.requests}
-              requestsError={openRequests.error}
-              onAnswer={openRequests.answer}
               onOpenThread={onOpenThread}
               apis={apis}
               handle={handle}
               client={client}
+            />
+          ) : null}
+          {graphShown && answering !== null ? (
+            <AnswerPopover
+              anchor={answering.anchor}
+              title={windowSubjects.get(answering.runId)?.title ?? 'Thread'}
+              projectColor={
+                windowSubjects.get(answering.runId)?.project?.color ?? null
+              }
+              requests={answeringRequests}
+              error={openRequests.error}
+              onAnswer={openRequests.answer}
+              onOpenHere={() => {
+                openHere(answering.runId);
+                setAnswering(null);
+              }}
+              onOpenThread={() => onOpenThread(answering.runId)}
+              onClose={() => setAnswering(null)}
             />
           ) : null}
         </div>

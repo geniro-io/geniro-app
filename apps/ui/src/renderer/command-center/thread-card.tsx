@@ -67,8 +67,8 @@ export interface ThreadCardProps {
   onGo: () => void;
   /** Open the thread in a window over the command center's graph. */
   onOpenHere?: () => void;
-  /** Open the thread's waiting question or approval in the command center; absent when it holds none. */
-  onAnswer?: () => void;
+  /** Open the thread's waiting question or approval from the pressed button; absent when it holds none. */
+  onAnswer?: (anchor: HTMLElement) => void;
   /** What the thread holds for the user, which names that button. */
   answerKind?: 'question' | 'approval' | null;
 }
@@ -421,7 +421,7 @@ export function ThreadCard({
               size="sm"
               data-slot="thread-card-answer"
               className="h-6 gap-1 rounded-full px-2.5 text-xs"
-              onClick={onAnswer}>
+              onClick={(event) => onAnswer(event.currentTarget)}>
               {answerKind === 'approval' ? (
                 <ShieldCheck aria-hidden="true" className="size-3.5" />
               ) : (

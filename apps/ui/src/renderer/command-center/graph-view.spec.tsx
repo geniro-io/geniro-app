@@ -401,12 +401,11 @@ describe('GraphView', () => {
       threadCard('thread-2').querySelector('[data-slot="thread-card-answer"]')!
         .textContent,
     ).toBe('Review');
-    act(() =>
-      threadCard('thread-2')
-        .querySelector<HTMLButtonElement>('[data-slot="thread-card-answer"]')!
-        .click(),
-    );
-    expect(onAnswer).toHaveBeenCalledWith('thread-2');
+    const button = threadCard('thread-2').querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-answer"]',
+    )!;
+    act(() => button.click());
+    expect(onAnswer).toHaveBeenCalledWith('thread-2', button);
     expect(onOpen).not.toHaveBeenCalled();
   });
 

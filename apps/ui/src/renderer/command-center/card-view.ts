@@ -44,8 +44,9 @@ export function idleDaysOf(lastAt: string, now: number): number | null {
 
 /**
  * Where a thread stands for the user: blocked on a press (a failure, an
- * approval), working, waiting on a question (its own to the user, or the
- * manager's to it), quiet, or untouched for a day and more.
+ * approval), waiting on the user's answer to its question, working (the
+ * manager awaiting its reply counts as work), quiet, or untouched for a day
+ * and more.
  */
 export function attentionOf(
   card: Pick<CommandCenterCard, 'run' | 'column' | 'contact'>,
@@ -57,14 +58,17 @@ export function attentionOf(
   if (card.column === 'working') {
     return 'working';
   }
-  if (card.run.awaiting === 'question' || card.contact.awaitingReply) {
+  if (card.run.awaiting === 'question') {
     return 'question';
+  }
+  if (card.contact.awaitingReply) {
+    return 'working';
   }
   const lastAt = Date.parse(card.run.lastActivityAt ?? card.run.createdAt);
   return now - lastAt >= INACTIVE_AFTER_MS ? 'inactive' : 'quiet';
 }
 
-/** The status chip's words: why a blocked or questioned thread stands where it does, else its status. */
+/** The status chip's words: why a blocked, questioned or awaited thread stands where it does, else its status. */
 export function statusTextOf(
   card: Pick<CommandCenterCard, 'run' | 'contact'>,
   status: ThreadCardStatus,
@@ -74,9 +78,14 @@ export function statusTextOf(
     return card.run.status === 'failed' ? 'Failed' : 'Needs approval';
   }
   if (attention === 'question') {
-    return card.run.awaiting === 'question'
-      ? 'Question for you'
-      : 'Awaiting reply';
+    return 'Question for you';
+  }
+  if (
+    attention === 'working' &&
+    status !== 'working' &&
+    card.contact.awaitingReply
+  ) {
+    return 'Awaiting reply';
   }
   return THREAD_STATUS_TEXT[status];
 }

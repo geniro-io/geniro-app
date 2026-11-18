@@ -69,14 +69,32 @@ describe('attentionOf', () => {
     ).toBe('working');
   });
 
-  it('puts a thread asking the user, or one the manager awaits, among the questions', () => {
+  it('puts only a thread asking the user among the questions, even when the manager also awaits it', () => {
     expect(
       attentionOf(
         cardOf({ awaiting: 'question', column: 'waiting', status: 'running' }),
         NOW,
       ),
     ).toBe('question');
-    expect(attentionOf(cardOf({ awaitingReply: true }), NOW)).toBe('question');
+    expect(
+      attentionOf(
+        cardOf({
+          awaiting: 'question',
+          column: 'waiting',
+          awaitingReply: true,
+        }),
+        NOW,
+      ),
+    ).toBe('question');
+  });
+
+  it('puts a still thread the manager awaits a reply from among the working', () => {
+    expect(
+      attentionOf(
+        cardOf({ awaitingReply: true, lastAt: NOW - 25 * HOUR }),
+        NOW,
+      ),
+    ).toBe('working');
   });
 
   it('calls a still thread quiet within a day and inactive after', () => {
@@ -177,9 +195,16 @@ describe('statusTextOf', () => {
     expect(
       statusTextOf(card({ awaiting: 'question' }), 'waiting', 'question'),
     ).toBe('Question for you');
+    expect(statusTextOf(card({ awaitingReply: true }), 'idle', 'working')).toBe(
+      'Awaiting reply',
+    );
     expect(
-      statusTextOf(card({ awaitingReply: true }), 'idle', 'question'),
-    ).toBe('Awaiting reply');
+      statusTextOf(
+        card({ awaitingReply: true, column: 'working' }),
+        'working',
+        'working',
+      ),
+    ).toBe('Working');
     expect(statusTextOf(card({}), 'idle', 'quiet')).toBe('Idle');
   });
 });

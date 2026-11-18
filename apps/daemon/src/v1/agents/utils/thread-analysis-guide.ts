@@ -108,6 +108,10 @@ function memberAssessment(runs: 'team' | 'thread'): string {
    }`;
 }
 
+function subAgents(ownReads: string): string {
+  return `Sub-agents. Read ${ownReads} yourself, and hand a sub-agent only a deep dive into a few runs or moments: a fresh one with a narrow brief — which runs and views to read, what to return and in how many characters — never one that starts from a copy of your conversation (a fork). A copy carries every page you have read into each request it makes, so a handful of them costs more than the rest of the analysis. Re-read yourself every row you cite from a sub-agent's report.`;
+}
+
 const TOOL_ECONOMY =
   'Tool economy. Failed tool calls (`failed`, `failedToolCalls`), the same call repeated, oversized outputs, and tools whose time or tokens outweighed what they returned.';
 
@@ -273,7 +277,9 @@ ${
     : '14'
 }. Cluster by root cause, then re-read every seq you will cite (view=item) and confirm the quote is really there.
 
-Use view=spans with kinds=["tool"] and minMs to find slow tools, view=items with memberId / kinds / afterSeq / fromTime to read around a moment, and view=item seq=N for one row in full. Read pages until you have what you need, not the whole thread.`,
+Use view=spans with kinds=["tool"] and minMs to find slow tools, view=items with memberId / kinds / afterSeq / fromTime to read around a moment, and view=item seq=N for one row in full. Read pages until you have what you need, not the whole thread.
+
+${subAgents('view=overview')}`,
       whereAFixBelongs(team),
       TERRITORIES,
       theBar(
@@ -359,7 +365,9 @@ ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT
 16. ${INFORMATION_ACCESS}
 17. Cluster by root cause, then re-read every row you will cite (view=item runId=… seq=…) and confirm the quote is really there.
 
-Read pages until you have what you need, not every run whole.`,
+Read pages until you have what you need, not every run whole.
+
+${subAgents('view=history, view=runs and view=team')}`,
     whereAFixBelongs(true),
     TERRITORIES,
     theBar(

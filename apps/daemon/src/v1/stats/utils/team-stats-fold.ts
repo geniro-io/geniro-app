@@ -119,7 +119,7 @@ interface MemberCell {
 /** One team's statistics, folded over every row its runs left in the ledgers. */
 export function foldTeamStats(
   input: TeamStatsInput,
-): Omit<TeamStatsWire, 'metrics' | 'assessmentVerdicts'> {
+): Omit<TeamStatsWire, 'metrics'> {
   let measuredWorkedMs = 0;
   const measuredOf = new Map<TeamStatsUsageRow, number>();
   const usage = input.usage.map((row) => {

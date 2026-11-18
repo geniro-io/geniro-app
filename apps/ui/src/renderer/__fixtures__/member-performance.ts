@@ -122,7 +122,6 @@ export function assessment(
       },
     ],
     judge: { agent: 'codex', model: 'gpt-6.1-sol', sameVendor: false },
-    userVerdict: null,
     ...overrides,
   };
 }

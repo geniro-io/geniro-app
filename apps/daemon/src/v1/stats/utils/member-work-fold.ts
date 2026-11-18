@@ -316,14 +316,6 @@ export function assessmentsByMember(
             : statusOf(row.chatRunId, row.cardSeq, item.id),
       })),
       judge: { ...row.judge, sameVendor: sameVendorOf(row) },
-      userVerdict:
-        row.userVerdict === null
-          ? null
-          : {
-              verdict: row.userVerdict.verdict,
-              note: row.userVerdict.note,
-              at: row.userVerdict.at.toISOString(),
-            },
     });
     byMember.set(row.memberId, list);
   }

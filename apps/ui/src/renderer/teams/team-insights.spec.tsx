@@ -111,7 +111,6 @@ const STATS: TeamStatsDto = {
       assessments: [],
     },
   ],
-  assessmentVerdicts: { assessments: 2, agreed: 1, disagreed: 0 },
 };
 
 let container: HTMLDivElement;

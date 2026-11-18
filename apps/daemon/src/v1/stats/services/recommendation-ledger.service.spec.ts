@@ -320,7 +320,6 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
           evidence: DEV.evidence,
           items: [{ id: 'W-1', title: 'Title of W-1' }],
           judge: { agent: 'codex', model: 'gpt-6.1-sol' },
-          userVerdict: null,
         },
         expect.objectContaining({ memberId: 'qa', verdict: 'keep', items: [] }),
       ]);

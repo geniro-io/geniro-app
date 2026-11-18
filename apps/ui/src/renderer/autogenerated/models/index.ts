@@ -2333,38 +2333,6 @@ export interface CapabilitiesDto {
      */
     maxActiveTurnsCeiling: number;
 }
-/**
- * 
- * @export
- * @interface CardAssessmentVerdictsDto
- */
-export interface CardAssessmentVerdictsDto {
-    /**
-     * 
-     * @type {Array<CardAssessmentVerdictsDtoVerdictsInner>}
-     * @memberof CardAssessmentVerdictsDto
-     */
-    verdicts: Array<CardAssessmentVerdictsDtoVerdictsInner>;
-}
-/**
- * 
- * @export
- * @interface CardAssessmentVerdictsDtoVerdictsInner
- */
-export interface CardAssessmentVerdictsDtoVerdictsInner {
-    /**
-     * 
-     * @type {string}
-     * @memberof CardAssessmentVerdictsDtoVerdictsInner
-     */
-    memberId: string;
-    /**
-     * 
-     * @type {MemberAssessmentUserVerdict}
-     * @memberof CardAssessmentVerdictsDtoVerdictsInner
-     */
-    userVerdict: MemberAssessmentUserVerdict | null;
-}
 
 /**
  * 
@@ -8126,12 +8094,6 @@ export interface MemberAssessmentEntry {
      * @memberof MemberAssessmentEntry
      */
     judge: MemberAssessmentEntryJudge;
-    /**
-     * 
-     * @type {MemberAssessmentUserVerdict}
-     * @memberof MemberAssessmentEntry
-     */
-    userVerdict: MemberAssessmentUserVerdict | null;
 }
 
 
@@ -8248,90 +8210,6 @@ export interface MemberAssessmentEntryJudge {
      */
     sameVendor: boolean | null;
 }
-/**
- * 
- * @export
- * @interface MemberAssessmentUserVerdict
- */
-export interface MemberAssessmentUserVerdict {
-    /**
-     * 
-     * @type {string}
-     * @memberof MemberAssessmentUserVerdict
-     */
-    verdict: MemberAssessmentUserVerdictVerdictEnum;
-    /**
-     * 
-     * @type {string}
-     * @memberof MemberAssessmentUserVerdict
-     */
-    note: string | null;
-    /**
-     * ISO-8601
-     * @type {string}
-     * @memberof MemberAssessmentUserVerdict
-     */
-    at: string;
-}
-
-
-/**
- * @export
- */
-export const MemberAssessmentUserVerdictVerdictEnum = {
-    Agree: 'agree',
-    Disagree: 'disagree'
-} as const;
-export type MemberAssessmentUserVerdictVerdictEnum = typeof MemberAssessmentUserVerdictVerdictEnum[keyof typeof MemberAssessmentUserVerdictVerdictEnum];
-
-/**
- * 
- * @export
- * @interface MemberAssessmentVerdictDto
- */
-export interface MemberAssessmentVerdictDto {
-    /**
-     * the chat that filed the card
-     * @type {string}
-     * @memberof MemberAssessmentVerdictDto
-     */
-    chatRunId: string;
-    /**
-     * 
-     * @type {number}
-     * @memberof MemberAssessmentVerdictDto
-     */
-    cardSeq: number;
-    /**
-     * 
-     * @type {string}
-     * @memberof MemberAssessmentVerdictDto
-     */
-    memberId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof MemberAssessmentVerdictDto
-     */
-    verdict: MemberAssessmentVerdictDtoVerdictEnum | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof MemberAssessmentVerdictDto
-     */
-    note?: string | null;
-}
-
-
-/**
- * @export
- */
-export const MemberAssessmentVerdictDtoVerdictEnum = {
-    Agree: 'agree',
-    Disagree: 'disagree'
-} as const;
-export type MemberAssessmentVerdictDtoVerdictEnum = typeof MemberAssessmentVerdictDtoVerdictEnum[keyof typeof MemberAssessmentVerdictDtoVerdictEnum];
-
 /**
  * 
  * @export
@@ -17649,41 +17527,10 @@ export interface TeamStatsDto {
     byMember: Array<TeamStatsMember>;
     /**
      * 
-     * @type {TeamStatsDtoAssessmentVerdicts}
-     * @memberof TeamStatsDto
-     */
-    assessmentVerdicts: TeamStatsDtoAssessmentVerdicts;
-    /**
-     * 
      * @type {ThreadMetrics}
      * @memberof TeamStatsDto
      */
     metrics: ThreadMetrics;
-}
-/**
- * how often the user agreed with the analyses’ marks
- * @export
- * @interface TeamStatsDtoAssessmentVerdicts
- */
-export interface TeamStatsDtoAssessmentVerdicts {
-    /**
-     * every member assessment filed
-     * @type {number}
-     * @memberof TeamStatsDtoAssessmentVerdicts
-     */
-    assessments: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof TeamStatsDtoAssessmentVerdicts
-     */
-    agreed: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof TeamStatsDtoAssessmentVerdicts
-     */
-    disagreed: number;
 }
 /**
  * 

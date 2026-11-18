@@ -133,13 +133,6 @@ export class TeamStatsService {
     });
     return {
       ...figures,
-      assessmentVerdicts: {
-        assessments: rows.length,
-        agreed: rows.filter((row) => row.userVerdict?.verdict === 'agree')
-          .length,
-        disagreed: rows.filter((row) => row.userVerdict?.verdict === 'disagree')
-          .length,
-      },
       metrics: foldThreadMetrics({
         runs: threads,
         goals,

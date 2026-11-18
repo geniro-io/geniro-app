@@ -493,6 +493,14 @@ export interface AcpAgentFailureProtocol {
   resume?: {
     isTransient(message: string): boolean;
     /**
+     * Whether a transient failure is the agent failing to reach its own server
+     * from this machine — a name that does not resolve, a route with no way out.
+     * It words the notice a resume leaves and changes nothing else: the resume
+     * runs the same either way. Absent: every transient failure is worded as an
+     * interruption of the agent's service.
+     */
+    isUnreachable?: (message: string) => boolean;
+    /**
      * The continuation prompt for ONE attempt, told what the failure did to
      * the sub-agents it caught — a function rather than a sentence because
      * that differs per failure, and getting it wrong is expensive: told only
@@ -648,6 +656,12 @@ export interface AcpSessionOptions {
    * than make this seam async for everyone.
    */
   readContext?: (sessionId: string) => AcpContextReading | null;
+  /**
+   * Whether the agent's own store holds this session with no conversation in
+   * it, so a refused load of it loses nothing. Absent, or false: a refused load
+   * is reported as the loss of the history.
+   */
+  sessionSavedNothing?: (sessionId: string) => boolean;
   /**
    * Agent→client methods this client refuses WITHOUT narrating it — the ones
    * whose own agent absorbs the refusal, so nothing about the turn changed.
@@ -1728,12 +1742,18 @@ export class AcpTurnDriver {
       // exactly this. Measured against 2026.08.11-e8db854: a load of an id the
       // profile does not hold answers
       // `-32602 Invalid params {"message":"Session \"…\" not found"}`.
-      const events: AgentEvent[] = [
-        {
+      const resumeId = this.options.input.resumeSessionId?.trim();
+      const events: AgentEvent[] = [];
+      if (resumeId && this.savedNothing(resumeId)) {
+        this.session.options.logger?.warn(
+          `acp: session ${resumeId} saved no conversation; its load was refused (${message}), so the turn opens a fresh session`,
+        );
+      } else {
+        events.push({
           type: 'notice',
           message: `agent could not reopen this conversation (${message}) — this turn runs on a fresh session, without the earlier history in its context`,
-        },
-      ];
+        });
+      }
       // Undo the replay bookkeeping the load armed: nothing is being replayed
       // now, and leaving `replaying` set would drop every transcript update of
       // the turn we are about to run.
@@ -3914,18 +3934,55 @@ export class AcpTurnDriver {
     this.session.options.logger?.warn(
       `acp: resuming after a transient failure in ${delayMs}ms (attempt ${this.transientResumes}/${attempts}, ${this.transientResumesThisTurn} of ${ceiling} this turn): ${message}`,
     );
+    const unreachable =
+      this.session.options.agentFailure?.resume?.isUnreachable?.(message) ===
+      true;
     events.push({
       type: 'notice',
       severity: 'info',
-      // The CAUSE is deliberately unnamed: what `isTransient` accepts is the
-      // adapter's business and spans more than dropped connections, so a
-      // sentence naming one would be false for the rest — and this row is the
-      // user's only account of why their turn paused.
-      message:
-        delayMs <= 0
-          ? `The agent's service interrupted this turn — asked it to continue (attempt ${this.transientResumes} of ${attempts}).`
-          : `The agent's service interrupted this turn — trying again in ${formatPause(delayMs)} (attempt ${this.transientResumes} of ${attempts}).`,
+      // The CAUSE is named only when the adapter classifies it as unreachable.
+      // Otherwise it stays unnamed: what `isTransient` accepts spans more than
+      // dropped connections, so a sentence naming one would be false for the
+      // rest — and this row is the user's only account of why their turn paused.
+      message: this.resumeNotice(
+        unreachable,
+        delayMs,
+        `(attempt ${this.transientResumes} of ${attempts})`,
+      ),
     });
+  }
+
+  private resumeNotice(
+    unreachable: boolean,
+    delayMs: number,
+    attempt: string,
+  ): string {
+    if (unreachable) {
+      const cause =
+        "The agent's server can't be reached from this Mac — check the network or VPN.";
+      return delayMs <= 0
+        ? `${cause} Asked it to continue ${attempt}.`
+        : `${cause} Trying again in ${formatPause(delayMs)} ${attempt}.`;
+    }
+    return delayMs <= 0
+      ? `The agent's service interrupted this turn — asked it to continue ${attempt}.`
+      : `The agent's service interrupted this turn — trying again in ${formatPause(delayMs)} ${attempt}.`;
+  }
+
+  /**
+   * Whether the agent's store holds the session with no conversation in it. A
+   * reader that throws has read nothing, so the refused load is reported as the
+   * loss it might be — the notice stays.
+   */
+  private savedNothing(sessionId: string): boolean {
+    try {
+      return this.session.options.sessionSavedNothing?.(sessionId) === true;
+    } catch (error) {
+      this.session.options.logger?.warn(
+        `acp: could not tell whether session ${sessionId} saved a conversation (${error instanceof Error ? error.message : String(error)}); its refused load is reported`,
+      );
+      return false;
+    }
   }
 
   /**

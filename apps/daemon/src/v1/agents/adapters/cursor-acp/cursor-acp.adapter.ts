@@ -155,6 +155,7 @@ import {
   CURSOR_TRANSIENT_FAILURE_PATTERN,
   CURSOR_TRANSIENT_RESUME_DELAYS_MS,
   CURSOR_TRANSIENT_RESUME_MAX_PER_TURN,
+  CURSOR_UNREACHABLE_FAILURE_PATTERN,
   CURSOR_USAGE_MAX_PAGES,
   CURSOR_USAGE_METHOD,
   CURSOR_USAGE_REQUEST_TIMEOUT_MS,
@@ -2814,6 +2815,21 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * A session the CLI wrote a directory for and no conversation into. A missing
+   * directory is not that: it is a store cleared under the session, which is a
+   * real loss, so it answers false.
+   */
+  private sessionSavedNothing(sessionId: string): boolean {
+    if (
+      !isPlainSessionId(sessionId) ||
+      !existsSync(join(this.sessionStoreDir(), sessionId))
+    ) {
+      return false;
+    }
+    return this.readSessionConversation(sessionId, 0)?.messages === 0;
+  }
+
+  /**
    * The title this agent gave the conversation, off the same store the
    * breakdown comes from.
    *
@@ -3528,6 +3544,8 @@ export class CursorAcpAdapter extends AgentAdapter {
           resume: {
             isTransient: (message) =>
               CURSOR_TRANSIENT_FAILURE_PATTERN.test(message),
+            isUnreachable: (message) =>
+              CURSOR_UNREACHABLE_FAILURE_PATTERN.test(message),
             prompt: cursorTransientResumePrompt,
             delaysMs: CURSOR_TRANSIENT_RESUME_DELAYS_MS,
             maxPerTurn: CURSOR_TRANSIENT_RESUME_MAX_PER_TURN,
@@ -3561,6 +3579,7 @@ export class CursorAcpAdapter extends AgentAdapter {
                 model: usage.model,
               };
         },
+        sessionSavedNothing: (sessionId) => this.sessionSavedNothing(sessionId),
         logger: this.cursorOptions.logger,
       },
       input,

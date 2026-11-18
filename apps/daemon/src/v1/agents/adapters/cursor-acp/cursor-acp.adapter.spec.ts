@@ -73,6 +73,7 @@ import {
   CURSOR_SILENTLY_DECLINED_METHODS,
   CURSOR_TRANSIENT_RESUME_DELAYS_MS,
   CURSOR_TRANSIENT_RESUME_PROMPT,
+  CURSOR_UNREACHABLE_FAILURE_PATTERN,
   CURSOR_USAGE_MAX_PAGES,
 } from './cursor-acp.const';
 
@@ -2070,6 +2071,214 @@ describe('CursorAcpAdapter — cannot reopen a conversation', () => {
   });
 });
 
+/** Cursor's store for session `s`, holding the turn's prompt as saved. */
+function saveConversation(sessionStoreDir: string): void {
+  const rootId = 'root-of-session-s';
+  const messageId = createHash('sha256').update('ship it').digest('hex');
+  mkdirSync(join(sessionStoreDir, 's'), { recursive: true });
+  const db = new DatabaseSync(join(sessionStoreDir, 's', 'store.db'));
+  db.exec('CREATE TABLE meta (value TEXT)');
+  db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
+  db.prepare('INSERT INTO meta (value) VALUES (?)').run(
+    Buffer.from(JSON.stringify({ latestRootBlobId: rootId })).toString('hex'),
+  );
+  const insert = db.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)');
+  insert.run(
+    rootId,
+    new Uint8Array([0x0a, 0x20, ...Buffer.from(messageId, 'hex')]),
+  );
+  insert.run(
+    messageId,
+    Buffer.from(
+      JSON.stringify({
+        role: 'user',
+        content: [
+          { type: 'text', text: '<user_query>\nship it\n</user_query>' },
+        ],
+      }),
+    ),
+  );
+  db.close();
+}
+
+describe('CURSOR_UNREACHABLE_FAILURE_PATTERN', () => {
+  it('matches a name lookup that failed and a route with no way out', () => {
+    expect(
+      CURSOR_UNREACHABLE_FAILURE_PATTERN.test(
+        'Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND agentn.global.api5.cursor.sh',
+      ),
+    ).toBe(true);
+    expect(
+      CURSOR_UNREACHABLE_FAILURE_PATTERN.test(
+        'Error: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh',
+      ),
+    ).toBe(true);
+    expect(
+      CURSOR_UNREACHABLE_FAILURE_PATTERN.test(
+        'Error: RetriableError: [unavailable] connect EHOSTUNREACH 1.2.3.4:443',
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a reset connection and a cancelled stream to the interrupted wording', () => {
+    expect(
+      CURSOR_UNREACHABLE_FAILURE_PATTERN.test(
+        'Error: RetriableError: [aborted] read ECONNRESET',
+      ),
+    ).toBe(false);
+    expect(
+      CURSOR_UNREACHABLE_FAILURE_PATTERN.test(
+        'Error: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('CursorAcpAdapter — the notice for a failure, and for a refused load', () => {
+  const NAME_LOOKUP_FAILED =
+    '\n\nError: RetriableError: [unavailable] getaddrinfo ENOTFOUND agentn.global.api5.cursor.sh';
+  const CONNECTION_RESET =
+    '\n\nError: RetriableError: [aborted] read ECONNRESET';
+  const PAUSE = `${CURSOR_TRANSIENT_RESUME_DELAYS_MS[0]! / 1000}s`;
+  const ATTEMPTS = CURSOR_TRANSIENT_RESUME_DELAYS_MS.length;
+
+  beforeEach(() =>
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }),
+  );
+  afterEach(() => vi.useRealTimers());
+
+  function startTurn(
+    input: Partial<AgentTurnInput> = {},
+    sessionStoreDir = mkdtempSync(join(tmpdir(), 'cursor-notice-store-')),
+  ): { child: FakeChild; events: AgentEvent[] } {
+    dirs.push(sessionStoreDir);
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      sessionStoreDir,
+    }).start({ ...BASE, ...input }, (event) => events.push(event));
+    return { child, events };
+  }
+
+  function stopTurnWith(child: FakeChild, text: string): void {
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text },
+      }),
+    );
+    child.stdout.emitData(
+      stdoutLine({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } }),
+    );
+  }
+
+  /** Answer the handshake with `loadSession`, then refuse the load of session `s`. */
+  function refuseLoad(child: FakeChild): void {
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: true },
+        },
+      }),
+    );
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: 2,
+        error: { code: -32602, message: 'Session "s" not found' },
+      }),
+    );
+  }
+
+  function answerNewSession(child: FakeChild): void {
+    const request = framesOn(child).find(
+      (frame) => frame.method === 'session/new',
+    );
+    expect(request).toBeDefined();
+    child.stdout.emitData(
+      stdoutLine({
+        jsonrpc: '2.0',
+        id: request?.id,
+        result: { sessionId: 'fresh-1' },
+      }),
+    );
+    acceptConfigFrames(child);
+  }
+
+  const reopenNotice = (event: AgentEvent): boolean =>
+    event.type === 'notice' &&
+    event.message.includes('could not reopen this conversation');
+
+  it('names an unreachable server in the notice the turn resumes with', () => {
+    const { child, events } = startTurn();
+    handshake(child);
+    stopTurnWith(child, NAME_LOOKUP_FAILED);
+
+    expect(events).toContainEqual({
+      type: 'notice',
+      severity: 'info',
+      message: `The agent's server can't be reached from this Mac — check the network or VPN. Trying again in ${PAUSE} (attempt 1 of ${ATTEMPTS}).`,
+    });
+  });
+
+  it('keeps the interrupted wording for a dropped connection', () => {
+    const { child, events } = startTurn();
+    handshake(child);
+    stopTurnWith(child, CONNECTION_RESET);
+
+    expect(events).toContainEqual({
+      type: 'notice',
+      severity: 'info',
+      message: `The agent's service interrupted this turn — trying again in ${PAUSE} (attempt 1 of ${ATTEMPTS}).`,
+    });
+  });
+
+  it('opens a fresh session with no reopen notice when the refused session saved nothing', () => {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-notice-store-'));
+    mkdirSync(join(store, 's'));
+    const { child, events } = startTurn({ resumeSessionId: 's' }, store);
+    refuseLoad(child);
+    answerNewSession(child);
+
+    expect(events.filter(reopenNotice)).toEqual([]);
+    expect(
+      framesOn(child).some((frame) => frame.method === 'session/prompt'),
+    ).toBe(true);
+  });
+
+  it('keeps the reopen notice when the refused session saved a conversation', () => {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-notice-store-'));
+    saveConversation(store);
+    const { child, events } = startTurn({ resumeSessionId: 's' }, store);
+    refuseLoad(child);
+
+    expect(events.filter(reopenNotice)).toHaveLength(1);
+  });
+
+  it('keeps the reopen notice when the session directory is gone', () => {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-notice-store-'));
+    const { child, events } = startTurn({ resumeSessionId: 's' }, store);
+    refuseLoad(child);
+
+    expect(events.filter(reopenNotice)).toHaveLength(1);
+  });
+
+  it('keeps the reopen notice when the saved store cannot be read', () => {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-notice-store-'));
+    mkdirSync(join(store, 's'));
+    writeFileSync(join(store, 's', 'store.db'), 'not a sqlite database');
+    const { child, events } = startTurn({ resumeSessionId: 's' }, store);
+    refuseLoad(child);
+
+    expect(events.filter(reopenNotice)).toHaveLength(1);
+  });
+});
+
 describe('CursorAcpAdapter — background sub-agents', () => {
   /**
    * Every frame below is transcribed from the wire, cursor-agent
@@ -3056,38 +3265,6 @@ ${RESUMED}
         expect(text).toContain(transcriptPath('agent-crumb'));
         expect(text).not.toContain('STILL RUNNING');
       });
-
-      /** Cursor's store for session `s`, holding the turn's prompt as saved. */
-      function saveConversation(sessionStoreDir: string): void {
-        const rootId = 'root-of-session-s';
-        const messageId = createHash('sha256').update('ship it').digest('hex');
-        mkdirSync(join(sessionStoreDir, 's'), { recursive: true });
-        const db = new DatabaseSync(join(sessionStoreDir, 's', 'store.db'));
-        db.exec('CREATE TABLE meta (value TEXT)');
-        db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
-        db.prepare('INSERT INTO meta (value) VALUES (?)').run(
-          Buffer.from(JSON.stringify({ latestRootBlobId: rootId })).toString(
-            'hex',
-          ),
-        );
-        const insert = db.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)');
-        insert.run(
-          rootId,
-          new Uint8Array([0x0a, 0x20, ...Buffer.from(messageId, 'hex')]),
-        );
-        insert.run(
-          messageId,
-          Buffer.from(
-            JSON.stringify({
-              role: 'user',
-              content: [
-                { type: 'text', text: '<user_query>\nship it\n</user_query>' },
-              ],
-            }),
-          ),
-        );
-        db.close();
-      }
 
       it('sends the brief again, ahead of the continuation, when cursor saved none of the request', async () => {
         const { child } = startWaiting();

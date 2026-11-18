@@ -675,6 +675,95 @@ describe('AcpSession session resume', () => {
     });
   });
 
+  it('opens the fresh session with no notice when the refused load saved nothing', () => {
+    // A session the CLI named but never wrote a conversation into holds no
+    // history, so a refused load loses none — and the notice would say it did.
+    const asked: string[] = [];
+    const logged: string[] = [];
+    const h = harness({
+      ...resuming,
+      sessionSavedNothing: (sessionId) => {
+        asked.push(sessionId);
+        return true;
+      },
+      logger: { warn: (message) => logged.push(message) },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({
+      id: 2,
+      error: { code: -32602, message: 'Invalid params' },
+    });
+
+    expect(asked).toEqual(['prior-7']);
+    expect(events).toEqual([]);
+    expect(logged).toContainEqual(
+      expect.stringContaining('prior-7 saved no conversation'),
+    );
+    expect(h.sentMethod('session/new')?.params).toEqual({
+      cwd: '/work',
+      mcpServers: [],
+    });
+
+    h.feed({ id: 3, result: { sessionId: 'fresh-1' } });
+    expect(h.sentMethod('session/prompt')?.params).toEqual({
+      sessionId: 'fresh-1',
+      prompt: [{ type: 'text', text: 'do the thing' }],
+    });
+  });
+
+  it('keeps the notice when the refused load saved a conversation', () => {
+    const h = harness({ ...resuming, sessionSavedNothing: () => false });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    expect(
+      h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } }),
+    ).toEqual([
+      {
+        type: 'notice',
+        message:
+          'agent could not reopen this conversation (Invalid params) — this turn runs on a fresh session, without the earlier history in its context',
+      },
+    ]);
+  });
+
+  it('keeps the notice, and logs why, when the saved-nothing check throws', () => {
+    const logged: string[] = [];
+    const h = harness({
+      ...resuming,
+      sessionSavedNothing: () => {
+        throw new Error('store is locked');
+      },
+      logger: { warn: (message) => logged.push(message) },
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    expect(
+      h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } }),
+    ).toContainEqual({
+      type: 'notice',
+      message: expect.stringContaining('could not reopen this conversation'),
+    });
+    expect(logged).toContainEqual(expect.stringContaining('store is locked'));
+  });
+
+  it('keeps a resume-only turn’s error whatever the check says', () => {
+    const h = harness({
+      input: { ...BASE_INPUT, resumeSessionId: 'prior-7', resumeOnly: true },
+      sessionSavedNothing: () => true,
+    });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    expect(
+      h.feed({ id: 2, error: { code: -32602, message: 'Invalid params' } }),
+    ).toEqual([
+      {
+        type: 'error',
+        message: 'agent could not reopen this conversation: Invalid params',
+      },
+    ]);
+  });
+
   it('un-arms the replay drop after a failed load, so the new turn is not swallowed', () => {
     // The load set `replaying`, and every transcript update is dropped while it
     // is set. Leave it armed and the fresh session's whole answer vanishes —
@@ -3529,6 +3618,101 @@ describe('AcpSession turn completion', () => {
     const h = primed();
     const [event] = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
     expect(event).toMatchObject({ finalText: null });
+  });
+});
+
+describe('AcpSession — a transient failure the agent cannot reach its server over', () => {
+  const NAME_LOOKUP_FAILED =
+    '\n\nError: RetriableError: [unavailable] getaddrinfo ENOTFOUND agentn.global.api5.cursor.sh';
+  const CONNECTION_RESET =
+    '\n\nError: RetriableError: [aborted] read ECONNRESET';
+  const UNREACHABLE =
+    "The agent's server can't be reached from this Mac — check the network or VPN.";
+  const INTERRUPTED = "The agent's service interrupted this turn";
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function primed(
+    delaysMs: readonly number[],
+    isUnreachable?: (message: string) => boolean,
+  ): Harness {
+    const h = harness({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+        resume: {
+          isTransient: () => true,
+          isUnreachable,
+          prompt: () => 'continue where you left off',
+          delaysMs,
+          maxPerTurn: 10,
+        },
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    return h;
+  }
+
+  const namesNameLookup = (message: string): boolean =>
+    message.includes('getaddrinfo ENOTFOUND');
+
+  it('says the server cannot be reached, with the pause, when the agent classifies the failure so', () => {
+    const h = primed([15_000], namesNameLookup);
+    h.feed(chunk('agent_message_chunk', NAME_LOOKUP_FAILED));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message: `${UNREACHABLE} Trying again in 15s (attempt 1 of 1).`,
+      },
+    ]);
+  });
+
+  it('says the same, without a pause to name, for a resume with none', () => {
+    const h = primed([0, 0], namesNameLookup);
+    h.feed(chunk('agent_message_chunk', NAME_LOOKUP_FAILED));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message: `${UNREACHABLE} Asked it to continue (attempt 1 of 2).`,
+      },
+    ]);
+    const continuation = h.sentAll('session/prompt').at(-1)?.params as
+      { prompt: { text?: string }[] } | undefined;
+    expect(continuation?.prompt.at(-1)).toEqual({
+      type: 'text',
+      text: 'continue where you left off',
+    });
+  });
+
+  it('keeps the interrupted wording for a transient failure the agent does not classify as unreachable', () => {
+    const h = primed([0, 0], namesNameLookup);
+    h.feed(chunk('agent_message_chunk', CONNECTION_RESET));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message: `${INTERRUPTED} — asked it to continue (attempt 1 of 2).`,
+      },
+    ]);
+  });
+
+  it('keeps the interrupted wording for every failure when the agent declares no classifier', () => {
+    const h = primed([0, 0]);
+    h.feed(chunk('agent_message_chunk', NAME_LOOKUP_FAILED));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message: `${INTERRUPTED} — asked it to continue (attempt 1 of 2).`,
+      },
+    ]);
   });
 });
 

@@ -1442,6 +1442,17 @@ export const CURSOR_TRANSIENT_FAILURE_PATTERN =
   /^(Error: RetriableError|Internal error): (\[(canceled|unavailable|aborted|deadline_exceeded|resource_exhausted)\]|\[unknown\] Premature close|WritableIterable is closed|\[internal\] HTTP\/2 keepalive ping timed out|Stream ended without turnEnded|Connection (stalled|failed)\b)/;
 
 /**
+ * A transient failure that is the agent not reaching its server from this Mac:
+ * a name that does not resolve, or a route with no way out. Measured on
+ * 2026.11.17-f532c45 (2026-11-18), where turns failed with
+ * `Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND agentn.global.api5.cursor.sh`.
+ * It only words the notice a resume leaves; the resume itself is the same as
+ * for any transient failure.
+ */
+export const CURSOR_UNREACHABLE_FAILURE_PATTERN =
+  /\b(getaddrinfo (ENOTFOUND|EAI_AGAIN)|connect (ENETUNREACH|EHOSTUNREACH|ENETDOWN))\b/;
+
+/**
  * What geniro sends when a turn died on one of those — see
  * `CURSOR_TRANSIENT_FAILURE_PATTERN`.
  *

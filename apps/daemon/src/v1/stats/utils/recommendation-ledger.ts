@@ -95,7 +95,6 @@ export function filedAssessmentsOf(
     evidence: member.evidence,
     items: member.items.map((id) => ({ id, title: titles.get(id) ?? '' })),
     judge: source.judge,
-    userVerdict: null,
   }));
 }
 

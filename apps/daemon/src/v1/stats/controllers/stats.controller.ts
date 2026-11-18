@@ -9,9 +9,6 @@ import {
   LineSnapshotDto,
 } from '../dto/line-snapshot.dto';
 import {
-  CardAssessmentParamsDto,
-  CardAssessmentVerdictsDto,
-  MemberAssessmentVerdictDto,
   RestoreTeamVersionDto,
   TeamStatsDto,
   TeamStatsParamsDto,
@@ -21,12 +18,10 @@ import {
   UsageStatsDto,
   UsageStatsQueryDto,
 } from '../dto/stats.dto';
-import { MemberAssessmentsService } from '../services/member-assessments.service';
 import { StatsService } from '../services/stats.service';
 import { TeamStatsService } from '../services/team-stats.service';
 import { TeamVersionsService } from '../services/team-versions.service';
 import type {
-  CardAssessmentVerdictsWire,
   LineBaselineWire,
   TeamStatsWire,
   TeamVersionRestoredWire,
@@ -48,7 +43,6 @@ export class StatsController {
     private readonly stats: StatsService,
     private readonly versions: TeamVersionsService,
     private readonly teamStats: TeamStatsService,
-    private readonly memberAssessments: MemberAssessmentsService,
   ) {}
 
   @Get('usage')
@@ -63,27 +57,6 @@ export class StatsController {
   @ZodResponse({ status: 200, type: TeamStatsDto })
   readTeamStats(@Param() params: TeamStatsParamsDto): Promise<TeamStatsWire> {
     return this.teamStats.read(params.slug);
-  }
-
-  @Post('assessments/verdict')
-  @ApiOperation({ operationId: 'setMemberAssessmentVerdict' })
-  @ZodResponse({ status: 201, type: CardAssessmentVerdictsDto })
-  setMemberAssessmentVerdict(
-    @Body() body: MemberAssessmentVerdictDto,
-  ): Promise<CardAssessmentVerdictsWire> {
-    return this.memberAssessments.setVerdict(body);
-  }
-
-  @Get('assessments/:chatRunId/:cardSeq')
-  @ApiOperation({ operationId: 'readCardAssessmentVerdicts' })
-  @ZodResponse({ status: 200, type: CardAssessmentVerdictsDto })
-  readCardAssessmentVerdicts(
-    @Param() params: CardAssessmentParamsDto,
-  ): Promise<CardAssessmentVerdictsWire> {
-    return this.memberAssessments.verdictsOfCard(
-      params.chatRunId,
-      params.cardSeq,
-    );
   }
 
   @Get('team-versions')

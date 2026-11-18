@@ -309,7 +309,6 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       },
       days: [],
       byMember: [],
-      assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
       metrics: {
         goals: {
           recorded: 0,
@@ -813,7 +812,6 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
       items: [{ id: 'W-1', title: 'Review the diff once' }],
       judge: { agent: 'claude', model: 'opus' },
-      userVerdict: null,
       ...overrides,
     });
 
@@ -1060,23 +1058,12 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         evidence: [],
         items: [],
         judge,
-        userVerdict: null,
       });
       await assessments.file([
         row('by-claude', { agent: 'claude', model: 'opus' }),
         row('by-codex', { agent: 'codex', model: null }),
         row('by-cursor-auto', { agent: 'cursor-agent', model: 'auto' }),
       ]);
-      await assessments.setUserVerdict(
-        { chatRunId: 'by-claude', cardSeq: 5, memberId: 'reviewer' },
-        { verdict: 'disagree', note: 'it missed the race' },
-        new Date('2026-10-21T10:00:00.000Z'),
-      );
-      await assessments.setUserVerdict(
-        { chatRunId: 'by-codex', cardSeq: 5, memberId: 'reviewer' },
-        { verdict: 'agree', note: null },
-        new Date('2026-10-21T10:00:00.000Z'),
-      );
 
       const stats = await service.read('dev-team');
       const reviewer = stats.byMember.find(
@@ -1098,18 +1085,13 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         Object.fromEntries(
           reviewer!.assessments.map((entry) => [
             entry.chatRunId,
-            [entry.judge.sameVendor, entry.userVerdict?.verdict ?? null],
+            entry.judge.sameVendor,
           ]),
         ),
       ).toEqual({
-        'by-claude': [false, 'disagree'],
-        'by-codex': [true, 'agree'],
-        'by-cursor-auto': [null, null],
-      });
-      expect(stats.assessmentVerdicts).toEqual({
-        assessments: 3,
-        agreed: 1,
-        disagreed: 1,
+        'by-claude': false,
+        'by-codex': true,
+        'by-cursor-auto': null,
       });
     });
   });

@@ -273,10 +273,6 @@ export interface MemberAssessmentJudge {
   model: string | null;
 }
 
-export const MEMBER_ASSESSMENT_USER_VERDICTS = ['agree', 'disagree'] as const;
-export type MemberAssessmentUserVerdict =
-  (typeof MEMBER_ASSESSMENT_USER_VERDICTS)[number];
-
 export interface MemberAssessmentRow {
   slug: string;
   chatRunId: string;
@@ -295,11 +291,6 @@ export interface MemberAssessmentRow {
   evidence: RecommendationEvidence[];
   items: { id: string; title: string }[];
   judge: MemberAssessmentJudge;
-  userVerdict: {
-    verdict: MemberAssessmentUserVerdict;
-    note: string | null;
-    at: Date;
-  } | null;
 }
 
 /** A team version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
@@ -1173,48 +1164,6 @@ export const MemberWorkSchema = z
   .meta({ id: 'MemberWork' });
 export type MemberWorkWire = z.infer<typeof MemberWorkSchema>;
 
-/** The user's own verdict on one analysis's marks of one member. */
-export const MemberAssessmentUserVerdictSchema = z
-  .object({
-    verdict: z.enum(MEMBER_ASSESSMENT_USER_VERDICTS),
-    note: z.string().nullable(),
-    at: z.string().describe('ISO-8601'),
-  })
-  .meta({ id: 'MemberAssessmentUserVerdict' });
-
-export const MAX_ASSESSMENT_NOTE_LENGTH = 2000;
-
-/** Set or clear the user's verdict on one member's marks on one card. */
-export const MemberAssessmentVerdictRequestSchema = z.object({
-  chatRunId: z.string().min(1).describe('the chat that filed the card'),
-  cardSeq: z.number().int().min(0),
-  memberId: z.string().min(1),
-  verdict: z
-    .enum(MEMBER_ASSESSMENT_USER_VERDICTS)
-    .nullable()
-    .describe('null clears the verdict'),
-  note: z
-    .string()
-    .max(MAX_ASSESSMENT_NOTE_LENGTH)
-    .nullable()
-    .optional()
-    .describe('why — what the next analysis reads beside it'),
-});
-
-/** The user's verdicts on one card's member assessments. */
-export const CardAssessmentVerdictsSchema = z.object({
-  verdicts: z.array(
-    z.object({
-      memberId: z.string(),
-      userVerdict: MemberAssessmentUserVerdictSchema.nullable(),
-    }),
-  ),
-});
-// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
-export type CardAssessmentVerdictsWire = z.infer<
-  typeof CardAssessmentVerdictsSchema
->;
-
 /** One analysis's judgement of one member, from the assessment ledger. */
 export const MemberAssessmentEntrySchema = z
   .object({
@@ -1282,9 +1231,6 @@ export const MemberAssessmentEntrySchema = z
           ),
       })
       .describe('the CLI and model of the chat that marked it'),
-    userVerdict: MemberAssessmentUserVerdictSchema.nullable().describe(
-      'the user’s own verdict on these marks; null until given',
-    ),
   })
   .meta({ id: 'MemberAssessmentEntry' });
 
@@ -1485,13 +1431,6 @@ export const TeamStatsWireSchema = z.object({
     .describe(
       'most expensive first; turns recorded with no member are in the totals only',
     ),
-  assessmentVerdicts: z
-    .object({
-      assessments: z.number().describe('every member assessment filed'),
-      agreed: z.number(),
-      disagreed: z.number(),
-    })
-    .describe('how often the user agreed with the analyses’ marks'),
   metrics: ThreadMetricsSchema,
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).

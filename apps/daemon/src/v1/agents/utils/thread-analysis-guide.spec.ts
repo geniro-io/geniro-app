@@ -344,9 +344,7 @@ describe('teamAnalysisGuide', () => {
         "a project's overlay beats the team, so a model it sets is changed there",
       );
       expect(guide).toContain('`members[].assessments`');
-      expect(guide).toContain(
-        'A mark the user disagreed with (`userVerdict.verdict` disagree) is a correction',
-      );
+      expect(guide).not.toContain('userVerdict');
       expect(guide).toContain(
         'a change measured worse is a case for undoing it',
       );

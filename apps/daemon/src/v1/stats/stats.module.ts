@@ -11,7 +11,6 @@ import { TeamRecommendationDao } from './dao/team-recommendation.dao';
 import { TeamVersionDao } from './dao/team-version.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
-import { MemberAssessmentsService } from './services/member-assessments.service';
 import { RecommendationLedgerService } from './services/recommendation-ledger.service';
 import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
 import { StatsService } from './services/stats.service';
@@ -59,7 +58,6 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     TeamVersionsService,
     TeamRecommendationDao,
     MemberAssessmentDao,
-    MemberAssessmentsService,
     RecommendationLedgerService,
     TeamHistoryService,
     TeamStatsService,

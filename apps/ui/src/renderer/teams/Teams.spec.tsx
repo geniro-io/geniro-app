@@ -380,7 +380,6 @@ beforeEach(() => {
     },
     days: [],
     byMember: [],
-    assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
   }));
   listTeamOverlays.mockReset().mockImplementation(async () => ({ scopes: [] }));
   openProject.mockReset();
@@ -3133,7 +3132,6 @@ describe('Teams — the team page', () => {
           assessments: [],
         },
       ],
-      assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
     }));
     await openBuilder();
     await press('Statistics');

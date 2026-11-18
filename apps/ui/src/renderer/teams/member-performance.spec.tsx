@@ -2,7 +2,6 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { vi } from 'vitest';
 
 import {
   assessment,
@@ -73,15 +72,9 @@ function figure(
   };
 }
 
-function render(
-  row: TeamStatsMember | null,
-  loading = false,
-  onVerdict?: Parameters<typeof MemberPerformance>[0]['onVerdict'],
-): void {
+function render(row: TeamStatsMember | null, loading = false): void {
   act(() => {
-    root.render(
-      <MemberPerformance row={row} loading={loading} onVerdict={onVerdict} />,
-    );
+    root.render(<MemberPerformance row={row} loading={loading} />);
   });
 }
 
@@ -205,7 +198,7 @@ describe('MemberPerformance — an unjudged mark', () => {
   });
 });
 
-describe('MemberPerformance — reliability, changes, judges and verdicts', () => {
+describe('MemberPerformance — reliability, changes and judges', () => {
   it('reads the spread of its cost and time per run', () => {
     render(REVIEWER);
 
@@ -323,36 +316,20 @@ describe('MemberPerformance — reliability, changes, judges and verdicts', () =
     expect(rows()).toBe(5);
   });
 
-  it('names the judge, warns when it shares the member’s vendor, and sends the verdict on its marks', async () => {
-    const onVerdict = vi.fn().mockResolvedValue(undefined);
-    render(
-      {
-        ...REVIEWER,
-        assessments: [
-          assessment({
-            judge: { agent: 'claude', model: 'opus', sameVendor: true },
-          }),
-        ],
-      },
-      false,
-      onVerdict,
-    );
+  it('names the judge and warns when it shares the member’s vendor', () => {
+    render({
+      ...REVIEWER,
+      assessments: [
+        assessment({
+          judge: { agent: 'claude', model: 'opus', sameVendor: true },
+        }),
+      ],
+    });
 
     const latest = container.querySelector('[data-slot="member-assessment"]')!;
     expect(latest.textContent).toContain('judged by claude · opus');
     expect(
       latest.querySelector('[data-slot="member-assessment-same-vendor"]'),
     ).not.toBeNull();
-
-    await act(async () => {
-      [...latest.querySelectorAll('button')]
-        .find((button) => button.textContent?.includes('Agree'))!
-        .click();
-    });
-
-    expect(onVerdict).toHaveBeenCalledWith(
-      expect.objectContaining({ chatRunId: 'analysis-2', cardSeq: 40 }),
-      { verdict: 'agree', note: null },
-    );
   });
 });

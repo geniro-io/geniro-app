@@ -29,6 +29,7 @@ import {
   isCardEntry,
   type ItemEntry,
   openCallBlocks,
+  type PairCardEntry,
   pullFileChangesOutOfGroups,
   resolveCallChains,
   runningCallCallees,
@@ -1912,7 +1913,7 @@ describe('groupTranscript', () => {
     ]);
     const [first, card, last] = entries as [
       ToolGroupEntry,
-      Extract<TranscriptEntry, { type: 'browser-screenshot' }>,
+      PairCardEntry,
       ToolGroupEntry,
     ];
     expect(
@@ -1931,10 +1932,40 @@ describe('groupTranscript', () => {
       call('mcp__geniro-run-1__browser_screenshot', 'b1', { tab: 't1' }),
     ]);
     expect(entries.map((e) => e.type)).toEqual(['browser-screenshot']);
+    expect((entries[0] as PairCardEntry).pair.result).toBeNull();
+  });
+
+  it('files start_thread as its own card, hidden from the tool group, and keeps its result on it', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__list_projects', 's1'),
+      result('s1', '[]'),
+      call('mcp__geniro-run-1__start_thread', 's2', {
+        project: 'ManifestOS',
+        title: 'CI-1233: Case page slow',
+        brief: 'Find why the case page is slow',
+      }),
+      result(
+        's2',
+        '{"status":"starting","taskId":"task-1","identifier":"MAN-16"}\nCard MAN-16 is starting now.',
+      ),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'thread-start']);
+    const [group, card] = entries as [ToolGroupEntry, PairCardEntry];
     expect(
-      (entries[0] as Extract<TranscriptEntry, { type: 'browser-screenshot' }>)
-        .pair.result,
-    ).toBeNull();
+      group.pairs.map((pair) => payloadString(pair.call.payload, 'id')),
+    ).toEqual(['s1']);
+    expect(payloadString(card.pair.call.payload, 'id')).toBe('s2');
+    expect(card.pair.result).not.toBeNull();
+    expect(isCardEntry(card)).toBe(true);
+  });
+
+  it('draws a start_thread card from the call alone while its result is out', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__start_thread', 's1', { title: 'Billing' }),
+    ]);
+    expect(entries.map((e) => e.type)).toEqual(['thread-start']);
+    expect((entries[0] as PairCardEntry).pair.result).toBeNull();
   });
 
   it('drops a show_gallery row that names no picture', () => {

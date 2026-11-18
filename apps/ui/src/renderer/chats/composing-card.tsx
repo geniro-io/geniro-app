@@ -6,6 +6,7 @@ import {
   Images,
   LayoutTemplate,
   ListChecks,
+  ListPlus,
   ScrollText,
   Sparkles,
   Table2,
@@ -64,6 +65,7 @@ const KIND_META: Record<
   patch: { icon: FileDiff, noun: 'a change', label: 'Proposed change' },
   plan: { icon: ListChecks, noun: 'a plan', label: 'Proposed plan' },
   team: { icon: TeamIcon, noun: 'a team', label: 'Proposed team' },
+  'thread-start': { icon: ListPlus, noun: 'a new thread', label: 'New thread' },
 };
 
 /**
@@ -232,6 +234,21 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
               delay={420 + index * 120}
             />
           ))}
+        </div>
+      );
+    case 'thread-start':
+      return (
+        <div className="flex flex-col gap-2">
+          <Bar className="h-3 w-2/3" />
+          <div className="flex items-center gap-1.5">
+            {[0, 1, 2].map((index) => (
+              <Bar
+                key={index}
+                className="h-4 w-16 rounded-md"
+                delay={120 + index * 120}
+              />
+            ))}
+          </div>
         </div>
       );
     case 'plan':

@@ -6,8 +6,8 @@ import { ApprovalCard } from '../chats/approval-card';
 import { payloadString } from '../chats/transcript-payload';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
+import { GoToThreadButton } from '../components/thread-labels';
 import { cn } from '../components/ui/utils';
-import { GoToThreadButton } from './thread-card';
 import type { OpenRequest } from './use-open-requests';
 
 export interface NeedsYouPanelProps {

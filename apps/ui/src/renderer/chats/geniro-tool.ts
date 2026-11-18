@@ -42,7 +42,8 @@ export type GeniroCardKind =
   | 'artifact'
   | 'patch'
   | 'plan'
-  | 'team';
+  | 'team'
+  | 'thread-start';
 
 /**
  * The tools geniro publishes on its own server that tell their story ELSEWHERE
@@ -92,6 +93,13 @@ export const SAVE_PROJECT_INSTRUCTIONS = 'save_project_instructions';
 export const BROWSER_SCREENSHOT = 'browser_screenshot';
 
 /**
+ * `start_thread` — the command center manager's new thread, drawn as a card
+ * from its call and its result as {@link BROWSER_SCREENSHOT} is. TWIN: the
+ * daemon's `HOST_START_THREAD_TOOL` in `chat.types.ts`.
+ */
+export const START_THREAD = 'start_thread';
+
+/**
  * The `approval_request` row's `toolName` for the first open of a new host in
  * a chat. TWIN: the daemon's `HOST_BROWSER_HOST_CARD` in `chat.types.ts`.
  */
@@ -115,6 +123,7 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // Its card is built from the call and its result, so the pair is not hidden
   // the way the others' are (`transcript-groups.ts`).
   [BROWSER_SCREENSHOT]: 'screenshot',
+  [START_THREAD]: 'thread-start',
   show_artifact: 'artifact',
   propose_patch: 'patch',
   [SAVE_PROJECT_INSTRUCTIONS]: 'patch',

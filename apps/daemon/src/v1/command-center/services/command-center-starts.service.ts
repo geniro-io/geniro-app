@@ -133,6 +133,7 @@ export class CommandCenterStartsService
       },
       em,
     );
+    this.tasks.announceInPlace(task);
     const identifier = taskIdentifier(project.taskKey, task.number);
     if (auto) {
       return { status: 'starting', taskId: task.id, identifier };
@@ -149,6 +150,7 @@ export class CommandCenterStartsService
         `run ${managerRunId} could not put a Start card on screen: ${messageOf(error)}`,
       );
       await this.taskDao.setStartRequest(task.id, null, em);
+      this.tasks.announceInPlace(task);
       return {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
@@ -197,6 +199,7 @@ export class CommandCenterStartsService
     const managerRunId = task.startRequestedByRunId;
     await this.taskDao.setStartRequest(taskId, null, em);
     await this.taskDao.clearStartRequester(taskId, em);
+    this.tasks.announceInPlace(task);
     const said = reason.slice(0, START_FAILURE_MAX_CHARS);
     this.wakeManager(
       managerRunId,
@@ -259,10 +262,12 @@ export class CommandCenterStartsService
       message = `[command center] The Start card for "${title}" was answered, but its card is gone or no longer asks to start; nothing was started.`;
     } else if (allow) {
       await this.taskDao.approveStartRequest(taskId, new Date(), em);
+      this.tasks.announceInPlace(task);
       message = `[command center] The user approved starting "${title}". It is starting now; you are told when it has.`;
     } else {
       await this.taskDao.setStartRequest(taskId, null, em);
       await this.taskDao.clearStartRequester(taskId, em);
+      this.tasks.announceInPlace(task);
       message = `[command center] The user declined to start "${title}". The card stays in backlog.`;
     }
     const note = answer?.trim() ?? '';
@@ -373,6 +378,7 @@ export class CommandCenterStartsService
         if (closed) {
           await this.taskDao.setStartRequest(task.id, null, em);
           await this.taskDao.clearStartRequester(task.id, em);
+          this.tasks.announceInPlace(task);
           continue;
         }
         const project = await this.projectDao.getById(task.projectId, em);

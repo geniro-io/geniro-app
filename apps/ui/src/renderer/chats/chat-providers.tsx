@@ -73,6 +73,7 @@ import {
   DelegateConversationContext,
   type DelegateConversationLoader,
 } from './use-delegate-pages';
+import { type TaskReader, TaskReaderContext } from './use-live-task';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
@@ -141,6 +142,7 @@ export function ChatProviders({
   lessonsKnowledgeApi = null,
   agentsApi = null,
   lessonsJump = null,
+  taskReader = null,
   children,
 }: {
   /**
@@ -234,6 +236,8 @@ export function ChatProviders({
   agentsApi?: DaemonApis['agents'] | null;
   /** A lesson's "Show in thread" — see `LessonsJumpContext`. */
   lessonsJump?: ((seq: number) => void) | null;
+  /** A `start_thread` card's live board card — see `TaskReaderContext`. */
+  taskReader?: TaskReader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   const liveDelegates = useLiveDelegates(liveText);
@@ -271,7 +275,10 @@ export function ChatProviders({
                                                 value={agentsApi}>
                                                 <LessonsJumpContext.Provider
                                                   value={lessonsJump}>
-                                                  {children}
+                                                  <TaskReaderContext.Provider
+                                                    value={taskReader}>
+                                                    {children}
+                                                  </TaskReaderContext.Provider>
                                                 </LessonsJumpContext.Provider>
                                               </AgentsApiContext.Provider>
                                             </LessonsKnowledgeApiContext.Provider>

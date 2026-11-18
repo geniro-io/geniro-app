@@ -113,8 +113,11 @@ export class TaskRunsService {
       const em = this.em.fork();
       await this.taskDao.setStoppedAt(taskId, null, em);
       await this.taskDao.setPrepareFailure(taskId, null, em);
-      await this.taskDao.settleStartRequest(taskId, em);
-      return wire;
+      if (!(await this.taskDao.settleStartRequest(taskId, em))) {
+        return wire;
+      }
+      this.tasks.announceInPlace(wire);
+      return { ...wire, startRequest: null };
     } finally {
       this.tasks.releaseStart(taskId);
     }

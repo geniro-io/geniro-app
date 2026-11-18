@@ -23,6 +23,7 @@ import {
 } from 'react';
 
 import { type Point, roundedPath } from '../components/stage-graph-layout';
+import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
@@ -54,7 +55,6 @@ import {
   ATTENTION_TEXT,
   attentionDotVariants,
   THREAD_CARD_WIDTH,
-  type ThreadAttention,
   ThreadCard,
   threadCardHeight,
 } from './thread-card';

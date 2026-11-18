@@ -1,9 +1,6 @@
+import type { ThreadAttention } from '../components/thread-labels';
 import type { GraphThread } from './graph-view';
-import {
-  THREAD_STATUS_TEXT,
-  type ThreadAttention,
-  type ThreadCardStatus,
-} from './thread-card';
+import { THREAD_STATUS_TEXT, type ThreadCardStatus } from './thread-card';
 
 export const FIXTURE_NOW = Date.parse('2026-11-17T12:00:00Z');
 

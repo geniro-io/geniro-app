@@ -16537,9 +16537,9 @@ describe('Chats — a screenshot pasted into a question answer', () => {
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 
-  it("delivers the image of a relayed thread question to the thread, not the manager's chat", async () => {
-    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
-    const relayed: ChatItem = {
+  const relayedQuestion = (options: { label: string }[]): ChatItem => {
+    const questions = [{ question: 'Which looks right?', options }];
+    return {
       id: 'r1-relay',
       runId: 'r1',
       memberId: null,
@@ -16556,15 +16556,78 @@ describe('Chats — a screenshot pasted into a question answer', () => {
           handle: 't9',
           threadTitle: 'Billing cache',
           toolName: 'AskUserQuestion',
-          input: {
-            questions: [{ question: 'Which looks right?', options: [] }],
-          },
-          questions: [{ question: 'Which looks right?', options: [] }],
+          input: { questions },
+          questions,
         },
       },
       createdAt: 'now',
     };
-    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), relayed]);
+  };
+
+  it("delivers the image picked with the manager composer's paperclip to the thread a relayed answer goes to", async () => {
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      relayedQuestion([{ label: 'Left' }, { label: 'Right' }]),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const picker = container.querySelector<HTMLInputElement>(
+      '[data-slot="composer-attach-input"]',
+    )!;
+    Object.defineProperty(picker, 'files', {
+      configurable: true,
+      value: [new File([PNG], 'shot.png', { type: 'image/png' })],
+    });
+    await act(async () => {
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    for (let attempt = 0; ; attempt++) {
+      if (container.querySelector('[data-slot="staged-attachment"]')) {
+        break;
+      }
+      if (attempt >= 100) {
+        throw new Error('the picked image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    await act(async () => {
+      [...container.querySelectorAll('[data-slot="pinned-request"] button')]
+        .find((b) => b.textContent?.includes('Right'))!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(client.sendVerdict).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.sendVerdict).mock.calls[0]!.slice(0, 4)).toEqual([
+      'r1',
+      'thread_question#1',
+      true,
+      'Right\n(1 image attached — sent as the next message)',
+    ]);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'thread-9',
+      sendMessageDto: {
+        text: '',
+        images: [{ mediaType: 'image/png', data: PNG_B64 }],
+      },
+    });
+    expect(
+      container.querySelector('[data-slot="staged-attachment"]'),
+    ).toBeNull();
+  });
+
+  it("delivers the image of a relayed thread question to the thread, not the manager's chat", async () => {
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      relayedQuestion([]),
+    ]);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');

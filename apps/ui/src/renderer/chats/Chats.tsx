@@ -133,7 +133,7 @@ import { AgentsPanel, type AgentsPanelPopup } from './agents-panel';
 import { AnalysisDialog } from './analysis-dialog';
 import { AnalyzeThreadDialog } from './analyze-thread-dialog';
 import { appendDraft } from './append-draft';
-import { ApprovalCard } from './approval-card';
+import { ApprovalCard, imagesAttachedNote } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
 import { BrowserColumn } from './browser/browser-column';
@@ -4948,21 +4948,47 @@ export function Chats({
       images?: SendMessageDtoImagesInner[],
       optionId?: string,
     ): void => {
+      const relay = threadQuestionRelayOfRow(item.payload);
+      const cardCount = images?.length ?? 0;
+      // A relayed question answered while pictures sit in the manager's own
+      // composer (its paperclip): they belong to the answer, not the manager.
+      const borrowed =
+        relay !== null &&
+        allow &&
+        answer !== undefined &&
+        composerOwnerRef.current === item.runId
+          ? attachmentsRef.current.slice(
+              0,
+              Math.max(0, MAX_ATTACHMENTS - cardCount),
+            )
+          : [];
+      let sentAnswer = answer;
+      if (answer !== undefined && borrowed.length > 0) {
+        const cardNote = imagesAttachedNote(cardCount);
+        sentAnswer =
+          cardNote !== '' && answer.endsWith(cardNote)
+            ? `${answer.slice(0, -cardNote.length)}${imagesAttachedNote(cardCount + borrowed.length)}`
+            : `${answer}${imagesAttachedNote(borrowed.length)}`;
+        attachments.clear(borrowed.map((image) => image.key));
+      }
       const requestId = payloadString(item.payload, 'id');
       if (requestId) {
         // Arity-preserving: a one-time verdict keeps the call it always made.
         if (optionId === undefined) {
-          client.sendVerdict(item.runId, requestId, allow, answer);
+          client.sendVerdict(item.runId, requestId, allow, sentAnswer);
         } else {
-          client.sendVerdict(item.runId, requestId, allow, answer, optionId);
+          client.sendVerdict(item.runId, requestId, allow, sentAnswer, optionId);
         }
       }
-      if (!images?.length) {
+      const delivered = [
+        ...(images ?? []),
+        ...borrowed.map(({ mediaType, data }) => ({ mediaType, data })),
+      ];
+      if (delivered.length === 0) {
         return;
       }
-      const relay = threadQuestionRelayOfRow(item.payload);
       if (relay !== null) {
-        deliverRelayedImages(relay, images, apis, client, (err) =>
+        deliverRelayedImages(relay, delivered, apis, client, (err) =>
           setError(describeDaemonError(err)),
         );
         return;
@@ -4976,15 +5002,15 @@ export function Chats({
       // A RUN_BUSY here is not a failure: the turn settled as this flew, and
       // the queue then delivers the image the moment the next turn can take
       // it, exactly as it would for anything typed in the composer.
-      void startTurn(item.runId, '', images).catch((err: unknown) => {
+      void startTurn(item.runId, '', delivered).catch((err: unknown) => {
         if (isRunBusyError(err)) {
-          enqueueMessage(item.runId, { text: '', images });
+          enqueueMessage(item.runId, { text: '', images: delivered });
           return;
         }
         setError(String(err));
       });
     },
-    [client, startTurn, enqueueMessage, apis],
+    [client, startTurn, enqueueMessage, apis, attachments],
   );
 
   /**

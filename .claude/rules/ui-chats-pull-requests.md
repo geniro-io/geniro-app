@@ -1,0 +1,35 @@
+---
+description: Chats page — a thread's pull requests and their outcomes, stage progress, the sidebar row, and the changes chip and dialog
+paths:
+  - "apps/ui/src/renderer/chats/use-thread-pull-requests*"
+  - "apps/ui/src/renderer/chats/pull-request-*"
+  - "apps/ui/src/renderer/chats/run-outcome*"
+  - "apps/ui/src/renderer/chats/use-run-outcomes*"
+  - "apps/ui/src/renderer/chats/use-run-daemon-read*"
+  - "apps/ui/src/renderer/chats/progress-dialog*"
+  - "apps/ui/src/renderer/chats/stage-*"
+  - "apps/ui/src/renderer/chats/stages-section*"
+  - "apps/ui/src/renderer/chats/use-chat-run*"
+  - "apps/ui/src/renderer/chats/chat-list-item*"
+  - "apps/ui/src/renderer/chats/chat-changes-dialog*"
+  - "apps/ui/src/renderer/chats/use-chat-changes*"
+  - "apps/ui/src/renderer/chats/changes-tree*"
+  - "apps/ui/src/renderer/chats/use-run-work-folders*"
+  - "apps/ui/src/renderer/components/stage-graph*"
+---
+
+# Chats — pull requests, stage progress and changes
+
+**Pull requests and changes:**
+
+- A thread's pull requests are only those it opened or its CLI recorded it touching (the run wire's `pullRequests`, each marked `opened`; a task card shows only the opened ones), addressed by URL (`use-thread-pull-requests.ts` over `readPullRequestsByRef`). That hook is the only source for the panel, the sidebar and the shelf.
+- A pull request's recorded outcome (`record_outcome`) is the daemon's `DisplayedPullRequest.outcome`, never folded from the window: the shelf chip draws its acceptance mark beside the number from it, and a `run_outcome` transcript row reads superseded once that outcome's seq is newer than its own (`RunOutcomesContext`). The row opens on a press into the agent's summary, every figure and the pull request's link row; its title and state come from the same `use-thread-pull-requests.ts` answers the panel draws (`RunOutcomes.resolved`), so a surface that asks none draws the number alone. `daemon-client.ts` carries it through every run-status announce. The agents panel's Pull requests section draws a pull request's whole outcome history under its row (`chats/pull-request-outcome-history.tsx`, folded per thread to the newest verdict), read from the daemon (`GET /v1/chats/:runId/outcomes`, `use-run-outcomes.ts` over `use-run-daemon-read.ts`, the one whole-run read the artifacts and team-notes lists share) and re-read when the newest outcome seq on the run's list moves.
+- A team run's stage progress is the daemon's `RunDto.stages` (`StageProgress`), replaced whole by every `run_status.stages` (`run-status-row.ts`) — never folded from `stage_change` rows, so `n/m` and every status hold past the loaded window. The progress popup (`progress-dialog.tsx`, opened from the shelf's Progress chip and the agents panel's Goals row; its stage rows are `stage-entry.tsx`), the agents-panel Stages section (moves through `moveTeamRunStage` with `expectedRev`; a `409 STAGE_PROGRESS_CHANGED` keeps the dialog open) and the transcript row (`stage-change-row.tsx`, next-stage titles from `RunStagesContext`, provided once with the transcript's values (`TranscriptContexts`); a move's row reads superseded once its stage's `StageProgressEntry.rev` names a later move, a nudge's once the run's `rev` moved on) all draw it, and every stage graph is the one `components/stage-graph.tsx`: React Flow nodes laid out and routed by ELK (`stage-graph-layout.ts`, orthogonal wires, so a wire that skips stages runs beside them and never across a pill), drawn once its lazy chunk and the layout land, so a spec reading its pills awaits `__tests__/settle-stage-graphs.ts`. The board card's line reads `TaskDto.stage`; `use-board.ts` reloads on a stages-only announce for a run it holds.
+- A sidebar row names the thread's newest resolved pull request among those it opened, and a touched one only for a thread that opened none — never in place of an opened one that did not resolve (`rowPullRequestOf`).
+- A ref GitHub could not answer still draws a row.
+- The renderer replaces the run's list wholesale on each announce.
+- Do not reintroduce a branch-scoped pull-request list.
+- `keepFresherRows`: a pin, colour or pull-request list written without moving `updatedAt` is decided by the listing. So are the live readings (`awaiting`, `holdingFor`, the shell/sub-agent/call counts), unless an announce of them arrived while the listing was in flight: no write stamps them, and an announce's `at` always postdates the row's `updatedAt`.
+- "Changed since this chat started" uses `upstreamBaseSince` and excludes what a pull brought in. The header names the ref and claims no cause.
+- A folder on one of the thread's open pull requests is measured from that pull request's base branch, so a stacked branch lists what GitHub lists (`changesPullRequestsOf` → `getChangesSince`'s fourth argument, re-read when GitHub's answer lands; `folderPullRequest` in main keeps those of the `origin` repository and matches the checked-out branch, else the head commit, else, for a detached worktree, a commit behind or past that head that is not already on its base). Without a match, a fetched base ref or a base past the start, the read falls back to the default branch, then the start. A worktree's dialog section names its own ref. A read past `MAX_CHANGES` draws `N+` on the chip, and its line counts cover only the files read.
+- The changes chip and dialog also count the worktrees the thread's agents made (`use-run-work-folders.ts`). A worktree is the thread's only if all three hold: main lists it (`listWorktrees(cwd, startedAtMs)`: a linked worktree made after the thread started — birth of its `.git` link file — never the main checkout and never a geniro task worktree, the direct children of `worktreesRoot()`), and the run's own tool calls name it (`POST /v1/chats/:runId/named-paths`). Each is read as a work folder (`getChangesSince(…, true)`: from where its history meets the start, past what upstream already has). Found folders are only ever added; each lists in its own dialog section. Listings go through `worktree-list.ts` (see _Git_ in `apps/ui/src/main/AGENTS.md`).

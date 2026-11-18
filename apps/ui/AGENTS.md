@@ -15,9 +15,16 @@ Main process (git, task worktrees, **Daemon supervision**, **Terminal panel**, *
 <!-- prettier-ignore -->
 | Area | Rule |
 | --- | --- |
-| Chats | `ui-chats.md` |
+| Chats | `ui-chats-transcript.md`, `ui-chats-sending.md`, `ui-chats-run-status.md`, `ui-chats-calls.md`, `ui-chats-cards.md`, `ui-chats-composer.md`, `ui-chats-pull-requests.md`, `ui-chats-layout.md` |
 | Teams | `ui-teams.md` |
 | Settings pages (Storage, Lessons, Knowledge, Memory, …) | `ui-settings.md` |
+
+**Hub files.** These serve many areas, so no rule's `paths:` names them all. Before changing one, also open the rules that name its class:
+
+<!-- prettier-ignore -->
+| File | Rules |
+| --- | --- |
+| `renderer/chats/Chats.tsx` | `ui-chats-sending.md`, `ui-chats-run-status.md`, `ui-chats-calls.md`, `ui-chats-cards.md`, `ui-chats-composer.md`, `ui-chats-pull-requests.md`, `ui-chats-layout.md` |
 
 ### Renderer shell
 

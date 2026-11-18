@@ -11,6 +11,7 @@ import {
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
+  MAX_RECOMMENDATIONS_PER_TARGET,
 } from '../chat.types';
 import {
   builderChatAnalysisGuide,
@@ -229,7 +230,7 @@ describe('teamAnalysisGuide', () => {
     expect(guide).toContain('view=spend');
   });
 
-  it('has the analyst judge the earlier changes by their runs and not repeat what the user passed over', () => {
+  it('has the analyst judge the earlier changes by their runs and ask again only for what would still help a lot', () => {
     const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain('3. Versions, not one pool.');
@@ -241,9 +242,67 @@ describe('teamAnalysisGuide', () => {
     expect(guide).toContain('kind "revert"');
     expect(guide).toContain('5. Earlier recommendations.');
     expect(guide).toContain(
-      'Never recommend again what the user skipped or passed over (not-selected) unless runs since then show new evidence',
+      'One the user skipped or passed over (not-selected) may come back when it would still help a lot',
     );
+    expect(guide).toContain(
+      "never while the user's note rules it out for a reason that still holds",
+    );
+    expect(guide).toContain(
+      'when it was offered, what the user answered and what makes it worth asking again',
+    );
+    expect(guide).not.toContain('Never recommend again');
     expect(guide).toContain('Set every item against view=history');
+    expect(guide).toContain('when your card asks again, the id of that item');
+  });
+
+  it('puts every proposal on the card, every weak instruction mark included, and drops none for being unsure', () => {
+    for (const guide of [
+      teamAnalysisGuide(null, true),
+      builderChatAnalysisGuide(true, 10),
+    ]) {
+      expect(guide).toContain('## Every proposal goes on the card');
+      expect(guide).toContain('your reply proposes nothing the card lacks');
+      expect(guide).toContain(
+        'every weak or poor instruction-quality mark: an item that fixes it',
+      );
+      expect(guide).toContain(
+        'is an item on the card that fixes it (Every proposal goes on the card)',
+      );
+      expect(guide).toContain('the id of the item that fixes it');
+      expect(guide).toContain(
+        'A change only Geniro itself or another tool could make is an external item, not a reason for none',
+      );
+      expect(guide).toContain(
+        'a task to file, something to check on the next runs, a follow-up in another repository',
+      );
+      expect(guide).toContain('with a low `confidence`');
+      expect(guide).not.toContain('when unsure, drop it');
+      expect(guide).not.toContain('fewer is better');
+      expect(guide).not.toContain(
+        'only a mark the runs back can become a recommendation',
+      );
+      expect(guide).toContain(
+        `At most ${MAX_RECOMMENDATIONS_PER_TARGET} items per target`,
+      );
+    }
+    const thread = threadAnalysisGuide('chat', null, true);
+    expect(thread).toContain('## Every proposal goes on the card');
+    expect(thread).not.toContain('instruction-quality mark');
+  });
+
+  it('files a code change only Geniro or a tool could make as an external item, never only words', () => {
+    const guide = teamAnalysisGuide(null, true);
+
+    expect(guide).toContain(
+      "Instructions, checks, rules and skills in the runs' own repository are repo items.",
+    );
+    expect(guide).toContain(
+      'a fix only the app or a tool the runs use could make — is an external item, never only words in your reply',
+    );
+    expect(guide).toContain('Geniro itself included');
+    expect(guide).not.toContain(
+      "Anything in the runs' own repository is a repo item.",
+    );
   });
 
   it('offers team, repo and user changes and the team save', () => {
@@ -350,7 +409,7 @@ describe('teamAnalysisGuide', () => {
     expect(guide).not.toContain('A short summary in your reply');
   });
 
-  it('files again what a replaced card left unanswered, but not what the user passed over', () => {
+  it('files again what a replaced card left unanswered', () => {
     const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain(
@@ -358,9 +417,6 @@ describe('teamAnalysisGuide', () => {
     );
     expect(guide).toContain(
       'An unanswered one was never decided: file it again when the runs still call for it.',
-    );
-    expect(guide).toContain(
-      'Never recommend again what the user skipped or passed over (not-selected)',
     );
   });
 

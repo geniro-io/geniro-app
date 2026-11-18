@@ -705,8 +705,8 @@ export const KNOWLEDGE_MOVE_SOURCES: readonly RecommendationTarget[] = [
  */
 export const RECOMMENDATION_TERRITORIES = ['process', 'domain'] as const;
 
-/** At most this many items per target on one card; zero is a valid report. */
-export const MAX_RECOMMENDATIONS_PER_TARGET = 5;
+/** At most this many items per target on one card: room for every change an analysis proposes. */
+export const MAX_RECOMMENDATIONS_PER_TARGET = 20;
 
 /** At most this many items on one card, every target together. */
 export const MAX_RECOMMENDATIONS =
@@ -794,7 +794,7 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire; external: as repo',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire; external: as repo, or code',
     ),
   location: z
     .string()

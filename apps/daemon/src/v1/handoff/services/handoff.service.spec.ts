@@ -6,6 +6,7 @@ import type {
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import type { TurnFolderService } from '../../agents/services/turn-folder.service';
 import { AgentKind } from '../../runs/runs.types';
 import { HandoffService } from './handoff.service';
 
@@ -27,6 +28,7 @@ function build(
     /** The run's `call_started` / `call_result` rows. */
     callRows?: { kind: string; payload: unknown }[];
     nodeRows?: { memberId: string; payload: string }[];
+    turnFolders?: Pick<TurnFolderService, 'folderFor'>;
   } = {},
 ) {
   const live = new Set(overrides.live ?? []);
@@ -104,6 +106,7 @@ function build(
     {
       rowsOfView: () => Promise.resolve(overrides.callRows ?? []),
     } as never,
+    overrides.turnFolders as TurnFolderService | undefined,
   );
   return { service, handoffTarget, adapterFor };
 }
@@ -270,6 +273,30 @@ describe('HandoffService', () => {
       args: ['--resume', 'sess-1'],
       unavailableReason: null,
     });
+  });
+
+  it('opens the terminal in the folder the run moved to once its own was deleted', async () => {
+    const asked: (string | null)[] = [];
+    const { service } = build({
+      run: {
+        id: 'run-1',
+        teamId: null,
+        agentKind: AgentKind.Claude,
+        model: null,
+        cwd: '/deleted/worktree',
+      },
+      turnFolders: {
+        folderFor: async (_runId, cwd) => {
+          asked.push(cwd);
+          return process.cwd();
+        },
+      },
+    });
+
+    const target = await service.resolve({ runId: 'run-1' });
+
+    expect(asked).toEqual(['/deleted/worktree']);
+    expect(target).toMatchObject({ kind: 'command', cwd: process.cwd() });
   });
 
   it('carries a pasteable line built from the same command it returns', async () => {

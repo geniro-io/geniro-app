@@ -10,6 +10,7 @@ import { interruptedReason } from '../../../utils/stop-cause';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
+import { TurnFolderService } from '../../agents/services/turn-folder.service';
 import { assertTeamRun } from '../../agents/utils/run-kind';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -91,6 +92,7 @@ export class TaskRunsService {
     private readonly labelInstructions: LabelInstructionsService,
     private readonly overlays: TeamOverlayService,
     private readonly runTeams: RunTeamService,
+    private readonly turnFolders: TurnFolderService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -435,6 +437,7 @@ export class TaskRunsService {
       // create path's own reasoning: `recordRun` also writes the worktree and
       // branch this press prepared, and the settle path reads them.
       const wire = await this.recordRun(task.id, run.id, input);
+      await this.returnToWorktree(run, input);
       // ONLY the fields that actually resolved, because `updateSettings`
       // branches on a key's PRESENCE and not on its value. A null carried
       // through is not "leave it alone" but an instruction: `configDir: null`
@@ -509,6 +512,17 @@ export class TaskRunsService {
    * Failure is handled exactly as `resume` handles it: the card goes back,
    * the run is never deleted.
    */
+  /**
+   * Put a run its folder's deletion moved back into the worktree this press
+   * just cut for its card, before the turn reads the row.
+   */
+  private async returnToWorktree(run: Run, input: StartTaskRun): Promise<void> {
+    await this.turnFolders.returnTo(run.id, input.cwd, {
+      startSha: input.startSha ?? null,
+      startDirty: input.startDirty ?? null,
+    });
+  }
+
   private async resumeTeam(
     task: Task,
     input: StartTaskRun,
@@ -524,6 +538,7 @@ export class TaskRunsService {
       // press prepared are written onto the card, and the settle path reads
       // them.
       const wire = await this.recordRun(task.id, run.id, input);
+      await this.returnToWorktree(run, input);
       await this.executor.sendMessage(run.id, this.continuation(task, input));
       return wire;
     } catch (error) {

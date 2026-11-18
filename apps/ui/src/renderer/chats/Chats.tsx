@@ -257,7 +257,6 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
-import { type PendingSend, withPendingSend } from './pending-send';
 import { ProgressChip, ProgressDialog } from './progress-dialog';
 import { ProjectSelect } from './project-select';
 import { PromptCacheNotice } from './prompt-cache-notice';
@@ -345,11 +344,6 @@ import {
   taskListsByThread,
   taskProgress,
 } from './task-payload';
-import {
-  restoreRunWorktree,
-  sendRestoringWorktree,
-  type WorktreeRun,
-} from './task-worktree';
 import { agentNameOf } from './team-note-author';
 import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
 import { hasThreadNotes } from './thread-notes';
@@ -1372,7 +1366,6 @@ export function Chats({
     activeRunId,
     activeRunIdRef,
     items,
-    itemsRef,
     anchors,
     callConversations,
     delegateConversations,
@@ -2366,31 +2359,16 @@ export function Chats({
     [chatApi, teamNames],
   );
 
-  /**
-   * Put back the worktree a chat outlived — see `task-worktree.ts`. Every send
-   * path goes through `startTurn`, Retry, Apply and an agent's button press
-   * through their own calls, so those are the four places that use it.
-   */
-  const restoreWorktree = useLatestCallback(
-    (run: WorktreeRun) => restoreRunWorktree(apis, run),
-    [apis],
-  );
-
   /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
   const applyRecommendations = useLatestCallback<RecommendationsApplier>(
     async (runId, cardSeq, ids) => {
       const raised = await startHostedTurn(runId);
       const clientMessageId = randomId();
       try {
-        await sendRestoringWorktree(
-          () =>
-            chatApi.applyRecommendations({
-              runId,
-              applyRecommendationsDto: { cardSeq, ids, clientMessageId },
-            }),
-          runsRef.current.find((run) => run.id === runId) ?? null,
-          restoreWorktree,
-        );
+        await chatApi.applyRecommendations({
+          runId,
+          applyRecommendationsDto: { cardSeq, ids, clientMessageId },
+        });
       } catch (err) {
         if (raised) {
           refuseHostedTurn();
@@ -2398,7 +2376,7 @@ export function Chats({
         throw err;
       }
     },
-    [chatApi, startHostedTurn, refuseHostedTurn, restoreWorktree],
+    [chatApi, startHostedTurn, refuseHostedTurn],
   );
 
   /** An analysis chat's header chip: the thread it reads, one press away. */
@@ -4448,10 +4426,6 @@ export function Chats({
     [client, refreshGroups],
   );
 
-  const [pendingSends, setPendingSends] = useState<
-    ReadonlyMap<string, PendingSend>
-  >(() => new Map());
-
   /**
    * Start one turn: mark the run working, send, render the user message
    * (addItem de-dupes when the WS copy arrives).
@@ -4516,23 +4490,6 @@ export function Chats({
           run.id === runId ? { ...run, status: 'running' } : run,
         ),
       );
-      let held: PendingSend | null = null;
-      const holdWhileRestoring = (): void => {
-        const pending: PendingSend = {
-          runId,
-          text,
-          imageCount: images?.length ?? 0,
-          sentAt: new Date().toISOString(),
-          // Another run's window says nothing about this run's seqs, so its
-          // own row can only take the place of the held one at the settle.
-          afterSeq:
-            runId === activeRunIdRef.current
-              ? (itemsRef.current.at(-1)?.seq ?? -1)
-              : Number.MAX_SAFE_INTEGER,
-        };
-        held = pending;
-        setPendingSends((prev) => new Map(prev).set(runId, pending));
-      };
       try {
         const sendMessageDto = {
           text,
@@ -4541,20 +4498,12 @@ export function Chats({
           ...queueTerms,
         };
         const run = runsRef.current.find((row) => row.id === runId);
-        // A chat in a TASK's worktree outlives it — the board collects that
-        // once the card is Done — so a refusal naming the missing folder puts
-        // the worktree back and sends once more (`sendRestoringWorktree`).
-        const userItem = await sendRestoringWorktree(
-          () =>
-            // A team run's message goes to the agents its trigger feeds,
-            // which only the executor knows — the chat route refuses one.
-            run?.teamId != null
-              ? teamApi.sendTeamRunMessage({ runId, sendMessageDto })
-              : chatApi.sendChatMessage({ runId, sendMessageDto }),
-          run ?? null,
-          restoreWorktree,
-          holdWhileRestoring,
-        );
+        // A team run's message goes to the agents its trigger feeds,
+        // which only the executor knows — the chat route refuses one.
+        const userItem =
+          run?.teamId != null
+            ? await teamApi.sendTeamRunMessage({ runId, sendMessageDto })
+            : await chatApi.sendChatMessage({ runId, sendMessageDto });
         addItem(userItem, true);
       } catch (err) {
         if (before !== null) {
@@ -4567,18 +4516,9 @@ export function Chats({
           );
         }
         throw err;
-      } finally {
-        setPendingSends((prev) => {
-          if (held === null || prev.get(runId) !== held) {
-            return prev;
-          }
-          const next = new Map(prev);
-          next.delete(runId);
-          return next;
-        });
       }
     },
-    [chatApi, teamApi, addItem, restoreWorktree],
+    [chatApi, teamApi, addItem],
   );
 
   /**
@@ -5129,22 +5069,12 @@ export function Chats({
     },
     [refuseHostedTurn],
   );
-  const deliverPress = useLatestCallback(
-    (runId: string, request: () => Promise<unknown>): Promise<unknown> =>
-      sendRestoringWorktree(
-        request,
-        runsRef.current.find((run) => run.id === runId) ?? null,
-        restoreWorktree,
-      ),
-    [restoreWorktree],
-  );
   const pressHooks: PressHooks = isHosted
     ? {
         beforePress: beforeHostedPress,
         onPressSettled: hostedPressSettled,
-        deliver: deliverPress,
       }
-    : { deliver: deliverPress };
+    : {};
   /** The agents' buttons on this chat, and their press — see `useChatActions`. */
   const pressableActions = useChatActions(
     activeTeamId === null ? chatApi : teamApi,
@@ -6826,8 +6756,6 @@ export function Chats({
     () => runningCallCallees(runState.calls),
     [runState.calls],
   );
-  const activePendingSend =
-    activeRunId === null ? undefined : pendingSends.get(activeRunId);
   const transcriptEntries = useMemo(
     () =>
       // No live rows over a thread whose first page has not landed. The
@@ -6839,7 +6767,7 @@ export function Chats({
       loadingHistory && durableEntries.length === 0
         ? durableEntries
         : withLiveText(
-            withPendingSend(durableEntries, activePendingSend, items),
+            durableEntries,
             liveText,
             workingAgents,
             activeRun?.id ?? null,
@@ -6848,8 +6776,6 @@ export function Chats({
     [
       loadingHistory,
       durableEntries,
-      activePendingSend,
-      items,
       liveText,
       workingAgents,
       activeRun?.id,
@@ -9201,21 +9127,11 @@ export function Chats({
     if (runId === undefined || !chatApi || activeRun?.teamId) {
       return null;
     }
-    const worktreeRun: WorktreeRun = {
-      taskId: activeRun?.taskId ?? null,
-      cwd: activeRun?.cwd ?? null,
-    };
     return () => {
-      // Retry after a task's worktree was collected is the reported case
-      // itself — the transcript's failure row offers exactly this press.
       void (async () => {
         const raised = await startHostedTurn(runId);
         try {
-          await sendRestoringWorktree(
-            () => chatApi.retryChat({ runId }),
-            worktreeRun,
-            restoreWorktree,
-          );
+          await chatApi.retryChat({ runId });
         } catch (err) {
           if (raised) {
             refuseHostedTurn();
@@ -9224,15 +9140,7 @@ export function Chats({
         }
       })();
     };
-  }, [
-    activeRun?.id,
-    activeRun?.taskId,
-    activeRun?.cwd,
-    chatApi,
-    restoreWorktree,
-    startHostedTurn,
-    refuseHostedTurn,
-  ]);
+  }, [activeRun?.id, chatApi, startHostedTurn, refuseHostedTurn]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group

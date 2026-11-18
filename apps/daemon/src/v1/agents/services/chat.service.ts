@@ -311,6 +311,7 @@ import { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
 import { ThreadInboxService } from './thread-inbox.service';
+import { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 import { WriteFailureNotices } from './write-failure.notices';
@@ -546,6 +547,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     this.sessions.onClosed((runId, interrupted, exited, cause) => {
       void this.settleAfterSessionClosed(runId, interrupted, exited, cause);
     });
+    this.turnFolders?.onMoved((runId) => {
+      void this.announceMovedRun(runId);
+    });
+  }
+
+  /** Every client's copy of a run that moved to another folder. */
+  private async announceMovedRun(runId: string): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
+      if (run === null) {
+        return;
+      }
+      const previews = await this.wireReads([run], em);
+      this.announceRefiled(this.toRunWire(run, previews.of(runId)));
+    } catch (err) {
+      this.logger.warn(
+        `could not announce run ${runId}'s new folder: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -944,6 +965,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly commandCenters?: CommandCenterBroker,
     /** Tells the thread when its events were not saved. Optional for the positional specs. */
     @Optional() private readonly writeFailures?: WriteFailureNotices,
+    /** Where a turn starts once the run's folder is gone. Optional for the positional specs. */
+    @Optional() private readonly turnFolders?: TurnFolderService,
   ) {}
 
   /**
@@ -6173,7 +6196,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const statusBefore = run.status;
     let wroteRunning = false;
     try {
-      const cwd = resolveValidCwd(run.cwd);
+      const cwd =
+        this.turnFolders === undefined
+          ? resolveValidCwd(run.cwd)
+          : await this.turnFolders.folderFor(runId, run.cwd);
       const agentKind = run.agentKind;
 
       // Before the settings re-read below, so the turn reads the brief it wrote.
@@ -7421,6 +7447,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // every message re-booting the user's MCP servers — and whatever one of
       // them owns, up to a browser they are logged into.
       let owningSession: AgentSession | null = null;
+      this.turnFolders?.oweMoveNote(runId, runId);
       const handle = this.sessions.startTurn(
         runId,
         adapter,

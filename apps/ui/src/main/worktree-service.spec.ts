@@ -29,6 +29,7 @@ import {
   readRegistry,
   reapFinishedWorktrees,
   removeWorktreeOnRequest,
+  settleFinishedWorktree,
   settleWorktreeForTask,
   taskBranchName,
 } from './worktree-service';
@@ -469,6 +470,49 @@ describe('pruneWorktreeForTask', () => {
       await expect(pruneWorktreeForTask('t1')).resolves.toBe(false);
 
       expect(existsSync(join(target, 'inner', 'precious.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe('settleFinishedWorktree', () => {
+  it(
+    'keeps the worktree when the daemon no longer calls the card finished, or cannot answer',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      await expect(
+        settleFinishedWorktree('t1', async () => new Set<string>()),
+      ).resolves.toEqual({ removed: false, committed: false });
+      await expect(
+        settleFinishedWorktree('t1', async () => null),
+      ).resolves.toEqual({ removed: false, committed: false });
+      await expect(
+        settleFinishedWorktree('t1', async () => {
+          throw new Error('daemon gone');
+        }),
+      ).resolves.toEqual({ removed: false, committed: false });
+
+      expect(existsSync(made.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'removes it once the daemon says, right then, that the card is finished',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      const asked: string[][] = [];
+
+      await expect(
+        settleFinishedWorktree('t1', async (ids) => {
+          asked.push(ids);
+          return new Set(ids);
+        }),
+      ).resolves.toEqual({ removed: true, committed: false });
+
+      expect(asked).toEqual([['t1']]);
+      expect(existsSync(made.path)).toBe(false);
     },
     TIMEOUT_MS,
   );

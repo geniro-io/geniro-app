@@ -114,6 +114,7 @@ import type { SkillHarvestStore } from '../../agents/services/skill-harvest.stor
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
+import type { TurnFolderService } from '../../agents/services/turn-folder.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import type { WriteFailureNotices } from '../../agents/services/write-failure.notices';
@@ -132,6 +133,7 @@ import {
 } from '../../agents/utils/run-attention';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
+import { isFolderGone } from '../../agents/utils/turn-folder';
 import {
   WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -1227,6 +1229,8 @@ function setup(
     userQuestions?: UserQuestionBroker;
     /** Where the executor reports the rows it could not write, when a test watches. */
     writeFailures?: WriteFailureNotices;
+    /** Where a turn starts once the run's folder is gone, when a test drives it. */
+    turnFolders?: Pick<TurnFolderService, 'folderFor' | 'oweMoveNote'>;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1735,6 +1739,7 @@ function setup(
     opts.commandEndWakes,
     opts.userQuestions,
     opts.writeFailures,
+    opts.turnFolders as TurnFolderService | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -5133,6 +5138,80 @@ describe('TeamExecutorService — follow-up messages', () => {
     }
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('holds a settled run as live work from the moment it takes a monitor wake until the turn it opens is running', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    expect(service.holdsOpeningWake(run.id)).toBe(false);
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'PR merged', {
+        message: 'PR · monitor m1 ended.',
+        severity: 'info',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    expect(service.holdsOpeningWake(run.id)).toBe(true);
+
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+    expect(service.holdsOpeningWake(run.id)).toBe(false);
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    completeTurn(claude.starts[1]!, 'done');
+    await drain();
+  });
+
+  it('wakes the lead with monitor output in the folder the run moved to once its own was deleted', async () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'wake-gone-')));
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'wake-moved-')));
+    const owedTo: string[] = [];
+    const { service, claude } = setup(4870, {
+      turnFolders: {
+        oweMoveNote: (_runId, key) => {
+          owedTo.push(key);
+        },
+        folderFor: async (_runId, cwd) =>
+          cwd === work ? elsewhere : realpathSync(cwd ?? ''),
+      },
+    });
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: work,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    rmSync(work, { recursive: true, force: true });
+
+    expect(
+      service.wakeConversation(run.id, 'a', 'PR merged', {
+        message: 'PR · monitor m1 ended.',
+        severity: 'info',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+
+    expect(claude.starts).toHaveLength(2);
+    expect(claude.starts[1]!.input.cwd).toBe(elsewhere);
+    expect(owedTo).toHaveLength(2);
+    expect(owedTo.every((key) => key.startsWith(run.id))).toBe(true);
+    completeTurn(claude.starts[1]!, 'done');
+    await drain();
   });
 
   it('wakes the lead of a call-free team with monitor output as a turn of its own, never into a running turn', async () => {
@@ -12476,6 +12555,50 @@ describe('TeamExecutorService — agent calls', () => {
       // $2 claude + the $1 bill; the cursor turn's own $5 is the bill's.
       expect(helper?.totals.costUsd).toBeCloseTo(3, 10);
       expect(helper?.model).toBe('claude-opus-5-5');
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('does NOT hand on a failure whose working folder was deleted under it — every member would meet it', async () => {
+      const work = realpathSync(mkdtempSync(join(tmpdir(), 'pool-gone-')));
+      const elsewhere = realpathSync(
+        mkdtempSync(join(tmpdir(), 'pool-moved-')),
+      );
+      // As the real service answers: a gone folder is moved, never thrown on.
+      const harness = setup(4870, {
+        turnFolders: {
+          oweMoveNote: () => undefined,
+          folderFor: async (_runId, cwd) =>
+            cwd === work && isFolderGone(work)
+              ? elsewhere
+              : realpathSync(cwd ?? ''),
+        },
+      });
+      const { claude, cursor, callBroker } = harness;
+      const run = await harness.service.startRun({
+        slug: 'pool',
+        team: POOL_WF,
+        cwd: work,
+        prompt: 'go',
+      });
+      await drain();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'x',
+      });
+      await drain();
+      rmSync(work, { recursive: true, force: true });
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: `spawn /bin/claude ENOENT`,
+      });
+      claude.starts[1]!.finish();
+
+      expect((await envelope).status).toBe('error');
+      expect(cursor.starts).toHaveLength(0);
 
       completeTurn(claude.starts[0]!, 'done');
       await drain();
@@ -20063,6 +20186,43 @@ describe('TeamExecutorService — team stages', () => {
       }),
     ).resolves.toBe(false);
     expect(claude.starts).toHaveLength(1);
+  });
+
+  it('wakes the lead in the folder the run moved to once its own was deleted', async () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'team-gone-')));
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'team-moved-')));
+    const asked: string[] = [];
+    const { service, claude } = setup(4870, {
+      turnFolders: {
+        oweMoveNote: () => undefined,
+        folderFor: async (_runId, cwd) => {
+          asked.push(cwd ?? '');
+          return cwd === work ? elsewhere : realpathSync(cwd ?? '');
+        },
+      },
+    });
+    const run = await service.startRun({
+      slug: 'staged',
+      team: STAGED,
+      cwd: work,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    rmSync(work, { recursive: true, force: true });
+
+    await expect(
+      service.continueAsHost(run.id, 'a', 'wake', {
+        severity: 'info',
+        message: 'x',
+      }),
+    ).resolves.toBe(true);
+    await drain();
+
+    expect(claude.starts).toHaveLength(2);
+    expect(claude.starts[1]!.input.cwd).toBe(elsewhere);
+    expect(asked).toContain(work);
   });
 
   it('a team without stages offers no move_stage, no stage part, no stage line and no stages on the row', async () => {

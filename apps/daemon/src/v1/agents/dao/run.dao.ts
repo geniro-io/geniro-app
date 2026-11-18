@@ -695,6 +695,30 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Move a run to another working folder, only while it still names `from`:
+   * false when another writer moved it first. Bookkeeping, not activity.
+   * `start` replaces the commit the changes chip counts from (null clears it,
+   * since it says nothing about a folder the run did not start in).
+   */
+  async rehome(
+    runId: string,
+    from: string,
+    to: string,
+    start: Pick<Run, 'startSha' | 'startDirty'>,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const em = txEm ?? this.em;
+    const data: Partial<Run> = { cwd: to, ...start };
+    const written = await em.nativeUpdate(Run, { id: runId, cwd: from }, data);
+    const managed = em.getUnitOfWork().getById<Run>(Run, runId);
+    if (written > 0 && managed) {
+      Object.assign(managed, data);
+      em.getUnitOfWork().merge(managed);
+    }
+    return written > 0;
+  }
+
+  /**
    * File how full this run's context window is, as the CLI just reported it.
    *
    * A bare `nativeUpdate` rather than `updateById`, and for the ordinary reason

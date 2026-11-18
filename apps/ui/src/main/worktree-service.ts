@@ -4,8 +4,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -480,6 +482,7 @@ export async function prepareWorktree(
   },
   options: PrepareWorktreeOptions = {},
 ): Promise<PreparedWorktree> {
+  assertRepositoryFolder(input.folder);
   const branch = taskBranchName(input.taskId);
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
@@ -559,6 +562,46 @@ export async function prepareWorktree(
     log: options.log ?? logToConsole,
   });
   return { path, branch, reused: false };
+}
+
+const SET_TASK_FOLDER =
+  "set this task's folder to the repository it works in (its project's folder is used only when the task names none)";
+
+/**
+ * Judged on the filesystem: git's refusal is translated prose, and its exit
+ * code does not tell "not a repository" from its other failures.
+ */
+function assertRepositoryFolder(folder: string): void {
+  const real = realDirectoryOf(folder);
+  if (real === null) {
+    throw new Error(`the folder ${folder} does not exist — ${SET_TASK_FOLDER}`);
+  }
+  for (let dir = real; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git')) || isGitDirectory(dir)) {
+      return;
+    }
+    if (dirname(dir) === dir) {
+      throw new Error(`${folder} is not a git repository — ${SET_TASK_FOLDER}`);
+    }
+  }
+}
+
+function realDirectoryOf(path: string): string | null {
+  try {
+    const real = realpathSync(path);
+    return statSync(real).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A bare repository, by the entries git itself requires of one. */
+function isGitDirectory(dir: string): boolean {
+  return (
+    existsSync(join(dir, 'HEAD')) &&
+    existsSync(join(dir, 'objects')) &&
+    existsSync(join(dir, 'refs'))
+  );
 }
 
 /** How {@link prepareWorktree}'s callers hand it the main-process log. */

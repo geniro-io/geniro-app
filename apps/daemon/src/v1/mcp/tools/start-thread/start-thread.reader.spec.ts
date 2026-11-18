@@ -66,6 +66,7 @@ function ops(
     tell: () => Promise.reject(new Error('unused')),
     note: () => Promise.reject(new Error('unused')),
     start: () => Promise.resolve(STARTING),
+    archive: () => Promise.reject(new Error('unused')),
     ...overrides,
   });
   return broker;

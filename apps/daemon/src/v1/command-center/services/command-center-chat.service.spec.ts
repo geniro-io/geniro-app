@@ -124,6 +124,37 @@ describe('CommandCenterChatService', () => {
       );
     });
 
+    it("re-briefs an existing manager with the user's standing instructions, and drops them once cleared", async () => {
+      current = { id: MANAGER, cwd: managerFolderPath() } as unknown as RunWire;
+
+      service.setInstructions('Answer in Russian.');
+      await service.open(START);
+      service.setInstructions('');
+      await service.open(START);
+
+      const [withText, without] = chats.refreshTeamInstructions.mock.calls.map(
+        (call) => call[1] as string,
+      );
+      expect(withText).toContain(
+        "## The user's standing instructions for you\n\nAnswer in Russian.",
+      );
+      expect(without).not.toContain("The user's standing instructions");
+    });
+
+    it("creates the manager chat with the user's standing instructions in its brief", async () => {
+      service.setInstructions('Keep reports to one line.');
+
+      await service.open(START);
+
+      expect(chats.createChat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          teamInstructions: expect.stringContaining(
+            'Keep reports to one line.',
+          ) as unknown,
+        }),
+      );
+    });
+
     it('moves an existing manager chat into its own folder and answers it as moved', async () => {
       current = { id: MANAGER, cwd: homedir() } as unknown as RunWire;
       const moved = {

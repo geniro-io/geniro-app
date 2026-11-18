@@ -8688,6 +8688,7 @@ export const HOST_MESSAGE_THREAD_TOOL = 'message_thread';
 export const HOST_TELL_THREADS_TOOL = 'tell_threads';
 export const HOST_NOTE_THREAD_TOOL = 'note_thread';
 export const HOST_START_THREAD_TOOL = 'start_thread';
+export const HOST_ARCHIVE_THREADS_TOOL = 'archive_threads';
 
 /** How many managed threads one `tell_threads` call may reach. */
 export const TELL_THREADS_MAX_TARGETS = 12;
@@ -8758,6 +8759,31 @@ export type NoteThreadAnswer =
       candidates: { handle: string; title: string }[];
     };
 
+/** `archive_threads`' arguments. */
+export const ArchiveThreadsSchema = z.object({
+  threads: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(TELL_THREADS_MAX_TARGETS)
+    .describe(
+      `1 to ${TELL_THREADS_MAX_TARGETS} managed threads to archive: each a roster handle (t3), a thread id, or a thread's exact title.`,
+    ),
+});
+export type ArchiveThreadsInput = z.infer<typeof ArchiveThreadsSchema>;
+
+/** What `archive_threads` did: every target handled, or nothing when any is unresolved. */
+export interface ArchiveThreadsAnswer {
+  archived: {
+    to: string;
+    handle: string;
+    runId: string;
+    title: string;
+    outcome: 'archived' | 'already_archived' | 'refused';
+    code: string | null;
+  }[];
+  unresolved: TellThreadsAnswer['unresolved'];
+}
+
 /** `start_thread`'s arguments. */
 export const StartThreadSchema = z.object({
   project: z
@@ -8810,6 +8836,10 @@ export interface CommandCenterOps {
     managerRunId: string,
     input: StartThreadInput,
   ): Promise<StartThreadAnswer>;
+  archive(
+    managerRunId: string,
+    input: ArchiveThreadsInput,
+  ): Promise<ArchiveThreadsAnswer>;
 }
 
 /** What the command-center module tells the chat service about its manager. */

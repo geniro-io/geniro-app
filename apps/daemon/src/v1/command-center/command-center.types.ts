@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { RunWireSchema } from '../agents/chat.types';
+import { CustomInstructionsSchema, RunWireSchema } from '../agents/chat.types';
 import { TaskStatusSchema } from '../tasks/tasks.types';
 import { chatChipsSchema } from '../teams/teams.types';
 
@@ -89,6 +89,21 @@ export const StartCommandCenterChatSchema = chatChipsSchema.meta({
 });
 export type StartCommandCenterChatInput = z.infer<
   typeof StartCommandCenterChatSchema
+>;
+
+/**
+ * TWIN PARSER: the body `apps/ui/src/main/command-center-instructions-push.ts`
+ * sends, built from `Settings.commandCenterInstructions`.
+ */
+export const CommandCenterInstructionsConfigSchema = z
+  .object({
+    instructions: CustomInstructionsSchema.describe(
+      "The user's standing instructions for the command center manager; empty for none",
+    ),
+  })
+  .meta({ id: 'CommandCenterInstructionsConfig' });
+export type CommandCenterInstructionsConfig = z.infer<
+  typeof CommandCenterInstructionsConfigSchema
 >;
 
 export const CommandCenterChatsDiscardedSchema = z.object({

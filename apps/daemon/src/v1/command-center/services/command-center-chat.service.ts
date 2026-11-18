@@ -52,6 +52,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   private opening: Promise<RunWire> | null = null;
   private readonly lastRemovalAt = new Map<string, number>();
   private subscription: Subscription | null = null;
+  private userInstructions = '';
 
   constructor(
     private readonly em: EntityManager,
@@ -99,6 +100,15 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   /** **Destructive and irreversible**: discard the manager chat and its roster. */
   reset(): Promise<{ deleted: number }> {
     return this.chats.deleteCommandCenterChats();
+  }
+
+  /**
+   * The user's standing instructions for the manager, pushed by Electron main
+   * from settings.json; read into the brief before each manager turn.
+   */
+  setInstructions(instructions: string): string {
+    this.userInstructions = instructions;
+    return this.userInstructions;
   }
 
   /** Put threads on a manager's roster now, for a reason other than activity, with the manager's note when it gave one. */
@@ -170,7 +180,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
       projectId: null,
       groupId: null,
       commandCenter: true,
-      teamInstructions: composeManagerBrief([]),
+      teamInstructions: composeManagerBrief([], this.userInstructions),
     });
   }
 
@@ -224,6 +234,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
         reason: entry.reason,
         note: entry.note,
       })),
+      this.userInstructions,
     );
   }
 

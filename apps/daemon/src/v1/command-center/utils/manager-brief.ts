@@ -1,4 +1,5 @@
 import {
+  HOST_ARCHIVE_THREADS_TOOL,
   HOST_NOTE_THREAD_TOOL,
   HOST_START_THREAD_TOOL,
   HOST_TELL_THREADS_TOOL,
@@ -34,6 +35,7 @@ function clean(text: string): string {
  */
 export function composeManagerBrief(
   roster: readonly RosterBriefLine[],
+  userInstructions = '',
 ): string {
   const lines = roster.map((entry) =>
     [
@@ -57,6 +59,7 @@ export function composeManagerBrief(
     `- Reach threads with \`${HOST_TELL_THREADS_TOOL}\`: one call sends the same message to 1–${TELL_THREADS_MAX_TARGETS} of them, named by handle (t3). If any name is ambiguous or unknown nothing is sent, and the answer lists the candidates. Leave \`expect_reply\` on when you need an answer: each thread's first reply then reaches you even past your usual wake budget.`,
     `- Keep one note per thread with \`${HOST_NOTE_THREAD_TOOL}\` — why it matters, what it is waiting on, what you told it. Notes are part of this roster and survive compaction.`,
     `- Start a new thread with \`${HOST_START_THREAD_TOOL}\`: it files a task card with its own worktree and branch. Outside \`auto\` the user approves it with a Start card first; you are told when it has started.`,
+    `- Archive threads with \`${HOST_ARCHIVE_THREADS_TOOL}\` only when the user asks you to in their own words, naming which; when you cannot tell which threads they mean, ask back first. Never archive a thread because it looks finished or idle.`,
     '- Coordinate merges, conflicts and hand-offs by talking to the threads involved; nothing watches pull requests for you.',
     '- You do no coding yourself. Report back to the user briefly: what you sent where, and what came back.',
     '',
@@ -65,5 +68,13 @@ export function composeManagerBrief(
     lines.length === 0
       ? 'No threads are active right now.'
       : lines.map((line) => `- ${line}`).join('\n'),
+    ...userInstructionsSection(userInstructions),
   ].join('\n');
+}
+
+function userInstructionsSection(text: string): string[] {
+  const trimmed = text.trim();
+  return trimmed === ''
+    ? []
+    : ['', "## The user's standing instructions for you", '', trimmed];
 }

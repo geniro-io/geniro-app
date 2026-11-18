@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   CommandCenterBoardSchema,
   CommandCenterChatsDiscardedSchema,
+  CommandCenterInstructionsConfigSchema,
   CommandCenterStartsSchema,
   CommandCenterTimelineSchema,
   START_FAILURE_MAX_CHARS,
@@ -87,4 +88,8 @@ export const commandCenterStartFailedSchema = z.object({
 });
 export class CommandCenterStartFailedDto extends createZodDto(
   commandCenterStartFailedSchema,
+) {}
+
+export class CommandCenterInstructionsConfigDto extends createZodDto(
+  CommandCenterInstructionsConfigSchema,
 ) {}

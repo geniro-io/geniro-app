@@ -45,6 +45,7 @@ import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
+import { ArchiveThreadsTool } from './archive-threads/archive-threads.tool';
 import { ArtifactAnswersTool } from './artifact-answers/artifact-answers.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
 import { AwaitAgentTool } from './await-agent/await-agent.tool';
@@ -205,6 +206,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new TellThreadsTool(deps.commandCenters, deps.commandCenterOps),
     new NoteThreadTool(deps.commandCenters, deps.commandCenterOps),
     new StartThreadTool(deps.commandCenters, deps.commandCenterOps),
+    new ArchiveThreadsTool(deps.commandCenters, deps.commandCenterOps),
     new MemorySearchTool(deps.memory),
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),

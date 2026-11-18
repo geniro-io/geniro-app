@@ -1,8 +1,8 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
-import type { HostRowWire } from '../chat.types';
 import type { ItemKind } from '../../runs/runs.types';
+import type { HostRowWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { mapEventToItem } from '../utils/event-to-item';

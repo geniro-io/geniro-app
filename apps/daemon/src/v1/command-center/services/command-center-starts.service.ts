@@ -207,7 +207,7 @@ export class CommandCenterStartsService
       managerWake(
         managerRunId,
         `start-failed:${taskId}`,
-      `[command center] The thread "${task.title}" (card ${taskId}) could not be started: ${said}. The card stays in backlog; tell the user, or try again with start_thread once the cause is fixed.`,
+        `[command center] The thread "${task.title}" (card ${taskId}) could not be started: ${said}. The card stays in backlog; tell the user, or try again with start_thread once the cause is fixed.`,
         `Could not start "${task.title}"`,
       ),
     );

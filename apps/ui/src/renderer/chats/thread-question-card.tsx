@@ -33,7 +33,12 @@ export function readThreadQuestionRelay(
   const handle = readString(record?.handle);
   const threadTitle = readString(record?.threadTitle);
   const toolName = readString(record?.toolName);
-  if (record === null || handle === null || threadTitle === null || toolName === null) {
+  if (
+    record === null ||
+    handle === null ||
+    threadTitle === null ||
+    toolName === null
+  ) {
     return null;
   }
   return {

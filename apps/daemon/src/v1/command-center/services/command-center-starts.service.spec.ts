@@ -514,7 +514,10 @@ describe('CommandCenterStartsService', () => {
         'manager',
         null,
       );
-      expect(noticeInfo).toHaveBeenCalledWith(MANAGER, 'Started "Billing cache"');
+      expect(noticeInfo).toHaveBeenCalledWith(
+        MANAGER,
+        'Started "Billing cache"',
+      );
       expect(wakePublish).not.toHaveBeenCalled();
       expect((await taskOf(task.id)).startRequestedByRunId).toBeNull();
     });

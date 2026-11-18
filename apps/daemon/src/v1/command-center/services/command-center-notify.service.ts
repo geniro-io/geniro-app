@@ -160,7 +160,9 @@ export class CommandCenterNotifyService
       );
       await Promise.all(onRoster.map((row) => this.review(row.threadRunId)));
     } catch (error) {
-      this.logger.warn(`command center boot review failed: ${messageOf(error)}`);
+      this.logger.warn(
+        `command center boot review failed: ${messageOf(error)}`,
+      );
     }
   }
 

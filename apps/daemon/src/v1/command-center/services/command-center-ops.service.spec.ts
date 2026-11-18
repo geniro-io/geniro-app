@@ -418,6 +418,40 @@ describe('CommandCenterOpsService', () => {
       expect(await onRoster('thread-2')).toBe(false);
     });
 
+    it('archives a thread named twice only once, with one row', async () => {
+      await db.seedRoster(MANAGER, 'thread-1', 't1');
+
+      const answer = await service.archive(MANAGER, {
+        threads: ['t1', 'Billing cache'],
+      });
+
+      expect(chats.archive.mock.calls).toEqual([['thread-1']]);
+      expect(answer.archived).toEqual([
+        expect.objectContaining({ to: 't1', outcome: 'archived' }),
+      ]);
+    });
+
+    it('reports an unexpected archive failure as ARCHIVE_FAILED and still archives the others', async () => {
+      await db.seedRoster(MANAGER, 'thread-1', 't1');
+      await db.seedRoster(MANAGER, 'thread-2', 't2');
+      chats.archive.mockImplementation((runId: string) =>
+        runId === 'thread-1'
+          ? Promise.reject(new Error('disk full'))
+          : Promise.resolve({}),
+      );
+
+      const answer = await service.archive(MANAGER, {
+        threads: ['t1', 't2'],
+      });
+
+      expect(
+        answer.archived.map((row) => [row.to, row.outcome, row.code]),
+      ).toEqual([
+        ['t1', 'refused', 'ARCHIVE_FAILED'],
+        ['t2', 'archived', null],
+      ]);
+    });
+
     it("refuses to archive the manager's own run", async () => {
       rosterOf([{ handle: 't9', runId: MANAGER, title: 'Manager' }]);
 

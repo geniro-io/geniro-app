@@ -21632,6 +21632,58 @@ describe('Chats — one hosted conversation', () => {
     ).toContain('Fresh chat');
   });
 
+  it('a surface that takes over a discard is told, and its run is not opened again', async () => {
+    const onDiscarded = vi.fn();
+    const discard = vi.fn(async () => undefined);
+    const open = vi.fn(async () => HOSTED);
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open,
+        discard,
+        onDiscarded,
+        headerActions: ({ discard: startOver }) => (
+          <button type="button" onClick={() => startOver?.()}>
+            Start over
+          </button>
+        ),
+      }),
+    });
+    const opensBefore = open.mock.calls.length;
+
+    const button = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === 'Start over',
+    );
+    await act(async () => {
+      button!.click();
+    });
+
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(onDiscarded).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls.length).toBe(opensBefore);
+  });
+
+  it('a surface that leaves the folder out of its header shows the agent where the folder was', async () => {
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ hideHeaderFolder: true }),
+    });
+
+    const identity = container.querySelector('[data-slot="thread-identity"]');
+    expect(identity?.textContent).toContain('claude');
+    expect(identity?.textContent).not.toContain('proj');
+  });
+
+  it('a hosted surface shows its run’s folder in the header unless it asks to leave it out', async () => {
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread(),
+    });
+
+    const identity = container.querySelector('[data-slot="thread-identity"]');
+    expect(identity?.textContent).toContain('proj');
+  });
+
   it('does none of the whole app’s work: no notifications, no archive sweep, no Analyze', async () => {
     (
       window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }

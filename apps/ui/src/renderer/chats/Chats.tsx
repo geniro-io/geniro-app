@@ -194,6 +194,7 @@ import {
 import { createComposerText, useComposerTextFact } from './composer-text';
 import {
   isChatApprovalMode,
+  NEW_CHAT_APPROVAL,
   targetAgentKind,
   teamSlugOf,
 } from './composer-values';
@@ -1100,7 +1101,8 @@ export function Chats({
   const teamSlug = teamSlugOf(target);
   const agentKind = targetAgentKind(target);
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
-  const [approvalMode, setApprovalMode] = useState<ChatApprovalMode>('ask');
+  const [approvalMode, setApprovalMode] =
+    useState<ChatApprovalMode>(NEW_CHAT_APPROVAL);
   /**
    * Per-CLI detection, or null until the probe answers. Null means UNKNOWN and
    * is rendered as "everything is offered" — refusing agents while the probe
@@ -5300,7 +5302,14 @@ export function Chats({
     }
     deactivateRun();
     void discard()
-      .then(refreshRuns)
+      .then(() => {
+        const onDiscarded = hostedRef.current?.onDiscarded;
+        if (onDiscarded === undefined) {
+          refreshRuns();
+        } else {
+          onDiscarded();
+        }
+      })
       .catch((err: unknown) => setError(describeDaemonError(err)));
   }, [deactivateRun, refreshRuns, setError]);
   // The open thread's analysis, for its Analyze button — see `useThreadAnalysis`.
@@ -10720,7 +10729,11 @@ export function Chats({
                         // because it is the same kind of fact — fixed for the
                         // run's life — and after three rejected positions in the
                         // composer below.
-                        cwd={activeRun.cwd}
+                        cwd={
+                          hosted?.hideHeaderFolder === true
+                            ? null
+                            : activeRun.cwd
+                        }
                         worktreeOf={taskWorktreeOf}
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.

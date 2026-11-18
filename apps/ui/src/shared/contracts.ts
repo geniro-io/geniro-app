@@ -315,6 +315,19 @@ export interface MemoryTriageConfig {
 }
 
 /**
+ * The command center manager's start settings: the model choice, the tool-approval
+ * mode and the auto-compact threshold. Approval and auto-compact are the values the
+ * composer keeps (`lastApprovalMode`, `lastAutoCompactPercent`), so both are opaque
+ * here and checked where they are used.
+ */
+export interface ManagerConfig extends MemoryTriageConfig {
+  /** The tool-approval mode; null = the new-chat default. */
+  approval: string | null;
+  /** The auto-compact threshold; null = the app's default. */
+  autoCompactPercent: number | null;
+}
+
+/**
  * One place encrypted share links are uploaded to, reached through the user's
  * own CLI and login (`gcloud`, `aws`, or a program of their own as argv).
  *
@@ -562,6 +575,11 @@ export interface Settings {
    * it; null until one has been made.
    */
   lastMemoryTriage: MemoryTriageConfig | null;
+  /**
+   * The command center manager's agent and model settings, so the empty state
+   * opens on the last choice; null until one has been made.
+   */
+  lastManagerConfig: ManagerConfig | null;
   /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
@@ -912,6 +930,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastAnalysisConfig: null,
   lastChangeChatApproval: null,
   lastMemoryTriage: null,
+  lastManagerConfig: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,

@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => {
     lastAnalysisConfig: null,
     lastChangeChatApproval: null,
     lastMemoryTriage: null,
+    lastManagerConfig: null,
     lastModelParameters: {},
     cliPaths: {},
     checkForUpdates: true,

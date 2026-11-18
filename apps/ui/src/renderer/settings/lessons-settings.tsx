@@ -26,6 +26,7 @@ import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import {
   blankTriageChoice,
+  blankTriageChoiceFor,
   ChoiceModelSettings,
 } from './memory-triage-settings';
 
@@ -211,9 +212,9 @@ export function LessonsSettingsPanel({
     target: string,
     apply: (choice: MemoryTriageConfig) => void,
   ): void => {
-    const kind = CLI_KINDS.find((candidate) => candidate === target);
-    if (kind !== undefined) {
-      apply(blankTriageChoice(kind));
+    const next = blankTriageChoiceFor(target);
+    if (next !== null) {
+      apply(next);
     }
   };
 

@@ -15,6 +15,14 @@ export interface HostedThread {
   /** Throw the conversation away; the next `open` starts a new one. */
   discard?: () => Promise<void>;
   /**
+   * Told once a discard has landed, in place of the usual re-open of the run.
+   * The surface decides what comes next — the command center leaves its
+   * manager unmade until the user starts one again.
+   */
+  onDiscarded?: () => void;
+  /** Leave the run's folder out of the header, which then names the agent. */
+  hideHeaderFolder?: boolean;
+  /**
    * Which stored queue is this surface's, stable across closing and reopening
    * it, so a message queued before it closed goes out once it is back.
    */

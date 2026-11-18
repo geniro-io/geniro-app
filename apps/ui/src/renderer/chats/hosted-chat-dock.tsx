@@ -1,4 +1,4 @@
-import { ChevronDown, Trash2 } from 'lucide-react';
+import { ChevronDown, type LucideIcon, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import type { DaemonHandle } from '../../shared/contracts';
@@ -10,6 +10,20 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonClient } from '../daemon-client';
 import { Chats } from './Chats';
 import type { HostedThread } from './hosted-thread';
+
+/** A surface's own start-over press: the icon, an optional visible label, and what it says to a reader. */
+export interface StartOverPress {
+  icon: LucideIcon;
+  label?: string;
+  ariaLabel: string;
+  title: string;
+}
+
+const DEFAULT_START_OVER: StartOverPress = {
+  icon: Trash2,
+  ariaLabel: 'Start a new conversation',
+  title: 'Throw this conversation away and start a new one',
+};
 
 /**
  * A conversation docked under a page — the team builder's, a project page's:
@@ -33,6 +47,7 @@ export function HostedChatDock({
   hidden = false,
   active = true,
   confirmStartOver,
+  startOverPress = DEFAULT_START_OVER,
   fill = false,
   onClose,
 }: {
@@ -51,6 +66,8 @@ export function HostedChatDock({
   active?: boolean;
   /** Ask before Start over throws the conversation away, with what is lost. */
   confirmStartOver?: { title: string; body: string; confirmLabel: string };
+  /** How the Start over press reads; the default is the trash icon. */
+  startOverPress?: StartOverPress;
   /** Take the page's whole height, with no resize handle. */
   fill?: boolean;
   /** Hide the dock; without it the dock offers no Hide. */
@@ -73,27 +90,32 @@ export function HostedChatDock({
     handleEdge: 'top',
   });
   const headerActions = useLatestCallback(
-    ({ discard: startOver }: { discard: (() => void) | null }) => (
+    ({ discard }: { discard: (() => void) | null }) => (
       <>
         <Button
           type="button"
           variant="ghost"
-          size="icon"
-          className="size-6"
-          aria-label="Start a new conversation"
-          title="Throw this conversation away and start a new one"
-          disabled={startOver === null}
+          size={startOverPress.label === undefined ? 'icon' : 'sm'}
+          className={cn(
+            startOverPress.label === undefined
+              ? 'size-6'
+              : 'h-6 gap-1 px-1.5 text-xs',
+          )}
+          aria-label={startOverPress.ariaLabel}
+          title={startOverPress.title}
+          disabled={discard === null}
           onClick={() => {
-            if (startOver === null) {
+            if (discard === null) {
               return;
             }
             if (confirmStartOver === undefined) {
-              startOver();
+              discard();
             } else {
-              setPendingStartOver(() => startOver);
+              setPendingStartOver(() => discard);
             }
           }}>
-          <Trash2 className="size-3.5 shrink-0" />
+          <startOverPress.icon className="size-3.5 shrink-0" />
+          {startOverPress.label}
         </Button>
         {onClose === undefined ? null : (
           <Button
@@ -109,7 +131,7 @@ export function HostedChatDock({
         )}
       </>
     ),
-    [onClose, confirmStartOver],
+    [onClose, confirmStartOver, startOverPress],
   );
 
   return (

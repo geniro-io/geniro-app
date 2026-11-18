@@ -183,6 +183,77 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('the command center manager’s choice survives a read, and a choice on a CLI this build lacks costs only that key', () => {
+    expect(readSettings().lastManagerConfig).toBeNull();
+
+    const choice = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: 'high',
+      contextWindow: null,
+      modelParameters: {},
+      approval: null,
+      autoCompactPercent: null,
+    };
+    writeRaw({ lastManagerConfig: choice });
+
+    expect(readSettings().lastManagerConfig).toEqual(choice);
+
+    writeRaw({
+      lastManagerConfig: { ...choice, agent: 'gemini' },
+      onboardingComplete: true,
+    });
+
+    const settings = readSettings();
+    expect(settings.lastManagerConfig).toBeNull();
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
+  it('a manager choice saved before its approval and auto-compact existed reads with both unset', () => {
+    writeRaw({
+      lastManagerConfig: {
+        agent: 'claude',
+        configDir: null,
+        model: 'opus',
+        effort: 'high',
+        contextWindow: null,
+        modelParameters: {},
+      },
+    });
+
+    expect(readSettings().lastManagerConfig).toEqual({
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: 'high',
+      contextWindow: null,
+      modelParameters: {},
+      approval: null,
+      autoCompactPercent: null,
+    });
+  });
+
+  it('a manager choice keeps its approval and auto-compact, and an out-of-range auto-compact costs only the choice', () => {
+    const choice = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: null,
+      contextWindow: null,
+      modelParameters: {},
+      approval: 'auto',
+      autoCompactPercent: 80,
+    };
+    writeRaw({ lastManagerConfig: choice });
+
+    expect(readSettings().lastManagerConfig).toEqual(choice);
+
+    writeRaw({ lastManagerConfig: { ...choice, autoCompactPercent: 99 } });
+
+    expect(readSettings().lastManagerConfig).toBeNull();
+  });
+
   it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
     expect(readSettings().keptSessionIdleMinutes).toBe(60);
 

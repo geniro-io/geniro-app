@@ -50,12 +50,16 @@ export function readKnowledgeReadArgs(
 export function knowledgeMissingText(
   handle: string,
   similar: readonly string[],
+  mayNameAnotherPlace = false,
 ): string {
   const named =
     similar.length > 0
       ? ` Did you mean ${similar.map((name) => `\`${name}\``).join(', ')}?`
       : ` ${HOST_KNOWLEDGE_SEARCH_TOOL} lists what this run sees.`;
-  return `NOT_FOUND: this run sees no knowledge document \`${handle}\`.${named}`;
+  const elsewhere = mayNameAnotherPlace
+    ? ' A document of another project or team is read by naming that place: `project` (its id, as list_projects names it) or `team` (its slug, as read_teams names it).'
+    : '';
+  return `NOT_FOUND: this run sees no knowledge document \`${handle}\`.${named}${elsewhere}`;
 }
 
 /**

@@ -72,6 +72,7 @@ export abstract class KnowledgeMcpTool extends BaseMcpTool {
   protected abstract answer(
     args: Record<string, unknown>,
     scope: KnowledgeCallScope,
+    context: McpCallContext,
   ): Promise<McpToolResult>;
 
   protected async run(
@@ -90,7 +91,7 @@ export abstract class KnowledgeMcpTool extends BaseMcpTool {
     );
     // Any other chat's reader refuses the two names as it refuses any unknown.
     if (!isAppOwnChat(this.gates, context)) {
-      return this.answer(args, scope);
+      return this.answer(args, scope, context);
     }
     const read = readKnowledgePlaceArgs(args);
     if (!read.ok) {
@@ -98,12 +99,12 @@ export abstract class KnowledgeMcpTool extends BaseMcpTool {
     }
     const { named, rest } = read.query;
     if (named === null) {
-      return this.answer(rest, scope);
+      return this.answer(rest, scope, context);
     }
     const place = await this.knowledge.placeNamed(named);
     return 'code' in place
       ? this.masked(`${place.code}: ${place.reason}`, true)
-      : this.answer(rest, { ...scope, place, elsewhere: true });
+      : this.answer(rest, { ...scope, place, elsewhere: true }, context);
   }
 
   /** Every result, refusals included, is masked of the secrets geniro knows. */

@@ -7979,7 +7979,7 @@ describe('ChatService', () => {
     );
   });
 
-  it('installs the analysis tools only on a turn of an analysis chat, scoped to its source', async () => {
+  it('installs the analysis tools only on an analysis chat, scoped to its source', async () => {
     const turns: unknown[] = [];
     const { service, analyses, claude } = setup({
       analysisSink: (turn) => {
@@ -8009,7 +8009,60 @@ describe('ChatService', () => {
     ]);
     claude.finish();
     await drain();
-    expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
+  });
+
+  it('keeps the analysis tools for the stretch the CLI runs after the turn, so a card is still filed there', async () => {
+    const { service, analyses, claude, itemDao } = setup({
+      analysisSink: (turn, write) =>
+        ({
+          turn,
+          report: async () => {
+            const row = await write('recommendations', { items: [] });
+            return { status: 'recorded', seq: row.seq, count: 0 };
+          },
+        }) as never,
+    });
+    const plain = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const analysis = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      analysisSource: { runId: plain.id, seq: 3, working: false },
+    });
+    await service.sendMessage(analysis.id, 'analyse');
+    await finishTurn(claude);
+
+    const filed = await analyses.report(analysis.id, SINGLE_AGENT_NODE, {
+      whole: {},
+    });
+
+    expect(filed).toMatchObject({ status: 'recorded' });
+    expect(
+      itemDao.items.filter(
+        (item) => item.runId === analysis.id && item.kind === 'recommendations',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('drops a hidden lessons chat’s analysis tools with its turn', async () => {
+    const { service, analyses, claude } = setup({
+      analysisSink: (turn) => ({ turn }) as never,
+    });
+    const reflection = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      analysisSource: {
+        runId: 'source',
+        seq: 5,
+        working: false,
+        purpose: 'lessons',
+      },
+    });
+    await service.sendMessage(reflection.id, 'reflect');
+    expect(analyses.canAnalyse(reflection.id, SINGLE_AGENT_NODE)).toBe(true);
+
+    await finishTurn(claude);
+
+    expect(analyses.canAnalyse(reflection.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
   it('puts an analysis’s project-instructions change on a diff card even in auto, and writes only on Apply', async () => {
@@ -8163,7 +8216,6 @@ describe('ChatService', () => {
       },
     ]);
     await finishTurn(claude);
-    expect(analyses.canAnalyse(builder.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
   it('offers a builder chat no analysis tools while its team has no run', async () => {

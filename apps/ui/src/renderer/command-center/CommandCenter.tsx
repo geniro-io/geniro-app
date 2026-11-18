@@ -488,6 +488,7 @@ export function CommandCenter({
                   cliDetections={sources.cliDetections}
                   capabilities={capabilities}
                   capabilitiesLoading={capabilitiesLoading}
+                  approvalCapabilityFor={sources.approvalCapabilityFor}
                   recentConfigDirs={sources.recentConfigDirs}
                   configProfiles={sources.configProfiles}
                   onOpened={board.reload}

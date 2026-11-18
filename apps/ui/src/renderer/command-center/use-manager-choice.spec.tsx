@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type CliDetection,
   DEFAULT_SETTINGS,
-  type MemoryTriageConfig,
+  type ManagerConfig,
   type Settings,
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
@@ -42,7 +42,7 @@ const ALL_FOUND = [
 
 async function mount(
   cliDetections: readonly CliDetection[] | null,
-  saved: MemoryTriageConfig | null,
+  saved: ManagerConfig | null,
 ): Promise<void> {
   window.geniro = createPreloadStub({
     getSettings: () =>
@@ -76,13 +76,15 @@ afterEach(() => {
 
 describe('useManagerChoice', () => {
   it('opens on the choice saved last, so a remount keeps the manager’s settings', async () => {
-    const saved: MemoryTriageConfig = {
+    const saved: ManagerConfig = {
       agent: 'codex',
       configDir: null,
       model: 'gpt-5.4',
       effort: 'high',
       contextWindow: '272k',
       modelParameters: { fast: 'on' },
+      approval: 'auto',
+      autoCompactPercent: 80,
     };
 
     await mount(ALL_FOUND, saved);
@@ -101,7 +103,7 @@ describe('useManagerChoice', () => {
     expect(latest?.choice).toBeNull();
   });
 
-  it('falls back to a blank choice on the first CLI this machine has when the saved one is gone', async () => {
+  it('falls back to a blank choice on the first CLI this machine has when the saved one is gone, keeping auto-compact and dropping the approval', async () => {
     await mount(
       [
         detection('claude', true),
@@ -115,6 +117,8 @@ describe('useManagerChoice', () => {
         effort: null,
         contextWindow: null,
         modelParameters: {},
+        approval: 'auto',
+        autoCompactPercent: 80,
       },
     );
 
@@ -125,18 +129,22 @@ describe('useManagerChoice', () => {
       effort: null,
       contextWindow: null,
       modelParameters: {},
+      approval: null,
+      autoCompactPercent: 80,
     });
   });
 
   it('saves every pick to settings at once and shows it', async () => {
     await mount(ALL_FOUND, null);
-    const next: MemoryTriageConfig = {
+    const next: ManagerConfig = {
       agent: 'cursor-agent',
       configDir: null,
       model: 'auto',
       effort: null,
       contextWindow: null,
       modelParameters: {},
+      approval: null,
+      autoCompactPercent: null,
     };
 
     await act(async () => {

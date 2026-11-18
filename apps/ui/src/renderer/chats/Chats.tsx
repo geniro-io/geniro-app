@@ -194,6 +194,7 @@ import {
 import { createComposerText, useComposerTextFact } from './composer-text';
 import {
   isChatApprovalMode,
+  NEW_CHAT_APPROVAL,
   targetAgentKind,
   teamSlugOf,
 } from './composer-values';
@@ -1101,7 +1102,8 @@ export function Chats({
   const teamSlug = teamSlugOf(target);
   const agentKind = targetAgentKind(target);
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
-  const [approvalMode, setApprovalMode] = useState<ChatApprovalMode>('ask');
+  const [approvalMode, setApprovalMode] =
+    useState<ChatApprovalMode>(NEW_CHAT_APPROVAL);
   /**
    * Per-CLI detection, or null until the probe answers. Null means UNKNOWN and
    * is rendered as "everything is offered" — refusing agents while the probe

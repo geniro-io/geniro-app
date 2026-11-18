@@ -4,26 +4,28 @@ import {
   CLI_KINDS,
   type CliDetection,
   type CliKind,
-  type MemoryTriageConfig,
+  type ManagerConfig,
 } from '../../shared/contracts';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { triageChoiceFor } from '../settings/memory-triage-settings';
 
 /**
- * The manager's agent and model settings: the choice the user made last, read
- * from settings.json. A remembered CLI this machine no longer has falls back to
- * a blank choice on the first one it has. Null until the saved choice is read.
+ * The manager's start settings: the choice the user made last, read from
+ * settings.json. A remembered CLI this machine no longer has falls back to a
+ * blank choice on the first one it has, which keeps the auto-compact threshold
+ * (one value for every CLI) and drops the approval (a mode of the old CLI).
+ * Null until the saved choice is read.
  */
 export function useManagerChoice(
   cliDetections: readonly CliDetection[] | null,
 ): {
-  choice: MemoryTriageConfig | null;
-  pick: (next: MemoryTriageConfig) => void;
+  choice: ManagerConfig | null;
+  pick: (next: ManagerConfig) => void;
 } {
   const [remembered, setRemembered] = useState<
-    MemoryTriageConfig | null | undefined
+    ManagerConfig | null | undefined
   >(undefined);
-  const [picked, setPicked] = useState<MemoryTriageConfig | null>(null);
+  const [picked, setPicked] = useState<ManagerConfig | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -44,7 +46,7 @@ export function useManagerChoice(
     };
   }, []);
 
-  const pick = useLatestCallback((next: MemoryTriageConfig): void => {
+  const pick = useLatestCallback((next: ManagerConfig): void => {
     setPicked(next);
     void window.geniro
       .updateSettings({ lastManagerConfig: next })
@@ -64,10 +66,29 @@ export function useManagerChoice(
           .filter((detection) => detection.found)
           .map((detection) => detection.kind);
   return {
-    choice: triageChoiceFor(
+    choice: managerChoiceFor(
       installed.length === 0 ? CLI_KINDS : installed,
       remembered,
     ),
     pick,
+  };
+}
+
+function managerChoiceFor(
+  agents: readonly CliKind[],
+  remembered: ManagerConfig | null,
+): ManagerConfig | null {
+  const base = triageChoiceFor(agents, remembered);
+  if (base === null) {
+    return null;
+  }
+  const approval =
+    remembered !== null && remembered.agent === base.agent
+      ? remembered.approval
+      : null;
+  return {
+    ...base,
+    approval,
+    autoCompactPercent: remembered?.autoCompactPercent ?? null,
   };
 }

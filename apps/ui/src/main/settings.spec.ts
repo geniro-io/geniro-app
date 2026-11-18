@@ -193,6 +193,8 @@ describe('readSettings', () => {
       effort: 'high',
       contextWindow: null,
       modelParameters: {},
+      approval: null,
+      autoCompactPercent: null,
     };
     writeRaw({ lastManagerConfig: choice });
 
@@ -206,6 +208,50 @@ describe('readSettings', () => {
     const settings = readSettings();
     expect(settings.lastManagerConfig).toBeNull();
     expect(settings.onboardingComplete).toBe(true);
+  });
+
+  it('a manager choice saved before its approval and auto-compact existed reads with both unset', () => {
+    writeRaw({
+      lastManagerConfig: {
+        agent: 'claude',
+        configDir: null,
+        model: 'opus',
+        effort: 'high',
+        contextWindow: null,
+        modelParameters: {},
+      },
+    });
+
+    expect(readSettings().lastManagerConfig).toEqual({
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: 'high',
+      contextWindow: null,
+      modelParameters: {},
+      approval: null,
+      autoCompactPercent: null,
+    });
+  });
+
+  it('a manager choice keeps its approval and auto-compact, and an out-of-range auto-compact costs only the choice', () => {
+    const choice = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: null,
+      contextWindow: null,
+      modelParameters: {},
+      approval: 'auto',
+      autoCompactPercent: 80,
+    };
+    writeRaw({ lastManagerConfig: choice });
+
+    expect(readSettings().lastManagerConfig).toEqual(choice);
+
+    writeRaw({ lastManagerConfig: { ...choice, autoCompactPercent: 99 } });
+
+    expect(readSettings().lastManagerConfig).toBeNull();
   });
 
   it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type DaemonHandle,
   DEFAULT_SETTINGS,
-  type MemoryTriageConfig,
+  type ManagerConfig,
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
@@ -62,13 +62,15 @@ vi.mock('../chats/Chats', async () => {
 
 const HANDLE = { host: '127.0.0.1', port: 1, token: 't' } as DaemonHandle;
 const CLIENT = {} as DaemonClient;
-const CHOICE: MemoryTriageConfig = {
+const CHOICE: ManagerConfig = {
   agent: 'claude',
   configDir: null,
   model: 'opus',
   effort: 'high',
   contextWindow: null,
   modelParameters: {},
+  approval: null,
+  autoCompactPercent: null,
 };
 
 const openCommandCenterChat = vi.fn();
@@ -79,7 +81,7 @@ const APIS = {
 
 let container: HTMLDivElement;
 let root: Root;
-let onDiscarded: ReturnType<typeof vi.fn>;
+let onDiscarded: () => void;
 
 beforeEach(() => {
   stubResizeObserver();

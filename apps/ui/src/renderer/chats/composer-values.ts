@@ -19,6 +19,20 @@ export const isChatApprovalMode = (value: unknown): value is ChatApprovalMode =>
   typeof value === 'string' &&
   (Object.values(ChatApprovalMode) as string[]).includes(value);
 
+/** The mode a new chat starts in when none was picked: the daemon's own default. */
+export const NEW_CHAT_APPROVAL: ChatApprovalMode = 'ask';
+
+/**
+ * The mode a new chat on a CLI with these modes actually starts in: the default,
+ * narrowed to what the CLI offers, else `auto`. The twin of the daemon's
+ * `initialApproval`, so a picker shows the mode the run will get.
+ */
+export function newChatApprovalOf(
+  modes: readonly ChatApprovalMode[],
+): ChatApprovalMode {
+  return modes.includes(NEW_CHAT_APPROVAL) ? NEW_CHAT_APPROVAL : 'auto';
+}
+
 /** A composer target naming a library team rather than a CLI. */
 const TEAM_TARGET = /^team:(.+)$/;
 

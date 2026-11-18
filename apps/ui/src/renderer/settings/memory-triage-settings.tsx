@@ -70,7 +70,7 @@ export function triageChoiceFor(
  * The model, effort, context window, parameters and profile of one choice,
  * through the composer's own model picker. The CLI is chosen beside it.
  */
-export function ChoiceModelSettings({
+export function ChoiceModelSettings<T extends MemoryTriageConfig>({
   value,
   onChange,
   agentsApi,
@@ -78,14 +78,19 @@ export function ChoiceModelSettings({
   capabilitiesLoading,
   recentConfigDirs,
   configProfiles,
+  autoCompactPercent,
+  onAutoCompactChange,
 }: {
-  value: MemoryTriageConfig;
-  onChange: (next: MemoryTriageConfig) => void;
+  value: T;
+  onChange: (next: T) => void;
   agentsApi: DaemonApis['agents'] | null;
   capabilities: CapabilitiesDto | null;
   capabilitiesLoading: boolean;
   recentConfigDirs: Partial<Record<CliKind, readonly string[]>>;
   configProfiles: readonly ConfigProfile[];
+  /** The auto-compact axis is offered only to a surface that passes its handler. */
+  autoCompactPercent?: number | null;
+  onAutoCompactChange?: (percent: number | null) => void;
 }): React.JSX.Element {
   const { agent: agentKind, model, configDir } = value;
   const models = useAgentModels(agentsApi, agentKind, configDir, model);
@@ -154,6 +159,8 @@ export function ChoiceModelSettings({
       onConfigDirChange={(next) => patch({ configDir: next })}
       onBrowseConfigDir={() => void pickConfigDir()}
       loading={models.loading}
+      autoCompactPercent={autoCompactPercent ?? null}
+      onAutoCompactChange={onAutoCompactChange}
       settingsLoading={efforts.loading || windows.loading || parameters.loading}
     />
   );

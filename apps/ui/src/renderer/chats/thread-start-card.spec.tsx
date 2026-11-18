@@ -240,6 +240,9 @@ describe('ThreadStartCard', () => {
       '[data-slot="thread-card-go"]',
     );
     expect(button).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="thread-start-note"]'),
+    ).toBeNull();
     act(() => button!.click());
     expect(open).toHaveBeenCalledWith('run-new');
   });
@@ -297,6 +300,13 @@ describe('ThreadStartCard', () => {
     );
     await render(<ThreadStartCard pair={pair(FILED)} />, reader);
     expect(stateText()).toBe('Card removed');
+    expect(
+      container.querySelector('[data-slot="thread-card-board-card"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="thread-start-card-id"]')
+        ?.textContent,
+    ).toBe('MAN-16');
   });
 
   it('shows a refusal with its reason and reads no card', async () => {

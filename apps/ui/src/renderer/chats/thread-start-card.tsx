@@ -3,6 +3,7 @@ import {
   Bot,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   Folder,
   Hand,
   type LucideIcon,
@@ -201,12 +202,20 @@ export function ThreadStartCard({
         <div
           data-slot="thread-start-labels"
           className="flex min-w-0 flex-wrap items-center gap-1">
-          {start.identifier === null ? null : (
+          {start.identifier === null ? null : found === null ? (
+            <ThreadLabelChip
+              slot="thread-start-card-id"
+              icon={CircleDashed}
+              text={start.identifier}
+              title={`Board card ${start.identifier}`}
+              yields={false}
+            />
+          ) : (
             <BoardCardLabel
               card={{
                 identifier: start.identifier,
                 title,
-                status: found?.status ?? 'backlog',
+                status: found.status,
               }}
             />
           )}
@@ -235,16 +244,20 @@ export function ThreadStartCard({
         </div>
         {note === null && !canGo ? null : (
           <div className="flex min-w-0 items-center justify-between gap-2">
-            <p
-              data-slot="thread-start-note"
-              className={cn(
-                'm-0 min-w-0 text-xs break-words',
-                state === 'refused'
-                  ? 'text-destructive'
-                  : 'text-muted-foreground',
-              )}>
-              {note}
-            </p>
+            {note === null ? (
+              <span />
+            ) : (
+              <p
+                data-slot="thread-start-note"
+                className={cn(
+                  'm-0 min-w-0 text-xs break-words',
+                  state === 'refused'
+                    ? 'text-destructive'
+                    : 'text-muted-foreground',
+                )}>
+                {note}
+              </p>
+            )}
             {canGo ? <GoToThreadButton onGo={() => open(runId)} /> : null}
           </div>
         )}

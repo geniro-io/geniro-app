@@ -9,6 +9,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
+import type { RunNoticeWriter } from '../../agents/services/run-notice.writer';
 import type { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
@@ -81,6 +82,9 @@ describe('CommandCenterStartsService', () => {
     >
   >;
   let wakePublish: ReturnType<typeof vi.fn<(wake: Wake) => void>>;
+  let noticeInfo: ReturnType<
+    typeof vi.fn<(runId: string, message: string) => Promise<void>>
+  >;
   let addToRoster: ReturnType<
     typeof vi.fn<
       (
@@ -163,6 +167,7 @@ describe('CommandCenterStartsService', () => {
     raiseOwnedCard = vi.fn(() => Promise.resolve());
     deliverOwnedCardVerdict = vi.fn(() => Promise.resolve());
     wakePublish = vi.fn<(wake: Wake) => void>();
+    noticeInfo = vi.fn(() => Promise.resolve());
     addToRoster = vi.fn(() => Promise.resolve());
     rosterThreads = vi.fn(() => Promise.resolve([]));
     listAll = vi.fn(() => Promise.resolve([project]));
@@ -185,6 +190,7 @@ describe('CommandCenterStartsService', () => {
       { create: createTask, announceInPlace } as unknown as TasksService,
       taskEvents,
       { addToRoster, rosterThreads } as unknown as CommandCenterChatService,
+      { info: noticeInfo } as unknown as RunNoticeWriter,
     );
     service.onModuleInit();
   });
@@ -492,13 +498,7 @@ describe('CommandCenterStartsService', () => {
   });
 
   describe('the report of a started thread', () => {
-    it('puts the thread on the manager roster and tells the manager once it has started', async () => {
-      rosterThreads.mockResolvedValueOnce([
-        {
-          entry: { threadRunId: THREAD, handle: 't3' },
-          run: null,
-        } as unknown as RosterThread,
-      ]);
+    it('puts the thread on the manager roster and writes its Started row without waking the manager', async () => {
       const task = await seedTask({
         startRequestedAt: null,
         startRequestedByRunId: MANAGER,
@@ -507,22 +507,18 @@ describe('CommandCenterStartsService', () => {
 
       startedEvent(task.id);
 
-      await vi.waitFor(() => expect(wakePublish).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(noticeInfo).toHaveBeenCalledTimes(1));
       expect(addToRoster).toHaveBeenCalledWith(
         MANAGER,
         [THREAD],
         'manager',
         null,
       );
-      expect(wakePublish).toHaveBeenCalledWith(
-        expect.objectContaining({
-          key: `command-center:started:${task.id}`,
-          owner: expect.objectContaining({ runId: MANAGER }),
-          prompt: expect.stringContaining(
-            `has started as t3 (thread ${THREAD}).`,
-          ),
-        }),
+      expect(noticeInfo).toHaveBeenCalledWith(
+        MANAGER,
+        'Started "Billing cache"',
       );
+      expect(wakePublish).not.toHaveBeenCalled();
       expect((await taskOf(task.id)).startRequestedByRunId).toBeNull();
     });
 
@@ -537,7 +533,7 @@ describe('CommandCenterStartsService', () => {
       await Promise.all([reports.reportStarted(), reports.reportStarted()]);
 
       expect(addToRoster).toHaveBeenCalledTimes(1);
-      expect(wakePublish).toHaveBeenCalledTimes(1);
+      expect(noticeInfo).toHaveBeenCalledTimes(1);
     });
 
     it('gives the report back when telling the manager fails, so the next report tells it', async () => {
@@ -554,17 +550,13 @@ describe('CommandCenterStartsService', () => {
       await vi.waitFor(async () =>
         expect((await taskOf(task.id)).startRequestedByRunId).toBe(MANAGER),
       );
-      expect(wakePublish).not.toHaveBeenCalled();
+      expect(noticeInfo).not.toHaveBeenCalled();
 
       startedEvent(task.id);
 
-      await vi.waitFor(() => expect(wakePublish).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(noticeInfo).toHaveBeenCalledTimes(1));
       expect(addToRoster).toHaveBeenCalledTimes(2);
-      expect(wakePublish).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: expect.stringContaining(`has started (thread ${THREAD}).`),
-        }),
-      );
+      expect(wakePublish).not.toHaveBeenCalled();
     });
   });
 });

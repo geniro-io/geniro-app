@@ -11,6 +11,7 @@ import {
   isGeniroToolName,
   isTeamProposalTool,
   standsAcrossTurns,
+  THREAD_QUESTION_CARD,
 } from './geniro-tool';
 
 const RUN = 'abc12345-0000-0000-0000-000000000000';
@@ -225,5 +226,9 @@ describe('in-app browser tools', () => {
 
   it('lets the new-host card stand across turns', () => {
     expect(standsAcrossTurns(BROWSER_HOST_CARD)).toBe(true);
+  });
+
+  it('lets a relayed thread question stand across turns', () => {
+    expect(standsAcrossTurns(THREAD_QUESTION_CARD)).toBe(true);
   });
 });

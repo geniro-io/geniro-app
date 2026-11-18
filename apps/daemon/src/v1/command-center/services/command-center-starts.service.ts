@@ -10,7 +10,6 @@ import type { Subscription } from 'rxjs';
 
 import {
   HOST_START_THREAD_TOOL,
-  SINGLE_AGENT_NODE,
   type StartThreadAnswer,
   type StartThreadInput,
 } from '../../agents/chat.types';
@@ -18,6 +17,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
+import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { taskIdentifier } from '../../projects/utils/project-key';
@@ -28,6 +28,7 @@ import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { TasksService } from '../../tasks/services/tasks.service';
 import type { CommandCenterStart } from '../command-center.types';
 import { START_FAILURE_MAX_CHARS } from '../command-center.types';
+import { managerWake } from '../utils/manager-wake';
 import { CommandCenterChatService } from './command-center-chat.service';
 
 function messageOf(error: unknown): string {
@@ -70,6 +71,7 @@ export class CommandCenterStartsService
     private readonly tasks: TasksService,
     private readonly taskEvents: TaskEventBus,
     private readonly managers: CommandCenterChatService,
+    private readonly notices: RunNoticeWriter,
   ) {}
 
   onModuleInit(): void {
@@ -201,11 +203,13 @@ export class CommandCenterStartsService
     await this.taskDao.clearStartRequester(taskId, em);
     this.tasks.announceInPlace(task);
     const said = reason.slice(0, START_FAILURE_MAX_CHARS);
-    this.wakeManager(
-      managerRunId,
-      `start-failed:${taskId}`,
-      `[command center] The thread "${task.title}" (card ${taskId}) could not be started: ${said}. The card stays in backlog; tell the user, or try again with start_thread once the cause is fixed.`,
-      `Could not start "${task.title}"`,
+    this.wakes.publish(
+      managerWake(
+        managerRunId,
+        `start-failed:${taskId}`,
+        `[command center] The thread "${task.title}" (card ${taskId}) could not be started: ${said}. The card stays in backlog; tell the user, or try again with start_thread once the cause is fixed.`,
+        `Could not start "${task.title}"`,
+      ),
     );
   }
 
@@ -309,7 +313,6 @@ export class CommandCenterStartsService
     if (!(await this.taskDao.claimStartReport(task.id, managerRunId, em))) {
       return;
     }
-    let handle: string | undefined;
     try {
       await this.managers.addToRoster(
         managerRunId,
@@ -317,41 +320,11 @@ export class CommandCenterStartsService
         'manager',
         task.startRequestNote,
       );
-      handle = (await this.managers.rosterThreads(managerRunId)).find(
-        ({ entry }) => entry.threadRunId === task.runId,
-      )?.entry.handle;
     } catch (error) {
       await this.taskDao.releaseStartReport(task.id, managerRunId, em);
       throw error;
     }
-    this.wakeManager(
-      managerRunId,
-      `started:${task.id}`,
-      `[command center] The thread "${task.title}" has started${handle === undefined ? '' : ` as ${handle}`} (thread ${task.runId}). It is on your roster.`,
-      `Started "${task.title}"`,
-    );
-  }
-
-  private wakeManager(
-    managerRunId: string,
-    key: string,
-    prompt: string,
-    message: string,
-  ): void {
-    this.wakes.publish({
-      key: `command-center:${key}`,
-      owner: {
-        target: 'chat',
-        runId: managerRunId,
-        memberId: SINGLE_AGENT_NODE,
-        conversationId: null,
-        caller: SINGLE_AGENT_NODE,
-      },
-      prompt,
-      row: { severity: 'info', message, woke: true },
-      note: prompt,
-      onDelivered: () => undefined,
-    });
+    await this.notices.info(managerRunId, `Started "${task.title}"`);
   }
 
   /** Track every Start card still waiting again, and tell what a restart left untold. */

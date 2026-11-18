@@ -28,6 +28,7 @@ import {
   isTeamProposalTool,
   namesGeniroGallery,
   namesGeniroMonitor,
+  THREAD_QUESTION_CARD,
 } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
@@ -35,6 +36,10 @@ import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
 import { TeamProposalCard } from './team-proposal-card';
 import { readProposalOutcome, readTeamProposal } from './team-proposal-payload';
 import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
+import {
+  readThreadQuestionRelay,
+  ThreadQuestionCard,
+} from './thread-question-card';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -384,6 +389,23 @@ function OptionPreviews({
   );
 }
 
+/**
+ * The line appended to an answer when screenshots ride along with it.
+ *
+ * A factual description of the DELIVERY, not words put in the user's mouth:
+ * the bytes go out as their own message, and without this the model reads the
+ * answer, acts on it, and only meets the screenshot afterwards with no idea
+ * it was meant as part of the reply.
+ *
+ * Shared by every path that sends an answer with pictures, so none can
+ * describe the delivery differently from the others.
+ */
+export function imagesAttachedNote(count: number): string {
+  return count === 0
+    ? ''
+    : `\n(${count === 1 ? '1 image' : `${count} images`} attached — sent as the next message)`;
+}
+
 function QuestionCard({
   questions,
   verdict,
@@ -454,21 +476,6 @@ function QuestionCard({
     attachments.attachments.filter(
       (image) => (image.owner ?? 0) === (questions.length > 1 ? index : 0),
     );
-  /**
-   * The line appended to a tab's answer when screenshots ride along with it.
-   *
-   * A factual description of the DELIVERY, not words put in the user's mouth:
-   * the bytes go out as their own message, and without this the model reads the
-   * answer, acts on it, and only meets the screenshot afterwards with no idea
-   * it was meant as part of the reply.
-   *
-   * Shared by BOTH submit paths, so neither can describe the delivery
-   * differently from the other.
-   */
-  const imageNoteFor = (count: number): string =>
-    count === 0
-      ? ''
-      : `\n(${count === 1 ? '1 image' : `${count} images`} attached — sent as the next message)`;
   const { responded, sending, respond } = useOneShotVerdict(
     verdict,
     expired,
@@ -507,7 +514,7 @@ function QuestionCard({
   // the stated grounds that "one image cannot say which tab it belongs to" —
   // which stopped being true the moment images carried an owner.
   const answerAt = (index: number): string =>
-    `${typedAt(index)}${imageNoteFor(imagesAt(index).length)}`;
+    `${typedAt(index)}${imagesAttachedNote(imagesAt(index).length)}`;
   const submission =
     questions.length > 1 ? combinedAnswer(questions, answerAt) : answerAt(0);
   // The per-tab budget: the daemon drops an oversized verdict on the floor
@@ -557,7 +564,7 @@ function QuestionCard({
     0,
     perTabBudget -
       pendingPickCost -
-      imageNoteFor(imagesAt(activeIndex).length).length,
+      imagesAttachedNote(imagesAt(activeIndex).length).length,
   );
   const unanswered = questions
     .map((q, index) =>
@@ -615,7 +622,7 @@ function QuestionCard({
       // settled and no way to resend.
       respond(
         true,
-        `${joinParts([label, (texts[index] ?? '').trim()])}${imageNoteFor(imagesAt(index).length)}`,
+        `${joinParts([label, (texts[index] ?? '').trim()])}${imagesAttachedNote(imagesAt(index).length)}`,
         attachments.toWire(),
       );
       return;
@@ -1503,12 +1510,37 @@ export function ApprovalCard({
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
+  const relay =
+    toolName === THREAD_QUESTION_CARD ? readThreadQuestionRelay(input) : null;
   // geniro's own team proposal, read once per row: its graph and diff are
   // the largest payload any card parses.
   const teamProposal = useMemo(
     () => (isTeamProposalTool(toolName) ? readTeamProposal(input) : null),
     [toolName, input],
   );
+  // A managed thread's request, relayed into the command center manager's
+  // chat: the thread's own card under the thread's name.
+  if (relay !== null) {
+    return (
+      <ThreadQuestionCard
+        relay={relay}
+        verdict={verdict}
+        outcome={outcome}
+        expired={expired}>
+        <ApprovalCard
+          toolName={relay.toolName}
+          input={relay.input}
+          questions={relay.questions}
+          options={relay.options}
+          requestId={requestId}
+          verdict={verdict}
+          verdictOption={verdictOption}
+          answer={answer}
+          onRespond={onRespond}
+        />
+      </ThreadQuestionCard>
+    );
+  }
   if (teamProposal !== null) {
     return (
       <TeamProposalCard

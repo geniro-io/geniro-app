@@ -1681,9 +1681,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   /**
    * Write the `approval_verdict` row of an owned card. A failure is logged and
    * swallowed: the row is the record of what the user chose, but it must not
-   * stop the answer reaching the agent, which is what they pressed for.
+   * stop the answer reaching the agent, which is what they pressed for. It
+   * starts no turn: a card whose answer goes elsewhere records it with this
+   * alone.
    */
-  private async recordOwnedCardVerdict(
+  async recordOwnedCardVerdict(
     runId: string,
     requestId: string,
     allow: boolean,

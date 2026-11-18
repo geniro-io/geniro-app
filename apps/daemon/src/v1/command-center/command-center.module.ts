@@ -11,6 +11,7 @@ import { CommandCenterService } from './services/command-center.service';
 import { CommandCenterChatService } from './services/command-center-chat.service';
 import { CommandCenterEventBus } from './services/command-center-events.bus';
 import { CommandCenterEventsService } from './services/command-center-events.service';
+import { CommandCenterNotifyService } from './services/command-center-notify.service';
 import { CommandCenterOpsService } from './services/command-center-ops.service';
 import { CommandCenterStartsService } from './services/command-center-starts.service';
 import { CommandCenterTimelineService } from './services/command-center-timeline.service';
@@ -38,6 +39,7 @@ import { CommandCenterTimelineService } from './services/command-center-timeline
     CommandCenterStartsService,
     CommandCenterOpsService,
     CommandCenterEventsService,
+    CommandCenterNotifyService,
     CommandCenterTimelineService,
   ],
   exports: [CommandCenterEventBus],

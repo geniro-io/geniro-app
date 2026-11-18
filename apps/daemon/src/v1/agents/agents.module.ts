@@ -796,6 +796,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     CallContextDao,
     ThreadInboxService,
     RunDao,
+    RunNoticeWriter,
     AgentAdapterRegistry,
     // Exported for the diagnostics report, which names each CLI and the
     // version that binary answers with. Through this ONE service so the

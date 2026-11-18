@@ -8690,6 +8690,31 @@ export const HOST_NOTE_THREAD_TOOL = 'note_thread';
 export const HOST_START_THREAD_TOOL = 'start_thread';
 export const HOST_ARCHIVE_THREADS_TOOL = 'archive_threads';
 
+/**
+ * The `approval_request` row's `toolName` for a managed thread's open question
+ * or approval, relayed into the command-center manager's chat
+ * (`ThreadQuestionCardInput`). It stands across turns, and its verdict answers
+ * the thread's own request without waking the manager.
+ *
+ * TWIN PARSER: the renderer's `standsAcrossTurns` and its card
+ * (`apps/ui/src/renderer/chats/geniro-tool.ts`).
+ */
+export const HOST_THREAD_QUESTION_CARD = 'thread_question';
+
+/** What a relayed thread-question card's row carries as `input`. */
+export interface ThreadQuestionCardInput {
+  threadRunId: string;
+  /** Whether the thread is a team run, which takes a picture sent with the answer through its own route. */
+  threadIsTeam: boolean;
+  threadRequestId: string;
+  handle: string;
+  threadTitle: string;
+  toolName: string;
+  input: unknown;
+  questions?: unknown;
+  options?: unknown;
+}
+
 /** How many managed threads one `tell_threads` call may reach. */
 export const TELL_THREADS_MAX_TARGETS = 12;
 /** The longest note `note_thread` keeps for one thread. */

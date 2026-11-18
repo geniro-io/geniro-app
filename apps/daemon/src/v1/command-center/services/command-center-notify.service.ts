@@ -18,6 +18,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { itemToWire } from '../../agents/utils/item-wire';
+import { asRecord } from '../../agents/utils/json-util';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
 import { UNTITLED_THREAD } from '../../agents/utils/thread-message-text';
 import {
@@ -130,8 +131,9 @@ export class CommandCenterNotifyService
   }
 
   /**
-   * Close what a restart left of earlier relays — the registry entries behind
-   * them are gone — then read every thread on the roster afresh.
+   * Take back what a restart left of earlier relays, then read every thread on
+   * the roster afresh. Runs after the boot put the standing questions back in
+   * the registry (`main.ts`), so a thread request still open there is known.
    */
   private async boot(): Promise<void> {
     try {
@@ -140,23 +142,13 @@ export class CommandCenterNotifyService
         return;
       }
       const em = this.em.fork();
-      const rows = await this.itemDao.rowsOfKinds(
-        managerRunId,
-        ANSWERABILITY_KINDS,
-        undefined,
-        em,
-      );
-      for (const { payload } of unansweredRequests(rows)) {
-        if (payload.toolName === HOST_THREAD_QUESTION_CARD) {
-          await this.chats.retireOwnedCard(
-            managerRunId,
-            payload.id,
-            HOST_THREAD_QUESTION_CARD,
-          );
-        }
-      }
       const onRoster = (await this.roster.listOf(managerRunId, em)).filter(
         (row) => row.leftAt === null,
+      );
+      await this.resumeRelays(
+        managerRunId,
+        new Set(onRoster.map((row) => row.threadRunId)),
+        em,
       );
       await Promise.all(onRoster.map((row) => this.review(row.threadRunId)));
     } catch (error) {
@@ -164,6 +156,76 @@ export class CommandCenterNotifyService
         `command center boot review failed: ${messageOf(error)}`,
       );
     }
+  }
+
+  /**
+   * Keep each relayed card whose roster thread still waits on its request —
+   * the same card answers it again — and close every other one, so a restart
+   * never draws a second card for one question.
+   */
+  private async resumeRelays(
+    managerRunId: string,
+    onRoster: ReadonlySet<string>,
+    em: EntityManager,
+  ): Promise<void> {
+    const rows = await this.itemDao.rowsOfKinds(
+      managerRunId,
+      ANSWERABILITY_KINDS,
+      undefined,
+      em,
+    );
+    const unanswered = new Set(
+      unansweredRequests(rows)
+        .filter(({ payload }) => payload.toolName === HOST_THREAD_QUESTION_CARD)
+        .map(({ payload }) => payload.id),
+    );
+    for (const row of rows) {
+      const payload = asRecord(itemToWire(row).payload);
+      const relayId = typeof payload?.id === 'string' ? payload.id : null;
+      if (
+        row.kind !== 'approval_request' ||
+        relayId === null ||
+        !unanswered.delete(relayId)
+      ) {
+        continue;
+      }
+      const target = relayTargetOf(payload?.input);
+      if (target === null || !this.stillWaits(target, onRoster)) {
+        await this.chats.retireOwnedCard(
+          managerRunId,
+          relayId,
+          HOST_THREAD_QUESTION_CARD,
+        );
+        continue;
+      }
+      const relay: Relay = { managerRunId, relayId, ...target };
+      this.relays.set(
+        relayKey(target.threadRunId, target.threadRequestId),
+        relay,
+      );
+      this.chats.trackOwnedCard(
+        managerRunId,
+        relayId,
+        { toolName: HOST_THREAD_QUESTION_CARD, input: payload?.input },
+        (allow, answer, optionId) => {
+          this.answer(relay, allow, answer, optionId);
+        },
+      );
+    }
+  }
+
+  /** Whether a roster thread still waits on the request, with no card of this boot answering it yet. */
+  private stillWaits(
+    target: Pick<Relay, 'threadRunId' | 'threadRequestId'>,
+    onRoster: ReadonlySet<string>,
+  ): boolean {
+    return (
+      onRoster.has(target.threadRunId) &&
+      !this.relays.has(relayKey(target.threadRunId, target.threadRequestId)) &&
+      this.approvals
+        .listByRun(target.threadRunId)
+        .some((entry) => entry.requestId === target.threadRequestId)
+    );
   }
 
   private async reviewNow(runId: string): Promise<void> {
@@ -343,4 +405,16 @@ export class CommandCenterNotifyService
 
 function relayKey(threadRunId: string, requestId: string): string {
   return `${threadRunId}\n${requestId}`;
+}
+
+/** The thread and request a relayed card's stored `input` answers, or null when it names none. */
+function relayTargetOf(
+  input: unknown,
+): Pick<Relay, 'threadRunId' | 'threadRequestId'> | null {
+  const record = asRecord(input);
+  const threadRunId = record?.threadRunId;
+  const threadRequestId = record?.threadRequestId;
+  return typeof threadRunId === 'string' && typeof threadRequestId === 'string'
+    ? { threadRunId, threadRequestId }
+    : null;
 }

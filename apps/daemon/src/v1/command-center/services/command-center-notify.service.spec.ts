@@ -48,6 +48,12 @@ type RetireOwnedCard = (
   requestId: string,
   toolName: string,
 ) => Promise<void>;
+type TrackOwnedCard = (
+  runId: string,
+  requestId: string,
+  card: DeferredCard,
+  respond: DeferredCardResponder,
+) => void;
 type RecordOwnedCardVerdict = (
   runId: string,
   requestId: string,
@@ -84,6 +90,7 @@ describe('CommandCenterNotifyService', () => {
   let listChats: ReturnType<typeof vi.fn<ListChats>>;
   let raiseOwnedCard: ReturnType<typeof vi.fn<RaiseOwnedCard>>;
   let retireOwnedCard: ReturnType<typeof vi.fn<RetireOwnedCard>>;
+  let trackOwnedCard: ReturnType<typeof vi.fn<TrackOwnedCard>>;
   let recordOwnedCardVerdict: ReturnType<typeof vi.fn<RecordOwnedCardVerdict>>;
   let changes: Subject<CommandCenterChangedEvent>;
   let service: CommandCenterNotifyService;
@@ -105,6 +112,7 @@ describe('CommandCenterNotifyService', () => {
     );
     raiseOwnedCard = vi.fn<RaiseOwnedCard>(() => Promise.resolve());
     retireOwnedCard = vi.fn<RetireOwnedCard>(() => Promise.resolve());
+    trackOwnedCard = vi.fn<TrackOwnedCard>();
     recordOwnedCardVerdict = vi.fn<RecordOwnedCardVerdict>(() =>
       Promise.resolve(),
     );
@@ -114,6 +122,7 @@ describe('CommandCenterNotifyService', () => {
         listChats,
         raiseOwnedCard,
         retireOwnedCard,
+        trackOwnedCard,
         recordOwnedCardVerdict,
       } as unknown as ChatService,
       {
@@ -491,5 +500,87 @@ describe('CommandCenterNotifyService', () => {
       'thread_question',
     );
     expect(publish).not.toHaveBeenCalled();
+  });
+  it('keeps the relayed card a restart left for a request the thread still waits on', async () => {
+    const respond = vi.fn<Responder>(() => true);
+    const relayed = {
+      threadRunId: THREAD,
+      threadIsTeam: false,
+      threadRequestId: REQUEST,
+      handle: 't1',
+      threadTitle: 'Billing cache',
+      toolName: 'AskUserQuestion',
+      input: ASK_INPUT,
+    };
+    await db.seedItem(MANAGER, 1, new Date(), 'approval_request', {
+      id: 'thread_question#kept',
+      toolName: 'thread_question',
+      input: relayed,
+    });
+    await db.seedItem(MANAGER, 2, new Date(), 'approval_request', {
+      id: 'thread_question#twin',
+      toolName: 'thread_question',
+      input: relayed,
+    });
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    setThread({ id: THREAD, status: 'completed' });
+    await openQuestion(THREAD, respond);
+
+    service.onApplicationBootstrap();
+
+    await vi.waitFor(() => expect(trackOwnedCard).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(retireOwnedCard).toHaveBeenCalledTimes(1));
+    expect(retireOwnedCard).toHaveBeenCalledWith(
+      MANAGER,
+      'thread_question#twin',
+      'thread_question',
+    );
+    await service.review(THREAD);
+    expect(raiseOwnedCard).not.toHaveBeenCalled();
+
+    const call = trackOwnedCard.mock.calls[0];
+    if (call === undefined) {
+      throw new Error('no card was kept');
+    }
+    expect(call.slice(0, 3)).toEqual([
+      MANAGER,
+      'thread_question#kept',
+      { toolName: 'thread_question', input: relayed },
+    ]);
+    call[3](true, 'yes');
+    expect(respond).toHaveBeenCalledWith(true, 'yes');
+    expect(recordOwnedCardVerdict).toHaveBeenCalledWith(
+      MANAGER,
+      'thread_question#kept',
+      true,
+      { answer: 'yes', outcome: 'delivered' },
+    );
+  });
+
+  it('closes a relayed card a restart left once its thread has left the roster', async () => {
+    await db.seedItem(MANAGER, 1, new Date(), 'approval_request', {
+      id: 'thread_question#gone',
+      toolName: 'thread_question',
+      input: { threadRunId: THREAD, threadRequestId: REQUEST },
+    });
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    await roster.leave(MANAGER, [THREAD], new Date());
+    setThread({ id: THREAD, status: 'completed' });
+    await openQuestion(
+      THREAD,
+      vi.fn<Responder>(() => true),
+    );
+
+    service.onApplicationBootstrap();
+
+    await vi.waitFor(() =>
+      expect(retireOwnedCard).toHaveBeenCalledWith(
+        MANAGER,
+        'thread_question#gone',
+        'thread_question',
+      ),
+    );
+    expect(trackOwnedCard).not.toHaveBeenCalled();
+    expect(raiseOwnedCard).not.toHaveBeenCalled();
   });
 });

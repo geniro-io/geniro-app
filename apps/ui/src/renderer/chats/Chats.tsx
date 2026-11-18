@@ -4977,7 +4977,13 @@ export function Chats({
         if (optionId === undefined) {
           client.sendVerdict(item.runId, requestId, allow, sentAnswer);
         } else {
-          client.sendVerdict(item.runId, requestId, allow, sentAnswer, optionId);
+          client.sendVerdict(
+            item.runId,
+            requestId,
+            allow,
+            sentAnswer,
+            optionId,
+          );
         }
       }
       const delivered = [

@@ -563,6 +563,11 @@ export interface Settings {
    */
   lastMemoryTriage: MemoryTriageConfig | null;
   /**
+   * The command center manager's agent and model settings, so the empty state
+   * opens on the last choice; null until one has been made.
+   */
+  lastManagerConfig: MemoryTriageConfig | null;
+  /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
    *
@@ -912,6 +917,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastAnalysisConfig: null,
   lastChangeChatApproval: null,
   lastMemoryTriage: null,
+  lastManagerConfig: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,

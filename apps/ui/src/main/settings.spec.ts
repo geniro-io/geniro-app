@@ -183,6 +183,31 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('the command center manager’s choice survives a read, and a choice on a CLI this build lacks costs only that key', () => {
+    expect(readSettings().lastManagerConfig).toBeNull();
+
+    const choice = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: 'high',
+      contextWindow: null,
+      modelParameters: {},
+    };
+    writeRaw({ lastManagerConfig: choice });
+
+    expect(readSettings().lastManagerConfig).toEqual(choice);
+
+    writeRaw({
+      lastManagerConfig: { ...choice, agent: 'gemini' },
+      onboardingComplete: true,
+    });
+
+    const settings = readSettings();
+    expect(settings.lastManagerConfig).toBeNull();
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it('keeps a run’s CLI for an hour by default, and a stored window survives a read', () => {
     expect(readSettings().keptSessionIdleMinutes).toBe(60);
 

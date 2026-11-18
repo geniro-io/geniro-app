@@ -5319,7 +5319,14 @@ export function Chats({
     }
     deactivateRun();
     void discard()
-      .then(refreshRuns)
+      .then(() => {
+        const onDiscarded = hostedRef.current?.onDiscarded;
+        if (onDiscarded === undefined) {
+          refreshRuns();
+        } else {
+          onDiscarded();
+        }
+      })
       .catch((err: unknown) => setError(describeDaemonError(err)));
   }, [deactivateRun, refreshRuns, setError]);
   // The open thread's analysis, for its Analyze button — see `useThreadAnalysis`.
@@ -10740,7 +10747,11 @@ export function Chats({
                         // because it is the same kind of fact — fixed for the
                         // run's life — and after three rejected positions in the
                         // composer below.
-                        cwd={activeRun.cwd}
+                        cwd={
+                          hosted?.hideHeaderFolder === true
+                            ? null
+                            : activeRun.cwd
+                        }
                         worktreeOf={taskWorktreeOf}
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.

@@ -54,6 +54,21 @@ const absolutePath = z
 
 const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
 
+const memoryTriageConfig = z
+  .strictObject({
+    agent: cliKind,
+    configDir: absolutePath.nullable(),
+    model: z.string().min(1).max(64).nullable(),
+    effort: z.string().min(1).max(64).nullable(),
+    contextWindow: z.string().min(1).max(64).nullable(),
+    modelParameters: z.record(
+      z.string().min(1).max(64),
+      z.string().min(1).max(200),
+    ),
+  })
+  .nullable()
+  .optional();
+
 /**
  * A git branch name. `git switch` takes this as an argv entry (no shell), so
  * the real risk is not injection but ARGUMENT injection: a name beginning with
@@ -445,20 +460,8 @@ export const settingsPatchSchema = z.strictObject({
     .nullable()
     .optional(),
   lastChangeChatApproval: z.string().min(1).max(32).nullable().optional(),
-  lastMemoryTriage: z
-    .strictObject({
-      agent: cliKind,
-      configDir: absolutePath.nullable(),
-      model: z.string().min(1).max(64).nullable(),
-      effort: z.string().min(1).max(64).nullable(),
-      contextWindow: z.string().min(1).max(64).nullable(),
-      modelParameters: z.record(
-        z.string().min(1).max(64),
-        z.string().min(1).max(200),
-      ),
-    })
-    .nullable()
-    .optional(),
+  lastMemoryTriage: memoryTriageConfig,
+  lastManagerConfig: memoryTriageConfig,
   // The OTHER model settings, per CLI, as `{parameterId: value}`. Both halves
   // are the CLI's own words (`optimize_for` → `balanced`), so both are bounded
   // and neither is enumerated — this app holds no vocabulary for them at all.

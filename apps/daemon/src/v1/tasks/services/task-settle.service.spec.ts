@@ -18,10 +18,23 @@ import {
 } from 'vitest';
 
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
+import { keptSessionAdapter } from '../../agents/__tests__/kept-session';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
+import { RunIdleReapService } from '../../agents/services/run-idle-reap.service';
+import { RunProcessAttribution } from '../../agents/services/run-process-attribution.service';
+import { createRunProcessReaper } from '../../agents/services/run-process-reaper.service';
+import type { RunTeardownService } from '../../agents/services/run-teardown.service';
+import {
+  RUN_ID_ENV,
+  RUN_OWNER_ENV,
+  type ScannedProcess,
+} from '../../agents/utils/run-process-scan';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import {
@@ -31,7 +44,9 @@ import {
 } from '../../projects/projects.types';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
+import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
+import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { RunStatus } from '../../runs/runs.types';
 import { fakeLiveWork } from '../__tests__/fake-live-work';
@@ -84,16 +99,26 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let em: EntityManager;
   let bus: AgentEventBus;
   let taskEvents: TaskEventBus;
+  let projectEvents: ProjectEventBus;
   let changes: TaskChangedEvent[];
   let projectChanges: string[];
   let projectId: string;
+  /** The kept CLI processes: what a finished card's run must end. */
+  let sessions: { closeFinishedRun: ReturnType<typeof vi.fn> };
+  /** Whether an archive or delete already ended the run. */
+  let teardown: { hasEnded: ReturnType<typeof vi.fn> };
+  /** What stops what the run's agents left running detached, and tells it. */
+  let idleReap: {
+    afterExitGrace: ReturnType<typeof vi.fn>;
+    reap: ReturnType<typeof vi.fn>;
+  };
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         ...GENIRO_ORM_RUNTIME,
         dbName: ':memory:',
-        entities: [Project, Task, Run, Item],
+        entities: [Project, Task, Run, Item, NodeState, CallContext],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -129,12 +154,33 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     );
     tasks.onModuleInit();
     bus = new AgentEventBus();
-    const projectEvents = new ProjectEventBus();
+    projectEvents = new ProjectEventBus();
     projectChanges = [];
     projectEvents
       .allChanges()
       .subscribe((event) => projectChanges.push(event.projectId));
-    service = new TaskSettleService(
+    sessions = { closeFinishedRun: vi.fn().mockResolvedValue(true) };
+    teardown = { hasEnded: vi.fn().mockReturnValue(false) };
+    idleReap = {
+      afterExitGrace: vi.fn().mockResolvedValue(undefined),
+      reap: vi.fn().mockResolvedValue([]),
+    };
+    service = build(
+      sessions as unknown as AgentSessionRegistry,
+      idleReap as unknown as RunIdleReapService,
+    );
+    const project = await projectDao.create({
+      name: 'Board',
+      folder: '/tmp/geniro-task-settle-spec',
+    });
+    projectId = project.id;
+  });
+
+  const build = (
+    withSessions: AgentSessionRegistry,
+    withReap: RunIdleReapService,
+  ): TaskSettleService =>
+    new TaskSettleService(
       em,
       bus,
       runDao,
@@ -144,13 +190,34 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       itemDao,
       projectEvents,
       adapters,
+      withSessions,
+      taskEvents,
+      teardown as unknown as RunTeardownService,
+      withReap,
     );
-    const project = await projectDao.create({
-      name: 'Board',
-      folder: '/tmp/geniro-task-settle-spec',
-    });
-    projectId = project.id;
-  });
+
+  /** The `processes stopped` warnings written into a run's transcript. */
+  const stoppedNotes = async (runId: string): Promise<string[]> => {
+    const rows = await itemDao.getAll(
+      { runId, kind: 'system' },
+      undefined,
+      orm.em.fork(),
+    );
+    return rows
+      .map(
+        (row) =>
+          JSON.parse(row.payload) as { message: string; caption?: string },
+      )
+      .filter((payload) => payload.caption === 'processes stopped')
+      .map((payload) => payload.message);
+  };
+
+  /** Long enough for `endFinishedWork` to have read the card and the run. */
+  const flushSettle = async (): Promise<void> => {
+    for (let tick = 0; tick < 5; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
 
   /** A card already in `in_progress` with a live run working it. */
   const working = async (runId = 'run-1') => {
@@ -1214,6 +1281,269 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       status: 'done',
       reason: 'work-finished',
     });
+  });
+
+  it('ends the run’s processes at once when the card’s work is finished', async () => {
+    // Its worktree is collected next: nothing may go on running in it.
+    const task = await working();
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+    expect(sessions.closeFinishedRun).not.toHaveBeenCalled();
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    await vi.waitFor(() =>
+      expect(sessions.closeFinishedRun).toHaveBeenCalledWith('run-1'),
+    );
+  });
+
+  it('reaps what a finished card’s agents left running, once its CLIs have gone', async () => {
+    // A dev server or watcher the agent detached is not in the CLI's process
+    // group, so the graceful close does not reach it. Run during the close, the
+    // reap would signal a CLI still finishing on its own.
+    const task = await working();
+    let closed = (): void => {};
+    sessions.closeFinishedRun.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        closed = () => resolve(true);
+      }),
+    );
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await vi.waitFor(() =>
+      expect(sessions.closeFinishedRun).toHaveBeenCalled(),
+    );
+    expect(idleReap.reap).not.toHaveBeenCalled();
+
+    closed();
+    await vi.waitFor(() =>
+      expect(idleReap.reap).toHaveBeenCalledWith('run-1', 'finished-card'),
+    );
+  });
+
+  it('reaps nothing when a turn of the run is in flight at the close', async () => {
+    // A follow-up or a button press that landed after the card was found
+    // finished: the registry closes nothing, and the reap is skipped with it.
+    const task = await working();
+    sessions.closeFinishedRun.mockResolvedValue(false);
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await vi.waitFor(() =>
+      expect(sessions.closeFinishedRun).toHaveBeenCalledWith('run-1'),
+    );
+    await flushSettle();
+
+    expect(idleReap.afterExitGrace).not.toHaveBeenCalled();
+    expect(idleReap.reap).not.toHaveBeenCalled();
+  });
+
+  it('waits out the kill grace before the reap, and leaves it to an archive that lands meanwhile', async () => {
+    const task = await working();
+    let graced = (): void => {};
+    idleReap.afterExitGrace.mockReturnValue(
+      new Promise<void>((resolve) => {
+        graced = resolve;
+      }),
+    );
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await vi.waitFor(() =>
+      expect(idleReap.afterExitGrace).toHaveBeenCalledWith('run-1'),
+    );
+    expect(idleReap.reap).not.toHaveBeenCalled();
+
+    teardown.hasEnded.mockReturnValue(true);
+    graced();
+    await flushSettle();
+
+    expect(idleReap.reap).not.toHaveBeenCalled();
+  });
+
+  it('over the real reap, stops what a finished card’s agents left running once its CLI has gone, and tells the user and the agent', async () => {
+    const task = await working();
+    const owner = 'aaaaaaaaaaaaaaaa';
+    const devServer: ScannedProcess = {
+      pid: 10,
+      ppid: 1,
+      pgid: 10,
+      uid: 501,
+      tty: null,
+      startedAt: 100,
+      args: 'pnpm dev --port 3000',
+      env: `${RUN_ID_ENV}=run-1 ${RUN_OWNER_ENV}=${owner}`,
+    };
+    const realSessions = new AgentSessionRegistry(4);
+    const signals: [number, NodeJS.Signals][] = [];
+    const reaper = createRunProcessReaper(
+      new RunProcessAttribution(owner, {
+        scan: () => Promise.resolve([devServer]),
+        selfPid: 900,
+        uid: 501,
+      }),
+      realSessions,
+      [],
+      {
+        signal: (pid, sig) => signals.push([pid, sig]),
+        startTimes: (pids) =>
+          Promise.resolve(new Map(pids.map((pid) => [pid, pid * 10]))),
+        wait: () => Promise.resolve(),
+        logger: { log: vi.fn(), warn: vi.fn() },
+        selfPid: 900,
+      },
+    );
+    const realReap = new RunIdleReapService(
+      em,
+      runDao,
+      itemDao,
+      bus,
+      new ItemCallIndexService(itemDao, runDao, em),
+      new ItemSeqAllocator(em, itemDao),
+      realSessions,
+      reaper,
+    );
+    const { adapter, kept } = keptSessionAdapter();
+    realSessions.startTurn(
+      'run-1',
+      adapter,
+      { prompt: 'p', cwd: '/p' },
+      () => undefined,
+    );
+    kept[0]?.endTurn();
+    service = build(realSessions, realReap);
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    await vi.waitFor(() => expect(kept[0]?.alive).toBe(false));
+    expect(signals).toEqual([]);
+    await vi.waitFor(
+      async () => expect(await stoppedNotes('run-1')).toHaveLength(1),
+      { timeout: 5_000 },
+    );
+    expect(
+      signals.filter(([, sig]) => sig === 'SIGTERM').map(([pid]) => pid),
+    ).toEqual([10]);
+    const [note] = await stoppedNotes('run-1');
+    expect(note).toContain("This card's work is finished");
+    expect(note).toContain('pnpm dev --port 3000');
+
+    realSessions.startTurn(
+      'run-1',
+      adapter,
+      { prompt: 'again', cwd: '/p' },
+      () => undefined,
+    );
+    const prompt = kept[1]?.inputs[0]?.prompt ?? '';
+    expect(prompt).toContain("When this card's work was finished");
+    expect(prompt).toContain('started by: pnpm.');
+  });
+
+  it('leaves live work alone: a monitor holds the card, and its run ends only once it stops', async () => {
+    // `RunLiveWork` withholds `work-finished` while a monitor runs, so this
+    // card does not stop one at Done; it ends with the finish it held back.
+    const task = await working();
+    service.onModuleInit();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    live.hold('run-1', 'monitor');
+
+    await settleRun('run-1', 'completed');
+    expect(sessions.closeFinishedRun).not.toHaveBeenCalled();
+    expect(idleReap.reap).not.toHaveBeenCalled();
+
+    live.release('run-1');
+    await vi.waitFor(() =>
+      expect(idleReap.reap).toHaveBeenCalledWith('run-1', 'finished-card'),
+    );
+    expect(changes.at(-1)).toMatchObject({
+      taskId: task.id,
+      reason: 'work-finished',
+    });
+  });
+
+  it('leaves a finished card’s run alone once it is archived — its teardown reaps it once', async () => {
+    const task = await working();
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+    const run = await runDao.getById('run-1');
+    run!.archivedAt = new Date();
+    await em.flush();
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await flushSettle();
+
+    expect(sessions.closeFinishedRun).not.toHaveBeenCalled();
+    expect(idleReap.reap).not.toHaveBeenCalled();
+  });
+
+  it('closes nothing when the teardown says an archive or delete already ended the run', async () => {
+    const task = await working();
+    teardown.hasEnded.mockReturnValue(true);
+    service.onModuleInit();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await vi.waitFor(() =>
+      expect(teardown.hasEnded).toHaveBeenCalledWith('run-1'),
+    );
+    await flushSettle();
+
+    expect(sessions.closeFinishedRun).not.toHaveBeenCalled();
+    expect(idleReap.reap).not.toHaveBeenCalled();
+  });
+
+  it('ends nothing when the card is picked back up between the event and its handling', async () => {
+    // A Run press or a Follow up landing after `work-finished` was announced:
+    // the close would land on the turn the user just started, and a close with
+    // a turn in flight signals it at once.
+    const task = await working();
+    await settleRun('run-1', 'completed');
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    service.onModuleInit();
+    const announce = async (): Promise<void> => {
+      taskEvents.publishTaskChanged({
+        taskId: task.id,
+        projectId,
+        status: 'done',
+        reason: 'work-finished',
+      });
+      await flushSettle();
+    };
+
+    // A start in flight for the card.
+    expect(tasks.claimStart(task.id)).toBe(true);
+    await announce();
+    tasks.releaseStart(task.id);
+    // Live work started since the event.
+    live.hold('run-1', 'monitor');
+    await announce();
+    live.release('run-1');
+    // Its run working again.
+    const run = await runDao.getById('run-1');
+    run!.status = 'running';
+    await em.flush();
+    await announce();
+    // Its card back in progress (a Follow up's move, before its run is).
+    run!.status = 'completed';
+    await em.flush();
+    await tasks.moveStatus(task.id, { from: 'done', to: 'in_progress' });
+    await announce();
+
+    expect(sessions.closeFinishedRun).not.toHaveBeenCalled();
+    expect(idleReap.reap).not.toHaveBeenCalled();
+
+    // Done again with its run settled: finished after all.
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    await vi.waitFor(() =>
+      expect(idleReap.reap).toHaveBeenCalledWith('run-1', 'finished-card'),
+    );
+    expect(sessions.closeFinishedRun).toHaveBeenCalledTimes(1);
   });
 
   it('releases a card whose run was deleted, keeping the report that is the card’s own', async () => {

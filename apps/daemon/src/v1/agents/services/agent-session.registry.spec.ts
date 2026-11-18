@@ -1050,6 +1050,205 @@ describe('AgentSessionRegistry — closing an idle process gracefully', () => {
   });
 });
 
+describe('AgentSessionRegistry — a finished card’s close', () => {
+  it('closes every process of the run gracefully and resolves only once each is gone', async () => {
+    // What lets the caller reap the run's detached processes AFTER the CLIs
+    // have finished, rather than signalling one mid-exit.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-1', 'qa'), adapter, INPUT, noop);
+    for (const session of sessions) {
+      await session.endTurn();
+      session.lingers = true;
+    }
+    let gone = false;
+
+    const finished = registry.closeFinishedRun('run-1').then(() => {
+      gone = true;
+    });
+    expect(sessions.map((session) => session.closeOptions)).toEqual([
+      [{ graceful: true }],
+      [{ graceful: true }],
+    ]);
+    at(sessions, 0).exit();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gone).toBe(false);
+
+    at(sessions, 1).exit();
+    await finished;
+    expect(gone).toBe(true);
+  });
+
+  it('waits for an idle close already under way, and still reports that process as the run’s', async () => {
+    // The idle window ran out and the CLI is finishing on its own when the
+    // card goes to Done: the reap after `closeFinishedRun` must not find the
+    // run unheld and signal that CLI mid-exit.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    cli.pid = 4242;
+    await cli.endTurn();
+    cli.lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+    let gone = false;
+
+    const finished = registry.closeFinishedRun('run-1').then(() => {
+      gone = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(registry.processRoots('run-1').map((root) => root.pid)).toEqual([
+      4242,
+    ]);
+    expect(gone).toBe(false);
+    expect(cli.closes).toBe(1);
+    cli.exit();
+    await finished;
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('takes over an idle close under way: the run is not told it went unused', async () => {
+    // The finished card reaps the run itself once the close resolves
+    // (`TaskSettleService.endFinishedWork`); the idle reap would be a second
+    // reap of the same run, with a "processes stopped" row on a finished card.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const told: string[] = [];
+    registry.onIdleClosed((runId) => told.push(runId));
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    await cli.endTurn();
+    cli.lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+
+    const finished = registry.closeFinishedRun('run-1');
+    cli.exit();
+    await finished;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(told).toEqual([]);
+  });
+
+  it('does not wait on a process whose close threw, and leaves it to the reap', async () => {
+    // A close that threw may never settle `closed`: waiting on it would hold
+    // `TaskSettleService.endFinishedWork` before its reap forever. The
+    // process is no longer reported as the run's, so the reap can end it.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    cli.pid = 4242;
+    await cli.endTurn();
+    cli.lingers = true;
+    cli.closeThrows = true;
+
+    await registry.closeFinishedRun('run-1');
+
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('does not wait on an idle close that threw before the card was finished', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const cli = at(sessions, 0);
+    cli.pid = 4242;
+    await cli.endTurn();
+    cli.lingers = true;
+    cli.closeThrows = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+    expect(cli.closeOptions).toEqual([{ graceful: true }]);
+
+    await registry.closeFinishedRun('run-1');
+
+    expect(cli.closes).toBe(1);
+    expect(registry.processRoots('run-1')).toEqual([]);
+  });
+
+  it('closes nothing and resolves false while a turn of the run is in flight', async () => {
+    // A follow-up or a button press that landed after the card was found
+    // finished: its turn must not be cut, and the caller must not reap.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-1', 'qa'), adapter, INPUT, noop);
+    const [settled, working] = sessions as [FakeSession, FakeSession];
+    await settled.endTurn();
+    settled.lingers = true;
+
+    expect(await registry.closeFinishedRun('run-1')).toBe(false);
+
+    expect(settled.closes).toBe(0);
+    expect(working.closes).toBe(0);
+
+    await working.endTurn();
+    working.lingers = true;
+    const finished = registry.closeFinishedRun('run-1');
+    settled.exit();
+    working.exit();
+    expect(await finished).toBe(true);
+  });
+
+  it('never reads the close as cutting the agent off, even right after off-turn rows', async () => {
+    // A finished card's close is housekeeping: off-turn output shortly before
+    // it must not leave "the agent was still working when geniro closed its
+    // process" in the transcript.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const closed: [string, boolean][] = [];
+    registry.onClosed((runId, interrupted) =>
+      closed.push([runId, interrupted]),
+    );
+    registry.startTurn('run-1', adapter, INPUT, noop, undefined, noop);
+    const cli = at(sessions, 0);
+    await cli.endTurn();
+    cli.emitBetweenTurn('Bash-1');
+
+    const finished = registry.closeFinishedRun('run-1');
+    await finished;
+
+    expect(closed).toEqual([['run-1', false]]);
+  });
+
+  it('is escalated by an archive that lands during it', async () => {
+    // An archive wants the processes gone now: the graceful close in progress
+    // becomes an immediate one, and the finished card's close still resolves
+    // only once the process has exited.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).lingers = true;
+    let gone = false;
+
+    const finished = registry.closeFinishedRun('run-1').then(() => {
+      gone = true;
+    });
+    registry.closeRun('run-1');
+    await Promise.resolve();
+
+    expect(at(sessions, 0).closeOptions).toEqual([
+      { graceful: true },
+      undefined,
+    ]);
+    expect(gone).toBe(false);
+    at(sessions, 0).exit();
+    await finished;
+    expect(gone).toBe(true);
+  });
+});
+
 describe('AgentSessionRegistry — telling that a run went unused', () => {
   it.each([
     ['a chat or card run', 'run-1'],
@@ -2759,6 +2958,38 @@ describe('AgentSessionRegistry — a stale process still running background work
     registry.startTurn('run-1', adapter, INPUT, onEvent);
 
     expect(notices(events)).toEqual([]);
+  });
+
+  it('owes nothing for a finished card’s own close, and keeps what an earlier close owed', async () => {
+    // A card in Done whose run the user presses Run on again starts a turn on
+    // this key: the commands its finished work left running were ended on
+    // purpose, and the turn must not read them as cut off — but a watcher an
+    // eviction stopped while the card was in review is still news to it.
+    const { registry, adapter, sessions, first, events, onEvent } =
+      await settledRun();
+    first.shellsRunning = 1;
+    first.runningCommands = ['pnpm test --watch'];
+    registry.close('run-1', 'the session ceiling was reached');
+    registry.startTurn(
+      'run-1',
+      adapter,
+      { ...INPUT, prompt: '', resumeOnly: true },
+      onEvent,
+    );
+    const resumed = at(sessions, 1);
+    await resumed.endTurn();
+    resumed.shellsRunning = 1;
+    resumed.runningCommands = ['pnpm dev'];
+    const written = notices(events).length;
+
+    await registry.closeFinishedRun('run-1');
+    registry.startTurn('run-1', adapter, INPUT, onEvent);
+
+    expect(resumed.closeOptions).toEqual([{ graceful: true }]);
+    expect(notices(events)).toHaveLength(written);
+    const prompt = at(at(sessions, 2).inputs, 0).prompt;
+    expect(prompt).toContain('- pnpm test --watch');
+    expect(prompt).not.toContain('- pnpm dev');
   });
 
   it('reads the stopped commands through the real session wrapper', async () => {

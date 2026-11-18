@@ -352,16 +352,19 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     { rows: string[]; prompts: string[] }
   >();
   /**
-   * Processes the idle close has asked to finish gracefully
-   * (`SessionCloseOptions`) and that have not exited yet, with the key each
-   * was closed under. A graceful close signals nothing at first, so the CLI
-   * can run for a few seconds after its entry is gone — and it is still this
-   * registry's to end: shutdown ({@link closeAll}) and a teardown
-   * ({@link closeRun}) escalate it, and it is still reported as the run's
+   * Processes the idle close, or a finished card's close, has asked to finish
+   * gracefully (`SessionCloseOptions`) and that have not exited yet, with the
+   * key each was closed under. A graceful close signals nothing at first, so
+   * the CLI can run for a few seconds after its entry is gone — and it is still
+   * this registry's to end: shutdown ({@link closeAll}) and a teardown
+   * ({@link closeRun}) escalate it, a finished card's close waits for it
+   * ({@link closeFinishedRun}), and it is still reported as the run's
    * ({@link processRoots}), so no reap signals it mid-exit. An immediate close
    * is not kept here: its process is already being signalled.
    */
   private readonly closing = new Map<SessionEntry, string>();
+  /** Entries whose `close()` threw: their `closed` may never settle. */
+  private readonly closeFailed = new WeakSet<SessionEntry>();
   /**
    * Processes closed for going unused whose exit {@link onIdleClosed} is still
    * owed. A teardown or shutdown that escalates one withdraws it.
@@ -769,6 +772,60 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         this.stopped.delete(key);
       }
     }
+  }
+
+  /**
+   * End every process a FINISHED card's run holds, gracefully, and resolve
+   * true once each is gone, so the caller's reap never signals a CLI still
+   * finishing. Never rejects. A process whose close threw is not waited on: it
+   * is dropped from {@link closing} and left to that reap. An idle close under
+   * way is taken over, so the run's idle reap does not follow it: the caller's
+   * reap tells the run instead.
+   *
+   * Resolves false, closing nothing, while any of the run's processes has a
+   * turn in flight: a message or a press that landed after the card was found
+   * finished has started work the user wants, and the caller reaps nothing.
+   *
+   * The close is never read as cutting the agent off: the card's work is
+   * finished, so off-turn rows shortly before are not work in progress.
+   *
+   * Unlike a teardown it keeps what an earlier close owed the key: the card can
+   * run again, and its agent is then owed that news.
+   */
+  closeFinishedRun(runId: string): Promise<boolean> {
+    if (this.turnsInFlight(runId) > 0) {
+      return Promise.resolve(false);
+    }
+    const prefix = runSessionKeyPrefix(runId);
+    const gone: Promise<void>[] = [];
+    const awaitGone = (entry: SessionEntry): void => {
+      if (this.closeFailed.has(entry)) {
+        this.closing.delete(entry);
+        return;
+      }
+      gone.push(entry.session.closed);
+    };
+    for (const [entry, key] of [...this.closing]) {
+      if (key === runId || key.startsWith(prefix)) {
+        this.idleExits.delete(entry);
+        awaitGone(entry);
+      }
+    }
+    for (const [key, entry] of [...this.entries]) {
+      if (key === runId || key.startsWith(prefix)) {
+        entry.offTurnActiveAt = 0;
+        this.closeEntry(
+          key,
+          entry,
+          "its card's work is finished",
+          false,
+          undefined,
+          { graceful: true },
+        );
+        awaitGone(entry);
+      }
+    }
+    return Promise.all(gone).then(() => true);
   }
 
   /**
@@ -1616,7 +1673,8 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * `tell` is whether a later turn on this key should hear which detached
    * commands the close stopped — every close but a teardown's, which leaves no
-   * conversation to tell, and shutdown's.
+   * conversation to tell, a finished card's ({@link closeFinishedRun}), and
+   * shutdown's.
    */
   private closeEntry(
     runId: string,
@@ -1650,6 +1708,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       // One session that cannot be closed must not stop the others — this runs
       // in a loop on shutdown, where giving up would orphan every later
       // process.
+      this.closeFailed.add(entry);
       this.logger.warn(
         `failed to close the agent session for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
       );

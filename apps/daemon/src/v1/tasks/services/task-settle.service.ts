@@ -10,6 +10,9 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { RunIdleReapService } from '../../agents/services/run-idle-reap.service';
+import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import {
   asRecord,
   parseJsonColumn,
@@ -33,6 +36,7 @@ import { resetInstantFrom } from '../../teams/utils/reset-instant';
 import { TaskDao } from '../dao/task.dao';
 import type { Task } from '../entity/task.entity';
 import type { TaskStatus, TaskWire } from '../tasks.types';
+import { TaskEventBus } from './task-events.bus';
 import { TasksService } from './tasks.service';
 
 /**
@@ -104,7 +108,9 @@ const WAITING_COLUMNS: readonly TaskStatus[] = ['backlog', 'todo'];
  * the agent's (see {@link ENDED_TASK_STATUS}). What is left is what an agent
  * cannot do for itself: park a card whose run failed or was stopped, put back
  * a card whose run the daemon's own shutdown cut off, keep the autopilot's
- * failure streak, and release a card whose run was deleted.
+ * failure streak, release a card whose run was deleted, and end the run's
+ * processes once its card's work is finished. A card that merely settles keeps
+ * its CLI for the kept-session idle window.
  */
 @Injectable()
 export class TaskSettleService implements OnModuleInit {
@@ -125,6 +131,10 @@ export class TaskSettleService implements OnModuleInit {
     private readonly itemDao: ItemDao,
     private readonly projectEvents: ProjectEventBus,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly sessions: AgentSessionRegistry,
+    private readonly taskEvents: TaskEventBus,
+    private readonly teardown: RunTeardownService,
+    private readonly idleReap: RunIdleReapService,
   ) {}
 
   onModuleInit(): void {
@@ -166,6 +176,19 @@ export class TaskSettleService implements OnModuleInit {
       });
     });
 
+    this.taskEvents.allChanges().subscribe((event) => {
+      if (event.reason !== 'work-finished') {
+        return;
+      }
+      void this.endFinishedWork(event.taskId).catch((error: unknown) => {
+        this.logger.warn(
+          `could not end the processes of finished task ${event.taskId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    });
+
     this.bus.allDeleted().subscribe((runId) => {
       void this.releaseDeletedRun(runId).catch((error: unknown) => {
         this.logger.warn(
@@ -175,6 +198,50 @@ export class TaskSettleService implements OnModuleInit {
         );
       });
     });
+  }
+
+  /**
+   * A card's work is FINISHED and its worktree is about to be collected: end
+   * its run's processes now rather than at the end of the kept-session window.
+   * The CLIs close gracefully first; a command the agent detached is outside
+   * their process group, so what is left is reaped once they are gone and
+   * their kill grace has passed, never during, so the reap does not signal a
+   * CLI still finishing. The reap is the idle one's
+   * ({@link RunIdleReapService.reap}): the transcript and the agent's next
+   * turn are told what was stopped.
+   *
+   * Asked again against the card and run as they are NOW, since the event was
+   * written: a Run press or a Follow up landing in between has started a turn
+   * on the very process this would close, and a turn in flight at the close
+   * skips it and the reap. An archived or deleted run is left to its teardown,
+   * which reaps it once, also when it lands during the grace.
+   */
+  private async endFinishedWork(taskId: string): Promise<void> {
+    const em = this.em.fork();
+    const task = await this.taskDao.getById(taskId, em);
+    if (!task?.runId) {
+      return;
+    }
+    const run = await this.runDao.getById(task.runId, em);
+    const { taskIds } = await this.tasks.finishedAmong([taskId]);
+    if (
+      taskIds.length === 0 ||
+      run === null ||
+      run.archivedAt !== null ||
+      this.tasks.isStarting(taskId) ||
+      this.teardown.hasEnded(task.runId)
+    ) {
+      return;
+    }
+    const runId = task.runId;
+    if (!(await this.sessions.closeFinishedRun(runId))) {
+      return;
+    }
+    await this.idleReap.afterExitGrace(runId);
+    if (this.teardown.hasEnded(runId)) {
+      return;
+    }
+    await this.idleReap.reap(runId, 'finished-card');
   }
 
   /**

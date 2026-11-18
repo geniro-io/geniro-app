@@ -1,7 +1,8 @@
 import { HOST_KNOWLEDGE_READ_TOOL } from '../../../agents/chat.types';
 import type { KnowledgeCallScope } from '../../../knowledge/knowledge.types';
-import type { McpToolResult } from '../../mcp.types';
+import type { McpCallContext, McpToolResult } from '../../mcp.types';
 import { knowledgeFence, KnowledgeMcpTool } from '../knowledge-mcp-tool';
+import { isAppOwnChat } from '../thread-tools-offer';
 import { knowledgeReadInstructions } from './knowledge-read.instructions';
 import {
   knowledgeMissingText,
@@ -25,6 +26,7 @@ export class KnowledgeReadTool extends KnowledgeMcpTool {
   protected async answer(
     args: Record<string, unknown>,
     { place, elsewhere }: KnowledgeCallScope,
+    context: McpCallContext,
   ): Promise<McpToolResult> {
     const read = readKnowledgeReadArgs(args);
     if (!read.ok) {
@@ -33,7 +35,11 @@ export class KnowledgeReadTool extends KnowledgeMcpTool {
     const found = await this.knowledge.read(place, read.query.handle);
     if (found.kind === 'missing') {
       return this.masked(
-        knowledgeMissingText(read.query.handle, found.similar),
+        knowledgeMissingText(
+          read.query.handle,
+          found.similar,
+          elsewhere !== true && isAppOwnChat(this.gates, context),
+        ),
         true,
       );
     }

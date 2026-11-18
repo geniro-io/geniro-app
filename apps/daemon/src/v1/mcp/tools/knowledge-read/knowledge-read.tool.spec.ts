@@ -8,6 +8,7 @@ import {
   CALL,
   documentOf,
   ordinaryChat,
+  projectChat,
 } from '../__tests__/knowledge-tool-fixtures';
 import { KnowledgeReadTool } from './knowledge-read.tool';
 
@@ -24,6 +25,7 @@ function fakeKnowledge(read: KnowledgeRead, enabled = true) {
       reads.push({ place, handle });
       return read;
     },
+    placeNamed: async (named: RunPlace) => named,
   } as unknown as KnowledgeService;
   return { service, scopes, reads };
 }
@@ -95,6 +97,34 @@ describe('KnowledgeReadTool', () => {
         },
       ],
       isError: true,
+    });
+  });
+
+  it('tells a chat that may name another place how to read a document there when its own has none', async () => {
+    const { service } = fakeKnowledge({ kind: 'missing', similar: [] });
+
+    const own = await new KnowledgeReadTool(service, projectChat()).call(
+      'knowledge_read',
+      { handle: 'stand' },
+      CALL,
+    );
+    const named = await new KnowledgeReadTool(service, projectChat()).call(
+      'knowledge_read',
+      { handle: 'stand', team: 'dev-team' },
+      CALL,
+    );
+
+    expect(own).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'NOT_FOUND: this run sees no knowledge document `stand`. knowledge_search lists what this run sees. A document of another project or team is read by naming that place: `project` (its id, as list_projects names it) or `team` (its slug, as read_teams names it).',
+        },
+      ],
+      isError: true,
+    });
+    expect(named.content[0]).toMatchObject({
+      text: expect.not.stringContaining('by naming that place'),
     });
   });
 

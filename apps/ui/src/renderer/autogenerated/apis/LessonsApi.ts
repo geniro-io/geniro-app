@@ -19,7 +19,6 @@ import type {
   LessonProposal,
   LessonProposalListDto,
   LessonReflectionFactsDto,
-  LessonSegment,
   LessonSegmentListDto,
   LessonsConfigAckDto,
   LessonsConfigDto,
@@ -85,10 +84,6 @@ export interface LessonsApiSaveLessonRequest {
 
 export interface LessonsApiSetLessonsConfigRequest {
     lessonsConfigDto: LessonsConfigDto;
-}
-
-export interface LessonsApiSkipLessonSegmentRequest {
-    segmentId: string;
 }
 
 export interface LessonsApiUndoLessonRequest {
@@ -724,51 +719,6 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async setLessonsConfig(requestParameters: LessonsApiSetLessonsConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonsConfigAckDto> {
         const response = await this.setLessonsConfigRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async skipLessonSegmentRaw(requestParameters: LessonsApiSkipLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonSegment>> {
-        if (requestParameters['segmentId'] == null) {
-            throw new runtime.RequiredError(
-                'segmentId',
-                'Required parameter "segmentId" was null or undefined when calling skipLessonSegment().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/lessons/segments/{segmentId}/skip`;
-        urlPath = urlPath.replace(`{${"segmentId"}}`, encodeURIComponent(String(requestParameters['segmentId'])));
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'POST',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async skipLessonSegment(requestParameters: LessonsApiSkipLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegment> {
-        const response = await this.skipLessonSegmentRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

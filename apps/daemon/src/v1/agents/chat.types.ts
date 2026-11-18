@@ -345,6 +345,9 @@ export type FindingLevel = (typeof FINDING_LEVELS)[number];
 export const FINDING_VERDICTS = ['CONFIRMED', 'PLAUSIBLE'] as const;
 export type FindingVerdict = (typeof FINDING_VERDICTS)[number];
 
+export const ARCHIVE_LESSONS = ['reflect', 'skip'] as const;
+export type ArchiveLessons = (typeof ARCHIVE_LESSONS)[number];
+
 export const FINDING_OUTCOMES = [
   'fixed',
   'skipped',
@@ -8566,7 +8569,6 @@ export interface ChatTextDatabase {
     edits_team_slug: Run['editsTeamSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
     analysis_team_slug: Run['analysisTeamSlug'];
-    pending_delete_at: StoredDate | null;
     deleted_at: StoredDate | null;
   };
   chat_text: {

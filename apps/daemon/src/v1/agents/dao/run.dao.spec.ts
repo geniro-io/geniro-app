@@ -902,18 +902,6 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(await dao.countArchivedBefore(new Date(9_999))).toBe(0);
     });
 
-    it('leaves out a run waiting out its lessons before its delete, as the archived count does', async () => {
-      await dao.create({ archivedAt: new Date(1_000) });
-      await dao.create({
-        archivedAt: new Date(1_000),
-        pendingDeleteAt: new Date(2_000),
-      });
-
-      expect(await dao.archivedRunsBefore(new Date(9_999))).toHaveLength(1);
-      expect(await dao.countArchivedBefore(new Date(9_999))).toBe(1);
-      expect((await dao.countByShelf()).archived).toBe(1);
-    });
-
     it('answers a TEAM run too, and says which it is', async () => {
       // It answered chats alone until team runs became archivable, which
       // left the retention window covering half the shelf and saying nothing.
@@ -1568,70 +1556,6 @@ describe('RunDao (in-memory sqlite)', () => {
       // The settle path reads this AFTER writing the status, so a run torn down
       // underneath it must cost the announce its figures and never the settle.
       await expect(dao.readWork('missing-run')).resolves.toBeNull();
-    });
-  });
-
-  describe('a run being deleted with lessons extracted first', () => {
-    it('leaves a chat being deleted out of the chat listings, the thread listing and the shelf counts', async () => {
-      const kept = await dao.create({
-        title: 'kept',
-        createdAt: new Date(1_000),
-      });
-      await dao.create({
-        title: 'deleting',
-        createdAt: new Date(2_000),
-        pendingDeleteAt: new Date(9_000),
-      });
-
-      expect((await dao.listChats('active')).map((r) => r.id)).toEqual([
-        kept.id,
-      ]);
-      expect(
-        (
-          await dao.listThreads({
-            excludeRunId: 'caller',
-            callerProjectId: null,
-            query: null,
-            includeArchived: false,
-            projectId: null,
-            window: undefined,
-            after: null,
-            limit: 50,
-          })
-        ).runs.map(({ run }) => run.id),
-      ).toEqual([kept.id]);
-      expect(await dao.countByShelf()).toEqual({ active: 1, archived: 0 });
-    });
-
-    it('leaves a team run being deleted out of the team listing and the shelf counts', async () => {
-      const kept = await dao.create({
-        teamId: 'wf-1',
-        createdAt: new Date(1_000),
-      });
-      await dao.create({
-        teamId: 'wf-1',
-        createdAt: new Date(2_000),
-        archivedAt: new Date(9_000),
-        pendingDeleteAt: new Date(9_000),
-      });
-
-      expect((await dao.listTeamRuns('all')).map((r) => r.id)).toEqual([
-        kept.id,
-      ]);
-      expect(await dao.countByShelf()).toEqual({ active: 1, archived: 0 });
-    });
-
-    it('lists only the runs pending delete, for the start-up delete', async () => {
-      await dao.create({ createdAt: new Date(1_000) });
-      const pending = await dao.create({
-        teamId: 'wf-1',
-        createdAt: new Date(2_000),
-        pendingDeleteAt: new Date(9_000),
-      });
-
-      expect((await dao.listPendingDeletes()).map((r) => r.id)).toEqual([
-        pending.id,
-      ]);
     });
   });
 });

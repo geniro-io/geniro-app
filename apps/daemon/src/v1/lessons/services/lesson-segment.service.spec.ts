@@ -1,11 +1,11 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { ConflictException, NotFoundException } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ArchiveLessonsRegistry } from '../../agents/services/archive-lessons.registry';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
@@ -65,7 +65,6 @@ function runOf(overrides: Partial<Run> = {}): Run {
     editsTeamSlug: null,
     editsProjectId: null,
     reflectedThroughSeq: null,
-    pendingDeleteAt: null,
     archivedAt: null,
     updatedAt: new Date(),
     ...overrides,
@@ -208,6 +207,7 @@ function build(
   config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
 
   const bus = new AgentEventBus();
+  const archiveChoices = new ArchiveLessonsRegistry();
   const events = new LessonsEventBus();
   const publishChanged = vi.spyOn(events, 'publishChanged');
   const service = new LessonSegmentService(
@@ -221,10 +221,12 @@ function build(
     config,
     events,
     teams as unknown as TeamStoreService,
+    archiveChoices,
   );
   return {
     service,
     bus,
+    archiveChoices,
     tx,
     items,
     created,
@@ -356,7 +358,6 @@ describe('LessonSegmentService', () => {
       ['a project chat', { editsProjectId: 'proj-1' }],
       ['a team builder chat', { editsTeamSlug: 'reviewers' }],
       ['a team analysis', { analysisTeamSlug: 'reviewers' }],
-      ['a thread pending deletion', { pendingDeleteAt: new Date() }],
     ])('never queues %s', async (_, overrides) => {
       const h = build({
         runs: [runOf(overrides as Partial<Run>)],
@@ -436,21 +437,31 @@ describe('LessonSegmentService', () => {
     });
   });
 
-  describe('skip', () => {
-    it('ends the queued stretch as skipped and moves the watermark past it', async () => {
+  describe('the archive dialog’s choice', () => {
+    it('queues the stretch when the dialog asked for lessons, though the app’s are off', async () => {
       const h = build({
-        segments: [queuedSegment()],
+        config: { mode: 'off' },
         items: { src: correctionStretch() },
       });
+      h.archiveChoices.expect('src', 'reflect');
 
-      const wire = await h.service.skip('seg-1');
+      const queued = await h.service.close('src', 'archive');
 
-      expect(wire.status).toBe('skipped');
-      expect(h.segments.updateById).toHaveBeenCalledWith(
-        'seg-1',
-        { status: 'skipped', skipReason: 'user_skipped', leaseUntil: null },
-        h.tx,
-      );
+      expect(queued).toMatchObject({ status: 'queued', toSeq: 2 });
+      expect(h.runDao.updateById).not.toHaveBeenCalled();
+    });
+
+    it('records a skipped stretch and moves the watermark past it when the dialog said no', async () => {
+      const h = build({ items: { src: correctionStretch() } });
+      h.archiveChoices.expect('src', 'skip');
+
+      const closed = await h.service.close('src', 'archive');
+
+      expect(closed).toMatchObject({
+        status: 'skipped',
+        skipReason: 'user_skipped',
+        toSeq: 2,
+      });
       expect(h.runDao.updateById).toHaveBeenCalledWith(
         'src',
         { reflectedThroughSeq: 2 },
@@ -459,40 +470,79 @@ describe('LessonSegmentService', () => {
       expect(h.publishChanged).toHaveBeenCalledWith('src');
     });
 
-    it('keeps the watermark where it is when it is already past the stretch', async () => {
+    it('turns the stretch already queued for the same range into a skipped one', async () => {
       const h = build({
-        runs: [runOf({ reflectedThroughSeq: 5 })],
         segments: [queuedSegment()],
         items: { src: correctionStretch() },
       });
+      h.archiveChoices.expect('src', 'skip');
 
-      await h.service.skip('seg-1');
+      await h.service.close('src', 'archive');
 
+      expect(h.created).toEqual([]);
+      expect(h.updated).toEqual([
+        {
+          id: 'seg-1',
+          fields: expect.objectContaining({
+            status: 'skipped',
+            skipReason: 'user_skipped',
+          }),
+        },
+      ]);
+    });
+
+    it('leaves the watermark alone when a skipped thread holds no learning signal', async () => {
+      const h = build({
+        items: { src: [turnComplete(1), userMessage(2, 'thanks')] },
+      });
+      h.archiveChoices.expect('src', 'skip');
+
+      expect(await h.service.close('src', 'archive')).toBeNull();
       expect(h.runDao.updateById).not.toHaveBeenCalled();
     });
 
-    it.each(['reflected', 'skipped', 'reflecting'])(
-      'refuses to skip a stretch that is already %s, with a conflict',
-      async (status) => {
-        const h = build({
-          segments: [queuedSegment({ status })],
-          items: { src: correctionStretch() },
-        });
+    it('spends a choice on one archive: the next close goes by the settings again', async () => {
+      const h = build({
+        config: { mode: 'off' },
+        items: { src: correctionStretch() },
+      });
+      h.archiveChoices.expect('src', 'reflect');
+      await h.service.close('src', 'archive');
+      h.items.set('src', [
+        ...correctionStretch(),
+        turnComplete(3),
+        userMessage(4, 'no, still wrong'),
+      ]);
 
-        await expect(h.service.skip('seg-1')).rejects.toBeInstanceOf(
-          ConflictException,
-        );
-        expect(h.segments.updateById).not.toHaveBeenCalled();
-        expect(h.runDao.updateById).not.toHaveBeenCalled();
+      expect(await h.service.close('src', 'archive')).toBeNull();
+    });
+
+    it('takes no archive choice for a stretch another closer ends', async () => {
+      const h = build({ items: { src: correctionStretch() } });
+      h.archiveChoices.expect('src', 'skip');
+
+      await h.service.close('src', 'manual');
+
+      expect(h.archiveChoices.take('src')).toBe('skip');
+    });
+  });
+
+  describe('threadEstimate', () => {
+    it.each([
+      ['on', {}, true],
+      ['off', { mode: 'off' as const }, false],
+    ])(
+      'tells the archive dialog whether lessons are %s for the thread',
+      async (_, config, lessonsOn) => {
+        const h = build({ config, items: { src: correctionStretch() } });
+
+        expect(await h.service.threadEstimate({ runId: 'src' })).toMatchObject({
+          signals: 1,
+          lessonsOn,
+          fromSeq: -1,
+          toSeq: 2,
+        });
       },
     );
-
-    it('refuses to skip a stretch that does not exist', async () => {
-      const h = build();
-
-      await expect(h.service.skip('seg-404')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-    });
   });
 });

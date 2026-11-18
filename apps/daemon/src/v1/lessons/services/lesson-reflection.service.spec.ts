@@ -74,7 +74,6 @@ function runOf(overrides: Partial<Run>): Run {
     editsTeamSlug: null,
     editsProjectId: null,
     reflectedThroughSeq: null,
-    pendingDeleteAt: null,
     archivedAt: null,
     ...overrides,
   } as unknown as Run;
@@ -857,19 +856,6 @@ describe('LessonReflectionService.state', () => {
       reflectable: false,
     });
   });
-
-  it('is never reflectable on a thread being deleted, whatever is past the watermark', async () => {
-    const fixture = build({
-      source: { pendingDeleteAt: new Date() },
-      maxSeq: SNAPSHOT_SEQ + 1,
-    });
-
-    expect(await fixture.service.state('src')).toEqual({
-      reflectable: false,
-      reflectionRunId: null,
-      reflectedThroughSeq: null,
-    });
-  });
 });
 
 describe('LessonReflectionService.start on a queued stretch', () => {
@@ -1173,53 +1159,6 @@ describe('LessonReflectionService.abandon', () => {
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
       'seg-9',
       expect.objectContaining({ status: 'failed' }),
-      fixture.em,
-    );
-  });
-});
-
-describe('LessonReflectionService.runningReflectionId', () => {
-  it('names the reflection still working on the thread', async () => {
-    const fixture = build({
-      running: [{ id: 'r1', status: 'running' }],
-    });
-
-    await expect(fixture.service.runningReflectionId('src')).resolves.toBe(
-      'r1',
-    );
-  });
-
-  it('answers null once every reflection on the thread has finished', async () => {
-    const fixture = build({
-      running: [{ id: 'r0', status: 'completed' }],
-    });
-
-    await expect(
-      fixture.service.runningReflectionId('src'),
-    ).resolves.toBeNull();
-  });
-});
-
-describe('LessonReflectionService.start on a thread being deleted', () => {
-  const DELETING = { pendingDeleteAt: new Date() };
-
-  it('refuses a reflection on it unless it is the delete that asked for one', async () => {
-    const fixture = build({ source: DELETING });
-
-    await expect(fixture.service.start('src', {})).rejects.toMatchObject({
-      errorCode: 'LESSONS_NOT_REFLECTABLE',
-    });
-    expect(fixture.chats.createChat).not.toHaveBeenCalled();
-  });
-
-  it('starts the reflection of a delete that extracts lessons first', async () => {
-    const fixture = build({ source: DELETING });
-
-    const started = await fixture.service.start('src', {}, 'delete');
-
-    expect(started.reflectionRunId).toBe('refl-run');
-    expect(fixture.segments.create).toHaveBeenCalledWith(
-      expect.objectContaining({ closedBy: 'delete', status: 'reflecting' }),
       fixture.em,
     );
   });

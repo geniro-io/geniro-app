@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Headers,
-  Optional,
   Param,
   ParseIntPipe,
   Post,
@@ -30,7 +29,6 @@ import {
   ActionPressDto,
   AnalyzeTeamDto,
   CancelledDto,
-  DeleteRunQueryDto,
   ItemDto,
   ListChatsQueryDto,
   PressActionDto,
@@ -38,7 +36,6 @@ import {
   SendMessageDto,
   ThreadAnalysisDto,
 } from '../../agents/dto/chat.dto';
-import { ExtractLessonsOnDeleteRegistry } from '../../agents/services/extract-lessons-on-delete.registry';
 import { runListPageOf } from '../../agents/utils/run-list-page';
 import type { KnowledgeRenamed } from '../../projects/projects.types';
 import {
@@ -133,8 +130,6 @@ export class TeamsController {
     private readonly avatars: AvatarStoreService,
     private readonly health: TeamHealthService,
     private readonly overlays: TeamOverlayService,
-    @Optional()
-    private readonly extractLessons?: ExtractLessonsOnDeleteRegistry,
   ) {}
 
   /**
@@ -325,16 +320,7 @@ export class TeamsController {
   @Delete('runs/:runId')
   @ApiOperation({ operationId: 'deleteTeamRun' })
   @ZodResponse({ status: 200, type: TeamDeletedDto })
-  async deleteRun(
-    @Param('runId') runId: string,
-    @Query() query: DeleteRunQueryDto,
-  ): Promise<{ deleted: boolean }> {
-    if (query.extractLessons === 'true') {
-      const taken = await this.extractLessons?.extract(runId);
-      if (taken != null) {
-        return taken;
-      }
-    }
+  deleteRun(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
     return this.executor.deleteRun(runId);
   }
 

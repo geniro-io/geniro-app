@@ -253,9 +253,6 @@ export const LessonOutcomePayloadSchema = z.object({
 });
 export type LessonOutcomePayload = z.infer<typeof LessonOutcomePayloadSchema>;
 
-/** How long a delete that extracts lessons first waits for its reflection before deleting anyway. */
-export const LESSON_PENDING_DELETE_MAX_MS = 10 * 60_000;
-
 export const LESSON_REFLECTION_MODES = ['off', 'auto'] as const;
 export type LessonReflectionMode = (typeof LESSON_REFLECTION_MODES)[number];
 
@@ -336,7 +333,7 @@ export const LessonEstimateQuerySchema = z.object({
 });
 export type LessonEstimateQuery = z.infer<typeof LessonEstimateQuerySchema>;
 
-/** One thread's unreflected stretch priced, for the archive notice and the delete dialog. */
+/** One thread's unreflected stretch priced, for the archive dialog. */
 export const ThreadLessonEstimateSchema = z
   .object({
     estimate: LessonEstimateSchema,
@@ -349,6 +346,11 @@ export const ThreadLessonEstimateSchema = z
       .min(0)
       .describe(
         'Learning signals past the last reflection; 0 = nothing worth reflecting on',
+      ),
+    lessonsOn: z
+      .boolean()
+      .describe(
+        'Whether an archive that names no choice reflects on this thread: the lessons settings of the app, then its team, then its project',
       ),
     fromSeq: z.number().int(),
     toSeq: z.number().int(),
@@ -367,7 +369,7 @@ export const LessonSegmentStatusSchema = z
   .enum(LESSON_SEGMENT_STATUSES)
   .meta({ id: 'LessonSegmentStatus' });
 
-/** One closed stretch, as the archive notice and the Settings readout read it. */
+/** One closed stretch, as the Settings readout reads it. */
 export const LessonSegmentWireSchema = z
   .object({
     id: z.string(),

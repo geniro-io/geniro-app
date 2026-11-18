@@ -125,7 +125,6 @@ export class RunDao extends BaseDao<Run> {
         ).as('rank'),
       ])
       .where('r.deleted_at', 'is', null)
-      .where('r.pending_delete_at', 'is', null)
       .where('r.edits_team_slug', 'is', null)
       .where('r.edits_project_id', 'is', null)
       .where('r.analysis_source_run_id', 'is', null)
@@ -217,7 +216,7 @@ export class RunDao extends BaseDao<Run> {
     txEm?: EntityManager,
   ): Promise<Run[]> {
     const { before, runId, runIds, limit, active } = page;
-    const narrowed: FilterQuery<Run>[] = [where, { pendingDeleteAt: null }];
+    const narrowed: FilterQuery<Run>[] = [where];
     if (runId !== undefined) {
       narrowed.push({ id: runId });
     }
@@ -367,14 +366,6 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
-  /** The runs deleted with "Extract lessons first" whose delete has not happened yet. */
-  async listPendingDeletes(txEm?: EntityManager): Promise<Run[]> {
-    return this.getRepo(txEm).find(
-      { pendingDeleteAt: { $ne: null } },
-      { disableIdentityMap: true },
-    );
-  }
-
   /**
    * Every analysis started on one library team, newest first — archived
    * rows included, for the reason {@link listAnalysesOf} gives.
@@ -521,8 +512,8 @@ export class RunDao extends BaseDao<Run> {
   ): Promise<{ active: number; archived: number }> {
     const repo = this.getRepo(txEm);
     const [active, archived] = await Promise.all([
-      repo.count({ archivedAt: null, pendingDeleteAt: null }),
-      repo.count({ archivedAt: { $ne: null }, pendingDeleteAt: null }),
+      repo.count({ archivedAt: null }),
+      repo.count({ archivedAt: { $ne: null } }),
     ]);
     return { active, archived };
   }
@@ -1728,5 +1719,5 @@ function pullRequestsByRun(
 }
 
 function archivedAtOrBefore(cutoff: Date): FilterQuery<Run> {
-  return { archivedAt: { $ne: null, $lte: cutoff }, pendingDeleteAt: null };
+  return { archivedAt: { $ne: null, $lte: cutoff } };
 }

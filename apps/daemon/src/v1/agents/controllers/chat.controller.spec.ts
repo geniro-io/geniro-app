@@ -6,6 +6,7 @@ import { StopDetachedProcessesSchema } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
 import { historyQuerySchema, listChatsQuerySchema } from '../dto/chat.dto';
 import type { AgentSessionRegistry } from '../services/agent-session.registry';
+import { ArchiveLessonsRegistry } from '../services/archive-lessons.registry';
 import type { MonitorRegistry } from '../services/monitor.registry';
 import { RunProcessAttribution } from '../services/run-process-attribution.service';
 import { RunProcessReaper } from '../services/run-process-reaper.service';
@@ -390,56 +391,51 @@ describe('POST /v1/chats/:runId/actions/:seq/press|dismiss', () => {
   });
 });
 
-describe('DELETE /v1/chats/:runId', () => {
-  function deleteController(extracted: { deleted: boolean } | null) {
-    const extractLessons = {
-      extract: vi.fn(async (_runId: string) => extracted),
-    };
-    const chatService = {
-      delete: vi.fn(async (_runId: string) => ({ deleted: true })),
-    };
+describe('POST /v1/chats/:runId/archive', () => {
+  function archiveController(archive: (runId: string) => Promise<unknown>) {
+    const archiveLessons = new ArchiveLessonsRegistry();
+    const chatService = { archive: vi.fn(archive) };
     const controller = Object.create(
       ChatController.prototype,
     ) as ChatController;
-    Object.assign(controller, { extractLessons, chatService });
-    return { controller, extractLessons, chatService };
+    Object.assign(controller, { archiveLessons, chatService });
+    return { controller, archiveLessons, chatService };
   }
 
-  it('answers the extract-first outcome and deletes nothing itself when the lessons take the run', async () => {
-    const { controller, extractLessons, chatService } = deleteController({
-      deleted: true,
+  it.each(['reflect', 'skip'] as const)(
+    "hands the dialog's %s to the lessons before the archive lands",
+    async (lessons) => {
+      let heldAtArchive: string | undefined;
+      const { controller, archiveLessons } = archiveController(async (id) => {
+        heldAtArchive = archiveLessons.take(id);
+        return { id };
+      });
+
+      await controller.archive(RUN, { lessons });
+
+      expect(heldAtArchive).toBe(lessons);
+    },
+  );
+
+  it('holds nothing when the archive names no choice', async () => {
+    const { controller, archiveLessons } = archiveController(async (id) => ({
+      id,
+    }));
+
+    await controller.archive(RUN, {});
+
+    expect(archiveLessons.take(RUN)).toBeUndefined();
+  });
+
+  it('drops the choice when the archive fails', async () => {
+    const { controller, archiveLessons } = archiveController(async () => {
+      throw new Error('no such run');
     });
 
     await expect(
-      controller.delete(RUN, { extractLessons: 'true' }),
-    ).resolves.toEqual({ deleted: true });
+      controller.archive(RUN, { lessons: 'reflect' }),
+    ).rejects.toThrow('no such run');
 
-    expect(extractLessons.extract).toHaveBeenCalledWith(RUN);
-    expect(chatService.delete).not.toHaveBeenCalled();
+    expect(archiveLessons.take(RUN)).toBeUndefined();
   });
-
-  it('deletes the run as usual when the lessons have nothing to take', async () => {
-    const { controller, extractLessons, chatService } = deleteController(null);
-
-    await expect(
-      controller.delete(RUN, { extractLessons: 'true' }),
-    ).resolves.toEqual({ deleted: true });
-
-    expect(extractLessons.extract).toHaveBeenCalledWith(RUN);
-    expect(chatService.delete).toHaveBeenCalledWith(RUN);
-  });
-
-  it.each([{ extractLessons: 'false' as const }, {}])(
-    'does not consult the lessons without the flag (%j)',
-    async (query) => {
-      const { controller, extractLessons, chatService } = deleteController({
-        deleted: true,
-      });
-
-      await controller.delete(RUN, query);
-
-      expect(extractLessons.extract).not.toHaveBeenCalled();
-      expect(chatService.delete).toHaveBeenCalledWith(RUN);
-    },
-  );
 });

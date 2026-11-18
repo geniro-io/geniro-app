@@ -11,7 +11,6 @@ import {
   LessonsConfigSchema,
   LessonSegmentListQuerySchema,
   LessonSegmentListSchema,
-  LessonSegmentWireSchema,
   LessonsReflectStartedSchema,
   LessonsSpendSchema,
   ReflectLessonsSchema,
@@ -28,10 +27,6 @@ export class LessonSegmentListQueryDto extends createZodDto(
 
 export class LessonSegmentListDto extends createZodDto(
   LessonSegmentListSchema,
-) {}
-
-export class LessonSegmentDto extends createZodDto(
-  z.object(LessonSegmentWireSchema.shape),
 ) {}
 
 export class LessonsSpendDto extends createZodDto(

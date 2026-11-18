@@ -178,9 +178,15 @@ describe('ThreadStartCard', () => {
       container.querySelector('[data-slot="thread-start-title"]')?.textContent,
     ).toBe('CI-1233: Case page slow');
     const chips = [
-      ...container.querySelectorAll('[data-slot="task-chip"]'),
-    ].map((chip) => chip.textContent);
-    expect(chips).toEqual(['MAN-16', 'ManifestOS', 'claude']);
+      ...container.querySelectorAll(
+        '[data-slot="thread-start-labels"] > [data-slot]',
+      ),
+    ].map((chip) => [chip.getAttribute('data-slot'), chip.textContent]);
+    expect(chips).toEqual([
+      ['thread-card-board-card', 'MAN-16'],
+      ['thread-start-agent', 'claude'],
+      ['thread-start-project', 'ManifestOS'],
+    ]);
     expect(stateText()).toBe('Waiting for your Start');
     expect(container.textContent).toContain('Answer the Start card to run it.');
   });
@@ -206,9 +212,7 @@ describe('ThreadStartCard', () => {
     const open = vi.fn<(runId: string) => void>();
     await render(<ThreadStartCard pair={pair(FILED)} />, reader, open);
     expect(stateText()).toBe('Starting…');
-    expect(
-      container.querySelector('[data-slot="thread-start-open"]'),
-    ).toBeNull();
+    expect(container.querySelector('[data-slot="thread-card-go"]')).toBeNull();
 
     current = card({
       runId: 'run-new',
@@ -227,9 +231,13 @@ describe('ThreadStartCard', () => {
     });
 
     expect(stateText()).toBe('Started');
-    expect(container.textContent).toContain('In progress');
+    expect(
+      container
+        .querySelector('[data-slot="thread-card-board-card"]')
+        ?.getAttribute('title'),
+    ).toContain('In progress');
     const button = container.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-start-open"]',
+      '[data-slot="thread-card-go"]',
     );
     expect(button).not.toBeNull();
     act(() => button!.click());

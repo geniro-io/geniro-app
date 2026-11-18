@@ -1,6 +1,5 @@
 import { cva } from 'class-variance-authority';
 import {
-  ArrowRight,
   Bot,
   Folder,
   GitMerge,
@@ -9,7 +8,6 @@ import {
   GitPullRequestDraft,
   type LucideIcon,
   MessageCircleQuestion,
-  MessageSquareText,
   Moon,
   ShieldCheck,
   Users,
@@ -18,26 +16,22 @@ import {
 import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import { type AvatarPerson, AvatarStack } from '../components/member-avatar';
+import {
+  BoardCardLabel,
+  GoToThreadButton,
+  type ThreadAttention,
+  type ThreadCardBoardCard,
+  ThreadLabelChip,
+  ThreadStatusChip,
+} from '../components/thread-labels';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
-import { taskStatusMeta } from '../tasks/task-status';
 
 export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
 
-/** Where a thread stands for the user, which colours its card and places it on the graph. */
-export type ThreadAttention =
-  'blocked' | 'working' | 'question' | 'quiet' | 'inactive';
-
 export type ThreadCardPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
-
-/** The board card a thread works, shown on it as a label. */
-export interface ThreadCardBoardCard {
-  identifier: string | null;
-  title: string;
-  status: string;
-}
 
 export interface ThreadCardProps {
   title: string;
@@ -190,18 +184,6 @@ export const attentionDotVariants = cva('size-2 shrink-0 rounded-full', {
   },
 });
 
-const statusChipVariants = cva('shrink-0 px-1.5 py-0 font-medium', {
-  variants: {
-    attention: {
-      blocked: 'bg-destructive/10 text-destructive',
-      working: 'bg-success/10 text-success',
-      question: 'bg-warning/15 text-warning',
-      quiet: 'bg-muted text-muted-foreground',
-      inactive: 'bg-muted text-muted-foreground',
-    } satisfies Record<ThreadAttention, string>,
-  },
-});
-
 function StatusDot({
   attention,
 }: {
@@ -262,84 +244,6 @@ function PullRequestChip({
       <span className="sr-only">{meta.word}</span>
       <span className="tabular-nums">#{number}</span>
     </Badge>
-  );
-}
-
-function BoardCardLabel({
-  card,
-}: {
-  card: ThreadCardBoardCard;
-}): React.JSX.Element {
-  const meta = taskStatusMeta(card.status);
-  const Icon = meta.icon;
-  return (
-    <Badge
-      data-slot="thread-card-board-card"
-      variant="muted"
-      title={`${card.identifier ?? 'Board card'} · ${card.title} · ${meta.label}`}
-      className="max-w-24 shrink-0 gap-1 px-1.5 py-0 font-normal">
-      <Icon
-        aria-hidden="true"
-        className={cn('size-3.5 shrink-0', meta.className)}
-      />
-      <span className="truncate font-mono tabular-nums">
-        {card.identifier ?? card.title}
-      </span>
-    </Badge>
-  );
-}
-
-function LabelChip({
-  slot,
-  icon,
-  text,
-  title,
-  yields,
-}: {
-  slot: string;
-  icon: LucideIcon;
-  text: string;
-  title: string;
-  /** Gives up its room first when the row runs out of it. */
-  yields: boolean;
-}): React.JSX.Element {
-  const Icon = icon;
-  return (
-    <Badge
-      data-slot={slot}
-      variant="muted"
-      title={title}
-      className={cn(
-        'gap-1 px-1.5 py-0 font-normal',
-        yields ? 'min-w-14 shrink' : 'max-w-28 shrink-0',
-      )}>
-      <Icon aria-hidden="true" className="size-3 shrink-0" />
-      <span className="truncate">{text}</span>
-    </Badge>
-  );
-}
-
-/** The way into a thread: a small outlined pill with the thread's glyph and an arrow. */
-export function GoToThreadButton({
-  onGo,
-}: {
-  onGo: () => void;
-}): React.JSX.Element {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      data-slot="thread-card-go"
-      className="group/go h-6 shrink-0 gap-1 rounded-full px-2.5 text-xs font-medium"
-      onClick={onGo}>
-      <MessageSquareText aria-hidden="true" className="size-3.5" />
-      Go to thread
-      <ArrowRight
-        aria-hidden="true"
-        className="size-3 transition-transform group-hover/go:translate-x-0.5 motion-reduce:transition-none"
-      />
-    </Button>
   );
 }
 
@@ -422,14 +326,11 @@ export function ThreadCard({
       <div
         data-slot="thread-card-labels"
         className="flex h-5 min-w-0 shrink-0 items-center gap-1 overflow-hidden">
-        <Badge
-          data-slot="thread-card-status"
-          variant="muted"
-          className={statusChipVariants({ attention })}>
+        <ThreadStatusChip attention={attention} slot="thread-card-status">
           {statusText}
-        </Badge>
+        </ThreadStatusChip>
         {agentLabel === null ? null : (
-          <LabelChip
+          <ThreadLabelChip
             slot="thread-card-agent"
             icon={isTeam ? Users : Bot}
             text={agentLabel}
@@ -439,7 +340,7 @@ export function ThreadCard({
         )}
         {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
         {project === null ? null : (
-          <LabelChip
+          <ThreadLabelChip
             slot="thread-card-project"
             icon={Folder}
             text={project}

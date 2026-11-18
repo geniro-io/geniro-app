@@ -1,23 +1,26 @@
 import {
-  ArrowUpRight,
   Ban,
   Bot,
   CircleAlert,
   CircleCheck,
-  FolderKanban,
+  Folder,
   Hand,
-  ListPlus,
   type LucideIcon,
+  MessageSquarePlus,
   Trash2,
-  UsersRound,
+  Users,
 } from 'lucide-react';
 import { useContext } from 'react';
 
-import { Button } from '../components/ui/button';
+import {
+  BoardCardLabel,
+  GoToThreadButton,
+  type ThreadAttention,
+  ThreadLabelChip,
+  ThreadStatusChip,
+} from '../components/thread-labels';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
-import { TaskChip } from '../tasks/task-chip';
-import { taskStatusMeta } from '../tasks/task-status';
 import { RunSettledContext } from './live-row';
 import { ThreadOpenContext } from './thread-message-card';
 import { readThreadStart, type ThreadStart } from './thread-start-payload';
@@ -37,44 +40,62 @@ type StartState =
 
 const STATE_META: Record<
   StartState,
-  { label: string; icon: LucideIcon | null; className: string }
+  {
+    label: string;
+    icon: LucideIcon | 'spinner' | null;
+    attention: ThreadAttention;
+    note: string | null;
+  }
 > = {
-  filing: { label: 'Filing…', icon: null, className: 'text-muted-foreground' },
+  filing: {
+    label: 'Filing…',
+    icon: 'spinner',
+    attention: 'quiet',
+    note: null,
+  },
   stopped: {
     label: 'No result',
     icon: Ban,
-    className: 'text-muted-foreground',
+    attention: 'quiet',
+    note: 'The call ended before the daemon answered it.',
   },
   'awaiting-start': {
     label: 'Waiting for your Start',
     icon: Hand,
-    className: 'text-warning',
+    attention: 'question',
+    note: 'Answer the Start card to run it.',
   },
-  starting: { label: 'Starting…', icon: null, className: 'text-primary' },
-  started: { label: 'Started', icon: CircleCheck, className: 'text-success' },
+  starting: {
+    label: 'Starting…',
+    icon: 'spinner',
+    attention: 'working',
+    note: null,
+  },
+  started: {
+    label: 'Started',
+    icon: CircleCheck,
+    attention: 'working',
+    note: null,
+  },
   'not-started': {
     label: 'Not started',
     icon: Ban,
-    className: 'text-muted-foreground',
+    attention: 'quiet',
+    note: 'The card stays in backlog.',
   },
   refused: {
     label: 'Refused',
     icon: CircleAlert,
-    className: 'text-destructive',
+    attention: 'blocked',
+    note: null,
   },
   removed: {
     label: 'Card removed',
     icon: Trash2,
-    className: 'text-muted-foreground',
+    attention: 'inactive',
+    note: 'Its board card was deleted.',
   },
-  filed: { label: 'Filed', icon: null, className: 'text-muted-foreground' },
-};
-
-const STATE_NOTE: Partial<Record<StartState, string>> = {
-  stopped: 'The call ended before the daemon answered it.',
-  'awaiting-start': 'Answer the Start card to run it.',
-  'not-started': 'The card stays in backlog.',
-  removed: 'Its board card was deleted.',
+  filed: { label: 'Filed', icon: null, attention: 'quiet', note: null },
 };
 
 function stateOf(
@@ -108,26 +129,21 @@ function stateOf(
   }
 }
 
-function StateLine({ state }: { state: StartState }): React.JSX.Element {
+function StateChip({ state }: { state: StartState }): React.JSX.Element {
   const meta = STATE_META[state];
   const Icon = meta.icon;
   return (
-    <span
-      data-slot="thread-start-state"
-      data-state={state}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 text-xs font-medium',
-        meta.className,
-      )}>
-      {Icon === null ? (
-        state === 'filing' || state === 'starting' ? (
-          <Spinner />
-        ) : null
-      ) : (
-        <Icon aria-hidden="true" className="size-3.5" />
+    <ThreadStatusChip
+      attention={meta.attention}
+      slot="thread-start-state"
+      className="gap-1">
+      {Icon === 'spinner' ? (
+        <Spinner />
+      ) : Icon === null ? null : (
+        <Icon aria-hidden="true" className="size-3 shrink-0" />
       )}
       {meta.label}
-    </span>
+    </ThreadStatusChip>
   );
 }
 
@@ -151,90 +167,88 @@ export function ThreadStartCard({
   const found = task.kind === 'found' ? task.task : null;
   const runId = found?.runId ?? null;
   const title = found?.title ?? start.title ?? 'New thread';
-  const column =
-    state === 'started' && found !== null ? taskStatusMeta(found.status) : null;
-  const note = state === 'refused' ? start.reason : (STATE_NOTE[state] ?? null);
+  const note = state === 'refused' ? start.reason : STATE_META[state].note;
+  const runsAs = start.team ?? start.agent;
+  const canGo = runId !== null && open !== null;
   return (
     <div
       data-slot="thread-start-card"
       data-state={state}
-      className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-sm shadow-panel-sm">
-      <div className="flex min-w-0 items-center gap-2">
-        <ListPlus
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="shrink-0 text-xs text-muted-foreground">
-          New thread
-        </span>
-        <span className="flex-1" />
-        <StateLine state={state} />
-      </div>
-      <p
-        data-slot="thread-start-title"
-        className="m-0 min-w-0 font-medium break-words text-foreground">
-        {title}
-      </p>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        {start.identifier === null ? null : (
-          <TaskChip title="Board card" className="font-mono text-foreground/80">
-            {start.identifier}
-          </TaskChip>
-        )}
-        {start.project === null ? null : (
-          <TaskChip title="Project">
-            <FolderKanban aria-hidden="true" className="size-3 shrink-0" />
-            <span className="truncate">{start.project}</span>
-          </TaskChip>
-        )}
-        <TaskChip title={start.team === null ? 'Agent' : 'Team'}>
-          {start.team === null ? (
-            <Bot aria-hidden="true" className="size-3 shrink-0" />
-          ) : (
-            <UsersRound aria-hidden="true" className="size-3 shrink-0" />
-          )}
-          <span className="truncate">
-            {start.team ?? start.agent ?? 'Project default'}
+      className="flex min-w-0 gap-3 rounded-card border border-border bg-card p-3 text-sm shadow-panel-sm">
+      <span
+        aria-hidden="true"
+        data-slot="thread-start-icon"
+        className={cn(
+          'flex size-9 shrink-0 items-center justify-center rounded-lg',
+          state === 'refused'
+            ? 'bg-destructive/10 text-destructive'
+            : 'bg-primary/10 text-primary',
+        )}>
+        <MessageSquarePlus className="size-4.5" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-[11px] tracking-wide text-muted-foreground uppercase">
+            New thread
           </span>
-        </TaskChip>
-        {column === null ? null : (
-          <TaskChip title="Board column">
-            <column.icon
-              aria-hidden="true"
-              className={cn('size-3 shrink-0', column.className)}
+          <StateChip state={state} />
+        </div>
+        <p
+          data-slot="thread-start-title"
+          className="m-0 min-w-0 text-sm leading-5 font-semibold break-words text-foreground">
+          {title}
+        </p>
+        <div
+          data-slot="thread-start-labels"
+          className="flex min-w-0 flex-wrap items-center gap-1">
+          {start.identifier === null ? null : (
+            <BoardCardLabel
+              card={{
+                identifier: start.identifier,
+                title,
+                status: found?.status ?? 'backlog',
+              }}
             />
-            {column.label}
-          </TaskChip>
-        )}
-      </div>
-      {note === null && runId === null ? null : (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {note === null ? null : (
+          )}
+          <ThreadLabelChip
+            slot="thread-start-agent"
+            icon={start.team === null ? Bot : Users}
+            text={runsAs ?? 'Project default'}
+            title={
+              start.team !== null
+                ? `Team ${start.team}`
+                : runsAs === null
+                  ? "The project's default agent or team"
+                  : `Agent ${runsAs}`
+            }
+            yields={false}
+          />
+          {start.project === null ? null : (
+            <ThreadLabelChip
+              slot="thread-start-project"
+              icon={Folder}
+              text={start.project}
+              title={`Project ${start.project}`}
+              yields
+            />
+          )}
+        </div>
+        {note === null && !canGo ? null : (
+          <div className="flex min-w-0 items-center justify-between gap-2">
             <p
               data-slot="thread-start-note"
               className={cn(
-                'm-0 min-w-0 flex-1 text-xs break-words',
+                'm-0 min-w-0 text-xs break-words',
                 state === 'refused'
                   ? 'text-destructive'
                   : 'text-muted-foreground',
               )}>
               {note}
             </p>
-          )}
-          {runId === null || open === null ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              data-slot="thread-start-open"
-              title="Open this thread"
-              onClick={() => open(runId)}>
-              Open thread
-              <ArrowUpRight aria-hidden="true" />
-            </Button>
-          )}
-        </div>
-      )}
+            {canGo ? <GoToThreadButton onGo={() => open(runId)} /> : null}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

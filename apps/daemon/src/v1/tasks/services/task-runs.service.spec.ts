@@ -39,6 +39,7 @@ import type { TeamMember } from '../../teams/teams.types';
 import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
+import { startTaskRunSchema } from '../dto/task-run.dto';
 import { Task } from '../entity/task.entity';
 import type { LabelInstructionWire, StartTaskRun } from '../tasks.types';
 import {
@@ -644,6 +645,23 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
     const stored = await taskDao.getById(task.id);
     expect(stored?.runId).toBe('run-1');
+  });
+
+  it('records a run started in a folder with no branch as working in that folder, clearing a branch an earlier run left', async () => {
+    const task = await seed();
+    await taskDao.updateById(task.id, { branch: 'geniro/task-earlier' });
+
+    const started = await service.start(task.id, start({ branch: undefined }));
+
+    expect(started).toMatchObject({
+      status: 'in_progress',
+      runId: 'run-1',
+      branch: null,
+      worktreePath: worktree,
+    });
+    expect(
+      startTaskRunSchema.safeParse({ cwd: worktree, from: 'todo' }).success,
+    ).toBe(true);
   });
 
   it('starts the chat at the project’s context window and model parameters', async () => {

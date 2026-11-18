@@ -36,12 +36,15 @@ export const startTaskRunSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'The worktree the agent works in — already created by the caller, and validated here only as a real directory',
+      "The worktree the agent works in — already created by the caller — or the task's own folder when that is in no git repository; validated here only as a real directory",
     ),
   branch: z
     .string()
     .min(1)
-    .describe('The branch that worktree has checked out'),
+    .optional()
+    .describe(
+      'The branch that worktree has checked out; absent when the folder is in no git repository and the run works in it directly',
+    ),
   /**
    * The status the caller believes the task is in, on `moveTaskStatus`'s own
    * terms: starting a run moves the card, so a start computed against a card

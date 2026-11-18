@@ -4,8 +4,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -50,7 +52,8 @@ export interface WorktreeRecord {
 
 export interface PreparedWorktree {
   path: string;
-  branch: string;
+  /** Null when the folder is in no repository and the run works in it directly. */
+  branch: string | null;
   /**
    * True when this was the task's own worktree, already standing, handed back
    * as it was — see `prepareWorktree`, and why a refused start must then leave
@@ -472,6 +475,10 @@ async function releaseBranchFromMissingWorktree(
  *
  * A worktree just MADE then gets the gitignored files the checkout's
  * `.worktreeinclude` lists (`worktree-include.ts`); a reused one keeps its own.
+ *
+ * A folder in no repository has nothing to cut a worktree from: the run works
+ * in that folder itself, with no branch, and nothing is recorded, so no
+ * clean-up ever reaches the user's folder.
  */
 export async function prepareWorktree(
   input: {
@@ -480,6 +487,15 @@ export async function prepareWorktree(
   },
   options: PrepareWorktreeOptions = {},
 ): Promise<PreparedWorktree> {
+  const real = realDirectoryOf(input.folder);
+  if (real === null) {
+    throw new Error(
+      `the folder ${input.folder} does not exist — set this task's folder to the folder it works in (its project's folder is used only when the task names none)`,
+    );
+  }
+  if (!isInRepository(real)) {
+    return { path: input.folder, branch: null, reused: false };
+  }
   const branch = taskBranchName(input.taskId);
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
@@ -559,6 +575,39 @@ export async function prepareWorktree(
     log: options.log ?? logToConsole,
   });
   return { path, branch, reused: false };
+}
+
+/**
+ * Judged on the filesystem: git's refusal is translated prose, and its exit
+ * code does not tell "not a repository" from its other failures.
+ */
+function isInRepository(realDir: string): boolean {
+  for (let dir = realDir; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git')) || isGitDirectory(dir)) {
+      return true;
+    }
+    if (dirname(dir) === dir) {
+      return false;
+    }
+  }
+}
+
+function realDirectoryOf(path: string): string | null {
+  try {
+    const real = realpathSync(path);
+    return statSync(real).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A bare repository, by the entries git itself requires of one. */
+function isGitDirectory(dir: string): boolean {
+  return (
+    existsSync(join(dir, 'HEAD')) &&
+    existsSync(join(dir, 'objects')) &&
+    existsSync(join(dir, 'refs'))
+  );
 }
 
 /** How {@link prepareWorktree}'s callers hand it the main-process log. */

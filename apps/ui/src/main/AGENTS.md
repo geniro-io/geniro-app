@@ -47,6 +47,7 @@ Git (the hardening is under _Security_):
 Task worktrees (`worktree-service.ts`):
 
 - A worktree lives at `<userData>/worktrees/<taskId>` on branch `geniro/task-<id>`, derived from the task id and never from its title. Pass `--` before the path.
+- A task folder in no repository (no `.git` or bare git directory at or above its real path, judged on the filesystem) gets no worktree: `prepareWorktree` hands back the folder itself with `branch: null` and records nothing, so no clean-up path ever reaches it. A folder that does not exist is refused in words that name it.
 - `<userData>/worktrees.json` is the only thing that authorizes a recursive delete. A row naming a path outside the worktrees directory (compared segment-wise) is dropped, and nothing is removed for it.
 - Before removing a worktree, confirm it against `git worktree list --porcelain`. Leave a row you cannot confirm alone.
 - `reapFinishedWorktrees` removes only worktrees whose work the daemon calls finished (`POST /v1/tasks/finished`: Done, no turn running and no live work outside one, such as a monitor). Never remove every clean worktree at launch, because a worktree outlives its run.

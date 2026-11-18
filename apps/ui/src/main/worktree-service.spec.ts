@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 
+import { gitFailureLine } from './git-failure';
 import { copyWorktreeIncludeFiles } from './worktree-include';
 import {
   prepareWorktree,
@@ -1406,7 +1407,13 @@ describe('removeWorktreeOnRequest', () => {
 
       expect(outcome.removed).toBe(true);
       expect(
-        git(repo, 'show', '--name-only', '--format=', made.branch).trim(),
+        git(
+          repo,
+          'show',
+          '--name-only',
+          '--format=',
+          taskBranchName('t1'),
+        ).trim(),
       ).toContain('left.txt');
     },
     TIMEOUT_MS,
@@ -1504,4 +1511,97 @@ describe('removeWorktreeOnRequest', () => {
     expect(outcome.removed).toBe(false);
     expect(readFileSync(join(path, 'keep.txt'), 'utf8')).toBe('mine\n');
   });
+});
+
+describe('prepareWorktree by what the folder is', () => {
+  let plain: string;
+
+  beforeEach(() => {
+    plain = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-worktree-plain-')));
+  });
+
+  afterEach(() => {
+    rmSync(plain, { recursive: true, force: true });
+  });
+
+  it('hands back a folder in no repository as the place to work, with no branch, and records nothing', async () => {
+    mkdirSync(join(plain, 'back-office'));
+    writeFileSync(join(plain, 'notes.md'), 'mine\n');
+
+    const made = await prepareWorktree({ taskId: 't1', folder: plain });
+
+    expect(made).toEqual({ path: plain, branch: null, reused: false });
+    expect(readRegistry()).toEqual([]);
+    expect(existsSync(join(mocks.userData, 'worktrees', 't1'))).toBe(false);
+    expect(await pruneWorktreeForTask('t1')).toBe(false);
+    expect(await settleWorktreeForTask('t1')).toEqual({
+      removed: false,
+      committed: false,
+    });
+    expect(readFileSync(join(plain, 'notes.md'), 'utf8')).toBe('mine\n');
+  });
+
+  it('says a folder that does not exist does not exist, and the fix', async () => {
+    const gone = join(plain, 'moved-away');
+
+    const refusal = await prepareWorktree({ taskId: 't1', folder: gone }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toBeInstanceOf(Error);
+    const message = (refusal as Error).message;
+    expect(message).toBe(
+      `the folder ${gone} does not exist — set this task's folder to the folder it works in (its project's folder is used only when the task names none)`,
+    );
+    expect(gitFailureLine(refusal, message)).toBe(message);
+    expect(readRegistry()).toEqual([]);
+  });
+
+  it(
+    'still cuts the worktree through a symlink into a repository subfolder',
+    async () => {
+      mkdirSync(join(repo, 'packages', 'app'), { recursive: true });
+      const link = join(plain, 'app');
+      symlinkSync(join(repo, 'packages', 'app'), link);
+
+      const made = await prepareWorktree({ taskId: 't1', folder: link });
+
+      expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
+        `worktree ${made.path}`,
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'still cuts the worktree from a bare repository',
+    async () => {
+      const bare = join(plain, 'bare.git');
+      git(plain, 'clone', '--bare', repo, bare);
+
+      const made = await prepareWorktree({ taskId: 't1', folder: bare });
+
+      expect(git(bare, 'worktree', 'list', '--porcelain')).toContain(
+        `worktree ${made.path}`,
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'still cuts the worktree from a linked worktree, whose .git is a file',
+    async () => {
+      const linked = join(plain, 'linked');
+      git(repo, 'worktree', 'add', '-b', 'side', linked);
+
+      const made = await prepareWorktree({ taskId: 't1', folder: linked });
+
+      expect(made.reused).toBe(false);
+      expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
+        `worktree ${made.path}`,
+      );
+    },
+    TIMEOUT_MS,
+  );
 });

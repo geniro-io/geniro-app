@@ -1510,7 +1510,10 @@ export interface TaskWorktreeResult {
   ok: boolean;
   /** Where the agent will work; null when the worktree could not be made. */
   path: string | null;
-  /** The branch it has checked out; null on failure. */
+  /**
+   * The branch it has checked out; null on failure, and for a folder in no
+   * repository, where the run works in the folder itself.
+   */
   branch: string | null;
   /**
    * Whether this was the task's OWN worktree, already standing and handed back

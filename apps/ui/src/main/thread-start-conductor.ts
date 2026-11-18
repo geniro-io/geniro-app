@@ -8,6 +8,7 @@ import {
   reportFailure,
   type RunStartDeps,
   startRunOn,
+  workPlaceOf,
 } from './task-run-start';
 
 /**
@@ -166,7 +167,7 @@ export class ThreadStartConductor {
         startedBy: 'manager',
       });
       this.deps.log(
-        `thread start began "${start.title}" on ${worktree.branch}`,
+        `thread start began "${start.title}" ${workPlaceOf(worktree)}`,
       );
     } catch (error) {
       this.deps.log(

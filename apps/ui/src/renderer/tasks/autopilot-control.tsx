@@ -211,7 +211,9 @@ export function AutopilotControl({
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                Each run works on its own branch, in its own worktree.
+                Each run works on its own branch, in its own worktree. A task
+                whose folder is not a git repository runs in that folder
+                directly.
               </p>
             </div>
           ) : null}

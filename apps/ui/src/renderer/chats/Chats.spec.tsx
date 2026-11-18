@@ -2095,6 +2095,78 @@ describe('Chats transcript auto-scroll', () => {
     expect(container.textContent).not.toContain('cwd does not exist');
   });
 
+  it('puts a TASK’s collected worktree back and presses an agent’s button after all', async () => {
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      actions: [
+        {
+          seq: 5,
+          actionId: 'pr-merged',
+          memberId: null,
+          conversationId: null,
+          label: 'PR merged',
+          once: true,
+          spec: { kind: 'message', text: 'merged — close out' },
+          publisher: {
+            nodeId: null,
+            conversationId: null,
+            callId: null,
+            agentLabel: null,
+          },
+          pending: false,
+        },
+      ],
+    });
+    api.pressChatAction
+      .mockReset()
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/actions/5/press failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockResolvedValueOnce({
+        outcome: {
+          actionSeq: 5,
+          actionId: 'pr-merged',
+          memberId: null,
+          conversationId: null,
+          state: 'succeeded',
+        },
+      });
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    const prepareTaskWorktree = vi.fn().mockResolvedValue({
+      ok: true,
+      path: '/userData/worktrees/t1',
+      branch: 'geniro/task-t1',
+      reused: false,
+      error: null,
+    });
+    window.geniro.prepareTaskWorktree = prepareTaskWorktree;
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="chat-actions"] [data-slot="action-chip"]',
+    );
+    await act(async () => chip!.click());
+
+    expect(prepareTaskWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/repo',
+    });
+    expect(api.pressChatAction).toHaveBeenCalledTimes(2);
+    const [first, second] = api.pressChatAction.mock.calls;
+    expect(second![0]).toEqual(first![0]);
+    expect(container.textContent).not.toContain('cwd does not exist');
+  });
+
   it('shows the message while its collected worktree is being put back', async () => {
     api.listChats.mockResolvedValue([
       { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },

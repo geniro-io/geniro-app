@@ -78,9 +78,12 @@ export function TabStrip<T extends string>({
     if (strip === null || active === undefined) {
       return;
     }
-    const right = active.offsetLeft + active.offsetWidth;
-    if (active.offsetLeft < strip.scrollLeft) {
-      strip.scrollLeft = active.offsetLeft;
+    const style = getComputedStyle(strip);
+    const left = active.offsetLeft - parseFloat(style.paddingLeft);
+    const right =
+      active.offsetLeft + active.offsetWidth + parseFloat(style.paddingRight);
+    if (left < strip.scrollLeft) {
+      strip.scrollLeft = left;
     } else if (right > strip.scrollLeft + strip.clientWidth) {
       strip.scrollLeft = right - strip.clientWidth;
     }
@@ -121,7 +124,7 @@ export function TabStrip<T extends string>({
       ref={stripRef}
       data-slot="tab-strip"
       className={cn(
-        'relative flex overflow-x-auto [scrollbar-width:none]',
+        'relative -ml-1.5 flex overflow-x-auto px-1.5 [scrollbar-width:none]',
         className,
       )}>
       <div role="tablist" aria-label={label} className="flex gap-6">
@@ -144,7 +147,7 @@ export function TabStrip<T extends string>({
               tabIndex={selected ? 0 : -1}
               title={tab.title}
               className={cn(
-                'relative flex h-10 shrink-0 items-center gap-1.5 text-base font-medium whitespace-nowrap text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:rounded-control focus-visible:ring-2 focus-visible:ring-ring',
+                'relative flex h-10 shrink-0 items-center gap-1.5 text-base font-medium whitespace-nowrap text-muted-foreground transition-colors outline-none before:pointer-events-none before:absolute before:-inset-x-1 before:inset-y-1.5 before:rounded-control hover:text-foreground focus-visible:before:ring-2 focus-visible:before:ring-ring',
                 selected && 'text-foreground',
                 underline === null &&
                   selected &&

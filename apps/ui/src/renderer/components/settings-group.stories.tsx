@@ -63,15 +63,14 @@ export const Page: Story = {
   ),
 };
 
-/** A group whose content needs the whole width keeps its name above it, with its actions. */
-export const Stacked: Story = {
+/** A group whose own action stands above its rows at the right, and whose long list is summed up in a row that opens it. */
+export const WithActions: Story = {
   render: () => (
     <SettingsGroups>
       <SettingsGroup
-        layout="stacked"
         icon={<Brain />}
         title="Entries"
-        description="Every note in memory, newest first."
+        description="Every note in memory, sorted by how agents reach it."
         hint="Each entry is one note agents can find by search. Approve, edit or forget any of them here."
         actions={
           <Button size="sm" variant="outline">
@@ -79,10 +78,12 @@ export const Stacked: Story = {
           </Button>
         }>
         <SettingsPanel>
-          <SettingsPanelRow layout="block">
-            <span className="text-sm text-muted-foreground">
-              1,228 entries — press Show to list them.
-            </span>
+          <SettingsPanelRow
+            label="All entries"
+            description="26 of 274 titles in every new chat · 5 waiting for review · 32 forgotten.">
+            <Button size="sm" variant="outline">
+              Open…
+            </Button>
           </SettingsPanelRow>
         </SettingsPanel>
       </SettingsGroup>

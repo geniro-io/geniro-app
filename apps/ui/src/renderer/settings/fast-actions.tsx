@@ -115,7 +115,6 @@ export function FastActionsPane({
   return (
     <SettingsGroups>
       <SettingsGroup
-        layout="stacked"
         icon={<Zap />}
         title="Your actions"
         description="Ready-made messages you can drop into a chat with one press."

@@ -1,41 +1,18 @@
-import { cva, type VariantProps } from 'class-variance-authority';
 import type React from 'react';
 
 import { HelpHint } from './help-hint';
 import { cn } from './ui/utils';
 
-const settingsGroup = cva('grid min-w-0 grid-cols-1 gap-x-10 gap-y-4', {
-  variants: {
-    /**
-     * `aside` puts the group's name, note and actions in a column of their own
-     * beside its rows once the page is wide enough, so a long page reads as
-     * named blocks rather than one run of cards. `stacked` keeps the heading
-     * above, for content that needs the whole width (a list of entries).
-     */
-    layout: {
-      aside: '@[52rem]:grid-cols-[15rem_minmax(0,1fr)]',
-      stacked: '',
-    },
-  },
-  defaultVariants: { layout: 'aside' },
-});
-
-const settingsGroupHeader = cva('flex min-w-0 items-start gap-3', {
-  variants: {
-    layout: {
-      aside: '@[52rem]:flex-col @[52rem]:gap-2',
-      stacked: '',
-    },
-  },
-  defaultVariants: { layout: 'aside' },
-});
-
 /**
  * One named group of a settings page: an icon, a title with its "?"
- * explanation, a one-line note, the group's own actions, then its rows.
+ * explanation and a one-line note, then its rows with the group's own actions
+ * above them at the right.
  *
- * Its parent carries `@container` ({@link SettingsGroups}), so the heading
- * moves beside the rows at the page's width rather than the window's.
+ * Once the page is wide enough the name and note stand in a column of their
+ * own beside the rows, so a long page reads as named blocks rather than one run
+ * of cards. Its parent carries `@container` ({@link SettingsGroups}), so that
+ * happens at the page's width rather than the window's. A list too long for
+ * the rows' column opens in a dialog from a row instead.
  */
 export function SettingsGroup({
   icon,
@@ -43,7 +20,6 @@ export function SettingsGroup({
   description,
   hint,
   actions,
-  layout,
   className,
   children,
 }: {
@@ -57,13 +33,16 @@ export function SettingsGroup({
   actions?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
-} & VariantProps<typeof settingsGroup>): React.JSX.Element {
+}): React.JSX.Element {
   return (
     <section
       data-slot="settings-group"
       aria-label={title}
-      className={cn(settingsGroup({ layout }), className)}>
-      <header className={cn(settingsGroupHeader({ layout }))}>
+      className={cn(
+        'grid min-w-0 grid-cols-1 gap-x-10 gap-y-4 @[52rem]:grid-cols-[15rem_minmax(0,1fr)]',
+        className,
+      )}>
+      <header className="flex min-w-0 items-start gap-3 @[52rem]:flex-col @[52rem]:gap-2">
         {icon === undefined ? null : (
           <span
             aria-hidden="true"
@@ -83,16 +62,18 @@ export function SettingsGroup({
               {description}
             </p>
           )}
-          {actions === undefined ? null : (
-            <div
-              data-slot="settings-group-actions"
-              className="flex flex-wrap items-center gap-2 pt-1">
-              {actions}
-            </div>
-          )}
         </div>
       </header>
-      <div className="flex min-w-0 flex-col gap-3">{children}</div>
+      <div className="flex min-w-0 flex-col gap-3">
+        {actions === undefined || actions === null ? null : (
+          <div
+            data-slot="settings-group-actions"
+            className="flex flex-wrap items-center justify-end gap-2">
+            {actions}
+          </div>
+        )}
+        {children}
+      </div>
     </section>
   );
 }

@@ -420,12 +420,35 @@ async function render(
   return api;
 }
 
-async function openEntries(): Promise<void> {
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '[data-slot="memory-entries-group"] [data-slot="show-all"][aria-expanded="false"]',
+function openButton(): HTMLButtonElement {
+  const summary = container.querySelector<HTMLElement>(
+    '[data-slot="memory-entries-summary"]',
   );
-  if (toggle) {
-    await press(toggle);
+  if (!summary) {
+    throw new Error('no entries summary');
+  }
+  return button(summary, 'Open…');
+}
+
+function entriesFigures(): string | null {
+  return (
+    container.querySelector('[data-slot="memory-entries-figures"]')
+      ?.textContent ?? null
+  );
+}
+
+async function openEntries(list?: string): Promise<void> {
+  if (container.querySelector('[data-slot="memory-entries-group"]') === null) {
+    await press(openButton());
+  }
+  if (list !== undefined) {
+    const found = [
+      ...entriesGroup().querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    ].find((candidate) => candidate.textContent?.startsWith(list));
+    if (!found) {
+      throw new Error(`no tab ${list}`);
+    }
+    await press(found);
   }
 }
 
@@ -1147,8 +1170,10 @@ describe('Memory', () => {
       }),
     );
     await render({ api });
+    expect(entriesFigures()).toContain('1+ waiting for review');
+    await openEntries();
 
-    expect(tab(container, 'Waiting for review', '1+')).toBeTruthy();
+    expect(tab(entriesGroup(), 'Waiting for review', '1+')).toBeTruthy();
   });
 
   it('claims no daemon total on a search that matches fewer waiting entries than the cap', async () => {
@@ -2155,7 +2180,7 @@ describe('Memory clean up', () => {
   });
 
   it('arms the automatic sweep only after a confirm naming what it would forget now', async () => {
-    const api = await renderOpen();
+    const api = await render();
     expect(container.textContent).toContain(
       'Never deletes, never asks a model, never touches kept entries or entries with a warning.',
     );
@@ -2190,7 +2215,7 @@ describe('Memory clean up', () => {
   });
 
   it('names the window it was asked about, whatever answer comes back late', async () => {
-    const api = await renderOpen();
+    const api = await render();
     let late: (summary: MemoryReviewSummaryDto) => void = () => undefined;
     api.memoryReviewSummary.mockImplementationOnce(
       () =>
@@ -2218,7 +2243,7 @@ describe('Memory clean up', () => {
   });
 
   it('says the figure may be high while earlier chats are still counted', async () => {
-    await renderOpen({
+    await render({
       api: fakeApi(undefined, undefined, { ...SUMMARY, counting: true }),
     });
 
@@ -2628,71 +2653,117 @@ function lessonsApiOf(waiting: number, saved: number): DaemonApis['lessons'] {
   } as unknown as DaemonApis['lessons'];
 }
 
-describe('Memory entries folded until asked', () => {
-  it('keeps the tab strip with its counts and hides the list behind a Show button', async () => {
+function closeButton(): HTMLButtonElement {
+  const found = entriesGroup()
+    .closest('[role="dialog"]')
+    ?.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+  if (!found) {
+    throw new Error('no Close on the entries window');
+  }
+  return found;
+}
+
+describe('Memory entries summary and window', () => {
+  it('sums the lists up in one row and keeps every entry off the page until Open is pressed', async () => {
     await render();
 
-    const group = entriesGroup();
-    expect(group.querySelector('[role="tablist"]')).not.toBeNull();
-    expect(tab(group, 'Waiting for review', '1')).toBeTruthy();
-    expect(tab(group, 'Forgotten', '3')).toBeTruthy();
-    expect(group.querySelector('[data-memory-handle]')).toBeNull();
+    expect(entriesFigures()).toBe(
+      `1 of 1 titles in every new chat · 1 waiting for review · ${SUMMARY.forgotten} forgotten.`,
+    );
     expect(
-      group.querySelector('[data-slot="memory-entries-toolbar"]'),
+      container.querySelectorAll(
+        '[data-slot="memory-entries-summary"] button:not([aria-label^="About"])',
+      ),
+    ).toHaveLength(1);
+    expect(container.querySelector('[data-memory-handle]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="memory-entries-group"]'),
     ).toBeNull();
-    const toggle = group.querySelector<HTMLButtonElement>(
-      '[data-slot="show-all"]',
-    )!;
-    expect(toggle.textContent).toBe('Show 1 entry');
 
-    await press(toggle);
+    await press(openButton());
 
+    const group = entriesGroup();
+    expect(
+      group
+        .closest('[role="dialog"]')
+        ?.querySelector('[data-slot="dialog-title"]')?.textContent,
+    ).toBe('Memory entries');
+    expect(tab(group, 'In every chat').getAttribute('aria-selected')).toBe(
+      'true',
+    );
     expect(group.querySelector('[data-memory-handle="m1"]')).not.toBeNull();
     expect(
       group.querySelector('[data-slot="memory-entries-toolbar"]'),
     ).not.toBeNull();
-    expect(group.querySelector('[data-slot="show-all"]')?.textContent).toBe(
-      'Hide entries',
-    );
   });
 
-  it('counts the forgotten tab from the daemon in its Show button', async () => {
+  it('moves between the lists by tab inside the window, and closes it again', async () => {
     await render({ api: fakeApi([ACTIVE, WAITING, GONE]) });
-    const group = entriesGroup();
 
-    await act(async () => {
-      tab(group, 'Forgotten', '3').click();
-    });
-    await settle();
-    expect(group.querySelectorAll('[data-memory-handle]')).toHaveLength(1);
-    await press(
-      group.querySelector<HTMLButtonElement>('[data-slot="show-all"]')!,
-    );
+    await openEntries('Forgotten');
 
-    expect(group.querySelector('[data-memory-handle]')).toBeNull();
-    expect(group.querySelector('[data-slot="show-all"]')?.textContent).toBe(
-      `Show ${SUMMARY.forgotten} entries`,
-    );
+    expect(
+      tab(entriesGroup(), 'Forgotten', '3').getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      entriesGroup().querySelectorAll('[data-memory-handle]'),
+    ).toHaveLength(1);
+
+    await press(closeButton());
+
+    expect(
+      container.querySelector('[data-slot="memory-entries-group"]'),
+    ).toBeNull();
   });
 
-  it('starts open when the pane is focused on one entry', async () => {
-    await render({ focus: 'm1' });
+  it('opens on a fresh In every chat list, whatever tab and search the window was left with', async () => {
+    const api = await render();
+    await openEntries('Search only');
+    await type(
+      entriesGroup().querySelector<HTMLInputElement>(
+        'input[aria-label="Search memory"]',
+      )!,
+      'pnpm',
+    );
+    await settle(300);
+    expect(api.listMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'active', reach: 'search', q: 'pnpm' }),
+    );
+    await press(closeButton());
+    const readsBefore = api.listMemories.mock.calls.length;
+
+    await press(openButton());
+
+    expect(
+      entriesGroup().querySelector<HTMLInputElement>(
+        'input[aria-label="Search memory"]',
+      )?.value,
+    ).toBe('');
+    expect(
+      tab(entriesGroup(), 'In every chat').getAttribute('aria-selected'),
+    ).toBe('true');
+    const reads = api.listMemories.mock.calls
+      .slice(readsBefore)
+      .map(([request]) => request);
+    expect(reads).toContainEqual({
+      status: 'active',
+      reach: 'index',
+      limit: 20,
+    });
+    expect(reads.some((request) => request && 'q' in request)).toBe(false);
+  });
+
+  it('starts open when the pane is focused on one entry, and leaves the entry when closed', async () => {
+    const onFocusDone = vi.fn();
+    await render({ focus: 'm1', onFocusDone });
 
     expect(
       entriesGroup().querySelector('[data-memory-handle="m1"]'),
     ).not.toBeNull();
-  });
 
-  it('pressing a tab while the list is folded opens it on that tab', async () => {
-    await render();
-    const group = entriesGroup();
+    await press(closeButton());
 
-    await press(tab(group, 'Waiting for review', '1'));
-
-    expect(group.querySelector('[data-memory-handle]')).not.toBeNull();
-    expect(
-      tab(group, 'Waiting for review', '1').getAttribute('aria-selected'),
-    ).toBe('true');
+    expect(onFocusDone).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2720,17 +2791,16 @@ describe('Memory waiting-for-review block', () => {
     expect(block.textContent).toContain(
       '2 notes agents saved and 3 lessons a reflection found',
     );
-    expect(tab(entriesGroup(), 'Waiting for review', '5')).toBeTruthy();
+    expect(entriesFigures()).toContain('5 waiting for review');
   });
 
-  it('opens the Waiting for review list on Review now, on the entries side', async () => {
+  it('opens the window on the Waiting for review list on Review now, on the entries side', async () => {
     const api = await render();
-    const group = entriesGroup();
-    expect(group.querySelector('[data-memory-handle]')).toBeNull();
+    expect(container.querySelector('[data-memory-handle]')).toBeNull();
 
     await press(button(container, 'Review now'));
 
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    const group = entriesGroup();
     expect(
       tab(group, 'Waiting for review', '1').getAttribute('aria-selected'),
     ).toBe('true');
@@ -2742,76 +2812,21 @@ describe('Memory waiting-for-review block', () => {
 
   it('switches back to the entries side on Review now when entries wait too', async () => {
     await render({ lessonsApi: lessonsApiOf(2, 0) });
-    const group = entriesGroup();
-    await press(tab(group, 'Waiting for review', '3'));
-    await press(tab(group, 'Lessons', '2'));
-    expect(tab(group, 'Lessons', '2').getAttribute('aria-selected')).toBe(
-      'true',
-    );
+    await openEntries('Waiting for review');
+    await press(tab(entriesGroup(), 'Lessons', '2'));
+    expect(
+      tab(entriesGroup(), 'Lessons', '2').getAttribute('aria-selected'),
+    ).toBe('true');
+    await press(closeButton());
 
     await press(button(container, 'Review now'));
 
-    expect(tab(group, 'Entries', '1').getAttribute('aria-selected')).toBe(
-      'true',
-    );
-    expect(tab(group, 'Lessons', '2').getAttribute('aria-selected')).toBe(
-      'false',
-    );
-  });
-
-  it('scrolls the entries group again once the reload it waited for has landed', async () => {
-    const api = fakeApi();
-    await render({ api });
-    const scroll = vi.mocked(Element.prototype.scrollIntoView);
-    scroll.mockClear();
-    let release: () => void = () => {};
-    const held = new Promise<MemoryListDto>((resolve) => {
-      release = () => resolve({ memories: [WAITING], tracks: [], next: null });
-    });
-    api.listMemories.mockImplementation(() => held);
-
-    await press(button(container, 'Review now'));
-    const callsBefore = scroll.mock.calls.length;
-    expect(callsBefore).toBeGreaterThan(0);
-    const settingsGroup = entriesGroup().closest('[data-slot=settings-group]');
-    expect(settingsGroup).not.toBeNull();
-    expect(scroll.mock.contexts[0]).toBe(settingsGroup);
-
-    await act(async () => release());
-    await settle();
-
-    expect(scroll.mock.calls.length).toBeGreaterThan(callsBefore);
-    expect(scroll.mock.contexts.at(-1)).toBe(settingsGroup);
-  });
-
-  it('drops the scroll request when the reload fails, so a later reload does not scroll', async () => {
-    const api = fakeApi();
-    const client = fakeClient();
-    await render({ api, client });
-    const scroll = vi.mocked(Element.prototype.scrollIntoView);
-    const healthy = api.listMemories.getMockImplementation()!;
-    api.listMemories.mockImplementation(() =>
-      Promise.reject(new Error('daemon gone')),
-    );
-
-    await press(button(container, 'Review now'));
-    api.listMemories.mockImplementation(healthy);
-    const callsAfterFailure = scroll.mock.calls.length;
-    const readsAfterFailure = api.listMemories.mock.calls.length;
-
-    client.announce({
-      memoryId: 'e1',
-      change: 'updated',
-      projectId: null,
-      teamSlug: null,
-      batchId: null,
-    });
-    await settle(300);
-
-    expect(api.listMemories.mock.calls.length).toBeGreaterThan(
-      readsAfterFailure,
-    );
-    expect(scroll.mock.calls.length).toBe(callsAfterFailure);
+    expect(
+      tab(entriesGroup(), 'Entries', '1').getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      tab(entriesGroup(), 'Lessons', '2').getAttribute('aria-selected'),
+    ).toBe('false');
   });
 
   it('opens on the Lessons side when only lessons wait', async () => {
@@ -2838,10 +2853,8 @@ describe('Memory lessons counts', () => {
       api: fakeApi(undefined, undefined, { ...SUMMARY, pending: 0 }),
       lessonsApi: lessonsApiOf(0, 12),
     });
+    await openEntries();
     const group = entriesGroup();
-    await press(
-      group.querySelector<HTMLButtonElement>('[data-slot="show-all"]')!,
-    );
     await press(tab(group, 'Waiting for review'));
     await press(tab(group, 'Lessons'));
 
@@ -2869,15 +2882,21 @@ describe('Memory explanations', () => {
       "Each CLI's own memory off",
       'Forget cold entries automatically',
       'Remove entries agents mark as not useful',
+      'All entries',
       'Import',
       'Export',
       'Forget all',
-      'the entry tabs',
     ]) {
       expect(
         container.querySelector(`button[aria-label="About ${subject}"]`),
         subject,
       ).not.toBeNull();
     }
+
+    await openEntries();
+
+    expect(
+      entriesGroup().querySelector('button[aria-label="About the entry tabs"]'),
+    ).not.toBeNull();
   });
 });

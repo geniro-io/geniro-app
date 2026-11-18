@@ -129,10 +129,11 @@ function readEntry(
   args: Record<string, unknown>,
   text: string | null,
 ): MemoryToolEntry | null {
-  if (!Array.isArray(args.ids)) {
+  const ids = args.ids ?? (args.id === undefined ? undefined : [args.id]);
+  if (!Array.isArray(ids)) {
     return null;
   }
-  const handles = args.ids
+  const handles = ids
     .map(normalizedHandle)
     .filter((handle): handle is string => handle !== null);
   if (handles.length === 0) {
@@ -267,7 +268,8 @@ function entryOf(
  * TWIN PARSER: the result texts of `memorySearchResultText`,
  * `memoryReadResultText`, `memorySaveResultText`, `memoryForgetResultText`,
  * `memoryFeedbackResultText` (each in `apps/daemon/src/v1/mcp/tools/memory-<tool>/`)
- * and `memoryEntryLine` (`apps/daemon/src/v1/mcp/tools/memory-mcp-tool.ts`).
+ * and `memoryEntryLine` (`apps/daemon/src/v1/mcp/tools/memory-mcp-tool.ts`),
+ * and the `memory_read` arguments `readMemoryReadArgs` accepts (`ids` or `id`).
  */
 export function memoryToolEntryOf(pair: ToolPair): MemoryToolEntry | null {
   const name = payloadString(pair.call.payload, 'name') ?? '';

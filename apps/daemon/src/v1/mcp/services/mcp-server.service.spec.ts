@@ -945,6 +945,74 @@ describe('McpServerService', () => {
       }
     });
 
+    it('reads one entry by id as by ids, lists ids first with id beside it, and refuses both together', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const saved = await db.service.save(
+          { kind: 'user' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          { projectId: null, teamSlug: null },
+        );
+        if (saved.kind !== 'created') {
+          throw new Error(`expected a saved entry, got ${saved.kind}`);
+        }
+        const handle = saved.entry.handle;
+        const read = async (args: Record<string, unknown>) => {
+          const { json } = await post(
+            target,
+            'run-1',
+            'agent',
+            rpc('tools/call', { name: HOST_MEMORY_READ_TOOL, arguments: args }),
+          );
+          return json().result as {
+            isError?: boolean;
+            content: { text: string }[];
+          };
+        };
+        const unfenced = (text: string) =>
+          text.replace(/memory-entry-[0-9a-f]+/g, 'memory-entry-x');
+
+        const byId = await read({ id: handle });
+        const byIds = await read({ ids: [handle] });
+        const both = await read({ id: handle, ids: [handle] });
+
+        expect(byId.isError).toBe(byIds.isError);
+        expect(byId.content[0]!.text).toContain('Never npm here.');
+        expect(unfenced(byId.content[0]!.text)).toBe(
+          unfenced(byIds.content[0]!.text),
+        );
+        expect(both.isError).toBe(true);
+        expect(both.content[0]!.text).toBe(
+          'INVALID_ARGS: send ids (a list of handles) or id (one handle), not both',
+        );
+
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/list', {}),
+        );
+        const schema = (
+          json().result as {
+            tools: {
+              name: string;
+              inputSchema: {
+                properties: Record<string, { description?: string }>;
+                required?: string[];
+              };
+            }[];
+          }
+        ).tools.find((t) => t.name === HOST_MEMORY_READ_TOOL)!.inputSchema;
+        expect(Object.keys(schema.properties)).toEqual(['ids', 'id']);
+        expect(schema.properties.id!.description).toContain('instead of `ids`');
+        expect(schema.required ?? []).toEqual([]);
+      } finally {
+        await db.orm.close();
+      }
+    });
+
     it('refuses a memory call once the user has turned memory off', async () => {
       const memory = fakeMemory(true);
       const target = memoryService(memory.service);

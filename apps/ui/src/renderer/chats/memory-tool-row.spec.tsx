@@ -207,6 +207,17 @@ describe('memory_read', () => {
     expect(line()).toBe('Read memory · m3, m5');
   });
 
+  it('lists the one handle a read sent as id', () => {
+    draw(
+      pair(
+        'memory_read',
+        { id: '12' },
+        { text: `${PREFACE}\n\nm12 (rev 1, global, user) — A` },
+      ),
+    );
+    expect(line()).toBe('Read memory · m12');
+  });
+
   it('marks a handle the result could not find', () => {
     draw(
       pair(

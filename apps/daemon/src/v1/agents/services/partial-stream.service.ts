@@ -425,10 +425,11 @@ export class PartialStreamService {
    * instead of opening a fresh row, so its clock and its token count both
    * carried the previous wait's numbers.
    *
-   * Called on every DURABLE event, which is the honest rule: the moment
-   * something reaches the transcript, whatever the agent was silently doing
-   * before it is over. Idempotent — a stretch that is already closed publishes
-   * nothing, so calling it per event costs no traffic.
+   * Called on every durable event the agent itself produces
+   * (`endsReasoningStretch`); a report about work running beside it — a
+   * delegate or a command settling, a call returning — leaves it open.
+   * Idempotent — a stretch that is already closed publishes nothing, so calling
+   * it per event costs no traffic.
    */
   endThinking(runId: string, ownerKey: string, memberId: string | null): void {
     try {

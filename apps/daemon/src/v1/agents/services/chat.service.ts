@@ -199,7 +199,7 @@ import {
 import { threadCardFields } from '../utils/host-thread-message';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
-import { isLiveWordsEvent } from '../utils/live-words';
+import { endsReasoningStretch, isLiveWordsEvent } from '../utils/live-words';
 import {
   readModelParameters,
   writeModelParameters,
@@ -4701,9 +4701,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (!mapped) {
         return;
       }
-      // Anything durable ends a reasoning stretch, as at the in-turn seam.
       const ownsLivePlane = this.ownsSession(runId, session);
-      if (ownsLivePlane && event.parentToolUseId === undefined) {
+      if (ownsLivePlane && endsReasoningStretch(event)) {
         this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
       }
       await this.persist(
@@ -7764,19 +7763,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               );
               return;
             }
-            // Anything durable ends a silent reasoning stretch — the tool call
-            // the model went quiet to prepare is the commonest one, and it
-            // carries no text delta to close it (see `endThinking`). Before the
-            // persist, so the row stops saying "Thinking…" as the tool row
-            // lands rather than a write later.
-            //
-            // MAIN THREAD ONLY, like every other write into this plane: there
-            // is one stretch per run and it belongs to the agent the user is
-            // addressing. A delegate's rows arrive on this same stream while
-            // the parent is genuinely still reasoning, so letting one close the
-            // stretch took the "Thinking…" row away from an agent that had not
-            // stopped.
-            if (event.parentToolUseId === undefined) {
+            // Before the persist, so the row stops saying "Thinking…" as the
+            // tool row lands rather than a write later.
+            if (endsReasoningStretch(event)) {
               this.partials.endThinking(runId, SINGLE_AGENT_NODE, null);
             }
             if (event.type === 'turn_held') {

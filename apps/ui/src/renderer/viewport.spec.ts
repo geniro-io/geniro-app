@@ -48,4 +48,13 @@ describe('the phone viewport', () => {
     expect(frameSrc).toContain("'self'");
     expect(frameSrc).toContain('http://127.0.0.1:*');
   });
+
+  it('keeps every absolutely positioned element inside the clipped body', () => {
+    // An element positioned against the root instead escaped `overflow: clip`
+    // and gave the document height past the screen; iPad Safari then left the
+    // keyboard's lift in place, the title bar off the top and an empty band
+    // along the bottom.
+    const body = /\n {2}body \{([^}]*)\}/.exec(GLOBAL_CSS)?.[1];
+    expect(body).toMatch(/\bposition: relative;/);
+  });
 });

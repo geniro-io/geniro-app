@@ -136,10 +136,16 @@ function useClock(): number {
 export function CommandCenter({
   handle,
   client,
+  active,
   onOpenThread,
 }: {
   handle: DaemonHandle;
   client: DaemonClient | null;
+  /**
+   * Whether the page is on screen: the board and the timeline read nothing
+   * while it is not.
+   */
+  active: boolean;
   onOpenThread: (runId: string) => void;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
@@ -168,7 +174,7 @@ export function CommandCenter({
     apis.capabilities,
   );
   const managerChoice = useManagerChoice(sources.cliDetections);
-  const board = useCommandCenterBoard(apis, client);
+  const board = useCommandCenterBoard(apis, client, active);
   const unknownTeams = [
     ...new Set(
       (board.cards ?? []).flatMap((card) =>
@@ -199,7 +205,7 @@ export function CommandCenter({
   const timeline = useCommandCenterTimeline(
     apis,
     client,
-    sidebar === 'timeline',
+    sidebar === 'timeline' && active,
   );
   const asking = useMemo(
     () =>
@@ -501,6 +507,7 @@ export function CommandCenter({
                 client={client}
                 choice={managerChoice.choice}
                 hidden={!chatShown}
+                active={active}
                 workingThreads={workingThreads}
                 onOpenThread={onOpenThread}
                 onTurnSettled={board.reload}

@@ -227,6 +227,7 @@ export function App(): React.JSX.Element {
   // Same latch, same reason: the board holds a selected project, a scroll
   // position and a half-finished drag, none of which survive a remount.
   const [tasksMounted, setTasksMounted] = useState(false);
+  const [commandCenterMounted, setCommandCenterMounted] = useState(false);
   /**
    * Which pane Settings opens on — HERE rather than inside Settings because
    * another screen can ask for one: Settings is unmounted while hidden, so a
@@ -240,6 +241,11 @@ export function App(): React.JSX.Element {
   }
   if (view === 'tasks' && !tasksMounted) {
     setTasksMounted(true);
+  }
+  // Mounted once, then kept hidden: a remount rebuilds the page and re-reads
+  // the whole board.
+  if (view === 'command-center' && !commandCenterMounted) {
+    setCommandCenterMounted(true);
   }
   const [connected, setConnected] = useState(false);
   const [handle, setHandle] = useState<DaemonHandle | null>(null);
@@ -977,13 +983,16 @@ export function App(): React.JSX.Element {
                       />
                     </div>
                   ) : null}
-                  {view === 'command-center' &&
-                  !showStartup &&
-                  handle !== null ? (
-                    <div className="min-h-0 flex-1">
+                  {commandCenterMounted && handle !== null ? (
+                    <div
+                      className={cn(
+                        'min-h-0 flex-1',
+                        (view !== 'command-center' || showStartup) && 'hidden',
+                      )}>
                       <CommandCenter
                         handle={handle}
                         client={clientRef.current}
+                        active={view === 'command-center' && !showStartup}
                         onOpenThread={(runId) => {
                           setThreadRequest(runId);
                           setView('chats');

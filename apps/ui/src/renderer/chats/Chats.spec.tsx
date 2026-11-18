@@ -16536,6 +16536,81 @@ describe('Chats — a screenshot pasted into a question answer', () => {
     expect(client.sendVerdict).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
+
+  it("delivers the image of a relayed thread question to the thread, not the manager's chat", async () => {
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', ''));
+    const relayed: ChatItem = {
+      id: 'r1-relay',
+      runId: 'r1',
+      memberId: null,
+      seq: 1,
+      kind: 'approval_request',
+      role: null,
+      payload: {
+        id: 'thread_question#1',
+        toolName: 'thread_question',
+        input: {
+          threadRunId: 'thread-9',
+          threadIsTeam: false,
+          threadRequestId: 'q-9',
+          handle: 't9',
+          threadTitle: 'Billing cache',
+          toolName: 'AskUserQuestion',
+          input: {
+            questions: [{ question: 'Which looks right?', options: [] }],
+          },
+          questions: [{ question: 'Which looks right?', options: [] }],
+        },
+      },
+      createdAt: 'now',
+    };
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), relayed]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const field = container.querySelector<HTMLInputElement>(
+      '[data-slot="pinned-request"] input',
+    )!;
+    const paste = new Event('paste', { bubbles: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { files: [new File([PNG], 'shot.png', { type: 'image/png' })] },
+    });
+    await act(async () => {
+      field.dispatchEvent(paste);
+    });
+    for (let attempt = 0; ; attempt++) {
+      if (container.querySelector('[data-slot="staged-attachment"]')) {
+        break;
+      }
+      if (attempt >= 100) {
+        throw new Error('the pasted image never staged');
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    await act(async () => {
+      [...container.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Answer')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(client.sendVerdict).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.sendVerdict).mock.calls[0]!.slice(0, 2)).toEqual([
+      'r1',
+      'thread_question#1',
+    ]);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'thread-9',
+      sendMessageDto: {
+        text: '',
+        images: [{ mediaType: 'image/png', data: PNG_B64 }],
+      },
+    });
+  });
 });
 
 describe('Chats — running shells', () => {

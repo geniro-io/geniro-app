@@ -108,7 +108,8 @@ export function ThreadQuestionCard({
           className="size-4 shrink-0 text-warning"
         />
         <span className="min-w-0 flex-1 text-sm font-medium break-words">
-          {relay.handle} · {relay.threadTitle} is waiting on you
+          {relay.handle} · {relay.threadTitle}{' '}
+          {verdict === null && !expired ? 'is waiting on you' : 'asked'}
         </span>
       </div>
       {closed ? (

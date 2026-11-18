@@ -163,4 +163,14 @@ describe('a thread question relayed into the manager chat', () => {
     renderCard(RELAYED_PERMISSION, { verdict: true, outcome: 'delivered' });
     expect(container.textContent).not.toContain('Not delivered');
   });
+
+  it('stops saying the thread waits once the card is answered or closed', () => {
+    renderCard(RELAYED_QUESTION, { verdict: true, outcome: 'delivered' });
+    expect(container.textContent).toContain('t3 · Billing cache asked');
+    expect(container.textContent).not.toContain('is waiting on you');
+
+    renderCard(RELAYED_QUESTION, { expired: true });
+    expect(container.textContent).toContain('t3 · Billing cache asked');
+    expect(container.textContent).not.toContain('is waiting on you');
+  });
 });

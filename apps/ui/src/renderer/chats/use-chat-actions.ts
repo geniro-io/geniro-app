@@ -79,6 +79,15 @@ export interface PressHooks {
    * threw.
    */
   onPressSettled?: (taken: boolean, action: LiveAction) => void;
+  /**
+   * Sends the press's request, wrapped as a typed send to the same run is
+   * wrapped — the chat screen puts back a task's collected worktree and presses
+   * once more (`sendRestoringWorktree`). Absent, the request goes as it is.
+   */
+  deliver?: (
+    runId: string,
+    request: () => Promise<unknown>,
+  ) => Promise<unknown>;
 }
 
 /**
@@ -190,7 +199,12 @@ export function useChatActions(
       }
       setPhase(action.seq, { kind: 'pressing' });
       Promise.resolve(hooksRef.current.beforePress?.(action))
-        .then(() => pressVia(api, runId, action.seq, clientMessageId))
+        .then(() => {
+          const request = (): Promise<unknown> =>
+            pressVia(api, runId, action.seq, clientMessageId);
+          const { deliver } = hooksRef.current;
+          return deliver === undefined ? request() : deliver(runId, request);
+        })
         .then(
           () => {
             hooksRef.current.onPressSettled?.(true, action);

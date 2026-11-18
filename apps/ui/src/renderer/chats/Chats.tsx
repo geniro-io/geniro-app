@@ -2368,8 +2368,8 @@ export function Chats({
 
   /**
    * Put back the worktree a chat outlived — see `task-worktree.ts`. Every send
-   * path goes through `startTurn`, Retry and Apply through their own calls, so
-   * those are the three places that use it.
+   * path goes through `startTurn`, Retry, Apply and an agent's button press
+   * through their own calls, so those are the four places that use it.
    */
   const restoreWorktree = useLatestCallback(
     (run: WorktreeRun) => restoreRunWorktree(apis, run),
@@ -5129,9 +5129,22 @@ export function Chats({
     },
     [refuseHostedTurn],
   );
-  const pressHooks: PressHooks | undefined = isHosted
-    ? { beforePress: beforeHostedPress, onPressSettled: hostedPressSettled }
-    : undefined;
+  const deliverPress = useLatestCallback(
+    (runId: string, request: () => Promise<unknown>): Promise<unknown> =>
+      sendRestoringWorktree(
+        request,
+        runsRef.current.find((run) => run.id === runId) ?? null,
+        restoreWorktree,
+      ),
+    [restoreWorktree],
+  );
+  const pressHooks: PressHooks = isHosted
+    ? {
+        beforePress: beforeHostedPress,
+        onPressSettled: hostedPressSettled,
+        deliver: deliverPress,
+      }
+    : { deliver: deliverPress };
   /** The agents' buttons on this chat, and their press — see `useChatActions`. */
   const pressableActions = useChatActions(
     activeTeamId === null ? chatApi : teamApi,

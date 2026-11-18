@@ -56,6 +56,16 @@ describe('composeManagerBrief', () => {
     expect(brief).not.toMatch(/^- t\d/m);
   });
 
+  it('tells the manager to speak only when a thread is done or asks, never about statuses', () => {
+    const brief = composeManagerBrief(ROSTER);
+
+    expect(brief).toContain(
+      'Write to the user only when a thread is done, when it asks something, or when a reply answers what the user asked.',
+    );
+    expect(brief).toContain("Never comment on a thread's status");
+    expect(brief).not.toContain('you are told when it has started');
+  });
+
   it('names the tool that reaches the threads by its wire name', () => {
     expect(composeManagerBrief(ROSTER)).toContain(
       `\`${HOST_TELL_THREADS_TOOL}\``,

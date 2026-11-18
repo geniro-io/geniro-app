@@ -105,6 +105,13 @@ export const START_THREAD = 'start_thread';
  */
 export const BROWSER_HOST_CARD = 'browser_host';
 
+/**
+ * The `approval_request` row's `toolName` for a managed thread's question,
+ * relayed into the command center manager's chat. TWIN: the daemon's
+ * `HOST_THREAD_QUESTION_CARD` in `chat.types.ts`.
+ */
+export const THREAD_QUESTION_CARD = 'thread_question';
+
 /** `propose_team`'s name before the rename, which the rows recorded then still carry. */
 export const LEGACY_PROPOSE_TEAM = 'propose_workflow';
 
@@ -392,7 +399,11 @@ export function geniroCardKindOf(
  * `ChatService.raiseOwnedCard` raises.
  */
 export function standsAcrossTurns(toolName: string | null): boolean {
-  return isTeamProposalTool(toolName) || toolName === BROWSER_HOST_CARD;
+  return (
+    isTeamProposalTool(toolName) ||
+    toolName === BROWSER_HOST_CARD ||
+    toolName === THREAD_QUESTION_CARD
+  );
 }
 
 /** Whether a row's tool is `propose_team`, under either of its names. */

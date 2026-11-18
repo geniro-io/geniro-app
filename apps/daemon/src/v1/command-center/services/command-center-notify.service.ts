@@ -297,7 +297,10 @@ export class CommandCenterNotifyService
       relay.managerRunId,
       relay.relayId,
       allow,
-      { ...(answer === undefined ? {} : { answer }), delivered },
+      {
+        ...(answer === undefined ? {} : { answer }),
+        outcome: delivered ? 'delivered' : 'not-delivered',
+      },
     );
   }
 

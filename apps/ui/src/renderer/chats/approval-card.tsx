@@ -28,6 +28,7 @@ import {
   isTeamProposalTool,
   namesGeniroGallery,
   namesGeniroMonitor,
+  THREAD_QUESTION_CARD,
 } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
@@ -35,6 +36,10 @@ import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
 import { TeamProposalCard } from './team-proposal-card';
 import { readProposalOutcome, readTeamProposal } from './team-proposal-payload';
 import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
+import {
+  readThreadQuestionRelay,
+  ThreadQuestionCard,
+} from './thread-question-card';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -1503,12 +1508,37 @@ export function ApprovalCard({
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
+  const relay =
+    toolName === THREAD_QUESTION_CARD ? readThreadQuestionRelay(input) : null;
   // geniro's own team proposal, read once per row: its graph and diff are
   // the largest payload any card parses.
   const teamProposal = useMemo(
     () => (isTeamProposalTool(toolName) ? readTeamProposal(input) : null),
     [toolName, input],
   );
+  // A managed thread's request, relayed into the command center manager's
+  // chat: the thread's own card under the thread's name.
+  if (relay !== null) {
+    return (
+      <ThreadQuestionCard
+        relay={relay}
+        verdict={verdict}
+        outcome={outcome}
+        expired={expired}>
+        <ApprovalCard
+          toolName={relay.toolName}
+          input={relay.input}
+          questions={relay.questions}
+          options={relay.options}
+          requestId={requestId}
+          verdict={verdict}
+          verdictOption={verdictOption}
+          answer={answer}
+          onRespond={onRespond}
+        />
+      </ThreadQuestionCard>
+    );
+  }
   if (teamProposal !== null) {
     return (
       <TeamProposalCard

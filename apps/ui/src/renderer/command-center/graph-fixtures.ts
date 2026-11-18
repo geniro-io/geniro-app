@@ -1,5 +1,6 @@
 import type { ThreadAttention } from '../components/thread-labels';
 import type { GraphThread } from './graph-view';
+import type { ProjectColor } from './project-colors';
 import { THREAD_STATUS_TEXT, type ThreadCardStatus } from './thread-card';
 
 export const FIXTURE_NOW = Date.parse('2026-11-17T12:00:00Z');
@@ -25,6 +26,12 @@ const TITLES = [
   'Wire the start conductor',
 ];
 
+/** The two projects {@link graphThreadsOf} files its threads under, coloured as the graph colours them. */
+export const FIXTURE_PROJECTS: readonly ProjectColor[] = [
+  { id: 'project-billing', name: 'QA Billing', color: 'blue' },
+  { id: 'project-cache', name: 'QA Cache', color: 'purple' },
+];
+
 /**
  * Synthetic threads for the graph's stories and specs: statuses in turn, every
  * second one works a board card, every fifth has gone still for days.
@@ -43,6 +50,7 @@ export function graphThreadsOf(count: number): GraphThread[] {
         statusText: THREAD_STATUS_TEXT[status],
         attention: still ? 'inactive' : ATTENTION_OF[status],
         project: index % 2 === 0 ? 'QA Billing' : 'QA Cache',
+        projectColor: index % 2 === 0 ? 'blue' : 'purple',
         agentLabel: index % 4 === 3 ? 'dev-team' : 'claude',
         isTeam: index % 4 === 3,
         crew:

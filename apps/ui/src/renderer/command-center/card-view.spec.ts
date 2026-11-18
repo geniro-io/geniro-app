@@ -6,6 +6,7 @@ import {
   idleDaysOf,
   orderByAttention,
   statusTextOf,
+  threadCardViewOf,
 } from './card-view';
 
 const NOW = Date.parse('2026-11-17T12:00:00Z');
@@ -206,5 +207,60 @@ describe('statusTextOf', () => {
       ),
     ).toBe('Working');
     expect(statusTextOf(card({}), 'idle', 'quiet')).toBe('Idle');
+  });
+});
+
+describe('threadCardViewOf — project colour', () => {
+  const boardCard = (project: { id: string; name: string } | null) =>
+    ({
+      run: {
+        id: 'run-1',
+        title: 'Fix the login redirect',
+        status: 'completed',
+        awaiting: null,
+        lastActivityAt: new Date(NOW - HOUR).toISOString(),
+        createdAt: new Date(NOW - DAY).toISOString(),
+        project,
+        teamId: null,
+        agentKind: null,
+        pullRequests: [],
+      },
+      column: 'idle',
+      contact: { lastAt: null, awaitingReply: false },
+      task: null,
+      note: null,
+      activity: null,
+    }) as unknown as Parameters<typeof threadCardViewOf>[0];
+
+  it('carries the colour the graph gave the thread’s project', () => {
+    const view = threadCardViewOf(
+      boardCard({ id: 'p-web', name: 'Web' }),
+      null,
+      [],
+      new Map(),
+      NOW,
+      new Map([['p-web', 'orange']]),
+    );
+
+    expect(view.project).toBe('Web');
+    expect(view.projectColor).toBe('orange');
+  });
+
+  it('carries no colour for a thread with no project, or one the graph has not coloured', () => {
+    const colors = new Map([['p-web', 'orange' as const]]);
+    expect(
+      threadCardViewOf(boardCard(null), null, [], new Map(), NOW, colors)
+        .projectColor,
+    ).toBeNull();
+    expect(
+      threadCardViewOf(
+        boardCard({ id: 'p-api', name: 'Api' }),
+        null,
+        [],
+        new Map(),
+        NOW,
+        colors,
+      ).projectColor,
+    ).toBeNull();
   });
 });

@@ -26,6 +26,36 @@ export interface NeedsYouPanelProps {
   className?: string;
 }
 
+/** One waiting card, the very one its thread pins above its composer, answered the way the thread answers it. */
+export function RequestCard({
+  request,
+  onAnswer,
+}: {
+  request: OpenRequest;
+  onAnswer: NeedsYouPanelProps['onAnswer'];
+}): React.JSX.Element {
+  const payload = request.item.payload as {
+    input?: unknown;
+    questions?: unknown;
+    options?: unknown;
+  } | null;
+  return (
+    <ApprovalCard
+      toolName={payloadString(request.item.payload, 'toolName') ?? 'tool'}
+      input={payload?.input ?? null}
+      questions={payload?.questions}
+      options={payload?.options}
+      requestId={request.requestId}
+      threadTitle={payloadString(request.item.payload, 'threadTitle')}
+      threadText={payloadString(request.item.payload, 'threadText')}
+      verdict={null}
+      onRespond={(allow, answer, images, optionId) =>
+        onAnswer(request, allow, answer, images, optionId)
+      }
+    />
+  );
+}
+
 function RequestEntry({
   request,
   focused,
@@ -43,11 +73,6 @@ function RequestEntry({
       ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [focused]);
-  const payload = request.item.payload as {
-    input?: unknown;
-    questions?: unknown;
-    options?: unknown;
-  } | null;
   return (
     <li
       ref={ref}
@@ -65,19 +90,7 @@ function RequestEntry({
         </span>
         <GoToThreadButton onGo={() => onOpenThread(request.runId)} />
       </div>
-      <ApprovalCard
-        toolName={payloadString(request.item.payload, 'toolName') ?? 'tool'}
-        input={payload?.input ?? null}
-        questions={payload?.questions}
-        options={payload?.options}
-        requestId={request.requestId}
-        threadTitle={payloadString(request.item.payload, 'threadTitle')}
-        threadText={payloadString(request.item.payload, 'threadText')}
-        verdict={null}
-        onRespond={(allow, answer, images, optionId) =>
-          onAnswer(request, allow, answer, images, optionId)
-        }
-      />
+      <RequestCard request={request} onAnswer={onAnswer} />
     </li>
   );
 }

@@ -9,10 +9,12 @@ import {
   type LucideIcon,
   MessageCircleQuestion,
   Moon,
+  PictureInPicture2,
   ShieldCheck,
   Users,
 } from 'lucide-react';
 
+import type { ProfileColor } from '../../shared/contracts';
 import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import { type AvatarPerson, AvatarStack } from '../components/member-avatar';
@@ -26,6 +28,7 @@ import {
 } from '../components/thread-labels';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { PaletteDot } from '../components/ui/palette-dot';
 import { cn } from '../components/ui/utils';
 
 export type ThreadCardStatus =
@@ -40,6 +43,8 @@ export interface ThreadCardProps {
   statusText: string;
   attention: ThreadAttention;
   project: string | null;
+  /** The project's colour on the graph, worn as a dot on its label. */
+  projectColor?: ProfileColor | null;
   /** The agent's short name, or the team's name for a team run. */
   agentLabel: string | null;
   isTeam: boolean;
@@ -60,8 +65,10 @@ export interface ThreadCardProps {
   /** A taller height to stand in; never shorter than its content. */
   height?: number;
   onGo: () => void;
-  /** Open the thread's waiting question or approval in the command center; absent when it holds none. */
-  onAnswer?: () => void;
+  /** Open the thread in a window over the command center's graph. */
+  onOpenHere?: () => void;
+  /** Open the thread's waiting question or approval from the pressed button; absent when it holds none. */
+  onAnswer?: (anchor: HTMLElement) => void;
   /** What the thread holds for the user, which names that button. */
   answerKind?: 'question' | 'approval' | null;
 }
@@ -250,7 +257,8 @@ function PullRequestChip({
 /**
  * One thread as a card — a node of the command center's graph: its title and
  * pull request, its state and labels, the manager's note, its latest message,
- * and a Go to thread button. The card itself opens nothing.
+ * a Go to thread button and a button that opens it in a window over the
+ * graph. The card itself opens nothing.
  */
 export function ThreadCard({
   title,
@@ -258,6 +266,7 @@ export function ThreadCard({
   statusText,
   attention,
   project,
+  projectColor = null,
   agentLabel,
   isTeam,
   crew,
@@ -271,6 +280,7 @@ export function ThreadCard({
   summary,
   height,
   onGo,
+  onOpenHere,
   onAnswer,
   answerKind = null,
 }: ThreadCardProps): React.JSX.Element {
@@ -322,6 +332,19 @@ export function ThreadCard({
             state={pullRequest.state}
           />
         )}
+        {onOpenHere === undefined ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-slot="thread-card-open-here"
+            className="-mr-1 size-6 shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={`Open ${title} here`}
+            title="Open in a window over the graph"
+            onClick={onOpenHere}>
+            <PictureInPicture2 aria-hidden="true" className="size-3.5" />
+          </Button>
+        )}
       </div>
       <div
         data-slot="thread-card-labels"
@@ -343,6 +366,15 @@ export function ThreadCard({
           <ThreadLabelChip
             slot="thread-card-project"
             icon={Folder}
+            mark={
+              projectColor === null ? undefined : (
+                <PaletteDot
+                  color={projectColor}
+                  size="md"
+                  data-slot="thread-card-project-dot"
+                />
+              )
+            }
             text={project}
             title={`Project ${project}`}
             yields
@@ -389,7 +421,7 @@ export function ThreadCard({
               size="sm"
               data-slot="thread-card-answer"
               className="h-6 gap-1 rounded-full px-2.5 text-xs"
-              onClick={onAnswer}>
+              onClick={(event) => onAnswer(event.currentTarget)}>
               {answerKind === 'approval' ? (
                 <ShieldCheck aria-hidden="true" className="size-3.5" />
               ) : (

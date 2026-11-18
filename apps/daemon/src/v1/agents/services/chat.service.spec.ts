@@ -17414,7 +17414,98 @@ describe('ChatService — the live tail belongs to the MAIN thread', () => {
     claude.finish();
     await drain();
   });
+
+  it('keeps the main agent THINKING whole while a background delegate settles', async () => {
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'reasoning_delta', text: 'Fork C is back.' });
+    await drain();
+    claude.emit(settledDelegate('toolu_fork_d'));
+    claude.emit({
+      type: 'tool_result',
+      id: 'toolu_fork_d',
+      name: 'Agent',
+      result: 'digest',
+      isError: false,
+    });
+    claude.emit({ type: 'reasoning_delta', text: ' Fork D is too.' });
+    await drain();
+
+    expect(deltas.at(-1)).toMatchObject({
+      thinkingStretch: 1,
+      thinkingText: 'Fork C is back. Fork D is too.',
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('keeps thinking the CLI runs by itself whole while a background delegate settles', async () => {
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    const offTurn = (event: AgentEvent): void =>
+      claude.sessions[0]?.onBetweenTurnEvent?.(event);
+
+    offTurn({ type: 'reasoning_delta', text: 'Fork C is back.' });
+    await drain();
+    offTurn(settledDelegate('toolu_fork_d'));
+    offTurn({ type: 'reasoning_delta', text: ' Fork D is too.' });
+    await drain();
+
+    expect(deltas.at(-1)).toMatchObject({
+      runId: run.id,
+      thinkingText: 'Fork C is back. Fork D is too.',
+    });
+    expect(deltas.at(-1)?.thinkingStretch).not.toBeNull();
+    expect(
+      new Set(
+        deltas
+          .filter((delta) => delta.thinkingText !== null)
+          .map((delta) => delta.thinkingStretch),
+      ).size,
+    ).toBe(1);
+  });
 });
+
+function settledDelegate(id: string): AgentEvent {
+  return {
+    type: 'subagent_info',
+    id,
+    label: null,
+    kind: null,
+    prompt: null,
+    model: 'claude-fable-5-2',
+    durationMs: 316791,
+    tokens: 350740,
+    toolUses: 14,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
+    costUsd: null,
+    stepsUnavailableReason: null,
+    backgroundOpen: false,
+    backgroundOutcome: 'completed',
+  };
+}
 
 describe('ChatService — a DELEGATE winding up is not the run working again', () => {
   /** A settled chat run whose CLI is still holding its session. */

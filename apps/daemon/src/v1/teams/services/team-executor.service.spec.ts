@@ -3413,6 +3413,53 @@ describe('TeamExecutorService', () => {
     await drain();
   });
 
+  it("keeps a member's thinking whole while its background delegate settles", async () => {
+    const { service, claude, partials } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      team: LINEAR,
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    const liveOf = () =>
+      partials.snapshot(run.id).find((event) => event.ownerKey === 'a');
+
+    turn.emit({ type: 'reasoning_delta', text: 'Fork C is back.' });
+    await drain();
+    const stretch = liveOf()?.thinkingStretch;
+    expect(stretch).toBeGreaterThan(0);
+    turn.emit({
+      type: 'subagent_info',
+      id: 'toolu_fork_d',
+      label: null,
+      kind: null,
+      prompt: null,
+      model: 'claude-fable-5-2',
+      durationMs: 316791,
+      tokens: 350740,
+      toolUses: 14,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: false,
+      backgroundOutcome: 'completed',
+    });
+    turn.emit({ type: 'reasoning_delta', text: ' Fork D is too.' });
+    await drain();
+
+    expect(liveOf()).toMatchObject({
+      thinkingStretch: stretch,
+      thinkingText: 'Fork C is back. Fork D is too.',
+    });
+    completeTurn(turn, 'done');
+    await drain();
+  });
+
   it('keeps the words of a member turn that died mid-sentence as one partial message', async () => {
     const { service, claude, partials, itemDao } = setup();
     const run = await service.startRun({

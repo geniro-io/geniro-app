@@ -171,7 +171,10 @@ import {
 } from '../../agents/utils/host-teams';
 import { threadCardFields } from '../../agents/utils/host-thread-message';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
-import { isLiveWordsEvent } from '../../agents/utils/live-words';
+import {
+  endsReasoningStretch,
+  isLiveWordsEvent,
+} from '../../agents/utils/live-words';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { offersMonitorTools } from '../../agents/utils/monitor-offer';
 import { wakesOnMonitorProgress } from '../../agents/utils/monitor-text';
@@ -6092,12 +6095,7 @@ export class TeamExecutorService
               return;
             }
           }
-          // Anything durable ends a silent reasoning stretch — the tool call
-          // the model went quiet to prepare carries no text delta to close it
-          // (see `PartialStreamService.endThinking`). Kept in step with the
-          // chat path, which does the same at its own persist seam — and, as
-          // there, never for a delegate's row: the member is still reasoning.
-          if (event.parentToolUseId === undefined) {
+          if (endsReasoningStretch(event)) {
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           this.backgroundWork.record(runId, event, node.id);
@@ -6520,7 +6518,7 @@ export class TeamExecutorService
           if (!mapped) {
             return;
           }
-          if (ownsLivePlane && event.parentToolUseId === undefined) {
+          if (ownsLivePlane && endsReasoningStretch(event)) {
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           await persistItem(node.id, mapped.kind, mapped.role, {

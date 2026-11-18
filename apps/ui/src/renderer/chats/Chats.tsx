@@ -347,7 +347,10 @@ import {
 import { agentNameOf } from './team-note-author';
 import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
 import { hasThreadNotes } from './thread-notes';
-import { threadQuestionRelayOfRow } from './thread-question-card';
+import {
+  deliverRelayedImages,
+  threadQuestionRelayOfRow,
+} from './thread-question-card';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -4959,15 +4962,9 @@ export function Chats({
       }
       const relay = threadQuestionRelayOfRow(item.payload);
       if (relay !== null) {
-        const message = {
-          runId: relay.threadRunId,
-          sendMessageDto: { text: '', images },
-        };
-        void (
-          relay.threadIsTeam
-            ? apis.teams.sendTeamRunMessage(message)
-            : apis.chats.sendChatMessage(message)
-        ).catch((err: unknown) => setError(describeDaemonError(err)));
+        deliverRelayedImages(relay, images, apis, client, (err) =>
+          setError(describeDaemonError(err)),
+        );
         return;
       }
       // The verdict FIRST, then the picture. The answer reaches the model as

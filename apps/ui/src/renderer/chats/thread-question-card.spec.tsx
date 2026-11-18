@@ -3,10 +3,15 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { DaemonApis } from '../daemon-api';
+import type { RunStatusEvent } from '../daemon-client';
 import { ApprovalCard } from './approval-card';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
 import {
+  deliverRelayedImages,
   readThreadQuestionRelay,
+  RELAYED_IMAGES_SEND_ATTEMPTS,
+  type ThreadQuestionRelay,
   threadQuestionRelayOfRow,
 } from './thread-question-card';
 
@@ -172,5 +177,143 @@ describe('a thread question relayed into the manager chat', () => {
     renderCard(RELAYED_QUESTION, { expired: true });
     expect(container.textContent).toContain('t3 · Billing cache asked');
     expect(container.textContent).not.toContain('is waiting on you');
+  });
+});
+
+describe('deliverRelayedImages', () => {
+  const IMAGES = [{ mediaType: 'image/png' as const, data: 'iVBO' }];
+  const RELAY: ThreadQuestionRelay = {
+    threadRunId: 'thread-1',
+    threadIsTeam: false,
+    handle: 't3',
+    threadTitle: 'Billing cache',
+    toolName: 'AskUserQuestion',
+    input: {},
+  };
+  const busy = (): Error =>
+    new Error(
+      'daemon POST /v1/chats/thread-1/messages failed (409): ' +
+        '{"statusCode":409,"code":"RUN_BUSY",' +
+        '"message":"a turn is already in progress for this run",' +
+        '"fullMessage":"[RUN_BUSY] a turn is already in progress for this run",' +
+        '"fields":[]}',
+    );
+
+  function harness(): {
+    apis: Pick<DaemonApis, 'chats' | 'teams'>;
+    sendChatMessage: ReturnType<typeof vi.fn>;
+    sendTeamRunMessage: ReturnType<typeof vi.fn>;
+    announce: (event: Partial<RunStatusEvent>) => void;
+    watchers: () => number;
+    client: { onRunStatus: (l: (e: RunStatusEvent) => void) => () => void };
+  } {
+    const listeners = new Set<(event: RunStatusEvent) => void>();
+    const sendChatMessage = vi.fn();
+    const sendTeamRunMessage = vi.fn();
+    return {
+      apis: {
+        chats: { sendChatMessage },
+        teams: { sendTeamRunMessage },
+      } as unknown as Pick<DaemonApis, 'chats' | 'teams'>,
+      sendChatMessage,
+      sendTeamRunMessage,
+      announce: (event) => {
+        for (const listener of [...listeners]) {
+          listener({ runId: 'thread-1', status: null, ...event });
+        }
+      },
+      watchers: () => listeners.size,
+      client: {
+        onRunStatus: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    };
+  }
+
+  const flush = (): Promise<void> =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+  it('sends the pictures to the thread once its answer turn settles when that turn refused them', async () => {
+    const h = harness();
+    h.sendChatMessage.mockRejectedValueOnce(busy()).mockResolvedValueOnce({});
+    const onError = vi.fn();
+
+    deliverRelayedImages(RELAY, IMAGES, h.apis, h.client, onError);
+    await flush();
+    expect(h.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    h.announce({ status: 'running' });
+    h.announce({ runId: 'other-run', status: 'completed' });
+    h.announce({ status: 'cancelled' });
+    await flush();
+    expect(h.sendChatMessage).toHaveBeenCalledTimes(1);
+
+    h.announce({ status: 'completed' });
+    await flush();
+    expect(h.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(h.sendChatMessage).toHaveBeenLastCalledWith({
+      runId: 'thread-1',
+      sendMessageDto: { text: '', images: IMAGES },
+    });
+    expect(h.watchers()).toBe(0);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("sends a team thread's pictures through the team route", async () => {
+    const h = harness();
+    h.sendTeamRunMessage.mockResolvedValueOnce({});
+
+    deliverRelayedImages(
+      { ...RELAY, threadIsTeam: true },
+      IMAGES,
+      h.apis,
+      h.client,
+      vi.fn(),
+    );
+    await flush();
+
+    expect(h.sendTeamRunMessage).toHaveBeenCalledWith({
+      runId: 'thread-1',
+      sendMessageDto: { text: '', images: IMAGES },
+    });
+    expect(h.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('reports any other refusal at once and waits for nothing', async () => {
+    const h = harness();
+    const refusal = new Error(
+      'daemon POST /v1/chats/thread-1/messages failed (404): gone',
+    );
+    h.sendChatMessage.mockRejectedValueOnce(refusal);
+    const onError = vi.fn();
+
+    deliverRelayedImages(RELAY, IMAGES, h.apis, h.client, onError);
+    await flush();
+
+    expect(onError).toHaveBeenCalledWith(refusal);
+    expect(h.watchers()).toBe(0);
+  });
+
+  it('gives up and reports after its last attempt is refused', async () => {
+    const h = harness();
+    h.sendChatMessage.mockRejectedValue(busy());
+    const onError = vi.fn();
+
+    deliverRelayedImages(RELAY, IMAGES, h.apis, h.client, onError);
+    await flush();
+    for (let settle = 1; settle < RELAYED_IMAGES_SEND_ATTEMPTS; settle++) {
+      h.announce({ status: 'completed' });
+      await flush();
+    }
+
+    expect(h.sendChatMessage).toHaveBeenCalledTimes(
+      RELAYED_IMAGES_SEND_ATTEMPTS,
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(h.watchers()).toBe(0);
   });
 });

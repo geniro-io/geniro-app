@@ -181,7 +181,8 @@ One home for each concern:
 - A geniro-performed compaction (cursor) invalidates earlier readings. It resets the fold (`endsContextHistory`), clears the live plane and the mirrored row, and the ring shows empty with `awaitingReading`.
 - The context panel is fetched on open and never polled. On a team run every readout branch carries `memberId`.
 - Category colours are assigned by position, never by name.
-- Money goes through `formatUsd` (a bound, for columns), `formatExactUsd` (an exact value, for standalone figures) or, for chart ticks only, `formatUsdAxis` (`stats/stats-format.ts`). Never add another format. A figure nothing measured is a dash or omitted, never `$0.00` or `0`.
+- Money goes through `formatUsd` (a bound, for columns), `formatExactUsd` (an exact value, for standalone figures), `formatUsdRate` (a price per million tokens) or, for chart ticks only, `formatUsdAxis` (`stats/stats-format.ts`). Never add another format. A figure nothing measured is a dash or omitted, never `$0.00` or `0`.
+- A model's list price is drawn by `components/model-price.tsx` alone (`ModelPrice`, or `modelPriceText` where only a string fits, a menu row's `hint`): from the reading's own price (`AgentModel.price`, `UsageGroup.price`, `ChatMetricsDto.modelPrice`), else `useModelPrice` / `useModelPrices` (`GET /v1/agents/model-price`, shared per client, agent, model and profile for a few minutes; the daemon's catalog is what refreshes hourly). A narrow row (an agent card, a pool slot, the waterfall's By model table) draws it `compact`. A picker row's `title` carries `modelPriceTitle`. An unpriced model draws nothing.
 
 **Composer and chips:**
 

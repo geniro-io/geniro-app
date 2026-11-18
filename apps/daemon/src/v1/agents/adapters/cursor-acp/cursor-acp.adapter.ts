@@ -1101,9 +1101,29 @@ export class CursorAcpAdapter extends AgentAdapter {
           { prefix: 'gemini-', vendor: 'google' },
           { prefix: 'grok-', vendor: 'xai' },
           { prefix: 'cursor-grok-', vendor: 'xai' },
+          { prefix: 'kimi-', vendor: 'moonshotai' },
+          { prefix: 'glm-', vendor: 'zai' },
           { prefix: 'composer-', vendor: 'cursor' },
         ],
       },
+      // Its ids fold an effort or thinking level, a parameter block or a label
+      // into the vendor's id (`gemini-4-argon-high`,
+      // `claude-haiku-5-5-thinking-xhigh`, `claude-opus-5[thinking=true,…]`,
+      // `grok-4.7-high (Auto Balanced)`), seen in the usage ledger on
+      // 2026-11-18. A `-fast` or `-max` id is a mode of its own price and
+      // stays unmatched.
+      modelIdVariant:
+        /(?:-thinking)?(?:-(?:minimal|low|medium|high|xhigh))?(?:\[[^\]]*\]|\s*\([^)]*\))?$/,
+      // A version point it writes as `p` (`glm-5p3` for zai's `glm-5.3`), and
+      // a Gemini it names without the `-preview` Google's id carries, both
+      // checked against models.dev on 2026-11-18.
+      modelIdSpellings: [
+        { pattern: /(\d)p(\d)/g, replacement: '$1.$2' },
+        {
+          pattern: /^(gemini-[\d.]+-(?:pro|flash))$/,
+          replacement: '$1-preview',
+        },
+      ],
       usage: {
         /**
          * It reports NONE. Measured 2026-08-12 on 2026.08.11-e8db854, from a
@@ -2325,6 +2345,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       profileDir: join(deps.userDataDir, CURSOR_PROFILE_DIR_NAME),
       sessionStoreDir: join(deps.userDataDir, CURSOR_SESSION_STORE_DIR_NAME),
       hostToolResults: deps.hostToolResults,
+      prices: deps.prices,
     });
   }
 

@@ -1,5 +1,6 @@
 import {
   defineConfig,
+  type EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -12,6 +13,11 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import {
+  lookupModelPrice,
+  type ModelPriceLookup,
+  parseModelPriceCatalog,
+} from '../../agents/utils/model-prices';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -73,15 +79,28 @@ describe('StatsService (in-memory sqlite)', () => {
     await orm.schema.clear();
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
-    service = new StatsService(
+    service = statsService(em);
+  });
+
+  /**
+   * The service over the real adapters: which CLIs' money is polled is each
+   * adapter's own declaration (`usage.polledSpend`), and so is which catalog
+   * provider prices a model.
+   */
+  function statsService(
+    em: EntityManager,
+    prices?: ModelPriceLookup,
+  ): StatsService {
+    return new StatsService(
       em,
-      dao,
-      // Which CLIs' money is polled is each adapter's own declaration
-      // (`usage.polledSpend`), so the registry is the real one.
+      new UsageEventDao(em),
       new AgentAdapterRegistry([
-        new ClaudeAdapter(),
-        new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
-        new CodexAdapter(),
+        new ClaudeAdapter({ prices }),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          prices,
+        }),
+        new CodexAdapter({ prices }),
       ]),
       new ProjectRootsService(em),
       new RunDao(em),
@@ -91,7 +110,21 @@ describe('StatsService (in-memory sqlite)', () => {
       new MetricLedgerDao(em),
       new GoalDao(em),
     );
-  });
+  }
+
+  const CATALOG: ModelPriceLookup = {
+    priceOf: (provider, model) =>
+      lookupModelPrice(
+        parseModelPriceCatalog({
+          anthropic: {
+            models: { 'claude-opus-5': { cost: { input: 5, output: 25 } } },
+          },
+          xai: { models: { 'grok-4.7': { cost: { input: 2, output: 6 } } } },
+        }),
+        provider,
+        model,
+      ),
+  };
 
   /**
    * The route hands the service ISO strings; these tests are written in local
@@ -248,6 +281,26 @@ describe('StatsService (in-memory sqlite)', () => {
       // The bill is spread over the run's ONE unpriced turn once, not once per
       // row — a cost per turn that divided by it twice would be half the truth.
       expect(stats.totals.costedTurns).toBe(1);
+    });
+
+    it('prices a model only the account poll named, under the CLI the poll billed', async () => {
+      await recordCursorTurn();
+      await recordPolled(
+        pricedRun({
+          polledSpendBuckets: JSON.stringify({
+            '2026-08-10|grok-4.7-xhigh': 250,
+          }),
+        }),
+      );
+
+      const stats = await statsService(orm.em.fork(), CATALOG).usage(
+        new Date(2026, 7, 10).toISOString(),
+        new Date(2026, 7, 11).toISOString(),
+      );
+
+      expect(
+        stats.byModel.find((group) => group.key === 'grok-4.7-xhigh')?.price,
+      ).toMatchObject({ input: 2, output: 6 });
     });
 
     it('counts a LIVE run’s price once — from the ledger, never the run row', async () => {
@@ -634,6 +687,45 @@ describe('StatsService (in-memory sqlite)', () => {
         '/work/b',
         '/work/a',
       ]);
+    });
+
+    it('gives each model row the list price of an agent that ran it, and none to a model no catalog lists', async () => {
+      const priced = statsService(orm.em.fork(), CATALOG);
+      await record(new Date(2026, 7, 10, 9), {
+        agentKind: 'claude',
+        model: 'claude-opus-5[1m]',
+        costUsd: 3,
+      });
+      await record(new Date(2026, 7, 10, 10), {
+        agentKind: 'cursor-agent',
+        model: 'grok-4.7-xhigh',
+        costUsd: 2,
+      });
+      await record(new Date(2026, 7, 10, 11), {
+        agentKind: 'cursor-agent',
+        model: 'composer-1',
+        costUsd: 1,
+      });
+
+      const stats = await priced.usage(
+        new Date(2026, 7, 10).toISOString(),
+        new Date(2026, 7, 11).toISOString(),
+      );
+
+      expect(
+        stats.byModel.map((group) => [
+          group.key,
+          group.price?.input ?? null,
+          group.price?.output ?? null,
+        ]),
+      ).toEqual([
+        ['claude-opus-5[1m]', 5, 25],
+        ['grok-4.7-xhigh', 2, 6],
+        ['composer-1', null, null],
+      ]);
+      expect(stats.byAgent.every((group) => group.price === undefined)).toBe(
+        true,
+      );
     });
 
     it('ranks by turn count when no slice reported a cost', async () => {

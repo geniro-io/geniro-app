@@ -1,5 +1,6 @@
 import { asNumber, asRecord } from '../../../utils/json-util';
 import { type ModelPrice, tokenCostUsd } from '../../../utils/model-prices';
+import { CLAUDE_MODEL_VARIANT } from '../claude.const';
 
 /**
  * A claude model's LIST price, by its CANONICAL id ({@link canonicalClaudeModel})
@@ -42,8 +43,7 @@ export const NO_CLAUDE_LIST_PRICES: ClaudeListPrices = () => null;
  * already the API's own id and is looked up as it stands.
  */
 export function canonicalClaudeModel(model: string): string {
-  const bracket = model.indexOf('[');
-  return bracket === -1 ? model : model.slice(0, bracket);
+  return model.replace(CLAUDE_MODEL_VARIANT, '');
 }
 
 /**

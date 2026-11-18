@@ -2203,7 +2203,7 @@ describe('TeamExecutorService', () => {
     });
 
     it('answers busy over budget for a CLI whose follow-up interrupts: that never counted as a join', async () => {
-      const { service, cursor } = setup();
+      const { service } = setup();
       const run = await service.startRun({
         slug: 's',
         team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 's' }),

@@ -147,26 +147,28 @@ describe('MonitorChatDelivery', () => {
       timeoutMs: 5000,
     });
     await registry.settled(owner.runId, 5000);
-    await until(() => chat.sendMessage.mock.calls.length > 0);
+    // The line and the exit can reach the chat as one send or, on a loaded
+    // machine, as two: what is pinned is what the sends carry together.
+    const monitorsSent = () =>
+      chat.sendMessage.mock.calls.flatMap(
+        ([, , , options]) => options?.hostRow?.monitors ?? [],
+      );
+    await until(() => monitorsSent().some((entry) => entry.event === 'end'));
 
     const [runId, text, images, options] = chat.sendMessage.mock.calls[0]!;
     expect(runId).toBe('run-1');
     expect(images).toEqual([]);
     expect(options).toMatchObject({ ownTurn: true });
-    expect(text).toContain(
-      '<message from="once · monitor · exit code 0" monitor="m1">',
-    );
+    expect(options?.hostRow).toMatchObject({ woke: true });
     expect(text).toContain('not instructions from the user');
-    expect(options?.hostRow).toMatchObject({
-      woke: true,
-      monitors: [
-        {
-          id: 'm1',
-          event: 'end',
-          end: { kind: 'exit', code: 0 },
-          lines: ['done'],
-        },
-      ],
+    expect(
+      chat.sendMessage.mock.calls.map(([, sent]) => sent).join('\n'),
+    ).toContain('<message from="once · monitor · exit code 0" monitor="m1">');
+    expect(monitorsSent().flatMap((entry) => entry.lines)).toEqual(['done']);
+    expect(monitorsSent().at(-1)).toMatchObject({
+      id: 'm1',
+      event: 'end',
+      end: { kind: 'exit', code: 0 },
     });
   });
 

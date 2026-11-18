@@ -7,6 +7,7 @@ import {
   AgentSessionListingWireSchema,
   AgentSkillWireSchema,
   AgentVocabularyWireSchema,
+  ModelPriceAnswerWireSchema,
 } from '../chat.types';
 
 /**
@@ -59,6 +60,23 @@ export const listVocabularyQuerySchema = z.object({
 });
 export class ListVocabularyQueryDto extends createZodDto(
   listVocabularyQuerySchema,
+) {}
+
+/** Query for one model's list price: which CLI runs it, under which id and account. */
+export const modelPriceQuerySchema = z.object({
+  agent: AgentKindSchema,
+  model: z.string().min(1).max(256),
+  /**
+   * The account the model runs under — what an alias resolves against.
+   * Optional and validated server-side.
+   */
+  configDir: z.string().min(1).optional(),
+});
+export class ModelPriceQueryDto extends createZodDto(modelPriceQuerySchema) {}
+
+/** One model's list price, or null with no price. */
+export class ModelPriceAnswerDto extends createZodDto(
+  ModelPriceAnswerWireSchema,
 ) {}
 
 /** The models, and the chosen model's levels, windows and parameters. */

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  catalogModelIds,
   countModelPrices,
+  isModelPriceProvider,
   lookupModelPrice,
   modelPriceCatalogShape,
   parseModelPriceCatalog,
   ratesForPrompt,
   tokenCostUsd,
+  toModelPriceWire,
 } from './model-prices';
 
 /**
@@ -64,6 +67,15 @@ const CATALOG = {
       },
     },
   },
+  xai: {
+    models: { 'grok-4.7': { cost: { input: 2, output: 6, cache_read: 0.5 } } },
+  },
+  google: {
+    models: { 'gemini-4-argon': { cost: { input: 2, output: 10 } } },
+  },
+  moonshotai: {
+    models: { 'kimi-k3': { cost: { input: 3, output: 15 } } },
+  },
   // A provider no adapter prices under is not read at all.
   'some-gateway': {
     models: { 'gpt-6-astra': { cost: { input: 1, output: 1 } } },
@@ -92,7 +104,24 @@ describe('parseModelPriceCatalog', () => {
     expect(lookupModelPrice(table, 'anthropic', 'claude-opus-5')).toMatchObject(
       { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, tiers: [] },
     );
-    expect(countModelPrices(table)).toBe(4);
+    expect(countModelPrices(table)).toBe(7);
+  });
+
+  it('reads the vendors cursor-agent serves models of', () => {
+    const table = parseModelPriceCatalog({
+      ...CATALOG,
+      zai: { models: { 'glm-5.2': { cost: { input: 1, output: 3.2 } } } },
+    });
+    expect(lookupModelPrice(table, 'zai', 'glm-5.2')?.output).toBe(3.2);
+    expect(lookupModelPrice(table, 'xai', 'grok-4.7')).toMatchObject({
+      input: 2,
+      output: 6,
+      cacheRead: 0.5,
+    });
+    expect(lookupModelPrice(table, 'google', 'gemini-4-argon')?.output).toBe(
+      10,
+    );
+    expect(lookupModelPrice(table, 'moonshotai', 'kimi-k3')?.input).toBe(3);
   });
 
   it('reads a model’s window from `limit.context`, and no window from a missing or zero one', () => {
@@ -146,7 +175,7 @@ describe('parseModelPriceCatalog', () => {
     expect(countModelPrices(parseModelPriceCatalog({ openai: [] }))).toBe(0);
   });
 
-  it('skips a tier that is not a context tier or has no usable size', () => {
+  it('skips a tier that is not a context tier or has no whole positive size', () => {
     const table = parseModelPriceCatalog({
       openai: {
         models: {
@@ -157,6 +186,11 @@ describe('parseModelPriceCatalog', () => {
               tiers: [
                 { input: 9, output: 9, tier: { type: 'volume', size: 10 } },
                 { input: 9, output: 9, tier: { type: 'context', size: 0 } },
+                {
+                  input: 9,
+                  output: 9,
+                  tier: { type: 'context', size: 200_000.5 },
+                },
                 { input: 3, output: 4, tier: { type: 'context', size: 500 } },
                 { input: 2, output: 3, tier: { type: 'context', size: 100 } },
               ],
@@ -179,6 +213,70 @@ describe('parseModelPriceCatalog', () => {
       JSON.parse(JSON.stringify(modelPriceCatalogShape(table))),
     );
     expect(reread).toEqual(table);
+  });
+});
+
+describe('toModelPriceWire', () => {
+  it('carries the rates and every long-context tier, never the window', () => {
+    const price = lookupModelPrice(
+      parseModelPriceCatalog(CATALOG),
+      'openai',
+      'gpt-6-astra',
+    );
+
+    expect(toModelPriceWire(price)).toEqual({
+      input: 10,
+      output: 50,
+      cacheRead: 1,
+      cacheWrite: 12.5,
+      tiers: [
+        {
+          aboveContextTokens: 272_000,
+          input: 20,
+          output: 75,
+          cacheRead: 2,
+          cacheWrite: 25,
+        },
+      ],
+    });
+    expect(toModelPriceWire(null)).toBeNull();
+  });
+});
+
+describe('catalogModelIds', () => {
+  it('tries the id first, then the id without the variant its CLI named', () => {
+    expect(catalogModelIds('claude-opus-5[1m]', /\[.*$/)).toEqual([
+      'claude-opus-5[1m]',
+      'claude-opus-5',
+    ]);
+    expect(catalogModelIds(' gpt-6-astra ')).toEqual(['gpt-6-astra']);
+  });
+
+  it('tries the CLI’s own spellings of the bare id last', () => {
+    const spellings = [{ pattern: /(\d)p(\d)/g, replacement: '$1.$2' }];
+    expect(catalogModelIds('glm-5p3-high', /-high$/, spellings)).toEqual([
+      'glm-5p3-high',
+      'glm-5p3',
+      'glm-5.3',
+    ]);
+    expect(catalogModelIds('gpt-6.1-sol', undefined, spellings)).toEqual([
+      'gpt-6.1-sol',
+    ]);
+  });
+
+  it('strips nothing a CLI did not name', () => {
+    expect(catalogModelIds('grok-4.7 (Auto Balanced)')).toEqual([
+      'grok-4.7 (Auto Balanced)',
+    ]);
+    expect(catalogModelIds('[1m]', /\[.*$/)).toEqual(['[1m]']);
+  });
+});
+
+describe('isModelPriceProvider', () => {
+  it('admits only a provider the parser reads', () => {
+    expect(isModelPriceProvider('xai')).toBe(true);
+    expect(isModelPriceProvider('cursor')).toBe(false);
+    expect(isModelPriceProvider(null)).toBe(false);
   });
 });
 

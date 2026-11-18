@@ -3162,6 +3162,44 @@ export const ChatTotalsResponseSchema = z.object({
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
 
+const perMillionRate = z.number().nonnegative();
+
+/**
+ * A model's list price in US dollars per million tokens, as the public
+ * catalog (models.dev) publishes it under the model's vendor. A cache rate the
+ * catalog does not state is null, never zero.
+ */
+export const ModelPriceWireSchema = z
+  .object({
+    input: perMillionRate.describe('Fresh prompt tokens'),
+    output: perMillionRate.describe('Completion tokens, reasoning included'),
+    cacheRead: perMillionRate
+      .nullable()
+      .describe('Prompt tokens served from the cache'),
+    cacheWrite: perMillionRate
+      .nullable()
+      .describe('Prompt tokens written to the cache'),
+    tiers: z
+      .array(
+        z
+          .object({
+            aboveContextTokens: z
+              .number()
+              .int()
+              .positive()
+              .describe('The rates apply to a prompt larger than this'),
+            input: perMillionRate,
+            output: perMillionRate,
+            cacheRead: perMillionRate.nullable(),
+            cacheWrite: perMillionRate.nullable(),
+          })
+          .meta({ id: 'ModelPriceTier' }),
+      )
+      .describe('Long-context rates, ascending by threshold'),
+  })
+  .meta({ id: 'ModelPrice' });
+export type ModelPriceWire = z.infer<typeof ModelPriceWireSchema>;
+
 /**
  * What one chat's context window holds right now, plus what the whole thread
  * has cost — the readout behind the composer's context ring.
@@ -3174,6 +3212,18 @@ export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
  */
 export const ChatMetricsWireSchema = z.object({
   context: ContextBreakdownWireSchema.nullable(),
+  model: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "the model the agent runs as: the breakdown's when it names one, else the run's own, an alias resolved; null when unknown",
+    ),
+  modelPrice: ModelPriceWireSchema.nullable()
+    .optional()
+    .describe(
+      'the list price of `model`; null when it is unknown or the catalog lists none',
+    ),
   breakdownReason: z
     .string()
     .nullable()
@@ -6053,6 +6103,21 @@ export const AgentSkillWireSchema = z.object({
 });
 export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
 
+/** One model's list price, as `GET /v1/agents/model-price` answers it. */
+export const ModelPriceAnswerWireSchema = z.object({
+  pricedAs: z
+    .string()
+    .nullable()
+    .describe(
+      'The model id the price was found under — an alias resolved — or null with no price',
+    ),
+  price: ModelPriceWireSchema.nullable().describe(
+    'Null when the model has no vendor the catalog lists, or the catalog does not list it',
+  ),
+});
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export type ModelPriceAnswerWire = z.infer<typeof ModelPriceAnswerWireSchema>;
+
 /**
  * One model a CLI accepts for `--model`.
  *
@@ -6092,6 +6157,11 @@ export const AgentModelWireSchema = z
       .string()
       .optional()
       .describe('Why this model cannot run an agent'),
+    price: ModelPriceWireSchema.nullable()
+      .optional()
+      .describe(
+        'List price of the model (or of the model an alias runs as); null when the catalog lists none',
+      ),
   })
   .meta({ id: 'AgentModel' });
 export type AgentModelWire = z.infer<typeof AgentModelWireSchema>;

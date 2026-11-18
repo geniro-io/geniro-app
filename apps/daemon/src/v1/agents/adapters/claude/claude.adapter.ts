@@ -133,6 +133,7 @@ import {
   CLAUDE_MODEL_RESOLUTION_STORE_MODEL,
   CLAUDE_MODEL_RESOLUTION_TIMEOUT_MS,
   CLAUDE_MODEL_RESOLUTION_TTL_MS,
+  CLAUDE_MODEL_VARIANT,
   CLAUDE_PARTIAL_MESSAGES_FLAG,
   CLAUDE_PERMISSION_MODE_DEFAULT,
   CLAUDE_PERMISSION_MODE_FLAG,
@@ -901,6 +902,7 @@ export class ClaudeAdapter extends AgentAdapter {
         consumptionReported: true,
       },
       modelVendor: { kind: 'fixed', vendor: 'anthropic' },
+      modelIdVariant: CLAUDE_MODEL_VARIANT,
       usage: {
         /**
          * Reports it in full. Every `result` line carries `usage` (input/output

@@ -9,6 +9,7 @@ import { MODEL_PRICE_CATALOG_URL } from '../utils/model-prices';
 import {
   MODEL_PRICES_FILE_NAME,
   MODEL_PRICES_REFRESH_AFTER_MS,
+  MODEL_PRICES_RETRY_AFTER_MS,
   ModelPriceCatalog,
   type ModelPriceFetch,
 } from './model-price-catalog.service';
@@ -129,6 +130,69 @@ describe('ModelPriceCatalog', () => {
     expect(relaunch.priceOf('openai', 'gpt-6-astra')?.input).toBe(11);
   });
 
+  it('keeps a held copy at most an hour, and a running daemon asks again within minutes of that', async () => {
+    expect(MODEL_PRICES_REFRESH_AFTER_MS).toBe(60 * 60_000);
+    await catalog(answering(reply(10)).fetch).refreshIfStale();
+    vi.useFakeTimers();
+    const network = answering(reply(11));
+    const running = catalog(network.fetch);
+    try {
+      running.onModuleInit();
+      now += MODEL_PRICES_REFRESH_AFTER_MS;
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      expect(network.calls).toHaveLength(1);
+      await running.refreshIfStale();
+      expect(running.priceOf('openai', 'gpt-6-astra')?.input).toBe(11);
+    } finally {
+      running.onApplicationShutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it('asks again 5, then 15 minutes after a failed ask, then hourly, never at every check', async () => {
+    const calls: string[] = [];
+    const failing: ModelPriceFetch = (url) => {
+      calls.push(url);
+      return Promise.reject(new Error('ENOTFOUND models.dev'));
+    };
+    const checkEvery = 5 * 60_000;
+    const advance = async (ms: number): Promise<void> => {
+      now += ms;
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    expect(MODEL_PRICES_RETRY_AFTER_MS).toEqual([
+      5 * 60_000,
+      15 * 60_000,
+      MODEL_PRICES_REFRESH_AFTER_MS,
+    ]);
+    vi.useFakeTimers();
+    const running = catalog(failing);
+    try {
+      running.onModuleInit();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+
+      await advance(checkEvery);
+      expect(calls).toHaveLength(2);
+
+      await advance(10 * 60_000);
+      expect(calls).toHaveLength(2);
+      await advance(checkEvery);
+      expect(calls).toHaveLength(3);
+
+      await advance(MODEL_PRICES_REFRESH_AFTER_MS - checkEvery);
+      expect(calls).toHaveLength(3);
+      await advance(checkEvery);
+      expect(calls).toHaveLength(4);
+      await advance(MODEL_PRICES_REFRESH_AFTER_MS - checkEvery);
+      expect(calls).toHaveLength(4);
+    } finally {
+      running.onApplicationShutdown();
+      vi.useRealTimers();
+    }
+  });
+
   it('reads a stamp from the future as stale rather than as fresh', async () => {
     await catalog(answering(reply(10)).fetch).refreshIfStale();
     now -= 60_000;
@@ -139,13 +203,46 @@ describe('ModelPriceCatalog', () => {
     expect(network.calls).toHaveLength(1);
   });
 
-  it('asks once for concurrent refreshes', async () => {
+  it('asks once for concurrent refreshes, and the second waits for the answer', async () => {
     const network = answering(reply(10));
     const prices = catalog(network.fetch);
 
-    await Promise.all([prices.refreshIfStale(), prices.refreshIfStale()]);
+    void prices.refreshIfStale();
+    await prices.refreshIfStale();
 
+    expect(prices.priceOf('openai', 'gpt-6-astra')?.input).toBe(10);
     expect(network.calls).toHaveLength(1);
+  });
+
+  it('starts the retry schedule over once an ask succeeds', async () => {
+    let fail = true;
+    const calls: string[] = [];
+    const flaky: ModelPriceFetch = (url, init) => {
+      calls.push(url);
+      return fail
+        ? Promise.reject(new Error('ENOTFOUND models.dev'))
+        : answering(reply(10)).fetch(url, init);
+    };
+    const prices = catalog(flaky);
+
+    await prices.refreshIfStale();
+    now += MODEL_PRICES_RETRY_AFTER_MS[0];
+    await prices.refreshIfStale();
+    now += MODEL_PRICES_RETRY_AFTER_MS[1];
+    fail = false;
+    await prices.refreshIfStale();
+    expect(calls).toHaveLength(3);
+
+    fail = true;
+    now += MODEL_PRICES_REFRESH_AFTER_MS;
+    await prices.refreshIfStale();
+    expect(calls).toHaveLength(4);
+    now += MODEL_PRICES_RETRY_AFTER_MS[0] - 1;
+    await prices.refreshIfStale();
+    expect(calls).toHaveLength(4);
+    now += 1;
+    await prices.refreshIfStale();
+    expect(calls).toHaveLength(5);
   });
 
   it.each([

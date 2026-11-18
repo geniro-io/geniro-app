@@ -13,6 +13,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import { readRunPullRequests } from '../../agents/utils/pull-request-capture';
 import {
+  reportedModelOf,
   turnMemberOf,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
@@ -30,7 +31,6 @@ import {
 } from '../utils/polled-spend';
 import {
   forTurn,
-  reportedModelOf,
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';

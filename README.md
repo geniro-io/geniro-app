@@ -412,7 +412,9 @@ Agents repeat mistakes from one thread to the next. When you **archive** a threa
 
 ## 📊 Stats, cost and CPU & RAM
 
-**Stats page.** Pick a period: today, 7, 30 or 90 days, or all time. See spend, cost per turn, turns, agent time, threads, pull requests, lines changed, tokens in and out, cache reads and writes, and cache hit rate. Break it all down by agent, model, project, team and thread. See the share of threads that recorded goals, how many goals were achieved and how threads ended, and every tool and MCP server the agents called, with its errors and average time. Prices come from the public [models.dev](https://models.dev) catalog. A model without a price shows a dash, never a made-up `$0`. The usage ledger survives deleted chats.
+**Stats page.** Pick a period: today, 7, 30 or 90 days, or all time. See spend, cost per turn, turns, agent time, threads, pull requests, lines changed, tokens in and out, cache reads and writes, and cache hit rate. Break it all down by agent, model, project, team and thread. See the share of threads that recorded goals, how many goals were achieved and how threads ended, and every tool and MCP server the agents called, with its errors and average time. Prices come from the public [models.dev](https://models.dev) catalog, refreshed every hour. A model without a price shows a dash, never a made-up `$0`. The usage ledger survives deleted chats.
+
+**Model prices.** A model's list price per million tokens — input, then output — shows in every model picker, on each agent's card and pool slot in the agents panel, in the context readout (beside the model, or with the plan limits when the reading names no model), under each row of **Stats → By model**, and in **Where the run went → By model**. Hover a price, or a picker row, for the cache read and write rates and any long-context rates. cursor-agent's models show their maker's price; Cursor's own models (Composer, Auto), local Ollama models and a model the catalog does not list show none.
 
 **Where the run went.** Opens as a sequence diagram of the run: a column per agent with its turns, time running down, a numbered arrow for every call and a dashed one back for each answer its caller waited on, calls made at once framed together and long idle stretches cut short. **Lanes** switches to the waterfall of every agent's turns on one clock, with its call links, sideways scroll and zoom. Both have the critical path, cost tables and "open in chat" on any span.
 
@@ -420,7 +422,7 @@ Agents repeat mistakes from one thread to the next. When you **archive** a threa
 
 **Memory and disk warnings.** While agents are running, Geniro checks every 30 seconds whether one thread's processes have passed 8 GB or have grown by 1 GB a minute for about three minutes running, whether macOS reports critical memory pressure, and whether the disk is down to 10 GB free. A one-off jump, such as a code index a tool loads when an agent opens a project, does not count as growth. A thread whose growth warning has cleared, or that you put away, stays quiet for 30 minutes. It tells you with a system notification and a strip at the top of the window. A memory warning names the thread, the agent and the command, with **Open processes** and, when Geniro may stop that command, **Stop command**; a disk warning shows only how much space is left and the line it warns below. It never stops anything on its own, and with no agents running it reads nothing. Settings → Notifications switches both off; the thresholds still live in `settings.json` under `resourceAlerts`.
 
-**Context and limits.** A context ring shows how full each agent's window is, auto-compaction kicks in at a percentage you choose, and plan limits sit one click away.
+**Context and limits.** A context ring shows how full each agent's window is, with the model's price beside its name; auto-compaction kicks in at a percentage you choose, and plan limits sit one click away.
 
 <table>
 <tr>

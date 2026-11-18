@@ -7,6 +7,7 @@ import type {
   AgentSessionListingWire,
   AgentSkillWire,
   AgentVocabularyWire,
+  ModelPriceAnswerWire,
 } from '../chat.types';
 import {
   AgentCacheResetDto,
@@ -16,10 +17,13 @@ import {
   ListAgentSessionsQueryDto,
   ListSkillsQueryDto,
   ListVocabularyQueryDto,
+  ModelPriceAnswerDto,
+  ModelPriceQueryDto,
 } from '../dto/skills.dto';
 import { AgentVocabularyService } from '../services/agent-vocabulary.service';
 import { CacheResetService } from '../services/cache-reset.service';
 import { CliSessionsService } from '../services/cli-sessions.service';
+import { ModelPriceService } from '../services/model-price.service';
 import { SkillsService } from '../services/skills.service';
 
 /**
@@ -37,6 +41,7 @@ export class SkillsController {
     private readonly vocabularyService: AgentVocabularyService,
     private readonly cliSessionsService: CliSessionsService,
     private readonly cacheResetService: CacheResetService,
+    private readonly modelPriceService: ModelPriceService,
   ) {}
 
   @Get('skills')
@@ -63,6 +68,20 @@ export class SkillsController {
     return this.vocabularyService.read(
       query.agent,
       query.model ?? null,
+      query.configDir ?? null,
+    );
+  }
+
+  /** What one model costs per million tokens, for showing beside it. */
+  @Get('model-price')
+  @ApiOperation({ operationId: 'getModelPrice' })
+  @ZodResponse({ status: 200, type: ModelPriceAnswerDto })
+  modelPrice(
+    @Query() query: ModelPriceQueryDto,
+  ): Promise<ModelPriceAnswerWire> {
+    return this.modelPriceService.answer(
+      query.agent,
+      query.model,
       query.configDir ?? null,
     );
   }

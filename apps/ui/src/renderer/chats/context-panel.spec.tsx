@@ -51,6 +51,7 @@ function metrics(): ChatMetricsDto {
         },
       ],
     },
+    model: 'claude-opus-5',
     breakdownReason: null,
     plan: null,
     planReason: null,
@@ -70,6 +71,122 @@ function metrics(): ChatMetricsDto {
     },
   };
 }
+
+describe('the model line', () => {
+  it('prices the model the reading names beside it', () => {
+    render(
+      <ContextPanel
+        metrics={{
+          ...metrics(),
+          modelPrice: {
+            input: 5,
+            output: 25,
+            cacheRead: 0.5,
+            cacheWrite: 6.25,
+            tiers: [],
+          },
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    const line = container.querySelector(
+      '[data-slot="context-breakdown"] [data-slot="context-model"]',
+    );
+    expect(line?.textContent).toBe('claude-opus-5$5 / $25 per 1M');
+  });
+
+  it('names the run’s model and its price with the plan when no breakdown names it', () => {
+    const base = metrics();
+    render(
+      <ContextPanel
+        metrics={{
+          ...base,
+          context: { ...base.context!, model: null },
+          model: 'grok-4.7-high',
+          modelPrice: {
+            input: 2,
+            output: 6,
+            cacheRead: null,
+            cacheWrite: null,
+            tiers: [],
+          },
+          plan: { plan: 'pro', windows: [], estimated: false },
+          planTakenAt: new Date().toISOString(),
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    const line = container.querySelector(
+      '[data-slot="plan-limits"] [data-slot="context-model"]',
+    );
+    expect(line?.textContent).toBe('grok-4.7-high$2 / $6 per 1M');
+    expect(
+      container.querySelectorAll('[data-slot="model-price"]'),
+    ).toHaveLength(1);
+  });
+
+  it('names the model on its own line when there is neither a breakdown nor a plan', () => {
+    render(
+      <ContextPanel
+        metrics={{
+          ...metrics(),
+          context: null,
+          breakdownReason: 'no live agent',
+          model: 'gpt-6.1-sol',
+          modelPrice: {
+            input: 2,
+            output: 10,
+            cacheRead: null,
+            cacheWrite: null,
+            tiers: [],
+          },
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(
+      container.querySelector('[data-slot="context-model"]')?.textContent,
+    ).toBe('gpt-6.1-sol$2 / $10 per 1M');
+  });
+
+  it('names the model once, in the breakdown, when the breakdown names it, a plan beside or not', () => {
+    for (const plan of [null, { plan: 'max', windows: [], estimated: false }]) {
+      render(
+        <ContextPanel
+          metrics={{
+            ...metrics(),
+            plan,
+            planTakenAt: plan ? new Date().toISOString() : null,
+          }}
+          loading={false}
+          error={null}
+        />,
+      );
+      expect(
+        container.querySelectorAll('[data-slot="context-model"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelector(
+          '[data-slot="context-breakdown"] [data-slot="context-model"]',
+        ),
+      ).not.toBeNull();
+    }
+  });
+
+  it('draws no price for a model nothing priced', () => {
+    render(
+      <ContextPanel
+        metrics={{ ...metrics(), modelPrice: null }}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(container.querySelector('[data-slot="model-price"]')).toBeNull();
+  });
+});
 
 describe('the thread totals', () => {
   it('marks a spend geniro priced itself, and says which part', () => {

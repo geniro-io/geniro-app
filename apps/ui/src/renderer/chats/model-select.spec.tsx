@@ -106,6 +106,38 @@ describe('ModelSelect', () => {
     expect(picked).toHaveBeenCalledWith('haiku');
   });
 
+  it('prices each row the daemon priced, and leaves an unpriced one bare', () => {
+    const el = render(
+      <ModelSelect
+        agentKind="claude"
+        value={null}
+        onChange={vi.fn()}
+        models={[
+          {
+            ...model('opus', 'Opus 5.5'),
+            resolvedModel: 'claude-opus-5-5',
+            price: {
+              input: 4,
+              output: 20,
+              cacheRead: 0.4,
+              cacheWrite: null,
+              tiers: [],
+            },
+          },
+          { ...model('claude-unknown', 'Unknown'), price: null },
+        ]}
+      />,
+    );
+
+    expect(openRows(el)).toEqual([
+      ['Opus 5.5', '$4 / $20 per 1M'],
+      ['Unknown', ''],
+      ['default model', ''],
+    ]);
+    const priced = [...el.querySelectorAll<HTMLElement>('[role="option"]')][0];
+    expect(priced?.getAttribute('title')).toContain('cache read $0.40');
+  });
+
   it('groups local models, permits tool-capable models and explains disabled models', () => {
     const picked = vi.fn();
     const el = render(

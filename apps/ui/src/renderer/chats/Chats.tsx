@@ -10009,7 +10009,7 @@ export function Chats({
         loadKnowledge={loadKnowledge}
         lessonsApi={apis.lessons}
         lessonsKnowledgeApi={apis.knowledge}
-        lessonsAgentsApi={agentsApi}
+        agentsApi={agentsApi}
         lessonsJump={jumpToSeq}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>

@@ -644,7 +644,7 @@ export function checkItems(
     const count = report.items.filter((item) => item.target === target).length;
     if (count > MAX_RECOMMENDATIONS_PER_TARGET) {
       problems.push(
-        `${count} ${target} items — keep the strongest ${MAX_RECOMMENDATIONS_PER_TARGET} at most`,
+        `${count} ${target} items — at most ${MAX_RECOMMENDATIONS_PER_TARGET} per target`,
       );
     }
   }

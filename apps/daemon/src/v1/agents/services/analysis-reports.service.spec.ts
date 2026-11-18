@@ -228,16 +228,16 @@ describe('checkItems', () => {
   };
 
   it('caps memory items per target like any other', () => {
-    const six = ['M-1', 'M-2', 'M-3', 'M-4', 'M-5', 'M-6'].map((id) => ({
-      ...memoryItem,
-      id,
-    }));
+    const over = Array.from(
+      { length: MAX_RECOMMENDATIONS_PER_TARGET + 1 },
+      (_, index) => ({ ...memoryItem, id: `M-${index + 1}` }),
+    );
 
     expect(
       checkItems(
         {
           hotspots: [],
-          items: six.map((item) => ({
+          items: over.map((item) => ({
             ...item,
             impact: { ...item.impact, costSavedUsd: null, outcome: 'gone' },
           })),
@@ -246,7 +246,11 @@ describe('checkItems', () => {
         true,
         new Set(),
       ),
-    ).toContainEqual(expect.stringContaining('6 memory items'));
+    ).toContainEqual(
+      expect.stringContaining(
+        `${MAX_RECOMMENDATIONS_PER_TARGET + 1} memory items`,
+      ),
+    );
   });
 
   const projectItem: RecommendationItem = {
@@ -362,10 +366,10 @@ describe('checkItems', () => {
           ITEM,
           { ...ITEM, id: 'W-2' },
           { ...projectItem, location: 'p-other' },
-          ...[1, 2, 3, 4, 5, 6].map((n) => ({
-            ...memoryItem,
-            id: `M-${n}`,
-          })),
+          ...Array.from(
+            { length: MAX_RECOMMENDATIONS_PER_TARGET + 1 },
+            (_, index) => ({ ...memoryItem, id: `M-${index + 1}` }),
+          ),
         ],
       },
       'chat',
@@ -373,7 +377,7 @@ describe('checkItems', () => {
       new Set(['p-billing']),
     );
 
-    expect(problems).toHaveLength(10);
+    expect(problems).toHaveLength(MAX_RECOMMENDATIONS_PER_TARGET + 5);
     expect(problems).toContainEqual(
       expect.stringContaining('W-1: the analysed thread is a plain chat'),
     );
@@ -384,9 +388,15 @@ describe('checkItems', () => {
       expect.stringContaining('location must be the projectId'),
     );
     expect(problems).toContainEqual(
-      expect.stringContaining('M-6: the shared memory is off'),
+      expect.stringContaining(
+        `M-${MAX_RECOMMENDATIONS_PER_TARGET + 1}: the shared memory is off`,
+      ),
     );
-    expect(problems).toContainEqual(expect.stringContaining('6 memory items'));
+    expect(problems).toContainEqual(
+      expect.stringContaining(
+        `${MAX_RECOMMENDATIONS_PER_TARGET + 1} memory items`,
+      ),
+    );
   });
 });
 
@@ -505,7 +515,7 @@ describe('checkItems — external items', () => {
       ),
     ).toContainEqual(
       expect.stringContaining(
-        `${MAX_RECOMMENDATIONS_PER_TARGET + 1} external items — keep the strongest ${MAX_RECOMMENDATIONS_PER_TARGET} at most`,
+        `${MAX_RECOMMENDATIONS_PER_TARGET + 1} external items — at most ${MAX_RECOMMENDATIONS_PER_TARGET} per target`,
       ),
     );
   });

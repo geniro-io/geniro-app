@@ -506,41 +506,24 @@ describe('ReportRecommendationsTool', () => {
     });
   });
 
-  it('refuses more than five items for one target', async () => {
+  it('refuses more than twenty items for one target', async () => {
     const { report, written } = setup('dev-team');
 
     const result = await report({
-      items: ['W-1', 'W-2', 'W-3', 'W-4', 'W-5', 'W-6'].map((id) => item(id)),
+      items: Array.from({ length: 21 }, (_, index) => item(`W-${index + 1}`)),
     });
 
-    expect(result.content[0]!.text).toContain('keep the strongest 5 at most');
+    expect(result.content[0]!.text).toContain(
+      '21 team items — at most 20 per target',
+    );
     expect(written).toEqual([]);
   });
 
-  it('takes five items for each target on one card', async () => {
+  it('takes twenty items for each target on one card', async () => {
     const { report, written } = setup('dev-team');
-    const ids = [
-      'W-1',
-      'W-2',
-      'W-3',
-      'W-4',
-      'W-5',
-      'R-1',
-      'R-2',
-      'R-3',
-      'R-4',
-      'R-5',
-      'U-1',
-      'U-2',
-      'U-3',
-      'U-4',
-      'U-5',
-      'M-1',
-      'M-2',
-      'M-3',
-      'M-4',
-      'M-5',
-    ];
+    const ids = ['W', 'R', 'U', 'M'].flatMap((prefix) =>
+      Array.from({ length: 20 }, (_, index) => `${prefix}-${index + 1}`),
+    );
 
     const result = await report({ items: ids.map((id) => item(id)) });
 

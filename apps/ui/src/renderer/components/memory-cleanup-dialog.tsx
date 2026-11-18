@@ -555,19 +555,20 @@ export function MemoryCleanupDialog({
       title="Clean up memory"
       className="max-w-3xl">
       <div data-slot="memory-cleanup" className="flex min-w-0 flex-col gap-3">
-        <TabStrip
-          label="Review"
-          idPrefix={CLEANUP_TABS_ID}
-          value={tab}
-          onSelect={onTab}
-          className="border-b border-border"
-          tabs={[
-            { id: 'cold', label: 'Least used', count: counts.cold },
-            { id: 'checks', label: 'Conflicts', count: counts.checks },
-            { id: 'kept', label: 'Kept', count: counts.kept },
-            { id: 'forgotten', label: 'Forgotten', count: counts.forgotten },
-          ]}
-        />
+        <div className="border-b border-border">
+          <TabStrip
+            label="Review"
+            idPrefix={CLEANUP_TABS_ID}
+            value={tab}
+            onSelect={onTab}
+            tabs={[
+              { id: 'cold', label: 'Least used', count: counts.cold },
+              { id: 'checks', label: 'Conflicts', count: counts.checks },
+              { id: 'kept', label: 'Kept', count: counts.kept },
+              { id: 'forgotten', label: 'Forgotten', count: counts.forgotten },
+            ]}
+          />
+        </div>
         <div
           role="tabpanel"
           id={tabPanelId(CLEANUP_TABS_ID, tab)}

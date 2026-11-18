@@ -58,12 +58,11 @@ describe('SettingsGroup', () => {
     ).toBe('Banners come from macOS.');
   });
 
-  it('draws the group actions in its header, before its rows', () => {
+  it('draws the group actions above its rows, outside the heading', () => {
     act(() => {
       root.render(
         <SettingsGroup
           title="Entries"
-          layout="stacked"
           actions={<button type="button">New entry</button>}>
           <p data-testid="rows">rows</p>
         </SettingsGroup>,
@@ -71,9 +70,13 @@ describe('SettingsGroup', () => {
     });
 
     const actions = container.querySelector(
-      'header [data-slot="settings-group-actions"]',
+      '[data-slot="settings-group-actions"]',
     );
     expect(actions?.textContent).toBe('New entry');
+    expect(actions?.closest('header')).toBeNull();
+    expect(actions?.parentElement).toBe(
+      container.querySelector('[data-testid="rows"]')?.parentElement,
+    );
     expect(
       actions!.compareDocumentPosition(
         container.querySelector('[data-testid="rows"]')!,

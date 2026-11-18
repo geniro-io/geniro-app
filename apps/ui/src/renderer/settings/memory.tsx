@@ -70,6 +70,7 @@ import {
   type TabStripTab,
 } from '../components/tab-strip';
 import { Button } from '../components/ui/button';
+import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
@@ -149,6 +150,16 @@ const ENTRY_TABS: readonly { id: EntryTab; label: string }[] = [
   { id: 'pending', label: 'Waiting for review' },
   { id: 'forgotten', label: 'Forgotten' },
 ];
+
+const TAB_HINT: Record<EntryTab, string> = {
+  index:
+    'Entries whose titles every new chat starts with, up to 2 KB, so agents know them without searching.',
+  search:
+    'Entries agents are not told about up front. They find one only by searching memory.',
+  pending:
+    'Notes agents saved, and lessons a reflection found, that no agent uses until you approve them.',
+  forgotten: 'Entries hidden from every agent. Restore brings one back.',
+};
 
 const TAB_REQUEST: Record<EntryTab, MemoriesApiListMemoriesRequest> = {
   index: { status: 'active', reach: 'index' },
@@ -461,6 +472,7 @@ export function Memory({
   const [pendingCut, setPendingCut] = useState(false);
   const [indexPreview, setIndexPreview] =
     useState<MemoryIndexPreviewDto | null>(null);
+  const [indexFit, setIndexFit] = useState<MemoryIndexPreviewDto | null>(null);
   const [waitingTab, setWaitingTab] = useState<'entries' | 'lessons' | null>(
     null,
   );
@@ -474,12 +486,7 @@ export function Memory({
   });
   const lessonCount = waitingLessons.proposals?.length ?? 0;
   const [listOpen, setListOpen] = useState(false);
-  const entriesGroup = useRef<HTMLDivElement | null>(null);
-  // The list opens and reloads after the press, so the scroll waits for the
-  // rows it reveals: scrolled at once, the page is still too short to reach.
-  const [scrollAsk, setScrollAsk] = useState<{
-    entriesAtAsk: readonly MemoryEntry[];
-  } | null>(null);
+  const searchField = useRef<HTMLInputElement | null>(null);
   const [loaded, setLoaded] = useState(false);
   const pendingShow = useShowAll(entries, PENDING_SHOWN);
   const [error, setError] = useState<string | null>(null);
@@ -623,17 +630,25 @@ export function Memory({
       Math.max(depth.current, MEMORY_PAGE),
       MEMORY_PAGE_MAX,
     );
+    const fit =
+      focus === null
+        ? api.previewMemoryIndex({}).catch(() => null)
+        : Promise.resolve(null);
+    const place = previewPlace(filters.scope);
     const lists = Promise.all([
       api.listMemories({ ...listRequest(filters, focus), limit }),
       focus === null
         ? api.listMemories({ status: 'pending', limit: PENDING_LIMIT })
         : Promise.resolve(null),
-      focus === null && filters.status === 'index'
-        ? api.previewMemoryIndex(previewPlace(filters.scope)).catch(() => null)
-        : Promise.resolve(null),
+      focus !== null || filters.status !== 'index'
+        ? Promise.resolve(null)
+        : Object.keys(place).length === 0
+          ? fit
+          : api.previewMemoryIndex(place).catch(() => null),
+      fit,
     ]);
     void lists
-      .then(([page, waiting, preview]) => {
+      .then(([page, waiting, preview, everyChat]) => {
         if (mine !== generation.current) {
           return;
         }
@@ -645,12 +660,14 @@ export function Memory({
         setPending(waiting?.memories ?? []);
         setPendingCut(waiting !== null && waiting.next !== null);
         setIndexPreview(preview);
+        if (everyChat !== null) {
+          setIndexFit(everyChat);
+        }
         setLoaded(true);
       })
       .catch((err: unknown) => {
         if (mine === generation.current) {
           setError(describeDaemonError(err));
-          setScrollAsk(null);
         }
       });
   }, [api, filters, focus]);
@@ -945,25 +962,6 @@ export function Memory({
     ...NO_FILTERS,
     status: filters.status,
   });
-  const daemonTotal =
-    focus !== null || !defaultFilters || summary === null
-      ? null
-      : filters.status === 'pending'
-        ? summary.pending
-        : filters.status === 'forgotten'
-          ? summary.forgotten
-          : null;
-  const entriesTotal =
-    filters.status === 'pending'
-      ? Math.max(daemonTotal ?? 0, entries.length) +
-        (defaultFilters ? lessonCount : 0)
-      : Math.max(daemonTotal ?? 0, entries.length);
-  const entriesExact = daemonTotal !== null || next === null;
-  const [entriesNoun, entriesNounOne] =
-    filters.status === 'pending'
-      ? ['waiting items', 'waiting item']
-      : ['entries', 'entry'];
-  const listVisible = focus !== null || listOpen || entriesTotal === 0;
   const pendingCapped = filters.status === 'pending' && focus === null;
   const shownEntries = pendingCapped ? pendingShow.shown : entries;
   const pendingTotal = defaultFilters
@@ -976,27 +974,44 @@ export function Memory({
     }
   }, [focus, setListOpen]);
 
-  const reviewWaiting = (): void => {
+  const openEntries = (status: EntryTab): void => {
     if (focus !== null) {
       onFocusDone?.();
     }
-    setFilters({ ...NO_FILTERS, status: 'pending' });
-    setWaitingTab(waitingEntries > 0 ? 'entries' : 'lessons');
+    const wanted = { ...NO_FILTERS, status };
+    if (!sameFilters(filters, wanted)) {
+      setFilters(wanted);
+    }
     setListOpen(true);
-    setScrollAsk(api === null ? null : { entriesAtAsk: entries });
   };
 
-  useEffect(() => {
-    if (scrollAsk === null || !listVisible) {
-      return;
+  const reviewWaiting = (): void => {
+    setWaitingTab(waitingEntries > 0 ? 'entries' : 'lessons');
+    openEntries('pending');
+  };
+
+  const closeEntries = (): void => {
+    setListOpen(false);
+    if (editing?.kind === 'edit') {
+      setEditing(null);
+      setFormError(null);
     }
-    entriesGroup.current
-      ?.closest('[data-slot=settings-group]')
-      ?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    if (entries !== scrollAsk.entriesAtAsk) {
-      setScrollAsk(null);
+    if (focus !== null) {
+      onFocusDone?.();
     }
-  }, [scrollAsk, listVisible, entries]);
+  };
+
+  const entriesFigures = [
+    indexFit === null
+      ? null
+      : `${indexFit.listed.toLocaleString('en-US')} of ${indexFit.eligible.toLocaleString('en-US')} titles in every new chat`,
+    summary === null && pending.length === 0 && lessonCount === 0
+      ? null
+      : `${waitingCount.toLocaleString('en-US')}${waitingCut ? '+' : ''} waiting for review`,
+    summary === null
+      ? null
+      : `${summary.forgotten.toLocaleString('en-US')} forgotten`,
+  ].filter((figure) => figure !== null);
   const waitingTabShown =
     waitingTab ??
     (waitingEntries > 0 || lessonCount === 0 ? 'entries' : 'lessons');
@@ -1100,13 +1115,11 @@ export function Memory({
   const entriesHint = (
     <>
       <p>
-        Every note agents can read or write, one row each. Open a tab to pick
-        which ones you are looking at; the list stays folded until you ask for
-        it.
+        Every note agents can read or write, sorted into four lists by how
+        agents reach it. Open one to search and filter it, and to edit, forget,
+        restore or approve its entries.
       </p>
-      <p>
-        Edit, forget or approve entries here, or add your own with New entry.
-      </p>
+      <p>New entry adds a note of your own.</p>
     </>
   );
 
@@ -1148,7 +1161,7 @@ export function Memory({
             <Button
               type="button"
               size="sm"
-              title="Open the Waiting for review list below, where you approve or forget each one."
+              title="Open the Waiting for review list, where you approve or forget each one."
               onClick={reviewWaiting}>
               Review now
             </Button>
@@ -1318,17 +1331,16 @@ export function Memory({
         />
 
         <SettingsGroup
-          layout="stacked"
           icon={<Library />}
           title="Entries"
           description="Every note in memory, sorted by how agents reach it."
           hint={entriesHint}
           actions={
-            focus !== null || editing?.kind === 'new' ? null : (
+            editing?.kind === 'new' ? null : (
               <Button
                 type="button"
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 title="Write a note yourself that agents can use."
                 disabled={api === null}
                 onClick={() => {
@@ -1344,269 +1356,55 @@ export function Memory({
               </Button>
             )
           }>
-          <div ref={entriesGroup} data-slot="memory-entries-group">
+          {editing?.kind === 'new' ? (
+            <MemoryForm
+              value={editing.value}
+              projects={projects}
+              teams={libraryTeamOptions}
+              saving={saving}
+              error={formError}
+              submitLabel="Add"
+              onChange={(value) =>
+                setEditing({ ...editing, value, vouched: [] })
+              }
+              onSubmit={() => void submit()}
+              onCancel={() => {
+                setEditing(null);
+                setFormError(null);
+              }}
+            />
+          ) : null}
+          <div data-slot="memory-entries-summary">
             <SettingsPanel>
-              <SettingsPanelRow layout="block">
-                {focus !== null ? (
-                  <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                    <span>Showing {focus} only.</span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="rounded-control"
-                      title="Leave this one entry and list every entry again."
-                      onClick={() => onFocusDone?.()}>
-                      Show all
-                    </Button>
-                  </div>
-                ) : (
+              <SettingsPanelRow
+                label="All entries"
+                hint={
                   <>
-                    <div className="flex min-w-0 items-center gap-1 border-b border-border">
-                      <TabStrip
-                        label="Which entries"
-                        idPrefix={ENTRY_TABS_ID}
-                        tabs={tabs}
-                        value={filters.status}
-                        className="min-w-0 flex-1"
-                        onSelect={(status) => {
-                          setFilters({ ...filters, status });
-                          setListOpen(true);
-                        }}
-                      />
-                      <HelpHint subject="the entry tabs" align="end">
-                        <HelpHintPart title="In every chat">
-                          Entries whose titles every new chat starts with, up to
-                          2 KB, so agents know them without searching.
-                        </HelpHintPart>
-                        <HelpHintPart title="Search only">
-                          Entries agents are not told about up front. They find
-                          one only by searching memory.
-                        </HelpHintPart>
-                        <HelpHintPart title="Waiting for review">
-                          Notes agents saved, and lessons a reflection found,
-                          that no agent uses until you approve them.
-                        </HelpHintPart>
-                        <HelpHintPart title="Forgotten">
-                          Entries hidden from every agent. Restore brings one
-                          back.
-                        </HelpHintPart>
-                      </HelpHint>
-                    </div>
-                    <ShowAllButton
-                      total={entriesExact ? entriesTotal : null}
-                      limit={0}
-                      expanded={listOpen}
-                      noun={entriesNoun}
-                      nounOne={entriesNounOne}
-                      onToggle={() => setListOpen(!listOpen)}
-                    />
+                    {ENTRY_TABS.map((entryTab) => (
+                      <HelpHintPart key={entryTab.id} title={entryTab.label}>
+                        {TAB_HINT[entryTab.id]}
+                      </HelpHintPart>
+                    ))}
                   </>
-                )}
-                {editing?.kind === 'new' ? (
-                  <div className="mt-2">
-                    <MemoryForm
-                      value={editing.value}
-                      projects={projects}
-                      teams={libraryTeamOptions}
-                      saving={saving}
-                      error={formError}
-                      submitLabel="Add"
-                      onChange={(value) =>
-                        setEditing({ ...editing, value, vouched: [] })
-                      }
-                      onSubmit={() => void submit()}
-                      onCancel={() => {
-                        setEditing(null);
-                        setFormError(null);
-                      }}
-                    />
-                  </div>
-                ) : null}
-                {listVisible && focus === null ? (
-                  <>
-                    <div
-                      data-slot="memory-entries-toolbar"
-                      className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-                      <label className="relative min-w-[12rem] flex-1">
-                        <Search
-                          aria-hidden="true"
-                          className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-                        />
-                        <Input
-                          aria-label="Search memory"
-                          placeholder="Search"
-                          className="pl-8"
-                          value={filters.q}
-                          onChange={(event) =>
-                            setFilters({ ...filters, q: event.target.value })
-                          }
-                        />
-                      </label>
-                      <div className="flex min-w-0 items-center">
-                        <Select
-                          variant="ghost"
-                          flexible
-                          aria-label="Scope"
-                          title="Show only the entries of one project, team or the global memory."
-                          value={filters.scope}
-                          groups={scopeGroups}
-                          onValueChange={(scope) =>
-                            setFilters({ ...filters, scope })
-                          }
-                        />
-                        <Select
-                          variant="ghost"
-                          aria-label="Type"
-                          title="Show only one kind of entry: about you, feedback, a project or a reference."
-                          value={filters.type}
-                          groups={[{ label: 'Type', items: TYPE_FILTERS }]}
-                          onValueChange={(type) =>
-                            setFilters({ ...filters, type })
-                          }
-                        />
-                      </div>
-                    </div>
-                    <p className="m-0 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                      <span data-slot="memory-tab-explained">
-                        {TAB_EXPLAINED[filters.status]}
-                      </span>
-                      {filters.status === 'index' && indexPreview !== null ? (
-                        <span
-                          data-slot="memory-index-fit"
-                          title={`How many of these titles ${previewWhere} starts with now; the rest are found by search. Pick a project or team to see its own.`}
-                          className="tabular-nums">
-                          <span className="font-medium text-foreground">
-                            {indexPreview.listed.toLocaleString('en-US')} of{' '}
-                            {indexPreview.eligible.toLocaleString('en-US')} fit
-                          </span>{' '}
-                          · {previewWhere}
-                        </span>
-                      ) : null}
-                    </p>
-                  </>
-                ) : null}
-                {listVisible ? (
-                  <div
-                    role={focus === null ? 'tabpanel' : undefined}
-                    id={
-                      focus === null
-                        ? tabPanelId(ENTRY_TABS_ID, filters.status)
-                        : undefined
-                    }
-                    aria-labelledby={
-                      focus === null
-                        ? tabId(ENTRY_TABS_ID, filters.status)
-                        : undefined
-                    }
-                    data-slot="memory-entries"
-                    className="flex min-w-0 flex-col">
-                    {focus === null && filters.status === 'pending' ? (
-                      <div className="mt-1 flex min-w-0 items-center gap-1">
-                        <TabStrip
-                          label="Waiting for review"
-                          idPrefix="memory-waiting"
-                          tabs={[
-                            {
-                              id: 'entries',
-                              label: 'Entries',
-                              count:
-                                waitingEntries > 0 ? waitingEntries : undefined,
-                            },
-                            {
-                              id: 'lessons',
-                              label: 'Lessons',
-                              count: lessonCount > 0 ? lessonCount : undefined,
-                            },
-                          ]}
-                          value={waitingTabShown}
-                          className="min-w-0 flex-1"
-                          onSelect={setWaitingTab}
-                        />
-                        <HelpHint
-                          subject="waiting entries and lessons"
-                          align="end">
-                          <HelpHintPart title="Entries">
-                            Notes an agent wanted to add to memory. Approve one
-                            to let agents use it, or forget it.
-                          </HelpHintPart>
-                          <HelpHintPart title="Lessons">
-                            What a reflection found in a chat. A number here
-                            counts only the lessons still waiting for you; the
-                            ones already saved are listed below, under Saved to
-                            memory, with their own count.
-                          </HelpHintPart>
-                        </HelpHint>
-                      </div>
-                    ) : null}
-                    {lessonsShown ? (
-                      <div className="mt-2 flex flex-col gap-6">
-                        <WaitingLessons
-                          waiting={waitingLessons}
-                          lessonsApi={lessonsApi}
-                          knowledgeApi={knowledgeApi}
-                        />
-                        <SavedLessons
-                          saved={savedLessons}
-                          lessonsApi={lessonsApi}
-                        />
-                      </div>
-                    ) : loaded && entries.length === 0 ? (
-                      focus !== null ? (
-                        <EmptyState className="h-auto py-8">
-                          No entry {focus}.
-                        </EmptyState>
-                      ) : defaultFilters ? (
-                        <EmptyState
-                          className="py-8"
-                          icon={TAB_EMPTY_ICON[filters.status]}>
-                          {TAB_EMPTY[filters.status]}
-                        </EmptyState>
-                      ) : (
-                        <EmptyState className="h-auto py-8">
-                          No entry matches. Try other words, or clear the
-                          filters.
-                        </EmptyState>
-                      )
-                    ) : (
-                      <ul className="-mx-2 flex list-none flex-col divide-y divide-border p-0">
-                        {shownEntries.map((entry) => (
-                          <li key={entry.id} className="py-0.5">
-                            {row(entry)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {pendingCapped && !lessonsShown ? (
-                      <ShowAllButton
-                        total={pendingTotal}
-                        limit={PENDING_SHOWN}
-                        expanded={pendingShow.expanded}
-                        noun="waiting entries"
-                        className="mt-1"
-                        onToggle={() =>
-                          pendingShow.setExpanded(!pendingShow.expanded)
-                        }
-                      />
-                    ) : null}
-                    {next !== null &&
-                    !lessonsShown &&
-                    (!pendingCapped ||
-                      pendingShow.expanded ||
-                      entries.length <= PENDING_SHOWN) ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="mt-1 self-center rounded-control text-muted-foreground"
-                        title="Load the next page of entries."
-                        disabled={loadingMore}
-                        onClick={loadMore}>
-                        Show more
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
+                }
+                description={
+                  <span
+                    data-slot="memory-entries-figures"
+                    className="tabular-nums">
+                    {entriesFigures.length === 0
+                      ? 'In four lists: in every chat, search only, waiting for review and forgotten.'
+                      : `${entriesFigures.join(' · ')}.`}
+                  </span>
+                }>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  title="List every entry in a window, with a tab for each list, search and filters."
+                  disabled={api === null}
+                  onClick={() => openEntries('index')}>
+                  Open…
+                </Button>
               </SettingsPanelRow>
             </SettingsPanel>
           </div>
@@ -1668,6 +1466,216 @@ export function Memory({
           </SettingsPanel>
         </SettingsGroup>
       </SettingsGroups>
+
+      <Dialog
+        open={listOpen}
+        onClose={closeEntries}
+        title="Memory entries"
+        initialFocus={searchField}
+        className="h-[min(56rem,100%)] max-w-4xl">
+        <div
+          data-slot="memory-entries-group"
+          className="flex min-w-0 flex-col gap-2">
+          {focus !== null ? (
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <span>Showing {focus} only.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="rounded-control"
+                title="Leave this one entry and list every entry again."
+                onClick={() => onFocusDone?.()}>
+                Show all
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="flex min-w-0 items-center gap-1 border-b border-border">
+                <TabStrip
+                  label="Which entries"
+                  idPrefix={ENTRY_TABS_ID}
+                  tabs={tabs}
+                  value={filters.status}
+                  className="min-w-0 flex-1"
+                  onSelect={(status) => setFilters({ ...filters, status })}
+                />
+                <HelpHint subject="the entry tabs" align="end">
+                  {ENTRY_TABS.map((entryTab) => (
+                    <HelpHintPart key={entryTab.id} title={entryTab.label}>
+                      {TAB_HINT[entryTab.id]}
+                    </HelpHintPart>
+                  ))}
+                </HelpHint>
+              </div>
+              <div
+                data-slot="memory-entries-toolbar"
+                className="flex min-w-0 flex-wrap items-center gap-1">
+                <label className="relative min-w-[12rem] flex-1">
+                  <Search
+                    aria-hidden="true"
+                    className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    ref={searchField}
+                    aria-label="Search memory"
+                    placeholder="Search"
+                    className="pl-8"
+                    value={filters.q}
+                    onChange={(event) =>
+                      setFilters({ ...filters, q: event.target.value })
+                    }
+                  />
+                </label>
+                <div className="flex min-w-0 items-center">
+                  <Select
+                    variant="ghost"
+                    flexible
+                    aria-label="Scope"
+                    title="Show only the entries of one project, team or the global memory."
+                    value={filters.scope}
+                    groups={scopeGroups}
+                    onValueChange={(scope) => setFilters({ ...filters, scope })}
+                  />
+                  <Select
+                    variant="ghost"
+                    aria-label="Type"
+                    title="Show only one kind of entry: about you, feedback, a project or a reference."
+                    value={filters.type}
+                    groups={[{ label: 'Type', items: TYPE_FILTERS }]}
+                    onValueChange={(type) => setFilters({ ...filters, type })}
+                  />
+                </div>
+              </div>
+              <p className="m-0 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                <span data-slot="memory-tab-explained">
+                  {TAB_EXPLAINED[filters.status]}
+                </span>
+                {filters.status === 'index' && indexPreview !== null ? (
+                  <span
+                    data-slot="memory-index-fit"
+                    title={`How many of these titles ${previewWhere} starts with now; the rest are found by search. Pick a project or team to see its own.`}
+                    className="tabular-nums">
+                    <span className="font-medium text-foreground">
+                      {indexPreview.listed.toLocaleString('en-US')} of{' '}
+                      {indexPreview.eligible.toLocaleString('en-US')} fit
+                    </span>{' '}
+                    · {previewWhere}
+                  </span>
+                ) : null}
+              </p>
+            </>
+          )}
+          <div
+            role={focus === null ? 'tabpanel' : undefined}
+            id={
+              focus === null
+                ? tabPanelId(ENTRY_TABS_ID, filters.status)
+                : undefined
+            }
+            aria-labelledby={
+              focus === null ? tabId(ENTRY_TABS_ID, filters.status) : undefined
+            }
+            data-slot="memory-entries"
+            className="flex min-w-0 flex-col">
+            {focus === null && filters.status === 'pending' ? (
+              <div className="mt-1 flex min-w-0 items-center gap-1">
+                <TabStrip
+                  label="Waiting for review"
+                  idPrefix="memory-waiting"
+                  tabs={[
+                    {
+                      id: 'entries',
+                      label: 'Entries',
+                      count: waitingEntries > 0 ? waitingEntries : undefined,
+                    },
+                    {
+                      id: 'lessons',
+                      label: 'Lessons',
+                      count: lessonCount > 0 ? lessonCount : undefined,
+                    },
+                  ]}
+                  value={waitingTabShown}
+                  className="min-w-0 flex-1"
+                  onSelect={setWaitingTab}
+                />
+                <HelpHint subject="waiting entries and lessons" align="end">
+                  <HelpHintPart title="Entries">
+                    Notes an agent wanted to add to memory. Approve one to let
+                    agents use it, or forget it.
+                  </HelpHintPart>
+                  <HelpHintPart title="Lessons">
+                    What a reflection found in a chat. A number here counts only
+                    the lessons still waiting for you; the ones already saved
+                    are listed below, under Saved to memory, with their own
+                    count.
+                  </HelpHintPart>
+                </HelpHint>
+              </div>
+            ) : null}
+            {lessonsShown ? (
+              <div className="mt-2 flex flex-col gap-6">
+                <WaitingLessons
+                  waiting={waitingLessons}
+                  lessonsApi={lessonsApi}
+                  knowledgeApi={knowledgeApi}
+                />
+                <SavedLessons saved={savedLessons} lessonsApi={lessonsApi} />
+              </div>
+            ) : loaded && entries.length === 0 ? (
+              focus !== null ? (
+                <EmptyState className="h-auto py-8">
+                  No entry {focus}.
+                </EmptyState>
+              ) : defaultFilters ? (
+                <EmptyState
+                  className="py-8"
+                  icon={TAB_EMPTY_ICON[filters.status]}>
+                  {TAB_EMPTY[filters.status]}
+                </EmptyState>
+              ) : (
+                <EmptyState className="h-auto py-8">
+                  No entry matches. Try other words, or clear the filters.
+                </EmptyState>
+              )
+            ) : (
+              <ul className="-mx-2 flex list-none flex-col divide-y divide-border p-0">
+                {shownEntries.map((entry) => (
+                  <li key={entry.id} className="py-0.5">
+                    {row(entry)}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {pendingCapped && !lessonsShown ? (
+              <ShowAllButton
+                total={pendingTotal}
+                limit={PENDING_SHOWN}
+                expanded={pendingShow.expanded}
+                noun="waiting entries"
+                className="mt-1"
+                onToggle={() => pendingShow.setExpanded(!pendingShow.expanded)}
+              />
+            ) : null}
+            {next !== null &&
+            !lessonsShown &&
+            (!pendingCapped ||
+              pendingShow.expanded ||
+              entries.length <= PENDING_SHOWN) ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="mt-1 self-center rounded-control text-muted-foreground"
+                title="Load the next page of entries."
+                disabled={loadingMore}
+                onClick={loadMore}>
+                Show more
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Dialog>
 
       <MemoryCleanupDialog
         open={cleanup.open}

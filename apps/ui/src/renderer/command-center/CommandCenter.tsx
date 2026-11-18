@@ -30,6 +30,7 @@ import { Button } from '../components/ui/button';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
+import { useElementSize } from '../components/use-element-size';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -40,6 +41,12 @@ import { type TeamFace, teamFacesOf, threadCardViewOf } from './card-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
 import { NeedsYouPanel } from './needs-you-panel';
+import { projectColorsOf } from './project-colors';
+import {
+  ThreadWindowsLayer,
+  type ThreadWindowSubject,
+  useThreadWindows,
+} from './thread-windows';
 import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
 import { useCommandCenterTimeline } from './use-command-center-timeline';
@@ -201,7 +208,8 @@ export function CommandCenter({
     };
   }, [apis, unknownTeams]);
   const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
-  const [focusRunId, setFocusRunId] = useState<string | null>(null);
+  const windows = useThreadWindows(narrow);
+  const [measureWindowArea, windowArea] = useElementSize();
   const timeline = useCommandCenterTimeline(
     apis,
     client,
@@ -243,10 +251,24 @@ export function CommandCenter({
   );
   const toggleSidebar = (tab: SidebarTab): void =>
     setSidebar((open) => (open === tab ? null : tab));
-  const answerFrom = (runId: string): void => {
-    setFocusRunId(runId);
-    setSidebar('needs');
-  };
+  const answerFrom = (runId: string): void =>
+    windows.open(runId, 'answer', windowArea);
+  const openHere = (runId: string): void =>
+    windows.open(runId, 'thread', windowArea);
+  const boardRunIds =
+    board.cards === null
+      ? null
+      : board.cards
+          .map((card) => card.run.id)
+          .sort()
+          .join(',');
+  useEffect(() => {
+    if (boardRunIds !== null) {
+      windows.keepOnly(
+        new Set(boardRunIds === '' ? [] : boardRunIds.split(',')),
+      );
+    }
+  }, [boardRunIds, windows.keepOnly]);
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -263,6 +285,15 @@ export function CommandCenter({
       ),
     [board.cards, projectFilter],
   );
+  const projectColors = projectColorsOf(
+    (board.cards ?? []).map((card) => card.run.project),
+  );
+  const colorOfProject = new Map(
+    projectColors.map((project) => [project.id, project.color]),
+  );
+  const shownProjects = projectColors.filter((project) =>
+    shown.some((card) => card.run.project?.id === project.id),
+  );
   const viewOf = (card: CommandCenterCard) =>
     threadCardViewOf(
       card,
@@ -270,7 +301,23 @@ export function CommandCenter({
       identities,
       teamFaces,
       now,
+      colorOfProject,
     );
+  const windowSubjects = new Map(
+    (board.cards ?? []).map((card): [string, ThreadWindowSubject] => [
+      card.run.id,
+      {
+        title: card.run.title ?? 'Untitled thread',
+        project:
+          card.run.project == null
+            ? null
+            : {
+                name: card.run.project.name,
+                color: colorOfProject.get(card.run.project.id) ?? null,
+              },
+      },
+    ]),
+  );
 
   const workingThreads = (board.cards ?? []).flatMap((card) =>
     card.column === 'working' || card.column === 'waiting'
@@ -374,6 +421,8 @@ export function CommandCenter({
             now={now}
             narrow={narrow}
             onOpen={onOpenThread}
+            onOpenHere={openHere}
+            projects={shownProjects}
             asking={askingKinds}
             onAnswer={answerFrom}
           />
@@ -431,10 +480,7 @@ export function CommandCenter({
             data-slot="command-center-needs-toggle"
             aria-pressed={sidebar === 'needs'}
             title="Questions and approvals your threads wait on — answer them here"
-            onClick={() => {
-              setFocusRunId(null);
-              toggleSidebar('needs');
-            }}>
+            onClick={() => toggleSidebar('needs')}>
             <MessageCircleQuestion aria-hidden="true" className="size-3.5" />
             <span className="max-sm:sr-only">Needs you</span>
             {needsCount === 0 ? null : (
@@ -476,7 +522,9 @@ export function CommandCenter({
         />
       )}
       <div className="relative flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          ref={measureWindowArea}
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {graphShown ? graph : null}
           <div
             hidden={!chatShown}
@@ -515,6 +563,21 @@ export function CommandCenter({
               />
             )}
           </div>
+          {graphShown && client !== null ? (
+            <ThreadWindowsLayer
+              windows={windows}
+              bounds={windowArea}
+              narrow={narrow}
+              subjects={windowSubjects}
+              requests={openRequests.requests}
+              requestsError={openRequests.error}
+              onAnswer={openRequests.answer}
+              onOpenThread={onOpenThread}
+              apis={apis}
+              handle={handle}
+              client={client}
+            />
+          ) : null}
         </div>
         {sidebar === null ? null : (
           <aside
@@ -547,7 +610,7 @@ export function CommandCenter({
               <NeedsYouPanel
                 requests={openRequests.requests}
                 error={openRequests.error}
-                focusRunId={focusRunId}
+                focusRunId={null}
                 onAnswer={openRequests.answer}
                 onOpenThread={onOpenThread}
               />

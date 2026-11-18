@@ -91,6 +91,60 @@ describe('ThreadCard — going to the thread', () => {
 
     expect(onGo).toHaveBeenCalledTimes(1);
   });
+
+  it('opens the thread over the graph from its Open here button, and offers none without a handler', () => {
+    const onGo = vi.fn();
+    const onOpenHere = vi.fn();
+    const button = render({
+      onGo,
+      onOpenHere,
+    }).querySelector<HTMLButtonElement>('[data-slot="thread-card-open-here"]')!;
+
+    expect(button.getAttribute('aria-label')).toBe(
+      'Open Fix the login redirect here',
+    );
+    act(() => {
+      button.click();
+    });
+
+    expect(onOpenHere).toHaveBeenCalledTimes(1);
+    expect(onGo).not.toHaveBeenCalled();
+    expect(
+      render({}).querySelector('[data-slot="thread-card-open-here"]'),
+    ).toBeNull();
+  });
+});
+
+describe('ThreadCard — project colour', () => {
+  it('wears its project’s colour as a dot on the project label, in the glyph’s place', () => {
+    const label = render({
+      project: 'Geniro',
+      projectColor: 'teal',
+    }).querySelector<HTMLElement>('[data-slot="thread-card-project"]')!;
+
+    const dot = label.querySelector<HTMLElement>(
+      '[data-slot="thread-card-project-dot"]',
+    )!;
+    expect(dot.dataset.color).toBe('teal');
+    expect(label.querySelector('svg')).toBeNull();
+    expect(label.getAttribute('title')).toBe('Project Geniro');
+  });
+
+  it('keeps the folder glyph and no dot when the project has no colour, and draws no label without a project', () => {
+    const plain = render({ project: 'Geniro', projectColor: null });
+    expect(
+      plain.querySelector('[data-slot="thread-card-project-dot"]'),
+    ).toBeNull();
+    expect(
+      plain.querySelector('[data-slot="thread-card-project"] svg'),
+    ).not.toBeNull();
+
+    const none = render({ project: null, projectColor: null });
+    expect(none.querySelector('[data-slot="thread-card-project"]')).toBeNull();
+    expect(
+      none.querySelector('[data-slot="thread-card-project-dot"]'),
+    ).toBeNull();
+  });
 });
 
 describe('ThreadCard — content', () => {

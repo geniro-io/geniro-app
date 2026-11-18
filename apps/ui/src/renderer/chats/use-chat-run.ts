@@ -42,6 +42,7 @@ import { discardsContextReading } from './compaction-payload';
 import { parkedReason, settleReleasesQueue } from './follow-up-delivery';
 import { isCallRow, mergeAnchorRows } from './history-anchors';
 import type { LiveState } from './live-text';
+import { readRunById } from './read-run';
 import {
   belowHorizon,
   deeper,
@@ -1774,12 +1775,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return;
       }
       const askedAfter = liveAnnounceCountRef.current;
-      void Promise.all([
-        chatApi.listChats({ scope: 'all', runId }),
-        teamApi.listTeamRuns({ scope: 'all', runId }),
-      ])
-        .then(([chats, teamRuns]) => {
-          const row = [...chats, ...teamRuns].find((run) => run.id === runId);
+      void readRunById(chatApi, teamApi, runId)
+        .then((row) => {
           if (row === undefined || deletedRunIdsRef.current.has(runId)) {
             return;
           }

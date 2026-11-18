@@ -14,18 +14,14 @@ import {
 } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
 import { Maximize, Minus, Plus, RadioTower } from 'lucide-react';
-import {
-  createContext,
-  useContext,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 
 import { type Point, roundedPath } from '../components/stage-graph-layout';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
+import { PaletteDot } from '../components/ui/palette-dot';
 import { cn } from '../components/ui/utils';
+import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
 import {
@@ -51,6 +47,7 @@ import {
   layoutRows,
   perLineFor,
 } from './graph-layout';
+import type { ProjectColor } from './project-colors';
 import {
   ATTENTION_TEXT,
   attentionDotVariants,
@@ -87,6 +84,10 @@ export interface GraphViewProps {
   /** One column for a narrow screen, scrolled rather than panned. */
   narrow: boolean;
   onOpen: (threadId: string) => void;
+  /** Open the thread in a window over the graph. */
+  onOpenHere: (threadId: string) => void;
+  /** The projects of the threads on the graph, each with its colour, for the legend. */
+  projects: readonly ProjectColor[];
   /** Threads holding a question or an approval the user can answer here, by what they hold. */
   asking: ReadonlyMap<string, 'question' | 'approval'>;
   onAnswer: (threadId: string) => void;
@@ -152,11 +153,13 @@ type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
   open: (threadId: string) => void;
+  openHere: (threadId: string) => void;
   answer: (threadId: string) => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
   open: () => undefined,
+  openHere: () => undefined,
   answer: () => undefined,
 });
 
@@ -313,7 +316,7 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
 }
 
 function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
-  const { open, answer } = useContext(GraphActionsContext);
+  const { open, openHere, answer } = useContext(GraphActionsContext);
   const { thread, summary, asking } = data;
   return (
     <div
@@ -325,6 +328,7 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
         {...thread.view}
         summary={summary}
         onGo={() => open(thread.id)}
+        onOpenHere={() => openHere(thread.id)}
         answerKind={asking}
         onAnswer={asking === null ? undefined : () => answer(thread.id)}
       />
@@ -477,6 +481,39 @@ function AttentionLegend({
   );
 }
 
+function ProjectLegend({
+  projects,
+  className,
+}: {
+  projects: readonly ProjectColor[];
+  className?: string;
+}): React.JSX.Element | null {
+  if (projects.length === 0) {
+    return null;
+  }
+  return (
+    <ul
+      aria-label="Projects"
+      data-slot="graph-projects"
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs',
+        className,
+      )}>
+      {projects.map((project) => (
+        <li
+          key={project.id}
+          data-slot="graph-project"
+          data-color={project.color}
+          title={`Project ${project.name}`}
+          className="flex max-w-40 min-w-0 items-center gap-1.5 text-muted-foreground">
+          <PaletteDot color={project.color} size="md" />
+          <span className="truncate">{project.name}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * The view that shows the graph across the canvas's width from its top, never
  * zoomed past 1: a card stays readable and a tall graph scrolls down, where a
@@ -515,32 +552,6 @@ export function wholeFit(
     y: Math.max(FIT_MARGIN, (canvas.height - graph.height * zoom) / 2),
     zoom,
   };
-}
-
-function useElementSize(): [
-  (el: HTMLDivElement | null) => void,
-  { width: number; height: number },
-] {
-  const [element, setElement] = useState<HTMLDivElement | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useLayoutEffect(() => {
-    if (element === null) {
-      return;
-    }
-    setSize({ width: element.clientWidth, height: element.clientHeight });
-    if (typeof ResizeObserver === 'undefined') {
-      return;
-    }
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries.at(-1)?.contentRect;
-      if (rect !== undefined) {
-        setSize({ width: rect.width, height: rect.height });
-      }
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [element]);
-  return [setElement, size];
 }
 
 export function GraphView(props: GraphViewProps): React.JSX.Element {
@@ -600,6 +611,8 @@ function GraphCanvas({
   now,
   narrow,
   onOpen,
+  onOpenHere,
+  projects,
   asking,
   onAnswer,
   className,
@@ -637,6 +650,7 @@ function GraphCanvas({
   }, [fitKey, narrow, size.width, fit]);
 
   const open = useLatestCallback(onOpen, []);
+  const openHere = useLatestCallback(onOpenHere, []);
   const answer = useLatestCallback(onAnswer, []);
 
   const states = new Map(
@@ -771,7 +785,7 @@ function GraphCanvas({
   };
 
   return (
-    <GraphActionsContext.Provider value={{ open, answer }}>
+    <GraphActionsContext.Provider value={{ open, openHere, answer }}>
       {narrow ? (
         <div
           role="group"
@@ -780,8 +794,9 @@ function GraphCanvas({
           data-layout="column"
           className={cn('overflow-y-auto', className)}>
           <AttentionLegend threads={threads} />
+          <ProjectLegend projects={projects} className="px-4 pt-1.5" />
           <div
-            className="mx-auto"
+            className="mx-auto [&_.react-flow__pane]:touch-pan-y"
             style={{ width: drawn.width, height: drawn.height }}>
             <ReactFlow
               {...flowProps}
@@ -821,6 +836,10 @@ function GraphCanvas({
                   zoomOnScroll={false}
                   zoomOnPinch
                   zoomOnDoubleClick={false}
+                />
+                <ProjectLegend
+                  projects={projects}
+                  className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-5rem)] rounded-control border border-border bg-card/95 px-2.5 py-1.5 shadow-sm"
                 />
                 <ZoomControls
                   onFit={() =>

@@ -14,7 +14,11 @@ import {
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { ContactState } from './contact-edge';
-import { FIXTURE_NOW, graphThreadsOf } from './graph-fixtures';
+import {
+  FIXTURE_NOW,
+  FIXTURE_PROJECTS,
+  graphThreadsOf,
+} from './graph-fixtures';
 import type { GraphThread } from './graph-view';
 import {
   GraphView,
@@ -153,6 +157,8 @@ describe('GraphView', () => {
           now={FIXTURE_NOW}
           narrow={false}
           onOpen={() => undefined}
+          onOpenHere={() => undefined}
+          projects={[]}
           asking={new Map()}
           onAnswer={() => undefined}
           {...overrides}
@@ -333,6 +339,51 @@ describe('GraphView', () => {
     expect(onOpen).toHaveBeenCalledWith('thread-2');
   });
 
+  it('opens a thread in a window over the graph from its Open here button, not by navigating to it', async () => {
+    const onOpen = vi.fn();
+    const onOpenHere = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onOpen, onOpenHere });
+
+    act(() =>
+      threadCard('thread-3')
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-card-open-here"]',
+        )!
+        .click(),
+    );
+    expect(onOpenHere).toHaveBeenCalledWith('thread-3');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('keys each project on the graph to its colour in a corner legend, and marks each card with its project’s dot', async () => {
+    await draw({ threads: graphThreadsOf(3), projects: FIXTURE_PROJECTS });
+
+    const legend = all('graph-project').map((entry) => [
+      entry.textContent,
+      entry.dataset.color,
+    ]);
+    expect(legend).toEqual([
+      ['QA Billing', 'blue'],
+      ['QA Cache', 'purple'],
+    ]);
+    expect(
+      threadCard('thread-1')
+        .querySelector('[data-slot="thread-card-project-dot"]')!
+        .getAttribute('data-color'),
+    ).toBe('blue');
+    expect(
+      threadCard('thread-2')
+        .querySelector('[data-slot="thread-card-project-dot"]')!
+        .getAttribute('data-color'),
+    ).toBe('purple');
+  });
+
+  it('draws no project legend when no thread on the graph has a project', async () => {
+    await draw({ threads: graphThreadsOf(2), projects: [] });
+
+    expect(all('graph-projects')).toHaveLength(0);
+  });
+
   it('offers Answer only on a thread holding a card for the user, and answers it here rather than opening it', async () => {
     const onAnswer = vi.fn();
     const onOpen = vi.fn();
@@ -451,5 +502,15 @@ describe('GraphView', () => {
     expect(ys).toEqual([...ys].sort((a, b) => a - b));
     expect(ys[0]).toBeGreaterThan(nodeY('graph-manager'));
     expect(all('contact-edge')).toHaveLength(4);
+  });
+
+  it('marks the phone column’s flow pane touch-pan-y, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
+    await draw({ threads: graphThreadsOf(4), narrow: true });
+
+    const pane = container.querySelector('.react-flow__pane')!;
+    const canvas = pane.closest('[class*="touch-pan-y"]');
+    expect(canvas).not.toBeNull();
+    expect(canvas!.className).toContain('[&_.react-flow__pane]:touch-pan-y');
+    expect(all('command-center-graph')[0]!.contains(canvas)).toBe(true);
   });
 });

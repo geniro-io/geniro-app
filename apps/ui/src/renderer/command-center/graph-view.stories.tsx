@@ -1,6 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { FIXTURE_NOW, graphThreadsOf } from './graph-fixtures';
+import {
+  FIXTURE_NOW,
+  FIXTURE_PROJECTS,
+  graphThreadsOf,
+} from './graph-fixtures';
 import { GraphView } from './graph-view';
 
 const MINUTE = 60_000;
@@ -40,6 +44,8 @@ const meta = {
     now: FIXTURE_NOW,
     narrow: false,
     onOpen: () => {},
+    onOpenHere: () => {},
+    projects: FIXTURE_PROJECTS,
     asking: new Map([['thread-2', 'question' as const]]),
     onAnswer: () => {},
     className: 'h-full',

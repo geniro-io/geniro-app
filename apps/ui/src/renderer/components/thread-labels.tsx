@@ -84,11 +84,14 @@ export function ThreadLabelChip({
   slot,
   icon,
   text,
+  mark,
   title,
   yields,
 }: {
   slot: string;
   icon: LucideIcon;
+  /** Drawn in the glyph's place, e.g. the project's colour dot. */
+  mark?: React.ReactNode;
   text: string;
   title: string;
   /** Gives up its room first when the row runs out of it. */
@@ -104,7 +107,7 @@ export function ThreadLabelChip({
         'gap-1 px-1.5 py-0 font-normal',
         yields ? 'min-w-14 shrink' : 'max-w-28 shrink-0',
       )}>
-      <Icon aria-hidden="true" className="size-3 shrink-0" />
+      {mark ?? <Icon aria-hidden="true" className="size-3 shrink-0" />}
       <span className="truncate">{text}</span>
     </Badge>
   );

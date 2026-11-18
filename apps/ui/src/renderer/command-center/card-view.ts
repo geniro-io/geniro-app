@@ -1,4 +1,4 @@
-import type { PullRequestInfo } from '../../shared/contracts';
+import type { ProfileColor, PullRequestInfo } from '../../shared/contracts';
 import { agentShortName } from '../agent-identity';
 import type {
   AgentIdentityCapability,
@@ -16,7 +16,7 @@ import {
 /** What a thread's card shows. */
 export type ThreadCardView = Omit<
   ThreadCardProps,
-  'onGo' | 'summary' | 'height'
+  'onGo' | 'onOpenHere' | 'summary' | 'height'
 >;
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -170,6 +170,7 @@ export function threadCardViewOf(
   identities: readonly AgentIdentityCapability[],
   teams: ReadonlyMap<string, TeamFace>,
   now: number,
+  projectColors: ReadonlyMap<string, ProfileColor> = new Map(),
 ): ThreadCardView {
   const team = card.run.teamId == null ? undefined : teams.get(card.run.teamId);
   const lastAt = card.run.lastActivityAt ?? card.run.createdAt;
@@ -192,6 +193,10 @@ export function threadCardViewOf(
     lastAt,
     now,
     project: card.run.project?.name ?? null,
+    projectColor:
+      card.run.project == null
+        ? null
+        : (projectColors.get(card.run.project.id) ?? null),
     agentLabel: agentLabelOf(card, identities, teams),
     isTeam: card.run.teamId != null,
     crew:

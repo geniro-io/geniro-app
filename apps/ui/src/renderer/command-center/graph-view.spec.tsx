@@ -504,13 +504,17 @@ describe('GraphView', () => {
     expect(all('contact-edge')).toHaveLength(4);
   });
 
-  it('marks the phone column’s flow pane touch-pan-y, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
+  it('puts the phone column’s flow pane under cc-touch-scroll, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
     await draw({ threads: graphThreadsOf(4), narrow: true });
 
     const pane = container.querySelector('.react-flow__pane')!;
-    const canvas = pane.closest('[class*="touch-pan-y"]');
-    expect(canvas).not.toBeNull();
-    expect(canvas!.className).toContain('[&_.react-flow__pane]:touch-pan-y');
-    expect(all('command-center-graph')[0]!.contains(canvas)).toBe(true);
+    expect(pane.closest('.cc-touch-scroll')).not.toBeNull();
+  });
+
+  it('leaves the desktop canvas’s pane to React Flow, which pans it by drag', async () => {
+    await draw({ threads: graphThreadsOf(4), narrow: false });
+
+    const pane = container.querySelector('.react-flow__pane')!;
+    expect(pane.closest('.cc-touch-scroll')).toBeNull();
   });
 });

@@ -21,18 +21,22 @@ import {
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { hostedByScope } = vi.hoisted(() => ({
+const { hostedByScope, activeByScope } = vi.hoisted(() => ({
   hostedByScope: new Map<string, HostedThread>(),
+  activeByScope: new Map<string, boolean>(),
 }));
 vi.mock('../chats/Chats', async () => {
   const { createElement } = await import('react');
   return {
     Chats: function ChatsStub({
       hosted,
+      active,
     }: {
       hosted: HostedThread;
+      active: boolean;
     }): React.JSX.Element {
       hostedByScope.set(hosted.queueScope, hosted);
+      activeByScope.set(hosted.queueScope, active);
       return createElement('div', {
         'data-slot': 'chats-stub',
         'data-scope': hosted.queueScope,
@@ -72,9 +76,11 @@ let windows: ThreadWindows;
 
 function Harness({
   narrow,
+  active = true,
   onOpenThread,
 }: {
   narrow: boolean;
+  active?: boolean;
   onOpenThread: (runId: string) => void;
 }): React.JSX.Element {
   windows = useThreadWindows(narrow);
@@ -89,6 +95,7 @@ function Harness({
         apis={apisWith([{ id: 'run-a' }], [{ id: 'run-b' }])}
         handle={HANDLE}
         client={CLIENT}
+        active={active}
       />
     </div>
   );
@@ -112,6 +119,7 @@ const titleOf = (el: HTMLElement): string | undefined =>
 
 beforeEach(() => {
   hostedByScope.clear();
+  activeByScope.clear();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -189,6 +197,15 @@ describe('useThreadWindows', () => {
 });
 
 describe('ThreadWindowsLayer', () => {
+  it('keeps a thread window inactive while the command center is hidden', () => {
+    draw();
+    act(() => windows.open('run-a', BOUNDS));
+    expect(activeByScope.get('command-center-thread:run-a')).toBe(true);
+
+    draw({ active: false });
+    expect(activeByScope.get('command-center-thread:run-a')).toBe(false);
+  });
+
   it('hosts the existing run in a thread window, read by its id', async () => {
     draw();
     act(() => windows.open('run-a', BOUNDS));

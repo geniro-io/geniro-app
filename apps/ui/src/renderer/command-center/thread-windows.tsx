@@ -145,12 +145,14 @@ function ThreadWindowChat({
   apis,
   handle,
   client,
+  active,
   onOpenThread,
 }: {
   runId: string;
   apis: DaemonApis;
   handle: DaemonHandle;
   client: DaemonClient;
+  active: boolean;
   onOpenThread: (runId: string) => void;
 }): React.JSX.Element {
   const open = useLatestCallback(() => readRun(apis, runId), [apis, runId]);
@@ -165,7 +167,9 @@ function ThreadWindowChat({
     }),
     [open, runId, onOpenThread],
   );
-  return <Chats client={client} handle={handle} active hosted={hosted} />;
+  return (
+    <Chats client={client} handle={handle} active={active} hosted={hosted} />
+  );
 }
 
 export interface ThreadWindowsLayerProps {
@@ -177,6 +181,7 @@ export interface ThreadWindowsLayerProps {
   apis: DaemonApis;
   handle: DaemonHandle;
   client: DaemonClient;
+  active: boolean;
 }
 
 /**
@@ -193,6 +198,7 @@ export function ThreadWindowsLayer({
   apis,
   handle,
   client,
+  active,
 }: ThreadWindowsLayerProps): React.JSX.Element | null {
   const front = frontWindow(windows.windows);
   const shown = narrow && front !== null ? [front] : windows.windows;
@@ -255,6 +261,7 @@ export function ThreadWindowsLayer({
               apis={apis}
               handle={handle}
               client={client}
+              active={active}
               onOpenThread={onOpenThread}
             />
           </FloatingWindow>

@@ -590,6 +590,7 @@ export function CommandCenter({
               apis={apis}
               handle={handle}
               client={client}
+              active={active}
             />
           ) : null}
           {graphShown && answering !== null ? (

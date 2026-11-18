@@ -86,6 +86,7 @@ const OPENS_BLOCK = {
   comparison: true,
   gallery: true,
   'browser-screenshot': true,
+  'thread-start': true,
   artifact: true,
   // Never filed under a delegate — see the `action` arm of `groupTranscript`.
   action: false,
@@ -133,6 +134,7 @@ const CARD_NOUN = {
   comparison: 'a comparison',
   gallery: 'a gallery',
   'browser-screenshot': 'a screenshot',
+  'thread-start': 'a new thread',
   artifact: 'a page',
   action: 'a button',
   workflow: 'a workflow',

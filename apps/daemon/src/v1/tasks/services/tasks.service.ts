@@ -187,10 +187,11 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * A card's own run started or settled with the card left where it was: no
-   * column moved, but what the board counts as running did.
+   * A card changed with no column moved: its own run started or settled (the
+   * board's running count moved), or its start request was filed, answered or
+   * ended (`TaskWire.startRequest`).
    */
-  announceRunChanged(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
+  announceInPlace(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,
@@ -851,6 +852,13 @@ function toWire(
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,
+    startRequest:
+      task.startRequestedAt === null
+        ? null
+        : {
+            requestedAt: task.startRequestedAt.toISOString(),
+            approvedAt: task.startApprovedAt?.toISOString() ?? null,
+          },
     report: task.report,
     reportedAt: task.reportedAt?.toISOString() ?? null,
     pullRequests: [...pullRequests],

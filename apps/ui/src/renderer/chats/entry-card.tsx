@@ -11,6 +11,7 @@ import { LessonsBlock } from './lessons-block';
 import { MetricsCard } from './metrics-block';
 import { RecommendationsBlock } from './recommendations-block';
 import { TaskListCard } from './task-list';
+import { ThreadStartCard } from './thread-start-card';
 import type { CardEntry } from './transcript-groups';
 import { WorkflowCard } from './workflow-block';
 
@@ -76,6 +77,8 @@ export const EntryCard = memo(function EntryCard({
           memoryKey={`browser-screenshot:${entry.id}`}
         />
       );
+    case 'thread-start':
+      return <ThreadStartCard pair={entry.pair} />;
     case 'artifact':
       return (
         <ArtifactCard

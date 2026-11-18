@@ -16428,6 +16428,12 @@ export interface TaskDto {
     runId: string | null;
     /**
      * 
+     * @type {TaskDtoStartRequest}
+     * @memberof TaskDto
+     */
+    startRequest: TaskDtoStartRequest | null;
+    /**
+     * 
      * @type {string}
      * @memberof TaskDto
      */
@@ -16483,6 +16489,25 @@ export interface TaskDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface TaskDtoStartRequest
+ */
+export interface TaskDtoStartRequest {
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDtoStartRequest
+     */
+    requestedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDtoStartRequest
+     */
+    approvedAt: string | null;
+}
 /**
  * 
  * @export

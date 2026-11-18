@@ -1844,6 +1844,41 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
   });
 
+  describe('a card the command center asked to start', () => {
+    it('settles the request when its run starts, and announces the card once with it gone', async () => {
+      const task = await seed();
+      await taskDao.setStartRequest(
+        task.id,
+        {
+          requestedAt: new Date(),
+          byRunId: 'manager-run',
+          approvedAt: new Date(),
+        },
+        em,
+      );
+      const announce = vi.spyOn(tasks, 'announceInPlace');
+
+      const wire = await service.start(task.id, {
+        ...start(),
+        startedBy: 'manager',
+      });
+
+      expect(wire.startRequest).toBeNull();
+      expect((await tasks.get(task.id)).startRequest).toBeNull();
+      expect(announce).toHaveBeenCalledTimes(1);
+      expect(announce.mock.calls[0]![0]).toMatchObject({ id: task.id });
+    });
+
+    it('announces nothing extra for a card no one asked to start', async () => {
+      const task = await seed();
+      const announce = vi.spyOn(tasks, 'announceInPlace');
+
+      await service.start(task.id, start());
+
+      expect(announce).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a card whose worktree the autopilot could not prepare', () => {
     const failureOf = async (
       taskId: string,

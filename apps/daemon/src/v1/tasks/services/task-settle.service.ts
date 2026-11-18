@@ -273,7 +273,7 @@ export class TaskSettleService implements OnModuleInit {
       return;
     }
     if (task.status !== 'failed') {
-      this.tasks.announceRunChanged(task);
+      this.tasks.announceInPlace(task);
       return;
     }
     await this.tasks.moveStatus(task.id, { from: 'failed', to: 'in_progress' });
@@ -402,7 +402,7 @@ export class TaskSettleService implements OnModuleInit {
     if (task.status === 'done') {
       const finished = await this.tasks.finishWhenFree(task);
       if (!finished && from === 'event') {
-        this.tasks.announceRunChanged(task);
+        this.tasks.announceInPlace(task);
       }
       return;
     }
@@ -428,7 +428,7 @@ export class TaskSettleService implements OnModuleInit {
       // Never from a reconcile: a board reconciles on every load and every
       // `task_changed`, so announcing there would reload the board for good.
       if (from === 'event') {
-        this.tasks.announceRunChanged(task);
+        this.tasks.announceInPlace(task);
       }
       return;
     }

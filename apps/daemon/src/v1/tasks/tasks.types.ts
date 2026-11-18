@@ -277,6 +277,18 @@ export const TaskWireSchema = z.object({
     .string()
     .nullable()
     .describe('The chat run currently serving this task, if any'),
+  startRequest: z
+    .object({
+      requestedAt: z.iso.datetime(),
+      approvedAt: z.iso
+        .datetime()
+        .nullable()
+        .describe('When the user pressed Start; null while the card waits'),
+    })
+    .nullable()
+    .describe(
+      "The command center manager's open request to start this card, from `start_thread`; null once it started, was declined or failed",
+    ),
   report: z
     .string()
     .nullable()

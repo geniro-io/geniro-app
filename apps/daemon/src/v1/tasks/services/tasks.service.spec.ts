@@ -353,6 +353,36 @@ describe('TasksService (in-memory sqlite)', () => {
     return task;
   };
 
+  it("carries the command center's start request while it is open, and none once it is settled", async () => {
+    const card = await service.create({
+      projectId,
+      title: 'Started by the manager',
+    });
+    expect((await service.get(card.id)).startRequest).toBeNull();
+
+    const requestedAt = new Date('2026-11-18T10:00:00.000Z');
+    await taskDao.setStartRequest(card.id, {
+      requestedAt,
+      byRunId: 'manager-run',
+      approvedAt: null,
+    });
+    expect((await service.get(card.id)).startRequest).toEqual({
+      requestedAt: requestedAt.toISOString(),
+      approvedAt: null,
+    });
+
+    const approvedAt = new Date('2026-11-18T10:01:00.000Z');
+    await taskDao.approveStartRequest(card.id, approvedAt);
+    const board = await service.listForProject(projectId);
+    expect(board.find((task) => task.id === card.id)?.startRequest).toEqual({
+      requestedAt: requestedAt.toISOString(),
+      approvedAt: approvedAt.toISOString(),
+    });
+
+    await taskDao.settleStartRequest(card.id);
+    expect((await service.get(card.id)).startRequest).toBeNull();
+  });
+
   it("carries the stage line of the card's run, and none for a run without stages", async () => {
     const staged = await cardWithRun('in_progress', 'running', 'run-staged');
     const plain = await cardWithRun('in_progress', 'running', 'run-plain');

@@ -362,8 +362,8 @@ export class TaskDao extends BaseDao<Task> {
   async settleStartRequest(
     taskId: string,
     txEm?: EntityManager,
-  ): Promise<void> {
-    await this.getRepo(txEm).nativeUpdate(
+  ): Promise<boolean> {
+    const settled = await this.getRepo(txEm).nativeUpdate(
       {
         id: taskId,
         deletedAt: null,
@@ -371,6 +371,7 @@ export class TaskDao extends BaseDao<Task> {
       } as FilterQuery<Task>,
       { startRequestedAt: null, startApprovedAt: null } as EntityData<Task>,
     );
+    return settled > 0;
   }
 
   /** Cards a manager asked to start that have started and not been reported. */

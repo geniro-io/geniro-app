@@ -285,7 +285,8 @@ export class Task extends TimestampsEntity {
   /**
    * When the command center's manager asked to start this card
    * (`start_thread`), and which manager run asked. Cleared by a successful
-   * start or by the request's Deny or failure. Not on the wire.
+   * start or by the request's Deny or failure. On the wire as
+   * `TaskWire.startRequest`, without the requester.
    */
   @Property({ type: DateTimeType, nullable: true })
   startRequestedAt: Date | null = null;

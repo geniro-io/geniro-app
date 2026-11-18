@@ -28,6 +28,7 @@ import {
   isGeniroToolName,
   MESSAGE_THREAD,
   SAVE_PROJECT_INSTRUCTIONS,
+  START_THREAD,
 } from './geniro-tool';
 import { isCallRow } from './history-anchors';
 import {
@@ -827,15 +828,17 @@ export interface GalleryEntry {
 }
 
 /**
- * One screenshot an agent took in the chat's browser, drawn as its own card.
+ * A card drawn from one of geniro's own tool calls and its result — a
+ * screenshot an agent took in the chat's browser, a thread the command center's
+ * manager started.
  *
  * Unlike every card above it is not a row the daemon writes: it is a tool pair
- * whose call row is hidden from the tool group and whose result row, which
- * names the saved file, lands on {@link pair} when it arrives. A row each, on
- * {@link FindingsEntry}'s reasoning.
+ * whose call row is hidden from the tool group and whose result row lands on
+ * {@link pair} when it arrives. A row each, on {@link FindingsEntry}'s
+ * reasoning.
  */
-export interface BrowserScreenshotEntry {
-  type: 'browser-screenshot';
+export interface PairCardEntry {
+  type: PairCardType;
   id: string;
   createdAt: string;
   seq: number;
@@ -1019,7 +1022,7 @@ export type TranscriptEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
-  | BrowserScreenshotEntry
+  | PairCardEntry
   | ArtifactEntry
   | ActionEntry
   | WorkflowEntry;
@@ -1056,10 +1059,26 @@ export type CardEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
-  | BrowserScreenshotEntry
+  | PairCardEntry
   | ArtifactEntry
   | ActionEntry
   | WorkflowEntry;
+
+/** The geniro tools drawn as a {@link PairCardEntry}, and the card each draws. */
+const PAIR_CARD_OF: ReadonlyMap<string, PairCardType> = new Map([
+  [BROWSER_SCREENSHOT, 'browser-screenshot'],
+  [START_THREAD, 'thread-start'],
+]);
+
+type PairCardType = 'browser-screenshot' | 'thread-start';
+
+const PAIR_CARD_TYPES = new Set<string>(PAIR_CARD_OF.values());
+
+export function isPairCardEntry(
+  entry: TranscriptEntry,
+): entry is PairCardEntry {
+  return PAIR_CARD_TYPES.has(entry.type);
+}
 
 export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
   return (
@@ -1071,7 +1090,7 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'metrics' ||
     entry.type === 'comparison' ||
     entry.type === 'gallery' ||
-    entry.type === 'browser-screenshot' ||
+    isPairCardEntry(entry) ||
     entry.type === 'artifact' ||
     entry.type === 'action' ||
     entry.type === 'workflow'
@@ -1322,7 +1341,7 @@ export function entryEndSeq(entry: TranscriptEntry): number | null {
       return max === null ? end : Math.max(max, end);
     }, null);
   }
-  if (entry.type === 'browser-screenshot') {
+  if (isPairCardEntry(entry)) {
     return Math.max(entry.seq, entry.pair.result?.seq ?? entry.seq);
   }
   if (isCardEntry(entry)) {
@@ -1351,7 +1370,7 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
       }
       continue;
     }
-    if (entry.type === 'browser-screenshot') {
+    if (isPairCardEntry(entry)) {
       max = Math.max(max, entry.pair.result?.seq ?? entry.seq);
       continue;
     }
@@ -1396,7 +1415,7 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
       }
       continue;
     }
-    if (entry.type === 'browser-screenshot') {
+    if (isPairCardEntry(entry)) {
       consider(entry.pair.result?.createdAt ?? entry.createdAt);
       continue;
     }
@@ -3113,7 +3132,8 @@ export function groupTranscript(
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
       const tool = geniroToolOf(name, item.runId);
-      if (tool === BROWSER_SCREENSHOT) {
+      const pairCard = tool === null ? undefined : PAIR_CARD_OF.get(tool);
+      if (pairCard !== undefined) {
         // The card is drawn from this pair, so the result must find it: the
         // call is hidden from the tool group, never from the pairing.
         const pair: ToolPair = { call: item, result: null };
@@ -3124,7 +3144,7 @@ export function groupTranscript(
         openGroups.delete(groupKey(item));
         openTaskCards.delete(groupKey(item));
         entries.push({
-          type: 'browser-screenshot',
+          type: pairCard,
           id: item.id,
           createdAt: item.createdAt,
           seq: item.seq,
@@ -5216,7 +5236,7 @@ function lastMainThreadRowAt(
         }
         continue;
       }
-      if (entry.type === 'browser-screenshot') {
+      if (isPairCardEntry(entry)) {
         consider(entry.pair.result?.createdAt ?? entry.createdAt);
         continue;
       }

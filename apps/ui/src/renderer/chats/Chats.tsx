@@ -435,6 +435,7 @@ import {
   useFileAttach,
 } from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
+import type { TaskReader } from './use-live-task';
 import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
 import { useModelDisplayName } from './use-model-display-name';
 import { ownPoolOf, useNodeDurableReadings } from './use-node-context';
@@ -940,6 +941,15 @@ export function Chats({
     capabilities: capabilitiesApi,
     handoff: handoffApi,
   } = apis;
+  const taskReader = useMemo<TaskReader>(
+    () => ({
+      read: (taskId) => apis.tasks.readTask({ taskId }),
+      onChanged: (listener) =>
+        client.onTaskChanged((event) => listener(event.taskId)),
+      onReconnect: (listener) => client.onReconnect(() => listener()),
+    }),
+    [apis, client],
+  );
 
   /**
    * Whether the window is phone-width right now.
@@ -9903,7 +9913,8 @@ export function Chats({
         lessonsApi={apis.lessons}
         lessonsKnowledgeApi={apis.knowledge}
         agentsApi={agentsApi}
-        lessonsJump={jumpToSeq}>
+        lessonsJump={jumpToSeq}
+        taskReader={taskReader}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

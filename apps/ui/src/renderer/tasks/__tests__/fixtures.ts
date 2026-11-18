@@ -37,6 +37,7 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     branch: null,
     worktreePath: null,
     runId: null,
+    startRequest: null,
     report: null,
     reportedAt: null,
     // What the card's run opened — empty for a card nothing has run, which is

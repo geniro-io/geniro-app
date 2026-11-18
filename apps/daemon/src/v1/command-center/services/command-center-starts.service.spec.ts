@@ -98,6 +98,13 @@ describe('CommandCenterStartsService', () => {
     typeof vi.fn<(input: Partial<Task>) => Promise<Task>>
   >;
   let taskEvents: TaskEventBus;
+  let announceInPlace: ReturnType<
+    typeof vi.fn<(task: Pick<Task, 'id' | 'projectId' | 'status'>) => void>
+  >;
+
+  function announcedIds(): string[] {
+    return announceInPlace.mock.calls.map(([task]) => task.id);
+  }
 
   async function seedTask(extra: Partial<Task> = {}): Promise<Task> {
     const fork = db.em.fork();
@@ -165,6 +172,7 @@ describe('CommandCenterStartsService', () => {
       return task;
     });
     taskEvents = new TaskEventBus();
+    announceInPlace = vi.fn();
 
     service = new CommandCenterStartsService(
       db.em,
@@ -174,7 +182,7 @@ describe('CommandCenterStartsService', () => {
       { publish: wakePublish } as unknown as HostWakeBus,
       { listAll } as unknown as ProjectDao,
       taskDao,
-      { create: createTask } as unknown as TasksService,
+      { create: createTask, announceInPlace } as unknown as TasksService,
       taskEvents,
       { addToRoster, rosterThreads } as unknown as CommandCenterChatService,
     );
@@ -200,6 +208,7 @@ describe('CommandCenterStartsService', () => {
       const task = await taskOf(taskId);
       expect(task.startApprovedAt).not.toBeNull();
       expect(task.startRequestedByRunId).toBe(AUTO_MANAGER);
+      expect(announcedIds()).toEqual([taskId]);
     });
 
     it('keeps the manager’s note for the thread until the start is reported, then puts it on the roster', async () => {
@@ -251,6 +260,7 @@ describe('CommandCenterStartsService', () => {
       expect(task.startApprovedAt).toBeNull();
       expect(task.startRequestedByRunId).toBe(MANAGER);
       expect(task.status).toBe('backlog');
+      expect(announcedIds()).toEqual([taskId]);
     });
 
     it('refuses CARD_NOT_SHOWN and clears the request when the Start card cannot be shown', async () => {
@@ -267,6 +277,7 @@ describe('CommandCenterStartsService', () => {
       expect(task.startRequestedAt).toBeNull();
       expect(task.startRequestedByRunId).toBeNull();
       expect(task.status).toBe('backlog');
+      expect(announcedIds()).toEqual([task.id, task.id]);
     });
 
     it('refuses a run that is not the command center manager, and files no card', async () => {
@@ -336,6 +347,7 @@ describe('CommandCenterStartsService', () => {
         'go ahead',
       );
       expect((await taskOf(taskId)).startApprovedAt).not.toBeNull();
+      expect(announcedIds()).toEqual([taskId, taskId]);
     });
 
     it('clears the request and the requester, and leaves the card in backlog, when declined', async () => {
@@ -358,6 +370,27 @@ describe('CommandCenterStartsService', () => {
       expect(task.startRequestedByRunId).toBeNull();
       expect(task.startApprovedAt).toBeNull();
       expect(task.status).toBe('backlog');
+      expect(announcedIds()).toEqual([taskId, taskId]);
+    });
+  });
+
+  describe('the boot re-read of waiting Start cards', () => {
+    it('clears and announces a request whose Start card was answered before the restart', async () => {
+      const requestedAt = new Date(1_700_000_000_000);
+      const task = await seedTask({
+        startRequestedAt: requestedAt,
+        startRequestedByRunId: MANAGER,
+      });
+      await db.seedItem(MANAGER, 1, new Date(), 'approval_verdict', {
+        id: `command-center-start:${task.id}:${requestedAt.getTime()}`,
+      });
+
+      service.onApplicationBootstrap();
+
+      await vi.waitFor(() => expect(announcedIds()).toEqual([task.id]));
+      const after = await taskOf(task.id);
+      expect(after.startRequestedAt).toBeNull();
+      expect(after.startRequestedByRunId).toBeNull();
     });
   });
 
@@ -446,6 +479,7 @@ describe('CommandCenterStartsService', () => {
       const after = await taskOf(task.id);
       expect(after.startRequestedAt).toBeNull();
       expect(after.startRequestedByRunId).toBeNull();
+      expect(announcedIds()).toEqual([task.id]);
     });
 
     it('tells no one about a card that no manager is waiting on', async () => {

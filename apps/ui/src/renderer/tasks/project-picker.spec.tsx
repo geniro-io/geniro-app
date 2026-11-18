@@ -194,10 +194,7 @@ describe('ProjectPicker — the ambient armed mark', () => {
     );
   });
 
-  // The list dropped the plain "armed" lightning — reported as noise repeated
-  // down every row — while the trigger keeps it. This must fail if the row
-  // ever regains the mark.
-  it('does not mark an armed-but-not-tripped project in the list', () => {
+  it('does not mark an armed project in the list', () => {
     expect(rowMarks(picker({ autopilotEnabled: true }))).toEqual([]);
   });
 
@@ -212,12 +209,21 @@ describe('ProjectPicker — the ambient armed mark', () => {
     ).toContain('geniro-app: autopilot stopped after 3 failed runs');
   });
 
-  // The breaker mark is a WARNING, not the lightning — it must still show up
-  // in the list even though the plain armed mark no longer does.
-  it('still marks a tripped breaker in the list', () => {
+  it('does not mark a tripped breaker in the list', () => {
+    const el = picker({ autopilotEnabled: true, autopilotFailureStreak: 3 });
+    expect(rowMarks(el)).toEqual([]);
+    expect(el.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+  });
+
+  it('does not mark a project waiting on a usage limit in the list', () => {
     expect(
-      rowMarks(picker({ autopilotEnabled: true, autopilotFailureStreak: 3 })),
-    ).toContain('geniro-app: autopilot stopped after 3 failed runs');
+      rowMarks(
+        picker({
+          autopilotEnabled: true,
+          autopilotLimitUntil: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+      ),
+    ).toEqual([]);
   });
 
   it('still reads as armed one failure short of the breaker, on the trigger', () => {

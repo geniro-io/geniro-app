@@ -77,9 +77,6 @@ export function ProjectPicker({
               // rides every row rather than only the tooltip.
               hint: folderName(project.folder),
               title: project.folder,
-              // A tripped breaker is a warning worth catching before opening
-              // the project; the plain "armed" lightning does not ride rows.
-              icon: <AutopilotMark project={project} showArmed={false} />,
             })),
           },
         ]

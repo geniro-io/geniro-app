@@ -116,6 +116,7 @@ async function paint(): Promise<void> {
         client={CLIENT}
         choice={CHOICE}
         hidden={false}
+        active
         workingThreads={[]}
         onOpenThread={vi.fn()}
         onTurnSettled={vi.fn()}

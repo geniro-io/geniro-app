@@ -21,6 +21,7 @@ export function ManagerDock({
   client,
   choice,
   hidden,
+  active,
   workingThreads,
   onOpenThread,
   onTurnSettled,
@@ -31,6 +32,8 @@ export function ManagerDock({
   client: DaemonClient;
   choice: ManagerConfig;
   hidden: boolean;
+  /** Whether the page is on screen. */
+  active: boolean;
   /** The manager's threads at work or waiting on the user, for the chat's corner card. */
   workingThreads: readonly WorkingThread[];
   onOpenThread: (runId: string) => void;
@@ -57,6 +60,7 @@ export function ManagerDock({
       handle={handle}
       client={client}
       hidden={hidden}
+      active={active}
       fill
       confirmStartOver={{
         title: 'Start a new manager chat?',

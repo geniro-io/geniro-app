@@ -35,11 +35,14 @@ function byActivity(a: CommandCenterCard, b: CommandCenterCard): number {
  * The command center's board as the daemon folds it. Read whole on mount,
  * after a reconnect and every {@link FULL_REFRESH_MS}; on
  * `command_center_changed` only the named cards are read again, and a named
- * card the daemon no longer answers for has left the board.
+ * card the daemon no longer answers for has left the board. While `active` is
+ * false nothing is read, and the whole board is read once each time the page
+ * is shown again: not every change to a card is announced (a rename is not).
  */
 export function useCommandCenterBoard(
   apis: DaemonApis | null,
   client: DaemonClient | null,
+  active: boolean,
 ): CommandCenterBoardState {
   const [cards, setCards] = useState<CommandCenterCard[] | null>(null);
   const [manager, setManager] = useState<RunDto | null>(null);
@@ -48,11 +51,13 @@ export function useCommandCenterBoard(
   const [error, setError] = useState<string | null>(null);
   const [pulses, setPulses] = useState<CommandCenterContactEvent[]>([]);
   const generation = useRef(0);
+  const stale = useRef(true);
 
-  const reload = useLatestCallback(() => {
+  const readWhole = useLatestCallback(() => {
     if (apis === null) {
       return;
     }
+    stale.current = false;
     const mine = ++generation.current;
     void apis.commandCenter
       .readCommandCenterBoard({})
@@ -105,8 +110,30 @@ export function useCommandCenterBoard(
     [apis],
   );
 
+  const reload = useLatestCallback(() => {
+    if (active) {
+      readWhole();
+    }
+  }, [readWhole]);
+
+  const changed = useLatestCallback(
+    (runIds: readonly string[]) => {
+      if (active) {
+        rereadSome(runIds);
+      }
+    },
+    [rereadSome],
+  );
+
   useEffect(() => {
-    reload();
+    if (!active) {
+      stale.current = true;
+    } else if (stale.current) {
+      readWhole();
+    }
+  }, [active, readWhole]);
+
+  useEffect(() => {
     const timer = setInterval(reload, FULL_REFRESH_MS);
     return () => clearInterval(timer);
   }, [reload]);
@@ -116,7 +143,7 @@ export function useCommandCenterBoard(
       return;
     }
     const offChanged = client.onCommandCenterChanged(({ runIds }) => {
-      rereadSome(runIds);
+      changed(runIds);
     });
     const offContact = client.onCommandCenterContact((contact) => {
       const cutoff = Date.parse(contact.at) - PULSE_KEEP_MS;
@@ -131,7 +158,7 @@ export function useCommandCenterBoard(
       offContact();
       offReconnect();
     };
-  }, [client, reload, rereadSome]);
+  }, [client, reload, changed]);
 
   return {
     cards,

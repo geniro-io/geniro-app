@@ -111,6 +111,22 @@ vi.mock('./daemon-client', () => ({
     }
   },
 }));
+const commandCenterMock = vi.hoisted(() => ({ mounts: 0 }));
+vi.mock('./command-center/CommandCenter', async () => {
+  const { useEffect } = await import('react');
+  return {
+    CommandCenter: ({ active }: { active?: boolean }) => {
+      useEffect(() => {
+        commandCenterMock.mounts += 1;
+      }, []);
+      return (
+        <output data-slot="command-center-stub">
+          {active === undefined ? 'no active prop' : String(active)}
+        </output>
+      );
+    },
+  };
+});
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));
 vi.mock('./debug/debug-panel', () => ({ DebugPanel: () => null }));
 
@@ -392,6 +408,56 @@ describe('App — the Projects address', () => {
 
     expect(backToGallery()).toBeNull();
     expect(location.hash).toBe('#/projects');
+  });
+});
+
+describe('App — the command center between visits', () => {
+  const stub = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-slot="command-center-stub"]');
+
+  const go = async (hash: string): Promise<void> => {
+    await act(async () => {
+      location.hash = hash;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await flush();
+  };
+
+  it('keeps the page mounted and hidden after a visit, so coming back rebuilds nothing', async () => {
+    commandCenterMock.mounts = 0;
+    history.replaceState(null, '', '#/command-center');
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    for (let tries = 0; tries < 100 && !testOver && !stub(); tries += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    }
+    expect(stub()).not.toBeNull();
+
+    await go('#/chats');
+
+    expect(stub()).not.toBeNull();
+    expect(stub()?.closest('.hidden')).not.toBeNull();
+    expect(stub()?.textContent).toBe('false');
+
+    await go('#/command-center');
+
+    expect(stub()?.textContent).toBe('true');
+    expect(stub()?.closest('.hidden')).toBeNull();
+    expect(commandCenterMock.mounts).toBe(1);
   });
 });
 

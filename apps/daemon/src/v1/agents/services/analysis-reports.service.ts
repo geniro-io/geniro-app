@@ -103,7 +103,8 @@ export class AnalysisReportsService {
   ) {}
 
   /**
-   * The sink of one turn. It keeps the newest refused card, in memory and only
+   * The sink of one turn and the stretch the CLI runs on by itself after it,
+   * until the next turn replaces it. It keeps the newest refused card, in memory and only
    * here: the turn that sent it is the one holding its text in its context, a
    * restart ends that turn anyway, and an on-disk copy would be one more place
    * for whatever the card quotes.
@@ -120,7 +121,7 @@ export class AnalysisReportsService {
         if ('patch' in call) {
           if (kept === null) {
             return refused(
-              'NO_KEPT_CARD — no refused card is kept: one lasts only for the turn that sent it, until a card is recorded. Send the whole card',
+              'NO_KEPT_CARD — no refused card is kept: one lasts until a card is recorded or the next turn starts. Send the whole card',
             );
           }
           const patched = patchedCard(kept, call.patch);

@@ -115,6 +115,7 @@ import {
 import {
   analysisTurnOf,
   isAnalysisRun,
+  isHiddenLessonsPurpose,
   runsReadOnly,
   teamAnalysisTurn,
   writeAnalysedRuns,
@@ -7348,7 +7349,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 analysisTurn,
                 async (kind, payload) =>
                   this.persist(
-                    em,
+                    this.em.fork(),
                     runId,
                     await this.seqs.reserve(runId),
                     kind,
@@ -7358,6 +7359,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               ),
             )
           : null;
+      const analysisDiesWithTurn = isHiddenLessonsPurpose(
+        analysisTurn?.purpose ?? null,
+      );
+      if (disposeAnalysis !== null && !analysisDiesWithTurn) {
+        this.keptHostTools.get(runId)?.push(disposeAnalysis);
+      }
       const disposeProjectChat =
         mcpEndpoint && isProjectChat(run) && this.projectChats !== undefined
           ? this.projectChats.register(runId, SINGLE_AGENT_NODE, {
@@ -7394,7 +7401,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         }
         disposeTeamProposals?.();
         disposeTeamBuilder?.();
-        disposeAnalysis?.();
+        if (analysisDiesWithTurn) {
+          disposeAnalysis?.();
+        }
         disposeProjectCards?.();
         disposeProjectChat?.();
         disposeCommandCenter?.();

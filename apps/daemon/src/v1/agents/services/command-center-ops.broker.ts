@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import type {
+  ArchiveThreadsAnswer,
+  ArchiveThreadsInput,
   CommandCenterOps,
   NoteThreadAnswer,
   NoteThreadInput,
@@ -58,6 +60,15 @@ export class CommandCenterOpsBroker {
   ): Promise<StartThreadAnswer | { error: string }> {
     return this.guarded('start_thread', managerRunId, (ops) =>
       ops.start(managerRunId, input),
+    );
+  }
+
+  archive(
+    managerRunId: string,
+    input: ArchiveThreadsInput,
+  ): Promise<ArchiveThreadsAnswer | { error: string }> {
+    return this.guarded('archive_threads', managerRunId, (ops) =>
+      ops.archive(managerRunId, input),
     );
   }
 

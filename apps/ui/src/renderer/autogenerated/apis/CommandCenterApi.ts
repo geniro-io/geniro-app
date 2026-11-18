@@ -17,6 +17,7 @@ import * as runtime from '../runtime';
 import type {
   CommandCenterBoardDto,
   CommandCenterChatsDiscardedDto,
+  CommandCenterInstructionsConfig,
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
   CommandCenterTimelineDto,
@@ -44,6 +45,10 @@ export interface CommandCenterApiReadCommandCenterBoardRequest {
 export interface CommandCenterApiReportCommandCenterStartFailedRequest {
     taskId: string;
     commandCenterStartFailedDto: CommandCenterStartFailedDto;
+}
+
+export interface CommandCenterApiSetCommandCenterInstructionsRequest {
+    commandCenterInstructionsConfig: CommandCenterInstructionsConfig;
 }
 
 /**
@@ -321,6 +326,53 @@ export class CommandCenterApi extends runtime.BaseAPI {
      */
     async reportCommandCenterStartFailed(requestParameters: CommandCenterApiReportCommandCenterStartFailedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
         await this.reportCommandCenterStartFailedRaw(requestParameters, initOverrides);
+    }
+
+    /**
+     * 
+     */
+    async setCommandCenterInstructionsRaw(requestParameters: CommandCenterApiSetCommandCenterInstructionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CommandCenterInstructionsConfig>> {
+        if (requestParameters['commandCenterInstructionsConfig'] == null) {
+            throw new runtime.RequiredError(
+                'commandCenterInstructionsConfig',
+                'Required parameter "commandCenterInstructionsConfig" was null or undefined when calling setCommandCenterInstructions().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/command-center/instructions`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['commandCenterInstructionsConfig'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setCommandCenterInstructions(requestParameters: CommandCenterApiSetCommandCenterInstructionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterInstructionsConfig> {
+        const response = await this.setCommandCenterInstructionsRaw(requestParameters, initOverrides);
+        return await response.value();
     }
 
 }

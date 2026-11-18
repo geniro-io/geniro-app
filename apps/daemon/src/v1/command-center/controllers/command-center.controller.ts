@@ -6,15 +6,19 @@ import {
   HttpCode,
   Param,
   Post,
+  Put,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import type { RunWire } from '../../agents/chat.types';
 import { RunDto } from '../../agents/dto/chat.dto';
 import type {
   CommandCenterBoard,
+  CommandCenterInstructionsConfig,
   CommandCenterStart,
   CommandCenterTimeline,
 } from '../command-center.types';
@@ -22,6 +26,7 @@ import {
   CommandCenterBoardDto,
   CommandCenterBoardQueryDto,
   CommandCenterChatsDiscardedDto,
+  CommandCenterInstructionsConfigDto,
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
   CommandCenterStartsQueryDto,
@@ -73,6 +78,20 @@ export class CommandCenterController {
   @ZodResponse({ status: 201, type: RunDto })
   open(@Body() dto: StartCommandCenterChatDto): Promise<RunWire> {
     return this.managers.open(dto);
+  }
+
+  /**
+   * The user's standing instructions for the manager — desktop only, like
+   * `PUT /v1/agents/sessions/config`: Electron main pushes it from settings.json.
+   */
+  @Put('instructions')
+  @UseGuards(DesktopOnlyGuard)
+  @ApiOperation({ operationId: 'setCommandCenterInstructions' })
+  @ZodResponse({ status: 200, type: CommandCenterInstructionsConfigDto })
+  setInstructions(
+    @Body() body: CommandCenterInstructionsConfigDto,
+  ): CommandCenterInstructionsConfig {
+    return { instructions: this.managers.setInstructions(body.instructions) };
   }
 
   /** **Destructive and irreversible**: discard the manager chat and its roster. */

@@ -54,6 +54,13 @@ const absolutePath = z
 
 const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
 
+const freeProse = z
+  .string()
+  .refine(
+    (value) => !hasControlCharacters(value),
+    'must not contain control characters',
+  );
+
 const memoryTriageFields = z.strictObject({
   agent: cliKind,
   configDir: absolutePath.nullable(),
@@ -545,13 +552,8 @@ export const settingsPatchSchema = z.strictObject({
   // one invisible pasted character (Word and Notes emit U+000B for a soft line
   // break) into a 400 on every new chat and team run, surfacing in the
   // composer with nothing pointing back at the settings box holding it.
-  customInstructions: z
-    .string()
-    .refine(
-      (value) => !hasControlCharacters(value),
-      'must not contain control characters',
-    )
-    .optional(),
+  customInstructions: freeProse.optional(),
+  commandCenterInstructions: freeProse.optional(),
   // Checked for the same reason, against the daemon's own twin.
   replyLanguage: z
     .string()

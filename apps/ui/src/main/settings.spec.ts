@@ -671,6 +671,16 @@ describe('updateSettings over a file that does not parse', () => {
     expect(readSettings().customInstructions).toBe('keep me');
   });
 
+  it('defaults the command center instructions to empty and keeps what is saved', () => {
+    expect(readSettings().commandCenterInstructions).toBe('');
+
+    updateSettings({ commandCenterInstructions: 'Lead with blocked threads.' });
+
+    expect(readSettings().commandCenterInstructions).toBe(
+      'Lead with blocked threads.',
+    );
+  });
+
   it('refuses the write outright when the existing file cannot even be read', () => {
     // Its bytes cannot be preserved, so replacing them is the very loss the
     // backup exists to prevent — the write fails instead, and the file stays.

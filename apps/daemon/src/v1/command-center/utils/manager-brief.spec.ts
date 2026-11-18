@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { HOST_TELL_THREADS_TOOL } from '../../agents/chat.types';
+import {
+  HOST_ARCHIVE_THREADS_TOOL,
+  HOST_TELL_THREADS_TOOL,
+} from '../../agents/chat.types';
 import { composeManagerBrief, type RosterBriefLine } from './manager-brief';
 
 const ROSTER: RosterBriefLine[] = [
@@ -56,6 +59,34 @@ describe('composeManagerBrief', () => {
   it('names the tool that reaches the threads by its wire name', () => {
     expect(composeManagerBrief(ROSTER)).toContain(
       `\`${HOST_TELL_THREADS_TOOL}\``,
+    );
+  });
+
+  it('tells the manager to archive only on the user ask, by the tool wire name', () => {
+    const brief = composeManagerBrief(ROSTER);
+
+    expect(brief).toContain(
+      `Archive threads with \`${HOST_ARCHIVE_THREADS_TOOL}\` only when the user asks you to in their own words`,
+    );
+  });
+
+  it("closes with the user's standing instructions under their own heading", () => {
+    const brief = composeManagerBrief(
+      ROSTER,
+      '  Answer in Russian.\nNever start threads on Fridays.  ',
+    );
+
+    expect(brief).toMatch(
+      /## The user's standing instructions for you\n\nAnswer in Russian\.\nNever start threads on Fridays\.$/,
+    );
+  });
+
+  it('adds no instructions section when the user has none', () => {
+    expect(composeManagerBrief(ROSTER, '   ')).toBe(
+      composeManagerBrief(ROSTER),
+    );
+    expect(composeManagerBrief(ROSTER)).not.toContain(
+      "The user's standing instructions",
     );
   });
 });

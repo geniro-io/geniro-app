@@ -19,6 +19,12 @@ describe('isHostCommandCenterCall', () => {
     }
   });
 
+  it('leaves archive_threads to the chat approval mode instead of approving it', () => {
+    expect(
+      isHostCommandCenterCall(SERVER, `mcp__${SERVER}__archive_threads`),
+    ).toBe(false);
+  });
+
   it('refuses message_thread, list_threads, another server and no server', () => {
     expect(
       isHostCommandCenterCall(SERVER, `mcp__${SERVER}__message_thread`),

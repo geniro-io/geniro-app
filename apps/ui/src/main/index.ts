@@ -24,6 +24,7 @@ import {
   sweepOrphanedBrowserPartitions,
 } from './browser/browser-sessions';
 import { type EgressProxy, startEgressProxy } from './browser/egress-proxy';
+import { CommandCenterInstructionsPush } from './command-center-instructions-push';
 import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
 import type { DaemonQuitCause } from './daemon-pidfile';
@@ -192,6 +193,13 @@ const keptSessionConfigPush = new KeptSessionConfigPush((message) => {
     source: 'kept-session-config',
   });
 });
+const commandCenterInstructionsPush = new CommandCenterInstructionsPush(
+  (message) => {
+    void reportMainLog(supervisor.getHandle(), 'warn', message, {
+      source: 'command-center-instructions',
+    });
+  },
+);
 /**
  * The memory settings, the same way: the daemon holds them in memory (memory
  * on, agent writes active until the first push), so every daemon is told on
@@ -223,6 +231,9 @@ onSettingsWritten((settings) => {
   void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
     idleMinutes: settings.keptSessionIdleMinutes,
     limit: settings.keptSessionLimit,
+  });
+  void commandCenterInstructionsPush.pushIfChanged(supervisor.getHandle(), {
+    instructions: settings.commandCenterInstructions,
   });
   void memoryConfigPush.pushIfChanged(
     supervisor.getHandle(),
@@ -759,6 +770,9 @@ function pushDaemonConfig(handle: DaemonHandle): void {
   void keptSessionConfigPush.push(handle, {
     idleMinutes: settings.keptSessionIdleMinutes,
     limit: settings.keptSessionLimit,
+  });
+  void commandCenterInstructionsPush.push(handle, {
+    instructions: settings.commandCenterInstructions,
   });
   void memoryConfigPush.push(handle, memoryConfigOf(settings));
   void lessonsConfigPush.push(handle, settings.lessons);

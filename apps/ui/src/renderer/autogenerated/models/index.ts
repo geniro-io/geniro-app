@@ -3575,6 +3575,19 @@ export type CommandCenterColumn = typeof CommandCenterColumn[keyof typeof Comman
 /**
  * 
  * @export
+ * @interface CommandCenterInstructionsConfig
+ */
+export interface CommandCenterInstructionsConfig {
+    /**
+     * The user's standing instructions for the command center manager; empty for none
+     * @type {string}
+     * @memberof CommandCenterInstructionsConfig
+     */
+    instructions: string;
+}
+/**
+ * 
+ * @export
  * @interface CommandCenterStart
  */
 export interface CommandCenterStart {

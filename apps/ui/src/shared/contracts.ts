@@ -795,6 +795,12 @@ export interface Settings {
    */
   customInstructions: string;
   /**
+   * Standing instructions for the command center manager. Pushed to the daemon
+   * on every write and start, not snapshotted per run: the manager's brief is
+   * rebuilt from the daemon's copy each turn.
+   */
+  commandCenterInstructions: string;
+  /**
    * The language every agent is told to reply in ("Russian"); `''` when the
    * user has set none, which leaves the choice to the model.
    *
@@ -953,6 +959,7 @@ export const DEFAULT_SETTINGS: Settings = {
   collapseToolSteps: false,
   daemonInspect: null,
   customInstructions: '',
+  commandCenterInstructions: '',
   replyLanguage: '',
   theme: DEFAULT_THEME_PREFERENCE,
 };

@@ -87,6 +87,7 @@ const mocks = vi.hoisted(() => {
     collapseToolSteps: false,
     daemonInspect: false,
     customInstructions: '',
+    commandCenterInstructions: '',
     replyLanguage: '',
     theme: 'system',
   };

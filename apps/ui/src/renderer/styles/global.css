@@ -181,6 +181,10 @@
 
   body {
     @apply bg-background text-foreground;
+    /* Without it an absolutely positioned descendant with no positioned
+       ancestor escapes the clip above and gives the window scrollable height,
+       which iPad Safari leaves scrolled after the keyboard closes. */
+    position: relative;
     margin: 0;
     font-family: var(--font-family-sans);
     -webkit-font-smoothing: antialiased;

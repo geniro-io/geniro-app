@@ -4,10 +4,11 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
-import type { ChatTotalsWire } from '../../agents/chat.types';
+import type { ChatTotalsWire, ModelPriceWire } from '../../agents/chat.types';
 import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { toModelPriceWire } from '../../agents/utils/model-prices';
 import { isWithinDirectory } from '../../agents/utils/path-within';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
@@ -17,6 +18,7 @@ import {
 } from '../../agents/utils/usage-figures';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import type { Run } from '../../runs/entity/run.entity';
+import type { AgentKind } from '../../runs/runs.types';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
@@ -110,6 +112,7 @@ export class StatsService {
     const activity = new ActivityFold();
     const byAgent = new Map<string | null, ChatTotalsWire>();
     const byModel = new Map<string | null, ChatTotalsWire>();
+    const modelAgents = new Map<string, Set<AgentKind>>();
     const byProject = new Map<string | null, ChatTotalsWire>();
     const byThread = new Map<string | null, ChatTotalsWire>();
     const byTeam = new Map<string | null, ChatTotalsWire>();
@@ -151,6 +154,7 @@ export class StatsService {
       );
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
+      noteModelAgent(modelAgents, event);
       addUsage(bucket(byProject, projectOf(event.cwd)), event);
       // Per THREAD, chats and team runs alike. It replaced a per-team
       // breakdown whose null key pooled every chat into one "Chats" row —
@@ -202,6 +206,7 @@ export class StatsService {
       // turns are not part of what it is spread over.
       addPolledSpend(bucket(byAgent, event.agentKind), costUsd, agentTurns);
       addPolledSpend(bucket(byModel, event.model), costUsd, turns);
+      noteModelAgent(modelAgents, event);
       addPolledSpend(bucket(byProject, projectOf(event.cwd)), costUsd, turns);
       // The polled row is keyed by its own run, so a run's bill lands on that
       // thread's row with the turns it was spread over.
@@ -283,13 +288,30 @@ export class StatsService {
         };
       }),
       byAgent: rank(byAgent),
-      byModel: rank(byModel),
+      byModel: rank(byModel).map((group) => ({
+        ...group,
+        price: this.modelPriceOf(group.key, modelAgents),
+      })),
       byProject: rank(byProject),
       byThread: await this.titled(rank(byThread), em),
       byTeam: rank(byTeam),
       byPurpose: rank(byPurpose),
       metrics,
     };
+  }
+
+  /** A model's list price under the first agent that ran it and finds one. */
+  private modelPriceOf(
+    model: string | null,
+    modelAgents: ReadonlyMap<string, ReadonlySet<AgentKind>>,
+  ): ModelPriceWire | null {
+    for (const kind of model === null ? [] : (modelAgents.get(model) ?? [])) {
+      const price = this.adapters.all().get(kind)?.modelPriceOf(model);
+      if (price !== undefined && price !== null) {
+        return toModelPriceWire(price);
+      }
+    }
+    return null;
   }
 
   /**
@@ -624,6 +646,18 @@ function bucket<K>(buckets: Map<K, ChatTotalsWire>, key: K): ChatTotalsWire {
   const fresh = emptyTotals();
   buckets.set(key, fresh);
   return fresh;
+}
+
+function noteModelAgent(
+  modelAgents: Map<string, Set<AgentKind>>,
+  event: UsageEvent,
+): void {
+  if (event.model === null || event.agentKind === null) {
+    return;
+  }
+  const agents = modelAgents.get(event.model) ?? new Set<AgentKind>();
+  agents.add(event.agentKind);
+  modelAgents.set(event.model, agents);
 }
 
 /**

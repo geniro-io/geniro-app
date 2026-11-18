@@ -68,6 +68,30 @@ const barWidths = (el: HTMLElement): string[] =>
   );
 
 describe('BreakdownColumn', () => {
+  it('draws a model row’s list price under its name, and none where nothing priced it', () => {
+    const el = card([
+      {
+        key: 'claude-opus-5-5',
+        totals: totals({ costUsd: 3 }),
+        price: {
+          input: 4,
+          output: 20,
+          cacheRead: null,
+          cacheWrite: null,
+          tiers: [],
+        },
+      },
+      { key: 'composer-2.5', totals: totals({ costUsd: 1 }), price: null },
+    ]);
+
+    expect(
+      [...el.querySelectorAll('li')].map(
+        (row) =>
+          row.querySelector('[data-slot="model-price"]')?.textContent ?? null,
+      ),
+    ).toEqual(['$4 / $20 per 1M', null]);
+  });
+
   it('names a slice whose CLI reported no cost beside one that did', () => {
     // The mixed-CLI period: claude prices its turns, cursor-agent reports no
     // cost at all. Sizing on `costUsd ?? 0` turns "not measured" into "worth

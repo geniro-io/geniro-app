@@ -1215,6 +1215,12 @@ export interface AgentModel {
      * @memberof AgentModel
      */
     unavailableReason?: string;
+    /**
+     * 
+     * @type {ModelPrice}
+     * @memberof AgentModel
+     */
+    price?: ModelPrice | null;
 }
 
 
@@ -2780,6 +2786,18 @@ export interface ChatMetricsDto {
      * @memberof ChatMetricsDto
      */
     context: ContextBreakdown | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatMetricsDto
+     */
+    model?: string | null;
+    /**
+     * 
+     * @type {ModelPrice}
+     * @memberof ChatMetricsDto
+     */
+    modelPrice?: ModelPrice | null;
     /**
      * 
      * @type {string}
@@ -10510,6 +10528,99 @@ export const MergeMemoriesDtoTypeEnum = {
 } as const;
 export type MergeMemoriesDtoTypeEnum = typeof MergeMemoriesDtoTypeEnum[keyof typeof MergeMemoriesDtoTypeEnum];
 
+/**
+ * 
+ * @export
+ * @interface ModelPrice
+ */
+export interface ModelPrice {
+    /**
+     * Fresh prompt tokens
+     * @type {number}
+     * @memberof ModelPrice
+     */
+    input: number;
+    /**
+     * Completion tokens, reasoning included
+     * @type {number}
+     * @memberof ModelPrice
+     */
+    output: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPrice
+     */
+    cacheRead: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPrice
+     */
+    cacheWrite: number | null;
+    /**
+     * Long-context rates, ascending by threshold
+     * @type {Array<ModelPriceTier>}
+     * @memberof ModelPrice
+     */
+    tiers: Array<ModelPriceTier>;
+}
+/**
+ * 
+ * @export
+ * @interface ModelPriceAnswerDto
+ */
+export interface ModelPriceAnswerDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ModelPriceAnswerDto
+     */
+    pricedAs: string | null;
+    /**
+     * 
+     * @type {ModelPrice}
+     * @memberof ModelPriceAnswerDto
+     */
+    price: ModelPrice | null;
+}
+/**
+ * 
+ * @export
+ * @interface ModelPriceTier
+ */
+export interface ModelPriceTier {
+    /**
+     * The rates apply to a prompt larger than this
+     * @type {number}
+     * @memberof ModelPriceTier
+     */
+    aboveContextTokens: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPriceTier
+     */
+    input: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPriceTier
+     */
+    output: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPriceTier
+     */
+    cacheRead: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ModelPriceTier
+     */
+    cacheWrite: number | null;
+}
 /**
  * 
  * @export
@@ -19322,6 +19433,12 @@ export interface UsageGroup {
      * @memberof UsageGroup
      */
     deleted?: boolean;
+    /**
+     * 
+     * @type {ModelPrice}
+     * @memberof UsageGroup
+     */
+    price?: ModelPrice | null;
 }
 /**
  * 

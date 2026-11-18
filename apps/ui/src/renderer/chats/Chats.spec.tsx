@@ -128,6 +128,8 @@ const agentsApi = vi.hoisted(() => ({
   listAgentContextWindows: vi.fn(),
   // The "Continue a session" picker's listing, one ask per profile.
   listAgentSessions: vi.fn(),
+  // The list price beside each agent card's model.
+  getModelPrice: vi.fn(),
 }));
 // The mount path lists teams + runs and reads capabilities once (which
 // gates the plan option in the approval chip).
@@ -1031,6 +1033,9 @@ beforeEach(() => {
     pausedSpans: [],
   });
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
+  agentsApi.getModelPrice
+    .mockReset()
+    .mockResolvedValue({ pricedAs: null, price: null });
   agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
     servers: [],
     unavailableReason: null,

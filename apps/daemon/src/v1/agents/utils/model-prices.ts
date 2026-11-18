@@ -1,3 +1,4 @@
+import type { ModelPriceWire } from '../chat.types';
 import { asArray, asRecord } from './json-util';
 
 /**
@@ -25,14 +26,55 @@ import { asArray, asRecord } from './json-util';
 export const MODEL_PRICE_CATALOG_URL = 'https://models.dev/api.json';
 
 /**
- * The catalog providers an adapter may price its models under — the provider
- * ids as models.dev spells them. Only these are parsed and kept: the catalog
- * holds ~226 providers and ~5MB, and nothing here prices a model from any of
- * the others. A CLI whose models a new provider prices adds the id here and
- * declares it on its own `AdapterConfig.usage.listPrice`.
+ * The catalog providers a model may be priced under — the provider ids as
+ * models.dev spells them, which are also the vendor ids an adapter's
+ * `AdapterConfig.modelVendor` names. Only these are parsed and kept: the
+ * catalog holds ~320 providers and ~7MB, and nothing here prices a model from
+ * any of the others. A CLI whose models a new vendor makes adds the id here.
  */
-export const MODEL_PRICE_PROVIDERS = ['openai', 'anthropic'] as const;
+export const MODEL_PRICE_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'google',
+  'xai',
+  'moonshotai',
+  'zai',
+] as const;
 export type ModelPriceProvider = (typeof MODEL_PRICE_PROVIDERS)[number];
+
+export function isModelPriceProvider(
+  value: string | null,
+): value is ModelPriceProvider {
+  return (MODEL_PRICE_PROVIDERS as readonly (string | null)[]).includes(value);
+}
+
+/**
+ * The catalog ids a CLI's model id may be listed under, in the order tried:
+ * the id itself, the id without the variant suffix its CLI declares
+ * (`AdapterConfig.modelIdVariant`), then that bare id under each of the CLI's
+ * own spellings rewritten (`modelIdSpellings`). Which spellings a CLI invents
+ * is a fact about that CLI, so nothing is rewritten here its adapter did not
+ * name.
+ */
+export function catalogModelIds(
+  model: string,
+  variant?: RegExp,
+  spellings: readonly { pattern: RegExp; replacement: string }[] = [],
+): string[] {
+  const id = model.trim();
+  const bare = variant === undefined ? id : id.replace(variant, '');
+  return [
+    ...new Set(
+      [
+        id,
+        bare,
+        ...spellings.map((spelling) =>
+          bare.replace(spelling.pattern, spelling.replacement),
+        ),
+      ].filter((candidate) => candidate !== ''),
+    ),
+  ];
+}
 
 /** One set of per-million-token rates. */
 export interface ModelPriceRates {
@@ -109,7 +151,8 @@ export interface PricedTokens {
  *
  * `context_over_200k` is deliberately not read: every entry measured carrying
  * it also carries the same figures as a `tiers[]` entry, which is the general
- * form (measured 2026-10-05: no openai/anthropic model has the former alone).
+ * form (re-measured 2026-11-18: no model of any provider read here has the
+ * former alone).
  */
 export function parseModelPriceCatalog(raw: unknown): ModelPriceTable {
   const table = new Map<ModelPriceProvider, Map<string, ModelPrice>>();
@@ -145,6 +188,30 @@ export function countModelPrices(table: ModelPriceTable): number {
     count += prices.size;
   }
   return count;
+}
+
+/** A price as the wire carries it: the rates and tiers, never the window. */
+export function toModelPriceWire(
+  price: ModelPrice | null,
+): ModelPriceWire | null {
+  return price === null
+    ? null
+    : {
+        ...wireRates(price),
+        tiers: price.tiers.map((tier) => ({
+          ...wireRates(tier),
+          aboveContextTokens: tier.aboveContextTokens,
+        })),
+      };
+}
+
+function wireRates(rates: ModelPriceRates): ModelPriceRates {
+  return {
+    input: rates.input,
+    output: rates.output,
+    cacheRead: rates.cacheRead,
+    cacheWrite: rates.cacheWrite,
+  };
 }
 
 /** One model's price, by exact id, or null. */
@@ -248,7 +315,13 @@ function readPrice(
     const tier = asRecord(tierRecord?.tier);
     const size = rate(tier?.size);
     const rates = readRates(tierRecord);
-    if (tier?.type !== 'context' || size === null || size <= 0 || !rates) {
+    if (
+      tier?.type !== 'context' ||
+      size === null ||
+      !Number.isInteger(size) ||
+      size <= 0 ||
+      !rates
+    ) {
       continue;
     }
     tiers.push({ ...rates, aboveContextTokens: size });

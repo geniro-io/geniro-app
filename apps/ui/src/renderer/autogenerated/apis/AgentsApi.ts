@@ -27,6 +27,7 @@ import type {
   CopyPluginMcpServerDto,
   KeptSessionConfigDto,
   KeptSessionConfigStateDto,
+  ModelPriceAnswerDto,
   RecheckMcpServerDto,
   SetMcpServerEnabledDto,
   WriteMcpConfigDto,
@@ -38,6 +39,12 @@ export interface AgentsApiAddAgentMcpServerRequest {
 
 export interface AgentsApiCopyAgentMcpPluginServerRequest {
     copyPluginMcpServerDto: CopyPluginMcpServerDto;
+}
+
+export interface AgentsApiGetModelPriceRequest {
+    agent: AgentKind;
+    model: string;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentMcpServersRequest {
@@ -294,6 +301,69 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async getKeptSessionConfig(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<KeptSessionConfigStateDto> {
         const response = await this.getKeptSessionConfigRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getModelPriceRaw(requestParameters: AgentsApiGetModelPriceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ModelPriceAnswerDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling getModelPrice().'
+            );
+        }
+
+        if (requestParameters['model'] == null) {
+            throw new runtime.RequiredError(
+                'model',
+                'Required parameter "model" was null or undefined when calling getModelPrice().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/model-price`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getModelPrice(requestParameters: AgentsApiGetModelPriceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ModelPriceAnswerDto> {
+        const response = await this.getModelPriceRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

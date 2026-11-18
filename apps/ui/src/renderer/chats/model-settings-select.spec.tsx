@@ -239,6 +239,38 @@ describe('ModelSettingsSelect', () => {
     expect(picked).toContainEqual(['model', 'haiku']);
   });
 
+  it('prices each model row the daemon priced, every rate in its tooltip', () => {
+    const { el } = render({
+      models: [
+        {
+          id: 'opus',
+          label: 'Opus 5.5',
+          resolvedModel: 'claude-opus-5-5',
+          source: 'cli',
+          price: {
+            input: 4,
+            output: 20,
+            cacheRead: 0.4,
+            cacheWrite: null,
+            tiers: [],
+          },
+        },
+        { id: 'claude-unknown', label: 'Unknown', source: 'cli', price: null },
+      ],
+    });
+    open(el);
+    openAxis(el, 'Model');
+
+    const priced = submenuRow(el, 'Opus 5.5')!;
+    expect(
+      priced.querySelector('[data-slot="menu-item-hint"]')?.textContent,
+    ).toBe('$4 / $20 per 1M');
+    expect(priced.getAttribute('title')).toContain('cache read $0.40');
+    expect(
+      submenuRow(el, 'Unknown')!.querySelector('[data-slot="menu-item-hint"]'),
+    ).toBeNull();
+  });
+
   it('offers local models in the model submenu and blocks models without tools', () => {
     const { el, picked } = render({
       models: [

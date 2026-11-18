@@ -2409,3 +2409,9 @@ export const CLAUDE_DETACHED_LAUNCH_KEYS: ReadonlyMap<string, string> = new Map(
     ['Monitor', 'taskId'],
   ],
 );
+
+/**
+ * A variant suffix claude puts on a model id (`claude-opus-5[1m]`), dropped to
+ * reach the API's own id — see `canonicalClaudeModel`.
+ */
+export const CLAUDE_MODEL_VARIANT = /\[.*$/;

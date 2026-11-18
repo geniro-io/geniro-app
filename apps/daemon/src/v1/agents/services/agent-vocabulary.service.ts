@@ -2,9 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentVocabularyWire } from '../chat.types';
+import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { ContextWindowsService } from './context-windows.service';
 import { EffortsService } from './efforts.service';
 import { ModelParametersService } from './model-parameters.service';
+import { ModelPriceService } from './model-price.service';
 import { ModelsService } from './models.service';
 
 /**
@@ -26,6 +28,7 @@ export class AgentVocabularyService {
     private readonly efforts: EffortsService,
     private readonly contextWindows: ContextWindowsService,
     private readonly modelParameters: ModelParametersService,
+    private readonly prices: ModelPriceService,
   ) {}
 
   /**
@@ -37,8 +40,14 @@ export class AgentVocabularyService {
   async read(
     kind: AgentKind,
     model: string | null,
-    configDir: string | null,
+    requestedConfigDir: string | null,
   ): Promise<AgentVocabularyWire> {
+    // A CLI asked under a folder that does not exist creates it, as a fresh
+    // signed-out profile, so a missing one is refused before any part asks.
+    const configDir =
+      requestedConfigDir === null
+        ? null
+        : resolveValidConfigDir(requestedConfigDir);
     const [models, efforts, contextWindows, modelParameters] =
       await Promise.allSettled([
         this.models.list(kind, configDir),
@@ -64,7 +73,10 @@ export class AgentVocabularyService {
       );
     }
     return {
-      models: models.status === 'fulfilled' ? models.value : null,
+      models:
+        models.status === 'fulfilled'
+          ? this.prices.priceRows(kind, models.value)
+          : null,
       efforts:
         efforts.status === 'fulfilled'
           ? {

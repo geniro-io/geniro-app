@@ -8,7 +8,9 @@ import { LoadingChip } from '../components/ui/loading-chip';
 import { Select } from '../components/ui/select';
 import {
   modelDescription,
+  modelHint,
   modelLabel,
+  modelTitle,
   withSelectedModel,
 } from './model-options';
 
@@ -142,8 +144,9 @@ export function ModelSelect({
   const rows = listed.map((model) => ({
     value: model.id,
     label: modelLabel(model),
+    hint: modelHint(model),
     disabled: Boolean(model.unavailableReason),
-    title: model.unavailableReason,
+    title: modelTitle(model),
     subLabel: modelDescription(model),
   }));
   const select = (

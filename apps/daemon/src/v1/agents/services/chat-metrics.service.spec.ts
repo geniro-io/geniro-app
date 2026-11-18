@@ -1,3 +1,7 @@
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -19,6 +23,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
+import type { ModelPrice } from '../utils/model-prices';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
@@ -126,6 +131,12 @@ function build(opts: {
     configDir: string | null;
     session: unknown;
   }[];
+  /** The adapter's list price of a model id. */
+  modelPriceOf?: (model: string | null) => ModelPrice | null;
+  /** What the adapter resolves the run's model to. */
+  resolveModel?: (model: string | null) => Promise<string | null>;
+  /** The chat's configured model. */
+  runModel?: string | null;
   /** A TEAM run: its turns by member, its member kinds, its polled bill. */
   team?: {
     rows: { memberId: string | null; payload: string }[];
@@ -151,6 +162,7 @@ function build(opts: {
             : {
                 agentKind:
                   'agentKind' in opts ? opts.agentKind : AgentKind.Claude,
+                model: opts.runModel ?? null,
                 lastMetricsReading: opts.lastMetricsReading ?? null,
                 // One folder per run, so a pin can be put on one of them.
                 cwd: `/proj/${runId}`,
@@ -203,6 +215,12 @@ function build(opts: {
           }),
           readContextUsage,
           readPlanLimits: opts.readPlanLimits ?? (() => Promise.resolve(null)),
+          modelPriceOf: opts.modelPriceOf ?? (() => null),
+          resolveModel:
+            opts.resolveModel ??
+            ((model: string | null) => Promise.resolve(model)),
+          modelVendorOf: () => 'anthropic',
+          vocabularyProfile: (dir: string | null) => dir,
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry,
     // The prewarm's own channel. A Subject rather than a stub, so a spec can
@@ -328,6 +346,10 @@ describe('ChatMetricsService — one team member', () => {
             }),
             readContextUsage,
             readPlanLimits: () => Promise.resolve(null),
+            modelPriceOf: () => null,
+            resolveModel: (model: string | null) => Promise.resolve(model),
+            modelVendorOf: () => 'anthropic',
+            vocabularyProfile: (dir: string | null) => dir,
           }) as unknown as AgentAdapter,
       } as unknown as AgentAdapterRegistry,
       { all: () => turns.asObservable() } as unknown as AgentEventBus,
@@ -585,6 +607,20 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     }),
   });
 
+  const modelTurn = (
+    memberId: string,
+    callId: string | null,
+    model: string,
+    agentKind?: string,
+  ) => ({
+    memberId,
+    payload: JSON.stringify({
+      usage: { inputTokens: 1, outputTokens: 1, contextModel: model },
+      ...(callId === null ? {} : { callId }),
+      ...(agentKind === undefined ? {} : { agentKind }),
+    }),
+  });
+
   function buildCall(
     opts: {
       live?: unknown;
@@ -600,6 +636,14 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       callDao?: CallContextDao;
       /** The CLI's plan reading may come from a one-shot process. */
       oneShotPlan?: boolean;
+      /** The breakdown names no model, as cursor's never does. */
+      breakdownNamesNoModel?: boolean;
+      /** The engineer's own profile, unpooled. */
+      ownProfile?: string;
+      /** The model the engineer's node state stamps. */
+      stateModel?: string;
+      /** Turn rows naming the model each ran on, the own one on codex. */
+      turnModels?: boolean;
     } = {},
   ) {
     const peek = vi.fn().mockReturnValue(opts.live ?? null);
@@ -613,12 +657,19 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
                 agentKind: AgentKind.Claude,
                 agentSessionId: 'sess-own',
                 polledSpend: opts.polledSpend ?? null,
+                model: opts.stateModel ?? null,
               }
             : null,
         ),
       );
-    const readContextUsage = vi.fn().mockResolvedValue(BREAKDOWN);
+    const readContextUsage = vi
+      .fn()
+      .mockResolvedValue(
+        opts.breakdownNamesNoModel ? { ...BREAKDOWN, model: null } : BREAKDOWN,
+      );
     const readPlanLimits = vi.fn().mockResolvedValue(opts.plan ?? null);
+    const pricedModels: (string | null)[] = [];
+    const resolvedUnder: (string | null)[] = [];
     const runRemember = vi.fn().mockResolvedValue(undefined);
     const nodeRemember = vi.fn().mockResolvedValue(undefined);
     const adapterFor = vi.fn();
@@ -632,18 +683,35 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             configDir: null,
             polledCostCents: null,
             polledCostEvents: null,
-            teamSnapshot: opts.pooled
+            teamSnapshot: opts.ownProfile
               ? JSON.stringify({
                   nodes: [
                     {
                       id: 'engineer',
                       kind: 'agent',
                       agent: 'claude',
-                      pool: [{ agent: 'codex', configDir: '/profiles/b' }],
+                      configDir: opts.ownProfile,
                     },
                   ],
                 })
-              : null,
+              : opts.pooled
+                ? JSON.stringify({
+                    nodes: [
+                      {
+                        id: 'engineer',
+                        kind: 'agent',
+                        agent: 'claude',
+                        pool: [
+                          {
+                            agent: 'codex',
+                            configDir: '/profiles/b',
+                            model: 'gpt-6.1-sol',
+                          },
+                        ],
+                      },
+                    ],
+                  })
+                : null,
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
@@ -678,6 +746,16 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
               }),
               readContextUsage,
               readPlanLimits,
+              modelPriceOf: (model: string | null) => {
+                pricedModels.push(model);
+                return null;
+              },
+              resolveModel: (model: string | null, dir: string | null) => {
+                resolvedUnder.push(dir);
+                return Promise.resolve(model);
+              },
+              modelVendorOf: () => 'anthropic',
+              vocabularyProfile: (dir: string | null) => dir,
             }) as unknown as AgentAdapter,
         ),
       } as unknown as AgentAdapterRegistry,
@@ -690,12 +768,18 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       { forRun: () => null } as unknown as ConfigDirPinService,
       wallTurns as unknown as WallTurnDao,
       usageRowsOf(
-        [
-          callTurn('engineer', 'call-1', 10),
-          callTurn('engineer', null, 100),
-          callTurn('researcher', 'call-2', 1000),
-          callTurn('engineer', 'call-3', 20),
-        ],
+        opts.turnModels
+          ? [
+              modelTurn('engineer', 'call-1', 'claude-haiku-5-5'),
+              modelTurn('engineer', null, 'gpt-6.1-sol', 'codex'),
+              modelTurn('engineer', 'call-3', 'claude-opus-5-5'),
+            ]
+          : [
+              callTurn('engineer', 'call-1', 10),
+              callTurn('engineer', null, 100),
+              callTurn('researcher', 'call-2', 1000),
+              callTurn('engineer', 'call-3', 20),
+            ],
         [
           started('call-1', 'engineer'),
           result('call-1', 'engineer', 'sess-a'),
@@ -725,8 +809,62 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       runRemember,
       nodeRemember,
       adapterFor,
+      pricedModels,
+      resolvedUnder,
     };
   }
+
+  it('names a member’s own newest turn’s model, priced under the CLI that ran it, never a call’s', async () => {
+    const built = buildCall({ breakdownNamesNoModel: true, turnModels: true });
+
+    const metrics = await built.service.read('run-1', 'engineer');
+
+    expect(metrics.model).toBe('gpt-6.1-sol');
+    expect(built.pricedModels).toEqual(['gpt-6.1-sol']);
+    expect(built.adapterFor).toHaveBeenCalledWith('codex');
+  });
+
+  it('names an unpooled callee’s stamped model, and none for a call its process holds on another CLI', async () => {
+    const own = buildCall({ breakdownNamesNoModel: true, stateModel: 'opus' });
+    expect((await own.service.read('run-1', null, 'call-1')).model).toBe(
+      'opus',
+    );
+
+    const moved = buildCall({
+      breakdownNamesNoModel: true,
+      stateModel: 'opus',
+      inFlight: true,
+      liveAgent: AgentKind.Codex,
+    });
+    const metrics = await moved.service.read('run-1', null, 'call-3');
+    expect(metrics.model).toBeNull();
+    expect(moved.resolvedUnder).toEqual([]);
+  });
+
+  it('resolves an unpooled callee’s model under that member’s own profile', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'geniro-callee-profile-'));
+    try {
+      const built = buildCall({
+        ownProfile: profile,
+        breakdownNamesNoModel: true,
+      });
+
+      await built.service.read('run-1', null, 'call-1');
+
+      expect(built.resolvedUnder).toEqual([realpathSync(profile)]);
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('names the model of the pool member that held the conversation', async () => {
+    const built = buildCall({ pooled: true, breakdownNamesNoModel: true });
+
+    const metrics = await built.service.read('run-1', null, 'call-3');
+
+    expect(metrics.model).toBe('gpt-6.1-sol');
+    expect(built.pricedModels).toEqual(['gpt-6.1-sol']);
+  });
 
   const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
 
@@ -897,6 +1035,165 @@ describe('ChatMetricsService', () => {
       context: BREAKDOWN,
       breakdownReason: null,
     });
+  });
+
+  it('prices the model the breakdown names', async () => {
+    const asked: (string | null)[] = [];
+    const { service } = build({
+      modelPriceOf: (model) => {
+        asked.push(model);
+        return {
+          input: 5,
+          output: 25,
+          cacheRead: 0.5,
+          cacheWrite: null,
+          tiers: [],
+          contextTokens: 1_000_000,
+        };
+      },
+    });
+
+    const reading = await service.read('run-1');
+
+    expect(asked).toEqual(['claude-opus-5[1m]']);
+    expect(reading.modelPrice).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0.5,
+      cacheWrite: null,
+      tiers: [],
+    });
+  });
+
+  it('prices the run’s own model, its alias resolved, where no breakdown names one', async () => {
+    const asked: (string | null)[] = [];
+    const resolved: (string | null)[] = [];
+    const { service } = build({
+      agentKind: AgentKind.CursorAgent,
+      breakdown: null,
+      runModel: 'grok-4.7-high',
+      resolveModel: (model) => {
+        resolved.push(model);
+        return Promise.resolve(
+          model === 'grok-4.7-high' ? 'grok-4.7-high' : null,
+        );
+      },
+      modelPriceOf: (model) => {
+        asked.push(model);
+        return {
+          input: 2,
+          output: 6,
+          cacheRead: 0.5,
+          cacheWrite: null,
+          tiers: [],
+          contextTokens: null,
+        };
+      },
+    });
+
+    const reading = await service.read('run-1');
+
+    expect(resolved).toEqual(['grok-4.7-high']);
+    expect(asked).toEqual(['grok-4.7-high']);
+    expect(reading.model).toBe('grok-4.7-high');
+    expect(reading.modelPrice).toMatchObject({ input: 2, output: 6 });
+  });
+
+  it('prices the model the newest turn reported, asking the CLI nothing', async () => {
+    const resolved: (string | null)[] = [];
+    const asked: (string | null)[] = [];
+    const { service } = build({
+      agentKind: AgentKind.CursorAgent,
+      breakdown: null,
+      payloads: [
+        turn({ inputTokens: 1, contextModel: 'gemini-4-argon-high' }),
+        turn({ inputTokens: 2, contextModel: 'grok-4.7-high' }),
+        turn({ inputTokens: 3 }),
+      ],
+      resolveModel: (model) => {
+        resolved.push(model);
+        return Promise.resolve(model);
+      },
+      modelPriceOf: (model) => {
+        asked.push(model);
+        return null;
+      },
+    });
+
+    const reading = await service.read('run-1');
+
+    expect(reading.model).toBe('grok-4.7-high');
+    expect(asked).toEqual(['grok-4.7-high']);
+    expect(resolved).toEqual([]);
+  });
+
+  it('prices the model a chat’s alias resolves to, and the alias itself when that fails', async () => {
+    const asked: (string | null)[] = [];
+    const resolved = build({
+      breakdown: null,
+      runModel: 'opus',
+      resolveModel: (model) =>
+        Promise.resolve(model === 'opus' ? 'claude-opus-5-5' : model),
+      modelPriceOf: (model) => {
+        asked.push(model);
+        return null;
+      },
+    });
+    expect((await resolved.service.read('run-1')).model).toBe(
+      'claude-opus-5-5',
+    );
+    expect(asked).toEqual(['claude-opus-5-5']);
+
+    const failing = build({
+      breakdown: null,
+      runModel: 'opus',
+      resolveModel: () => Promise.reject(new Error('probe failed')),
+    });
+    expect((await failing.service.read('run-1')).model).toBe('opus');
+  });
+
+  it('asks the CLI nothing when the breakdown names the model', async () => {
+    const resolved: (string | null)[] = [];
+    const { service } = build({
+      runModel: 'opus',
+      resolveModel: (model) => {
+        resolved.push(model);
+        return Promise.resolve(model);
+      },
+    });
+
+    expect((await service.read('run-1')).model).toBe('claude-opus-5[1m]');
+    expect(resolved).toEqual([]);
+  });
+
+  it('resolves nothing under an account folder that no longer exists', async () => {
+    const resolved: (string | null)[] = [];
+    const { service } = build({
+      breakdown: null,
+      runModel: 'opus',
+      configDir: '/no/such/profile-for-metrics-spec',
+      resolveModel: (model) => {
+        resolved.push(model);
+        return Promise.resolve('claude-opus-5-5');
+      },
+    });
+
+    expect((await service.read('run-1')).model).toBe('opus');
+    expect(resolved).toEqual([]);
+  });
+
+  it('prices nothing when no breakdown names a model', async () => {
+    const asked: (string | null)[] = [];
+    const { service } = build({
+      breakdown: null,
+      modelPriceOf: (model) => {
+        asked.push(model);
+        return null;
+      },
+    });
+
+    expect((await service.read('run-1')).modelPrice).toBeNull();
+    expect(asked).toEqual([]);
   });
 
   it('answers something the wire schema accepts UNCHANGED', async () => {

@@ -110,6 +110,7 @@ import { MemoryImportService } from './services/memory-import.service';
 import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
+import { ModelPriceService } from './services/model-price.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
@@ -409,6 +410,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     OllamaService,
     AgentVocabularyService,
+    ModelPriceService,
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
     CliSessionsService,

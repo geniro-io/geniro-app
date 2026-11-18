@@ -7,6 +7,7 @@ import {
   formatUsd,
   markEstimate,
 } from '../chats/agent-activity';
+import { ModelPrice } from '../components/model-price';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
@@ -175,6 +176,7 @@ function BreakdownRows({
               {row.display}
             </span>
           </div>
+          <ModelPrice price={row.price} className="-mt-1 self-start" />
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
             <div
               className={cn('h-full rounded-full', rankClass(index))}

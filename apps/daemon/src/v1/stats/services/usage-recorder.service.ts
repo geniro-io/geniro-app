@@ -14,6 +14,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import {
   carriesUsage,
+  reportedModelOf,
   turnMemberOf,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
@@ -22,7 +23,6 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import { polledAgentKind, polledSpendRows } from '../utils/polled-spend';
 import {
-  reportedModelOf,
   type UsageDimensions,
   usageDimensions,
 } from '../utils/usage-dimensions';

@@ -5,6 +5,7 @@ import {
   type GoalStatus,
   MEMBER_VERDICTS,
   type MemberVerdict,
+  ModelPriceWireSchema,
   type RecommendationEvidence,
   type StageChangeAction,
   type ThreadOutcomeKind,
@@ -809,6 +810,11 @@ export const UsageGroupWireSchema = z
       .boolean()
       .optional()
       .describe('a thread that no longer exists — its spend outlives it'),
+    price: ModelPriceWireSchema.nullable()
+      .optional()
+      .describe(
+        "a model's list price, on the model dimension only; null when no agent that ran it finds one",
+      ),
   })
   .meta({ id: 'UsageGroup' });
 export type UsageGroupWire = z.infer<typeof UsageGroupWireSchema>;

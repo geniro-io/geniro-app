@@ -27,27 +27,39 @@ import {
 export const MODEL_PRICES_FILE_NAME = 'model-prices.json';
 
 /**
- * How old the held catalog may get before it is asked for again.
- *
- * Twelve hours: list prices move a few times a year, and a new model appearing
- * is the only change worth catching quickly — half a day is quick enough for
- * that and costs the public host two requests a day per machine at most.
+ * How old the held catalog may get before it is asked for again: one hour,
+ * so a price change or a newly listed model reaches every model picker and
+ * readout within the hour, at most 24 anonymous GETs a day per machine.
  */
-export const MODEL_PRICES_REFRESH_AFTER_MS = 12 * 60 * 60_000;
+export const MODEL_PRICES_REFRESH_AFTER_MS = 60 * 60_000;
 
 /**
  * How often a long-running daemon checks whether the catalog has gone stale.
  * A check that finds it fresh does nothing — this is a clock, not a fetch rate.
+ * Well under {@link MODEL_PRICES_REFRESH_AFTER_MS}, or a refresh lands up to
+ * one check late.
  */
-const STALENESS_CHECK_EVERY_MS = 60 * 60_000;
+const STALENESS_CHECK_EVERY_MS = 5 * 60_000;
+
+/**
+ * How long after the 1st, 2nd and every later failed ask in a row the catalog
+ * is asked again: soon at first, so a fetch that failed at boot or on a wake
+ * prices the pickers within minutes, then hourly, so an outage or a reply that
+ * stopped parsing costs the public host no more than a good copy would.
+ */
+export const MODEL_PRICES_RETRY_AFTER_MS = [
+  5 * 60_000,
+  15 * 60_000,
+  MODEL_PRICES_REFRESH_AFTER_MS,
+] as const;
 
 /** A fetch that has not answered in this long is abandoned until next time. */
 const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Refuse a reply (or a stored file) larger than this. The whole catalog was
- * ~5.3MB when measured (2026-10-05); the stored projection of the two
- * providers read from it is a few tens of KB. The cap bounds the work a
+ * ~7MB when measured (2026-11-18); the stored projection of the providers
+ * read from it is a few tens of KB. The cap bounds the work a
  * runaway reply can cause, not the catalog's expected size.
  */
 const MAX_REPLY_BYTES = 32 * 1024 * 1024;
@@ -72,7 +84,7 @@ export interface ModelPriceCatalogOptions {
   fetch?: ModelPriceFetch | null;
 }
 
-/** What is persisted: when, and the catalog's own shape for two providers. */
+/** What is persisted: when, and the catalog's own shape for `MODEL_PRICE_PROVIDERS`. */
 interface StoredCatalog {
   fetchedAt: number;
   catalog: unknown;
@@ -111,6 +123,10 @@ export class ModelPriceCatalog
   private table: ModelPriceTable | null = null;
   /** When the held table was fetched; null when nothing is held. */
   private fetchedAt: number | null = null;
+  /** When this process last asked, answered or not; null before it has. */
+  private attemptedAt: number | null = null;
+  /** Failed asks in a row since the last good one. */
+  private failures = 0;
   private inFlight: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -159,18 +175,35 @@ export class ModelPriceCatalog
     if (this.fetchFn === null) {
       return Promise.resolve();
     }
+    if (this.inFlight !== null) {
+      return this.inFlight;
+    }
     // A stamp from the FUTURE (a clock set back since it was written) reads as
     // stale rather than as fresh until that moment arrives.
-    const age = this.fetchedAt === null ? null : this.now() - this.fetchedAt;
-    if (age !== null && age >= 0 && age < MODEL_PRICES_REFRESH_AFTER_MS) {
+    if (
+      this.isRecent(this.fetchedAt, MODEL_PRICES_REFRESH_AFTER_MS) ||
+      this.isRecent(this.attemptedAt, this.retryAfterMs())
+    ) {
       return Promise.resolve();
     }
-    if (this.inFlight === null) {
-      this.inFlight = this.refresh(this.fetchFn).finally(() => {
-        this.inFlight = null;
-      });
-    }
+    this.attemptedAt = this.now();
+    this.inFlight = this.refresh(this.fetchFn).finally(() => {
+      this.inFlight = null;
+    });
     return this.inFlight;
+  }
+
+  private retryAfterMs(): number {
+    return this.failures === 0
+      ? MODEL_PRICES_REFRESH_AFTER_MS
+      : MODEL_PRICES_RETRY_AFTER_MS[
+          Math.min(this.failures, MODEL_PRICES_RETRY_AFTER_MS.length) - 1
+        ]!;
+  }
+
+  private isRecent(at: number | null, withinMs: number): boolean {
+    const age = at === null ? null : this.now() - at;
+    return age !== null && age >= 0 && age < withinMs;
   }
 
   private async refresh(fetchFn: ModelPriceFetch): Promise<void> {
@@ -195,11 +228,13 @@ export class ModelPriceCatalog
       }
       this.table = table;
       this.fetchedAt = this.now();
+      this.failures = 0;
       this.save(table, this.fetchedAt);
       this.logger.log(
         `model price catalog refreshed: ${countModelPrices(table)} model prices`,
       );
     } catch (err) {
+      this.failures += 1;
       this.logger.warn(
         `model price catalog refresh failed (keeping the last good copy): ${err instanceof Error ? err.message : String(err)}`,
       );

@@ -34,7 +34,9 @@ import {
 import { folderName, shortenPath } from './directory-select';
 import {
   modelDescription,
+  modelHint,
   modelLabel,
+  modelTitle,
   withSelectedModel,
 } from './model-options';
 import { PENDING_MODEL_SETTINGS_TEXT } from './model-settings-pending-row';
@@ -577,6 +579,8 @@ export function ModelSettingsSelect({
               .map((entry) => ({
                 value: encode(MODEL, entry.id),
                 label: modelLabel(entry),
+                hint: modelHint(entry),
+                title: modelTitle(entry),
                 subLabel: modelDescription(entry),
                 checked: entry.id === model,
               })),

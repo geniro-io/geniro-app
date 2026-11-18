@@ -1,5 +1,4 @@
 import type { TurnMember } from '../../agents/chat.types';
-import { asRecord, asString } from '../../agents/utils/json-util';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
@@ -114,16 +113,4 @@ function teamNameOf(run: UsageDimensionRun | null): string | null {
     return null;
   }
   return readTeamSnapshot(run.teamSnapshot)?.name ?? run.teamId;
-}
-
-/**
- * The model a finished turn's payload says the CLI RAN on — `usage.contextModel`,
- * the model the turn's context window was measured for (claude's `modelUsage`,
- * an ACP agent's own current model) — or null when it names none.
- */
-export function reportedModelOf(payload: unknown): string | null {
-  const model = asString(
-    asRecord(asRecord(payload)?.['usage'])?.['contextModel'],
-  );
-  return model === null || model.trim() === '' ? null : model;
 }

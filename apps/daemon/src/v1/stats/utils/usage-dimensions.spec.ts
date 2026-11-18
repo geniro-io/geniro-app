@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { reportedModelOf } from '../../agents/utils/usage-figures';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
-import { reportedModelOf, usageDimensions } from './usage-dimensions';
+import { usageDimensions } from './usage-dimensions';
 
 const run = (overrides: Partial<Run> = {}): Run =>
   ({

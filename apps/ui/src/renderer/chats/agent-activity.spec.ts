@@ -9,6 +9,7 @@ import {
   formatExactUsd,
   formatTokens,
   formatUsd,
+  formatUsdRate,
   subagentThreadsByAgent,
   threadsOf,
   withDurableNodeStatus,
@@ -773,6 +774,17 @@ describe('formatTokens / formatUsd', () => {
     expect(formatTokens(2_000_000_000)).toBe('2B');
     // The step is at the billion exactly: one token below it is still an M.
     expect(formatTokens(999_900_000)).toBe('999.9M');
+  });
+
+  it('formats a per-million rate as a price list does, to the vendor’s own digit', () => {
+    expect(formatUsdRate(4)).toBe('$4');
+    expect(formatUsdRate(20)).toBe('$20');
+    expect(formatUsdRate(0.1)).toBe('$0.10');
+    expect(formatUsdRate(2.5)).toBe('$2.50');
+    expect(formatUsdRate(0.075)).toBe('$0.075');
+    expect(formatUsdRate(0.0375)).toBe('$0.0375');
+    expect(formatUsdRate(0.01875)).toBe('$0.01875');
+    expect(formatUsdRate(1.75)).toBe('$1.75');
   });
 
   it('formats spend with a sub-cent floor', () => {

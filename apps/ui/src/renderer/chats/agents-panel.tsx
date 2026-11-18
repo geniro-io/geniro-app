@@ -46,6 +46,7 @@ import { ErrorBanner } from '../components/error-banner';
 import type { McpConfigActions } from '../components/mcp-add-dialog';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { MemberAvatar } from '../components/member-avatar';
+import { ModelPrice } from '../components/model-price';
 import { PanelActionRow } from '../components/panel-link-row';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
@@ -124,6 +125,7 @@ import {
   openTurnWorkedMs,
 } from './turn-duration';
 import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
+import { useModelPrice } from './use-model-price';
 import type { RunProcessesState } from './use-run-processes';
 import type { RunWaterfallState } from './use-run-waterfall';
 import type { ThreadAnalysisMark } from './use-thread-analysis';
@@ -1621,6 +1623,32 @@ function measured(value: number | null | undefined): number | null {
 }
 
 /**
+ * The list price of the model a card's agent is on, beside the model's name,
+ * asked of the pool slot its own conversation runs on — the CLI and profile
+ * that ran it.
+ */
+function AgentModelPrice({
+  agent,
+}: {
+  agent: AgentDisplay;
+}): React.JSX.Element | null {
+  const slot =
+    agent.ownPool === undefined
+      ? undefined
+      : poolMembersOf(agent)[agent.ownPool.member - 1];
+  return (
+    <ModelPrice
+      compact
+      price={useModelPrice(
+        slot?.agent ?? agent.agent,
+        agent.model,
+        slot === undefined ? agent.configDir : slot.configDir,
+      )}
+    />
+  );
+}
+
+/**
  * What one agent has SPENT, right-aligned on its model's line.
  *
  * ASKED FOR as "I should see spent tokens and price for each agent in the
@@ -2900,6 +2928,7 @@ export function AgentsPanel({
                             {agent.model}
                           </span>
                         )}
+                        <AgentModelPrice agent={agent} />
                         <AgentCost agent={agent} />
                       </span>
                     )}

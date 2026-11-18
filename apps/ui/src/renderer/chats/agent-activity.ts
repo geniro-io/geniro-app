@@ -1091,6 +1091,22 @@ export function formatExactUsd(amount: number): string {
   return `$${USD_DIGITS.format(amount)}`;
 }
 
+const USD_RATE = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 6,
+});
+
+/**
+ * A PRICE per million tokens, as a price list prints it: a whole dollar bare
+ * (`$4`, `$20`), anything else to the digit the vendor set (`$0.10`, `$2.50`,
+ * `$0.075`, `$0.01875`), so a cache rate is not rounded a few percent off.
+ */
+export function formatUsdRate(perMillion: number): string {
+  return Number.isInteger(perMillion)
+    ? `$${perMillion}`
+    : `$${USD_RATE.format(perMillion)}`;
+}
+
 /**
  * Whether a cost carries a part geniro PRICED itself — token counts at the
  * public list price — rather than read off the agent's own bill. The daemon

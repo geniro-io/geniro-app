@@ -124,6 +124,31 @@ describe('breakdownRows', () => {
     ]);
   });
 
+  it('names the CLI that ran each model row, what its price is asked of', () => {
+    const data = wfDto(100, {
+      lanes: [wfLane('mgr'), wfLane('qa', { agentKind: 'cursor-agent' })],
+      turns: [
+        wfTurn('qa', 0, 10, { model: 'grok-4.7-high' }),
+        wfTurn('mgr', 20, 30, { model: 'claude-opus-5-5' }),
+        wfTurn('mgr', 40, 50, { model: null }),
+        wfTurn('mgr', 60, 70, {
+          model: 'gpt-6.1-sol',
+          member: { agentKind: 'codex', model: 'gpt-6.1-sol' },
+        }),
+      ],
+    });
+
+    const rows = breakdownRows(data, whole(100), 'model', undefined);
+
+    // A pooled member's turn that ran on its codex slot is asked of codex.
+    expect(rows.map((row) => [row.key, row.agentKind])).toEqual([
+      ['grok-4.7-high', 'cursor-agent'],
+      ['claude-opus-5-5', wfLane('mgr').agentKind],
+      ['unknown model', null],
+      ['gpt-6.1-sol', 'codex'],
+    ]);
+  });
+
   it('narrows to the focused agent', () => {
     const data = wfDto(100, {
       lanes: [wfLane('mgr'), wfLane('eng')],

@@ -5426,11 +5426,25 @@ export interface AdapterConfig {
 
   // ── What a turn cost ───────────────────────────────────────────────────────
   /**
-   * Whose models this CLI runs — what tells an analysis's judge apart from the
-   * members it marks, since a judge favours its own vendor's work. Absent: not
-   * known for any model.
+   * Whose models this CLI runs, named by the vendor's models.dev provider id —
+   * what tells an analysis's judge apart from the members it marks, since a
+   * judge favours its own vendor's work, and which catalog provider a model's
+   * list price is shown from (`AgentAdapter.modelPriceOf`). Absent: not known
+   * for any model.
    */
   readonly modelVendor?: AdapterModelVendor;
+  /**
+   * The trailing part of this CLI's model ids that names a variant of one
+   * vendor model — an effort or thinking level, a parameter block, a label —
+   * which the vendor's catalog lists under the bare id. Absent: the CLI's ids
+   * are the vendor's own.
+   */
+  readonly modelIdVariant?: RegExp;
+  /**
+   * How this CLI spells a vendor's id differently, each a rewrite tried on the
+   * id without its variant when neither is listed. Absent: none.
+   */
+  readonly modelIdSpellings?: readonly AdapterModelIdSpelling[];
   /**
    * Whether this CLI reports the tokens and money a turn spent, or the reason
    * its context meter will always be empty.
@@ -5649,6 +5663,12 @@ export interface AdapterDaemonDeps {
   readonly prices: ModelPriceLookup;
   /** What geniro's own MCP endpoint served, for a CLI that reports no MCP result. */
   readonly hostToolResults: HostToolResultLedger;
+}
+
+/** One rewrite from a CLI's spelling of a model id to its vendor's. */
+export interface AdapterModelIdSpelling {
+  readonly pattern: RegExp;
+  readonly replacement: string;
 }
 
 /**

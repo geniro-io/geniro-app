@@ -18,10 +18,12 @@ import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
-import type {
-  ModelPrice,
-  ModelPriceLookup,
-  ModelPriceRates,
+import {
+  catalogModelIds,
+  isModelPriceProvider,
+  type ModelPrice,
+  type ModelPriceLookup,
+  type ModelPriceRates,
 } from '../utils/model-prices';
 import {
   ollamaBaseUrl,
@@ -365,6 +367,38 @@ export abstract class AgentAdapter {
       vendor.prefixes.find((entry) => id.startsWith(entry.prefix))?.vendor ??
       null
     );
+  }
+
+  /**
+   * A model's list price as the public catalog publishes it under the model's
+   * vendor, for SHOWING what it costs per million tokens — or null for a model
+   * of no catalog vendor (a local `ollama/` one, an `auto` pick, a CLI's own)
+   * or an id the catalog does not list. It never prices a turn: a CLI whose
+   * bill is read elsewhere (`usage.listPrice` unavailable) still shows the
+   * published rates of the vendor models it runs.
+   */
+  modelPriceOf(model: string | null): ModelPrice | null {
+    const prices = this.options.prices;
+    const provider = this.modelVendorOf(model);
+    if (
+      model === null ||
+      prices === undefined ||
+      !isModelPriceProvider(provider)
+    ) {
+      return null;
+    }
+    const config = this.getConfig();
+    for (const id of catalogModelIds(
+      model,
+      config.modelIdVariant,
+      config.modelIdSpellings,
+    )) {
+      const price = prices.priceOf(provider, id);
+      if (price !== null) {
+        return price;
+      }
+    }
+    return null;
   }
 
   protected listPriceOf(model: string | null): ModelPrice | null {

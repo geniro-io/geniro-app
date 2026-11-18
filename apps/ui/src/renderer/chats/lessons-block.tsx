@@ -16,10 +16,10 @@ import {
 import type { DaemonApis } from '../daemon-api';
 import { formatDuration } from '../stats/stats-format';
 import { formatUsd } from './agent-activity';
+import { AgentsApiContext } from './agents-api-context';
 import {
   described,
   documentsReaderOf,
-  LessonsAgentsApiContext,
   LessonsApiContext,
   LessonsJumpContext,
   LessonsKnowledgeApiContext,
@@ -169,7 +169,7 @@ export function LessonsBlock({
   const moveUps = useMoveUps(api, sourceRunId, card.proposals, entry.outcomes);
   const reflectionFacts = useRunFacts(api, card.reflectionRunId);
   const checkFacts = useRunFacts(api, card.check?.runId ?? null);
-  const agentsApi = useContext(LessonsAgentsApiContext);
+  const agentsApi = useContext(AgentsApiContext);
   const reflectionModel = useModelDisplayName(
     agentsApi,
     card.agentKind,

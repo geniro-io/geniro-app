@@ -33,7 +33,8 @@ import {
   readCallSeed,
   sessionMember,
 } from '../utils/call-seed';
-import { parseJsonColumn } from '../utils/json-util';
+import { asRecord, parseJsonColumn } from '../utils/json-util';
+import { toModelPriceWire } from '../utils/model-prices';
 import { readNodePoolMembers } from '../utils/node-pool-members';
 import {
   accountKeyOf,
@@ -52,6 +53,7 @@ import {
   conversationsBill,
   readPolledSpendLedger,
 } from '../utils/polled-spend-ledger';
+import { resolvePricedModel } from '../utils/priced-model';
 import {
   callSessionKey,
   nodeSessionKey,
@@ -64,6 +66,7 @@ import {
   snapshotPoolKinds,
 } from '../utils/snapshot-config-dirs';
 import {
+  reportedModelOf,
   sumUsagePayloads,
   turnAgentKindOf,
   USAGE_ITEM_KINDS,
@@ -121,6 +124,18 @@ interface ReadingTarget {
   /** The key the agent's kept process is registered under. */
   sessionKey: string;
   agentKind: AgentKind | null;
+  /**
+   * The model this agent runs as when neither a breakdown nor a turn names
+   * one: the member's last turn's, or the chat's configured one (null for the
+   * CLI's default).
+   */
+  model: string | null;
+  /**
+   * Whether {@link model} may be resolved under {@link account}: false where
+   * the conversation's process runs another CLI than the profile it was
+   * started under, whose folder that CLI must not be asked in.
+   */
+  resolvesModel: boolean;
   /** The profile a stored reading must still describe (null for a member). */
   configDir: string | null;
   /**
@@ -394,8 +409,21 @@ export class ChatMetricsService implements OnModuleInit {
       refresh,
     });
     const plan = planReading?.plan ?? null;
+    const named = context?.model
+      ? { model: context.model, agentKind: target.agentKind }
+      : (newestOwnTurnModel(payloads, target) ?? {
+          model: await this.runModelOf(target),
+          agentKind: target.agentKind,
+        });
     return {
       context,
+      model: named.model,
+      modelPrice:
+        named.agentKind === null || !named.model
+          ? null
+          : toModelPriceWire(
+              this.adapters.for(named.agentKind).modelPriceOf(named.model),
+            ),
       breakdownReason:
         context === null
           ? this.absenceReason(
@@ -451,6 +479,18 @@ export class ChatMetricsService implements OnModuleInit {
     };
   }
 
+  /** The model the target's agent would run as under its account. */
+  private runModelOf(target: ReadingTarget): Promise<string | null> {
+    if (target.agentKind === null || !target.resolvesModel) {
+      return Promise.resolve(target.model);
+    }
+    return resolvePricedModel(
+      this.adapters.for(target.agentKind),
+      target.model,
+      target.account === null ? target.configDir : target.account.dir,
+    );
+  }
+
   /**
    * A chat's own agent as a reading target.
    *
@@ -471,6 +511,8 @@ export class ChatMetricsService implements OnModuleInit {
       stateNodeId: SINGLE_AGENT_NODE,
       sessionKey: runId,
       agentKind: run.agentKind,
+      model: run.model ?? null,
+      resolvesModel: true,
       configDir: run.configDir,
       account: this.account(run, run.agentKind, run.configDir),
       storedReading: run.lastMetricsReading,
@@ -518,6 +560,8 @@ export class ChatMetricsService implements OnModuleInit {
       stateNodeId: memberId,
       sessionKey: nodeSessionKey(runId, memberId),
       agentKind: state.agentKind,
+      model: state.model ?? null,
+      resolvesModel: true,
       configDir,
       account: this.account(run, state.agentKind, configDir),
       storedReading: state.lastMetricsReading ?? null,
@@ -601,6 +645,18 @@ export class ChatMetricsService implements OnModuleInit {
       // The live process first: it is what the readout asks, so its CLI is
       // the one whose answer is being read.
       agentKind,
+      model:
+        profile !== null
+          ? profile.agentKind === agentKind
+            ? profile.model
+            : null
+          : agentKind === state.agentKind
+            ? (state.model ?? null)
+            : null,
+      resolvesModel:
+        profile !== null
+          ? profile.agentKind === agentKind
+          : agentKind === state.agentKind,
       configDir: profile?.configDir ?? null,
       // A pool member's own account; an in-flight conversation on another
       // member's CLI names no profile yet, so it shares nobody's reading.
@@ -1384,6 +1440,31 @@ function planReadingIsCurrent(
 /** An ISO stamp as epoch milliseconds — NaN when it cannot be read. */
 function epochOf(iso: string): number {
   return Date.parse(iso);
+}
+
+/**
+ * The model the target's newest own turn reported running on, with the CLI
+ * that ran it — a member's call turns and its sub-agents' left out — or null.
+ */
+function newestOwnTurnModel(
+  payloads: readonly string[],
+  target: ReadingTarget,
+): { model: string; agentKind: AgentKind | null } | null {
+  const ownOnly = target.memberId !== null && target.callIds === null;
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const payload = asRecord(parseJsonColumn(payloads[index]));
+    if (
+      ownOnly &&
+      (payload?.callId != null || payload?.parentToolUseId != null)
+    ) {
+      continue;
+    }
+    const model = reportedModelOf(payload);
+    if (model !== null) {
+      return { model, agentKind: turnAgentKindOf(payload) ?? target.agentKind };
+    }
+  }
+  return null;
 }
 
 /** Which of the adapter's two declared readings to consult. */

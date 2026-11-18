@@ -1,0 +1,60 @@
+---
+description: Chats page — calls, instances and delegates, the working-agents card, thread and team analysis popups, the run waterfall
+paths:
+  - "apps/ui/src/renderer/chats/call-*"
+  - "apps/ui/src/renderer/chats/use-call-*"
+  - "apps/ui/src/renderer/chats/use-recent-call-messages*"
+  - "apps/ui/src/renderer/chats/working-agent*"
+  - "apps/ui/src/renderer/chats/working-card-parts*"
+  - "apps/ui/src/renderer/chats/conversation-work*"
+  - "apps/ui/src/renderer/chats/agent-instances*"
+  - "apps/ui/src/renderer/chats/subagent-*"
+  - "apps/ui/src/renderer/chats/use-delegate-pages*"
+  - "apps/ui/src/renderer/chats/transcript-groups*"
+  - "apps/ui/src/renderer/chats/durable-transcript*"
+  - "apps/ui/src/renderer/chats/prompt-cache*"
+  - "apps/ui/src/renderer/chats/tool-kind*"
+  - "apps/ui/src/renderer/chats/agents-panel*"
+  - "apps/ui/src/renderer/chats/analysis-dialog*"
+  - "apps/ui/src/renderer/chats/analyze-thread-dialog*"
+  - "apps/ui/src/renderer/chats/use-thread-analysis*"
+  - "apps/ui/src/renderer/chats/hosted-chat-dock*"
+  - "apps/ui/src/renderer/chats/run-waterfall*"
+  - "apps/ui/src/renderer/chats/use-run-waterfall*"
+---
+
+# Chats — calls, analysis and the run waterfall
+
+**Calls, instances and delegates:**
+
+- A team run's agents come from the run's snapshot (`GET /v1/teams/runs/:runId/team`), never the library. The new-run trigger chip is the exception.
+- A call waiting under its run's active-turn cap reads `queued`, never running — on its card, in the agents panel and on the working-agents card (`CallBlockEntry.queued`, folded from the executor's `queuedCall` row; its first status row ends it; off the page, run state's `RunCallState.queued`). `queued` is unsettled and is not working.
+- A call continuing an earlier call's `thread` is the same instance.
+- A call a callee made is drawn as a card inside its caller's card, never in the run's own flow: the claim pass files it under the call its `inCall` names, else under the newest call of its `callerConversationId` chain (`parentCallOf`, twin of the daemon's), and the parent's status, result and readings are read from its own rows only (`CallShell.nested`). Both surfaces resolve chains through `resolveCallChains` and match through `callIds`. A root page never carries such a call's rows, so a folded caller card holds no card for it: a callee of a call run state reads as running whose card is not in the window draws no live or working row (`withLiveText`'s `daemonOpenCalls`, from `runningCallCallees`); the working-agents card narrates it.
+- The working-agents card (`chats/working-agents-card.tsx`, a team run's agents at the bottom right of the transcript, directly above the chips line) lists one row per conversation (`workingAgentRows`): run state's `calls` over the whole run, corrected only by what the window has seen move since that read. It floats in a hanging row after the transcript, so it never reflows the text. Its first view is a small square, whatever the run is doing: one lead face (`leadWorkingAgent`: whoever works, then the other live conversations, then an unseen failure, then the rest — user decision: the face is who is out now, and a failure leads only once nobody is live) with `+N` counting the other live conversations (the other conversations when none is live), two of one agent as two, a ring that spins only while a call is `working`, a red dot for a failure not yet seen, faded once nobody is live and no failure is unseen. Hover or keyboard focus opens a `HoverPopover` over the square, and a press pins that same panel (a press outside, a second press or Escape closes it; there is no other unfolded view). It lists every current run (each live conversation, a queued one included) as a card of its own, never grouped by agent (user decision: three runs of one QA are three cards), with the callee's face and name, its state (`waiting` for a callee holding its call for calls of its own, naming whom from run state's `callerConversationId`), clock, caller, title and three newest messages, the shelf's own status counters beside the name counting only that conversation's commands, monitors, delegates and task list (`conversation-work.ts`, filed by every call id of its chain; a press inside them never opens the conversation), under a live summary and over a fold of what has settled (`working-agents:finished`, per thread), each read as it opens; each seen failure is remembered per thread (`working-agents:failure-seen:<callId>`, written while the panel is open). A run reads the callee's newest three own messages from `GET /v1/chats/:runId/calls/:callId/messages` (`use-recent-call-messages.ts`), never a page of the conversation, draws each held to ten lines (`ClampedText`, Show more unfolds it in place) on a line down the left in the state's colour, the newest brightest, and takes live rows straight off the socket, since the transcript's stream stops at the tail. A press on a run, live or settled, closes the panel and opens its whole conversation in a popup, whose Show in chat is `openCall`. The popup is `call-conversation-dialog.tsx`: its own rows, read through `use-call-pages.ts` (the loader the opened cards use too) and folded by `useDurableTranscript`, so a call off the window is read without moving the window; a call the callee made from that conversation is drawn as a card inside it, and its live rows are taken too (`callsInside`).
+- Never pool every instance's work into one list. Rows are filed by `callId`. Content whose call is not loaded becomes an inferred instance.
+- A main conversation exists only when there is a `status` row with no `callId`. Never infer one by counting turns.
+- Never time a wait from the agent's last row.
+- The call-message queue is keyed by call block id, because call ids restart per pass. It retries only `CALL_MESSAGE_REFUSED`. A message row (`role === 'user'`) is never the block's summary or result.
+- The prompt-cache badge threshold is a twin of the daemon's `CACHE_EXPIRED` rule, pinned by a spec.
+- A call card's line, its shut band, its tasks chip and the agents panel's instance row read the callee's own thread (`callBlockActivity`, `callBlockSummary`, `callBlockTasks`), never a sub-agent's: several run at once, each with its own card.
+- With no tool of its own running, or once its turn ended, a callee with sub-agents out reads the still `<member> is waiting for N sub-agents` (`callBlockSubagentsRunning`): its blocks in the window as each reads, plus the delegates the daemon says run in this conversation with no block there (`offWindowSubagents`, laid on by `applyDaemonReadings`). A shut band showing the callee's words carries it as a chip beside them. A held turn writes no row, so that card stays `running`; `waiting` needs the turn's terminal row.
+- A delegate's generic title is its id tail. `resultIsOwn` is decided structurally, never by matching a CLI's prose. A `SendMessage` is not a delegation (`isAgentToolName`).
+- Shells listed in the panel are the main thread's only, dropped at the item (`subagentIdOf`).
+
+**Thread analysis** (`analysis-dialog.tsx`, `use-thread-analysis.ts`):
+
+- A thread's analysis is never a sidebar row and never a search hit. Its home is its popup over the source (`AnalysisDialog`), where it is read, answered, applied and replaced; the Analyze button opens the popup when one exists, else the setup dialog, and marks it (tint; a dot while working or waiting on you). The popup and the setup dialog close when their thread is deleted (the analysis went with it).
+- A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
+- The popup and the builder's chat dock draw their conversation with the chat screen (`Chats` with `hosted`, above): every chip, label, queue and shelf a thread has, they have.
+- A team's analysis setup dialog asks the daemon whether the picked agent and model share the members' vendor (`checkTeamAnalysisJudge`) and, when most members do, says a judge marks its own vendor high and offers the other agents.
+- A team's analysis ("Analyze & improve…", the open team's overflow menu) uses the same two components, each given a `subject` of kind `team`: `AnalyzeThreadDialog` (plus how many latest runs to read, twin bound `MAX_ANALYSED_RUNS`) and `AnalysisDialog` (its team analysis read by `GET /v1/teams/:slug/analysis`, never the builder chat's). The menu opens the popup when one exists, else the setup dialog; both close when the builder leaves that team, and a turn of the analysis settling re-reads the team (`reloadAfterAgentEdit`), since an applied item changes the file. Every "is this an analysis" check is `isAnalysisRun` (either column). The builder's chat dock posts the same recommendations card (its agent reads the team's latest runs), applied by the chat screen's own `applyRecommendations`.
+
+**Run waterfall** (`chats/run-waterfall*.ts(x)`, the "Where the run went" popup, opened from the agents panel's control row straight into its full view):
+
+- Every span, its `seq` (what "Open in chat" jumps to) and the critical path come from the daemon's waterfall route; the renderer never folds them from loaded `items`.
+- `blocksCaller` (`run-waterfall-geometry.ts`) is a twin of the daemon's critical-path rule in `v1/agents/utils/thread-timeline.ts`: any call not `async` holds its caller. Change one, change the other.
+- The full view reads ONE state (zoom window, selected mark, focused agent); the tables count a turn's time where it overlaps the window and its money where it ended (`run-waterfall-breakdown.ts`).
+- It opens as a SEQUENCE DIAGRAM (`run-waterfall-sequence.tsx` over `sequenceLayout` in `run-waterfall-sequence-layout.ts`; Calls / Lanes, `geniro.waterfall.lanes`): a column per agent, time running down, a numbered horizontal arrow per call (numbered by when it was made) from the caller's turn at that moment and a dashed one back under the same number for a call its caller waited on (`blocksCaller`). Arrows are one neutral colour (lit or failed aside); agent colours stay on the columns and bars. Turns of one agent running at once are stacked `NEST` pixels apart, and calls one agent made within `SEQUENCE_PARALLEL_MS` with no other arrow between are framed as "N at once" (`SequenceLayout.groups`). Every arrow has a row of its own at least `SEQUENCE_ROW_MIN` below the last, and an event-free stretch over `SEQUENCE_BREAK_MS` is drawn as a short break, so nothing overlaps. Pointing at or selecting a call lights the turns that answered it (`RunWaterfallTurn.callId`); a turn lights the calls it made.
+- In Lanes, every call is drawn as a rounded line between its lanes (`CallLinks`, under the bars, measured off the DOM after layout): out of the caller's turn at the moment of the call, bending into the start of the turn that answered it — the daemon's `RunWaterfallTurn.callId`, overlap only for a run recorded before turns named their call — and, for a call its caller waited on (`blocksCaller`), dotted back into the caller at the moment it returned. Lines stay quiet until the pointer is over a turn or call, which lights that mark's own links (a selected call keeps its lit); the Links switch (`geniro.waterfall.callLinks`) keeps only the selected call's.
+- The lanes are drawn `scale` card widths wide (`GANTT_SCALES`, 2× to start) and scroll sideways under the pinned name column; ⌘/Ctrl + wheel steps the scale around the pointer.

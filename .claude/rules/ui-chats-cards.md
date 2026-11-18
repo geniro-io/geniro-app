@@ -1,0 +1,84 @@
+---
+description: Chats page — agent-drawn cards and their parsers, buttons, approval and proposal cards, text hazards, artifacts and sharing, shells
+paths:
+  - "apps/ui/src/renderer/chats/*-payload.ts"
+  - "apps/ui/src/renderer/chats/action-*"
+  - "apps/ui/src/renderer/chats/use-chat-actions*"
+  - "apps/ui/src/renderer/chats/command-confirm-dialog*"
+  - "apps/ui/src/renderer/chats/recommendations-*"
+  - "apps/ui/src/renderer/chats/transcript-groups*"
+  - "apps/ui/src/renderer/chats/geniro-tool*"
+  - "apps/ui/src/renderer/chats/findings-block*"
+  - "apps/ui/src/renderer/chats/chart-block*"
+  - "apps/ui/src/renderer/chats/metrics-block*"
+  - "apps/ui/src/renderer/chats/comparison-block*"
+  - "apps/ui/src/renderer/chats/gallery-block*"
+  - "apps/ui/src/renderer/chats/local-image-loader*"
+  - "apps/ui/src/renderer/chats/workflow-block*"
+  - "apps/ui/src/renderer/chats/diff-view*"
+  - "apps/ui/src/renderer/chats/approval-card*"
+  - "apps/ui/src/renderer/chats/plan-card*"
+  - "apps/ui/src/renderer/chats/call-question-card*"
+  - "apps/ui/src/renderer/chats/team-proposal-card*"
+  - "apps/ui/src/renderer/chats/team-diff-list*"
+  - "apps/ui/src/renderer/chats/verdict-note*"
+  - "apps/ui/src/renderer/chats/text-hazard*"
+  - "apps/ui/src/renderer/chats/use-one-shot-verdict*"
+  - "apps/ui/src/renderer/chats/task-list*"
+  - "apps/ui/src/renderer/chats/artifact-*"
+  - "apps/ui/src/renderer/chats/published-artifact*"
+  - "apps/ui/src/renderer/chats/use-artifact-sharing*"
+  - "apps/ui/src/renderer/chats/use-run-artifacts*"
+  - "apps/ui/src/renderer/chats/shell-*"
+  - "apps/ui/src/renderer/components/stage-graph*"
+  - "apps/ui/src/renderer/components/sign-in-action*"
+---
+
+# Chats — cards, artifacts and shells
+
+**Cards (agent-drawn payloads):**
+
+- Each card kind has a twin parser (`*-payload.ts`) of the daemon's schema.
+- Agent buttons (`action-chip.tsx`, `action-card.tsx`, `use-chat-actions.ts`): what is pressable is run state's `actions`, never a fold of the window. A press refused `RUN_BUSY` is retried by the hook (same seq, same `clientMessageId`) once the turn settles, never through the composer queue, which would send the text without recording the press. The shelf group sits after the stage chip, ahead of the running team chip. A team run presses through the team routes (the hook takes whichever API the open run needs; the chat route refuses a team run), and its busy refusals are asked again on `ACTION_RETRY_MS`, since its run state opens no turn. A button whose `publisher.agentLabel` is set (another team agent's) says so: `· <agent>` on the chip, `from <agent>` on the card, linking to its call's card, which it opens (`ChatActions.openCall`: the `call:<blockId>` thread flag, then a reveal, paging first when the card is off the window; the working-agents card's Show in chat does the same). A stop button lists what it stops (`spec.targets`: command and pid, plus what these start by the press) on its card and in the chip's tooltip before it is pressed, and its status reads `stopped` or `already stopped` (`alreadyStopped`).
+- A command action opens `CommandConfirmDialog` from the chip, the card and the overflow row alike (the confirm state lives in `useChatActions`: `press` only sets `confirming`; one dialog per surface in `ChatProviders`), showing the exact argv, one quoted token per argument, and the folder. Nothing is sent until "Run command". The card shows the command (`Runs:`) before and after the press and, once it ends, its last run's status (exit code or error) even while the button stays live — a failed or reusable command stays pressable — plus a folded `Output` with the tail (`outputTail`, drawn through `AnsiText`, fold kept per thread). Only a message press starts a turn (`pressStartsTurn`), so only it raises a surface's working flag (the builder dock's).
+- A recommendations card's knowledge items (`K-`) sit in a group of their own. A move's two sides are ticked and unticked together and each names the other (`movePartnerOf`), since the daemon refuses an Apply of one (`MOVE_SPLIT`).
+- A team card states the population beside the sample (`data-slot="analysis-population"`: the runs read of how many the team has, with the average over all of them) and in the projection's footnote, drawn from `teamStats.population`, which the daemon measures over every ledger row; never folded here. An external item (`X-`) sits in a group of its own, "Other repositories": applying it files a board card, so its outcome note names that card.
+- `isCardEntry` (`transcript-groups.ts`) is the one predicate over card kinds. Never write a `'task-list' || …` chain.
+- A new card tool also goes in `GENIRO_TOOL_NAMES`, which the compiler cannot check.
+- Findings keep the agent's order.
+- Charts key rows by position (`s0`, `s1`, …), never by series name. `null` stays a gap.
+- Metrics colour a delta by stated sentiment, never by sign.
+- The gallery loads through `LocalImageLoaderContext`. It does that sequentially and only while open, releases images on fold, and uses no lightbox of its own. A picture named by URL arrives already downloaded by the daemon (a local path, with the URL as `source`); the renderer never fetches one. Each card shows its caption and description under the picture in one horizontally scrolling strip, and the viewer shows the description too.
+- Dynamic workflow: the roster is taken whole. A launch is recognised by a `workflow_info` row, never by tool name.
+- `propose_patch` renders as an ordinary approval card (`diff-view.tsx` `editDiffOf`). Its tool-name literal is a twin. `save_project_instructions` does too, drawing the daemon's unified hunks and the `P-` ids it carries out (`projectInstructionsCardOf`, `UnifiedDiff`) while its hazard scan reads the whole old and new text; the verdict row's `outcome` (`not-saved` draws "✗ Not saved") and `answer` say what Apply did, for a patch too (`hostPatchVerdict`). The card marks the words that changed inside paired lines (`UnifiedDiff` `wordLevel`). Both proposals are `'patch'` in `GENIRO_TOOLS` (`isProposedChange`); a refused `save_project_instructions` call keeps its row (`transcript-groups.ts`).
+- A plan or question row that cannot be parsed falls back to the permission body.
+- `propose_team` draws `TeamProposalCard` from its `approval_request` row (`team-proposal-payload.ts`, twin of the daemon's `TeamProposalSchema` / `TeamDiff` / `TeamProposalOutcome`); an unreadable payload falls back to the permission body. The agent's `summary` and `reason` (a change sent as edits, from any chat, always carries both) are drawn as its own words under the title. Saved / not saved is the verdict row's `outcome`, never the agent-bound message. A card whose team half changes nothing (`diff.identical`) says so in its badge and its saved line, and offers Open project instead of Open team where the surface can open one (`onOpenProject`; the project's own chat, already on that page, cannot). Its Approve gate scans every string the card can draw, raw (`proposalScanText`), the diff's old side included. `components/stage-graph-flow.tsx`, `lazy()` behind `StageGraph`, is the only chat-reachable importer of `@xyflow/react` and `elkjs`. The card draws the members (each with its public role and the blocks addressed to it, never its private instructions), the trigger member and the stages, and — as sections of their own beside the shared team, each a `UnifiedDiff` — a project's overlay and a project's instructions the same Approve writes (`overlay`, `project`, each read tolerantly and dropped whole when malformed), its approval line naming every file it changes; a proposal recorded in the node-graph shape is read through `teamFromLegacyGraph`. The change list comes first and is open; the members and the stage texts start folded, a fold still showing the members and stages a replacement adds or changes (`previewMarks`, `stageMarksOf`) and saying how many more it holds; and a long changed value is drawn as its two sides, which the daemon quotes from where they differ (`quoteTextChange`). The card stands across turns, so it counts as needs-input only while no turn streams (`standsAcrossTurns`, the daemon's `awaitingOf`).
+- The plan and team cards share their note field and its send rule (`chats/verdict-note.tsx`); the hazard gate is `chats/text-hazard-gate.tsx`, shared with the permission card.
+- A question card is drawn from the row's `questions`, never from a CLI's tool name. `secret` masks the field.
+- `useOneShotVerdict` is the one verdict-timing contract.
+- Only the latest task-list card shows its rows. Fold state derived from data takes a press override (`useThreadOverride`). Never seed derived open state into `useState`.
+- Approval cards scan for text hazards (`chats/text-hazards.ts`):
+  - Bidi or invisible characters gate Approve until acknowledged.
+  - The tick resets when the content changes. Deny is never gated.
+  - The banner names codepoints and never prints the character.
+  - Join scanned parts with spaces, never newlines. Ordinary emoji are exempt.
+
+**Artifacts** (`published-artifact.ts`, `artifact-frame.tsx`):
+
+- The frame's sandbox is the root `AGENTS.md`'s (_Constraints_, the artifact page's outbound call). The page is served by the daemon, never put in `srcdoc`, and loaded with `referrerPolicy="no-referrer"`.
+- Into the frame go theme tokens and, once the page announces itself, the answers kept for it (`ArtifactAnswersContext`, provided by `Chats` with `ArtifactUrlContext`); out of it come its height, a link, a click on one of its own `data:` pictures — the picture or a link to it (shown in `ImageViewer`), an Escape the page did not act on (`closeTopEscapeLayer`, since a key pressed in the frame never reaches the renderer's document), a folder button's path (`window.geniro.openArtifactPath`, desktop only, only on a fresh click — `navigator.userActivation` — one per `OPEN_PATH_GAP_MS`, its failure shown under the frame in the frame's own words) and each answer the page changes (`answer`, with the page's save count, sent as a batch of changes after `ANSWERS_SAVE_DELAY_MS` and on unmount, sent again after `ANSWERS_RETRY_MS` when refused; the merged set comes back to the saving frame with the counts it confirmed, and `ArtifactAnswersStore` hands it to every other frame of the page). All by `postMessage`, filtered on `event.source`; the picture, the Escape, the folder and the answers only while the frame holds focus (`document.activeElement`), so a page cannot act on the app unprompted.
+- Key the frame by `${artifactId}:${version}`.
+- A `show_artifact` row is never claimed into a call card (`UNCLAIMABLE_KINDS`): a callee's page is drawn in the main flow, and the newest-card sweep spans the whole run.
+- The panel list comes from `GET /v1/chats/:runId/artifacts` and answers empty on a run mismatch.
+- A saved file bakes in the theme and restates the CSP as `ARTIFACT_FILE_CSP`, a twin of the daemon's `artifact-page.ts`. Insert them into a parsed `<head>` (`DOMParser`), never by text splice.
+- A saved file must look like the framed page. The daemon's raw reading (`renderArtifactDocument`) carries the frame's base style (font, padding, box-sizing, centring) but not its transparent ground, and the export supplies the ground.
+- Links are opened by the host, only for `http:`, `https:` and `mailto:` (`shared/link-schemes.ts`); an inline page's go to the chat browser by the chat-link rule, the full-screen dialog's always to the system browser (its page hides the pane). Main's `guardArtifactFrameNavigations` cancels any frame navigation away from the artifact route.
+- Share (`artifact-share.tsx` over `use-artifact-sharing.ts`, provided as `ArtifactShareContext` by `Chats`): beside Save on the card and in the dialog header; null on a paired phone, which draws nothing. A press sends the current `themeVars()`. The link (key in its `#fragment`) is read from the daemon when the panel opens, never kept in the list — and only for a share that was uploaded (`sharedVersion > 0`). A share waiting on sign-in (`awaiting-sign-in`) tints the icon `text-warning` and shows "Sign-in required (<cli>)" with `SignInAction` (`components/sign-in-action.tsx` over `use-share-sign-in.ts`, polling like `use-cli-login.ts` but never sharing its wire) in the panel and as a strip under the card; the daemon retries after the sign-in and announces `shares_changed`, which re-reads the list (`daemon-client.ts` `onSharesChanged`). Settings → Sharing checks a place only on Check, never on open. Settings → Sharing (`settings/sharing.tsx`) edits the places, the agents switch and the auto-revoke window, and lists every shared page with the moment it was first shared, Copy link, Revoke and Revoke all.
+
+**Shells** (`chats/shell-activity.ts`):
+
+- Detached state comes from the daemon's `shell_open`/`shell_info` rows, never from a text match. `readLaunchHandle` stays strict and anchored at the start of the reply.
+- A failed kill is not a kill.
+- Foreground commands are gated on `isSettledRunStatus`. Detached commands are not.
+- The whole gate lives in `Chats.tsx`'s `shellsByAgent`, and every count flattens that map.
+- `shell_info` and `workflow_info` rows are skipped outright in `groupTranscript`.

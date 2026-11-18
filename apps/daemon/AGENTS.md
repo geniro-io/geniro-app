@@ -17,7 +17,7 @@ Each area's invariants are a rule in `.claude/rules/` (table below), loaded when
 | Runs and runtime columns | `daemon-run-state.md` |
 | Agents: adapters | `daemon-agents-adapters.md` |
 | Agents: turns and off-turn work | `daemon-agent-turns.md` |
-| Host tools | `daemon-host-tools.md` |
+| Host tools | `daemon-host-tools-render.md`, `daemon-host-tools-browser.md`, `daemon-host-tools-team-proposal.md`, `daemon-host-tools-actions.md`, `daemon-host-tools-threads.md`, `daemon-host-tools-outcomes.md`, `daemon-host-tools-stages.md`, `daemon-host-tools-monitors.md` |
 | Thread analysis | `daemon-thread-analysis.md` |
 | Lessons | `daemon-lessons.md` |
 | Question cards | `daemon-question-cards.md` |
@@ -39,16 +39,16 @@ Each area's invariants are a rule in `.claude/rules/` (table below), loaded when
 <!-- prettier-ignore -->
 | File | Rules |
 | --- | --- |
-| `v1/agents/services/chat.service.ts` | `daemon-run-state.md`, `daemon-host-tools.md`, `daemon-thread-analysis.md`, `daemon-lessons.md`, `daemon-question-cards.md`, `daemon-projects-tasks.md`, `daemon-agent-instructions.md` |
+| `v1/agents/services/chat.service.ts` | `daemon-run-state.md`, `daemon-host-tools-render.md`, `daemon-host-tools-team-proposal.md`, `daemon-host-tools-threads.md`, `daemon-host-tools-monitors.md`, `daemon-thread-analysis.md`, `daemon-lessons.md`, `daemon-question-cards.md`, `daemon-projects-tasks.md`, `daemon-agent-instructions.md` |
 | `v1/agents/dao/run.dao.ts` | `daemon-thread-analysis.md`, `daemon-lessons.md`, `daemon-pull-requests.md`, `daemon-teams-passes.md`, `daemon-projects-tasks.md`, `daemon-memory.md` |
 | `v1/agents/dao/item.dao.ts` | `daemon-run-processes.md`, `daemon-thread-analysis.md`, `daemon-pull-requests.md` |
 | `v1/agents/adapters/agent-adapter.ts` | `daemon-thread-analysis.md`, `daemon-pull-requests.md`, `daemon-projects-tasks.md`, `daemon-memory.md`, `daemon-auto-compaction.md` |
-| `v1/teams/services/team-executor.service.ts` | `daemon-host-tools.md`, `daemon-lessons.md`, `daemon-question-cards.md` |
-| `v1/teams/services/call-broker.service.ts` | `daemon-host-tools.md`, `daemon-question-cards.md` |
-| `v1/teams/services/run-team.service.ts` | `daemon-host-tools.md` |
+| `v1/teams/services/team-executor.service.ts` | `daemon-host-tools-team-proposal.md`, `daemon-host-tools-actions.md`, `daemon-host-tools-outcomes.md`, `daemon-host-tools-stages.md`, `daemon-host-tools-monitors.md`, `daemon-lessons.md`, `daemon-question-cards.md` |
+| `v1/teams/services/call-broker.service.ts` | `daemon-host-tools-render.md`, `daemon-host-tools-actions.md`, `daemon-question-cards.md` |
+| `v1/teams/services/run-team.service.ts` | `daemon-host-tools-stages.md` |
 | `v1/teams/services/team-chat.service.ts` | `daemon-thread-analysis.md`, `daemon-memory.md`, `daemon-knowledge.md` |
 | `v1/projects/services/project-scope.service.ts` | `daemon-thread-analysis.md`, `daemon-memory.md`, `daemon-knowledge.md`, `daemon-agent-instructions.md` |
-| `v1/projects/services/projects.service.ts` | `daemon-host-tools.md`, `daemon-thread-analysis.md`, `daemon-lessons.md`, `daemon-knowledge.md` |
+| `v1/projects/services/projects.service.ts` | `daemon-host-tools-team-proposal.md`, `daemon-thread-analysis.md`, `daemon-lessons.md`, `daemon-knowledge.md` |
 
 ### Boot, process and storage
 

@@ -88,15 +88,62 @@ describe('attentionOf', () => {
 });
 
 describe('orderByAttention', () => {
-  it('orders by attention band, newest activity first within a band', () => {
-    const entry = (id: string, attention: string, hoursAgo: number) => ({
-      id,
-      view: {
-        attention: attention as ReturnType<typeof attentionOf>,
-        lastAt: new Date(NOW - hoursAgo * HOUR).toISOString(),
-      },
-    });
+  const entry = (
+    id: string,
+    attention: string,
+    hoursAgo: number,
+    startedHoursAgo = 100,
+  ) => ({
+    id,
+    createdAt: new Date(NOW - startedHoursAgo * HOUR).toISOString(),
+    view: {
+      attention: attention as ReturnType<typeof attentionOf>,
+      lastAt: new Date(NOW - hoursAgo * HOUR).toISOString(),
+    },
+  });
 
+  it('stands working threads newest started first, whichever spoke last', () => {
+    expect(
+      orderByAttention([
+        entry('old-start-just-spoke', 'working', 0, 9),
+        entry('new-start-quiet-a-while', 'working', 2, 1),
+        entry('middle-start', 'working', 1, 5),
+      ]).map((item) => item.id),
+    ).toEqual([
+      'new-start-quiet-a-while',
+      'middle-start',
+      'old-start-just-spoke',
+    ]);
+  });
+
+  it('keeps working threads started at the same moment in one fixed order, whichever spoke last', () => {
+    const order = (zSpokeHoursAgo: number) =>
+      orderByAttention([
+        entry('z-thread', 'working', zSpokeHoursAgo, 4),
+        entry('a-thread', 'working', 1, 4),
+      ]).map((item) => item.id);
+
+    expect(order(0)).toEqual(['a-thread', 'z-thread']);
+    expect(order(2)).toEqual(['a-thread', 'z-thread']);
+  });
+
+  it('keeps newest activity first in the bands that do not stream, whenever each thread started', () => {
+    expect(
+      orderByAttention([
+        entry('quiet-old-activity-new-start', 'quiet', 5, 6),
+        entry('quiet-new-activity-old-start', 'quiet', 1, 90),
+        entry('blocked-old', 'blocked', 9, 10),
+        entry('blocked-new', 'blocked', 2, 80),
+      ]).map((item) => item.id),
+    ).toEqual([
+      'blocked-new',
+      'blocked-old',
+      'quiet-new-activity-old-start',
+      'quiet-old-activity-new-start',
+    ]);
+  });
+
+  it('orders by attention band, newest activity first within a band', () => {
     expect(
       orderByAttention([
         entry('old-quiet', 'quiet', 5),
@@ -108,8 +155,8 @@ describe('orderByAttention', () => {
       ]).map((item) => item.id),
     ).toEqual([
       'blocked',
-      'working',
       'question',
+      'working',
       'new-quiet',
       'old-quiet',
       'inactive',

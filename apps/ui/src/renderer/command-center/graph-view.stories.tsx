@@ -52,7 +52,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A few threads, one band each: blocked on top, then working, a question, quiet. */
+/** A few threads, one band each: blocked on top, then a question, working, quiet. */
 export const Few: Story = {};
 
 /** Twelve threads in their attention bands, the still ones greyed at the bottom. */

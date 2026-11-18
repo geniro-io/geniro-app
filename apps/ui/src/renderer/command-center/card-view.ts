@@ -27,11 +27,11 @@ export const IDLE_AFTER_DAYS = 3;
 /** A quiet thread untouched this long is greyed out and sinks to the bottom. */
 export const INACTIVE_AFTER_MS = DAY_MS;
 
-/** Top to bottom: what needs the user, what works, what waits on a question, what is quiet, what has gone still. */
+/** Top to bottom: what is blocked, what waits on a question, what works, what is quiet, what has gone still. */
 export const ATTENTION_ORDER: readonly ThreadAttention[] = [
   'blocked',
-  'working',
   'question',
+  'working',
   'quiet',
   'inactive',
 ];
@@ -193,14 +193,24 @@ export function threadCardViewOf(
   };
 }
 
-/** The cards in the order they stand: by {@link ATTENTION_ORDER}, newest activity first within each. */
+/**
+ * The cards in the order they stand: by {@link ATTENTION_ORDER}, newest
+ * activity first within each band, except working threads, which stand newest
+ * started first — their activity moves with every item they stream.
+ */
 export function orderByAttention<
-  T extends { view: Pick<ThreadCardView, 'attention' | 'lastAt'> },
+  T extends {
+    id: string;
+    createdAt: string;
+    view: Pick<ThreadCardView, 'attention' | 'lastAt'>;
+  },
 >(threads: readonly T[]): T[] {
   return [...threads].sort(
     (a, b) =>
       ATTENTION_ORDER.indexOf(a.view.attention) -
         ATTENTION_ORDER.indexOf(b.view.attention) ||
-      b.view.lastAt.localeCompare(a.view.lastAt),
+      (a.view.attention === 'working'
+        ? b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)
+        : b.view.lastAt.localeCompare(a.view.lastAt)),
   );
 }

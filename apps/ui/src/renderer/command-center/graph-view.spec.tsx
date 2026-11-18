@@ -45,6 +45,38 @@ const settle = async (): Promise<void> => {
   }
 };
 
+describe('shownThreads', () => {
+  it('keeps working cards in place while their threads stream, a newer activity moving none of them', () => {
+    const [template] = graphThreadsOf(1);
+    const working: GraphThread[] = ['a', 'b', 'c'].map((id, index) => ({
+      ...template!,
+      id,
+      createdAt: new Date(FIXTURE_NOW - (30 - index) * MINUTE).toISOString(),
+      view: {
+        ...template!.view,
+        attention: 'working',
+        lastAt: new Date(FIXTURE_NOW - (3 - index) * MINUTE).toISOString(),
+      },
+    }));
+    const before = shownThreads(working).map((thread) => thread.id);
+    expect(before).toEqual(['c', 'b', 'a']);
+
+    const streamed = working.map((thread) =>
+      thread.id === 'a'
+        ? {
+            ...thread,
+            view: {
+              ...thread.view,
+              lastAt: new Date(FIXTURE_NOW).toISOString(),
+            },
+          }
+        : thread,
+    );
+
+    expect(shownThreads(streamed).map((thread) => thread.id)).toEqual(before);
+  });
+});
+
 describe('wholeFit', () => {
   it('fits the whole graph, the taller side deciding, centred, never past 1', () => {
     expect(
@@ -171,7 +203,7 @@ describe('GraphView', () => {
     }
   });
 
-  it('stands the threads in bands by attention: blocked on top, then working, questions, quiet, inactive last', async () => {
+  it('stands the threads in bands by attention: blocked on top, then questions, working, quiet, inactive last', async () => {
     const threads = graphThreadsOf(10);
     await draw({ threads });
 
@@ -179,8 +211,8 @@ describe('GraphView', () => {
     expect(graph.dataset.layout).toBe('bands');
     const order = [
       'blocked',
-      'working',
       'question',
+      'working',
       'quiet',
       'inactive',
     ] as const;
@@ -209,8 +241,8 @@ describe('GraphView', () => {
     const items = all('graph-legend-item').map((item) => item.textContent);
     expect(items).toEqual([
       'Blocked2',
-      'Working2',
       'Question2',
+      'Working2',
       'Quiet2',
       'Inactive a day+2',
     ]);
@@ -271,7 +303,7 @@ describe('GraphView', () => {
   it('draws the 24 that need the user most, the still ones left to "+N more"', () => {
     const shown = shownThreads(graphThreadsOf(30));
     const rank = (thread: GraphThread): number =>
-      ['blocked', 'working', 'question', 'quiet', 'inactive'].indexOf(
+      ['blocked', 'question', 'working', 'quiet', 'inactive'].indexOf(
         thread.view.attention,
       );
 

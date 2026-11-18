@@ -10,25 +10,59 @@ import type { ToolArgs } from '../../mcp.types';
 import { memoryEntryText } from '../memory-mcp-tool';
 import { readToolArgs } from '../tool-args';
 
+const MemoryHandleSchema = z
+  .string()
+  .trim()
+  .regex(MEMORY_HANDLE_PATTERN, 'a handle like m12');
+
 export const MemoryReadArgsSchema = z
   .object({
     ids: z
-      .array(
-        z.string().trim().regex(MEMORY_HANDLE_PATTERN, 'a handle like m12'),
-      )
+      .array(MemoryHandleSchema)
       .min(1)
       .max(MEMORY_READ_MAX)
+      .optional()
       .describe(
         `Handles of the entries to read (\`m12\`), at most ${MEMORY_READ_MAX}.`,
       ),
+    id: MemoryHandleSchema.optional().describe(
+      'One handle instead of `ids` (`m12`); send one of the two.',
+    ),
   })
   .strict();
-export type MemoryReadArgs = z.infer<typeof MemoryReadArgsSchema>;
 
+export interface MemoryReadArgs {
+  ids: string[];
+}
+
+/**
+ * TWIN PARSER: `askedHandles` in `apps/daemon/src/v1/memory/utils/memory-usage-history.ts`
+ * and `readEntry` in `apps/ui/src/renderer/chats/memory-tool-row.tsx` read the
+ * handles a stored call asked for; a field accepted here is read there too.
+ */
 export function readMemoryReadArgs(
   args: Record<string, unknown>,
 ): ToolArgs<MemoryReadArgs> {
-  return readToolArgs(MemoryReadArgsSchema, args);
+  const read = readToolArgs(MemoryReadArgsSchema, args);
+  if (!read.ok) {
+    return read;
+  }
+  const { ids, id } = read.query;
+  if (ids !== undefined && id !== undefined) {
+    return {
+      ok: false,
+      error: 'send ids (a list of handles) or id (one handle), not both',
+    };
+  }
+  if (ids !== undefined) {
+    return { ok: true, query: { ids } };
+  }
+  return id === undefined
+    ? {
+        ok: false,
+        error: 'ids is required — the handles to read, like ["m12"]',
+      }
+    : { ok: true, query: { ids: [id] } };
 }
 
 /**

@@ -47,6 +47,42 @@ describe('readMemoryReadArgs', () => {
     ).toBe(false);
     expect(readMemoryReadArgs({ ids: ['note'] }).ok).toBe(false);
   });
+
+  it('reads a single id as a one-handle ids', () => {
+    expect(readMemoryReadArgs({ id: ' m12 ' })).toEqual({
+      ok: true,
+      query: { ids: ['m12'] },
+    });
+    expect(readMemoryReadArgs({ id: 'm12' })).toEqual(
+      readMemoryReadArgs({ ids: ['m12'] }),
+    );
+    expect(readMemoryReadArgs({ id: 'm12', ids: null })).toEqual({
+      ok: true,
+      query: { ids: ['m12'] },
+    });
+  });
+
+  it('refuses id and ids sent together, saying to send one of them', () => {
+    expect(readMemoryReadArgs({ id: 'm12', ids: ['m12'] })).toEqual({
+      ok: false,
+      error: 'send ids (a list of handles) or id (one handle), not both',
+    });
+  });
+
+  it('refuses an id that is not a handle for what it is, not as an unknown field', () => {
+    const read = readMemoryReadArgs({ id: 'note' });
+
+    expect(read.ok).toBe(false);
+    expect(!read.ok && read.error).toContain('a handle like m12');
+    expect(!read.ok && read.error).not.toContain('Unrecognized key');
+  });
+
+  it('asks for ids when neither field is sent', () => {
+    expect(readMemoryReadArgs({})).toEqual({
+      ok: false,
+      error: 'ids is required — the handles to read, like ["m12"]',
+    });
+  });
 });
 
 describe('memoryReadResultText', () => {

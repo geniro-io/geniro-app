@@ -229,10 +229,17 @@ function searchHandles(resultPayload: string): string[] {
     .filter((handle): handle is string => handle !== null);
 }
 
-/** The `ids` a `memory_read` call asked for, bare or in cursor's `{toolName, args}` wrap. */
+/**
+ * The handles a `memory_read` call asked for (`ids`, or the one `id`), bare or
+ * in cursor's `{toolName, args}` wrap.
+ *
+ * TWIN PARSER: `readMemoryReadArgs` in
+ * `apps/daemon/src/v1/mcp/tools/memory-read/memory-read.reader.ts`.
+ */
 function askedHandles(callPayload: string): string[] {
   const input = asRecord(parseJsonColumn(callPayload))?.input;
-  const ids = asRecord(hostToolArguments(input, HOST_MEMORY_READ_TOOL))?.ids;
+  const args = asRecord(hostToolArguments(input, HOST_MEMORY_READ_TOOL));
+  const ids = args?.ids ?? (args?.id === undefined ? undefined : [args.id]);
   if (!Array.isArray(ids)) {
     return [];
   }

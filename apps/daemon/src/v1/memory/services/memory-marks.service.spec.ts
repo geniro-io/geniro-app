@@ -664,6 +664,32 @@ describe('MemoryMarks through MemoryService', () => {
     expect(await db.em.fork().count(MemoryMark, {})).toBe(0);
   });
 
+  it('lets a cursor run mark an entry it read with a single id, though its result carries no text', async () => {
+    const entry = await userEntry('Use pnpm');
+    const runId = 'cursor-run';
+    const server = `geniro-${runId.slice(0, 8)}`;
+    await thread(runId, { index: [] });
+    await row(runId, 'tool_call', {
+      id: 'call-1',
+      name: `${server}: memory_read`,
+      input: {
+        providerIdentifier: server,
+        toolName: 'memory_read',
+        args: { id: entry.handle },
+      },
+    });
+    await row(runId, 'tool_result', {
+      id: 'call-1',
+      name: `${server}: memory_read`,
+      result: { success: true },
+      isError: false,
+    });
+
+    expect(await mark(runId, entry, 'helped')).toMatchObject({
+      kind: 'marked',
+    });
+  });
+
   it('refuses a mark on a handle no visible entry holds', async () => {
     await thread('t1', { title: 'Any run' });
 

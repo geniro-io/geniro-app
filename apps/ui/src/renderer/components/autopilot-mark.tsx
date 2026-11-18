@@ -48,15 +48,8 @@ export function autopilotResumesAt(project: ProjectDto): string | null {
  */
 export function AutopilotMark({
   project,
-  showArmed = true,
 }: {
   project: ProjectDto;
-  /**
-   * Draw the plain "armed" lightning. Off on the LIST rows, where the same
-   * glyph repeated down every row was noise; a tripped breaker is a warning
-   * and is drawn either way.
-   */
-  showArmed?: boolean;
 }): React.JSX.Element | null {
   if (!project.autopilotEnabled) {
     return null;
@@ -64,9 +57,6 @@ export function AutopilotMark({
   const stopped = project.autopilotFailureStreak >= FAILURE_BREAKER_THRESHOLD;
   const resumesAt = autopilotResumesAt(project);
   const paused = stopped || resumesAt !== null;
-  if (!paused && !showArmed) {
-    return null;
-  }
   const label = stopped
     ? `${project.name}: autopilot stopped after ${project.autopilotFailureStreak} failed runs`
     : resumesAt !== null

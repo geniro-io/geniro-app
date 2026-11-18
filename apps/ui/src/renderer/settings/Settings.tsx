@@ -13,6 +13,7 @@ import {
   type LucideIcon,
   MessageSquareText,
   Palette,
+  RadioTower,
   ScrollText,
   Share2,
   SlidersHorizontal,
@@ -404,6 +405,8 @@ export function Settings({
     Partial<Record<CliKind, Record<string, boolean>>>
   >({});
   const [customInstructions, setCustomInstructions] = useState('');
+  const [commandCenterInstructions, setCommandCenterInstructions] =
+    useState('');
   const [replyLanguage, setReplyLanguage] = useState('');
   const [archiveRetentionDays, setArchiveRetentionDays] = useState<
     number | null
@@ -463,6 +466,7 @@ export function Settings({
     notificationsEnabled: 0,
     daemonInspect: 0,
     customInstructions: 0,
+    commandCenterInstructions: 0,
     replyLanguage: 0,
     other: 0,
   });
@@ -509,6 +513,9 @@ export function Settings({
     (entry): entry is typeof entry & { note: string } => entry.note !== null,
   );
   const hasControlChars = hasControlCharacters(customInstructions);
+  const hasCommandCenterControlChars = hasControlCharacters(
+    commandCenterInstructions,
+  );
 
   // Latest binary paths for the debounced persist timer (it fires after the
   // state that triggered it has committed).
@@ -595,6 +602,9 @@ export function Settings({
         // a missing optional field. Same default `Chats.tsx` applies.
         setCustomInstructions(s.customInstructions ?? '');
       }
+      if (!commandCenter.dirtyRef.current) {
+        setCommandCenterInstructions(s.commandCenterInstructions ?? '');
+      }
       if (!themeDirtyRef.current) {
         setTheme(s.theme);
       }
@@ -650,9 +660,11 @@ export function Settings({
                 ? 'daemonInspect'
                 : patch.customInstructions !== undefined
                   ? 'customInstructions'
-                  : patch.replyLanguage !== undefined
-                    ? 'replyLanguage'
-                    : 'other';
+                  : patch.commandCenterInstructions !== undefined
+                    ? 'commandCenterInstructions'
+                    : patch.replyLanguage !== undefined
+                      ? 'replyLanguage'
+                      : 'other';
       const generation = ++persistGenerationRef.current[domain];
       setError(null);
       try {
@@ -784,6 +796,18 @@ export function Settings({
       instructions.schedule(next);
     },
     [instructions],
+  );
+
+  const commandCenter = useDebouncedPersist(
+    (value: string) => persist({ commandCenterInstructions: value }),
+    savableInstructions,
+  );
+  const onCommandCenterInstructionsChange = useLatestCallback(
+    (next: string): void => {
+      setCommandCenterInstructions(next);
+      commandCenter.schedule(next);
+    },
+    [commandCenter],
   );
 
   /** Debounced like the instructions, and held on screen on the same terms. */
@@ -2076,6 +2100,32 @@ export function Settings({
                         </details>
                       </SettingsPanelRow>
                     ) : null}
+                  </SettingsPanel>
+                </SettingsGroup>
+
+                <SettingsGroup
+                  icon={<RadioTower />}
+                  title="Command center"
+                  description="Standing instructions for the command center manager. They apply from its next turn."
+                  hint="Text you write here is added to the command center manager's brief. Empty adds nothing.">
+                  <SettingsPanel>
+                    <SettingsPanelRow layout="block">
+                      <ExpandableTextarea
+                        id="settings-command-center-instructions"
+                        title="Command center instructions"
+                        value={commandCenterInstructions}
+                        onChange={onCommandCenterInstructionsChange}
+                        rows={6}
+                        placeholder="e.g. Lead with the threads that need you. Keep each summary to three lines."
+                      />
+                      {hasCommandCenterControlChars ? (
+                        <ErrorText>
+                          Contains invisible control characters — not saved.
+                          Pasting from a word processor can add them; retype it
+                          or paste as plain text.
+                        </ErrorText>
+                      ) : null}
+                    </SettingsPanelRow>
                   </SettingsPanel>
                 </SettingsGroup>
 

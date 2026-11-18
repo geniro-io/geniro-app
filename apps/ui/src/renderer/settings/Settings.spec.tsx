@@ -835,11 +835,12 @@ describe('Settings — custom instructions', () => {
       .mockResolvedValue({ cleared: 0 });
   });
 
-  /** Type into the instructions box the way a user does. */
-  async function typeInstructions(text: string): Promise<void> {
-    const box = container.querySelector<HTMLTextAreaElement>(
-      '#settings-custom-instructions',
-    )!;
+  /** Type into an instructions box the way a user does. */
+  async function typeInstructions(
+    text: string,
+    selector = '#settings-custom-instructions',
+  ): Promise<void> {
+    const box = container.querySelector<HTMLTextAreaElement>(selector)!;
     const setValue = Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       'value',
@@ -896,6 +897,68 @@ describe('Settings — custom instructions', () => {
     expect(geniro.updateSettings).toHaveBeenCalledWith({
       customInstructions: 'Prefer small diffs.',
     });
+  });
+
+  it('seeds the command center box from persisted settings', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      commandCenterInstructions: 'Lead with the blocked threads.',
+    });
+    await mount();
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        '#settings-command-center-instructions',
+      )?.value,
+    ).toBe('Lead with the blocked threads.');
+  });
+
+  it('survives a settings payload with no commandCenterInstructions key at all', async () => {
+    const { commandCenterInstructions: _omitted, ...withoutKey } = settings;
+    geniro.getSettings.mockResolvedValue(withoutKey);
+    await mount();
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        '#settings-command-center-instructions',
+      )?.value,
+    ).toBe('');
+    expect(
+      container.querySelector('[aria-label="Command center"]'),
+    ).not.toBeNull();
+  });
+
+  it('flushes a pending command center edit when Settings unmounts', async () => {
+    await mount();
+    await typeInstructions(
+      'Lead with the blocked threads.',
+      '#settings-command-center-instructions',
+    );
+
+    expect(geniro.updateSettings).not.toHaveBeenCalled();
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      commandCenterInstructions: 'Lead with the blocked threads.',
+    });
+  });
+
+  it('holds an unsavable command center value on screen, says why, and never writes it', async () => {
+    await mount();
+    await typeInstructions(
+      'Lead\u000B with blocked threads.',
+      '#settings-command-center-instructions',
+    );
+
+    expect(container.textContent).toContain('invisible control characters');
+    await act(async () => root?.unmount());
+    root = null;
+    expect(geniro.updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandCenterInstructions: expect.anything(),
+      }),
+    );
   });
 
   it('seeds the reply language and saves an edit trimmed', async () => {
@@ -2244,6 +2307,7 @@ describe('Settings explains itself', () => {
       'Archive',
       'Transcript',
       'Custom instructions',
+      'Command center',
       'Updates',
       'Diagnostics',
     ]);

@@ -70,6 +70,19 @@ describe('RunNoticeWriter', () => {
     expect(announced).toEqual(['system']);
   });
 
+  it('writes a warning notice with its caption', async () => {
+    await writer.warn('run-1', 'Could not deliver', 'Monitor');
+
+    const rows = await itemDao.rowsOfKinds('run-1', ['system']);
+    expect(rows.map((row) => itemToWire(row).payload)).toEqual([
+      expect.objectContaining({
+        message: 'Could not deliver',
+        severity: 'warning',
+        caption: 'Monitor',
+      }),
+    ]);
+  });
+
   it('writes nothing for a run that is gone', async () => {
     await writer.info('gone', 'Started "Billing cache"');
 

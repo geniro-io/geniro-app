@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApprovalCard } from './approval-card';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
-import { readThreadQuestionRelay } from './thread-question-card';
+import {
+  readThreadQuestionRelay,
+  threadQuestionRelayOfRow,
+} from './thread-question-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -13,6 +16,7 @@ import { readThreadQuestionRelay } from './thread-question-card';
 
 const RELAYED_PERMISSION = {
   threadRunId: 'thread-1',
+  threadIsTeam: false,
   threadRequestId: 'req-1',
   handle: 't3',
   threadTitle: 'Billing cache',
@@ -79,6 +83,8 @@ function renderCard(
 describe('a thread question relayed into the manager chat', () => {
   it('reads the relayed request off the row, and refuses one with no handle', () => {
     expect(readThreadQuestionRelay(RELAYED_QUESTION)).toEqual({
+      threadRunId: 'thread-1',
+      threadIsTeam: false,
       handle: 't3',
       threadTitle: 'Billing cache',
       toolName: 'AskUserQuestion',
@@ -87,6 +93,23 @@ describe('a thread question relayed into the manager chat', () => {
     });
     expect(
       readThreadQuestionRelay({ ...RELAYED_QUESTION, handle: '' }),
+    ).toBeNull();
+  });
+
+  it('names the thread a row relays — where a picture sent with the answer goes — and no thread for any other row', () => {
+    expect(
+      threadQuestionRelayOfRow({
+        id: 'relay-1',
+        toolName: THREAD_QUESTION_CARD,
+        input: { ...RELAYED_QUESTION, threadIsTeam: true },
+      }),
+    ).toMatchObject({ threadRunId: 'thread-1', threadIsTeam: true });
+    expect(
+      threadQuestionRelayOfRow({
+        id: 'req-1',
+        toolName: 'AskUserQuestion',
+        input: RELAYED_QUESTION,
+      }),
     ).toBeNull();
   });
 
@@ -125,6 +148,15 @@ describe('a thread question relayed into the manager chat', () => {
     expect(container.textContent).toContain(
       'Not delivered — the thread no longer waited on this.',
     );
+  });
+
+  it('draws an answerable permission card when the relay cannot be read', () => {
+    const onRespond = renderCard({});
+    expect(
+      container.querySelector('[data-slot="thread-question-card"]'),
+    ).toBeNull();
+    act(() => button('Deny')!.click());
+    expect(onRespond).toHaveBeenCalledWith(false);
   });
 
   it('says nothing more when the answer was delivered', () => {

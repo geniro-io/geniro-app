@@ -5,6 +5,8 @@ import { ApprovalCard } from './approval-card';
 import { ThreadQuestionCard } from './thread-question-card';
 
 const RELAY = {
+  threadRunId: 'thread-1',
+  threadIsTeam: false,
   handle: 't3',
   threadTitle: 'CI-1235: PDF previews don’t open in Safari 17',
   toolName: 'AskUserQuestion',

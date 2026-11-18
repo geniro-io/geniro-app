@@ -8704,6 +8704,8 @@ export const HOST_THREAD_QUESTION_CARD = 'thread_question';
 /** What a relayed thread-question card's row carries as `input`. */
 export interface ThreadQuestionCardInput {
   threadRunId: string;
+  /** Whether the thread is a team run, which takes a picture sent with the answer through its own route. */
+  threadIsTeam: boolean;
   threadRequestId: string;
   handle: string;
   threadTitle: string;

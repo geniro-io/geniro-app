@@ -1,10 +1,13 @@
 import { MessageCircleQuestion } from 'lucide-react';
 
 import { Card } from '../components/ui/card';
+import { THREAD_QUESTION_CARD } from './geniro-tool';
 import { recordOf } from './tool-result-text';
 
 /** A managed thread's open request, as the manager chat's relayed card carries it. */
 export interface ThreadQuestionRelay {
+  threadRunId: string;
+  threadIsTeam: boolean;
   handle: string;
   threadTitle: string;
   toolName: string;
@@ -19,7 +22,7 @@ function readString(value: unknown): string | null {
 
 /**
  * The relayed request on a `thread_question` row's `input`, or null when its
- * handle, title or tool is missing — the caller then draws the permission
+ * thread, handle, title or tool is missing — the caller then draws the permission
  * body, which is still answerable.
  *
  * TWIN PARSER: `ThreadQuestionCardInput` in `apps/daemon/src/v1/agents/chat.types.ts`,
@@ -30,11 +33,13 @@ export function readThreadQuestionRelay(
   input: unknown,
 ): ThreadQuestionRelay | null {
   const record = recordOf(input);
+  const threadRunId = readString(record?.threadRunId);
   const handle = readString(record?.handle);
   const threadTitle = readString(record?.threadTitle);
   const toolName = readString(record?.toolName);
   if (
     record === null ||
+    threadRunId === null ||
     handle === null ||
     threadTitle === null ||
     toolName === null
@@ -42,6 +47,8 @@ export function readThreadQuestionRelay(
     return null;
   }
   return {
+    threadRunId,
+    threadIsTeam: record.threadIsTeam === true,
     handle,
     threadTitle,
     toolName,
@@ -49,6 +56,16 @@ export function readThreadQuestionRelay(
     ...(record.questions === undefined ? {} : { questions: record.questions }),
     ...(record.options === undefined ? {} : { options: record.options }),
   };
+}
+
+/** The relayed request of an `approval_request` row, or null when the row is not a readable relay. */
+export function threadQuestionRelayOfRow(
+  payload: unknown,
+): ThreadQuestionRelay | null {
+  const record = recordOf(payload);
+  return record?.toolName === THREAD_QUESTION_CARD
+    ? readThreadQuestionRelay(record.input)
+    : null;
 }
 
 /** What became of an answer pressed on the card, as its verdict row's `outcome` says. */

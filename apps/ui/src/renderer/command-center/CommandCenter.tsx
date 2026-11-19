@@ -738,7 +738,7 @@ export function CommandCenter({
       {offBoard === null ? null : (
         <ActionNotice
           key={offBoard}
-          className="absolute bottom-4 left-1/2 z-40 w-[min(26rem,calc(100%-2rem))] -translate-x-1/2"
+          className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
           icon={<Archive className="size-4" />}
           title="This thread is no longer on the board"
           detail="It was archived or removed; Chats still has it."

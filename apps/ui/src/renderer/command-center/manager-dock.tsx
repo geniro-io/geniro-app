@@ -26,6 +26,7 @@ export function ManagerDock({
   workingThreads,
   threadIdentities,
   onOpenThread,
+  onOpenThreadHere,
   onTurnSettled,
   onDiscarded,
 }: {
@@ -41,6 +42,8 @@ export function ManagerDock({
   /** The board's threads as the manager's transcript names them. */
   threadIdentities: ReadonlyMap<string, ThreadIdentity>;
   onOpenThread: (runId: string) => void;
+  /** Open a thread in a window over the graph; absent while the graph is hidden. */
+  onOpenThreadHere?: (runId: string) => void;
   onTurnSettled: () => void;
   /** The manager is gone; the page offers to start a new one on the same settings. */
   onDiscarded: () => void;
@@ -92,6 +95,7 @@ export function ManagerDock({
         workingThreads,
         threadIdentities,
         onOpenThread,
+        onOpenThreadHere,
       }}
     />
   );

@@ -11045,6 +11045,7 @@ export function Chats({
                             <WorkingThreadsCard
                               threads={hostedWorkingThreads}
                               onOpenThread={hosted?.onOpenThread}
+                              onOpenHere={hosted?.onOpenThreadHere}
                               beside={startedAgents.length > 0}
                             />
                           )}

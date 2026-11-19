@@ -1,57 +1,59 @@
-import { Folder } from 'lucide-react';
+import { PictureInPicture2 } from 'lucide-react';
+import { useRef, useState } from 'react';
 
-import type { ProfileColor } from '../../shared/contracts';
 import { HoverPopover } from '../components/hover-popover';
-import {
-  type AvatarPerson,
-  AvatarStack,
-  MemberAvatar,
-} from '../components/member-avatar';
-import { StatusDot } from '../components/status-dot';
-import { ThreadLabelChip } from '../components/thread-labels';
-import { PaletteDot } from '../components/ui/palette-dot';
+import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
+import { Button } from '../components/ui/button';
 import { popoverSurface } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { plainMarkdownText } from './brief-text';
-import { CallGlyph } from './shelf-glyphs';
+import { formatDateTime, formatRelativeTime } from './relative-time';
+import { CallGlyph, SubagentGlyph, TerminalGlyph } from './shelf-glyphs';
 import {
   AgentsTile,
   type AgentsTileFace,
   CONTROL_HOVER,
 } from './working-card-parts';
 
+/** Work a settled thread still has out: a held turn, background sub-agents, detached commands. */
+export interface WorkingThreadBackground {
+  held: boolean;
+  subagents: number;
+  commands: number;
+}
+
 export interface WorkingThread {
   runId: string;
-  title: string;
-  agentLabel: string | null;
-  agentKind: string | null;
-  crew: { people: readonly AvatarPerson[]; total: number } | null;
-  project: string | null;
-  projectColor: ProfileColor | null;
-  lastMessage: string | null;
+  /** The thread as its node on the graph shows it. */
+  identity: ThreadIdentity;
   status: 'working' | 'waiting';
+  lastMessage: string | null;
+  /** When the thread last moved. */
+  lastAt: string;
+  background: WorkingThreadBackground;
 }
 
 type ThreadStatus = WorkingThread['status'];
 
-const STATE_LOOK: Record<
-  ThreadStatus,
-  { word: string; pill: string; rail: string }
-> = {
-  working: {
-    word: 'working',
-    pill: 'bg-success/15 text-success',
-    rail: 'border-success/50',
-  },
-  waiting: {
-    word: 'waiting on you',
-    pill: 'bg-warning/15 text-warning',
-    rail: 'border-warning/50',
-  },
-};
+const GROUPS: readonly { status: ThreadStatus; title: string; rail: string }[] =
+  [
+    { status: 'waiting', title: 'Waiting on you', rail: 'border-warning/50' },
+    { status: 'working', title: 'Working', rail: 'border-success/50' },
+  ];
 
 const RIGHT_OF_AGENTS_CARD = 'right-14';
 const IN_THE_CORNER = 'right-4';
+
+/**
+ * Marks the element the panel may rise to: the top of the page's body, under
+ * its header. The panel's list never grows past it.
+ */
+export const WORKING_THREADS_CEILING = 'data-working-threads-ceiling';
+
+const LIST_MAX_PX = 480;
+const PANEL_HEAD_PX = 44;
+const CEILING_GAP_PX = 8;
 
 /** A press that lands on a control of its own inside an openable row. */
 function pressedOwnControl(event: React.MouseEvent): boolean {
@@ -60,19 +62,11 @@ function pressedOwnControl(event: React.MouseEvent): boolean {
   return control !== null && control !== event.currentTarget;
 }
 
-function threadFace(thread: WorkingThread): AgentsTileFace {
-  const agent = thread.agentLabel ?? thread.agentKind;
-  if (agent === null) {
-    return {
-      name: thread.title,
-      colorKey: thread.runId,
-      avatar: {
-        kind: 'initials',
-        value: thread.title.trim().charAt(0).toUpperCase(),
-      },
-    };
-  }
-  return { name: agent, colorKey: thread.agentKind ?? thread.runId };
+function tileFace(thread: WorkingThread): AgentsTileFace {
+  return {
+    name: thread.identity.agentLabel ?? thread.identity.title,
+    colorKey: thread.identity.agentLabel ?? thread.runId,
+  };
 }
 
 function threadsSummary(threads: readonly WorkingThread[]): string {
@@ -88,136 +82,45 @@ function threadsSummary(threads: readonly WorkingThread[]): string {
   return words.join(' · ');
 }
 
-function ThreadStatusDot({
-  status,
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** What the thread still has running after its turn, one glyph and count each. */
+function ThreadBackground({
+  background,
 }: {
-  status: ThreadStatus;
-}): React.JSX.Element {
-  if (status === 'waiting') {
-    return (
-      <span
-        data-slot="working-thread-dot"
-        data-status={status}
-        className="flex shrink-0">
-        <StatusDot tone="warn" className="size-1.5" />
-      </span>
-    );
+  background: WorkingThreadBackground;
+}): React.JSX.Element | null {
+  if (
+    !background.held &&
+    background.subagents === 0 &&
+    background.commands === 0
+  ) {
+    return null;
   }
-  return (
-    <span
-      aria-hidden="true"
-      data-slot="working-thread-dot"
-      data-status={status}
-      className="relative flex size-1.5 shrink-0">
-      <span className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none" />
-      <span className="relative size-1.5 rounded-full bg-success" />
-    </span>
-  );
-}
-
-function ThreadFace({ thread }: { thread: WorkingThread }): React.JSX.Element {
-  if (thread.crew !== null && thread.crew.people.length > 0) {
-    return (
-      <span
-        data-slot="working-thread-crew"
-        aria-label={`${thread.crew.total} members`}
-        className="shrink-0">
-        <AvatarStack
-          size={24}
-          max={3}
-          total={thread.crew.total}
-          people={thread.crew.people}
-          ringClassName="ring-popover"
-        />
-      </span>
-    );
-  }
-  const face = threadFace(thread);
-  return (
-    <MemberAvatar
-      size={24}
-      name={face.name}
-      colorKey={face.colorKey}
-      avatar={face.avatar}
-    />
-  );
-}
-
-function ThreadHead({
-  thread,
-  onOpen,
-}: {
-  thread: WorkingThread;
-  onOpen?: () => void;
-}): React.JSX.Element {
-  const content = (
-    <>
-      <ThreadFace thread={thread} />
-      <span
-        data-slot="working-thread-title"
-        title={thread.title}
-        className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-snug font-semibold break-words text-foreground">
-        {thread.title}
-      </span>
-    </>
-  );
-  const layout = 'flex min-w-0 items-start gap-2.5';
-  if (onOpen === undefined) {
-    return <div className={layout}>{content}</div>;
-  }
-  return (
-    <button
-      type="button"
-      data-slot="working-thread-open"
-      title={`Open ${thread.title}`}
-      onClick={onOpen}
-      className={cn(
-        layout,
-        'rounded-sm text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring',
-      )}>
-      {content}
-    </button>
-  );
-}
-
-function ThreadFacts({ thread }: { thread: WorkingThread }): React.JSX.Element {
-  const look = STATE_LOOK[thread.status];
+  const item = 'inline-flex shrink-0 items-center gap-1';
   return (
     <div
-      data-slot="working-thread-facts"
-      className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
-      <span
-        data-slot="working-thread-state"
-        data-status={thread.status}
-        className={cn(
-          'inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium',
-          look.pill,
-        )}>
-        <ThreadStatusDot status={thread.status} />
-        {look.word}
-      </span>
-      {thread.agentLabel === null ? null : (
-        <span data-slot="working-thread-agent" className="min-w-0 truncate">
-          {thread.agentLabel}
+      data-slot="working-thread-background"
+      className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pl-[42px] text-[11px] text-muted-foreground">
+      {background.held ? (
+        <span data-slot="working-thread-held" className={item}>
+          <CallGlyph live className="size-3.5 text-primary" />
+          Turn held for background work
+        </span>
+      ) : null}
+      {background.subagents === 0 ? null : (
+        <span data-slot="working-thread-subagents" className={item}>
+          <SubagentGlyph live className="size-3.5" />
+          {plural(background.subagents, 'sub-agent', 'sub-agents')}
         </span>
       )}
-      {thread.project === null ? null : (
-        <ThreadLabelChip
-          slot="working-thread-project"
-          icon={Folder}
-          mark={
-            thread.projectColor === null ? undefined : (
-              <PaletteDot
-                color={thread.projectColor}
-                size="md"
-                data-slot="working-thread-project-dot"
-              />
-            )
-          }
-          text={thread.project}
-          title={`Project ${thread.project}`}
-          yields
-        />
+      {background.commands === 0 ? null : (
+        <span data-slot="working-thread-commands" className={item}>
+          <TerminalGlyph live className="size-3.5" />
+          {plural(background.commands, 'command', 'commands')}
+        </span>
       )}
     </div>
   );
@@ -225,8 +128,10 @@ function ThreadFacts({ thread }: { thread: WorkingThread }): React.JSX.Element {
 
 function ThreadMessage({
   thread,
+  rail,
 }: {
   thread: WorkingThread;
+  rail: string;
 }): React.JSX.Element | null {
   const message =
     thread.lastMessage === null
@@ -238,7 +143,7 @@ function ThreadMessage({
   return (
     <div
       data-slot="working-thread-rail"
-      className={cn('border-l-2 pl-3', STATE_LOOK[thread.status].rail)}>
+      className={cn('ml-[42px] border-l-2 pl-3', rail)}>
       <span
         data-slot="working-thread-message"
         title={message}
@@ -251,10 +156,16 @@ function ThreadMessage({
 
 function ThreadRow({
   thread,
+  rail,
+  now,
   onOpenThread,
+  onOpenHere,
 }: {
   thread: WorkingThread;
+  rail: string;
+  now: number;
   onOpenThread?: (runId: string) => void;
+  onOpenHere?: (runId: string) => void;
 }): React.JSX.Element {
   const open =
     onOpenThread === undefined ? undefined : () => onOpenThread(thread.runId);
@@ -262,6 +173,7 @@ function ThreadRow({
     <div
       data-slot="working-thread-row"
       data-run={thread.runId}
+      data-status={thread.status}
       onClick={
         open === undefined
           ? undefined
@@ -272,26 +184,76 @@ function ThreadRow({
             }
       }
       className={cn(
-        'flex min-w-0 flex-col gap-2 rounded-lg bg-accent/40 p-2.5',
+        'flex min-w-0 flex-col gap-2 rounded-lg px-2.5 py-2',
         open !== undefined && 'cursor-pointer',
         open !== undefined && CONTROL_HOVER,
       )}>
-      <ThreadHead thread={thread} onOpen={open} />
-      <ThreadFacts thread={thread} />
-      <ThreadMessage thread={thread} />
+      <ThreadHead
+        identity={thread.identity}
+        slot="working-thread"
+        onOpen={open}
+        ringClassName="ring-popover"
+        aside={
+          <>
+            <span
+              data-slot="working-thread-time"
+              title={formatDateTime(thread.lastAt)}
+              className="text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">
+              {formatRelativeTime(thread.lastAt, now)}
+            </span>
+            {onOpenHere === undefined ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                data-slot="working-thread-open-here"
+                className="size-6 text-muted-foreground hover:text-foreground"
+                aria-label={`Open ${thread.identity.title} here`}
+                title="Open in a window over the graph"
+                onClick={() => onOpenHere(thread.runId)}>
+                <PictureInPicture2 aria-hidden="true" className="size-3.5" />
+              </Button>
+            )}
+          </>
+        }
+      />
+      <ThreadBackground background={thread.background} />
+      <ThreadMessage thread={thread} rail={rail} />
     </div>
   );
+}
+
+/** How tall the list may grow under the panel's head before it reaches the ceiling. */
+function listRoom(section: HTMLElement | null): number {
+  if (section === null) {
+    return LIST_MAX_PX;
+  }
+  const ceiling = section.closest(`[${WORKING_THREADS_CEILING}]`);
+  const top = ceiling === null ? 0 : ceiling.getBoundingClientRect().top;
+  const room =
+    section.getBoundingClientRect().top - top - PANEL_HEAD_PX - CEILING_GAP_PX;
+  return Math.max(120, Math.min(LIST_MAX_PX, room));
 }
 
 export function WorkingThreadsCard({
   threads,
   onOpenThread,
+  onOpenHere,
   beside,
 }: {
   threads: readonly WorkingThread[];
   onOpenThread?: (runId: string) => void;
+  /** Open a thread in a window over the command center's graph. */
+  onOpenHere?: (runId: string) => void;
   beside: boolean;
 }): React.JSX.Element | null {
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [opened, setOpened] = useState({ room: LIST_MAX_PX, now: 0 });
+  const onOpenChange = useLatestCallback((open: boolean) => {
+    if (open) {
+      setOpened({ room: listRoom(sectionRef.current), now: Date.now() });
+    }
+  }, []);
   const lead =
     threads.find((thread) => thread.status === 'working') ?? threads[0];
   if (lead === undefined) {
@@ -302,6 +264,7 @@ export function WorkingThreadsCard({
   return (
     <div className="pointer-events-none relative z-20 h-0 w-full overflow-visible">
       <section
+        ref={sectionRef}
         data-slot="working-threads-card"
         aria-label="Threads working"
         className={cn(
@@ -319,11 +282,12 @@ export function WorkingThreadsCard({
             'group relative min-w-0 rounded-xl text-left font-normal',
             CONTROL_HOVER,
           )}
-          panelClassName="w-96 p-0"
+          panelClassName="w-[26rem] p-0"
+          onOpenChange={onOpenChange}
           trigger={
             <span className="flex items-center gap-2 py-1 pr-2 pl-1">
               <AgentsTile
-                face={threadFace(lead)}
+                face={tileFace(lead)}
                 others={threads.length - 1}
                 activity={anyWorking ? 'working' : 'waiting'}
               />
@@ -335,7 +299,7 @@ export function WorkingThreadsCard({
             </span>
           }>
           <div className="flex flex-col">
-            <div className="flex min-w-0 items-center gap-2 px-3 py-2">
+            <div className="flex h-11 min-w-0 items-center gap-2 px-3">
               <CallGlyph
                 live={anyWorking}
                 className={cn(
@@ -352,14 +316,42 @@ export function WorkingThreadsCard({
                 {summary}
               </span>
             </div>
-            <div className="flex max-h-[min(60vh,32rem)] flex-col gap-1.5 overflow-y-auto border-t border-border/60 p-1.5">
-              {threads.map((thread) => (
-                <ThreadRow
-                  key={thread.runId}
-                  thread={thread}
-                  onOpenThread={onOpenThread}
-                />
-              ))}
+            <div
+              data-slot="working-threads-list"
+              style={{ maxHeight: opened.room }}
+              className="flex flex-col gap-2 overflow-y-auto border-t border-border/60 p-1.5">
+              {GROUPS.map((group) => {
+                const members = threads.filter(
+                  (thread) => thread.status === group.status,
+                );
+                return members.length === 0 ? null : (
+                  <section
+                    key={group.status}
+                    data-slot="working-threads-group"
+                    data-status={group.status}
+                    aria-label={group.title}
+                    className="flex flex-col gap-0.5">
+                    <h3 className="flex items-center gap-1.5 px-2.5 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                      {group.title}
+                      <span className="tabular-nums">{members.length}</span>
+                    </h3>
+                    {members.map((thread) => (
+                      <ThreadRow
+                        key={thread.runId}
+                        thread={thread}
+                        rail={group.rail}
+                        now={
+                          opened.now === 0
+                            ? Date.parse(thread.lastAt)
+                            : opened.now
+                        }
+                        onOpenThread={onOpenThread}
+                        onOpenHere={onOpenHere}
+                      />
+                    ))}
+                  </section>
+                );
+              })}
             </div>
           </div>
         </HoverPopover>

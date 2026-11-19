@@ -2,6 +2,10 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { userEvent, within } from 'storybook/test';
 
 import type { AvatarPerson } from '../components/member-avatar';
+import {
+  bareThreadIdentity,
+  type ThreadIdentity,
+} from '../components/thread-head';
 import { type WorkingThread, WorkingThreadsCard } from './working-threads-card';
 
 const TEAM_PEOPLE: readonly AvatarPerson[] = [
@@ -11,18 +15,26 @@ const TEAM_PEOPLE: readonly AvatarPerson[] = [
   { key: 'qa', name: 'Thanos', avatar: null },
 ];
 
-function thread(over: Partial<WorkingThread>): WorkingThread {
+const AGENT: ThreadIdentity = {
+  ...bareThreadIdentity('Build the export button and its tests'),
+  face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+  status: { attention: 'working', text: 'Working' },
+  agentLabel: 'claude',
+};
+
+function thread(
+  over: Partial<Omit<WorkingThread, 'identity'>> & {
+    identity?: Partial<ThreadIdentity>;
+  },
+): WorkingThread {
   return {
     runId: 'run-1',
-    title: 'Build the export button and its tests',
-    agentLabel: 'Senior Engineer',
-    agentKind: 'claude',
-    crew: null,
-    project: null,
-    projectColor: null,
-    lastMessage: null,
     status: 'working',
+    lastMessage: null,
+    lastAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    background: { held: false, subagents: 0, commands: 0 },
     ...over,
+    identity: { ...AGENT, ...over.identity },
   };
 }
 
@@ -40,29 +52,41 @@ const meta = {
   args: {
     beside: false,
     onOpenThread: () => {},
+    onOpenHere: () => {},
     threads: [
       thread({
         runId: 'run-1',
-        project: 'Geniro',
-        projectColor: 'teal',
+        identity: {
+          project: 'Geniro',
+          projectColor: 'teal',
+          pullRequest: { number: 146, state: 'draft' },
+          boardCard: { identifier: 'GEN-12', title: 'Export', status: 'todo' },
+        },
+        background: { held: false, subagents: 2, commands: 0 },
         lastMessage: 'Export button wired; **two** specs left to write',
       }),
       thread({
         runId: 'run-2',
-        title: 'Which CSV escaping does the export library apply?',
-        agentLabel: 'Researcher',
-        agentKind: 'cursor-agent',
         status: 'waiting',
+        identity: {
+          title: 'Which CSV escaping does the export library apply?',
+          face: { kind: 'agent', icon: 'code', name: 'cursor' },
+          status: { attention: 'question', text: 'Waiting on you' },
+          agentLabel: 'cursor',
+        },
         lastMessage: 'Checking the library source for its quoting rules',
       }),
       thread({
         runId: 'run-3',
-        title: 'Draft the release notes for the export feature',
-        agentLabel: 'dev-team',
-        agentKind: null,
-        crew: { people: TEAM_PEOPLE, total: 6 },
-        project: 'Docs',
-        projectColor: 'purple',
+        identity: {
+          title: 'Draft the release notes for the export feature',
+          face: { kind: 'team', people: TEAM_PEOPLE, total: 6 },
+          agentLabel: 'dev-team',
+          isTeam: true,
+          project: 'Docs',
+          projectColor: 'purple',
+        },
+        background: { held: true, subagents: 0, commands: 1 },
         lastMessage: 'Waiting on the QA plan before the notes go out',
       }),
     ],
@@ -87,9 +111,10 @@ const MANY_THREADS: readonly WorkingThread[] = Array.from(
   (_, index) =>
     thread({
       runId: `run-many-${index}`,
-      title: `Export follow-up ${index + 1}: wire the CSV escaping and its specs to the new button`,
-      agentLabel: index % 2 === 0 ? 'Senior Engineer' : 'Middle Engineer',
       status: index % 3 === 0 ? 'waiting' : 'working',
+      identity: {
+        title: `Export follow-up ${index + 1}: wire the CSV escaping and its specs to the new button`,
+      },
       lastMessage: 'Still running the checks for this branch',
     }),
 );

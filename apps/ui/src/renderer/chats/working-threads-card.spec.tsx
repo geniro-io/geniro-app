@@ -3,7 +3,15 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { type WorkingThread, WorkingThreadsCard } from './working-threads-card';
+import {
+  bareThreadIdentity,
+  type ThreadIdentity,
+} from '../components/thread-head';
+import {
+  WORKING_THREADS_CEILING,
+  type WorkingThread,
+  WorkingThreadsCard,
+} from './working-threads-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -17,24 +25,36 @@ afterEach(() => {
   container.remove();
 });
 
-function thread(over: Partial<WorkingThread>): WorkingThread {
+const AGENT: ThreadIdentity = {
+  ...bareThreadIdentity('Export the CSV'),
+  face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+  status: { attention: 'working', text: 'Working' },
+  agentLabel: 'claude',
+};
+
+function thread(
+  over: Partial<Omit<WorkingThread, 'identity'>> & {
+    identity?: Partial<ThreadIdentity>;
+  },
+): WorkingThread {
   return {
     runId: 'run-1',
-    title: 'Export the CSV',
-    agentLabel: 'Senior Engineer',
-    agentKind: 'claude',
-    crew: null,
-    project: null,
-    projectColor: null,
-    lastMessage: null,
     status: 'working',
+    lastMessage: null,
+    lastAt: '2026-11-19T08:00:00Z',
+    background: { held: false, subagents: 0, commands: 0 },
     ...over,
+    identity: { ...AGENT, ...over.identity },
   };
 }
 
 function render(
   threads: readonly WorkingThread[],
-  options: { beside?: boolean; onOpenThread?: (runId: string) => void } = {},
+  options: {
+    beside?: boolean;
+    onOpenThread?: (runId: string) => void;
+    onOpenHere?: (runId: string) => void;
+  } = {},
 ): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
@@ -45,6 +65,7 @@ function render(
         threads={threads}
         beside={options.beside ?? false}
         onOpenThread={options.onOpenThread}
+        onOpenHere={options.onOpenHere}
       />,
     );
   });
@@ -122,72 +143,107 @@ describe('WorkingThreadsCard', () => {
     expect(card.className).not.toContain('right-4');
   });
 
-  it('lays each thread out like a current run of the agents card: its title, its state, its agent and its project in colour', async () => {
+  it('lists the threads waiting on the user first, then the working ones, each group under its name and count', async () => {
+    const el = render([
+      thread({ runId: 'a' }),
+      thread({ runId: 'b', status: 'waiting' }),
+      thread({ runId: 'c' }),
+    ]);
+
+    await openPanel(el);
+
+    const groups = Array.from(
+      el.querySelectorAll<HTMLElement>('[data-slot="working-threads-group"]'),
+    );
+    expect(groups.map((group) => group.dataset.status)).toEqual([
+      'waiting',
+      'working',
+    ]);
+    expect(groups[0]!.querySelector('h3')!.textContent).toBe('Waiting on you1');
+    expect(groups[1]!.querySelector('h3')!.textContent).toBe('Working2');
+    expect(rowsOf(el).map((row) => row.dataset.run)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('heads each row as the thread’s node on the graph: face, title, pull request, status, agent, board card and project in colour', async () => {
     const el = render([
       thread({
         runId: 'a',
-        title: 'Export the CSV',
-        project: 'Geniro',
-        projectColor: 'teal',
-      }),
-      thread({
-        runId: 'b',
-        title: 'Fix the parser',
-        agentLabel: null,
-        agentKind: 'codex',
-        status: 'waiting',
+        identity: {
+          title: 'Export the CSV',
+          pullRequest: { number: 146, state: 'open' },
+          boardCard: { identifier: 'PRI-10', title: 'Export', status: 'todo' },
+          project: 'Geniro',
+          projectColor: 'teal',
+        },
       }),
     ]);
 
     await openPanel(el);
 
-    const [first, second] = rowsOf(el);
-    expect(rowsOf(el).map((row) => row.dataset.run)).toEqual(['a', 'b']);
-    expect(slot(first!, 'working-thread-title')!.textContent).toBe(
+    const row = rowsOf(el)[0]!;
+    expect(slot(row, 'working-thread-face')!.dataset.face).toBe('agent');
+    expect(slot(row, 'working-thread-title')!.textContent).toBe(
       'Export the CSV',
     );
-    expect(slot(first!, 'working-thread-state')!.textContent).toBe('working');
-    expect(slot(first!, 'working-thread-agent')!.textContent).toBe(
-      'Senior Engineer',
+    expect(slot(row, 'working-thread-pull-request')!.textContent).toContain(
+      `#${146}`,
     );
-    expect(slot(first!, 'working-thread-project')!.textContent).toBe('Geniro');
+    expect(slot(row, 'working-thread-status')!.textContent).toBe('Working');
+    expect(slot(row, 'working-thread-agent')!.textContent).toBe('claude');
+    expect(slot(row, 'working-thread-board-card')!.textContent).toBe('PRI-10');
+    expect(slot(row, 'working-thread-project')!.textContent).toBe('Geniro');
     expect(
-      slot(first!, 'working-thread-project-dot')!.getAttribute('data-color'),
+      slot(row, 'working-thread-project-dot')!.getAttribute('data-color'),
     ).toBe('teal');
-    expect(slot(second!, 'working-thread-title')!.textContent).toBe(
-      'Fix the parser',
-    );
-    expect(slot(second!, 'working-thread-state')!.textContent).toBe(
-      'waiting on you',
-    );
-    expect(slot(second!, 'working-thread-agent')).toBeNull();
-    expect(slot(second!, 'working-thread-project')).toBeNull();
+    expect(slot(row, 'working-thread-time')!.title).not.toBe('');
   });
 
-  it('shows a team thread as its crew faces in place of one agent face', async () => {
+  it('shows a team thread by its crew’s faces', async () => {
     const el = render([
       thread({
         runId: 'a',
-        agentLabel: 'dev-team',
-        agentKind: null,
-        crew: {
-          people: [
-            { key: 'senior', name: 'Tony Stark', avatar: null },
-            { key: 'middle', name: 'Peter Parker', avatar: null },
-          ],
-          total: 4,
+        identity: {
+          face: {
+            kind: 'team',
+            people: [
+              { key: 'senior', name: 'Tony Stark', avatar: null },
+              { key: 'middle', name: 'Peter Parker', avatar: null },
+            ],
+            total: 4,
+          },
+          agentLabel: 'dev-team',
+          isTeam: true,
         },
+      }),
+    ]);
+
+    await openPanel(el);
+
+    const face = slot(rowsOf(el)[0]!, 'working-thread-face')!;
+    expect(face.dataset.face).toBe('team');
+    expect(face.getAttribute('aria-label')).toBe('4 members');
+  });
+
+  it('names the work a thread still has out after its turn, and says nothing when it has none', async () => {
+    const el = render([
+      thread({
+        runId: 'a',
+        background: { held: true, subagents: 2, commands: 1 },
       }),
       thread({ runId: 'b' }),
     ]);
 
     await openPanel(el);
 
-    const [team, agent] = rowsOf(el);
-    expect(slot(team!, 'working-thread-crew')!.getAttribute('aria-label')).toBe(
-      '4 members',
+    const [busy, plain] = rowsOf(el);
+    expect(slot(busy!, 'working-thread-held')).not.toBeNull();
+    expect(slot(busy!, 'working-thread-subagents')!.textContent).toBe(
+      '2 sub-agents',
     );
-    expect(slot(agent!, 'working-thread-crew')).toBeNull();
+    expect(slot(busy!, 'working-thread-commands')!.textContent).toBe(
+      '1 command',
+    );
+    expect(slot(plain!, 'working-thread-background')).toBeNull();
   });
 
   it('draws the latest message on a rail, and no rail without one', async () => {
@@ -209,28 +265,6 @@ describe('WorkingThreadsCard', () => {
     expect(slot(without!, 'working-thread-rail')).toBeNull();
   });
 
-  it('shows a working thread with a primary pulse and a waiting one in the warning tone', async () => {
-    const el = render([
-      thread({ runId: 'a' }),
-      thread({ runId: 'b', status: 'waiting' }),
-    ]);
-
-    await openPanel(el);
-
-    const [working, waiting] = rowsOf(el);
-    expect(slot(working!, 'working-thread-dot')!.dataset.status).toBe(
-      'working',
-    );
-    expect(slot(waiting!, 'working-thread-dot')!.dataset.status).toBe(
-      'waiting',
-    );
-    expect(
-      slot(waiting!, 'working-thread-dot')!
-        .querySelector('[data-slot="status-dot"]')!
-        .getAttribute('data-tone'),
-    ).toBe('warn');
-  });
-
   it('a press on the row opens that thread by its run', async () => {
     const onOpenThread = vi.fn();
     const el = render([thread({ runId: 'a' }), thread({ runId: 'b' })], {
@@ -249,10 +283,29 @@ describe('WorkingThreadsCard', () => {
     const el = render([thread({ runId: 'a' })], { onOpenThread });
     await openPanel(el);
 
-    await press(slot(rowsOf(el)[0]!, 'working-thread-open')!);
+    await press(slot(rowsOf(el)[0]!, 'working-thread-title')!);
 
     expect(onOpenThread).toHaveBeenCalledTimes(1);
     expect(onOpenThread).toHaveBeenCalledWith('a');
+  });
+
+  it('opens a thread in a window over the graph from its row, without opening it in Chats', async () => {
+    const onOpenThread = vi.fn();
+    const onOpenHere = vi.fn();
+    const el = render([thread({ runId: 'a' })], { onOpenThread, onOpenHere });
+    await openPanel(el);
+
+    await press(slot(rowsOf(el)[0]!, 'working-thread-open-here')!);
+
+    expect(onOpenHere).toHaveBeenCalledWith('a');
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it('offers no window where the graph cannot hold one', async () => {
+    const el = render([thread({})], { onOpenThread: () => {} });
+    await openPanel(el);
+
+    expect(slot(rowsOf(el)[0]!, 'working-thread-open-here')).toBeNull();
   });
 
   it('keeps no Go to thread button in the row', async () => {
@@ -267,7 +320,37 @@ describe('WorkingThreadsCard', () => {
     await openPanel(el);
 
     const row = rowsOf(el)[0]!;
-    expect(slot(row, 'working-thread-open')).toBeNull();
+    expect(slot(row, 'working-thread-title')!.tagName).toBe('SPAN');
     expect(row.className).not.toContain('cursor-pointer');
+  });
+
+  it('never lets the list rise past the top of the page body', async () => {
+    const tops = new Map<Element, number>();
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return { top: tops.get(this) ?? 0 } as DOMRect;
+      });
+    try {
+      container = document.createElement('div');
+      container.setAttribute(WORKING_THREADS_CEILING, '');
+      document.body.append(container);
+      root = createRoot(container);
+      act(() => {
+        root.render(
+          <WorkingThreadsCard threads={[thread({})]} beside={false} />,
+        );
+      });
+      tops.set(container, 100);
+      tops.set(slot(container, 'working-threads-card')!, 500);
+
+      await openPanel(container);
+
+      expect(slot(container, 'working-threads-list')!.style.maxHeight).toBe(
+        `${500 - 100 - 44 - 8}px`,
+      );
+    } finally {
+      rect.mockRestore();
+    }
   });
 });

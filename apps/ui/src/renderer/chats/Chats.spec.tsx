@@ -21550,6 +21550,16 @@ describe('Chats — one hosted conversation', () => {
     expect(identity?.textContent).not.toContain('proj');
   });
 
+  it('a surface that heads the conversation itself gets no chat header, and the conversation still draws', async () => {
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ hideHeader: true }),
+    });
+
+    expect(container.querySelector('[data-slot="chat-header"]')).toBeNull();
+    expect(container.querySelector('textarea')).not.toBeNull();
+  });
+
   it('a hosted surface shows its run’s folder in the header unless it asks to leave it out', async () => {
     const { client } = makeClient();
     const container = await mount(client, undefined, {

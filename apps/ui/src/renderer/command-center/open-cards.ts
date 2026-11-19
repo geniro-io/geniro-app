@@ -1,0 +1,153 @@
+import { useState } from 'react';
+
+import type { ThreadAttention } from '../components/thread-labels';
+import { useLatestCallback } from '../components/use-latest-callback';
+
+/** A card's own size in pixels: its width, and the height of the chat under its head. */
+export interface CardSize {
+  width: number;
+  height: number;
+}
+
+/** Where a thread's node stood when its card opened, which it keeps while the card is open. */
+export interface CardBand {
+  attention: ThreadAttention;
+  lastAt: string;
+}
+
+export interface OpenCard {
+  runId: string;
+  band: CardBand;
+}
+
+export const CARD_SIZES_KEY = 'commandCenter.cardSizes';
+export const DEFAULT_CARD_SIZE: CardSize = { width: 460, height: 420 };
+export const MIN_CARD_SIZE: CardSize = { width: 320, height: 220 };
+export const MAX_REMEMBERED_CARD_SIZES = 200;
+
+type CardSizes = Readonly<Record<string, CardSize>>;
+
+function isCardSize(value: unknown): value is CardSize {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const { width, height } = value as Record<string, unknown>;
+  return (
+    typeof width === 'number' &&
+    typeof height === 'number' &&
+    Number.isFinite(width) &&
+    Number.isFinite(height)
+  );
+}
+
+/** The card sizes this device remembers, by thread; empty when none or unreadable. */
+export function readCardSizes(): CardSizes {
+  try {
+    const stored: unknown = JSON.parse(
+      localStorage.getItem(CARD_SIZES_KEY) ?? '{}',
+    );
+    if (typeof stored !== 'object' || stored === null) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(stored).filter(([, size]) => isCardSize(size)),
+    ) as CardSizes;
+  } catch {
+    return {};
+  }
+}
+
+function writeCardSizes(sizes: CardSizes): void {
+  try {
+    localStorage.setItem(CARD_SIZES_KEY, JSON.stringify(sizes));
+  } catch {
+    return;
+  }
+}
+
+/** `sizes` with `runId` set last, the oldest dropped past {@link MAX_REMEMBERED_CARD_SIZES}. */
+export function withCardSize(
+  sizes: CardSizes,
+  runId: string,
+  size: CardSize,
+): CardSizes {
+  const entries = Object.entries(sizes).filter(([id]) => id !== runId);
+  entries.push([runId, size]);
+  return Object.fromEntries(entries.slice(-MAX_REMEMBERED_CARD_SIZES));
+}
+
+export interface OpenCards {
+  /** In the order they opened. */
+  cards: readonly OpenCard[];
+  isOpen: (runId: string) => boolean;
+  open: (runId: string, band: CardBand) => void;
+  close: (runId: string) => void;
+  toggle: (runId: string, band: CardBand) => void;
+  /** Close every card whose thread left the board, and forget their sizes. */
+  keepOnly: (runIds: ReadonlySet<string>) => void;
+  sizeOf: (runId: string) => CardSize;
+  resize: (runId: string, size: CardSize) => void;
+}
+
+/**
+ * The threads open as cards on the command center's canvas — any number of
+ * them, or on a phone the one opened last — and the size each card was left
+ * at on this device.
+ */
+export function useOpenCards(narrow: boolean): OpenCards {
+  const [cards, setCards] = useState<readonly OpenCard[]>([]);
+  const [sizes, setSizes] = useState<CardSizes>(readCardSizes);
+
+  const open = useLatestCallback(
+    (runId: string, band: CardBand): void =>
+      setCards((rows) => {
+        const kept = rows.filter((row) => row.runId === runId);
+        if (kept.length > 0) {
+          return narrow ? kept : rows;
+        }
+        return [...(narrow ? [] : rows), { runId, band }];
+      }),
+    [narrow],
+  );
+  const close = useLatestCallback(
+    (runId: string): void =>
+      setCards((rows) => rows.filter((row) => row.runId !== runId)),
+    [],
+  );
+  const isOpen = (runId: string): boolean =>
+    cards.some((row) => row.runId === runId);
+  const toggle = useLatestCallback((runId: string, band: CardBand): void => {
+    if (cards.some((row) => row.runId === runId)) {
+      close(runId);
+    } else {
+      open(runId, band);
+    }
+  }, []);
+  const keepOnly = useLatestCallback((runIds: ReadonlySet<string>): void => {
+    setCards((rows) =>
+      rows.every((row) => runIds.has(row.runId))
+        ? rows
+        : rows.filter((row) => runIds.has(row.runId)),
+    );
+    setSizes((current) => {
+      const kept = Object.entries(current).filter(([id]) => runIds.has(id));
+      if (kept.length === Object.keys(current).length) {
+        return current;
+      }
+      const next = Object.fromEntries(kept);
+      writeCardSizes(next);
+      return next;
+    });
+  }, []);
+  const sizeOf = (runId: string): CardSize => sizes[runId] ?? DEFAULT_CARD_SIZE;
+  const resize = useLatestCallback(
+    (runId: string, size: CardSize): void =>
+      setSizes((current) => {
+        const next = withCardSize(current, runId, size);
+        writeCardSizes(next);
+        return next;
+      }),
+    [],
+  );
+  return { cards, isOpen, open, close, toggle, keepOnly, sizeOf, resize };
+}

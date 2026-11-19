@@ -91,8 +91,9 @@ function passageNear(line: readonly PlacedBox[], target: number): number {
 
 /**
  * The root centred on top and the rows under it, each centred and every
- * other one shifted half a box so it sits under the gaps of the row above. A
- * row is as tall as its tallest box. A wire leaves the root's bottom, runs
+ * other one shifted half the widest box so it sits under the gaps of the row
+ * above. Each box takes its own width in its row, and a row is as tall as its
+ * tallest box. A wire leaves the root's bottom, runs
  * along the gap above the first row, passes each row above its own through
  * the nearest gap, and drops into its box's top — so no wire crosses a box.
  */
@@ -102,11 +103,11 @@ export function layoutRows(
 ): GraphGeometry {
   const filled = rows.filter((row) => row.length > 0);
   const cell = Math.max(0, ...filled.flat().map((item) => item.width));
-  const step = cell + COLUMN_GAP;
-  const stagger = filled.length > 1 ? step / 2 : 0;
-  const widest =
-    Math.max(0, ...filled.map((row) => row.length * step - COLUMN_GAP)) +
-    stagger;
+  const stagger = filled.length > 1 ? (cell + COLUMN_GAP) / 2 : 0;
+  const spanOf = (row: readonly GraphBox[]): number =>
+    row.reduce((sum, item) => sum + item.width, 0) +
+    COLUMN_GAP * (row.length - 1);
+  const widest = Math.max(0, ...filled.map(spanOf)) + stagger;
   const width = Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
@@ -123,19 +124,15 @@ export function layoutRows(
   let top = rootBottom + LINE_GAP;
   let bottom = rootBottom;
   const placedRows: PlacedBox[][] = filled.map((row, index) => {
-    const span = row.length * step - COLUMN_GAP;
-    const left =
-      centre - span / 2 + (index % 2 === 1 ? stagger / 2 : -stagger / 2);
+    let x =
+      centre - spanOf(row) / 2 + (index % 2 === 1 ? stagger / 2 : -stagger / 2);
     const rowTop = top;
     const tallest = Math.max(...row.map((item) => item.height));
     top += tallest + LINE_GAP;
     bottom = rowTop + tallest;
-    return row.map((item, column) => {
-      const placed = {
-        ...item,
-        x: left + column * step + (cell - item.width) / 2,
-        y: rowTop,
-      };
+    return row.map((item) => {
+      const placed = { ...item, x, y: rowTop };
+      x += item.width + COLUMN_GAP;
       boxes.set(item.id, placed);
       return placed;
     });

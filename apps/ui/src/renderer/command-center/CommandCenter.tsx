@@ -1,4 +1,5 @@
 import {
+  Archive,
   History,
   MessageCircleQuestion,
   MessageSquare,
@@ -23,6 +24,7 @@ import {
   useThreadPullRequests,
 } from '../chats/use-thread-pull-requests';
 import { WORKING_THREADS_CEILING } from '../chats/working-threads-card';
+import { ActionNotice } from '../components/action-notice';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
@@ -32,7 +34,7 @@ import { Button } from '../components/ui/button';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
-import { useElementSize } from '../components/use-element-size';
+import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -47,11 +49,13 @@ import {
   threadCardViewOf,
   threadIdentitiesOf,
 } from './card-view';
+import type { GraphFocus } from './graph-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
 import { NeedsYouPanel } from './needs-you-panel';
+import { type CardBand, useOpenCards } from './open-cards';
 import { projectColorsOf } from './project-colors';
-import { ThreadWindowsLayer, useThreadWindows } from './thread-windows';
+import { ThreadCardChat } from './thread-card-chat';
 import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
 import { useCommandCenterTimeline } from './use-command-center-timeline';
@@ -213,8 +217,9 @@ export function CommandCenter({
     };
   }, [apis, unknownTeams]);
   const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
-  const windows = useThreadWindows(narrow);
-  const [measureWindowArea, windowArea] = useElementSize();
+  const cards = useOpenCards(narrow);
+  const [focus, setFocus] = useState<GraphFocus | null>(null);
+  const [offBoard, setOffBoard] = useState<string | null>(null);
   const timeline = useCommandCenterTimeline(
     apis,
     client,
@@ -262,7 +267,6 @@ export function CommandCenter({
   } | null>(null);
   const answerFrom = (runId: string, anchor: HTMLElement): void =>
     setAnswering({ runId, anchor });
-  const openHere = (runId: string): void => windows.open(runId, windowArea);
   const answeringRequests =
     answering === null
       ? []
@@ -284,11 +288,9 @@ export function CommandCenter({
           .join(',');
   useEffect(() => {
     if (boardRunIds !== null) {
-      windows.keepOnly(
-        new Set(boardRunIds === '' ? [] : boardRunIds.split(',')),
-      );
+      cards.keepOnly(new Set(boardRunIds === '' ? [] : boardRunIds.split(',')));
     }
-  }, [boardRunIds, windows.keepOnly]);
+  }, [boardRunIds, cards.keepOnly]);
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -344,6 +346,63 @@ export function CommandCenter({
       teamFaces,
       colorOfProject,
     ],
+  );
+
+  const bandOf = (card: CommandCenterCard): CardBand => {
+    const view = viewOf(card);
+    return { attention: view.attention, lastAt: view.lastAt };
+  };
+  const toggleCard = (runId: string): void => {
+    const card = board.cards?.find((entry) => entry.run.id === runId);
+    if (card !== undefined) {
+      cards.toggle(runId, bandOf(card));
+    }
+  };
+  const showThread = useLatestCallback((runId: string): void => {
+    if (board.cards === null) {
+      return;
+    }
+    if (runId === managerRunId) {
+      if (view === 'graph') {
+        pickView(narrow ? 'chat' : 'both');
+      }
+      return;
+    }
+    const card = board.cards.find((entry) => entry.run.id === runId);
+    if (card === undefined) {
+      setOffBoard(runId);
+      return;
+    }
+    setOffBoard(null);
+    if (narrow) {
+      setSidebar(null);
+    }
+    if (view === 'chat') {
+      pickView(narrow ? 'graph' : 'both');
+    }
+    if (
+      projectFilter !== ALL_PROJECTS &&
+      card.run.project?.id !== projectFilter
+    ) {
+      setProjectFilter(card.run.project?.id ?? ALL_PROJECTS);
+    }
+    cards.open(runId, bandOf(card));
+    setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
+  }, []);
+  const renderCardChat = useLatestCallback(
+    (runId: string): React.ReactNode =>
+      client === null ? null : (
+        <ThreadCardChat
+          runId={runId}
+          apis={apis}
+          handle={handle}
+          client={client}
+          active={active}
+          onOpenThread={showThread}
+          threadIdentities={threadIdentities}
+        />
+      ),
+    [],
   );
 
   const workingThreads = (board.cards ?? []).flatMap((card) => {
@@ -451,8 +510,20 @@ export function CommandCenter({
             pulses={pulses}
             now={now}
             narrow={narrow}
-            onOpen={onOpenThread}
-            onOpenHere={openHere}
+            active={active}
+            onOpenInChats={onOpenThread}
+            onToggleCard={toggleCard}
+            openCards={cards.cards.map((card) => ({
+              ...card,
+              size: cards.sizeOf(card.runId),
+            }))}
+            onCloseCard={cards.close}
+            onResizeCard={cards.resize}
+            renderCardChat={renderCardChat}
+            focus={focus}
+            onFocused={(seq) =>
+              setFocus((last) => (last?.seq === seq ? null : last))
+            }
             projects={shownProjects}
             asking={askingKinds}
             onAnswer={answerFrom}
@@ -475,7 +546,7 @@ export function CommandCenter({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold max-sm:hidden">
@@ -555,7 +626,6 @@ export function CommandCenter({
       )}
       <div className="relative flex min-h-0 flex-1">
         <div
-          ref={measureWindowArea}
           {...{ [WORKING_THREADS_CEILING]: '' }}
           className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {graphShown ? graph : null}
@@ -591,26 +661,13 @@ export function CommandCenter({
                 active={active}
                 workingThreads={workingThreads}
                 threadIdentities={threadIdentities}
-                onOpenThread={onOpenThread}
-                onOpenThreadHere={graphShown ? openHere : undefined}
+                onOpenThread={showThread}
+                onOpenThreadHere={graphShown ? showThread : undefined}
                 onTurnSettled={board.reload}
                 onDiscarded={board.reload}
               />
             )}
           </div>
-          {graphShown && client !== null ? (
-            <ThreadWindowsLayer
-              windows={windows}
-              bounds={windowArea}
-              narrow={narrow}
-              subjects={threadIdentities}
-              onOpenThread={onOpenThread}
-              apis={apis}
-              handle={handle}
-              client={client}
-              active={active}
-            />
-          ) : null}
           {graphShown && answering !== null ? (
             <AnswerPopover
               anchor={answering.anchor}
@@ -621,11 +678,10 @@ export function CommandCenter({
               requests={answeringRequests}
               error={openRequests.error}
               onAnswer={openRequests.answer}
-              onOpenHere={() => {
-                openHere(answering.runId);
+              onShowThread={() => {
+                showThread(answering.runId);
                 setAnswering(null);
               }}
-              onOpenThread={() => onOpenThread(answering.runId)}
               onClose={() => setAnswering(null)}
             />
           ) : null}
@@ -663,7 +719,7 @@ export function CommandCenter({
                 error={openRequests.error}
                 focusRunId={null}
                 onAnswer={openRequests.answer}
-                onOpenThread={onOpenThread}
+                onOpenThread={showThread}
               />
             ) : (
               <TimelinePanel
@@ -672,13 +728,30 @@ export function CommandCenter({
                 error={timeline.error}
                 hasMore={timeline.hasMore}
                 onLoadOlder={timeline.loadOlder}
-                onOpenThread={onOpenThread}
+                onOpenThread={showThread}
                 now={now}
               />
             )}
           </aside>
         )}
       </div>
+      {offBoard === null ? null : (
+        <ActionNotice
+          key={offBoard}
+          className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
+          icon={<Archive className="size-4" />}
+          title="This thread is no longer on the board"
+          detail="It was archived or removed; Chats still has it."
+          action={{
+            label: 'Open in Chats',
+            onAction: () => {
+              setOffBoard(null);
+              onOpenThread(offBoard);
+            },
+          }}
+          onDismiss={() => setOffBoard(null)}
+        />
+      )}
     </div>
   );
 }

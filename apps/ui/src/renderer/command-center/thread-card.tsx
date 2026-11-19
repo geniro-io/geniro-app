@@ -1,22 +1,22 @@
 import { cva } from 'class-variance-authority';
 import {
+  ArrowUpRight,
+  ChevronUp,
   MessageCircleQuestion,
+  MessageSquareText,
   Moon,
-  PictureInPicture2,
   ShieldCheck,
 } from 'lucide-react';
 
 import type { ProfileColor } from '../../shared/contracts';
 import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
-import { type AvatarPerson, AvatarStack } from '../components/member-avatar';
-import {
-  GoToThreadButton,
-  PullRequestLabel,
-  type ThreadAttention,
-  type ThreadCardBoardCard,
-  ThreadLabelsRow,
-  type ThreadPullRequestState,
+import type { ThreadFaceLook } from '../components/thread-face';
+import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
+import type {
+  ThreadAttention,
+  ThreadCardBoardCard,
+  ThreadPullRequestState,
 } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
@@ -36,8 +36,8 @@ export interface ThreadCardProps {
   /** The agent's short name, or the team's name for a team run. */
   agentLabel: string | null;
   isTeam: boolean;
-  /** A team run's members, for the faces on its card; null for one agent. */
-  crew: { people: readonly AvatarPerson[]; total: number } | null;
+  /** The thread's face: its agent, its team's members, or a plain mark. */
+  face: ThreadFaceLook;
   pullRequest: { number: number; state: ThreadPullRequestState } | null;
   note: string | null;
   /** The thread's latest message, as the thread list previews it. */
@@ -52,9 +52,10 @@ export interface ThreadCardProps {
   summary?: string;
   /** A taller height to stand in; never shorter than its content. */
   height?: number;
-  onGo: () => void;
-  /** Open the thread in a window over the command center's graph. */
-  onOpenHere?: () => void;
+  /** Leave the command center for the thread in Chats. */
+  onOpenInChats: () => void;
+  /** Turn the node into the thread's card on the canvas, its chat under this head; absent where no card can open. */
+  onToggleCard?: () => void;
   /** Open the thread's waiting question or approval from the pressed button; absent when it holds none. */
   onAnswer?: (anchor: HTMLElement) => void;
   /** What the thread holds for the user, which names that button. */
@@ -67,7 +68,7 @@ const PAD_PX = 10;
 const GAP_PX = 6;
 const BORDER_PX = 1;
 const LINE_PX = 16;
-const ROW_PX = { header: 20, labels: 20, note: 20, footer: 24 } as const;
+const ROW_PX = { head: 44, note: 20, footer: 24 } as const;
 
 const MESSAGE_WIDTH_PX = THREAD_CARD_WIDTH - PAD_PX * 2 - BORDER_PX * 2;
 
@@ -122,8 +123,7 @@ export function threadCardHeight(view: {
 }): number {
   const lines = previewLines(view.lastMessage);
   const rows = [
-    ROW_PX.header,
-    ROW_PX.labels,
+    ROW_PX.head,
     ...(view.note === null ? [] : [ROW_PX.note]),
     ...(lines === 0 ? [] : [lines * LINE_PX]),
     ROW_PX.footer,
@@ -179,31 +179,115 @@ export const attentionDotVariants = cva('size-2 shrink-0 rounded-full', {
   },
 });
 
-function StatusDot({
-  attention,
+/** Who the card's thread is, as its head and every transcript head it. */
+export function threadCardIdentity(
+  props: Pick<
+    ThreadCardProps,
+    | 'title'
+    | 'face'
+    | 'pullRequest'
+    | 'attention'
+    | 'statusText'
+    | 'agentLabel'
+    | 'isTeam'
+    | 'boardCard'
+    | 'project'
+    | 'projectColor'
+  >,
+): ThreadIdentity {
+  return {
+    title: props.title,
+    face: props.face,
+    pullRequest: props.pullRequest,
+    status: { attention: props.attention, text: props.statusText },
+    agentLabel: props.agentLabel,
+    isTeam: props.isTeam,
+    boardCard: props.boardCard,
+    project: props.project,
+    projectColor: props.projectColor ?? null,
+  };
+}
+
+/** The quiet icon buttons at the end of a thread head on the canvas. */
+export function ThreadHeadIcon({
+  slot,
+  label,
+  title,
+  icon,
+  onClick,
 }: {
-  attention: ThreadAttention;
+  slot: string;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+  onClick: () => void;
 }): React.JSX.Element {
   return (
-    <span
-      aria-hidden="true"
-      data-slot="thread-card-dot"
-      className={cn('relative', attentionDotVariants({ attention }))}>
-      {attention === 'working' ? (
-        <span
-          data-slot="thread-card-dot-ping"
-          className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none"
-        />
-      ) : null}
-    </span>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      data-slot={slot}
+      className="size-6 shrink-0 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
+      aria-label={label}
+      title={title}
+      onClick={onClick}>
+      {icon}
+    </Button>
+  );
+}
+
+/** Show a thread's chat on the canvas, or hide it again, from its head. */
+export function ShowChatIcon({
+  title,
+  open,
+  onToggle,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+}): React.JSX.Element {
+  return (
+    <ThreadHeadIcon
+      slot={open ? 'thread-head-hide-chat' : 'thread-head-show-chat'}
+      label={open ? `Hide the chat of ${title}` : `Show the chat of ${title}`}
+      title={open ? 'Hide chat' : 'Show chat'}
+      icon={
+        open ? (
+          <ChevronUp aria-hidden="true" />
+        ) : (
+          <MessageSquareText aria-hidden="true" />
+        )
+      }
+      onClick={onToggle}
+    />
+  );
+}
+
+/** Leave the command center for the thread in Chats — the one control on the page that does. */
+export function OpenInChatsIcon({
+  title,
+  onOpen,
+}: {
+  title: string;
+  onOpen: () => void;
+}): React.JSX.Element {
+  return (
+    <ThreadHeadIcon
+      slot="thread-head-open-in-chats"
+      label={`Open ${title} in Chats`}
+      title="Open in Chats"
+      icon={<ArrowUpRight aria-hidden="true" />}
+      onClick={onOpen}
+    />
   );
 }
 
 /**
- * One thread as a card — a node of the command center's graph: its title and
- * pull request, its state and labels, the manager's note, its latest message,
- * a Go to thread button and a button that opens it in a window over the
- * graph. The card itself opens nothing.
+ * One thread as a card — a node of the command center's graph: the thread's
+ * head (its face, title, pull request and labels, with Show chat and Open in
+ * Chats at its end), the manager's note, its latest message and when it last
+ * moved. Its title and Show chat turn it into the thread's card on the canvas.
  */
 export function ThreadCard({
   title,
@@ -214,7 +298,7 @@ export function ThreadCard({
   projectColor = null,
   agentLabel,
   isTeam,
-  crew,
+  face,
   pullRequest,
   note,
   lastMessage,
@@ -224,8 +308,8 @@ export function ThreadCard({
   now,
   summary,
   height,
-  onGo,
-  onOpenHere,
+  onOpenInChats,
+  onToggleCard,
   onAnswer,
   answerKind = null,
 }: ThreadCardProps): React.JSX.Element {
@@ -249,60 +333,37 @@ export function ThreadCard({
         padding: PAD_PX,
         gap: GAP_PX,
       }}>
-      <div className="flex h-5 min-w-0 shrink-0 items-center gap-2">
-        <StatusDot attention={attention} />
-        <span
-          data-slot="thread-card-title"
-          title={title}
-          className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {title}
-        </span>
-        {crew === null || crew.people.length === 0 ? null : (
-          <span
-            data-slot="thread-card-crew"
-            aria-label={`${crew.total} members`}
-            className="shrink-0">
-            <AvatarStack
-              size={20}
-              max={4}
-              total={crew.total}
-              people={crew.people}
-              ringClassName="ring-card"
-            />
-          </span>
-        )}
-        {pullRequest === null ? null : (
-          <PullRequestLabel
-            pullRequest={pullRequest}
-            slot="thread-card-pull-request"
-          />
-        )}
-        {onOpenHere === undefined ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            data-slot="thread-card-open-here"
-            className="-mr-1 size-6 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label={`Open ${title} here`}
-            title="Open in a window over the graph"
-            onClick={onOpenHere}>
-            <PictureInPicture2 aria-hidden="true" className="size-3.5" />
-          </Button>
-        )}
+      <div className="h-11 shrink-0">
+        <ThreadHead
+          slot="thread-card"
+          identity={threadCardIdentity({
+            title,
+            face,
+            pullRequest,
+            attention,
+            statusText,
+            agentLabel,
+            isTeam,
+            boardCard,
+            project,
+            projectColor,
+          })}
+          onOpen={onToggleCard}
+          ringClassName="ring-card"
+          aside={
+            <>
+              {onToggleCard === undefined ? null : (
+                <ShowChatIcon
+                  title={title}
+                  open={false}
+                  onToggle={onToggleCard}
+                />
+              )}
+              <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
+            </>
+          }
+        />
       </div>
-      <ThreadLabelsRow
-        slot="thread-card"
-        className="h-5 shrink-0"
-        view={{
-          status: { attention, text: statusText },
-          agentLabel,
-          isTeam,
-          boardCard,
-          project,
-          projectColor,
-        }}
-      />
       {note === null ? null : (
         <p
           data-slot="thread-card-note"
@@ -355,7 +416,6 @@ export function ThreadCard({
               {answerKind === 'approval' ? 'Review' : 'Answer'}
             </Button>
           )}
-          <GoToThreadButton onGo={onGo} />
         </span>
       </div>
     </article>

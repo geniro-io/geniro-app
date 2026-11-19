@@ -190,3 +190,244 @@ describe('perLineFor on a measured canvas', () => {
     expect(perLineFor(3, 2400, 272)).toBe(4);
   });
 });
+
+describe('layoutRows golden picture', () => {
+  it('places equal thread boxes, a mixed-height row and the "+N more" pill exactly as before per-box cells', () => {
+    const thread = (id: string, height = 150): GraphBox => ({
+      id,
+      width: 272,
+      height,
+    });
+    const geometry = layoutRows({ id: 'manager', width: 380, height: 84 }, [
+      [thread('a'), thread('b', 182), thread('c')],
+      [thread('d'), thread('e')],
+      [{ id: 'more', width: 160, height: 32 }],
+    ]);
+    expect({
+      width: geometry.width,
+      height: geometry.height,
+      boxes: [...geometry.boxes.values()],
+      routes: Object.fromEntries(geometry.routes),
+    }).toMatchInlineSnapshot(`
+      {
+        "boxes": [
+          {
+            "height": 84,
+            "id": "manager",
+            "width": 380,
+            "x": 360,
+            "y": 24,
+          },
+          {
+            "height": 150,
+            "id": "a",
+            "width": 272,
+            "x": 24,
+            "y": 180,
+          },
+          {
+            "height": 182,
+            "id": "b",
+            "width": 272,
+            "x": 336,
+            "y": 180,
+          },
+          {
+            "height": 150,
+            "id": "c",
+            "width": 272,
+            "x": 648,
+            "y": 180,
+          },
+          {
+            "height": 150,
+            "id": "d",
+            "width": 272,
+            "x": 336,
+            "y": 434,
+          },
+          {
+            "height": 150,
+            "id": "e",
+            "width": 272,
+            "x": 648,
+            "y": 434,
+          },
+          {
+            "height": 32,
+            "id": "more",
+            "width": 160,
+            "x": 392,
+            "y": 656,
+          },
+        ],
+        "height": 712,
+        "routes": {
+          "a": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 160,
+              "y": 144,
+            },
+            {
+              "x": 160,
+              "y": 180,
+            },
+          ],
+          "b": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 472,
+              "y": 144,
+            },
+            {
+              "x": 472,
+              "y": 180,
+            },
+          ],
+          "c": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 784,
+              "y": 144,
+            },
+            {
+              "x": 784,
+              "y": 180,
+            },
+          ],
+          "d": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 316,
+              "y": 144,
+            },
+            {
+              "x": 316,
+              "y": 398,
+            },
+            {
+              "x": 472,
+              "y": 398,
+            },
+            {
+              "x": 472,
+              "y": 434,
+            },
+          ],
+          "e": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 628,
+              "y": 144,
+            },
+            {
+              "x": 628,
+              "y": 398,
+            },
+            {
+              "x": 784,
+              "y": 398,
+            },
+            {
+              "x": 784,
+              "y": 434,
+            },
+          ],
+          "more": [
+            {
+              "x": 550,
+              "y": 108,
+            },
+            {
+              "x": 550,
+              "y": 144,
+            },
+            {
+              "x": 316,
+              "y": 144,
+            },
+            {
+              "x": 316,
+              "y": 398,
+            },
+            {
+              "x": 316,
+              "y": 620,
+            },
+            {
+              "x": 472,
+              "y": 620,
+            },
+            {
+              "x": 472,
+              "y": 656,
+            },
+          ],
+        },
+        "width": 1100,
+      }
+    `);
+  });
+});
+
+describe('layoutRows per-box cells', () => {
+  it('gives a wide box its own width in its row, its neighbours a gap away and every wire into its own centre', () => {
+    const geometry = layoutRows(ROOT, [
+      [
+        { id: 'a', width: 272, height: 150 },
+        { id: 'open', width: 480, height: 520 },
+        { id: 'c', width: 272, height: 150 },
+      ],
+      [{ id: 'd', width: 272, height: 150 }],
+    ]);
+    const a = geometry.boxes.get('a')!;
+    const open = geometry.boxes.get('open')!;
+    const c = geometry.boxes.get('c')!;
+    const d = geometry.boxes.get('d')!;
+    expect(open.x - (a.x + a.width)).toBe(40);
+    expect(c.x - (open.x + open.width)).toBe(40);
+    expect(d.y).toBe(open.y + open.height + 72);
+    expect(geometry.routes.get('open')!.at(-1)).toEqual({
+      x: open.x + open.width / 2,
+      y: open.y,
+    });
+    expect(overlaps(geometry)).toEqual([]);
+    expect(wiresThroughBoxes(geometry)).toEqual([]);
+  });
+});

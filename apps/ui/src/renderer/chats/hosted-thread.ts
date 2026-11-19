@@ -23,6 +23,8 @@ export interface HostedThread {
   onDiscarded?: () => void;
   /** Leave the run's folder out of the header, which then names the agent. */
   hideHeaderFolder?: boolean;
+  /** Draw no header at all: the surface heads the conversation itself. */
+  hideHeader?: boolean;
   /**
    * Which stored queue is this surface's, stable across closing and reopening
    * it, so a message queued before it closed goes out once it is back.
@@ -50,7 +52,7 @@ export interface HostedThread {
   onRunSettingsChanged?: (run: RunDto) => void | Promise<void>;
   workingThreads?: readonly WorkingThread[];
   onOpenThread?: (runId: string) => void;
-  /** Open a thread in a window over the command center's graph. */
+  /** Open a thread as its card on the command center's graph. */
   onOpenThreadHere?: (runId: string) => void;
   /** The threads this surface can name the way its canvas does — see `ThreadIdentityContext`. */
   threadIdentities?: ReadonlyMap<string, ThreadIdentity>;

@@ -13,6 +13,7 @@ import type {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { OUTSIDE_ANY_CALL } from '../utils/call-membership';
+import { previewCardRow } from '../utils/card-row-preview';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { eventLoopSlicer } from '../utils/event-loop-slices';
 import {
@@ -219,7 +220,11 @@ export class ChatHistoryService {
     };
     if ('root' in conversation) {
       add(await this.callsAcross(runId, kept, callRows));
-      add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
+      add(
+        (await this.cardRowsFor(runId, [...kept, ...byId.values()]))
+          .filter((row) => !held.has(row.id) && !byId.has(row.id))
+          .map(previewCardRow),
+      );
       add(await this.deadCardsOf(runId, kept));
     } else {
       const nested = kept.flatMap((row) => {

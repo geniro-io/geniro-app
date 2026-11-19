@@ -177,6 +177,12 @@ function handleOf(edge: 's' | 'se'): HTMLElement {
   )!;
 }
 
+function headOf(runId: string): HTMLElement {
+  return container.querySelector<HTMLElement>(
+    `[data-slot="thread-canvas-card"][data-run-id="${runId}"] [data-slot="thread-canvas-card-head"]`,
+  )!;
+}
+
 describe('ThreadCardLayer — the cards over the canvas', () => {
   it('draws one card per open thread that has a slot, each with its chat, and none for one without', () => {
     drawLayer({
@@ -420,5 +426,63 @@ describe('ThreadCardLayer — the flash', () => {
     });
     expect(flashOf('a')).not.toBeNull();
     expect(flashOf('a')).not.toBe(first);
+  });
+});
+
+describe('ThreadCardLayer — dragging a card by its head', () => {
+  it('a press that travels less than the drag threshold is a click, and moves nothing', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 103, 102));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerup', 103, 102));
+    });
+
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it('moves the card with the pointer past the threshold, and hands its place up once on release', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    expect(onMove).toHaveBeenNthCalledWith(1, 'a', { x: 150, y: 70 }, false);
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerup', 150, 130));
+    });
+    expect(onMove).toHaveBeenCalledTimes(2);
+    expect(onMove).toHaveBeenNthCalledWith(2, 'a', { x: 150, y: 70 }, true);
+  });
+
+  it('measures the drag in flow units, so at zoom 2 the same screen move carries the card half as far', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 2] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+
+    expect(onMove).toHaveBeenNthCalledWith(1, 'a', { x: 125, y: 55 }, false);
   });
 });

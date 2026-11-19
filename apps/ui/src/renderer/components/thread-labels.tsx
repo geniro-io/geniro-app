@@ -1,9 +1,22 @@
 import { cva } from 'class-variance-authority';
-import { ArrowRight, type LucideIcon, MessageSquareText } from 'lucide-react';
+import {
+  ArrowRight,
+  Bot,
+  Folder,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  type LucideIcon,
+  MessageSquareText,
+  Users,
+} from 'lucide-react';
 
+import type { ProfileColor } from '../../shared/contracts';
 import { taskStatusMeta } from '../tasks/task-status';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { PaletteDot } from './ui/palette-dot';
 import { cn } from './ui/utils';
 
 /** Where a thread stands for the user, which colours its card and its status chip. */
@@ -57,14 +70,16 @@ export function ThreadStatusChip({
 /** The board card a thread works: its column's glyph and its identifier. */
 export function BoardCardLabel({
   card,
+  slot = 'thread-card-board-card',
 }: {
   card: ThreadCardBoardCard;
+  slot?: string;
 }): React.JSX.Element {
   const meta = taskStatusMeta(card.status);
   const Icon = meta.icon;
   return (
     <Badge
-      data-slot="thread-card-board-card"
+      data-slot={slot}
       variant="muted"
       title={`${card.identifier ?? 'Board card'} · ${card.title} · ${meta.label}`}
       className="max-w-24 shrink-0 gap-1 px-1.5 py-0 font-normal">
@@ -110,6 +125,143 @@ export function ThreadLabelChip({
       {mark ?? <Icon aria-hidden="true" className="size-3 shrink-0" />}
       <span className="truncate">{text}</span>
     </Badge>
+  );
+}
+
+export type ThreadPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
+
+/** A thread's pull request: its number, and its state where one is known. */
+export interface ThreadPullRequest {
+  number: number;
+  state: ThreadPullRequestState | null;
+}
+
+const PULL_REQUEST_META: Record<
+  ThreadPullRequestState,
+  { word: string; icon: LucideIcon; className: string }
+> = {
+  open: { word: 'open', icon: GitPullRequest, className: 'text-warning' },
+  draft: {
+    word: 'draft',
+    icon: GitPullRequestDraft,
+    className: 'text-muted-foreground',
+  },
+  merged: { word: 'merged', icon: GitMerge, className: 'text-success' },
+  closed: {
+    word: 'closed',
+    icon: GitPullRequestClosed,
+    className: 'text-destructive',
+  },
+};
+
+/** A thread's pull request as a label: its state's glyph and its number. */
+export function PullRequestLabel({
+  pullRequest,
+  slot,
+}: {
+  pullRequest: ThreadPullRequest;
+  slot: string;
+}): React.JSX.Element {
+  const meta =
+    pullRequest.state === null ? null : PULL_REQUEST_META[pullRequest.state];
+  const Icon = meta?.icon ?? GitPullRequest;
+  return (
+    <Badge
+      data-slot={slot}
+      variant="muted"
+      title={
+        meta === null
+          ? `Pull request #${pullRequest.number}`
+          : `#${pullRequest.number} · ${meta.word}`
+      }
+      className="shrink-0 gap-1 px-1.5 py-0 font-normal">
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          'size-3.5 shrink-0',
+          meta?.className ?? 'text-muted-foreground',
+        )}
+      />
+      {meta === null ? null : <span className="sr-only">{meta.word}</span>}
+      <span className="tabular-nums">#{pullRequest.number}</span>
+    </Badge>
+  );
+}
+
+/** What a thread's labels row shows, as its node on the command center's graph does. */
+export interface ThreadLabelsView {
+  /** Where the thread stands, in its tint and words; null where the view does not know. */
+  status: { attention: ThreadAttention; text: string } | null;
+  /** The agent's short name, or the team's name for a team run. */
+  agentLabel: string | null;
+  isTeam: boolean;
+  boardCard: ThreadCardBoardCard | null;
+  project: string | null;
+  projectColor: ProfileColor | null;
+}
+
+/**
+ * A thread's labels in one row — its status, agent or team, board card and
+ * project with the project's colour as a dot — the row its node on the graph
+ * and every card that heads a thread share. Each label's slot is `slot`
+ * followed by what it is (`-status`, `-agent`, `-board-card`, `-project`).
+ */
+export function ThreadLabelsRow({
+  view,
+  slot,
+  className,
+}: {
+  view: ThreadLabelsView;
+  slot: string;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <div
+      data-slot={`${slot}-labels`}
+      className={cn(
+        'flex min-w-0 items-center gap-1 overflow-hidden',
+        className,
+      )}>
+      {view.status === null ? null : (
+        <ThreadStatusChip
+          attention={view.status.attention}
+          slot={`${slot}-status`}>
+          {view.status.text}
+        </ThreadStatusChip>
+      )}
+      {view.agentLabel === null ? null : (
+        <ThreadLabelChip
+          slot={`${slot}-agent`}
+          icon={view.isTeam ? Users : Bot}
+          text={view.agentLabel}
+          title={
+            view.isTeam ? `Team ${view.agentLabel}` : `Agent ${view.agentLabel}`
+          }
+          yields={false}
+        />
+      )}
+      {view.boardCard === null ? null : (
+        <BoardCardLabel card={view.boardCard} slot={`${slot}-board-card`} />
+      )}
+      {view.project === null ? null : (
+        <ThreadLabelChip
+          slot={`${slot}-project`}
+          icon={Folder}
+          mark={
+            view.projectColor === null ? undefined : (
+              <PaletteDot
+                color={view.projectColor}
+                size="md"
+                data-slot={`${slot}-project-dot`}
+              />
+            )
+          }
+          text={view.project}
+          title={`Project ${view.project}`}
+          yields
+        />
+      )}
+    </div>
   );
 }
 

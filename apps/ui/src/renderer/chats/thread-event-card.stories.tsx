@@ -1,31 +1,60 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
+import type { ThreadIdentity } from '../components/thread-head';
 import { ThreadEventCard } from './thread-event-card';
-import {
-  type ThreadIdentity,
-  ThreadIdentityContext,
-  ThreadOpenContext,
-} from './thread-title';
+import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
+
+const PEOPLE = [
+  { key: 'lead', name: 'Lead' },
+  { key: 'senior', name: 'Senior Engineer' },
+  { key: 'qa', name: 'QA' },
+];
 
 const IDENTITIES = new Map<string, ThreadIdentity>([
   [
     'r-ncdex',
     {
       title: 'NCDEX_IND: add agro commodities',
-      project: 'PriceField',
-      projectColor: 'orange',
+      face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+      pullRequest: { number: 146, state: 'open' },
+      status: { attention: 'working', text: 'Working' },
       agentLabel: 'claude',
       isTeam: false,
+      boardCard: {
+        identifier: 'PRI-10',
+        title: 'Agro commodities',
+        status: 'in_progress',
+      },
+      project: 'PriceField',
+      projectColor: 'orange',
     },
   ],
   [
     'r-elves',
     {
       title: 'Stage 5 — the Elves batch',
-      project: 'HoAE',
-      projectColor: 'indigo',
+      face: { kind: 'team', people: PEOPLE, total: 5 },
+      pullRequest: null,
+      status: { attention: 'question', text: 'Waiting on you' },
       agentLabel: 'Dev Team',
       isTeam: true,
+      boardCard: null,
+      project: 'HoAE',
+      projectColor: 'indigo',
+    },
+  ],
+  [
+    'r-manager',
+    {
+      title: 'Manager',
+      face: { kind: 'manager' },
+      pullRequest: null,
+      status: { attention: 'quiet', text: 'Idle' },
+      agentLabel: 'claude',
+      isTeam: false,
+      boardCard: null,
+      project: null,
+      projectColor: null,
     },
   ],
 ]);
@@ -75,6 +104,15 @@ export const Received: Story = {
 
 export const Woken: Story = {
   args: { kind: 'woken', runId: 'r-elves', title: 'Stage 5' },
+};
+
+export const FromTheManager: Story = {
+  args: {
+    kind: 'received',
+    runId: 'r-manager',
+    title: 'Command center manager',
+    text: 'The user decided: leave the source inactive and cancel this task. Keep the PR open for review.',
+  },
 };
 
 export const Done: Story = {

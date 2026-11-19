@@ -328,11 +328,20 @@ export function CommandCenter({
       threadIdentitiesOf(
         board.cards ?? [],
         board.manager,
+        (card) => rowPullRequestOf(card.run, pullRequests.byKey),
         identities,
         teamFaces,
+        Date.now(),
         colorOfProject,
       ),
-    [board.cards, board.manager, identities, teamFaces, colorOfProject],
+    [
+      board.cards,
+      board.manager,
+      pullRequests.byKey,
+      identities,
+      teamFaces,
+      colorOfProject,
+    ],
   );
 
   const workingThreads = (board.cards ?? []).flatMap((card) =>

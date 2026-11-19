@@ -157,6 +157,10 @@ describe('thread message rows in the transcript', () => {
                 projectColor: 'teal',
                 agentLabel: 'claude',
                 isTeam: false,
+                face: { kind: 'unknown' },
+                pullRequest: null,
+                status: null,
+                boardCard: null,
               },
             ],
           ])

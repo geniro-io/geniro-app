@@ -1,38 +1,44 @@
 import {
-  Bot,
   CircleCheck,
-  Folder,
-  GitPullRequest,
+  CornerDownRight,
   Inbox,
   type LucideIcon,
+  Reply,
   RotateCw,
   Send,
-  Users,
 } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useContext } from 'react';
 
 import { ClampedText } from '../components/clamped-text';
-import { ThreadLabelChip } from '../components/thread-labels';
-import { PALETTE_BORDER_CLASS } from '../components/ui/palette';
-import { PaletteDot } from '../components/ui/palette-dot';
+import {
+  bareThreadIdentity,
+  ThreadHead,
+  type ThreadIdentity,
+} from '../components/thread-head';
 import { cn } from '../components/ui/utils';
 import { plainPreview } from './brief-text';
 import {
   sentOutcomeWords,
   type ThreadMessageRow,
 } from './thread-message-payload';
-import { ThreadTitle, useThreadIdentity } from './thread-title';
+import { ThreadOpenContext, useThreadIdentity } from './thread-title';
 
 /** What happened between this thread and another one. */
 export type ThreadEventKind = 'sent' | 'received' | 'woken' | 'done';
 
-const KIND_META: Record<ThreadEventKind, { icon: LucideIcon; label: string }> =
-  {
-    sent: { icon: Send, label: 'Message to' },
-    received: { icon: Inbox, label: 'Message from' },
-    woken: { icon: RotateCw, label: 'Woken by a message from' },
-    done: { icon: CircleCheck, label: 'Done' },
-  };
+const KIND_META: Record<
+  ThreadEventKind,
+  { icon: LucideIcon; label: string; rail: string }
+> = {
+  sent: { icon: Send, label: 'Message to', rail: 'border-primary/40' },
+  received: { icon: Inbox, label: 'Message from', rail: 'border-border' },
+  woken: {
+    icon: RotateCw,
+    label: 'Woken by a message from',
+    rail: 'border-border',
+  },
+  done: { icon: CircleCheck, label: 'Done', rail: 'border-success/50' },
+};
 
 export interface ThreadEventCardProps {
   kind: ThreadEventKind;
@@ -52,11 +58,22 @@ export interface ThreadEventCardProps {
   pullRequest?: number | null;
 }
 
+function identityOf(
+  known: ThreadIdentity | null,
+  title: string,
+  pullRequest: number | null,
+): ThreadIdentity {
+  const identity = known ?? bareThreadIdentity(title);
+  return identity.pullRequest !== null || pullRequest === null
+    ? identity
+    : { ...identity, pullRequest: { number: pullRequest, state: null } };
+}
+
 /**
  * One event between this thread and another — a message sent or received, a
  * turn a message started, a thread that finished — headed by that thread the
- * way the command center's canvas shows it, in its project's colour where the
- * view knows it.
+ * way the command center's graph shows it: its face, title, pull request and
+ * labels where the view knows it, its recorded title alone where it does not.
  */
 export const ThreadEventCard = memo(function ThreadEventCard({
   kind,
@@ -69,104 +86,73 @@ export const ThreadEventCard = memo(function ThreadEventCard({
   handle = null,
   pullRequest = null,
 }: ThreadEventCardProps): React.JSX.Element {
-  const identity = useThreadIdentity(runId);
+  const known = useThreadIdentity(runId);
+  const open = useContext(ThreadOpenContext);
+  const identity = identityOf(known, title, pullRequest);
   const meta = KIND_META[kind];
   const Icon = meta.icon;
-  const color = identity?.projectColor ?? null;
   const reply = inReplyTo === null ? '' : plainPreview(inReplyTo);
   return (
     <article
       data-slot="thread-event-card"
       data-kind={kind}
       data-run={runId}
-      data-color={color ?? undefined}
-      className={cn(
-        'flex w-full min-w-0 flex-col gap-1.5 self-start rounded-xl border border-l-4 border-border bg-card px-3.5 py-2.5 text-sm',
-        color === null ? 'border-l-primary/50' : PALETTE_BORDER_CLASS[color],
-      )}>
-      <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+      data-color={identity.projectColor ?? undefined}
+      className="flex w-full max-w-2xl min-w-0 flex-col gap-2 self-start rounded-lg border border-border/70 bg-card px-3 py-2.5 text-sm">
+      <p className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
         <Icon
           aria-hidden="true"
-          className={cn('size-3.5 shrink-0', kind === 'done' && 'text-success')}
+          className={cn(
+            'size-3.5 shrink-0',
+            kind === 'done' ? 'text-success' : 'text-muted-foreground',
+          )}
         />
-        <span data-slot="thread-event-label" className="shrink-0">
+        <span data-slot="thread-event-label" className="shrink-0 font-medium">
           {meta.label}
         </span>
         {handle === null ? null : (
           <span
             data-slot="thread-event-handle"
-            className="shrink-0 font-mono text-foreground/80">
+            className="shrink-0 rounded-sm bg-muted px-1 font-mono text-foreground/80">
             {handle}
           </span>
         )}
-        <ThreadTitle runId={runId} title={identity?.title ?? title} chip />
         {member === null ? null : (
-          <span data-slot="thread-event-member" className="shrink-0">
+          <span data-slot="thread-event-member" className="min-w-0 truncate">
             · {member}
           </span>
         )}
-        {identity?.agentLabel == null ? null : (
-          <ThreadLabelChip
-            slot="thread-event-agent"
-            icon={identity.isTeam ? Users : Bot}
-            text={identity.agentLabel}
-            title={
-              identity.isTeam
-                ? `Team ${identity.agentLabel}`
-                : `Agent ${identity.agentLabel}`
-            }
-            yields={false}
-          />
-        )}
-        {identity?.project == null ? null : (
-          <ThreadLabelChip
-            slot="thread-event-project"
-            icon={Folder}
-            mark={
-              color === null ? undefined : (
-                <PaletteDot
-                  color={color}
-                  size="md"
-                  data-slot="thread-event-project-dot"
-                />
-              )
-            }
-            text={identity.project}
-            title={`Project ${identity.project}`}
-            yields={false}
-          />
-        )}
-        {pullRequest === null ? null : (
-          <ThreadLabelChip
-            slot="thread-event-pull-request"
-            icon={GitPullRequest}
-            text={`#${pullRequest}`}
-            title={`Pull request #${pullRequest}`}
-            yields={false}
-          />
-        )}
-      </header>
+      </p>
+      <ThreadHead
+        identity={identity}
+        slot="thread-event"
+        onOpen={open === null ? undefined : () => open(runId)}
+      />
       {reply === '' ? null : (
-        <blockquote
+        <p
           data-slot="thread-event-reply-to"
           title={reply}
-          className="flex min-w-0 flex-col gap-0.5 border-l-2 border-border pl-2 text-xs text-muted-foreground">
-          <span className="shrink-0 font-medium">In reply to your message</span>
+          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <Reply aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="shrink-0">In reply to your message</span>
           <span className="min-w-0 truncate italic">{reply}</span>
-        </blockquote>
+        </p>
       )}
       {text === null || text === '' ? null : (
-        <ClampedText
-          text={text}
-          lines={3}
-          slot="thread-event-text"
-          className="text-sm text-foreground"
-        />
+        <div className={cn('border-l-2 pl-3', meta.rail)}>
+          <ClampedText
+            text={text}
+            lines={3}
+            slot="thread-event-text"
+            className="text-sm leading-relaxed text-foreground"
+          />
+        </div>
       )}
       {outcome === null ? null : (
         <p
           data-slot="thread-event-outcome"
-          className="text-xs text-muted-foreground">
+          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <CornerDownRight aria-hidden="true" className="size-3.5 shrink-0" />
           {outcome}
         </p>
       )}

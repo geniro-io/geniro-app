@@ -11,6 +11,7 @@ import {
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { HostedThread } from '../chats/hosted-thread';
+import type { ThreadIdentity } from '../components/thread-head';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { ManagerDock } from './manager-dock';
@@ -107,7 +108,7 @@ afterEach(() => {
   container.remove();
 });
 
-const IDENTITIES = new Map([
+const IDENTITIES = new Map<string, ThreadIdentity>([
   [
     'run-a',
     {
@@ -116,6 +117,10 @@ const IDENTITIES = new Map([
       projectColor: 'teal' as const,
       agentLabel: 'claude',
       isTeam: false,
+      face: { kind: 'unknown' },
+      pullRequest: null,
+      status: null,
+      boardCard: null,
     },
   ],
 ]);

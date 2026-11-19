@@ -3,12 +3,9 @@ import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 
 import { mountIntoDocument } from '../__tests__/mount-into-document';
+import type { ThreadIdentity } from '../components/thread-head';
 import { ThreadEventCard, ThreadEventRow } from './thread-event-card';
-import {
-  type ThreadIdentity,
-  ThreadIdentityContext,
-  ThreadOpenContext,
-} from './thread-title';
+import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -18,10 +15,14 @@ const render = mountIntoDocument();
 
 const PELICAN: ThreadIdentity = {
   title: 'Pelican — fix the login redirect',
-  project: 'Web',
-  projectColor: 'teal',
+  face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+  pullRequest: { number: 88, state: 'open' },
+  status: { attention: 'working', text: 'Working' },
   agentLabel: 'claude',
   isTeam: false,
+  boardCard: { identifier: 'WEB-7', title: 'Login redirect', status: 'todo' },
+  project: 'Web',
+  projectColor: 'teal',
 };
 
 const IDENTITIES = new Map([['r-pelican', PELICAN]]);
@@ -37,7 +38,7 @@ function card(el: HTMLElement): HTMLElement {
 }
 
 describe('ThreadEventCard', () => {
-  it('heads a known thread as the canvas does: its title, agent and project in the project colour', () => {
+  it('heads a known thread as its node on the graph does: face, title, pull request, status, agent, board card and project dot', () => {
     const el = render(
       <ThreadIdentityContext.Provider value={IDENTITIES}>
         <ThreadEventCard
@@ -49,9 +50,24 @@ describe('ThreadEventCard', () => {
       </ThreadIdentityContext.Provider>,
     );
     const article = card(el);
-    expect(article.className).toContain('border-l-group-teal');
+    expect(article.className).not.toContain('border-l-');
     expect(article.dataset.color).toBe('teal');
-    expect(article.textContent).toContain('Pelican — fix the login redirect');
+    expect(
+      el.querySelector('[data-slot="thread-event-title"]')?.textContent,
+    ).toBe('Pelican — fix the login redirect');
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="thread-event-face"]')?.dataset
+        .face,
+    ).toBe('agent');
+    expect(
+      el.querySelector('[data-slot="thread-event-status"]')?.textContent,
+    ).toBe('Working');
+    expect(
+      el.querySelector('[data-slot="thread-event-pull-request"]')?.textContent,
+    ).toContain(`#${88}`);
+    expect(
+      el.querySelector('[data-slot="thread-event-board-card"]')?.textContent,
+    ).toBe('WEB-7');
     expect(
       el.querySelector('[data-slot="thread-event-agent"]')?.textContent,
     ).toBe('claude');
@@ -69,9 +85,15 @@ describe('ThreadEventCard', () => {
       <ThreadEventCard kind="received" runId="r-otter" title="Otter" />,
     );
     const article = card(el);
-    expect(article.className).not.toContain('border-l-group-');
     expect(article.dataset.color).toBeUndefined();
-    expect(article.textContent).toContain('Otter');
+    expect(
+      el.querySelector('[data-slot="thread-event-title"]')?.textContent,
+    ).toBe('Otter');
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="thread-event-face"]')?.dataset
+        .face,
+    ).toBe('unknown');
+    expect(el.querySelector('[data-slot="thread-event-labels"]')).toBeNull();
     expect(el.querySelector('[data-slot="thread-event-agent"]')).toBeNull();
     expect(el.querySelector('[data-slot="thread-event-project"]')).toBeNull();
   });
@@ -85,7 +107,7 @@ describe('ThreadEventCard', () => {
     );
     act(() => {
       el.querySelector<HTMLButtonElement>(
-        '[data-slot="thread-title"]',
+        '[data-slot="thread-event-title"]',
       )?.click();
     });
     expect(opened).toEqual(['r-otter']);

@@ -13,6 +13,7 @@ const ROSTER: RosterBriefLine[] = [
     project: 'Billing',
     reason: 'auto',
     note: 'waits for the schema to land',
+    done: false,
   },
   {
     handle: 't2',
@@ -20,6 +21,7 @@ const ROSTER: RosterBriefLine[] = [
     project: null,
     reason: 'user',
     note: null,
+    done: false,
   },
   {
     handle: 't3',
@@ -27,6 +29,7 @@ const ROSTER: RosterBriefLine[] = [
     project: 'Web',
     reason: 'manager',
     note: 'owns the tag',
+    done: true,
   },
 ];
 
@@ -37,7 +40,7 @@ describe('composeManagerBrief', () => {
     expect(composeManagerBrief(again)).toBe(composeManagerBrief(ROSTER));
   });
 
-  it('lists every handle with its title, project, why it is there and its note', () => {
+  it('lists every handle with its title, project, why it is there, whether it is done and its note', () => {
     const brief = composeManagerBrief(ROSTER);
 
     expect(brief).toContain(
@@ -45,7 +48,7 @@ describe('composeManagerBrief', () => {
     );
     expect(brief).toContain('- t2 · Docs · no project · added by the user');
     expect(brief).toContain(
-      '- t3 · Release · Web · started by you · note: owns the tag',
+      '- t3 · Release · Web · started by you · done · note: owns the tag',
     );
   });
 

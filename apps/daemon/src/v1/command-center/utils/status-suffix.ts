@@ -40,8 +40,8 @@ function capped(line: string): string {
 /**
  * The status table appended to every manager turn's prompt — what changes too
  * often for the brief. Times are relative to `now`, so the agent never has to
- * reason about clocks. At most {@link STATUS_SUFFIX_MAX_LINES} threads, then a
- * count of the rest.
+ * reason about clocks. Finished threads come last, and at most
+ * {@link STATUS_SUFFIX_MAX_LINES} threads are listed, then a count of the rest.
  */
 export function composeStatusSuffix(
   lines: readonly StatusLine[],
@@ -50,7 +50,10 @@ export function composeStatusSuffix(
   if (lines.length === 0) {
     return null;
   }
-  const shown = lines
+  const shown = [
+    ...lines.filter((line) => line.column !== 'done'),
+    ...lines.filter((line) => line.column === 'done'),
+  ]
     .slice(0, STATUS_SUFFIX_MAX_LINES)
     .map((line) =>
       capped(

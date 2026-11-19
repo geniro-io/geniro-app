@@ -3,6 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ThreadArchiveContext,
+  type ThreadArchiveOf,
+} from '../components/thread-archive';
 import type { ThreadAttention } from '../components/thread-labels';
 import {
   ThreadCard,
@@ -51,7 +55,10 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
   };
 }
 
-function render(over: Partial<ThreadCardProps> = {}): HTMLElement {
+function render(
+  over: Partial<ThreadCardProps> = {},
+  archiveOf: ThreadArchiveOf | null = null,
+): HTMLElement {
   act(() => {
     root?.unmount();
   });
@@ -60,7 +67,11 @@ function render(over: Partial<ThreadCardProps> = {}): HTMLElement {
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<ThreadCard {...props(over)} />);
+    root!.render(
+      <ThreadArchiveContext.Provider value={archiveOf}>
+        <ThreadCard {...props(over)} />
+      </ThreadArchiveContext.Provider>,
+    );
   });
   return container.querySelector<HTMLElement>('[data-slot="thread-card"]')!;
 }
@@ -239,6 +250,7 @@ describe('ThreadCard — content', () => {
     ['question', 'bg-warning/10'],
     ['quiet', 'bg-card'],
     ['inactive', 'opacity-70'],
+    ['done', 'bg-muted/40'],
   ])('colours a %s card by where it stands', (attention, tint) => {
     const el = render({ attention });
 
@@ -417,5 +429,62 @@ describe('ThreadCard — motion', () => {
     expect(
       render({ attention: 'quiet' }).className.includes('cc-breathe'),
     ).toBe(false);
+  });
+});
+
+describe('ThreadCard — archive', () => {
+  it('archives from the head of any thread the provider offers one for', () => {
+    const archive = vi.fn();
+    const archiveOf = vi.fn<ThreadArchiveOf>(() => archive);
+    const el = render({ runId: 'run-1', attention: 'working' }, archiveOf);
+
+    act(() => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-slot="thread-head-archive"]',
+      )!.click();
+    });
+
+    expect(archiveOf).toHaveBeenCalledWith('run-1');
+    expect(archive).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers the footer Archive only on a finished thread, and it archives the same thread', () => {
+    const archive = vi.fn();
+    const finished = render(
+      { runId: 'run-1', attention: 'done' },
+      () => archive,
+    );
+
+    expect(
+      finished.querySelector('[data-slot="thread-head-archive"]'),
+    ).not.toBeNull();
+    act(() => {
+      finished
+        .querySelector<HTMLButtonElement>('[data-slot="thread-card-archive"]')!
+        .click();
+    });
+    expect(archive).toHaveBeenCalledTimes(1);
+
+    const working = render(
+      { runId: 'run-1', attention: 'quiet' },
+      () => archive,
+    );
+    expect(
+      working.querySelector('[data-slot="thread-card-archive"]'),
+    ).toBeNull();
+  });
+
+  it('draws no archive without a provider standing, even on a finished thread', () => {
+    const el = render({ runId: 'run-1', attention: 'done' });
+
+    expect(el.querySelector('[data-slot="thread-head-archive"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-card-archive"]')).toBeNull();
+  });
+
+  it('draws no archive for a thread the provider answers null for', () => {
+    const el = render({ runId: 'run-1', attention: 'done' }, () => null);
+
+    expect(el.querySelector('[data-slot="thread-head-archive"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-card-archive"]')).toBeNull();
   });
 });

@@ -12,9 +12,6 @@ export const CONTACT_LOOKBACK_MS = 24 * HOUR_MS;
 /** How long a reply credit lasts after the manager's message. */
 export const REPLY_CREDIT_MS = 2 * HOUR_MS;
 
-/** How often roster removals may change the manager's brief with no addition beside them. */
-export const ROSTER_REMOVAL_INTERVAL_MS = 6 * HOUR_MS;
-
 /** The status table's caps: the lines a manager turn reads, and their width. */
 export const STATUS_SUFFIX_MAX_LINES = 40;
 export const STATUS_SUFFIX_LINE_MAX = 160;
@@ -206,7 +203,7 @@ export type RosterReason = z.infer<typeof RosterReasonSchema>;
  */
 export interface CommandCenterChangedEvent {
   runIds: string[];
-  reason: 'status' | 'items' | 'roster' | 'task';
+  reason: 'status' | 'items' | 'roster' | 'task' | 'refiled';
 }
 
 /**

@@ -72,6 +72,12 @@ export class CommandCenterEventsService
       this.agents.allReplyCreditsSpent().subscribe(({ toRunId }) => {
         this.events.publishChanged([toRunId], 'items');
       }),
+      this.agents.allChanged().subscribe((runs) => {
+        this.events.publishChanged(
+          runs.map((run) => run.id),
+          'refiled',
+        );
+      }),
     );
   }
 

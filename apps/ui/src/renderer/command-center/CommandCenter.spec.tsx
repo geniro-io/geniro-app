@@ -7,6 +7,7 @@ import type { DaemonHandle } from '../../shared/contracts';
 import type { DaemonClient } from '../daemon-client';
 import { CommandCenter } from './CommandCenter';
 import type { GraphViewProps } from './graph-view';
+import { ThreadCard } from './thread-card';
 
 const { probes, fakes } = vi.hoisted(() => ({
   probes: {
@@ -61,7 +62,17 @@ vi.mock('../daemon-api', async (importOriginal) => ({
 vi.mock('./graph-view', () => ({
   GraphView: (props: GraphViewProps) => {
     probes.graph = props;
-    return <div data-slot="stub-graph" />;
+    return (
+      <div data-slot="stub-graph">
+        {props.threads.map((thread) => (
+          <ThreadCard
+            key={thread.id}
+            {...thread.view}
+            onOpenInChats={() => undefined}
+          />
+        ))}
+      </div>
+    );
   },
 }));
 vi.mock('./manager-dock', () => ({
@@ -104,7 +115,11 @@ vi.mock('../components/ui/select', async (importOriginal) => ({
 const onOpenThread = vi.fn();
 const NOW_ISO = new Date().toISOString();
 
-function cardOf(runId: string, projectId: string): unknown {
+function cardOf(
+  runId: string,
+  projectId: string,
+  column: 'idle' | 'done' = 'idle',
+): unknown {
   return {
     run: {
       id: runId,
@@ -118,7 +133,7 @@ function cardOf(runId: string, projectId: string): unknown {
       project: { id: projectId, name: projectId },
       pullRequests: [],
     },
-    column: 'idle',
+    column,
     contact: { lastAt: null, awaitingReply: false },
     task: null,
     note: null,
@@ -443,5 +458,118 @@ describe('CommandCenter — the places nodes were moved to', () => {
 
     act(() => probes.graph!.onResetLayout());
     expect(probes.graph!.positions).toEqual({});
+  });
+});
+
+const NO_LESSONS = {
+  signals: 0,
+  lessonsOn: false,
+  estimate: { agentKind: 'claude', model: null, tokens: 0, usd: 0 },
+  check: null,
+  fromSeq: 0,
+  toSeq: 0,
+};
+
+function dialogButton(text: string): HTMLButtonElement {
+  const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+  return [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent === text,
+  )!;
+}
+
+describe('CommandCenter — archiving a finished thread', () => {
+  it('archives a finished thread from its node once the dialog confirms, and Undo puts it back', async () => {
+    const archiveChat = vi.fn(() => Promise.resolve());
+    const unarchiveChat = vi.fn(() => Promise.resolve());
+    const estimateLessons = vi.fn(() => Promise.resolve(NO_LESSONS));
+    fakes.board = boardOf([
+      cardOf('run-a', 'p1'),
+      cardOf('run-d', 'p2', 'done'),
+    ]);
+    fakes.apis = {
+      teams: { listTeams: () => Promise.resolve([]) },
+      chats: { archiveChat, unarchiveChat },
+      lessons: { estimateLessons },
+    };
+    await renderPage();
+
+    expect(
+      container.querySelectorAll('[data-slot="thread-card-archive"]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(
+        '[data-attention="done"] [data-slot="thread-card-archive"]',
+      ),
+    ).not.toBeNull();
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="thread-card-archive"]')!
+        .click();
+    });
+    await settle();
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+      'Archive chat',
+    );
+    expect(estimateLessons).toHaveBeenCalledWith({ runId: 'run-d' });
+
+    await act(async () => {
+      dialogButton('Archive').click();
+    });
+    await settle();
+
+    expect(archiveChat).toHaveBeenCalledTimes(1);
+    expect(archiveChat).toHaveBeenCalledWith({
+      runId: 'run-d',
+      lessons: undefined,
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.textContent).toContain('Archived Thread run-d');
+
+    await act(async () => {
+      buttonNamed('Undo').click();
+    });
+    await settle();
+
+    expect(unarchiveChat).toHaveBeenCalledTimes(1);
+    expect(unarchiveChat).toHaveBeenCalledWith({ runId: 'run-d' });
+    expect(container.textContent).not.toContain('Archived Thread run-d');
+  });
+
+  it('keeps the toast up with the error when Undo fails, and re-reads nothing', async () => {
+    const archiveChat = vi.fn(() => Promise.resolve());
+    const unarchiveChat = vi.fn(() => Promise.reject(new Error('daemon gone')));
+    const board = boardOf([cardOf('run-d', 'p2', 'done')]) as {
+      reload: ReturnType<typeof vi.fn>;
+    };
+    fakes.board = board;
+    fakes.apis = {
+      teams: { listTeams: () => Promise.resolve([]) },
+      chats: { archiveChat, unarchiveChat },
+      lessons: { estimateLessons: vi.fn(() => Promise.resolve(NO_LESSONS)) },
+    };
+    await renderPage();
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="thread-card-archive"]')!
+        .click();
+    });
+    await settle();
+    await act(async () => {
+      dialogButton('Archive').click();
+    });
+    await settle();
+    const reloads = board.reload.mock.calls.length;
+
+    await act(async () => {
+      buttonNamed('Undo').click();
+    });
+    await settle();
+
+    expect(unarchiveChat).toHaveBeenCalledWith({ runId: 'run-d' });
+    expect(container.textContent).toContain('Archived Thread run-d');
+    expect(container.textContent).toContain('daemon gone');
+    expect(board.reload.mock.calls.length).toBe(reloads);
   });
 });

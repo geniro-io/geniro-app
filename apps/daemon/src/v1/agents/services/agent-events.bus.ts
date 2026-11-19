@@ -190,7 +190,7 @@ export class AgentEventBus {
     }
   }
 
-  /** Re-filed run rows, for the single fan-out subscriber (the gateway). */
+  /** Re-filed run rows, for the gateway's fan-out and every module that follows archives. */
   allChanged(): Observable<RunWire[]> {
     return this.changed.asObservable();
   }

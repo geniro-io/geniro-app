@@ -8,8 +8,13 @@ import {
 const SERVER = 'geniro-75a31aea';
 
 describe('isHostCommandCenterCall', () => {
-  it('matches tell_threads, note_thread and start_thread on this run’s server, in both spellings', () => {
-    for (const tool of ['tell_threads', 'note_thread', 'start_thread']) {
+  it('matches tell_threads, note_thread, start_thread and read_command_center on this run’s server, in both spellings', () => {
+    for (const tool of [
+      'tell_threads',
+      'note_thread',
+      'start_thread',
+      'read_command_center',
+    ]) {
       expect(isHostCommandCenterCall(SERVER, `mcp__${SERVER}__${tool}`)).toBe(
         true,
       );

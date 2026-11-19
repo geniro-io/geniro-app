@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { RunWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import type { TaskDao } from '../../tasks/dao/task.dao';
@@ -114,6 +115,18 @@ describe('CommandCenterEventsService', () => {
     expect(contacts.publishChanged).toHaveBeenCalledWith(
       ['thread-1'],
       'status',
+    );
+  });
+
+  it('re-reads the cards of every thread archived or unarchived anywhere', () => {
+    agents.publishRunsChanged([
+      { id: 'thread-1' },
+      { id: 'thread-2' },
+    ] as unknown as RunWire[]);
+
+    expect(contacts.publishChanged).toHaveBeenCalledWith(
+      ['thread-1', 'thread-2'],
+      'refiled',
     );
   });
 

@@ -54,6 +54,7 @@ function ops(
     note: () => Promise.resolve(NOTED),
     start: () => Promise.reject(new Error('unused')),
     archive: () => Promise.reject(new Error('unused')),
+    read: () => Promise.reject(new Error('unused')),
     ...overrides,
   });
   return broker;

@@ -1,6 +1,7 @@
 import {
   HOST_ARCHIVE_THREADS_TOOL,
   HOST_NOTE_THREAD_TOOL,
+  HOST_READ_COMMAND_CENTER_TOOL,
   HOST_START_THREAD_TOOL,
   HOST_TELL_THREADS_TOOL,
   TELL_THREADS_MAX_TARGETS,
@@ -14,6 +15,7 @@ export interface RosterBriefLine {
   project: string | null;
   reason: RosterReason;
   note: string | null;
+  done: boolean;
 }
 
 const REASON_WORDS: Record<RosterReason, string> = {
@@ -43,6 +45,7 @@ export function composeManagerBrief(
       clean(entry.title),
       entry.project === null ? 'no project' : clean(entry.project),
       REASON_WORDS[entry.reason],
+      entry.done ? 'done' : null,
       entry.note === null ? null : `note: ${clean(entry.note)}`,
     ]
       .filter((part): part is string => part !== null)
@@ -56,6 +59,7 @@ export function composeManagerBrief(
     '## How to work',
     '',
     `- The user writes to you in plain words and never picks threads. Work out which threads they mean from the roster below (titles, projects, your notes) and the status table each message carries. When you cannot tell which threads they mean, ask back with the candidates instead of guessing: a word that fits more than one roster title ("billing" with two billing threads) is unclear even if one of them came up recently, so ask before sending.`,
+    `- See the whole graph as it stands now with \`${HOST_READ_COMMAND_CENTER_TOOL}\`: every active thread with its column, status, pull request and board card. A finished thread stays on your roster, marked done and listed last, until it is archived; when a name fits an unfinished thread and a finished one, it means the unfinished one.`,
     `- Reach threads with \`${HOST_TELL_THREADS_TOOL}\`: one call sends the same message to 1–${TELL_THREADS_MAX_TARGETS} of them, named by handle (t3). If any name is ambiguous or unknown nothing is sent, and the answer lists the candidates. Leave \`expect_reply\` on when you need an answer: each thread's first reply then reaches you even past your usual wake budget.`,
     `- Keep one note per thread with \`${HOST_NOTE_THREAD_TOOL}\` — why it matters, what it is waiting on, what you told it. Notes are part of this roster and survive compaction.`,
     `- Start a new thread with \`${HOST_START_THREAD_TOOL}\`: it files a task card with its own worktree and branch. Outside \`auto\` the user approves it with a Start card first; once it starts it joins your roster, and you are told only if it fails to start.`,

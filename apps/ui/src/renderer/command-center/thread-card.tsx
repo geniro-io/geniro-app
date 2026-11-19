@@ -11,8 +11,17 @@ import {
 import type { ProfileColor } from '../../shared/contracts';
 import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
+import {
+  ArchiveThreadButton,
+  ArchiveThreadIcon,
+  useThreadArchive,
+} from '../components/thread-archive';
 import type { ThreadFaceLook } from '../components/thread-face';
-import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
+import {
+  ThreadHead,
+  ThreadHeadIcon,
+  type ThreadIdentity,
+} from '../components/thread-head';
 import type {
   ThreadAttention,
   ThreadCardBoardCard,
@@ -25,6 +34,8 @@ export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
 
 export interface ThreadCardProps {
+  /** The thread's run, which the page's archive control is offered for. */
+  runId?: string;
   title: string;
   status: ThreadCardStatus;
   /** The status chip's words, which say why the card stands in its band. */
@@ -150,6 +161,7 @@ export const ATTENTION_TEXT: Record<ThreadAttention, string> = {
   question: 'Question',
   quiet: 'Quiet',
   inactive: 'Inactive a day+',
+  done: 'Done',
 };
 
 const cardVariants = cva(
@@ -162,6 +174,7 @@ const cardVariants = cva(
         question: 'border-warning/50 bg-warning/10',
         quiet: 'border-border bg-card',
         inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
+        done: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
       } satisfies Record<ThreadAttention, string>,
     },
   },
@@ -175,6 +188,7 @@ export const attentionDotVariants = cva('size-2 shrink-0 rounded-full', {
       question: 'bg-warning',
       quiet: 'bg-muted-foreground/60',
       inactive: 'bg-muted-foreground/30',
+      done: 'bg-success/50',
     } satisfies Record<ThreadAttention, string>,
   },
 });
@@ -206,35 +220,6 @@ export function threadCardIdentity(
     project: props.project,
     projectColor: props.projectColor ?? null,
   };
-}
-
-/** The quiet icon buttons at the end of a thread head on the canvas. */
-export function ThreadHeadIcon({
-  slot,
-  label,
-  title,
-  icon,
-  onClick,
-}: {
-  slot: string;
-  label: string;
-  title: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-}): React.JSX.Element {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      data-slot={slot}
-      className="size-6 shrink-0 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
-      aria-label={label}
-      title={title}
-      onClick={onClick}>
-      {icon}
-    </Button>
-  );
 }
 
 /** Show a thread's chat on the canvas, or hide it again, from its head. */
@@ -290,6 +275,7 @@ export function OpenInChatsIcon({
  * moved. Its title and Show chat turn it into the thread's card on the canvas.
  */
 export function ThreadCard({
+  runId,
   title,
   status,
   statusText,
@@ -316,6 +302,7 @@ export function ThreadCard({
   const preview = previewLine(lastMessage);
   const lines = previewLines(lastMessage);
   const ownHeight = threadCardHeight({ note, lastMessage });
+  const archive = useThreadArchive(runId);
   return (
     <article
       aria-label={summary ?? title}
@@ -359,6 +346,9 @@ export function ThreadCard({
                   onToggle={onToggleCard}
                 />
               )}
+              {archive === null ? null : (
+                <ArchiveThreadIcon title={title} onArchive={archive} />
+              )}
               <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
             </>
           }
@@ -398,6 +388,13 @@ export function ThreadCard({
           {formatRelativeTime(lastAt, now)}
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
+          {archive === null || attention !== 'done' ? null : (
+            <ArchiveThreadButton
+              slot="thread-card-archive"
+              title={title}
+              onArchive={archive}
+            />
+          )}
           {onAnswer === undefined ? null : (
             <Button
               type="button"

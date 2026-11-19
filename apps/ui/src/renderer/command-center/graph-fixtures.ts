@@ -12,7 +12,7 @@ const ATTENTION_OF: Record<ThreadCardStatus, ThreadAttention> = {
   waiting: 'question',
   idle: 'quiet',
   failed: 'blocked',
-  done: 'quiet',
+  done: 'done',
 };
 
 const HOUR = 60 * 60_000;

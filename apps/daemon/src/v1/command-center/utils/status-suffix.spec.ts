@@ -91,6 +91,39 @@ describe('composeStatusSuffix', () => {
     expect(text.at(-1)).toBe('- …and 5 more threads');
   });
 
+  it('lists finished threads after every other, keeping each group in roster order', () => {
+    const text = composeStatusSuffix(
+      [
+        line({ handle: 't1', column: 'done' }),
+        line({ handle: 't2', column: 'working' }),
+        line({ handle: 't3', column: 'done' }),
+        line({ handle: 't4', column: 'idle' }),
+      ],
+      NOW,
+    )!.split('\n');
+
+    expect(text.slice(1).map((entry) => entry.split(' · ')[0])).toEqual([
+      '- t2',
+      '- t4',
+      '- t1',
+      '- t3',
+    ]);
+  });
+
+  it('cuts finished threads first when the roster is over STATUS_SUFFIX_MAX_LINES', () => {
+    const lines = [
+      line({ handle: 'done-1', column: 'done' }),
+      ...Array.from({ length: STATUS_SUFFIX_MAX_LINES }, (_, index) =>
+        line({ handle: `t${index + 1}` }),
+      ),
+    ];
+
+    const text = composeStatusSuffix(lines, NOW)!.split('\n');
+
+    expect(text.some((entry) => entry.startsWith('- done-1'))).toBe(false);
+    expect(text.at(-1)).toBe('- …and 1 more threads');
+  });
+
   it('caps each line at STATUS_SUFFIX_LINE_MAX characters, ending with an ellipsis', () => {
     const text = composeStatusSuffix(
       [line({ handle: 'x'.repeat(STATUS_SUFFIX_LINE_MAX + 40) })],

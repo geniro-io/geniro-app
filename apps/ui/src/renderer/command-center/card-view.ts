@@ -31,13 +31,14 @@ export const IDLE_AFTER_DAYS = 3;
 /** A quiet thread untouched this long is greyed out and sinks to the bottom. */
 export const INACTIVE_AFTER_MS = DAY_MS;
 
-/** Top to bottom: what is blocked, what waits on a question, what works, what is quiet, what has gone still. */
+/** Top to bottom: what is blocked, what waits on a question, what works, what is quiet, what has gone still, what has finished. */
 export const ATTENTION_ORDER: readonly ThreadAttention[] = [
   'blocked',
   'question',
   'working',
   'quiet',
   'inactive',
+  'done',
 ];
 
 /** Whole days since the thread last moved, once that reaches {@link IDLE_AFTER_DAYS}; else null. */
@@ -48,9 +49,9 @@ export function idleDaysOf(lastAt: string, now: number): number | null {
 
 /**
  * Where a thread stands for the user: blocked on a press (a failure, an
- * approval), waiting on the user's answer to its question, working (the
- * manager awaiting its reply counts as work), quiet, or untouched for a day
- * and more.
+ * approval), waiting on the user's answer to its question, working, finished
+ * (kept until it is archived), working again when the manager awaits its
+ * reply, quiet, or untouched for a day and more.
  */
 export function attentionOf(
   card: Pick<CommandCenterCard, 'run' | 'column' | 'contact'>,
@@ -64,6 +65,9 @@ export function attentionOf(
   }
   if (card.run.awaiting === 'question') {
     return 'question';
+  }
+  if (card.column === 'done') {
+    return 'done';
   }
   if (card.contact.awaitingReply) {
     return 'working';
@@ -280,6 +284,7 @@ export function threadCardViewOf(
   const attention = attentionOf(card, now);
   return {
     ...threadNameOf(card, identities, teams, projectColors),
+    runId: card.run.id,
     status,
     statusText: statusTextOf(card, status, attention),
     attention,

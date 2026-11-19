@@ -240,6 +240,69 @@ describe('ThreadEventRow', () => {
     ).toBe('Started a turn there');
   });
 
+  it('draws the message as markdown, not as its raw source', () => {
+    const el = render(
+      <ThreadEventCard
+        kind="received"
+        runId="r-otter"
+        title="Otter"
+        text={'Batch is **staged**; run `verify` next.'}
+      />,
+    );
+    const body = el.querySelector('[data-slot="thread-event-text"]')!;
+    expect(body.querySelector('strong')?.textContent).toBe('staged');
+    expect(body.querySelector('code')?.textContent).toBe('verify');
+    expect(body.textContent).not.toContain('**');
+  });
+
+  it('folds a long message behind Show more, and Show more unfolds it', () => {
+    const long = Array.from({ length: 30 }, (_, i) => `- step ${i + 1}`).join(
+      '\n',
+    );
+    const el = render(
+      <ThreadEventCard
+        kind="received"
+        runId="r-otter"
+        title="Otter"
+        text={long}
+      />,
+    );
+    const body = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-text"]',
+    )!;
+    expect(body.dataset.clamped).toBe('true');
+    const toggle = el.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-event-text-toggle"]',
+    )!;
+    expect(toggle.textContent).toContain('Show more');
+
+    act(() => toggle.click());
+
+    expect(body.dataset.clamped).toBeUndefined();
+    expect(toggle.textContent).toContain('Show less');
+    expect(body.textContent).toContain('step 30');
+  });
+
+  it('shows a short message with a picture whole, with no Show more', () => {
+    const el = render(
+      <ThreadEventCard
+        kind="received"
+        runId="r-otter"
+        title="Otter"
+        text={'Coverage:\n\n![Coverage by module](/tmp/coverage.png)'}
+      />,
+    );
+    const body = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-text"]',
+    )!;
+    expect(body.dataset.clamped).toBeUndefined();
+    expect(
+      el.querySelector('[data-slot="thread-event-text-toggle"]'),
+    ).toBeNull();
+    expect(body.querySelector('[data-slot^="markdown-image"]')).not.toBeNull();
+    expect(body.textContent).not.toContain('![');
+  });
+
   it('shows a finished thread with its handle, pull request and what it reported', () => {
     const el = render(
       <ThreadEventRow

@@ -102,6 +102,35 @@ export const Received: Story = {
   },
 };
 
+export const LongMarkdownReply: Story = {
+  args: {
+    kind: 'received',
+    runId: 'r-elves',
+    title: 'Stage 5',
+    inReplyTo: 'Hold the Elves batch until the stage 4 review lands.',
+    text: [
+      '## Stage 5 — review of the Elves batch',
+      '',
+      'The batch is **staged** and every check has run:',
+      '',
+      '1. Textures: 42 of 42 converted.',
+      '2. Stalls: form, textures and the market sign are finished.',
+      '3. Pathing: two NPCs still clip the fountain.',
+      '',
+      '```ts',
+      'const report = await batch.verify({ stage: 5, strict: true });',
+      '```',
+      '',
+      '| Check | Result |',
+      '| --- | --- |',
+      '| Textures | passed |',
+      '| Pathing | 2 failures |',
+      '',
+      'Tell me if you want the NPC fix in this batch or the next one.',
+    ].join('\n'),
+  },
+};
+
 export const Woken: Story = {
   args: { kind: 'woken', runId: 'r-elves', title: 'Stage 5' },
 };

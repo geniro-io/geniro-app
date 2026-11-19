@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import { memo, useContext } from 'react';
 
-import { ClampedText } from '../components/clamped-text';
 import {
   bareThreadIdentity,
   ThreadHead,
@@ -17,6 +16,7 @@ import {
 } from '../components/thread-head';
 import { cn } from '../components/ui/utils';
 import { plainPreview } from './brief-text';
+import { ClampedMarkdown } from './clamped-markdown';
 import {
   sentOutcomeWords,
   type ThreadMessageRow,
@@ -56,6 +56,8 @@ export interface ThreadEventCardProps {
   /** The manager's short name for the thread (`t22`). */
   handle?: string | null;
   pullRequest?: number | null;
+  /** Where the text's Show more is remembered within the thread. */
+  memoryKey?: string;
 }
 
 function identityOf(
@@ -85,6 +87,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
   outcome = null,
   handle = null,
   pullRequest = null,
+  memoryKey,
 }: ThreadEventCardProps): React.JSX.Element {
   const known = useThreadIdentity(runId);
   const open = useContext(ThreadOpenContext);
@@ -140,11 +143,13 @@ export const ThreadEventCard = memo(function ThreadEventCard({
       )}
       {text === null || text === '' ? null : (
         <div className={cn('border-l-2 pl-3', meta.rail)}>
-          <ClampedText
+          <ClampedMarkdown
             text={text}
-            lines={3}
+            lines={8}
             slot="thread-event-text"
-            className="text-sm leading-relaxed text-foreground"
+            className="text-sm text-foreground"
+            toggleClassName="text-xs"
+            memoryKey={memoryKey}
           />
         </div>
       )}
@@ -179,6 +184,7 @@ export function ThreadEventRow({
               member={message.fromMember}
               inReplyTo={message.inReplyTo?.text ?? null}
               text={message.text}
+              memoryKey={`thread-event:${message.id}`}
             />
           ))}
         </ThreadEventStack>

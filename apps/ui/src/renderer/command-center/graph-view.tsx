@@ -816,6 +816,14 @@ function GraphCanvas({
     onCanvas.size === 0 && pinned.size === 0
       ? drawn
       : layoutRows(root, graphRows(shown, hidden, canvasWidth));
+  const dragGone =
+    drag !== null &&
+    (narrow || !shown.some((t) => `thread:${t.id}` === drag.id));
+  useEffect(() => {
+    if (dragGone) {
+      setDrag(null);
+    }
+  }, [dragGone]);
   const placedRoot = drawn.boxes.get(MANAGER_ID)!;
   const offsetOf = (position: { x: number; y: number }): NodeOffset => ({
     x: position.x - placedRoot.x,

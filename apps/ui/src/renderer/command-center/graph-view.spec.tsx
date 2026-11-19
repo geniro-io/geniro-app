@@ -853,6 +853,46 @@ describe('GraphView', () => {
     expect(onResetLayout).toHaveBeenCalledTimes(1);
   });
 
+  it('moves an open card’s slot with its head, and on the drop places it relative to the manager', async () => {
+    Element.prototype.setPointerCapture = vi.fn();
+    const onPlaceNode = vi.fn();
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+      onPlaceNode,
+    });
+    const start = nodeAt('graph-slot', 'thread-2');
+    const head = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="thread-2"] [data-slot="thread-canvas-card-head"]',
+    )!;
+    const press = (type: string, x: number, y: number): void => {
+      act(() => {
+        head.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            button: 0,
+            clientX: x,
+            clientY: y,
+          }),
+        );
+      });
+    };
+
+    press('pointerdown', 100, 100);
+    press('pointermove', 160, 140);
+    const during = nodeAt('graph-slot', 'thread-2');
+    expect(during.x).toBeCloseTo(start.x + 60, 5);
+    expect(during.y).toBeCloseTo(start.y + 40, 5);
+    expect(onPlaceNode).not.toHaveBeenCalled();
+
+    press('pointerup', 160, 140);
+    const manager = nodeAt('graph-manager');
+    expect(onPlaceNode).toHaveBeenCalledWith('thread-2', {
+      x: start.x + 60 - manager.x,
+      y: start.y + 40 - manager.y,
+    });
+  });
+
   it('keeps the view the viewer moved when the graph grows wider, rather than refitting over it', async () => {
     const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
     await draw({ threads: graphThreadsOf(3) });

@@ -444,6 +444,44 @@ describe('layoutRows with pinned boxes', () => {
     return { x: box.x - root.x, y: box.y - root.y };
   };
 
+  it('moves a row past every pinned box it would meet, one stacked under another', () => {
+    const rows = rowsOf(8, 4);
+    const free = layoutRows(ROOT, rows);
+    const spot = free.boxes.get('t0')!;
+    const root = free.boxes.get('root')!;
+    const upper = { x: spot.x - root.x, y: spot.y - root.y };
+    const lower = { x: upper.x, y: upper.y + spot.height + 72 };
+
+    const geometry = layoutRows(
+      ROOT,
+      rows,
+      new Map([
+        ['t7', upper],
+        ['t6', lower],
+      ]),
+    );
+
+    expect(overlaps(geometry)).toEqual([]);
+    const below = geometry.boxes.get('t6')!;
+    expect(geometry.boxes.get('t0')!.y).toBeGreaterThanOrEqual(
+      below.y + below.height,
+    );
+  });
+
+  it('keeps the rows under a wholly pinned row where they stood across the canvas', () => {
+    const rows = rowsOf(12, 4);
+    const free = layoutRows(ROOT, rows);
+    const firstRow = new Map(
+      rows[0]!.map((box, index) => [box.id, { x: 3000 + index * 400, y: 0 }]),
+    );
+
+    const geometry = layoutRows(ROOT, rows, firstRow);
+
+    for (const box of [...rows[1]!, ...rows[2]!]) {
+      expect(geometry.boxes.get(box.id)!.x).toBe(free.boxes.get(box.id)!.x);
+    }
+  });
+
   it('lays out exactly as before when no box is pinned', () => {
     for (const rows of [rowsOf(9, 4), rowsOf(24, 6)]) {
       expect(layoutRows(ROOT, rows, new Map())).toEqual(layoutRows(ROOT, rows));

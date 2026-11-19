@@ -153,15 +153,15 @@ export function layoutRows(
   let top = rootBottom + LINE_GAP;
   let bottom = rootBottom;
   const placedRows: PlacedBox[][] = [];
-  for (const row of filled) {
+  filled.forEach((row, rowIndex) => {
     const free = row.filter((item) => !pinned.has(item.id));
     if (free.length === 0) {
-      continue;
+      return;
     }
     const start =
       centre -
       spanOf(free) / 2 +
-      (placedRows.length % 2 === 1 ? stagger / 2 : -stagger / 2);
+      (rowIndex % 2 === 1 ? stagger / 2 : -stagger / 2);
     const at = (rowTop: number): PlacedBox[] => {
       let x = start;
       return free.map((item) => {
@@ -191,7 +191,7 @@ export function layoutRows(
       boxes.set(box.id, box);
     }
     placedRows.push(placed);
-  }
+  });
 
   placedRows.forEach((row, lineIndex) => {
     for (const box of row) {

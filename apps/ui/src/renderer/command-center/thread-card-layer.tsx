@@ -51,6 +51,7 @@ interface HeadPress {
   startX: number;
   startY: number;
   moving: boolean;
+  last: CardMove;
 }
 
 /** A move of the card by its head, in screen pixels from where the press began. */
@@ -144,7 +145,7 @@ function CardHead({
     dy: event.clientY - from.startY,
   });
   const begin = (event: ReactPointerEvent<HTMLElement>): void => {
-    if (onMove === undefined || event.button !== 0 || press.current !== null) {
+    if (onMove === undefined || event.button !== 0 || press.current?.moving) {
       return;
     }
     press.current = {
@@ -152,6 +153,7 @@ function CardHead({
       startX: event.clientX,
       startY: event.clientY,
       moving: false,
+      last: { dx: 0, dy: 0 },
     };
   };
   const follow = (event: ReactPointerEvent<HTMLElement>): void => {
@@ -167,16 +169,25 @@ function CardHead({
       active.moving = true;
       event.currentTarget.setPointerCapture(event.pointerId);
     }
+    active.last = move;
     onMove?.(move, false);
   };
-  const release = (event: ReactPointerEvent<HTMLElement>): void => {
+  const finish = (
+    event: ReactPointerEvent<HTMLElement>,
+    at: (active: HeadPress) => CardMove,
+  ): void => {
     const active = press.current;
     if (active === null || active.pointerId !== event.pointerId) {
       return;
     }
     press.current = null;
     if (active.moving) {
-      onMove?.(moveOf(event, active), true);
+      onMove?.(at(active), true);
+    }
+  };
+  const forget = (): void => {
+    if (press.current?.moving === false) {
+      press.current = null;
     }
   };
   return (
@@ -189,8 +200,9 @@ function CardHead({
       style={{ height: CARD_HEAD_HEIGHT }}
       onPointerDown={begin}
       onPointerMove={follow}
-      onPointerUp={release}
-      onPointerCancel={release}>
+      onPointerUp={(event) => finish(event, (active) => moveOf(event, active))}
+      onPointerCancel={(event) => finish(event, (active) => active.last)}
+      onPointerLeave={forget}>
       {leading}
       <div className="min-w-0 flex-1">
         <ThreadHead
@@ -397,6 +409,11 @@ export function ThreadCardLayer({
     onMove(runId, to, done);
   };
 
+  for (const runId of moving.current.keys()) {
+    if (!slots.has(runId)) {
+      moving.current.delete(runId);
+    }
+  }
   const shown = cards.filter((card) => slots.has(card.runId));
   if (shown.length === 0) {
     return null;

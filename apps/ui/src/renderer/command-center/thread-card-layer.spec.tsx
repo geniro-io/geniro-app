@@ -485,4 +485,65 @@ describe('ThreadCardLayer — dragging a card by its head', () => {
 
     expect(onMove).toHaveBeenNthCalledWith(1, 'a', { x: 125, y: 55 }, false);
   });
+
+  it('measures every move from where the card stood when the drag began, while its slot follows the pointer', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    drawLayer({ onMove, slots: new Map([['a', box(150, 70)]]) });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 170, 140));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 170, y: 80 }, false);
+  });
+
+  it('starts a new press afresh when the last one never came back up', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 300, 300));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 350, 330));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 150, y: 70 }, false);
+  });
+
+  it('drops a cancelled drag where the pointer was last followed, not where the cancel reports it', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointercancel', 0, 0));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 150, y: 70 }, true);
+  });
 });

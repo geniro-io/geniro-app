@@ -53,6 +53,7 @@ import type { GraphFocus } from './graph-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
 import { NeedsYouPanel } from './needs-you-panel';
+import { useNodePositions } from './node-positions';
 import { type CardBand, useOpenCards } from './open-cards';
 import { projectColorsOf } from './project-colors';
 import { ThreadCardChat } from './thread-card-chat';
@@ -218,6 +219,7 @@ export function CommandCenter({
   }, [apis, unknownTeams]);
   const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
   const cards = useOpenCards(narrow);
+  const nodePositions = useNodePositions();
   const [focus, setFocus] = useState<GraphFocus | null>(null);
   const [offBoard, setOffBoard] = useState<string | null>(null);
   const timeline = useCommandCenterTimeline(
@@ -288,9 +290,11 @@ export function CommandCenter({
           .join(',');
   useEffect(() => {
     if (boardRunIds !== null) {
-      cards.keepOnly(new Set(boardRunIds === '' ? [] : boardRunIds.split(',')));
+      const onBoard = new Set(boardRunIds === '' ? [] : boardRunIds.split(','));
+      cards.keepOnly(onBoard);
+      nodePositions.keepOnly(onBoard);
     }
-  }, [boardRunIds, cards.keepOnly]);
+  }, [boardRunIds, cards.keepOnly, nodePositions.keepOnly]);
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -519,6 +523,9 @@ export function CommandCenter({
             }))}
             onCloseCard={cards.close}
             onResizeCard={cards.resize}
+            positions={nodePositions.offsets}
+            onPlaceNode={nodePositions.place}
+            onResetLayout={nodePositions.reset}
             renderCardChat={renderCardChat}
             focus={focus}
             onFocused={(seq) =>

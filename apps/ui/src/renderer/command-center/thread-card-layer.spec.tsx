@@ -128,6 +128,7 @@ function layerProps(
     flashing: null,
     onClose: vi.fn(),
     onResize: vi.fn(),
+    onMove: vi.fn(),
     onOpenInChats: vi.fn(),
     renderChat: (runId) => (
       <span data-slot="card-chat">{`chat of ${runId}`}</span>
@@ -173,6 +174,12 @@ function pointer(type: string, clientX: number, clientY: number): MouseEvent {
 function handleOf(edge: 's' | 'se'): HTMLElement {
   return container.querySelector<HTMLElement>(
     `[data-slot="thread-canvas-card-resize"][data-edge="${edge}"]`,
+  )!;
+}
+
+function headOf(runId: string): HTMLElement {
+  return container.querySelector<HTMLElement>(
+    `[data-slot="thread-canvas-card"][data-run-id="${runId}"] [data-slot="thread-canvas-card-head"]`,
   )!;
 }
 
@@ -419,5 +426,124 @@ describe('ThreadCardLayer — the flash', () => {
     });
     expect(flashOf('a')).not.toBeNull();
     expect(flashOf('a')).not.toBe(first);
+  });
+});
+
+describe('ThreadCardLayer — dragging a card by its head', () => {
+  it('a press that travels less than the drag threshold is a click, and moves nothing', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 103, 102));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerup', 103, 102));
+    });
+
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it('moves the card with the pointer past the threshold, and hands its place up once on release', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    expect(onMove).toHaveBeenNthCalledWith(1, 'a', { x: 150, y: 70 }, false);
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerup', 150, 130));
+    });
+    expect(onMove).toHaveBeenCalledTimes(2);
+    expect(onMove).toHaveBeenNthCalledWith(2, 'a', { x: 150, y: 70 }, true);
+  });
+
+  it('measures the drag in flow units, so at zoom 2 the same screen move carries the card half as far', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 2] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+
+    expect(onMove).toHaveBeenNthCalledWith(1, 'a', { x: 125, y: 55 }, false);
+  });
+
+  it('measures every move from where the card stood when the drag began, while its slot follows the pointer', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    drawLayer({ onMove, slots: new Map([['a', box(150, 70)]]) });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 170, 140));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 170, y: 80 }, false);
+  });
+
+  it('starts a new press afresh when the last one never came back up', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 300, 300));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 350, 330));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 150, y: 70 }, false);
+  });
+
+  it('drops a cancelled drag where the pointer was last followed, not where the cancel reports it', () => {
+    const onMove = vi.fn();
+    drawLayer({ onMove, slots: new Map([['a', box(100, 40)]]) });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 1] });
+    });
+
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointermove', 150, 130));
+    });
+    act(() => {
+      headOf('a').dispatchEvent(pointer('pointercancel', 0, 0));
+    });
+
+    expect(onMove).toHaveBeenLastCalledWith('a', { x: 150, y: 70 }, true);
   });
 });

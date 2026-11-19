@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ReactFlowProps } from '@xyflow/react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
@@ -35,6 +36,7 @@ import { CARD_HEAD_HEIGHT, largestCard } from './thread-card-layer';
 const seams = vi.hoisted(() => ({
   setViewport: [] as unknown[][],
   moveStart: null as (() => void) | null,
+  flow: null as ReactFlowProps | null,
 }));
 
 vi.mock('@xyflow/react', async (importOriginal) => {
@@ -43,6 +45,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
   return {
     ...actual,
     ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      seams.flow = props;
       seams.moveStart =
         props.onMoveStart === undefined
           ? null
@@ -201,6 +204,7 @@ describe('GraphView', () => {
   beforeEach(() => {
     seams.setViewport.splice(0);
     seams.moveStart = null;
+    seams.flow = null;
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
     container = document.createElement('div');
@@ -233,6 +237,9 @@ describe('GraphView', () => {
           openCards={[]}
           onCloseCard={() => undefined}
           onResizeCard={() => undefined}
+          positions={{}}
+          onPlaceNode={() => undefined}
+          onResetLayout={() => undefined}
           onFocused={() => undefined}
           renderCardChat={() => null}
           focus={null}
@@ -261,18 +268,21 @@ describe('GraphView', () => {
     return card;
   }
 
-  function nodeY(slot: string, id?: string): number {
+  function nodeAt(slot: string, id?: string): { x: number; y: number } {
     const inner = container.querySelector<HTMLElement>(
       id === undefined
         ? `[data-slot="${slot}"]`
         : `[data-slot="${slot}"][data-thread-id="${id}"]`,
     )!;
     const wrapper = inner.closest<HTMLElement>('.react-flow__node')!;
-    return Number(
-      /translate\(\s*[-\d.]+px,\s*([-\d.]+)px\)/.exec(
-        wrapper.style.transform,
-      )![1],
-    );
+    const [, x, y] = /translate\(\s*([-\d.]+)px,\s*([-\d.]+)px\)/.exec(
+      wrapper.style.transform,
+    )!;
+    return { x: Number(x), y: Number(y) };
+  }
+
+  function nodeY(slot: string, id?: string): number {
+    return nodeAt(slot, id).y;
   }
 
   it('heads the tree with the manager and hangs every thread under it as a card, wires going down', async () => {
@@ -749,6 +759,208 @@ describe('GraphView', () => {
       ),
     ).not.toBeNull();
   });
+
+  it('lets a thread node be dragged on a wide canvas, and no other node', async () => {
+    await draw({
+      threads: graphThreadsOf(30),
+      openCards: [openCard('thread-2')],
+    });
+
+    const threadNodes = nodesOfType('thread');
+    expect(threadNodes.length).toBeGreaterThan(0);
+    expect(threadNodes.every((node) => node.draggable === true)).toBe(true);
+    for (const type of ['manager', 'slot', 'more']) {
+      const nodes = nodesOfType(type);
+      expect(nodes).toHaveLength(1);
+      expect(nodes[0]!.draggable).toBe(false);
+    }
+    expect(seams.flow?.nodeDragThreshold).toBe(5);
+  });
+
+  it('lets no node be dragged on a phone, where the column is the layout', async () => {
+    await draw({ threads: graphThreadsOf(3), narrow: true });
+
+    const nodes = seams.flow?.nodes ?? [];
+    expect(nodes.length).toBeGreaterThan(1);
+    expect(nodes.every((node) => node.draggable === false)).toBe(true);
+  });
+
+  it('moves a dragged thread node with the pointer, and on release places it at the drop, relative to the manager', async () => {
+    const onPlaceNode = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onPlaceNode });
+    const start = flowNode('thread:thread-2').position;
+    const to = { x: start.x + 120, y: start.y + 40 };
+
+    act(() => {
+      seams.flow!.onNodesChange!([
+        {
+          type: 'position',
+          id: 'thread:thread-2',
+          position: to,
+          dragging: true,
+        },
+      ]);
+    });
+    const during = nodeAt('graph-thread', 'thread-2');
+    expect(during.x).toBeCloseTo(to.x, 5);
+    expect(during.y).toBeCloseTo(to.y, 5);
+    expect(onPlaceNode).not.toHaveBeenCalled();
+
+    act(() => {
+      seams.flow!.onNodeDragStop!(
+        new MouseEvent('mouseup'),
+        flowNode('thread:thread-2'),
+        [],
+      );
+    });
+    const manager = nodesOfType('manager')[0]!.position;
+    expect(onPlaceNode).toHaveBeenCalledTimes(1);
+    expect(onPlaceNode).toHaveBeenCalledWith('thread-2', {
+      x: to.x - manager.x,
+      y: to.y - manager.y,
+    });
+  });
+
+  it('draws a thread at the place it was left, offset from the manager node', async () => {
+    await draw({
+      threads: graphThreadsOf(3),
+      positions: { 'thread-2': { x: 240, y: 360 } },
+    });
+
+    const manager = nodeAt('graph-manager');
+    const placed = nodeAt('graph-thread', 'thread-2');
+    expect(placed.x).toBeCloseTo(manager.x + 240, 5);
+    expect(placed.y).toBeCloseTo(manager.y + 360, 5);
+  });
+
+  it('offers Reset layout only while a node keeps a place of its own, and gives the automatic layout back on a click', async () => {
+    const onResetLayout = vi.fn();
+    const resetButton = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[data-slot="graph-reset-layout"]',
+      );
+    await draw({ threads: graphThreadsOf(3), onResetLayout });
+    expect(resetButton()).toBeNull();
+
+    await draw({
+      threads: graphThreadsOf(3),
+      positions: { 'thread-2': { x: 240, y: 360 } },
+      onResetLayout,
+    });
+    expect(resetButton()).not.toBeNull();
+    act(() => resetButton()!.click());
+
+    expect(onResetLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the manager where it stood when a card opens wider than its node, so moved nodes stay put', async () => {
+    await draw({
+      threads: graphThreadsOf(6),
+      positions: { 'thread-5': { x: -300, y: 400 } },
+    });
+    const manager = nodeAt('graph-manager');
+    const moved = nodeAt('graph-thread', 'thread-5');
+
+    await draw({
+      threads: graphThreadsOf(6),
+      positions: { 'thread-5': { x: -300, y: 400 } },
+      openCards: [openCard('thread-2', { width: 900, height: 420 })],
+    });
+
+    expect(nodeAt('graph-manager')).toEqual(manager);
+    expect(nodeAt('graph-thread', 'thread-5')).toEqual(moved);
+  });
+
+  it('moves an open card’s slot with its head, and on the drop places it relative to the manager', async () => {
+    Element.prototype.setPointerCapture = vi.fn();
+    const onPlaceNode = vi.fn();
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+      onPlaceNode,
+    });
+    const start = nodeAt('graph-slot', 'thread-2');
+    const head = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="thread-2"] [data-slot="thread-canvas-card-head"]',
+    )!;
+    const press = (type: string, x: number, y: number): void => {
+      act(() => {
+        head.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            button: 0,
+            clientX: x,
+            clientY: y,
+          }),
+        );
+      });
+    };
+
+    press('pointerdown', 100, 100);
+    press('pointermove', 160, 140);
+    const during = nodeAt('graph-slot', 'thread-2');
+    expect(during.x).toBeCloseTo(start.x + 60, 5);
+    expect(during.y).toBeCloseTo(start.y + 40, 5);
+    expect(onPlaceNode).not.toHaveBeenCalled();
+
+    press('pointerup', 160, 140);
+    const manager = nodeAt('graph-manager');
+    expect(onPlaceNode).toHaveBeenCalledWith('thread-2', {
+      x: start.x + 60 - manager.x,
+      y: start.y + 40 - manager.y,
+    });
+  });
+
+  it('keeps the view the viewer moved when the graph grows wider, rather than refitting over it', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    await draw({ threads: graphThreadsOf(3) });
+    clock.mockReturnValue(60_000);
+    act(() => seams.moveStart?.());
+    seams.setViewport.splice(0);
+
+    await draw({ threads: graphThreadsOf(12) });
+
+    expect(seams.setViewport).toEqual([]);
+  });
+
+  it('refits a view the viewer moved when the canvas itself changes size', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    const previous = globalThis.ResizeObserver;
+    const canvasSizes: ((entries: ResizeObserverEntry[]) => void)[] = [];
+    globalThis.ResizeObserver = class {
+      private readonly callback: (entries: ResizeObserverEntry[]) => void;
+
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        this.callback = callback;
+      }
+
+      observe(target: Element): void {
+        if (target.parentElement?.dataset.slot === 'command-center-graph') {
+          canvasSizes.push(this.callback);
+        }
+      }
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      await draw({ threads: graphThreadsOf(3) });
+      clock.mockReturnValue(60_000);
+      act(() => seams.moveStart?.());
+      seams.setViewport.splice(0);
+
+      act(() => {
+        canvasSizes.at(-1)!([
+          { contentRect: { width: 900, height: 600 } },
+        ] as unknown as ResizeObserverEntry[]);
+      });
+
+      expect(seams.setViewport.length).toBeGreaterThan(0);
+    } finally {
+      globalThis.ResizeObserver = previous;
+    }
+  });
 });
 
 describe('graphRows', () => {
@@ -772,6 +984,20 @@ describe('graphRows', () => {
     });
   });
 });
+
+type FlowNode = NonNullable<ReactFlowProps['nodes']>[number];
+
+function nodesOfType(type: string): FlowNode[] {
+  return (seams.flow?.nodes ?? []).filter((node) => node.type === type);
+}
+
+function flowNode(id: string): FlowNode {
+  const node = (seams.flow?.nodes ?? []).find((step) => step.id === id);
+  if (node === undefined) {
+    throw new Error(`no flow node ${id}`);
+  }
+  return node;
+}
 
 function openCard(
   runId: string,

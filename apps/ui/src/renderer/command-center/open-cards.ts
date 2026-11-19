@@ -2,6 +2,14 @@ import { useState } from 'react';
 
 import type { ThreadAttention } from '../components/thread-labels';
 import { useLatestCallback } from '../components/use-latest-callback';
+import {
+  hasFiniteNumbers,
+  keptRunRecords,
+  readRunRecords,
+  type RunRecords,
+  withRunRecord,
+  writeRunRecords,
+} from './run-records';
 
 /** A card's own size in pixels: its width, and the height of the chat under its head. */
 export interface CardSize {
@@ -25,44 +33,15 @@ export const DEFAULT_CARD_SIZE: CardSize = { width: 460, height: 420 };
 export const MIN_CARD_SIZE: CardSize = { width: 320, height: 220 };
 export const MAX_REMEMBERED_CARD_SIZES = 200;
 
-type CardSizes = Readonly<Record<string, CardSize>>;
+type CardSizes = RunRecords<CardSize>;
 
 function isCardSize(value: unknown): value is CardSize {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const { width, height } = value as Record<string, unknown>;
-  return (
-    typeof width === 'number' &&
-    typeof height === 'number' &&
-    Number.isFinite(width) &&
-    Number.isFinite(height)
-  );
+  return hasFiniteNumbers(value, ['width', 'height']);
 }
 
 /** The card sizes this device remembers, by thread; empty when none or unreadable. */
 export function readCardSizes(): CardSizes {
-  try {
-    const stored: unknown = JSON.parse(
-      localStorage.getItem(CARD_SIZES_KEY) ?? '{}',
-    );
-    if (typeof stored !== 'object' || stored === null) {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.entries(stored).filter(([, size]) => isCardSize(size)),
-    ) as CardSizes;
-  } catch {
-    return {};
-  }
-}
-
-function writeCardSizes(sizes: CardSizes): void {
-  try {
-    localStorage.setItem(CARD_SIZES_KEY, JSON.stringify(sizes));
-  } catch {
-    return;
-  }
+  return readRunRecords(CARD_SIZES_KEY, isCardSize);
 }
 
 /** `sizes` with `runId` set last, the oldest dropped past {@link MAX_REMEMBERED_CARD_SIZES}. */
@@ -71,9 +50,7 @@ export function withCardSize(
   runId: string,
   size: CardSize,
 ): CardSizes {
-  const entries = Object.entries(sizes).filter(([id]) => id !== runId);
-  entries.push([runId, size]);
-  return Object.fromEntries(entries.slice(-MAX_REMEMBERED_CARD_SIZES));
+  return withRunRecord(sizes, runId, size, MAX_REMEMBERED_CARD_SIZES);
 }
 
 export interface OpenCards {
@@ -130,12 +107,10 @@ export function useOpenCards(narrow: boolean): OpenCards {
         : rows.filter((row) => runIds.has(row.runId)),
     );
     setSizes((current) => {
-      const kept = Object.entries(current).filter(([id]) => runIds.has(id));
-      if (kept.length === Object.keys(current).length) {
-        return current;
+      const next = keptRunRecords(current, runIds);
+      if (next !== current) {
+        writeRunRecords(CARD_SIZES_KEY, next);
       }
-      const next = Object.fromEntries(kept);
-      writeCardSizes(next);
       return next;
     });
   }, []);
@@ -144,7 +119,7 @@ export function useOpenCards(narrow: boolean): OpenCards {
     (runId: string, size: CardSize): void =>
       setSizes((current) => {
         const next = withCardSize(current, runId, size);
-        writeCardSizes(next);
+        writeRunRecords(CARD_SIZES_KEY, next);
         return next;
       }),
     [],

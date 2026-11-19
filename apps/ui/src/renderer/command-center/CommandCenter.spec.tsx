@@ -416,3 +416,32 @@ describe('CommandCenter — the phone sidebar and the focus', () => {
     expect(probes.graph!.focus).toBeNull();
   });
 });
+
+describe('CommandCenter — the places nodes were moved to', () => {
+  it('hands the graph the places this device keeps, and forgets those of threads that left the board', async () => {
+    localStorage.setItem(
+      'commandCenter.nodePositions',
+      JSON.stringify({
+        'run-a': { x: 40, y: 300 },
+        'run-gone': { x: 0, y: 0 },
+      }),
+    );
+
+    await renderPage();
+
+    expect(probes.graph!.positions).toEqual({ 'run-a': { x: 40, y: 300 } });
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.nodePositions')!),
+    ).toEqual({ 'run-a': { x: 40, y: 300 } });
+  });
+
+  it('keeps a dropped node’s place and gives it up on Reset layout', async () => {
+    await renderPage();
+
+    act(() => probes.graph!.onPlaceNode('run-b', { x: 12, y: 340 }));
+    expect(probes.graph!.positions).toEqual({ 'run-b': { x: 12, y: 340 } });
+
+    act(() => probes.graph!.onResetLayout());
+    expect(probes.graph!.positions).toEqual({});
+  });
+});

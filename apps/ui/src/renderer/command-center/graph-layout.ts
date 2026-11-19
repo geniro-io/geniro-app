@@ -89,6 +89,15 @@ function passageNear(line: readonly PlacedBox[], target: number): number {
   );
 }
 
+function overlaps(box: PlacedBox, obstacle: PlacedBox): boolean {
+  return (
+    box.x < obstacle.x + obstacle.width + COLUMN_GAP / 2 &&
+    obstacle.x < box.x + box.width + COLUMN_GAP / 2 &&
+    box.y < obstacle.y + obstacle.height + LINE_GAP / 2 &&
+    obstacle.y < box.y + box.height + LINE_GAP / 2
+  );
+}
+
 /**
  * The root centred on top and the rows under it, each centred and every
  * other one shifted half the widest box so it sits under the gaps of the row
@@ -96,10 +105,18 @@ function passageNear(line: readonly PlacedBox[], target: number): number {
  * tallest box. A wire leaves the root's bottom, runs
  * along the gap above the first row, passes each row above its own through
  * the nearest gap, and drops into its box's top — so no wire crosses a box.
+ *
+ * A box in `pinned` stands at the root's top-left plus its offset instead, and
+ * a row that would touch it moves down past it. The width the root is centred
+ * on still counts pinned boxes in their rows, and `frame`, when given, replaces
+ * it, so neither a pin nor a box grown in place moves the root and with it
+ * every pinned box.
  */
 export function layoutRows(
   root: GraphBox,
   rows: readonly (readonly GraphBox[])[],
+  pinned: ReadonlyMap<string, Point> = new Map(),
+  frame?: number,
 ): GraphGeometry {
   const filled = rows.filter((row) => row.length > 0);
   const cell = Math.max(0, ...filled.flat().map((item) => item.width));
@@ -108,7 +125,7 @@ export function layoutRows(
     row.reduce((sum, item) => sum + item.width, 0) +
     COLUMN_GAP * (row.length - 1);
   const widest = Math.max(0, ...filled.map(spanOf)) + stagger;
-  const width = Math.max(widest, root.width) + MARGIN * 2;
+  const width = frame ?? Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
   const boxes = new Map<string, PlacedBox>();
@@ -121,21 +138,61 @@ export function layoutRows(
   boxes.set(root.id, placedRoot);
   const rootBottom = MARGIN + root.height;
 
+  const obstacles: PlacedBox[] = [];
+  for (const item of filled.flat()) {
+    const offset = pinned.get(item.id);
+    if (offset !== undefined) {
+      const placed = {
+        ...item,
+        x: placedRoot.x + offset.x,
+        y: placedRoot.y + offset.y,
+      };
+      boxes.set(item.id, placed);
+      obstacles.push(placed);
+    }
+  }
+
   let top = rootBottom + LINE_GAP;
   let bottom = rootBottom;
-  const placedRows: PlacedBox[][] = filled.map((row, index) => {
-    let x =
-      centre - spanOf(row) / 2 + (index % 2 === 1 ? stagger / 2 : -stagger / 2);
-    const rowTop = top;
-    const tallest = Math.max(...row.map((item) => item.height));
-    top += tallest + LINE_GAP;
+  const placedRows: PlacedBox[][] = [];
+  filled.forEach((row, rowIndex) => {
+    const free = row.filter((item) => !pinned.has(item.id));
+    if (free.length === 0) {
+      return;
+    }
+    const start =
+      centre -
+      spanOf(free) / 2 +
+      (rowIndex % 2 === 1 ? stagger / 2 : -stagger / 2);
+    const at = (rowTop: number): PlacedBox[] => {
+      let x = start;
+      return free.map((item) => {
+        const placed = { ...item, x, y: rowTop };
+        x += item.width + COLUMN_GAP;
+        return placed;
+      });
+    };
+    let placed = at(top);
+    for (;;) {
+      const hit = obstacles.filter((obstacle) =>
+        placed.some((box) => overlaps(box, obstacle)),
+      );
+      if (hit.length === 0) {
+        break;
+      }
+      placed = at(
+        Math.max(...hit.map((obstacle) => obstacle.y + obstacle.height)) +
+          LINE_GAP,
+      );
+    }
+    const rowTop = placed[0]!.y;
+    const tallest = Math.max(...free.map((item) => item.height));
+    top = rowTop + tallest + LINE_GAP;
     bottom = rowTop + tallest;
-    return row.map((item) => {
-      const placed = { ...item, x, y: rowTop };
-      x += item.width + COLUMN_GAP;
-      boxes.set(item.id, placed);
-      return placed;
-    });
+    for (const box of placed) {
+      boxes.set(box.id, box);
+    }
+    placedRows.push(placed);
   });
 
   placedRows.forEach((row, lineIndex) => {
@@ -159,7 +216,33 @@ export function layoutRows(
     }
   });
 
-  return { width, height: bottom + MARGIN, boxes, routes };
+  const bus = rootBottom + LINE_GAP / 2;
+  for (const box of obstacles) {
+    const target = box.x + box.width / 2;
+    const end = box.y >= bus ? box.y : box.y + box.height;
+    routes.set(
+      box.id,
+      withoutRepeats([
+        { x: centre, y: rootBottom },
+        { x: centre, y: bus },
+        { x: target, y: bus },
+        { x: target, y: end },
+      ]),
+    );
+  }
+
+  const placedBoxes = [...boxes.values()];
+  const right = Math.max(
+    width - MARGIN,
+    ...placedBoxes.map((b) => b.x + b.width),
+  );
+  const lowest = Math.max(bottom, ...obstacles.map((b) => b.y + b.height));
+  return {
+    width: right + MARGIN,
+    height: lowest + MARGIN,
+    boxes,
+    routes,
+  };
 }
 
 /**

@@ -49,6 +49,9 @@ const meta = {
     openCards: [],
     onCloseCard: () => {},
     onResizeCard: () => {},
+    positions: {},
+    onPlaceNode: () => {},
+    onResetLayout: () => {},
     renderCardChat: () => (
       <p className="p-4 text-sm text-muted-foreground">The thread's chat</p>
     ),

@@ -51,6 +51,7 @@ export const ThreadCardChat = memo(function ThreadCardChat({
     (): HostedThread => ({
       open,
       queueScope: `command-center-thread:${runId}`,
+      hideHeader: true,
       emptyText: 'Nothing has been said in this thread yet.',
       composerLabel: 'Message this thread',
       composerPlaceholder: 'Write to this thread…',

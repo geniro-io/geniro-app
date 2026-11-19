@@ -10686,7 +10686,7 @@ export function Chats({
                   <section className="flex min-h-0 flex-col">
                     {mobileBack}
                     {mobilePanelToggle}
-                    {activeRun ? (
+                    {activeRun && hosted?.hideHeader !== true ? (
                       <ChatHeader
                         label={runLabel(activeRun, teamNames)}
                         analysisSource={analysisSourceOf(activeRun)}

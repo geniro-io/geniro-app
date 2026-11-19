@@ -23,6 +23,8 @@ export interface HostedThread {
   onDiscarded?: () => void;
   /** Leave the run's folder out of the header, which then names the agent. */
   hideHeaderFolder?: boolean;
+  /** Draw no header at all: the surface heads the conversation itself. */
+  hideHeader?: boolean;
   /**
    * Which stored queue is this surface's, stable across closing and reopening
    * it, so a message queued before it closed goes out once it is back.

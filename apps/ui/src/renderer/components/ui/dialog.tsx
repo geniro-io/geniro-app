@@ -60,9 +60,14 @@ export function Dialog({
   const overlayRef = React.useRef<HTMLDivElement | null>(null);
   const [counterZoom, setCounterZoom] = React.useState<{ zoom?: number }>({});
   React.useLayoutEffect(() => {
-    if (open) {
-      setCounterZoom(counterZoomStyle(overlayRef.current?.parentElement));
+    if (!open) {
+      return;
     }
+    const measure = (): void =>
+      setCounterZoom(counterZoomStyle(overlayRef.current?.parentElement));
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
   }, [open]);
   // Read through a ref rather than put in the effect's dependencies: callers
   // pass inline arrows, so every render of the screen around an OUTER dialog

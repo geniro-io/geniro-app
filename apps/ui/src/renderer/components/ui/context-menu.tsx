@@ -1,12 +1,15 @@
 import * as React from 'react';
 
 import { useLatestCallback } from '../use-latest-callback';
+import { cssZoomOf } from './css-zoom';
 import { Menu, type MenuGroup } from './menu';
 
 /** Where a context menu was raised, in viewport coordinates. */
 export interface ContextMenuPoint {
   x: number;
   y: number;
+  /** The CSS zoom where it was raised, which a `fixed` anchor's offsets are scaled by; 1 when absent. */
+  zoom?: number;
 }
 
 /**
@@ -66,7 +69,10 @@ export function ContextMenu({
         aria-hidden="true"
         data-slot="context-menu-anchor"
         className="pointer-events-none fixed size-px"
-        style={{ left: point.x, top: point.y }}
+        style={{
+          left: point.x / (point.zoom ?? 1),
+          top: point.y / (point.zoom ?? 1),
+        }}
       />
       <Menu
         open
@@ -105,11 +111,15 @@ export function useContextMenu(): {
   const [point, setPoint] = React.useState<ContextMenuPoint | null>(null);
   const onContextMenu = useLatestCallback((event: React.MouseEvent): void => {
     event.preventDefault();
-    setPoint({ x: event.clientX, y: event.clientY });
+    setPoint({
+      x: event.clientX,
+      y: event.clientY,
+      zoom: cssZoomOf(event.currentTarget),
+    });
   }, []);
   const openBelow = useLatestCallback((trigger: Element): void => {
     const rect = trigger.getBoundingClientRect();
-    setPoint({ x: rect.left, y: rect.bottom });
+    setPoint({ x: rect.left, y: rect.bottom, zoom: cssZoomOf(trigger) });
   }, []);
   const close = useLatestCallback(() => setPoint(null), []);
   return { point, onContextMenu, openBelow, close };

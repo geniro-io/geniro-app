@@ -371,13 +371,19 @@ export function CommandCenter({
       colorOfProject,
     ],
   );
-  const [threadIdentities, setThreadIdentities] = useState(builtIdentities);
-  if (
-    builtIdentities !== threadIdentities &&
-    !sameThreadIdentities(builtIdentities, threadIdentities)
-  ) {
-    setThreadIdentities(builtIdentities);
+  const [heldIdentities, setHeldIdentities] = useState({
+    built: builtIdentities,
+    kept: builtIdentities,
+  });
+  if (heldIdentities.built !== builtIdentities) {
+    setHeldIdentities({
+      built: builtIdentities,
+      kept: sameThreadIdentities(builtIdentities, heldIdentities.kept)
+        ? heldIdentities.kept
+        : builtIdentities,
+    });
   }
+  const threadIdentities = heldIdentities.kept;
 
   const bandOf = (card: CommandCenterCard): CardBand => {
     const view = viewOf(card);

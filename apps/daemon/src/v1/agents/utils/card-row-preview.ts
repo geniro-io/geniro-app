@@ -33,6 +33,17 @@ export function previewCardRow(row: ItemWire): ItemWire {
     : { ...row, payload: { ...payload, [field]: value } };
 }
 
+/**
+ * The card rows a page does not already hold or anchor, each as its preview —
+ * a row the page holds or anchors is drawn, so it is never cut.
+ */
+export function previewCardRows(
+  rows: readonly ItemWire[],
+  served: (id: string) => boolean,
+): ItemWire[] {
+  return rows.filter((row) => !served(row.id)).map(previewCardRow);
+}
+
 function cutLongStrings(value: unknown): unknown {
   if (typeof value === 'string') {
     return value.length > CARD_ROW_PREVIEW_CHARS ? cutText(value) : value;

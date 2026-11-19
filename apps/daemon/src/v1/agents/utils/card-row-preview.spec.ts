@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { ItemKind } from '../../runs/runs.types';
 import type { ItemWire } from '../chat.types';
-import { CARD_ROW_PREVIEW_CHARS, previewCardRow } from './card-row-preview';
+import {
+  CARD_ROW_PREVIEW_CHARS,
+  previewCardRow,
+  previewCardRows,
+} from './card-row-preview';
 
 function rowOf(kind: ItemKind, payload: unknown): ItemWire {
   return {
@@ -119,6 +123,28 @@ describe('previewCardRow', () => {
     expect(previewCardRow(row).payload).toEqual({
       id: 't4',
       result: ['[image: image/png, 3 KB]'],
+    });
+  });
+});
+
+describe('previewCardRows', () => {
+  it('drops a row the page already serves and cuts the rest, so a drawn row is never replaced by its cut copy', () => {
+    const long = 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1);
+    const served = {
+      ...rowOf('tool_result', { id: 't1', result: long }),
+      id: 'served',
+    };
+    const card = {
+      ...rowOf('tool_result', { id: 't2', result: long }),
+      id: 'card',
+    };
+
+    const out = previewCardRows([served, card], (id) => id === 'served');
+
+    expect(out.map((row) => row.id)).toEqual(['card']);
+    expect(out[0]!.payload).toEqual({
+      id: 't2',
+      result: 'x'.repeat(CARD_ROW_PREVIEW_CHARS),
     });
   });
 });

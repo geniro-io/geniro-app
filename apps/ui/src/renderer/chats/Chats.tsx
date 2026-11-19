@@ -69,6 +69,7 @@ import { MobileDrawer } from '../components/mobile-drawer';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
+import { cssZoomOf } from '../components/ui/css-zoom';
 import { Dialog } from '../components/ui/dialog';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
@@ -3199,8 +3200,9 @@ export function Chats({
     // A margin above the card so it does not land flush against the top edge,
     // where a header would otherwise read as the card's own first line.
     scroller.scrollTop +=
-      card.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top -
+      (card.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top) /
+        cssZoomOf(scroller) -
       24;
     setAboveTail(!isScrolledToBottom(scroller));
   }, []);

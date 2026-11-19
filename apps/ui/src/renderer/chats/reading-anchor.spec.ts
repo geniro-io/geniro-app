@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 
+import { stubCssZoom } from '../__tests__/stub-css-zoom';
 import {
   holdReadingPlace,
   READING_ANCHOR_MAX_MS,
@@ -88,6 +89,32 @@ describe('holdReadingPlace', () => {
     setOffset(2, 6_120);
     clock.step();
     expect(scroller.scrollTop).toBe(5_470);
+  });
+
+  it('pays back growth in the scroller’s own pixels under a CSS zoom, where rects read scaled', () => {
+    const restore = stubCssZoom(0.5);
+    try {
+      const { scroller, rows, setOffset } = makeScroller([0, 300, 1_000]);
+      for (const row of rows) {
+        const local = row.getBoundingClientRect;
+        row.getBoundingClientRect = () => {
+          const rect = local();
+          return { top: rect.top * 0.5, bottom: rect.bottom * 0.5 } as DOMRect;
+        };
+      }
+      scroller.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 300 }) as DOMRect;
+      scroller.scrollTop = 350;
+      const clock = manualClock();
+      holdReadingPlace(scroller, clock);
+
+      setOffset(1, 5_300);
+      setOffset(2, 6_000);
+      clock.step();
+      expect(scroller.scrollTop).toBe(5_350);
+    } finally {
+      restore();
+    }
   });
 
   it('writes nothing while a gesture owns the scroll, then pays the whole shift back once it lets go', () => {

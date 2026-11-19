@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { ContextMenu, useContextMenu } from './context-menu';
 import type { MenuGroup } from './menu';
 
@@ -72,6 +73,19 @@ describe('ContextMenu', () => {
     // element; the class carries both, and jsdom computes no layout.
     expect(anchor!.className).toContain('fixed');
     expect(anchor!.className).toContain('size-px');
+  });
+
+  it('parks its anchor at the point under a CSS zoom, whose fixed offsets would scale it away', async () => {
+    await mount(
+      <ContextMenu
+        point={{ x: 240, y: 96, zoom: 0.5 }}
+        groups={GROUPS}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(anchorOf()!.style.left).toBe('480px');
+    expect(anchorOf()!.style.top).toBe('192px');
   });
 
   it('draws every group it is given', async () => {
@@ -149,6 +163,36 @@ describe('useContextMenu', () => {
     // WebContents `context-menu` event `main/context-menu.ts` answers, so the
     // app's own panel and the platform's can never both appear.
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('records the CSS zoom where it was raised', async () => {
+    const restore = stubCssZoom(0.5);
+    try {
+      function ZoomProbe(): React.JSX.Element {
+        const { point, onContextMenu } = useContextMenu();
+        return (
+          <div data-testid="target" onContextMenu={onContextMenu}>
+            <span data-testid="zoom">{point?.zoom ?? '—'}</span>
+          </div>
+        );
+      }
+      const container = await mount(<ZoomProbe />);
+      await act(async () => {
+        container.querySelector('[data-testid="target"]')!.dispatchEvent(
+          new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 10,
+            clientY: 20,
+          }),
+        );
+      });
+      expect(container.querySelector('[data-testid="zoom"]')?.textContent).toBe(
+        '0.5',
+      );
+    } finally {
+      restore();
+    }
   });
 
   it('closes again', async () => {

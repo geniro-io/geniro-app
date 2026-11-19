@@ -298,6 +298,7 @@ function CanvasThreadCard({
       return;
     }
     const zoom = zoomOf();
+    const onScreen = Math.min(1, 1 / zoom);
     setDraft(
       resizeCard(
         active.origin,
@@ -306,7 +307,10 @@ function CanvasThreadCard({
           dx: (event.clientX - active.startX) / zoom,
           dy: (event.clientY - active.startY) / zoom,
         },
-        largest,
+        {
+          width: largest.width * onScreen,
+          height: largest.height * onScreen,
+        },
       ),
     );
   };

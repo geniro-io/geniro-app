@@ -63,8 +63,7 @@ function draw(over: Partial<AnswerPopoverProps> = {}): void {
         requests={[RETRY]}
         error={null}
         onAnswer={vi.fn()}
-        onOpenHere={vi.fn()}
-        onOpenThread={vi.fn()}
+        onShowThread={vi.fn()}
         onClose={vi.fn()}
         {...over}
       />,
@@ -132,25 +131,23 @@ describe('AnswerPopover', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the thread in a window over the graph, or goes to it in Chats', () => {
-    const onOpenHere = vi.fn();
-    const onOpenThread = vi.fn();
-    draw({ onOpenHere, onOpenThread });
+  it('shows the thread’s chat on the canvas from its one Show chat button, and offers no other way in', () => {
+    const onShowThread = vi.fn();
+    draw({ onShowThread });
 
-    act(() =>
-      panel()!
-        .querySelector<HTMLButtonElement>(
-          '[data-slot="answer-popover-open-here"]',
-        )!
-        .click(),
+    const buttons = panel()!.querySelectorAll<HTMLButtonElement>(
+      '[data-slot="answer-popover-show-chat"]',
     );
-    act(() =>
-      panel()!
-        .querySelector<HTMLButtonElement>('[data-slot="answer-popover-go"]')!
-        .click(),
-    );
+    expect(buttons).toHaveLength(1);
+    expect(
+      panel()!.querySelector('[data-slot="answer-popover-open-here"]'),
+    ).toBeNull();
+    expect(
+      panel()!.querySelector('[data-slot="answer-popover-go"]'),
+    ).toBeNull();
 
-    expect(onOpenHere).toHaveBeenCalledTimes(1);
-    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    act(() => buttons[0]!.click());
+
+    expect(onShowThread).toHaveBeenCalledTimes(1);
   });
 });

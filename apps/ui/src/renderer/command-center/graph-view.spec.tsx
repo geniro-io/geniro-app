@@ -19,14 +19,17 @@ import {
   FIXTURE_PROJECTS,
   graphThreadsOf,
 } from './graph-fixtures';
-import type { GraphThread } from './graph-view';
+import type { GraphOpenCard, GraphThread } from './graph-view';
 import {
+  cardBox,
+  graphRows,
   GraphView,
   MAX_THREAD_NODES,
   shownThreads,
   wholeFit,
   widthFit,
 } from './graph-view';
+import { THREAD_CARD_WIDTH, threadCardHeight } from './thread-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -78,6 +81,36 @@ describe('shownThreads', () => {
     );
 
     expect(shownThreads(streamed).map((thread) => thread.id)).toEqual(before);
+  });
+
+  it('keeps an open thread past the node cap, even when it stands in the last band', () => {
+    const threads = graphThreadsOf(30);
+    const shownIds = new Set(shownThreads(threads).map((thread) => thread.id));
+    const hidden = threads.find((thread) => !shownIds.has(thread.id))!;
+    const band = {
+      attention: 'inactive' as const,
+      lastAt: '1970-01-01T00:00:00.000Z',
+    };
+
+    const shown = shownThreads(threads, new Map([[hidden.id, { band }]]));
+
+    expect(shown).toHaveLength(MAX_THREAD_NODES + 1);
+    expect(shown.at(-1)!.id).toBe(hidden.id);
+  });
+
+  it('draws an open thread in the band it had when its card opened, not the band it has now', () => {
+    const threads = graphThreadsOf(30);
+    const shownIds = new Set(shownThreads(threads).map((thread) => thread.id));
+    const hidden = threads.find((thread) => !shownIds.has(thread.id))!;
+    expect(hidden.view.attention).toBe('inactive');
+    const band = {
+      attention: 'blocked' as const,
+      lastAt: new Date(FIXTURE_NOW).toISOString(),
+    };
+
+    const shown = shownThreads(threads, new Map([[hidden.id, { band }]]));
+
+    expect(shown[0]!.id).toBe(hidden.id);
   });
 });
 
@@ -156,8 +189,14 @@ describe('GraphView', () => {
           pulses={[]}
           now={FIXTURE_NOW}
           narrow={false}
-          onOpen={() => undefined}
-          onOpenHere={() => undefined}
+          active
+          onOpenInChats={() => undefined}
+          onToggleCard={() => undefined}
+          openCards={[]}
+          onCloseCard={() => undefined}
+          onResizeCard={() => undefined}
+          renderCardChat={() => null}
+          focus={null}
           projects={[]}
           asking={new Map()}
           onAnswer={() => undefined}
@@ -324,35 +363,47 @@ describe('GraphView', () => {
     );
   });
 
-  it('opens a thread only from its Go to thread button, never from a click on the card', async () => {
-    const onOpen = vi.fn();
-    await draw({ threads: graphThreadsOf(3), onOpen });
+  it('takes a thread to Chats only from its Open in Chats icon, never from a click on the card', async () => {
+    const onOpenInChats = vi.fn();
+    const onToggleCard = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onOpenInChats, onToggleCard });
 
     act(() => threadCard('thread-2').click());
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(onOpenInChats).not.toHaveBeenCalled();
+    expect(onToggleCard).not.toHaveBeenCalled();
 
     act(() =>
       threadCard('thread-2')
-        .querySelector<HTMLButtonElement>('[data-slot="thread-card-go"]')!
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-head-open-in-chats"]',
+        )!
         .click(),
     );
-    expect(onOpen).toHaveBeenCalledWith('thread-2');
+    expect(onOpenInChats).toHaveBeenCalledWith('thread-2');
+    expect(onToggleCard).not.toHaveBeenCalled();
   });
 
-  it('opens a thread in a window over the graph from its Open here button, not by navigating to it', async () => {
-    const onOpen = vi.fn();
-    const onOpenHere = vi.fn();
-    await draw({ threads: graphThreadsOf(3), onOpen, onOpenHere });
+  it('turns a thread into its card from its Show chat icon and from its title, not by navigating to it', async () => {
+    const onOpenInChats = vi.fn();
+    const onToggleCard = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onOpenInChats, onToggleCard });
 
     act(() =>
       threadCard('thread-3')
         .querySelector<HTMLButtonElement>(
-          '[data-slot="thread-card-open-here"]',
+          '[data-slot="thread-head-show-chat"]',
         )!
         .click(),
     );
-    expect(onOpenHere).toHaveBeenCalledWith('thread-3');
-    expect(onOpen).not.toHaveBeenCalled();
+    act(() =>
+      threadCard('thread-3')
+        .querySelector<HTMLButtonElement>('[data-slot="thread-card-title"]')!
+        .click(),
+    );
+
+    expect(onToggleCard).toHaveBeenNthCalledWith(1, 'thread-3');
+    expect(onToggleCard).toHaveBeenNthCalledWith(2, 'thread-3');
+    expect(onOpenInChats).not.toHaveBeenCalled();
   });
 
   it('keys each project on the graph to its colour in a corner legend, and marks each card with its project’s dot', async () => {
@@ -386,12 +437,14 @@ describe('GraphView', () => {
 
   it('offers Answer only on a thread holding a card for the user, and answers it here rather than opening it', async () => {
     const onAnswer = vi.fn();
-    const onOpen = vi.fn();
+    const onOpenInChats = vi.fn();
+    const onToggleCard = vi.fn();
     await draw({
       threads: graphThreadsOf(3),
       asking: new Map([['thread-2', 'approval' as const]]),
       onAnswer,
-      onOpen,
+      onOpenInChats,
+      onToggleCard,
     });
 
     expect(
@@ -406,7 +459,8 @@ describe('GraphView', () => {
     )!;
     act(() => button.click());
     expect(onAnswer).toHaveBeenCalledWith('thread-2', button);
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(onOpenInChats).not.toHaveBeenCalled();
+    expect(onToggleCard).not.toHaveBeenCalled();
   });
 
   it('shows a thread’s board card as a label on its node, with no node of its own', async () => {
@@ -516,4 +570,84 @@ describe('GraphView', () => {
     const pane = container.querySelector('.react-flow__pane')!;
     expect(pane.closest('.cc-touch-scroll')).toBeNull();
   });
+
+  it('draws an open thread as a slot in the graph, with its card over the slot holding the chat renderCardChat gives', async () => {
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+      renderCardChat: (threadId) => (
+        <span data-slot="card-chat">{`chat of ${threadId}`}</span>
+      ),
+    });
+
+    expect(all('graph-slot').map((slot) => slot.dataset.threadId)).toEqual([
+      'thread-2',
+    ]);
+    expect(
+      container.querySelector(
+        '[data-slot="graph-thread"][data-thread-id="thread-2"]',
+      ),
+    ).toBeNull();
+    const cards = all('thread-canvas-card');
+    expect(cards.map((card) => card.dataset.runId)).toEqual(['thread-2']);
+    expect(
+      cards[0]!.querySelector('[data-slot="card-chat"]')!.textContent,
+    ).toBe('chat of thread-2');
+  });
+
+  it('draws no card for a collapsed thread, and asks for no chat of it', async () => {
+    const renderCardChat = vi.fn(
+      (threadId: string): string => `chat of ${threadId}`,
+    );
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+      renderCardChat,
+    });
+
+    expect(
+      all('graph-thread')
+        .map((node) => node.dataset.threadId)
+        .sort(),
+    ).toEqual(['thread-1', 'thread-3']);
+    expect(all('thread-canvas-card').map((card) => card.dataset.runId)).toEqual(
+      ['thread-2'],
+    );
+    expect(
+      new Set(renderCardChat.mock.calls.map(([threadId]) => threadId)),
+    ).toEqual(new Set(['thread-2']));
+  });
 });
+
+describe('graphRows', () => {
+  it('sizes an open thread’s box as its card, and every other thread as its node', () => {
+    const threads = graphThreadsOf(3);
+    const size = { width: 500, height: 300 };
+    const open = new Map<string, GraphOpenCard>([
+      ['thread-2', openCard('thread-2', size)],
+    ]);
+
+    const boxes = graphRows(shownThreads(threads, open), 0, 0, open).flat();
+
+    expect(boxes.find((box) => box.id === 'thread:thread-2')).toEqual({
+      id: 'thread:thread-2',
+      ...cardBox(size),
+    });
+    expect(boxes.find((box) => box.id === 'thread:thread-1')).toEqual({
+      id: 'thread:thread-1',
+      width: THREAD_CARD_WIDTH,
+      height: threadCardHeight(threads[0]!.view),
+    });
+  });
+});
+
+function openCard(
+  runId: string,
+  size: { width: number; height: number } = { width: 460, height: 420 },
+): GraphOpenCard {
+  return {
+    runId,
+    band: { attention: 'working', lastAt: new Date(FIXTURE_NOW).toISOString() },
+    size,
+  };
+}

@@ -38,7 +38,7 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
     project: 'Geniro',
     agentLabel: 'claude',
     isTeam: false,
-    crew: null,
+    face: { kind: 'unknown' },
     pullRequest: null,
     note: null,
     lastMessage: null,
@@ -46,7 +46,7 @@ function props(over: Partial<ThreadCardProps> = {}): ThreadCardProps {
     idleDays: null,
     lastAt: new Date(NOW - 5 * 60_000).toISOString(),
     now: NOW,
-    onGo: vi.fn(),
+    onOpenInChats: vi.fn(),
     ...over,
   };
 }
@@ -65,53 +65,119 @@ function render(over: Partial<ThreadCardProps> = {}): HTMLElement {
   return container.querySelector<HTMLElement>('[data-slot="thread-card"]')!;
 }
 
-describe('ThreadCard — going to the thread', () => {
+describe('ThreadCard — the head', () => {
+  it('heads the card with the thread head, its face and its title', () => {
+    const el = render();
+
+    expect(el.querySelector('[data-slot="thread-card-head"]')).not.toBeNull();
+    expect(
+      el
+        .querySelector('[data-slot="thread-card-face"]')!
+        .getAttribute('data-face'),
+    ).toBe('unknown');
+    expect(
+      el.querySelector('[data-slot="thread-card-title"]')!.textContent,
+    ).toBe('Fix the login redirect');
+  });
+
   it('opens nothing when the card itself is clicked', () => {
-    const onGo = vi.fn();
-    const el = render({ onGo });
+    const onToggleCard = vi.fn();
+    const onOpenInChats = vi.fn();
+    const el = render({ onToggleCard, onOpenInChats });
 
     act(() => {
       el.click();
     });
 
-    expect(onGo).not.toHaveBeenCalled();
+    expect(onToggleCard).not.toHaveBeenCalled();
+    expect(onOpenInChats).not.toHaveBeenCalled();
     expect(el.getAttribute('role')).toBeNull();
   });
 
-  it('goes to the thread from its Go to thread button', () => {
-    const onGo = vi.fn();
-    const button = render({ onGo }).querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-go"]',
+  it('turns the card into its chat from the title and from the Show chat icon', () => {
+    const onToggleCard = vi.fn();
+    const el = render({ onToggleCard });
+
+    const title = el.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-title"]',
     )!;
-
-    expect(button.textContent).toContain('Go to thread');
+    expect(title.tagName).toBe('BUTTON');
     act(() => {
-      button.click();
+      title.click();
     });
+    expect(onToggleCard).toHaveBeenCalledTimes(1);
 
-    expect(onGo).toHaveBeenCalledTimes(1);
-  });
-
-  it('opens the thread over the graph from its Open here button, and offers none without a handler', () => {
-    const onGo = vi.fn();
-    const onOpenHere = vi.fn();
-    const button = render({
-      onGo,
-      onOpenHere,
-    }).querySelector<HTMLButtonElement>('[data-slot="thread-card-open-here"]')!;
-
-    expect(button.getAttribute('aria-label')).toBe(
-      'Open Fix the login redirect here',
+    const showChat = el.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-head-show-chat"]',
+    )!;
+    expect(showChat.getAttribute('aria-label')).toBe(
+      'Show the chat of Fix the login redirect',
     );
     act(() => {
-      button.click();
+      showChat.click();
+    });
+    expect(onToggleCard).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes the thread to Chats only from its Open in Chats icon', () => {
+    const onToggleCard = vi.fn();
+    const onOpenInChats = vi.fn();
+    const el = render({ onToggleCard, onOpenInChats });
+
+    act(() => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-slot="thread-head-open-in-chats"]',
+      )!.click();
     });
 
-    expect(onOpenHere).toHaveBeenCalledTimes(1);
-    expect(onGo).not.toHaveBeenCalled();
+    expect(onOpenInChats).toHaveBeenCalledTimes(1);
+    expect(onToggleCard).not.toHaveBeenCalled();
+  });
+
+  it('draws neither a Show chat icon nor a title button without a card to toggle', () => {
+    const el = render({ onToggleCard: undefined });
+
+    expect(el.querySelector('[data-slot="thread-head-show-chat"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-card-title"]')!.tagName).toBe(
+      'SPAN',
+    );
     expect(
-      render({}).querySelector('[data-slot="thread-card-open-here"]'),
-    ).toBeNull();
+      el.querySelector('[data-slot="thread-head-open-in-chats"]'),
+    ).not.toBeNull();
+  });
+
+  it('wears a team run’s member faces, and one agent’s glyph for one agent', () => {
+    const team = render({
+      isTeam: true,
+      agentLabel: 'dev-team',
+      face: {
+        kind: 'team',
+        people: [
+          { key: 'a', name: 'Nick Fury', avatar: null },
+          { key: 'b', name: 'Tony Stark', avatar: null },
+        ],
+        total: 6,
+      },
+    });
+    const face = team.querySelector<HTMLElement>(
+      '[data-slot="thread-card-face"]',
+    )!;
+
+    expect(face.getAttribute('data-face')).toBe('team');
+    expect(face.getAttribute('aria-label')).toBe('6 members');
+    expect(face.querySelectorAll('[data-slot="avatar"]')).toHaveLength(2);
+    expect(
+      face.querySelector('[data-slot="avatar-stack-rest"]')!.textContent,
+    ).toBe('+4');
+
+    const agent = render({
+      face: { kind: 'agent', icon: 'bot', name: 'Claude' },
+    });
+    expect(
+      agent
+        .querySelector('[data-slot="thread-card-face"]')!
+        .getAttribute('data-face'),
+    ).toBe('agent');
   });
 });
 
@@ -166,19 +232,6 @@ describe('ThreadCard — content', () => {
       expect(el.dataset.status).toBe(status);
     },
   );
-
-  it('pulses its dot only while the thread works', () => {
-    expect(
-      render({ attention: 'working' }).querySelector(
-        '[data-slot="thread-card-dot-ping"]',
-      ),
-    ).not.toBeNull();
-    expect(
-      render({ attention: 'quiet' }).querySelector(
-        '[data-slot="thread-card-dot-ping"]',
-      ),
-    ).toBeNull();
-  });
 
   it.each<[ThreadAttention, string]>([
     ['blocked', 'bg-destructive/5'],
@@ -294,7 +347,7 @@ describe('ThreadCard — content', () => {
     expect(line.textContent).toBe('Told 8bbdf9e6-0a39-4d4d-a…');
   });
 
-  it('says when the thread last moved beside its Go to thread button', () => {
+  it('says when the thread last moved', () => {
     expect(
       render().querySelector('[data-slot="thread-card-time"]')!.textContent,
     ).toBe('5m');
@@ -353,7 +406,7 @@ describe('ThreadCard — labels', () => {
   });
 });
 
-describe('ThreadCard — motion and faces', () => {
+describe('ThreadCard — motion', () => {
   it('breathes while the thread works, and in warning while it waits on the user', () => {
     expect(
       render({ attention: 'working' }).classList.contains('cc-breathe-success'),
@@ -364,31 +417,5 @@ describe('ThreadCard — motion and faces', () => {
     expect(
       render({ attention: 'quiet' }).className.includes('cc-breathe'),
     ).toBe(false);
-  });
-
-  it('wears a team run’s member faces, and none for one agent', () => {
-    const team = render({
-      isTeam: true,
-      agentLabel: 'dev-team',
-      crew: {
-        people: [
-          { key: 'a', name: 'Nick Fury', avatar: null },
-          { key: 'b', name: 'Tony Stark', avatar: null },
-        ],
-        total: 6,
-      },
-    });
-    const crew = team.querySelector<HTMLElement>(
-      '[data-slot="thread-card-crew"]',
-    )!;
-
-    expect(crew.getAttribute('aria-label')).toBe('6 members');
-    expect(crew.querySelectorAll('[data-slot="avatar"]')).toHaveLength(2);
-    expect(
-      crew.querySelector('[data-slot="avatar-stack-rest"]')!.textContent,
-    ).toBe('+4');
-    expect(
-      render({ crew: null }).querySelector('[data-slot="thread-card-crew"]'),
-    ).toBeNull();
   });
 });

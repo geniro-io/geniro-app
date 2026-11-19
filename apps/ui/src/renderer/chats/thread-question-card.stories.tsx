@@ -1,8 +1,28 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
 
+import {
+  bareThreadIdentity,
+  type ThreadIdentity,
+} from '../components/thread-head';
 import { ApprovalCard } from './approval-card';
 import { ThreadQuestionCard } from './thread-question-card';
+import { ThreadIdentityContext } from './thread-title';
+
+const IDENTITIES = new Map<string, ThreadIdentity>([
+  [
+    'thread-1',
+    {
+      ...bareThreadIdentity('CI-1235: PDF previews don’t open in Safari 17'),
+      face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+      status: { attention: 'question', text: 'Question for you' },
+      agentLabel: 'claude',
+      pullRequest: { number: 212, state: 'draft' },
+      project: 'Web',
+      projectColor: 'teal',
+    },
+  ],
+]);
 
 const RELAY = {
   threadRunId: 'thread-1',
@@ -44,7 +64,13 @@ const meta = {
     </ThreadQuestionCard>
   ),
   decorators: [
-    (story) => <div className="w-[560px] bg-background p-4">{story()}</div>,
+    (story) => (
+      <div className="w-[560px] bg-background p-4">
+        <ThreadIdentityContext.Provider value={IDENTITIES}>
+          {story()}
+        </ThreadIdentityContext.Provider>
+      </div>
+    ),
   ],
 } satisfies Meta<typeof ThreadQuestionCard>;
 
@@ -60,3 +86,7 @@ export const NotDelivered: Story = {
 };
 
 export const Closed: Story = { args: { expired: true } };
+
+export const UnknownThread: Story = {
+  args: { relay: { ...RELAY, threadRunId: 'thread-unknown' } },
+};

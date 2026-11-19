@@ -26,6 +26,7 @@ const ATTENTIONS: readonly ThreadAttention[] = [
   'question',
   'quiet',
   'inactive',
+  'done',
 ];
 
 function ThreadLabels(): React.JSX.Element {

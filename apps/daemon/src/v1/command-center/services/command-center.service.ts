@@ -11,6 +11,7 @@ import { TeamExecutorService } from '../../teams/services/team-executor.service'
 import {
   type CommandCenterBoard,
   type CommandCenterCard,
+  type CommandCenterColumn,
   CONTACT_LOOKBACK_MS,
 } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
@@ -45,7 +46,7 @@ function cardsByRun(tasks: readonly Task[]): Map<string, Task> {
 
 /**
  * The command center's board: every active thread — every chat and team run
- * not archived and not finished, however long ago it last moved — as a card
+ * not archived, finished or not, however long ago it last moved — as a card
  * with its column and its contact with the manager. Everything is folded
  * here, over every row, never in the renderer.
  */
@@ -69,8 +70,8 @@ export class CommandCenterService {
 
   /**
    * Every active thread, or exactly `runIds` when given — still held to what
-   * the board shows: never an app-own chat, never the manager, never a thread
-   * that is archived or has finished.
+   * the board shows: never an app-own chat, never the manager, never an
+   * archived thread. A finished thread stays until it is archived.
    */
   async activeThreads(runIds?: readonly string[]): Promise<ActiveThreads> {
     const managerRunId = await this.managerRunId();
@@ -82,20 +83,28 @@ export class CommandCenterService {
       this.chats.listChats('active', page),
       this.executor.listRuns('active', page),
     ]);
-    const runs = [...chats, ...teams].filter((run) => run.id !== managerRunId);
+    return {
+      managerRunId,
+      runs: [...chats, ...teams].filter((run) => run.id !== managerRunId),
+    };
+  }
+
+  /** Each run's board column, by run id. */
+  async columnsOf(
+    runs: readonly RunWire[],
+  ): Promise<Map<string, CommandCenterColumn>> {
     const taskOf = cardsByRun(
       await this.taskDao.listByRunIds(
         runs.map((run) => run.id),
         this.em.fork(),
       ),
     );
-    return {
-      managerRunId,
-      runs: runs.filter(
-        (run) =>
-          boardColumnOf(run, taskOf.get(run.id)?.status ?? null) !== 'done',
-      ),
-    };
+    return new Map(
+      runs.map((run) => [
+        run.id,
+        boardColumnOf(run, taskOf.get(run.id)?.status ?? null),
+      ]),
+    );
   }
 
   async board(runIds?: readonly string[]): Promise<CommandCenterBoard> {

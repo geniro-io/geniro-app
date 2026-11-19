@@ -1112,6 +1112,12 @@ describe('parseCommandCenterChanged — the command_center_changed twin', () => 
     ).toEqual({ runIds: ['a', 'b'], reason: 'items' });
   });
 
+  it('reads runs re-filed by an archive or an unarchive', () => {
+    expect(
+      parseCommandCenterChanged({ runIds: ['a'], reason: 'refiled' }),
+    ).toEqual({ runIds: ['a'], reason: 'refiled' });
+  });
+
   it('refuses an unknown reason, a non-string id and a missing list', () => {
     expect(
       parseCommandCenterChanged({ runIds: ['a'], reason: 'x' }),

@@ -4,6 +4,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ThreadArchiveContext,
+  type ThreadArchiveOf,
+} from '../components/thread-archive';
 import { bareThreadIdentity } from '../components/thread-head';
 import type { PlacedBox } from './graph-layout';
 import type { CardSize } from './open-cards';
@@ -144,13 +148,18 @@ function StoreProbe(): null {
   return null;
 }
 
-function drawLayer(over: Partial<ThreadCardLayerProps> = {}): void {
+function drawLayer(
+  over: Partial<ThreadCardLayerProps> = {},
+  archiveOf: ThreadArchiveOf | null = null,
+): void {
   act(() => {
     root.render(
-      <ReactFlowProvider>
-        <StoreProbe />
-        <ThreadCardLayer {...layerProps(over)} />
-      </ReactFlowProvider>,
+      <ThreadArchiveContext.Provider value={archiveOf}>
+        <ReactFlowProvider>
+          <StoreProbe />
+          <ThreadCardLayer {...layerProps(over)} />
+        </ReactFlowProvider>
+      </ThreadArchiveContext.Provider>,
     );
   });
 }
@@ -274,6 +283,41 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
     });
 
     expect(onOpenInChats).toHaveBeenCalledWith('a');
+  });
+
+  it('archives the thread of the card whose head icon is pressed, through the action of its run', () => {
+    const archive = vi.fn();
+    const archiveOf = vi.fn<ThreadArchiveOf>((runId) => () => archive(runId));
+    drawLayer(
+      {
+        cards: [card('a', 400, 300), card('b', 400, 300)],
+        slots: new Map([
+          ['a', box(0, 0)],
+          ['b', box(500, 0)],
+        ]),
+      },
+      archiveOf,
+    );
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-canvas-card"][data-run-id="b"] [data-slot="thread-head-archive"]',
+        )!
+        .click();
+    });
+
+    expect(archiveOf).toHaveBeenCalledWith('b');
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledWith('b');
+  });
+
+  it('draws no archive icon on the cards without a provider standing', () => {
+    drawLayer();
+
+    expect(
+      container.querySelector('[data-slot="thread-head-archive"]'),
+    ).toBeNull();
   });
 });
 

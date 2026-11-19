@@ -32,7 +32,10 @@ describe('CommandCenterChatService', () => {
     deleteCommandCenterChats: ReturnType<typeof vi.fn>;
     moveChatFolder: ReturnType<typeof vi.fn>;
   };
-  let board: { activeThreads: ReturnType<typeof vi.fn> };
+  let board: {
+    activeThreads: ReturnType<typeof vi.fn>;
+    columnsOf: ReturnType<typeof vi.fn>;
+  };
   let events: { publishChanged: ReturnType<typeof vi.fn> };
   let roster: CommandCenterRosterDao;
   let service: CommandCenterChatService;
@@ -73,6 +76,7 @@ describe('CommandCenterChatService', () => {
       activeThreads: vi.fn(() =>
         Promise.resolve({ managerRunId: MANAGER, runs: [] }),
       ),
+      columnsOf: vi.fn(() => Promise.resolve(new Map())),
     };
     events = { publishChanged: vi.fn() };
     roster = new CommandCenterRosterDao(db.em);
@@ -139,6 +143,26 @@ describe('CommandCenterChatService', () => {
         "## The user's standing instructions for you\n\nAnswer in Russian.",
       );
       expect(without).not.toContain("The user's standing instructions");
+    });
+
+    it('re-briefs byte for byte the same when a roster thread finishes, so a finish never rewrites the brief', async () => {
+      current = { id: MANAGER, cwd: managerFolderPath() } as unknown as RunWire;
+      board.activeThreads.mockResolvedValue({
+        managerRunId: MANAGER,
+        runs: [
+          { id: 'thread-1', title: 'Billing cache', status: 'completed' },
+        ] as unknown as RunWire[],
+      });
+      board.columnsOf.mockResolvedValue(new Map([['thread-1', 'working']]));
+      await service.open(START);
+      board.columnsOf.mockResolvedValue(new Map([['thread-1', 'done']]));
+      await service.open(START);
+
+      const [working, finished] = chats.refreshTeamInstructions.mock.calls.map(
+        (call) => call[1] as string,
+      );
+      expect(working).toContain('- t1 · Billing cache');
+      expect(finished).toBe(working);
     });
 
     it("creates the manager chat with the user's standing instructions in its brief", async () => {
@@ -241,6 +265,64 @@ describe('CommandCenterChatService', () => {
         handle: 't1',
         left: false,
       });
+    });
+  });
+
+  describe('rosterThreads', () => {
+    it('takes every thread that left the board off the roster at once, each time, and announces it', async () => {
+      await service.addToRoster(MANAGER, ['thread-1', 'thread-2'], 'auto');
+      events.publishChanged.mockClear();
+      board.activeThreads.mockResolvedValue({
+        managerRunId: MANAGER,
+        runs: [{ id: 'thread-2' }] as unknown as RunWire[],
+      });
+
+      await service.rosterThreads(MANAGER);
+
+      expect(events.publishChanged).toHaveBeenLastCalledWith(
+        ['thread-1'],
+        'roster',
+      );
+
+      board.activeThreads.mockResolvedValue({
+        managerRunId: MANAGER,
+        runs: [],
+      });
+
+      const threads = await service.rosterThreads(MANAGER);
+
+      expect(threads).toEqual([]);
+      expect(events.publishChanged).toHaveBeenLastCalledWith(
+        ['thread-2'],
+        'roster',
+      );
+      expect(await handlesOf()).toEqual([
+        { thread: 'thread-1', handle: 't1', left: true },
+        { thread: 'thread-2', handle: 't2', left: true },
+      ]);
+    });
+    it('marks the roster threads whose board column is done, a failed one excepted', async () => {
+      const runs = [
+        { id: 'thread-1', title: 'Billing cache', status: 'completed' },
+        { id: 'thread-2', title: 'Docs', status: 'completed' },
+        { id: 'thread-3', title: 'Invoices', status: 'failed' },
+      ] as unknown as RunWire[];
+      board.activeThreads.mockResolvedValue({ managerRunId: MANAGER, runs });
+      board.columnsOf.mockResolvedValue(
+        new Map([
+          ['thread-1', 'done'],
+          ['thread-2', 'working'],
+          ['thread-3', 'done'],
+        ]),
+      );
+
+      const threads = await service.rosterThreads(MANAGER);
+
+      expect(
+        Object.fromEntries(
+          threads.map(({ entry, done }) => [entry.threadRunId, done]),
+        ),
+      ).toEqual({ 'thread-1': true, 'thread-2': false, 'thread-3': false });
     });
   });
 

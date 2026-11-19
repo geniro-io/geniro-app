@@ -9,6 +9,10 @@ import {
   useState,
 } from 'react';
 
+import {
+  ArchiveThreadIcon,
+  useThreadArchive,
+} from '../components/thread-archive';
 import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
@@ -109,6 +113,7 @@ const cardVariants = cva(
         question: 'border-warning/60',
         quiet: 'border-border-strong',
         inactive: 'border-border-strong',
+        done: 'border-border-strong',
       } satisfies Record<ThreadAttention, string>,
     },
   },
@@ -190,6 +195,7 @@ function CardHead({
       press.current = null;
     }
   };
+  const archive = useThreadArchive(card.runId);
   return (
     <div
       data-slot="thread-canvas-card-head"
@@ -213,6 +219,9 @@ function CardHead({
               {open ? (
                 <ShowChatIcon title={title} open onToggle={onClose} />
               ) : null}
+              {archive === null ? null : (
+                <ArchiveThreadIcon title={title} onArchive={archive} />
+              )}
               <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
             </>
           }

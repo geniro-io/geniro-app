@@ -1330,6 +1330,7 @@ const COMMAND_CENTER_CHANGE_REASONS = [
   'items',
   'roster',
   'task',
+  'refiled',
 ] as const;
 
 /** Cards of the command center that moved: the board re-reads exactly these. */

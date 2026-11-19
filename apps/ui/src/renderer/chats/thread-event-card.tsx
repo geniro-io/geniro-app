@@ -10,6 +10,11 @@ import {
 import { memo, useContext } from 'react';
 
 import {
+  ArchiveThreadButton,
+  ArchiveThreadIcon,
+  useThreadArchive,
+} from '../components/thread-archive';
+import {
   bareThreadIdentity,
   ThreadHead,
   type ThreadIdentity,
@@ -91,6 +96,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
 }: ThreadEventCardProps): React.JSX.Element {
   const known = useThreadIdentity(runId);
   const open = useContext(ThreadOpenContext);
+  const archive = useThreadArchive(runId);
   const identity = identityOf(known, title, pullRequest);
   const meta = KIND_META[kind];
   const Icon = meta.icon;
@@ -130,6 +136,11 @@ export const ThreadEventCard = memo(function ThreadEventCard({
         identity={identity}
         slot="thread-event"
         onOpen={open === null ? undefined : () => open(runId)}
+        aside={
+          archive === null ? undefined : (
+            <ArchiveThreadIcon title={identity.title} onArchive={archive} />
+          )
+        }
       />
       {reply === '' ? null : (
         <p
@@ -150,6 +161,15 @@ export const ThreadEventCard = memo(function ThreadEventCard({
             className="text-sm text-foreground"
             toggleClassName="text-xs"
             memoryKey={memoryKey}
+          />
+        </div>
+      )}
+      {archive === null || kind !== 'done' ? null : (
+        <div className="flex justify-end">
+          <ArchiveThreadButton
+            slot="thread-event-archive"
+            title={identity.title}
+            onArchive={archive}
           />
         </div>
       )}

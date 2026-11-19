@@ -82,6 +82,7 @@ import { ProposeTeamTool } from './propose-team/propose-team.tool';
 import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
+import { ReadCommandCenterTool } from './read-command-center/read-command-center.tool';
 import { ReadTeamsTool } from './read-teams/read-teams.tool';
 import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
@@ -207,6 +208,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new NoteThreadTool(deps.commandCenters, deps.commandCenterOps),
     new StartThreadTool(deps.commandCenters, deps.commandCenterOps),
     new ArchiveThreadsTool(deps.commandCenters, deps.commandCenterOps),
+    new ReadCommandCenterTool(deps.commandCenters, deps.commandCenterOps),
     new MemorySearchTool(deps.memory),
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),

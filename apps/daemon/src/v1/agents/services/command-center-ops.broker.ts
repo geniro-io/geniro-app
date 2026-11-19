@@ -6,6 +6,7 @@ import type {
   CommandCenterOps,
   NoteThreadAnswer,
   NoteThreadInput,
+  ReadCommandCenterAnswer,
   StartThreadAnswer,
   StartThreadInput,
   TellThreadsAnswer,
@@ -69,6 +70,14 @@ export class CommandCenterOpsBroker {
   ): Promise<ArchiveThreadsAnswer | { error: string }> {
     return this.guarded('archive_threads', managerRunId, (ops) =>
       ops.archive(managerRunId, input),
+    );
+  }
+
+  read(
+    managerRunId: string,
+  ): Promise<ReadCommandCenterAnswer | { error: string }> {
+    return this.guarded('read_command_center', managerRunId, (ops) =>
+      ops.read(managerRunId),
     );
   }
 

@@ -12,10 +12,9 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ChatService } from '../../agents/services/chat.service';
 import { UNTITLED_THREAD } from '../../agents/utils/thread-message-text';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
-import {
-  ROSTER_REMOVAL_INTERVAL_MS,
-  type RosterReason,
-  type StartCommandCenterChatInput,
+import type {
+  RosterReason,
+  StartCommandCenterChatInput,
 } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
@@ -35,22 +34,22 @@ function messageOf(error: unknown): string {
 export interface RosterThread {
   entry: CommandCenterRosterEntry;
   run: RunWire | null;
+  /** Whether the thread has finished: its board column is `done` and it did not fail. */
+  done: boolean;
 }
 
 /**
  * The command center's manager: one ordinary chat for the whole app, hidden
  * from the sidebar (`Run.commandCenter`), and the roster of threads it
- * manages. The roster follows the board's active set — additions at once,
- * removals held until the next addition or {@link ROSTER_REMOVAL_INTERVAL_MS}
- * — because every change to it rewrites the brief, which respawns the
- * manager's CLI and costs its prompt cache. Statuses, which move all the time,
- * ride each turn's prompt instead.
+ * manages. The roster follows the board's active set, which a thread leaves
+ * only when it is archived or deleted. Every change to it rewrites the brief,
+ * which respawns the manager's CLI and costs its prompt cache, so statuses,
+ * which move all the time, ride each turn's prompt instead.
  */
 @Injectable()
 export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CommandCenterChatService.name);
   private opening: Promise<RunWire> | null = null;
-  private readonly lastRemovalAt = new Map<string, number>();
   private subscription: Subscription | null = null;
   private userInstructions = '';
 
@@ -153,9 +152,17 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
         known.set(run.id, run);
       }
     }
+    const runs = rows.flatMap((row) => {
+      const run = known.get(row.threadRunId);
+      return run === undefined ? [] : [run];
+    });
+    const columns = await this.board.columnsOf(runs);
     return rows.map((entry) => ({
       entry,
       run: known.get(entry.threadRunId) ?? null,
+      done:
+        columns.get(entry.threadRunId) === 'done' &&
+        known.get(entry.threadRunId)?.status !== 'failed',
     }));
   }
 
@@ -184,12 +191,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /**
-   * Bring the roster in line with the board's active set and answer that set.
-   * New threads join at once; threads that went quiet leave only beside an
-   * addition, or once {@link ROSTER_REMOVAL_INTERVAL_MS} has passed since the
-   * last removal.
-   */
+  /** Bring the roster in line with the board's active set and answer that set. */
   private async syncRoster(managerRunId: string): Promise<RunWire[]> {
     const { runs } = await this.board.activeThreads();
     const rows = await this.roster.listOf(managerRunId);
@@ -201,24 +203,12 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
       .map((run) => run.id)
       .filter((id) => !onRoster.has(id));
     const removals = [...onRoster].filter((id) => !activeIds.has(id));
-    const now = Date.now();
-    const added = await this.roster.join(
-      managerRunId,
-      additions,
-      'auto',
-      new Date(now),
-    );
-    const removalDue =
-      now - (this.lastRemovalAt.get(managerRunId) ?? 0) >=
-      ROSTER_REMOVAL_INTERVAL_MS;
-    if (removals.length > 0 && (additions.length > 0 || removalDue)) {
-      await this.roster.leave(managerRunId, removals, new Date(now));
-      this.lastRemovalAt.set(managerRunId, now);
+    const now = new Date();
+    const added = await this.roster.join(managerRunId, additions, 'auto', now);
+    if (removals.length > 0) {
+      await this.roster.leave(managerRunId, removals, now);
     }
-    if (
-      added ||
-      (removals.length > 0 && (additions.length > 0 || removalDue))
-    ) {
+    if (added || removals.length > 0) {
       this.events.publishChanged([...additions, ...removals], 'roster');
     }
     return runs;

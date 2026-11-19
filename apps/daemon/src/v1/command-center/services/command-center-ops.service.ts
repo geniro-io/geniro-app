@@ -11,6 +11,7 @@ import {
   type ArchiveThreadsInput,
   type NoteThreadAnswer,
   type NoteThreadInput,
+  type ReadCommandCenterAnswer,
   SINGLE_AGENT_NODE,
   type TellThreadsAnswer,
   type TellThreadsInput,
@@ -21,9 +22,13 @@ import { CommandCenterOpsBroker } from '../../agents/services/command-center-ops
 import { UNTITLED_THREAD } from '../../agents/utils/thread-message-text';
 import { isMessageableThread } from '../../agents/utils/thread-runs';
 import { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
-import { REPLY_CREDIT_MS } from '../command-center.types';
+import {
+  type CommandCenterCard,
+  REPLY_CREDIT_MS,
+} from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import { type NameableThread, resolveTarget } from '../utils/resolve-target';
+import { CommandCenterService } from './command-center.service';
 import {
   CommandCenterChatService,
   type RosterThread,
@@ -40,11 +45,36 @@ function candidatesOf(threads: readonly NameableThread[]) {
   }));
 }
 
+function graphThreadOf(card: CommandCenterCard) {
+  return {
+    handle: card.handle,
+    runId: card.run.id,
+    title: card.run.title ?? UNTITLED_THREAD,
+    project: card.run.project?.name ?? null,
+    column: card.column,
+    status: card.run.status,
+    awaiting: card.run.awaiting ?? null,
+    awaitingReply: card.contact.awaitingReply,
+    pullRequest: card.run.pullRequests.find((pr) => pr.opened)?.number ?? null,
+    taskCard:
+      card.task === null
+        ? null
+        : {
+            identifier: card.task.identifier,
+            title: card.task.title,
+            status: card.task.status,
+          },
+    lastActivityAt: card.run.lastActivityAt,
+    note: card.note,
+  };
+}
+
 function nameableOf(threads: readonly RosterThread[]): NameableThread[] {
-  return threads.map(({ entry, run }) => ({
+  return threads.map(({ entry, run, done }) => ({
     handle: entry.handle,
     runId: entry.threadRunId,
     title: run?.title ?? UNTITLED_THREAD,
+    done,
   }));
 }
 
@@ -68,6 +98,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     private readonly starts: CommandCenterStartsService,
     private readonly events: CommandCenterEventBus,
     private readonly chats: ChatService,
+    private readonly board: CommandCenterService,
   ) {}
 
   onModuleInit(): void {
@@ -76,6 +107,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
       note: (managerRunId, input) => this.note(managerRunId, input),
       start: (managerRunId, input) => this.starts.start(managerRunId, input),
       archive: (managerRunId, input) => this.archive(managerRunId, input),
+      read: (managerRunId) => this.read(managerRunId),
     });
   }
 
@@ -173,8 +205,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Archive each named thread the way the sidebar does, after every name has
-   * resolved; an archived thread leaves the roster at once instead of waiting
-   * for the next roster sync's removal window.
+   * resolved; an archived thread leaves the roster at once.
    */
   async archive(
     managerRunId: string,
@@ -192,7 +223,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     const resolved: { to: string; thread: NameableThread }[] = [];
     const unresolved: Unresolved[] = [];
     for (const to of input.threads) {
-      const found = await this.resolve(to, roster);
+      const found = await this.resolve(to, roster, false);
       if ('thread' in found) {
         resolved.push({ to, thread: found.thread });
         continue;
@@ -253,6 +284,26 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * The graph as the user sees it on the board: every active thread, the
+   * roster brought in line first so each carries its handle, finished threads
+   * last.
+   */
+  async read(managerRunId: string): Promise<ReadCommandCenterAnswer> {
+    await this.assertManager(managerRunId);
+    await this.managers.rosterThreads(managerRunId);
+    const board = await this.board.board();
+    const threads = board.cards.map(graphThreadOf);
+    return {
+      generatedAt: board.generatedAt,
+      threads: [
+        ...threads.filter((thread) => thread.column !== 'done'),
+        ...threads.filter((thread) => thread.column === 'done'),
+      ],
+      pendingStarts: board.pendingStarts,
+    };
+  }
+
+  /**
    * The threads that left this manager's roster because they were archived —
    * by an earlier call, or by the user from the sidebar — still nameable, so
    * archiving one again is answered as already done rather than as unknown.
@@ -284,6 +335,7 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
               handle: row.handle,
               runId: row.threadRunId,
               title: titles.get(row.threadRunId) ?? UNTITLED_THREAD,
+              done: false,
             },
           ]
         : [],
@@ -305,8 +357,9 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
   private async resolve(
     name: string,
     roster: readonly NameableThread[],
+    preferUnfinished = true,
   ): Promise<{ thread: NameableThread } | Omit<Unresolved, 'to'>> {
-    const resolution = resolveTarget(name, roster);
+    const resolution = resolveTarget(name, roster, preferUnfinished);
     if (resolution.kind === 'resolved') {
       return { thread: resolution.thread };
     }

@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { mountIntoDocument } from '../__tests__/mount-into-document';
+import {
+  ThreadArchiveContext,
+  type ThreadArchiveOf,
+} from '../components/thread-archive';
 import type { ThreadIdentity } from '../components/thread-head';
 import { ThreadEventCard, ThreadEventRow } from './thread-event-card';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
@@ -370,5 +374,85 @@ describe('ThreadEventRow', () => {
       'r-otter',
       'r-elves',
     ]);
+  });
+});
+
+describe('ThreadEventCard — archive', () => {
+  it.each(['sent', 'received', 'woken', 'done'] as const)(
+    'heads a %s event with the archive icon of its thread, once the provider offers one',
+    (kind) => {
+      const el = render(
+        <ThreadArchiveContext.Provider value={() => vi.fn()}>
+          <ThreadEventCard kind={kind} runId="r-otter" title="Otter" />
+        </ThreadArchiveContext.Provider>,
+      );
+
+      expect(
+        el.querySelector('[data-slot="thread-head-archive"]'),
+      ).not.toBeNull();
+    },
+  );
+
+  it('draws the Archive button on a finished thread only, and archives its thread from it', () => {
+    const archive = vi.fn();
+    const archiveOf = vi.fn<ThreadArchiveOf>(() => archive);
+    const done = render(
+      <ThreadArchiveContext.Provider value={archiveOf}>
+        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+      </ThreadArchiveContext.Provider>,
+    );
+
+    act(() => {
+      done
+        .querySelector<HTMLButtonElement>('[data-slot="thread-event-archive"]')!
+        .click();
+    });
+
+    expect(archiveOf).toHaveBeenCalledWith('r-otter');
+    expect(archive).toHaveBeenCalledTimes(1);
+
+    const sent = render(
+      <ThreadArchiveContext.Provider value={archiveOf}>
+        <ThreadEventCard kind="sent" runId="r-otter" title="Otter" />
+      </ThreadArchiveContext.Provider>,
+    );
+    expect(sent.querySelector('[data-slot="thread-event-archive"]')).toBeNull();
+  });
+
+  it('archives its thread from the head icon of any event', () => {
+    const archive = vi.fn();
+    const el = render(
+      <ThreadArchiveContext.Provider value={() => archive}>
+        <ThreadEventCard kind="received" runId="r-otter" title="Otter" />
+      </ThreadArchiveContext.Provider>,
+    );
+
+    act(() => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-slot="thread-head-archive"]',
+      )!.click();
+    });
+
+    expect(archive).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws no archive without a provider standing, even on a finished thread', () => {
+    const el = render(
+      <ThreadEventCard kind="done" runId="r-otter" title="Otter" />,
+    );
+
+    expect(el.querySelector('[data-slot="thread-head-archive"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-event-archive"]')).toBeNull();
+  });
+
+  it('draws no archive for a thread the provider answers null for', () => {
+    const el = render(
+      <ThreadArchiveContext.Provider value={() => null}>
+        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+      </ThreadArchiveContext.Provider>,
+    );
+
+    expect(el.querySelector('[data-slot="thread-head-archive"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-event-archive"]')).toBeNull();
   });
 });

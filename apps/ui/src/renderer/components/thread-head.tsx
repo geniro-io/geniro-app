@@ -5,6 +5,7 @@ import {
   type ThreadLabelsView,
   type ThreadPullRequest,
 } from './thread-labels';
+import { Button } from './ui/button';
 import { cn } from './ui/utils';
 
 /** Who a thread is, as the command center's graph shows it. */
@@ -107,5 +108,34 @@ export function ThreadHead({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** The quiet icon buttons at the end of a thread head. */
+export function ThreadHeadIcon({
+  slot,
+  label,
+  title,
+  icon,
+  onClick,
+}: {
+  slot: string;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      data-slot={slot}
+      className="size-6 shrink-0 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
+      aria-label={label}
+      title={title}
+      onClick={onClick}>
+      {icon}
+    </Button>
   );
 }

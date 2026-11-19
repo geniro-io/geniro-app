@@ -113,17 +113,22 @@ describe('CommandCenterService.board', () => {
     );
   }
 
-  it('shows every active thread however long ago it moved, and none archived or finished', async () => {
+  it('shows every active thread however long ago it moved, a finished one included, and none archived', async () => {
     await seedChatAged('recent', HOUR);
     await seedChatAged('two-weeks', 14 * 24 * HOUR);
     await seedChatAged('running-old', 10 * 24 * HOUR, { status: 'running' });
     await seedChatAged('archived', HOUR, { archivedAt: new Date(now) });
     await seedChatAged('finished', HOUR);
     await db.seedTask('finished', 'done');
+    await seedChatAged('finished-archived', HOUR, {
+      archivedAt: new Date(now),
+    });
+    await db.seedTask('finished-archived', 'done');
 
     const board = await service.board();
 
     expect(board.cards.map((card) => card.run.id).sort()).toEqual([
+      'finished',
       'recent',
       'running-old',
       'two-weeks',
@@ -161,7 +166,7 @@ describe('CommandCenterService.board', () => {
     });
   });
 
-  it('places each thread in its column, and leaves a finished one off the board', async () => {
+  it('places each thread in its column, a finished one in done', async () => {
     await seedChatAged('done-card', HOUR);
     await db.seedTask('done-card', 'done');
     await seedChatAged('review-card', HOUR);
@@ -173,8 +178,26 @@ describe('CommandCenterService.board', () => {
     expect(
       Object.fromEntries(board.cards.map((card) => [card.run.id, card.column])),
     ).toEqual({
+      'done-card': 'done',
       'review-card': 'in_review',
       'idle-card': 'idle',
+    });
+  });
+
+  it('answers each run’s board column, done for a thread whose card is done', async () => {
+    await seedChatAged('done-card', HOUR);
+    await db.seedTask('done-card', 'done');
+    await seedChatAged('review-card', HOUR);
+    await db.seedTask('review-card', 'in_review');
+    await seedChatAged('loose', HOUR);
+    const { runs } = await service.activeThreads();
+
+    const columns = await service.columnsOf(runs);
+
+    expect(Object.fromEntries(columns)).toEqual({
+      'done-card': 'done',
+      'review-card': 'in_review',
+      loose: 'idle',
     });
   });
 

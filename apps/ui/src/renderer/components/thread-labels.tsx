@@ -21,7 +21,7 @@ import { cn } from './ui/utils';
 
 /** Where a thread stands for the user, which colours its card and its status chip. */
 export type ThreadAttention =
-  'blocked' | 'working' | 'question' | 'quiet' | 'inactive';
+  'blocked' | 'working' | 'question' | 'quiet' | 'inactive' | 'done';
 
 /** The board card a thread works, shown on it as a label. */
 export interface ThreadCardBoardCard {
@@ -40,6 +40,7 @@ export const threadStatusChipVariants = cva(
         question: 'bg-warning/15 text-warning',
         quiet: 'bg-muted text-muted-foreground',
         inactive: 'bg-muted text-muted-foreground',
+        done: 'bg-success/10 text-success',
       } satisfies Record<ThreadAttention, string>,
     },
   },

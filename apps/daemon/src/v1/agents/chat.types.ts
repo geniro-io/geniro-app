@@ -8710,6 +8710,7 @@ export const HOST_TELL_THREADS_TOOL = 'tell_threads';
 export const HOST_NOTE_THREAD_TOOL = 'note_thread';
 export const HOST_START_THREAD_TOOL = 'start_thread';
 export const HOST_ARCHIVE_THREADS_TOOL = 'archive_threads';
+export const HOST_READ_COMMAND_CENTER_TOOL = 'read_command_center';
 
 /**
  * The `approval_request` row's `toolName` for a managed thread's open question
@@ -8867,6 +8868,39 @@ export type StartThreadAnswer =
     }
   | { status: 'refused'; code: string; reason: string };
 
+/** `read_command_center` takes no arguments. */
+export const ReadCommandCenterSchema = z.object({});
+export type ReadCommandCenterInput = z.infer<typeof ReadCommandCenterSchema>;
+
+/** One thread of the command center's graph, as `read_command_center` answers it. */
+export interface CommandCenterGraphThread {
+  /** Its roster handle (t3), or null while it is not on the roster. */
+  handle: string | null;
+  runId: string;
+  title: string;
+  project: string | null;
+  /** The board column: working, waiting, idle, in_review or done. */
+  column: string;
+  /** The run's own status. */
+  status: string;
+  /** What the thread waits on from the user (a question, an approval), or null. */
+  awaiting: string | null;
+  /** Whether you await its reply to your last message. */
+  awaitingReply: boolean;
+  pullRequest: number | null;
+  taskCard: { identifier: string | null; title: string; status: string } | null;
+  lastActivityAt: string | null;
+  note: string | null;
+}
+
+/** The command center's graph now: every active thread, finished ones last. */
+export interface ReadCommandCenterAnswer {
+  generatedAt: string;
+  threads: CommandCenterGraphThread[];
+  /** Start cards you raised that still wait on the user. */
+  pendingStarts: number;
+}
+
 /**
  * The command center's operations behind the manager's tools, installed by the
  * command-center module (`CommandCenterOpsBroker`). Every method answers; a
@@ -8886,6 +8920,7 @@ export interface CommandCenterOps {
     managerRunId: string,
     input: ArchiveThreadsInput,
   ): Promise<ArchiveThreadsAnswer>;
+  read(managerRunId: string): Promise<ReadCommandCenterAnswer>;
 }
 
 /** What the command-center module tells the chat service about its manager. */

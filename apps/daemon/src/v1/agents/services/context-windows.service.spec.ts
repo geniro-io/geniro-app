@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type { AgentContextWindowListing } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
+import { CodexAdapter } from '../adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { UnknownAgentVersion } from './__tests__/unknown-agent-version';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -34,6 +39,29 @@ function service(options: ContextWindowsServiceOptions = {}): {
     ),
   };
 }
+
+function codexService(home: string): ContextWindowsService {
+  return new ContextWindowsService(
+    new AgentAdapterRegistry([new CodexAdapter({ homeDir: home })]),
+    new ProcessRegistry(),
+    new UnknownAgentVersion(),
+  );
+}
+
+const CODEX_CATALOG = JSON.stringify({
+  models: [
+    {
+      slug: 'gpt-6.2-sol',
+      context_window: 500000,
+      max_context_window: 872000,
+    },
+  ],
+});
+
+const CODEX_WINDOWS = [
+  { id: '500k', label: '500k' },
+  { id: '872k', label: '872k' },
+];
 
 const LISTING: AgentContextWindowListing = {
   windows: [
@@ -181,5 +209,43 @@ describe('ContextWindowsService', () => {
       // that by matching the reason prose is what this field replaced.
       unavailableKind: null,
     });
+  });
+
+  it('hands the adapter the profile the question is asked under', async () => {
+    const { windows, cursor } = service();
+    const spy = vi
+      .spyOn(cursor, 'listModelContextWindows')
+      .mockResolvedValue(LISTING);
+
+    await windows.list('cursor-agent', 'claude-opus-5', '/profiles/work');
+
+    expect(spy.mock.calls[0]?.[1]?.configDir).toBe('/profiles/work');
+  });
+
+  it('lists a model only the profile’s own codex catalog carries', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'context-windows-home-'));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    const profile = join(home, 'profile');
+    mkdirSync(profile);
+    writeFileSync(join(profile, 'models_cache.json'), CODEX_CATALOG);
+
+    const listing = await codexService(home).list(
+      'codex',
+      'gpt-6.2-sol',
+      profile,
+    );
+
+    expect(listing.windows).toEqual(CODEX_WINDOWS);
+  });
+
+  it('still reads the default codex home when no profile is given', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'context-windows-home-'));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    mkdirSync(join(home, '.codex'));
+    writeFileSync(join(home, '.codex', 'models_cache.json'), CODEX_CATALOG);
+
+    const listing = await codexService(home).list('codex', 'gpt-6.2-sol');
+
+    expect(listing.windows).toEqual(CODEX_WINDOWS);
   });
 });

@@ -128,6 +128,7 @@ function layerProps(
     flashing: null,
     onClose: vi.fn(),
     onResize: vi.fn(),
+    onMove: vi.fn(),
     onOpenInChats: vi.fn(),
     renderChat: (runId) => (
       <span data-slot="card-chat">{`chat of ${runId}`}</span>

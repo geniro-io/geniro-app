@@ -22,6 +22,9 @@ import { OpenInChatsIcon, ShowChatIcon } from './thread-card';
 /** The card's head above its chat, in pixels: the thread head and its padding. */
 export const CARD_HEAD_HEIGHT = 66;
 
+/** How far, in pixels, a press must travel before it moves a node or a card rather than clicking it. */
+export const DRAG_THRESHOLD = 5;
+
 /** The room a card leaves the graph pane's edges when it is as big as it may get. */
 const PANE_INSET = 16;
 
@@ -41,6 +44,19 @@ interface Gesture {
   startX: number;
   startY: number;
   origin: CardSize;
+}
+
+interface HeadPress {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  moving: boolean;
+}
+
+/** A move of the card by its head, in screen pixels from where the press began. */
+export interface CardMove {
+  dx: number;
+  dy: number;
 }
 
 /** The most a card's chat may take: never wider or taller than the pane it stands in. */
@@ -111,19 +127,70 @@ function CardHead({
   open,
   onClose,
   onOpenInChats,
+  onMove,
   leading,
 }: {
   card: CanvasCard;
   open: boolean;
   onClose: () => void;
   onOpenInChats: () => void;
+  onMove?: (move: CardMove, done: boolean) => void;
   leading?: React.ReactNode;
 }): React.JSX.Element {
   const title = card.identity.title;
+  const press = useRef<HeadPress | null>(null);
+  const moveOf = (event: ReactPointerEvent<HTMLElement>, from: HeadPress) => ({
+    dx: event.clientX - from.startX,
+    dy: event.clientY - from.startY,
+  });
+  const begin = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (onMove === undefined || event.button !== 0 || press.current !== null) {
+      return;
+    }
+    press.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moving: false,
+    };
+  };
+  const follow = (event: ReactPointerEvent<HTMLElement>): void => {
+    const active = press.current;
+    if (active === null || active.pointerId !== event.pointerId) {
+      return;
+    }
+    const move = moveOf(event, active);
+    if (!active.moving) {
+      if (Math.hypot(move.dx, move.dy) < DRAG_THRESHOLD) {
+        return;
+      }
+      active.moving = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    onMove?.(move, false);
+  };
+  const release = (event: ReactPointerEvent<HTMLElement>): void => {
+    const active = press.current;
+    if (active === null || active.pointerId !== event.pointerId) {
+      return;
+    }
+    press.current = null;
+    if (active.moving) {
+      onMove?.(moveOf(event, active), true);
+    }
+  };
   return (
     <div
-      className="flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-2.5"
-      style={{ height: CARD_HEAD_HEIGHT }}>
+      data-slot="thread-canvas-card-head"
+      className={cn(
+        'flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-2.5',
+        onMove !== undefined && 'cursor-grab touch-none select-none',
+      )}
+      style={{ height: CARD_HEAD_HEIGHT }}
+      onPointerDown={begin}
+      onPointerMove={follow}
+      onPointerUp={release}
+      onPointerCancel={release}>
       {leading}
       <div className="min-w-0 flex-1">
         <ThreadHead
@@ -149,6 +216,7 @@ function CanvasThreadCard({
   flash,
   onClose,
   onResize,
+  onMove,
   onOpenInChats,
   chat,
 }: {
@@ -157,6 +225,7 @@ function CanvasThreadCard({
   flash: number | null;
   onClose: () => void;
   onResize: (size: CardSize) => void;
+  onMove: (move: CardMove, done: boolean) => void;
   onOpenInChats: () => void;
   chat: React.ReactNode;
 }): React.JSX.Element {
@@ -221,6 +290,7 @@ function CanvasThreadCard({
         open
         onClose={onClose}
         onOpenInChats={onOpenInChats}
+        onMove={onMove}
       />
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {chat}
@@ -260,6 +330,8 @@ export interface ThreadCardLayerProps {
   flashing: { runId: string; seq: number } | null;
   onClose: (runId: string) => void;
   onResize: (runId: string, size: CardSize) => void;
+  /** The card was dragged by its head so its slot's top-left stands at `to` in the flow; `done` on the drop. */
+  onMove: (runId: string, to: { x: number; y: number }, done: boolean) => void;
   onOpenInChats: (runId: string) => void;
   renderChat: (runId: string) => React.ReactNode;
 }
@@ -277,10 +349,12 @@ export function ThreadCardLayer({
   flashing,
   onClose,
   onResize,
+  onMove,
   onOpenInChats,
   renderChat,
 }: ThreadCardLayerProps): React.JSX.Element | null {
   const store = useStoreApi();
+  const moving = useRef(new Map<string, { x: number; y: number }>());
   const wrappers = useRef(new Map<string, HTMLDivElement>());
   const placed = useRef(slots);
   placed.current = slots;
@@ -307,6 +381,21 @@ export function ThreadCardLayer({
       }),
     [store, place],
   );
+
+  const move = (runId: string, by: CardMove, done: boolean): void => {
+    const origin = moving.current.get(runId) ?? placed.current.get(runId);
+    if (origin === undefined) {
+      return;
+    }
+    const zoom = store.getState().transform[2];
+    const to = { x: origin.x + by.dx / zoom, y: origin.y + by.dy / zoom };
+    if (done) {
+      moving.current.delete(runId);
+    } else if (!moving.current.has(runId)) {
+      moving.current.set(runId, { x: origin.x, y: origin.y });
+    }
+    onMove(runId, to, done);
+  };
 
   const shown = cards.filter((card) => slots.has(card.runId));
   if (shown.length === 0) {
@@ -336,6 +425,7 @@ export function ThreadCardLayer({
             flash={flashing?.runId === card.runId ? flashing.seq : null}
             onClose={() => onClose(card.runId)}
             onResize={(size) => onResize(card.runId, size)}
+            onMove={(by, done) => move(card.runId, by, done)}
             onOpenInChats={() => onOpenInChats(card.runId)}
             chat={renderChat(card.runId)}
           />

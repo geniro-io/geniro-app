@@ -233,6 +233,9 @@ describe('GraphView', () => {
           openCards={[]}
           onCloseCard={() => undefined}
           onResizeCard={() => undefined}
+          positions={{}}
+          onPlaceNode={() => undefined}
+          onResetLayout={() => undefined}
           onFocused={() => undefined}
           renderCardChat={() => null}
           focus={null}

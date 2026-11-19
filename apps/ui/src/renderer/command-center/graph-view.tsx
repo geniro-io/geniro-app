@@ -5,6 +5,7 @@ import {
   type EdgeProps,
   Handle,
   type Node,
+  type NodeChange,
   type NodeHandle,
   type NodeProps,
   Position,
@@ -14,7 +15,7 @@ import {
   useStore,
 } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
-import { Maximize, Minus, Plus, RadioTower } from 'lucide-react';
+import { Maximize, Minus, Plus, RadioTower, RotateCcw } from 'lucide-react';
 import {
   createContext,
   useContext,
@@ -57,6 +58,7 @@ import {
   perLineFor,
   type PlacedBox,
 } from './graph-layout';
+import type { NodeOffset, NodeOffsets } from './node-positions';
 import type { CardBand, CardSize } from './open-cards';
 import type { ProjectColor } from './project-colors';
 import {
@@ -71,6 +73,7 @@ import {
   type CanvasCard,
   CARD_HEAD_HEIGHT,
   clampCard,
+  DRAG_THRESHOLD,
   largestCard,
   PhoneThreadCard,
   ThreadCardLayer,
@@ -126,6 +129,12 @@ export interface GraphViewProps {
   openCards: readonly GraphOpenCard[];
   onCloseCard: (threadId: string) => void;
   onResizeCard: (threadId: string, size: CardSize) => void;
+  /** Where the nodes the user moved stand, by thread, from the manager node's top-left. */
+  positions: NodeOffsets;
+  /** A thread's node or card was dropped at `offset` from the manager node's top-left. */
+  onPlaceNode: (threadId: string, offset: NodeOffset) => void;
+  /** Give every moved node back to the automatic layout. */
+  onResetLayout: () => void;
   /** The chat a card holds under its head. */
   renderCardChat: (threadId: string) => React.ReactNode;
   /** The thread to pan to and flash; null for none. */
@@ -668,7 +677,13 @@ export function GraphView(props: GraphViewProps): React.JSX.Element {
   );
 }
 
-function ZoomControls({ onFit }: { onFit: () => void }): React.JSX.Element {
+function ZoomControls({
+  onFit,
+  onReset,
+}: {
+  onFit: () => void;
+  onReset: (() => void) | null;
+}): React.JSX.Element {
   const flow = useReactFlow();
   const reduced = usePrefersReducedMotion();
   const duration = reduced ? 0 : 200;
@@ -704,6 +719,19 @@ function ZoomControls({ onFit }: { onFit: () => void }): React.JSX.Element {
         onClick={onFit}>
         <Maximize aria-hidden="true" />
       </Button>
+      {onReset === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          data-slot="graph-reset-layout"
+          aria-label="Reset layout"
+          title="Reset layout"
+          onClick={onReset}>
+          <RotateCcw aria-hidden="true" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -722,6 +750,9 @@ function GraphCanvas({
   openCards,
   onCloseCard,
   onResizeCard,
+  positions,
+  onPlaceNode,
+  onResetLayout,
   renderCardChat,
   focus,
   onFocused,
@@ -734,10 +765,15 @@ function GraphCanvas({
   const flow = useReactFlow();
   const reduced = usePrefersReducedMotion();
   const [measure, size] = useElementSize();
-  const fitted = useRef<string | null>(null);
+  const fittedSize = useRef<string | null>(null);
+  const fittedWidth = useRef<number | null>(null);
+  const userMoved = useRef(false);
   const quietUntil = useRef(0);
   const focused = useRef<number | null>(null);
   const [flashing, setFlashing] = useState<GraphFocus | null>(null);
+  const [drag, setDrag] = useState<{ id: string; offset: NodeOffset } | null>(
+    null,
+  );
   const panZoomReady = useStore((state) => state.panZoom !== null);
 
   const largest = size.width === 0 ? null : largestCard(size);
@@ -761,13 +797,30 @@ function GraphCanvas({
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
     height: narrow ? MANAGER_HEIGHT_NARROW : MANAGER_HEIGHT,
   };
+  const pinned = new Map<string, NodeOffset>();
+  if (!narrow) {
+    for (const thread of shown) {
+      const offset = positions[thread.id];
+      if (offset !== undefined) {
+        pinned.set(`thread:${thread.id}`, offset);
+      }
+    }
+    if (drag !== null) {
+      pinned.set(drag.id, drag.offset);
+    }
+  }
   const drawn: GraphGeometry = narrow
     ? layoutColumn(root, rows.flat())
-    : layoutRows(root, rows);
+    : layoutRows(root, rows, pinned);
   const unopened =
-    onCanvas.size === 0
+    onCanvas.size === 0 && pinned.size === 0
       ? drawn
       : layoutRows(root, graphRows(shown, hidden, canvasWidth));
+  const placedRoot = drawn.boxes.get(MANAGER_ID)!;
+  const offsetOf = (position: { x: number; y: number }): NodeOffset => ({
+    x: position.x - placedRoot.x,
+    y: position.y - placedRoot.y,
+  });
 
   const moveQuietly = (duration: number): void => {
     quietUntil.current = performance.now() + duration + QUIET_MOVE_SLACK_MS;
@@ -777,15 +830,23 @@ function GraphCanvas({
     moveQuietly(duration);
     void flow.setViewport(widthFit(unopened, size), { duration });
   }, []);
-  const fitKey = `${Math.round(unopened.width)}#${Math.round(size.width)}x${Math.round(size.height)}`;
+  const sizeKey = `${Math.round(size.width)}x${Math.round(size.height)}`;
+  const graphWidth = Math.round(unopened.width);
   useLayoutEffect(() => {
-    if (narrow || size.width === 0 || fitted.current === fitKey) {
+    if (narrow || size.width === 0) {
       return;
     }
-    const first = fitted.current === null;
-    fitted.current = fitKey;
+    const resized = fittedSize.current !== sizeKey;
+    const grown = fittedWidth.current !== graphWidth;
+    if (!resized && !(grown && !userMoved.current)) {
+      return;
+    }
+    const first = fittedSize.current === null;
+    fittedSize.current = sizeKey;
+    fittedWidth.current = graphWidth;
+    userMoved.current = false;
     fit(!first);
-  }, [fitKey, narrow, size.width, fit]);
+  }, [sizeKey, graphWidth, narrow, size.width, fit]);
 
   const focusSlot =
     focus === null ? undefined : drawn.boxes.get(`thread:${focus.runId}`);
@@ -833,8 +894,43 @@ function GraphCanvas({
     if (performance.now() < quietUntil.current) {
       return;
     }
+    userMoved.current = true;
     onViewportMove?.();
   }, []);
+  const nodesChanged = useLatestCallback(
+    (changes: NodeChange<GraphFlowNode>[]) => {
+      for (const change of changes) {
+        if (
+          change.type === 'position' &&
+          change.dragging === true &&
+          change.position !== undefined
+        ) {
+          setDrag({ id: change.id, offset: offsetOf(change.position) });
+        }
+      }
+    },
+    [],
+  );
+  const nodeDropped = useLatestCallback(
+    (_event: unknown, node: GraphFlowNode) => {
+      if (node.type === 'thread') {
+        onPlaceNode(node.data.thread.id, offsetOf(node.position));
+      }
+      setDrag(null);
+    },
+    [],
+  );
+  const cardMoved = useLatestCallback(
+    (runId: string, to: { x: number; y: number }, done: boolean) => {
+      if (done) {
+        onPlaceNode(runId, offsetOf(to));
+        setDrag(null);
+      } else {
+        setDrag({ id: `thread:${runId}`, offset: offsetOf(to) });
+      }
+    },
+    [],
+  );
 
   const states = new Map(
     shown.map((thread) => {
@@ -867,7 +963,7 @@ function GraphCanvas({
       width: box.width,
       height: box.height,
       handles: handlesFor(box.width, box.height),
-      className: NODE_CLASS,
+      className: drag?.id === id ? undefined : NODE_CLASS,
       selectable: false,
       draggable: false,
       focusable: false,
@@ -906,7 +1002,7 @@ function GraphCanvas({
       ),
     };
     if (card === undefined) {
-      nodes.push({ ...base(id), type: 'thread', data });
+      nodes.push({ ...base(id), type: 'thread', data, draggable: !narrow });
     } else {
       nodes.push({ ...base(id), type: 'slot', data });
       slots.set(thread.id, drawn.boxes.get(id)!);
@@ -964,6 +1060,9 @@ function GraphCanvas({
     { x: 0, y: 0 },
   );
   const stretch = 1 / MIN_ZOOM - 1;
+  const placedBoxes = [...drawn.boxes.values()];
+  const leftmost = Math.min(0, ...placedBoxes.map((box) => box.x));
+  const topmost = Math.min(0, ...placedBoxes.map((box) => box.y));
 
   const phoneCard = narrow ? openCards.at(-1) : undefined;
   const phoneThread =
@@ -978,6 +1077,9 @@ function GraphCanvas({
     nodeTypes: NODE_TYPES,
     edgeTypes: EDGE_TYPES,
     onNodeClick: POINTER_ON_NODES,
+    onNodesChange: nodesChanged,
+    onNodeDragStop: nodeDropped,
+    nodeDragThreshold: DRAG_THRESHOLD,
     nodesDraggable: false,
     nodesConnectable: false,
     nodesFocusable: false,
@@ -1052,7 +1154,7 @@ function GraphCanvas({
                   minZoom={MIN_ZOOM}
                   maxZoom={MAX_ZOOM}
                   translateExtent={[
-                    [-PAN_ROOM, -PAN_ROOM],
+                    [leftmost - PAN_ROOM, topmost - PAN_ROOM],
                     [
                       drawn.width + PAN_ROOM + overhang.x * stretch,
                       drawn.height + PAN_ROOM + overhang.y * stretch,
@@ -1075,6 +1177,9 @@ function GraphCanvas({
                       duration: reduced ? 0 : FIT_MS,
                     })
                   }
+                  onReset={
+                    Object.keys(positions).length === 0 ? null : onResetLayout
+                  }
                 />
                 <ThreadCardLayer
                   cards={canvasCards}
@@ -1083,6 +1188,7 @@ function GraphCanvas({
                   flashing={flashing}
                   onClose={onCloseCard}
                   onResize={onResizeCard}
+                  onMove={cardMoved}
                   onOpenInChats={openInChats}
                   renderChat={renderCardChat}
                 />

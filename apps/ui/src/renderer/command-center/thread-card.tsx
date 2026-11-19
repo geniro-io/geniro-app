@@ -1,17 +1,9 @@
 import { cva } from 'class-variance-authority';
 import {
-  Bot,
-  Folder,
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  type LucideIcon,
   MessageCircleQuestion,
   Moon,
   PictureInPicture2,
   ShieldCheck,
-  Users,
 } from 'lucide-react';
 
 import type { ProfileColor } from '../../shared/contracts';
@@ -19,22 +11,18 @@ import { plainPreview } from '../chats/brief-text';
 import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import { type AvatarPerson, AvatarStack } from '../components/member-avatar';
 import {
-  BoardCardLabel,
   GoToThreadButton,
+  PullRequestLabel,
   type ThreadAttention,
   type ThreadCardBoardCard,
-  ThreadLabelChip,
-  ThreadStatusChip,
+  ThreadLabelsRow,
+  type ThreadPullRequestState,
 } from '../components/thread-labels';
-import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { PaletteDot } from '../components/ui/palette-dot';
 import { cn } from '../components/ui/utils';
 
 export type ThreadCardStatus =
   'working' | 'waiting' | 'idle' | 'failed' | 'done';
-
-export type ThreadCardPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 
 export interface ThreadCardProps {
   title: string;
@@ -50,7 +38,7 @@ export interface ThreadCardProps {
   isTeam: boolean;
   /** A team run's members, for the faces on its card; null for one agent. */
   crew: { people: readonly AvatarPerson[]; total: number } | null;
-  pullRequest: { number: number; state: ThreadCardPullRequestState } | null;
+  pullRequest: { number: number; state: ThreadPullRequestState } | null;
   note: string | null;
   /** The thread's latest message, as the thread list previews it. */
   lastMessage: string | null;
@@ -211,49 +199,6 @@ function StatusDot({
   );
 }
 
-const PULL_REQUEST_META: Record<
-  ThreadCardPullRequestState,
-  { word: string; icon: LucideIcon; className: string }
-> = {
-  open: { word: 'open', icon: GitPullRequest, className: 'text-warning' },
-  draft: {
-    word: 'draft',
-    icon: GitPullRequestDraft,
-    className: 'text-muted-foreground',
-  },
-  merged: { word: 'merged', icon: GitMerge, className: 'text-success' },
-  closed: {
-    word: 'closed',
-    icon: GitPullRequestClosed,
-    className: 'text-destructive',
-  },
-};
-
-function PullRequestChip({
-  number,
-  state,
-}: {
-  number: number;
-  state: ThreadCardPullRequestState;
-}): React.JSX.Element {
-  const meta = PULL_REQUEST_META[state];
-  const Icon = meta.icon;
-  return (
-    <Badge
-      data-slot="thread-card-pull-request"
-      variant="muted"
-      title={`#${number} · ${meta.word}`}
-      className="shrink-0 gap-1 px-1.5 py-0 font-normal">
-      <Icon
-        aria-hidden="true"
-        className={cn('size-3.5 shrink-0', meta.className)}
-      />
-      <span className="sr-only">{meta.word}</span>
-      <span className="tabular-nums">#{number}</span>
-    </Badge>
-  );
-}
-
 /**
  * One thread as a card — a node of the command center's graph: its title and
  * pull request, its state and labels, the manager's note, its latest message,
@@ -327,9 +272,9 @@ export function ThreadCard({
           </span>
         )}
         {pullRequest === null ? null : (
-          <PullRequestChip
-            number={pullRequest.number}
-            state={pullRequest.state}
+          <PullRequestLabel
+            pullRequest={pullRequest}
+            slot="thread-card-pull-request"
           />
         )}
         {onOpenHere === undefined ? null : (
@@ -346,41 +291,18 @@ export function ThreadCard({
           </Button>
         )}
       </div>
-      <div
-        data-slot="thread-card-labels"
-        className="flex h-5 min-w-0 shrink-0 items-center gap-1 overflow-hidden">
-        <ThreadStatusChip attention={attention} slot="thread-card-status">
-          {statusText}
-        </ThreadStatusChip>
-        {agentLabel === null ? null : (
-          <ThreadLabelChip
-            slot="thread-card-agent"
-            icon={isTeam ? Users : Bot}
-            text={agentLabel}
-            title={isTeam ? `Team ${agentLabel}` : `Agent ${agentLabel}`}
-            yields={false}
-          />
-        )}
-        {boardCard === null ? null : <BoardCardLabel card={boardCard} />}
-        {project === null ? null : (
-          <ThreadLabelChip
-            slot="thread-card-project"
-            icon={Folder}
-            mark={
-              projectColor === null ? undefined : (
-                <PaletteDot
-                  color={projectColor}
-                  size="md"
-                  data-slot="thread-card-project-dot"
-                />
-              )
-            }
-            text={project}
-            title={`Project ${project}`}
-            yields
-          />
-        )}
-      </div>
+      <ThreadLabelsRow
+        slot="thread-card"
+        className="h-5 shrink-0"
+        view={{
+          status: { attention, text: statusText },
+          agentLabel,
+          isTeam,
+          boardCard,
+          project,
+          projectColor,
+        }}
+      />
       {note === null ? null : (
         <p
           data-slot="thread-card-note"

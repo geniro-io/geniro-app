@@ -4,10 +4,21 @@ import { Bot, Folder, Users } from 'lucide-react';
 import {
   BoardCardLabel,
   GoToThreadButton,
+  PullRequestLabel,
   type ThreadAttention,
   ThreadLabelChip,
+  ThreadLabelsRow,
+  type ThreadPullRequestState,
   ThreadStatusChip,
 } from './thread-labels';
+
+const PULL_REQUEST_STATES: readonly (ThreadPullRequestState | null)[] = [
+  'open',
+  'draft',
+  'merged',
+  'closed',
+  null,
+];
 
 const ATTENTIONS: readonly ThreadAttention[] = [
   'blocked',
@@ -56,6 +67,26 @@ function ThreadLabels(): React.JSX.Element {
           yields
         />
       </div>
+      <div className="flex flex-wrap items-center gap-1">
+        {PULL_REQUEST_STATES.map((state, index) => (
+          <PullRequestLabel
+            key={state ?? 'unknown'}
+            slot="thread-pull-request"
+            pullRequest={{ number: 140 + index, state }}
+          />
+        ))}
+      </div>
+      <ThreadLabelsRow
+        slot="thread"
+        view={{
+          status: { attention: 'working', text: 'Working' },
+          agentLabel: 'Dev Team',
+          isTeam: true,
+          boardCard: { identifier: 'PRI-10', title: 'Agro', status: 'todo' },
+          project: 'PriceField',
+          projectColor: 'orange',
+        }}
+      />
       <div>
         <GoToThreadButton onGo={() => undefined} />
       </div>

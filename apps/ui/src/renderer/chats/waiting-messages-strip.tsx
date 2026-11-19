@@ -9,11 +9,11 @@ import { ClampedText } from '../components/clamped-text';
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { describeDaemonError } from '../daemon-api';
-import { ThreadTitle } from './thread-message-card';
 import {
   type ThreadMessageReason,
   waitingMessageReasonWords,
 } from './thread-message-payload';
+import { ThreadTitle } from './thread-title';
 
 /** Rows drawn above the composer; the rest stay one press away in the shelf's chip. */
 export const WAITING_STRIP_ROWS = 3;

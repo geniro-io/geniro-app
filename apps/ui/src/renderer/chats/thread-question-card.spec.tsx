@@ -3,6 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  bareThreadIdentity,
+  type ThreadIdentity,
+} from '../components/thread-head';
 import type { DaemonApis } from '../daemon-api';
 import type { RunStatusEvent } from '../daemon-client';
 import { ApprovalCard } from './approval-card';
@@ -14,6 +18,7 @@ import {
   type ThreadQuestionRelay,
   threadQuestionRelayOfRow,
 } from './thread-question-card';
+import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -59,6 +64,9 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
 });
+
+const slotText = (name: string): string | null | undefined =>
+  container.querySelector(`[data-slot="${name}"]`)?.textContent;
 
 const button = (label: string): HTMLButtonElement | undefined =>
   [...container.querySelectorAll('button')].find(
@@ -118,15 +126,87 @@ describe('a thread question relayed into the manager chat', () => {
     ).toBeNull();
   });
 
-  it('names the thread above the thread’s own question', () => {
+  it('heads the thread’s own question with the thread, and says it waits on the user', () => {
     renderCard(RELAYED_QUESTION);
-    expect(
-      container.querySelector('[data-slot="thread-question-card"]'),
-    ).not.toBeNull();
-    expect(container.textContent).toContain(
-      't3 · Billing cache is waiting on you',
-    );
+    const card = container.querySelector<HTMLElement>(
+      '[data-slot="thread-question-card"]',
+    )!;
+    expect(card.dataset.state).toBe('waiting');
+    expect(slotText('thread-question-label')).toBe('Question for you');
+    expect(slotText('thread-question-handle')).toBe('t3');
+    expect(slotText('thread-question-title')).toBe('Billing cache');
+    expect(slotText('thread-question-waiting')).toBe('Waiting on you');
     expect(container.textContent).toContain('Which cache should I clear?');
+  });
+
+  it('heads it as the thread’s node on the graph does where the view knows the thread', () => {
+    const opened: string[] = [];
+    act(() =>
+      root.render(
+        <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
+          <ThreadIdentityContext.Provider
+            value={
+              new Map([
+                [
+                  'thread-1',
+                  {
+                    ...bareThreadIdentity('Billing cache — clear the layer'),
+                    face: { kind: 'agent', icon: 'terminal', name: 'claude' },
+                    status: { attention: 'question', text: 'Question for you' },
+                    agentLabel: 'claude',
+                    project: 'Web',
+                    projectColor: 'teal',
+                  } satisfies ThreadIdentity,
+                ],
+              ])
+            }>
+            <ApprovalCard
+              toolName={THREAD_QUESTION_CARD}
+              input={RELAYED_QUESTION}
+              requestId="relay-1"
+              verdict={null}
+              onRespond={vi.fn()}
+            />
+          </ThreadIdentityContext.Provider>
+        </ThreadOpenContext.Provider>,
+      ),
+    );
+    expect(slotText('thread-question-title')).toBe(
+      'Billing cache — clear the layer',
+    );
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="thread-question-face"]')
+        ?.dataset.face,
+    ).toBe('agent');
+    expect(slotText('thread-question-status')).toBe('Question for you');
+    expect(slotText('thread-question-project')).toBe('Web');
+    expect(
+      container.querySelector('[data-slot="thread-question-card"]')!.className,
+    ).not.toContain('border-warning');
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-question-title"]',
+        )!
+        .click(),
+    );
+    expect(opened).toEqual(['thread-1']);
+  });
+
+  it('draws the question a relay carries only in its input as a question, never as raw JSON', () => {
+    renderCard({
+      ...RELAYED_PERMISSION,
+      toolName: 'ask_user_question',
+      input: {
+        title: 'Which source?',
+        questions: RELAYED_QUESTION.questions,
+      },
+    });
+    expect(
+      container.querySelector('[data-slot="question-card"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain('Which cache should I clear?');
+    expect(container.textContent).not.toContain('"questions"');
   });
 
   it('answers through the card’s own verdict, as the thread’s card would', () => {
@@ -169,14 +249,21 @@ describe('a thread question relayed into the manager chat', () => {
     expect(container.textContent).not.toContain('Not delivered');
   });
 
-  it('stops saying the thread waits once the card is answered or closed', () => {
+  it('stops saying the thread waits once the card is answered, declined or closed', () => {
     renderCard(RELAYED_QUESTION, { verdict: true, outcome: 'delivered' });
-    expect(container.textContent).toContain('t3 · Billing cache asked');
-    expect(container.textContent).not.toContain('is waiting on you');
+    expect(slotText('thread-question-label')).toBe('Answered');
+    expect(
+      container.querySelector('[data-slot="thread-question-waiting"]'),
+    ).toBeNull();
+
+    renderCard(RELAYED_PERMISSION, { verdict: false });
+    expect(slotText('thread-question-label')).toBe('Declined');
 
     renderCard(RELAYED_QUESTION, { expired: true });
-    expect(container.textContent).toContain('t3 · Billing cache asked');
-    expect(container.textContent).not.toContain('is waiting on you');
+    expect(slotText('thread-question-label')).toBe('No longer open');
+    expect(
+      container.querySelector('[data-slot="thread-question-waiting"]'),
+    ).toBeNull();
   });
 });
 

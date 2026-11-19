@@ -32,13 +32,25 @@ export interface ThreadMessageSent {
   title: string;
   outcome: ThreadMessageOutcome;
   reason: ThreadMessageReason | null;
+  /** Null on a row written before the daemon kept the text. */
+  text: string | null;
+}
+
+/** A thread on the command center's roster that finished. */
+export interface ThreadDone {
+  runId: string;
+  title: string;
+  handle: string;
+  summary: string | null;
+  pullRequest: number | null;
 }
 
 /** The one shape a thread-message row carries. */
 export type ThreadMessageRow =
   | { kind: 'received'; messages: ReceivedThreadMessage[] }
   | { kind: 'woken'; fromRunId: string; fromTitle: string }
-  | { kind: 'sent'; sent: ThreadMessageSent };
+  | { kind: 'sent'; sent: ThreadMessageSent }
+  | { kind: 'done'; done: ThreadDone[] };
 
 const REASONS: ReadonlySet<string> = new Set(
   Object.values(WaitingMessageDtoReasonEnum),
@@ -52,8 +64,8 @@ const OUTCOMES: ReadonlySet<string> = new Set<ThreadMessageOutcome>([
 /**
  * The thread-message row a system item carries, or null when it carries none.
  *
- * TWIN PARSER: the `threadMessages`, `threadWake` and `threadMessageSent`
- * fields of `HostRowWire` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ * TWIN PARSER: the `threadMessages`, `threadWake`, `threadMessageSent` and
+ * `threadDone` fields of `HostRowWire` in `apps/daemon/src/v1/agents/chat.types.ts`.
  */
 export function readThreadMessageRow(
   payload: unknown,
@@ -71,7 +83,43 @@ export function readThreadMessageRow(
     return { kind: 'woken', ...wake };
   }
   const sent = readSent(bag.threadMessageSent);
-  return sent === null ? null : { kind: 'sent', sent };
+  if (sent !== null) {
+    return { kind: 'sent', sent };
+  }
+  const done = Array.isArray(bag.threadDone)
+    ? bag.threadDone.flatMap((entry) => {
+        const read = readDone(entry);
+        return read === null ? [] : [read];
+      })
+    : [];
+  return done.length === 0 ? null : { kind: 'done', done };
+}
+
+function readDone(value: unknown): ThreadDone | null {
+  if (value === null || typeof value !== 'object') {
+    return null;
+  }
+  const { runId, title, handle, summary, pullRequest } = value as Record<
+    string,
+    unknown
+  >;
+  if (
+    typeof runId !== 'string' ||
+    typeof title !== 'string' ||
+    typeof handle !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    runId,
+    title,
+    handle,
+    summary: typeof summary === 'string' && summary !== '' ? summary : null,
+    pullRequest:
+      typeof pullRequest === 'number' && Number.isInteger(pullRequest)
+        ? pullRequest
+        : null,
+  };
 }
 
 function readReceived(value: unknown): ReceivedThreadMessage[] | null {
@@ -131,7 +179,10 @@ function readSent(value: unknown): ThreadMessageSent | null {
   if (value === null || typeof value !== 'object') {
     return null;
   }
-  const { toRunId, title, outcome, reason } = value as Record<string, unknown>;
+  const { toRunId, title, outcome, reason, text } = value as Record<
+    string,
+    unknown
+  >;
   const reasonValue = reason ?? null;
   if (
     typeof toRunId !== 'string' ||
@@ -150,6 +201,7 @@ function readSent(value: unknown): ThreadMessageSent | null {
     title,
     outcome: outcome as ThreadMessageOutcome,
     reason: reasonValue as ThreadMessageReason | null,
+    text: typeof text === 'string' && text !== '' ? text : null,
   };
 }
 
@@ -176,6 +228,21 @@ const REASON_WORDS: Record<ThreadMessageReason, string> = {
 
 export function threadMessageReasonWords(reason: ThreadMessageReason): string {
   return REASON_WORDS[reason];
+}
+
+/** What became of a sent message, as a sentence under it. */
+export function sentOutcomeWords(sent: ThreadMessageSent): string {
+  if (sent.outcome === 'joined') {
+    return 'Joined the running turn';
+  }
+  if (sent.outcome === 'woken') {
+    return 'Started a turn there';
+  }
+  if (sent.reason === null) {
+    return 'Waiting';
+  }
+  const words = REASON_WORDS[sent.reason];
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /** The same reasons as the thread holding the message reads them. */

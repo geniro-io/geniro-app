@@ -4,13 +4,13 @@ import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatExactUsd, formatTokens } from './agent-activity';
-import { MarkdownContent } from './markdown-content';
+import { ClampedMarkdown } from './clamped-markdown';
 import {
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
-import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
+import { useThreadOverride } from './thread-ui-memory';
 
 /**
  * Block LIFECYCLE — how a piece of nested work ends, in the transcript fold's
@@ -227,59 +227,20 @@ export function InlineClampText({
   /** Where Show more is remembered within the thread. */
   memoryKey?: string;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useThreadFlag(memoryKey, false);
-  const isLong = text.split('\n').length > lines || text.length > lines * 80;
   return (
     <div
       className={cn(
         'rounded-lg px-3 py-2.5 text-[11px] leading-relaxed',
         accentClass,
       )}>
-      {/*
-        `overflow-clip`, and the difference from `overflow-hidden` is the whole
-        of a reported bug. `hidden` truncates AND makes the box a scroll
-        container — one with no scrollbar, which nothing on screen says exists
-        and no gesture can scroll back. Anything that brings a descendant into
-        view therefore shifts this content up for good, and the clamp starts
-        cutting through the middle of its FIRST line instead of its last.
-        Measured: opening a sub-agent's detail dialog does exactly that, every
-        time. `Dialog` moves focus to the first focusable child on open; when
-        the request panel leads with a fenced block, that child is the fence's
-        own Copy button sitting inside this box, so `focus()` scrolls the clamp
-        to reveal it. `clip` truncates without a scroll container — probe-
-        confirmed in this stack, where a box set to `scrollTop = 40` keeps 40
-        under `hidden` and refuses it under `clip`.
-      */}
-      <div
-        className={cn(!expanded && isLong && 'overflow-clip')}
-        style={
-          !expanded && isLong
-            ? {
-                maxHeight: `${lines * 1.8}em`,
-                maskImage: 'linear-gradient(to bottom, black 40%, transparent)',
-                WebkitMaskImage:
-                  'linear-gradient(to bottom, black 40%, transparent)',
-              }
-            : undefined
-        }>
-        <MarkdownContent content={text} className="text-[11px]" />
-      </div>
-      {isLong ? (
-        <button
-          type="button"
-          className="mt-1.5 flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => setExpanded((v) => !v)}>
-          {expanded ? (
-            <>
-              <ChevronUp aria-hidden="true" className="size-3" /> Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown aria-hidden="true" className="size-3" /> Show more
-            </>
-          )}
-        </button>
-      ) : null}
+      <ClampedMarkdown
+        text={text}
+        lines={lines}
+        slot="inline-clamp-text"
+        className="text-[11px]"
+        toggleClassName="text-[10px]"
+        memoryKey={memoryKey}
+      />
     </div>
   );
 }

@@ -1,4 +1,8 @@
-import { type HostWake, SINGLE_AGENT_NODE } from '../../agents/chat.types';
+import {
+  type HostRowWire,
+  type HostWake,
+  SINGLE_AGENT_NODE,
+} from '../../agents/chat.types';
 
 /**
  * A wake of the manager chat for one thing it must hear about. `key` names
@@ -9,6 +13,7 @@ export function managerWake(
   key: string,
   prompt: string,
   message: string,
+  fields?: Pick<HostRowWire, 'threadDone'>,
 ): HostWake {
   return {
     key: `command-center:${key}`,
@@ -20,7 +25,7 @@ export function managerWake(
       caller: SINGLE_AGENT_NODE,
     },
     prompt,
-    row: { severity: 'info', message, woke: true },
+    row: { severity: 'info', message, woke: true, ...fields },
     note: prompt,
     onDelivered: () => undefined,
   };

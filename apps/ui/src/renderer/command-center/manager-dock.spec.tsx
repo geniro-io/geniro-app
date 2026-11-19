@@ -11,6 +11,7 @@ import {
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { HostedThread } from '../chats/hosted-thread';
+import type { ThreadIdentity } from '../components/thread-head';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { ManagerDock } from './manager-dock';
@@ -107,6 +108,23 @@ afterEach(() => {
   container.remove();
 });
 
+const IDENTITIES = new Map<string, ThreadIdentity>([
+  [
+    'run-a',
+    {
+      title: 'Fix the login redirect',
+      project: 'Web',
+      projectColor: 'teal' as const,
+      agentLabel: 'claude',
+      isTeam: false,
+      face: { kind: 'unknown' },
+      pullRequest: null,
+      status: null,
+      boardCard: null,
+    },
+  ],
+]);
+
 async function paint(): Promise<void> {
   await act(async () => {
     root.render(
@@ -116,6 +134,7 @@ async function paint(): Promise<void> {
         client={CLIENT}
         choice={CHOICE}
         hidden={false}
+        threadIdentities={IDENTITIES}
         active
         workingThreads={[]}
         onOpenThread={vi.fn()}
@@ -153,6 +172,12 @@ async function click(button: HTMLButtonElement): Promise<void> {
 }
 
 describe('ManagerDock', () => {
+  it('hands the board threads’ identities to the manager’s transcript', async () => {
+    await paint();
+
+    expect(drawn.hosted?.threadIdentities).toBe(IDENTITIES);
+  });
+
   it('starts a new manager chat from its header, after the confirmation, without re-opening the old one', async () => {
     await paint();
     expect(openCommandCenterChat).toHaveBeenCalledTimes(1);

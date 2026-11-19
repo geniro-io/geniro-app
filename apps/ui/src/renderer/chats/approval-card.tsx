@@ -42,6 +42,7 @@ import {
 } from './thread-question-card';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
+import { recordOf } from './tool-result-text';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
 import { MAX_ANSWER_LENGTH } from './verdict-note';
@@ -1530,7 +1531,7 @@ export function ApprovalCard({
         <ApprovalCard
           toolName={relay.toolName}
           input={relay.input}
-          questions={relay.questions}
+          questions={relay.questions ?? recordOf(relay.input)?.questions}
           options={relay.options}
           requestId={requestId}
           verdict={verdict}

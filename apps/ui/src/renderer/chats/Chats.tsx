@@ -10844,6 +10844,7 @@ export function Chats({
                           ? (hosted?.onOpenThread ?? null)
                           : handleActivateRun
                       }
+                      threadIdentities={hosted?.threadIdentities}
                       openMemory={onOpenMemory ?? null}
                       openKnowledge={onOpenKnowledge ? openKnowledge : null}
                       collapseToolSteps={collapseToolSteps}
@@ -11062,24 +11063,23 @@ export function Chats({
                           />
                         </>
                       )}
-                    </TranscriptContexts>
 
-                    {/* Between the scroller and the composer, and drawn OVER
+                      {/* Between the scroller and the composer, and drawn OVER
                   the transcript from a zero-height row — see
                   `jump-to-latest.tsx` for why it cannot take part in the
                   column's sizing. */}
-                    {/* Offered whenever the newest message is not what is on
+                      {/* Offered whenever the newest message is not what is on
                     screen, which is TWO states rather than one. `aboveTail` is
                     the scroll position; `awayFromTail` is a window fetched
                     around a search hit, whose own bottom is somewhere in the
                     middle of the conversation — there the button is the only way
                     back, and it has to FETCH rather than scroll. */}
-                    <JumpToLatest
-                      visible={aboveTail || awayFromTail}
-                      onJump={awayFromTail ? backToTail : jumpToLatest}
-                    />
+                      <JumpToLatest
+                        visible={aboveTail || awayFromTail}
+                        onJump={awayFromTail ? backToTail : jumpToLatest}
+                      />
 
-                    {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                      {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
                   past and it overlaps the messages it floats above. Here the
                   card is a sibling of the transcript and the composer, which
@@ -11089,28 +11089,28 @@ export function Chats({
                   It sits ABOVE the composer because that is where the answer
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
-                    {pinnedRequest ? (
-                      <div
-                        data-slot="pinned-request"
-                        // Named and given a role that can CARRY a name, so a
-                        // screen-reader user typing into the composer learns the
-                        // turn has stopped on them. Deliberately NOT `aria-live`:
-                        // the card inside is a tablist full of interactive
-                        // controls, and announcing the whole region on every
-                        // keystroke inside it would be worse than saying nothing.
-                        role="region"
-                        aria-label="Question waiting on your answer"
-                        // Bounded and scrolling itself, so option previews stacked
-                        // above the options cannot push them, the answer field and
-                        // the composer off screen.
-                        className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
-                        {openRequests.length > 1 ? (
-                          <p className="m-0 mb-1.5 text-xs text-muted-foreground">
-                            {openRequests.length} questions waiting — answering
-                            this one opens the next
-                          </p>
-                        ) : null}
-                        {/* Every open request is rendered, and all but the newest are
+                      {pinnedRequest ? (
+                        <div
+                          data-slot="pinned-request"
+                          // Named and given a role that can CARRY a name, so a
+                          // screen-reader user typing into the composer learns the
+                          // turn has stopped on them. Deliberately NOT `aria-live`:
+                          // the card inside is a tablist full of interactive
+                          // controls, and announcing the whole region on every
+                          // keystroke inside it would be worse than saying nothing.
+                          role="region"
+                          aria-label="Question waiting on your answer"
+                          // Bounded and scrolling itself, so option previews stacked
+                          // above the options cannot push them, the answer field and
+                          // the composer off screen.
+                          className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
+                          {openRequests.length > 1 ? (
+                            <p className="m-0 mb-1.5 text-xs text-muted-foreground">
+                              {openRequests.length} questions waiting —
+                              answering this one opens the next
+                            </p>
+                          ) : null}
+                          {/* Every open request is rendered, and all but the newest are
                       `hidden`. Rendering only the pinned one would unmount the
                       card being typed into the moment a newer question arrived,
                       resetting its picks, its text and every staged attachment
@@ -11118,15 +11118,16 @@ export function Chats({
                       also keeps the concealed cards out of the tab order and
                       the accessibility tree, which `display:none` via a class
                       would not guarantee against a utility being overridden. */}
-                        {openRequests.map((request) => (
-                          <div
-                            key={request.id}
-                            hidden={request.id !== pinnedRequest.id}>
-                            {approvalCardFor(request)}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
+                          {openRequests.map((request) => (
+                            <div
+                              key={request.id}
+                              hidden={request.id !== pinnedRequest.id}>
+                              {approvalCardFor(request)}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </TranscriptContexts>
 
                     {transcriptError ? (
                       <ErrorBanner

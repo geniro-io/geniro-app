@@ -26,6 +26,7 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
 import {
   ATTENTION_ORDER,
+  MANAGER_TITLE,
   orderByAttention,
   type ThreadCardView,
 } from './card-view';
@@ -262,7 +263,7 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex items-center gap-2">
-              <span className="text-sm font-semibold">Manager</span>
+              <span className="text-sm font-semibold">{MANAGER_TITLE}</span>
               <span
                 data-slot="graph-manager-state"
                 className={cn(

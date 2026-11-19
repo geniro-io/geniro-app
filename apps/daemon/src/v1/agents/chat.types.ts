@@ -5251,6 +5251,22 @@ export interface HostRowWire {
    * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
    */
   threadMessageSent?: ThreadMessageSentRow;
+  /**
+   * Threads of the command center's roster that reached done, one per wake
+   * this row opened.
+   *
+   * TWIN PARSER: read by `readThreadMessageRow` in
+   * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+   */
+  threadDone?: ThreadDoneRow[];
+}
+
+export interface ThreadDoneRow {
+  runId: string;
+  title: string;
+  handle: string;
+  summary: string | null;
+  pullRequest: number | null;
 }
 
 export type ThreadMessageStatus = 'waiting' | 'delivered' | 'cancelled';
@@ -5294,11 +5310,16 @@ export interface ThreadMessageRowEntry {
   inReplyTo?: ThreadMessageReply | null;
 }
 
+/**
+ * TWIN PARSER: read by `readSent` in
+ * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+ */
 export interface ThreadMessageSentRow {
   toRunId: string;
   title: string;
   outcome: ThreadMessageOutcome;
   reason: ThreadMessageReason | null;
+  text?: string;
 }
 
 /** What `message_thread` answers. */

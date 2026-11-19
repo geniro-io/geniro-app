@@ -99,15 +99,23 @@ describe('boardColumnOf', () => {
     expect(boardColumnOf(run({ status: 'failed' }), 'backlog')).toBe('idle');
   });
 
-  it('places a settled thread still holding its turn for background work in working, ahead of done', () => {
+  it('places a settled thread still holding its turn or a background sub-agent in working, even when it is done', () => {
     expect(boardColumnOf(run({ holdingFor: 1 }), 'done')).toBe('working');
+    expect(boardColumnOf(run({ subagentsOut: 2 }), null)).toBe('working');
+    expect(
+      boardColumnOf(run({ subagentsOut: 1, outcome: OUTCOME }), null),
+    ).toBe('working');
   });
 
-  it('places a settled thread with a background sub-agent or a detached command out in working', () => {
-    expect(boardColumnOf(run({ subagentsOut: 2 }), null)).toBe('working');
+  it('places a settled thread with a detached command out in working, unless it is already done', () => {
+    expect(boardColumnOf(run({ shellsOpen: 1 }), null)).toBe('working');
+    expect(
+      boardColumnOf(run({ shellsOpen: 1, pullRequests: [OPENED_PR] }), null),
+    ).toBe('working');
     expect(boardColumnOf(run({ shellsOpen: 1, outcome: OUTCOME }), null)).toBe(
-      'working',
+      'done',
     );
+    expect(boardColumnOf(run({ shellsOpen: 1 }), 'done')).toBe('done');
   });
 
   it('moves a thread out of working into done or idle once its background work has ended', () => {
@@ -124,5 +132,8 @@ describe('boardColumnOf', () => {
     expect(
       boardColumnOf(run({ status: 'cancelled', subagentsOut: 1 }), null),
     ).toBe('idle');
+    expect(boardColumnOf(run({ status: 'failed', shellsOpen: 1 }), null)).toBe(
+      'idle',
+    );
   });
 });

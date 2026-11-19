@@ -352,7 +352,7 @@ export function WorkingThreadsCard({
                 {summary}
               </span>
             </div>
-            <div className="flex flex-col gap-1.5 border-t border-border/60 p-1.5">
+            <div className="flex max-h-[min(60vh,32rem)] flex-col gap-1.5 overflow-y-auto border-t border-border/60 p-1.5">
               {threads.map((thread) => (
                 <ThreadRow
                   key={thread.runId}

@@ -82,6 +82,23 @@ export const Working: Story = {};
 
 export const Pinned: Story = { play: pinPanel };
 
+const MANY_THREADS: readonly WorkingThread[] = Array.from(
+  { length: 10 },
+  (_, index) =>
+    thread({
+      runId: `run-many-${index}`,
+      title: `Export follow-up ${index + 1}: wire the CSV escaping and its specs to the new button`,
+      agentLabel: index % 2 === 0 ? 'Senior Engineer' : 'Middle Engineer',
+      status: index % 3 === 0 ? 'waiting' : 'working',
+      lastMessage: 'Still running the checks for this branch',
+    }),
+);
+
+export const ManyThreadsPinned: Story = {
+  args: { threads: MANY_THREADS },
+  play: pinPanel,
+};
+
 export const BesideAgentsCard: Story = {
   args: { beside: true },
   decorators: [

@@ -229,7 +229,10 @@ export function layoutRows(
     );
   }
 
-  const right = Math.max(width - MARGIN, ...obstacles.map((b) => b.x + b.width));
+  const right = Math.max(
+    width - MARGIN,
+    ...obstacles.map((b) => b.x + b.width),
+  );
   const lowest = Math.max(bottom, ...obstacles.map((b) => b.y + b.height));
   return {
     width: right + MARGIN,

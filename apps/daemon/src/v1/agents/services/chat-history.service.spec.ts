@@ -27,6 +27,7 @@ import type { ItemWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { CALL_MEMBERSHIP_VERSION } from '../utils/call-membership';
+import { CARD_ROW_PREVIEW_CHARS } from '../utils/card-row-preview';
 import { itemToWire } from '../utils/item-wire';
 import type { ChatService } from './chat.service';
 import { ChatHistoryService } from './chat-history.service';
@@ -529,6 +530,94 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         )
         .map((item) => item.seq);
     }
+
+    it("cuts a callee's long tool result to the preview cap among a root page's anchors", async () => {
+      await teamRun();
+      const result = 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1);
+      await row(9, 'tool_call', 'qa', {
+        id: 't9',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(10, 'tool_result', 'qa', {
+        id: 't9',
+        callId: 'call-2',
+        result,
+      });
+
+      const { anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+
+      expect(
+        anchors
+          .filter((item) => item.kind === 'tool_result')
+          .map((item) => item.payload),
+      ).toEqual([
+        {
+          id: 't9',
+          callId: 'call-2',
+          result: 'x'.repeat(CARD_ROW_PREVIEW_CHARS),
+        },
+      ]);
+    });
+
+    it("keeps a tool call anchored above a root page at its full input — the cut reaches only a call card's rows", async () => {
+      await teamRun();
+      const input = { content: 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1) };
+      await row(9, 'tool_call', 'manager', { id: 'm1', name: 'Write', input });
+      await row(10, 'tool_result', 'manager', { id: 'm1', result: 'written' });
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 1, take: 'newest' },
+        { root: true },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([10]);
+      expect(
+        anchors
+          .filter(
+            (item) =>
+              item.kind === 'tool_call' &&
+              (item.payload as { id?: string } | null)?.id === 'm1',
+          )
+          .map((item) => item.payload),
+      ).toEqual([{ id: 'm1', name: 'Write', input }]);
+    });
+
+    it("returns a call's own conversation uncut, anchors included", async () => {
+      await teamRun();
+      const result = 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1);
+      await row(9, 'tool_call', 'qa', {
+        id: 't9',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(10, 'tool_result', 'qa', {
+        id: 't9',
+        callId: 'call-2',
+        result,
+      });
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 1, take: 'oldest' },
+        { call: 'call-2' },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([6]);
+      expect(
+        anchors
+          .filter((item) => item.kind === 'tool_result')
+          .map((item) => item.payload),
+      ).toEqual([{ id: 't9', callId: 'call-2', result }]);
+    });
 
     it("caps a call's card rows per kind, so a flood of one kind never crowds out another", async () => {
       await teamRun();

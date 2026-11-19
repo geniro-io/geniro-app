@@ -164,6 +164,17 @@ describe('WorkingThreadsCard', () => {
     expect(rowsOf(el).map((row) => row.dataset.run)).toEqual(['b', 'a', 'c']);
   });
 
+  it('draws no Waiting on you group when nobody waits', async () => {
+    const el = render([thread({ runId: 'a' }), thread({ runId: 'b' })]);
+
+    await openPanel(el);
+
+    const groups = Array.from(
+      el.querySelectorAll<HTMLElement>('[data-slot="working-threads-group"]'),
+    );
+    expect(groups.map((group) => group.dataset.status)).toEqual(['working']);
+  });
+
   it('heads each row as the thread’s node on the graph: face, title, pull request, status, agent, board card and project in colour', async () => {
     const el = render([
       thread({

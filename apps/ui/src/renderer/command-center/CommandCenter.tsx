@@ -344,23 +344,28 @@ export function CommandCenter({
     ],
   );
 
-  const workingThreads = (board.cards ?? []).flatMap((card) =>
-    card.column === 'working' || card.column === 'waiting'
-      ? [
-          {
-            runId: card.run.id,
-            title: card.run.title ?? 'Untitled thread',
-            agentLabel: viewOf(card).agentLabel,
-            agentKind: card.run.agentKind ?? null,
-            startedAt: null,
-            status:
-              card.column === 'working'
-                ? ('working' as const)
-                : ('waiting' as const),
-          },
-        ]
-      : [],
-  );
+  const workingThreads = (board.cards ?? []).flatMap((card) => {
+    if (card.column !== 'working' && card.column !== 'waiting') {
+      return [];
+    }
+    const view = viewOf(card);
+    return [
+      {
+        runId: card.run.id,
+        title: view.title,
+        agentLabel: view.agentLabel,
+        agentKind: card.run.agentKind ?? null,
+        crew: view.crew,
+        project: view.project,
+        projectColor: view.projectColor ?? null,
+        lastMessage: view.lastMessage,
+        status:
+          card.column === 'working'
+            ? ('working' as const)
+            : ('waiting' as const),
+      },
+    ];
+  });
 
   const graphThreads = shown.map((card) => {
     const view = viewOf(card);

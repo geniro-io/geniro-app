@@ -9,15 +9,12 @@ import { type WorkingThread, WorkingThreadsCard } from './working-threads-card';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const NOW = Date.parse('2026-11-17T12:00:00.000Z');
-
 let container: HTMLElement;
 let root: Root;
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
-  vi.useRealTimers();
 });
 
 function thread(over: Partial<WorkingThread>): WorkingThread {
@@ -26,7 +23,10 @@ function thread(over: Partial<WorkingThread>): WorkingThread {
     title: 'Export the CSV',
     agentLabel: 'Senior Engineer',
     agentKind: 'claude',
-    startedAt: new Date(NOW - 195_000).toISOString(),
+    crew: null,
+    project: null,
+    projectColor: null,
+    lastMessage: null,
     status: 'working',
     ...over,
   };
@@ -67,6 +67,12 @@ async function openPanel(el: Element): Promise<void> {
   });
 }
 
+async function press(target: HTMLElement): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 describe('WorkingThreadsCard', () => {
   it('draws nothing with no thread to list', () => {
     const el = render([]);
@@ -75,8 +81,6 @@ describe('WorkingThreadsCard', () => {
   });
 
   it('counts the working threads and the ones waiting on the user', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
     const el = render([
       thread({ runId: 'a' }),
       thread({ runId: 'b' }),
@@ -118,17 +122,19 @@ describe('WorkingThreadsCard', () => {
     expect(card.className).not.toContain('right-4');
   });
 
-  it('lists each thread once the panel is pinned, with its agent and how long it has run', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
+  it('lays each thread out like a current run of the agents card: its title, its state, its agent and its project in colour', async () => {
     const el = render([
-      thread({ runId: 'a', title: 'Export the CSV' }),
+      thread({
+        runId: 'a',
+        title: 'Export the CSV',
+        project: 'Geniro',
+        projectColor: 'teal',
+      }),
       thread({
         runId: 'b',
         title: 'Fix the parser',
         agentLabel: null,
         agentKind: 'codex',
-        startedAt: null,
         status: 'waiting',
       }),
     ]);
@@ -137,14 +143,70 @@ describe('WorkingThreadsCard', () => {
 
     const [first, second] = rowsOf(el);
     expect(rowsOf(el).map((row) => row.dataset.run)).toEqual(['a', 'b']);
-    expect(first!.textContent).toContain('Export the CSV');
-    expect(first!.textContent).toContain('Senior Engineer');
-    expect(slot(first!, 'working-thread-elapsed')!.textContent).toBe(
-      'for 3m 15s',
+    expect(slot(first!, 'working-thread-title')!.textContent).toBe(
+      'Export the CSV',
     );
-    expect(second!.textContent).toContain('Fix the parser');
-    expect(second!.textContent).toContain('waiting on you');
-    expect(slot(second!, 'working-thread-elapsed')).toBeNull();
+    expect(slot(first!, 'working-thread-state')!.textContent).toBe('working');
+    expect(slot(first!, 'working-thread-agent')!.textContent).toBe(
+      'Senior Engineer',
+    );
+    expect(slot(first!, 'working-thread-project')!.textContent).toBe('Geniro');
+    expect(
+      slot(first!, 'working-thread-project-dot')!.getAttribute('data-color'),
+    ).toBe('teal');
+    expect(slot(second!, 'working-thread-title')!.textContent).toBe(
+      'Fix the parser',
+    );
+    expect(slot(second!, 'working-thread-state')!.textContent).toBe(
+      'waiting on you',
+    );
+    expect(slot(second!, 'working-thread-agent')).toBeNull();
+    expect(slot(second!, 'working-thread-project')).toBeNull();
+  });
+
+  it('shows a team thread as its crew faces in place of one agent face', async () => {
+    const el = render([
+      thread({
+        runId: 'a',
+        agentLabel: 'dev-team',
+        agentKind: null,
+        crew: {
+          people: [
+            { key: 'senior', name: 'Tony Stark', avatar: null },
+            { key: 'middle', name: 'Peter Parker', avatar: null },
+          ],
+          total: 4,
+        },
+      }),
+      thread({ runId: 'b' }),
+    ]);
+
+    await openPanel(el);
+
+    const [team, agent] = rowsOf(el);
+    expect(slot(team!, 'working-thread-crew')!.getAttribute('aria-label')).toBe(
+      '4 members',
+    );
+    expect(slot(agent!, 'working-thread-crew')).toBeNull();
+  });
+
+  it('draws the latest message on a rail, and no rail without one', async () => {
+    const el = render([
+      thread({
+        runId: 'a',
+        lastMessage: 'Rebased on **main**, two specs left',
+      }),
+      thread({ runId: 'b', lastMessage: null }),
+    ]);
+
+    await openPanel(el);
+
+    const [withMessage, without] = rowsOf(el);
+    expect(slot(withMessage!, 'working-thread-message')!.textContent).toBe(
+      'Rebased on main, two specs left',
+    );
+    expect(slot(withMessage!, 'working-thread-rail')).not.toBeNull();
+    expect(slot(without!, 'working-thread-rail')).toBeNull();
   });
 
   it('shows a working thread with a primary pulse and a waiting one in the warning tone', async () => {
@@ -169,27 +231,43 @@ describe('WorkingThreadsCard', () => {
     ).toBe('warn');
   });
 
-  it('Go to thread opens that thread by its run', async () => {
+  it('a press on the row opens that thread by its run', async () => {
     const onOpenThread = vi.fn();
     const el = render([thread({ runId: 'a' }), thread({ runId: 'b' })], {
       onOpenThread,
     });
     await openPanel(el);
 
-    const button = rowsOf(el)[1]!.querySelector('button')!;
-    expect(button.textContent).toBe('Go to thread');
-    await act(async () => {
-      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await press(rowsOf(el)[1]!);
 
     expect(onOpenThread).toHaveBeenCalledTimes(1);
     expect(onOpenThread).toHaveBeenCalledWith('b');
   });
 
-  it('offers no Go to thread button when nothing can open the thread', async () => {
+  it('a press on the title opens the thread once, not once more from the row', async () => {
+    const onOpenThread = vi.fn();
+    const el = render([thread({ runId: 'a' })], { onOpenThread });
+    await openPanel(el);
+
+    await press(slot(rowsOf(el)[0]!, 'working-thread-open')!);
+
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    expect(onOpenThread).toHaveBeenCalledWith('a');
+  });
+
+  it('keeps no Go to thread button in the row', async () => {
+    const el = render([thread({})], { onOpenThread: () => {} });
+    await openPanel(el);
+
+    expect(rowsOf(el)[0]!.textContent).not.toContain('Go to thread');
+  });
+
+  it('a row with no way to open its thread is not pressable', async () => {
     const el = render([thread({})]);
     await openPanel(el);
 
-    expect(rowsOf(el)[0]!.querySelector('button')).toBeNull();
+    const row = rowsOf(el)[0]!;
+    expect(slot(row, 'working-thread-open')).toBeNull();
+    expect(row.className).not.toContain('cursor-pointer');
   });
 });

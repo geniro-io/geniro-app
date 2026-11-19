@@ -5,7 +5,13 @@ import { boardColumnOf } from './board-column';
 
 type BoardRun = Pick<
   RunWire,
-  'status' | 'awaiting' | 'outcome' | 'pullRequests'
+  | 'status'
+  | 'awaiting'
+  | 'outcome'
+  | 'pullRequests'
+  | 'holdingFor'
+  | 'shellsOpen'
+  | 'subagentsOut'
 >;
 
 const OPENED_PR = {
@@ -91,5 +97,32 @@ describe('boardColumnOf', () => {
   it('places a thread with nothing behind it in idle', () => {
     expect(boardColumnOf(run(), null)).toBe('idle');
     expect(boardColumnOf(run({ status: 'failed' }), 'backlog')).toBe('idle');
+  });
+
+  it('places a settled thread still holding its turn for background work in working, ahead of done', () => {
+    expect(boardColumnOf(run({ holdingFor: 1 }), 'done')).toBe('working');
+  });
+
+  it('places a settled thread with a background sub-agent or a detached command out in working', () => {
+    expect(boardColumnOf(run({ subagentsOut: 2 }), null)).toBe('working');
+    expect(boardColumnOf(run({ shellsOpen: 1, outcome: OUTCOME }), null)).toBe(
+      'working',
+    );
+  });
+
+  it('moves a thread out of working into done or idle once its background work has ended', () => {
+    const ended = { holdingFor: 0, shellsOpen: 0, subagentsOut: 0 };
+
+    expect(boardColumnOf(run(ended), 'done')).toBe('done');
+    expect(boardColumnOf(run(ended), null)).toBe('idle');
+  });
+
+  it('leaves a failed or cancelled thread out of working, whatever it still has out', () => {
+    expect(
+      boardColumnOf(run({ status: 'failed', holdingFor: 1 }), 'backlog'),
+    ).toBe('idle');
+    expect(
+      boardColumnOf(run({ status: 'cancelled', subagentsOut: 1 }), null),
+    ).toBe('idle');
   });
 });

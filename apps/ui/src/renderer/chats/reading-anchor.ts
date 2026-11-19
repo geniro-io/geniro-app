@@ -31,6 +31,8 @@
  * while a lift stands.
  */
 
+import { cssZoomOf } from '../components/ui/css-zoom';
+
 /** A row that has not moved for this long after the page landed has settled. */
 export const READING_ANCHOR_SETTLE_MS = 600;
 /** The hold never outlives this after its last release, however much moves. */
@@ -105,8 +107,8 @@ function pickAnchor(scroller: HTMLElement): HTMLElement | null {
 /** Where `row` sits inside the scroll CONTENT — unmoved by scrolling. */
 function contentOffset(scroller: HTMLElement, row: HTMLElement): number {
   return (
-    row.getBoundingClientRect().top -
-    scroller.getBoundingClientRect().top +
+    (row.getBoundingClientRect().top - scroller.getBoundingClientRect().top) /
+      cssZoomOf(scroller) +
     scroller.scrollTop
   );
 }

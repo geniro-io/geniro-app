@@ -8,6 +8,7 @@ import type { DaemonClient } from '../daemon-client';
 import { CommandCenter } from './CommandCenter';
 import type { GraphViewProps } from './graph-view';
 import { ThreadCard } from './thread-card';
+import type { ThreadCardChatProps } from './thread-card-chat';
 
 const { probes, fakes } = vi.hoisted(() => ({
   probes: {
@@ -240,6 +241,32 @@ function buttonNamed(text: string): HTMLButtonElement {
     (button) => button.textContent === text,
   )!;
 }
+
+describe('CommandCenter — the identities a card’s chat heads threads with', () => {
+  const identitiesOfCardChat = (): ThreadCardChatProps['threadIdentities'] =>
+    (
+      probes.graph!.renderCardChat(
+        'run-a',
+      ) as React.ReactElement<ThreadCardChatProps>
+    ).props.threadIdentities;
+
+  it('hands the same identities object across a board update that names every thread the same way, and a new one once a title changes', async () => {
+    await renderPage();
+    const first = identitiesOfCardChat();
+
+    fakes.board = boardOf([cardOf('run-a', 'p1'), cardOf('run-b', 'p2')]);
+    await renderPage();
+    expect(identitiesOfCardChat()).toBe(first);
+
+    const renamed = cardOf('run-b', 'p2') as { run: { title: string } };
+    renamed.run.title = 'Renamed thread';
+    fakes.board = boardOf([cardOf('run-a', 'p1'), renamed]);
+    await renderPage();
+    const next = identitiesOfCardChat();
+    expect(next).not.toBe(first);
+    expect(next.get('run-b')?.title).toBe('Renamed thread');
+  });
+});
 
 describe('CommandCenter — showing a thread on the canvas', () => {
   it('shows a thread from the board as a card on the canvas, and brings it into view', async () => {

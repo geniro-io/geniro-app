@@ -6,6 +6,7 @@ import {
   useState,
 } from 'react';
 
+import { cssZoomOf } from '../components/ui/css-zoom';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { jumpToBottom } from '../scroll-to-bottom';
 import { isScrolledToBottom } from './scroll-follow';
@@ -267,8 +268,9 @@ export function useTranscriptJump({
       followingRef.current = false;
       /** How far the target still is from where it should be parked. */
       const drift = (): number =>
-        target.getBoundingClientRect().top -
-        scroller.getBoundingClientRect().top -
+        (target.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top) /
+          cssZoomOf(scroller) -
         JUMP_MARGIN_PX;
       scroller.scrollTop += drift();
       setAboveTail(!isScrolledToBottom(scroller));

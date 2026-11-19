@@ -4,6 +4,7 @@ import * as React from 'react';
 import type { ProfileColor } from '../../../shared/contracts';
 import { useReportOverlayOpen } from '../browser-occlusion';
 import { pointOf, usePointerGrace } from '../use-pointer-grace';
+import { counterZoomStyle } from './css-zoom';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
 import { PALETTE_BORDER_CLASS } from './palette';
@@ -313,6 +314,7 @@ export function Menu({
         return;
       }
       const rect = trigger.getBoundingClientRect();
+      const zoom = counterZoomStyle(trigger);
       setBox(
         side === 'right'
           ? {
@@ -321,6 +323,7 @@ export function Menu({
               // padding so the first child row lines up with its parent.
               top: Math.max(VIEWPORT_MARGIN, rect.top - 5),
               left: rect.right + TRIGGER_GAP,
+              ...zoom,
             }
           : {
               position: 'fixed',
@@ -330,6 +333,7 @@ export function Menu({
               ...(align === 'end'
                 ? { right: window.innerWidth - rect.right }
                 : { left: rect.left }),
+              ...zoom,
             },
       );
     };

@@ -43,6 +43,13 @@ describe('resizeCard', () => {
     });
   });
 
+  it('a drag from the right edge changes only the width', () => {
+    expect(resizeCard(ORIGIN, 'e', { dx: 50, dy: 200 }, LARGEST)).toEqual({
+      width: 450,
+      height: 300,
+    });
+  });
+
   it('a drag from the corner changes both the width and the height', () => {
     expect(resizeCard(ORIGIN, 'se', { dx: 60, dy: -40 }, LARGEST)).toEqual({
       width: 460,
@@ -165,9 +172,19 @@ function drawLayer(
 }
 
 function placedOf(runId: string): HTMLElement {
-  return container.querySelector<HTMLElement>(
-    `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
-  )!.parentElement!;
+  return container
+    .querySelector<HTMLElement>(
+      `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
+    )!
+    .closest<HTMLElement>('[data-slot="thread-canvas-card-place"]')!;
+}
+
+function scalerOf(runId: string): HTMLElement {
+  return container
+    .querySelector<HTMLElement>(
+      `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
+    )!
+    .closest<HTMLElement>('[data-slot="thread-canvas-card-zoom"]')!;
 }
 
 function flashOf(runId: string): Element | null {
@@ -180,7 +197,7 @@ function pointer(type: string, clientX: number, clientY: number): MouseEvent {
   return new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY });
 }
 
-function handleOf(edge: 's' | 'se'): HTMLElement {
+function handleOf(edge: 's' | 'e' | 'se'): HTMLElement {
   return container.querySelector<HTMLElement>(
     `[data-slot="thread-canvas-card-resize"][data-edge="${edge}"]`,
   )!;
@@ -235,6 +252,52 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
 
     expect(onResize).toHaveBeenCalledTimes(1);
     expect(onResize).toHaveBeenCalledWith('a', { width: 460, height: 340 });
+  });
+
+  it('resizes from the right edge, changing the width alone', () => {
+    const onResize = vi.fn();
+    drawLayer({ onResize });
+
+    act(() => {
+      handleOf('e').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      handleOf('e').dispatchEvent(pointer('pointermove', 150, 300));
+    });
+    act(() => {
+      handleOf('e').dispatchEvent(pointer('pointerup', 150, 300));
+    });
+
+    expect(onResize).toHaveBeenCalledWith('a', { width: 450, height: 300 });
+  });
+
+  it('measures a resize in card pixels, so at zoom 2 the same screen drag grows the card half as much', () => {
+    const onResize = vi.fn();
+    drawLayer({ onResize });
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 2] });
+    });
+
+    act(() => {
+      handleOf('se').dispatchEvent(pointer('pointerdown', 100, 100));
+    });
+    act(() => {
+      handleOf('se').dispatchEvent(pointer('pointermove', 160, 140));
+    });
+    act(() => {
+      handleOf('se').dispatchEvent(pointer('pointerup', 160, 140));
+    });
+
+    expect(onResize).toHaveBeenCalledWith('a', { width: 430, height: 320 });
+  });
+
+  it('shows a grip in the corner that resizes', () => {
+    drawLayer();
+
+    expect(
+      handleOf('se').querySelector('[data-slot="thread-canvas-card-grip"]'),
+    ).not.toBeNull();
+    expect(handleOf('se').className).toContain('cursor-nwse-resize');
   });
 
   it('resizes from the bottom edge, changing the height alone', () => {
@@ -401,7 +464,7 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
     expect(wrapper.style.top).toBe('30px');
   });
 
-  it('keeps the card’s own width and height at every zoom', () => {
+  it('scales the card with the flow’s zoom, keeping its own size in card pixels so it covers its slot', () => {
     drawLayer({ slots: new Map([['a', box(0, 0)]]) });
     const section = container.querySelector<HTMLElement>(
       '[data-slot="thread-canvas-card"][data-run-id="a"]',
@@ -410,14 +473,15 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
     act(() => {
       flowStore!.setState({ transform: [0, 0, 2] });
     });
+    expect(scalerOf('a').style.zoom).toBe('2');
     expect(section.style.width).toBe('400px');
     expect(section.style.height).toBe('366px');
 
     act(() => {
       flowStore!.setState({ transform: [0, 0, 0.5] });
     });
+    expect(scalerOf('a').style.zoom).toBe('0.5');
     expect(section.style.width).toBe('400px');
-    expect(section.style.height).toBe('366px');
   });
 
   it('does not render the chat again for a pan or a zoom', () => {

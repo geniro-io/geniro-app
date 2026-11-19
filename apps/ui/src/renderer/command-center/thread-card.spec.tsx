@@ -91,6 +91,24 @@ describe('ThreadCard — the head', () => {
     ).toBe('Fix the login redirect');
   });
 
+  it('keeps the Show chat, Archive and Open in Chats icons in the footer, off the title line', () => {
+    const el = render(
+      { runId: 'run-1', onToggleCard: vi.fn() },
+      vi.fn<ThreadArchiveOf>(() => vi.fn()),
+    );
+    const head = el.querySelector('[data-slot="thread-card-head"]')!;
+    const actions = el.querySelector('[data-slot="thread-card-actions"]')!;
+
+    for (const slot of [
+      'thread-head-show-chat',
+      'thread-head-archive',
+      'thread-head-open-in-chats',
+    ]) {
+      expect(head.querySelector(`[data-slot="${slot}"]`)).toBeNull();
+      expect(actions.querySelector(`[data-slot="${slot}"]`)).not.toBeNull();
+    }
+  });
+
   it('opens nothing when the card itself is clicked', () => {
     const onToggleCard = vi.fn();
     const onOpenInChats = vi.fn();
@@ -433,7 +451,7 @@ describe('ThreadCard — motion', () => {
 });
 
 describe('ThreadCard — archive', () => {
-  it('archives from the head of any thread the provider offers one for', () => {
+  it('archives from the footer icon of any thread the provider offers one for', () => {
     const archive = vi.fn();
     const archiveOf = vi.fn<ThreadArchiveOf>(() => archive);
     const el = render({ runId: 'run-1', attention: 'working' }, archiveOf);

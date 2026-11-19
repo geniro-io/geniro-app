@@ -13,6 +13,7 @@ import type {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { OUTSIDE_ANY_CALL } from '../utils/call-membership';
+import { previewCardRows } from '../utils/card-row-preview';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { eventLoopSlicer } from '../utils/event-loop-slices';
 import {
@@ -35,7 +36,9 @@ import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
  * The kinds of a call's rows a folded card and the readings beside it (each
- * agent's turns and clock, `turn-duration.ts`) read whole — see `cardRowsFor` —
+ * agent's turns and clock, `turn-duration.ts`) read whole — see `cardRowsFor`;
+ * on a root page the long text of its tool calls, replies and messages is cut to
+ * `CARD_ROW_PREVIEW_CHARS`, and an opened card's own rows replace them by id —
  * each kind with its own cap, so a call that writes hundreds of one kind cannot
  * crowd out another. A turn's ending is any of `TERMINAL_KINDS`: without its
  * `error` or `turn_cancelled` row a failed turn reads as still running.
@@ -219,7 +222,12 @@ export class ChatHistoryService {
     };
     if ('root' in conversation) {
       add(await this.callsAcross(runId, kept, callRows));
-      add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
+      add(
+        previewCardRows(
+          await this.cardRowsFor(runId, [...kept, ...byId.values()]),
+          (id) => held.has(id) || byId.has(id),
+        ),
+      );
       add(await this.deadCardsOf(runId, kept));
     } else {
       const nested = kept.flatMap((row) => {

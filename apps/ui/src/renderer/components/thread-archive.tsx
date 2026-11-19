@@ -1,8 +1,7 @@
 import { Archive } from 'lucide-react';
 import { createContext, useContext } from 'react';
 
-import { ThreadHeadIcon } from './thread-head';
-import { Button } from './ui/button';
+import { ThreadActionButton, ThreadHeadIcon } from './thread-head';
 
 /**
  * The archive a screen offers for a thread it shows: an action that asks
@@ -56,17 +55,13 @@ export function ArchiveThreadButton({
   onArchive: () => void;
 }): React.JSX.Element {
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      data-slot={slot}
-      aria-label={`Archive ${title}`}
+    <ThreadActionButton
+      slot={slot}
+      label={`Archive ${title}`}
       title="Archive this finished thread"
-      className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-      onClick={onArchive}>
-      <Archive aria-hidden="true" className="size-3.5" />
+      icon={<Archive aria-hidden="true" />}
+      onClick={() => onArchive()}>
       Archive
-    </Button>
+    </ThreadActionButton>
   );
 }

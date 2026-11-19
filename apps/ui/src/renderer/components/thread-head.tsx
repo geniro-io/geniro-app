@@ -139,3 +139,35 @@ export function ThreadHeadIcon({
     </Button>
   );
 }
+
+/** A quiet worded action on a thread: a borderless ghost button, its icon before the word. */
+export function ThreadActionButton({
+  slot,
+  label,
+  title,
+  icon,
+  children,
+  onClick,
+}: {
+  slot: string;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick: (anchor: HTMLButtonElement) => void;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      data-slot={slot}
+      aria-label={label}
+      title={title}
+      className="h-6 shrink-0 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
+      onClick={(event) => onClick(event.currentTarget)}>
+      {icon}
+      {children}
+    </Button>
+  );
+}

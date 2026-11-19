@@ -39,6 +39,7 @@ export function NavListItem({
   onDragOver,
   onDragEnd,
   onContextMenu,
+  data,
 }: {
   active: boolean;
   title?: string;
@@ -85,9 +86,12 @@ export function NavListItem({
    * it.
    */
   onContextMenu?: (event: React.MouseEvent) => void;
+  /** `data-*` attributes for the row's `li`, which specs and stands find it by. */
+  data?: Readonly<Record<`data-${string}`, string>>;
 }): React.JSX.Element {
   return (
     <li
+      {...data}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragOver={onDragOver}

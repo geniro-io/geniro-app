@@ -82,7 +82,7 @@ export class ContextWindowsService {
     // adapter says whether its own account is a directory at all.
     const profile = this.adapters.for(kind).vocabularyProfile(configDir);
     return this.cache.read(kind, model, profile, version, (previous) =>
-      this.fetch(kind, model, previous),
+      this.fetch(kind, model, configDir, previous),
     );
   }
 
@@ -103,6 +103,7 @@ export class ContextWindowsService {
   private async fetch(
     kind: AgentKind,
     model: string | null,
+    configDir: string | null,
     previous: AgentContextWindowListing | undefined,
   ): Promise<
     AgentContextWindowListing | VolatileAnswer<AgentContextWindowListing>
@@ -110,6 +111,7 @@ export class ContextWindowsService {
     const adapter = this.adapters.for(kind);
     try {
       return await adapter.listModelContextWindows(model, {
+        configDir,
         onSpawn: (child, spawnInfo) =>
           this.processes.register(
             `context-windows:list:${randomUUID()}`,

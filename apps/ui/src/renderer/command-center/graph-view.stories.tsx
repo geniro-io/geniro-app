@@ -53,6 +53,7 @@ const meta = {
       <p className="p-4 text-sm text-muted-foreground">The thread's chat</p>
     ),
     focus: null,
+    onFocused: () => {},
     projects: FIXTURE_PROJECTS,
     asking: new Map([['thread-2', 'question' as const]]),
     onAnswer: () => {},

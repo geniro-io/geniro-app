@@ -374,6 +374,9 @@ export function CommandCenter({
       return;
     }
     setOffBoard(null);
+    if (narrow) {
+      setSidebar(null);
+    }
     if (view === 'chat') {
       pickView(narrow ? 'graph' : 'both');
     }
@@ -518,6 +521,9 @@ export function CommandCenter({
             onResizeCard={cards.resize}
             renderCardChat={renderCardChat}
             focus={focus}
+            onFocused={(seq) =>
+              setFocus((last) => (last?.seq === seq ? null : last))
+            }
             projects={shownProjects}
             asking={askingKinds}
             onAnswer={answerFrom}

@@ -197,6 +197,7 @@ describe('GraphView', () => {
           onResizeCard={() => undefined}
           renderCardChat={() => null}
           focus={null}
+          onFocused={() => undefined}
           projects={[]}
           asking={new Map()}
           onAnswer={() => undefined}

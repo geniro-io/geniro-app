@@ -70,6 +70,8 @@ import {
 import {
   type CanvasCard,
   CARD_HEAD_HEIGHT,
+  clampCard,
+  largestCard,
   PhoneThreadCard,
   ThreadCardLayer,
 } from './thread-card-layer';
@@ -128,6 +130,8 @@ export interface GraphViewProps {
   renderCardChat: (threadId: string) => React.ReactNode;
   /** The thread to pan to and flash; null for none. */
   focus: GraphFocus | null;
+  /** The focus of this `seq` was handled, so it is never replayed on a later mount. */
+  onFocused: (seq: number) => void;
   /** The projects of the threads on the graph, each with its colour, for the legend. */
   projects: readonly ProjectColor[];
   /** Threads holding a question or an approval the user can answer here, by what they hold. */
@@ -720,6 +724,7 @@ function GraphCanvas({
   onResizeCard,
   renderCardChat,
   focus,
+  onFocused,
   projects,
   asking,
   onAnswer,
@@ -732,10 +737,18 @@ function GraphCanvas({
   const fitted = useRef<string | null>(null);
   const quietUntil = useRef(0);
   const focused = useRef<number | null>(null);
-  const [flashing, setFlashing] = useState<string | null>(null);
+  const [flashing, setFlashing] = useState<GraphFocus | null>(null);
   const panZoomReady = useStore((state) => state.panZoom !== null);
 
-  const open = new Map(openCards.map((card) => [card.runId, card]));
+  const largest = size.width === 0 ? null : largestCard(size);
+  const open = new Map(
+    openCards.map((card) => [
+      card.runId,
+      largest === null
+        ? card
+        : { ...card, size: clampCard(card.size, largest) },
+    ]),
+  );
   const onCanvas: ReadonlyMap<string, GraphOpenCard> = narrow
     ? new Map()
     : open;
@@ -777,14 +790,15 @@ function GraphCanvas({
   const focusSlot =
     focus === null ? undefined : drawn.boxes.get(`thread:${focus.runId}`);
   useEffect(() => {
-    if (
-      focus === null ||
-      focused.current === focus.seq ||
-      narrow ||
-      size.width === 0 ||
-      !panZoomReady ||
-      focusSlot === undefined
-    ) {
+    if (focus === null || focused.current === focus.seq) {
+      return;
+    }
+    if (narrow) {
+      focused.current = focus.seq;
+      onFocused(focus.seq);
+      return;
+    }
+    if (size.width === 0 || !panZoomReady || focusSlot === undefined) {
       return;
     }
     focused.current = focus.seq;
@@ -801,8 +815,9 @@ function GraphCanvas({
       y,
       { zoom, duration },
     );
-    setFlashing(focus.runId);
-  }, [focus, focusSlot, narrow, size, panZoomReady, flow, reduced]);
+    setFlashing(focus);
+    onFocused(focus.seq);
+  }, [focus, focusSlot, narrow, size, panZoomReady, flow, reduced, onFocused]);
   useEffect(() => {
     if (flashing === null) {
       return;

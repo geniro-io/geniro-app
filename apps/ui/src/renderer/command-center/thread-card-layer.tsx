@@ -146,7 +146,7 @@ function CardHead({
 function CanvasThreadCard({
   card,
   largest,
-  flashing,
+  flash,
   onClose,
   onResize,
   onOpenInChats,
@@ -154,7 +154,7 @@ function CanvasThreadCard({
 }: {
   card: CanvasCard;
   largest: CardSize;
-  flashing: boolean;
+  flash: number | null;
   onClose: () => void;
   onResize: (size: CardSize) => void;
   onOpenInChats: () => void;
@@ -214,10 +214,7 @@ function CanvasThreadCard({
       data-slot="thread-canvas-card"
       data-run-id={card.runId}
       data-attention={card.attention}
-      className={cn(
-        cardVariants({ attention: card.attention }),
-        flashing && 'cc-flash',
-      )}
+      className={cn('relative', cardVariants({ attention: card.attention }))}
       style={{ width: size.width, height: CARD_HEAD_HEIGHT + size.height }}>
       <CardHead
         card={card}
@@ -228,6 +225,14 @@ function CanvasThreadCard({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {chat}
       </div>
+      {flash === null ? null : (
+        <span
+          key={flash}
+          aria-hidden
+          data-slot="thread-canvas-card-flash"
+          className="cc-flash pointer-events-none absolute inset-0 z-10 rounded-card"
+        />
+      )}
       {(['s', 'se'] as const).map((edge) => (
         <div
           key={edge}
@@ -251,7 +256,8 @@ export interface ThreadCardLayerProps {
   slots: ReadonlyMap<string, PlacedBox>;
   /** The graph pane's size, which caps a card's. */
   pane: { width: number; height: number };
-  flashing: string | null;
+  /** The card to flash, a new `seq` each time it is shown. */
+  flashing: { runId: string; seq: number } | null;
   onClose: (runId: string) => void;
   onResize: (runId: string, size: CardSize) => void;
   onOpenInChats: (runId: string) => void;
@@ -327,7 +333,7 @@ export function ThreadCardLayer({
           <CanvasThreadCard
             card={card}
             largest={largest}
-            flashing={flashing === card.runId}
+            flash={flashing?.runId === card.runId ? flashing.seq : null}
             onClose={() => onClose(card.runId)}
             onResize={(size) => onResize(card.runId, size)}
             onOpenInChats={() => onOpenInChats(card.runId)}

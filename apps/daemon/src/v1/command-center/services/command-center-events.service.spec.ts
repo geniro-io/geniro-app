@@ -99,6 +99,24 @@ describe('CommandCenterEventsService', () => {
     expect(contacts.publishChanged).toHaveBeenCalledWith(['thread-1'], 'items');
   });
 
+  it("re-reads a thread's card as its hold, sub-agents, commands and monitors start and end, so its column follows", () => {
+    for (const count of [
+      { holdingFor: 1 },
+      { subagentsOut: 1 },
+      { shellsOpen: 1 },
+      { monitorsOpen: 1 },
+      { holdingFor: 0, subagentsOut: 0, shellsOpen: 0, monitorsOpen: 0 },
+    ]) {
+      agents.publishRunStatus({ runId: 'thread-1', status: null, ...count });
+    }
+
+    expect(contacts.publishChanged).toHaveBeenCalledTimes(5);
+    expect(contacts.publishChanged).toHaveBeenCalledWith(
+      ['thread-1'],
+      'status',
+    );
+  });
+
   it('relays nothing for a message between two threads', async () => {
     agents.publishThreadMessageSent({
       messageId: 'm-3',

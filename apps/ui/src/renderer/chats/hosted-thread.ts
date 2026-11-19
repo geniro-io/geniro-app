@@ -50,6 +50,8 @@ export interface HostedThread {
   onRunSettingsChanged?: (run: RunDto) => void | Promise<void>;
   workingThreads?: readonly WorkingThread[];
   onOpenThread?: (runId: string) => void;
+  /** Open a thread in a window over the command center's graph. */
+  onOpenThreadHere?: (runId: string) => void;
   /** The threads this surface can name the way its canvas does — see `ThreadIdentityContext`. */
   threadIdentities?: ReadonlyMap<string, ThreadIdentity>;
 }

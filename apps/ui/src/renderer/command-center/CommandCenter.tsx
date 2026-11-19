@@ -22,9 +22,11 @@ import {
   rowPullRequestOf,
   useThreadPullRequests,
 } from '../chats/use-thread-pull-requests';
+import { WORKING_THREADS_CEILING } from '../chats/working-threads-card';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import { bareThreadIdentity } from '../components/thread-head';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { SegmentedControl } from '../components/ui/segmented-control';
@@ -344,23 +346,30 @@ export function CommandCenter({
     ],
   );
 
-  const workingThreads = (board.cards ?? []).flatMap((card) =>
-    card.column === 'working' || card.column === 'waiting'
-      ? [
-          {
-            runId: card.run.id,
-            title: card.run.title ?? 'Untitled thread',
-            agentLabel: viewOf(card).agentLabel,
-            agentKind: card.run.agentKind ?? null,
-            startedAt: null,
-            status:
-              card.column === 'working'
-                ? ('working' as const)
-                : ('waiting' as const),
-          },
-        ]
-      : [],
-  );
+  const workingThreads = (board.cards ?? []).flatMap((card) => {
+    if (card.column !== 'working' && card.column !== 'waiting') {
+      return [];
+    }
+    const view = viewOf(card);
+    return [
+      {
+        runId: card.run.id,
+        identity:
+          threadIdentities.get(card.run.id) ?? bareThreadIdentity(view.title),
+        status:
+          card.column === 'working'
+            ? ('working' as const)
+            : ('waiting' as const),
+        lastMessage: view.lastMessage,
+        lastAt: view.lastAt,
+        background: {
+          held: (card.run.holdingFor ?? 0) > 0,
+          subagents: card.run.subagentsOut ?? 0,
+          commands: card.run.shellsOpen ?? 0,
+        },
+      },
+    ];
+  });
 
   const graphThreads = shown.map((card) => {
     const view = viewOf(card);
@@ -547,6 +556,7 @@ export function CommandCenter({
       <div className="relative flex min-h-0 flex-1">
         <div
           ref={measureWindowArea}
+          {...{ [WORKING_THREADS_CEILING]: '' }}
           className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {graphShown ? graph : null}
           <div
@@ -582,6 +592,7 @@ export function CommandCenter({
                 workingThreads={workingThreads}
                 threadIdentities={threadIdentities}
                 onOpenThread={onOpenThread}
+                onOpenThreadHere={graphShown ? openHere : undefined}
                 onTurnSettled={board.reload}
                 onDiscarded={board.reload}
               />

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactFlowProps } from '@xyflow/react';
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
   afterAll,
@@ -642,6 +642,60 @@ describe('GraphView', () => {
     expect(
       cards[0]!.querySelector('[data-slot="card-chat"]')!.textContent,
     ).toBe('chat of thread-2');
+  });
+
+  it('keeps the flow and each open card’s chat mounted while the page is hidden and measures 0×0', async () => {
+    const previous = globalThis.ResizeObserver;
+    const canvasSizes: ((entries: ResizeObserverEntry[]) => void)[] = [];
+    globalThis.ResizeObserver = class {
+      private readonly callback: (entries: ResizeObserverEntry[]) => void;
+
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        this.callback = callback;
+      }
+
+      observe(target: Element): void {
+        if (target.parentElement?.dataset.slot === 'command-center-graph') {
+          canvasSizes.push(this.callback);
+        }
+      }
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver;
+    const mounts: string[] = [];
+    function CardChat({ threadId }: { threadId: string }): React.JSX.Element {
+      useEffect(() => {
+        mounts.push(threadId);
+      }, [threadId]);
+      return <span data-slot="card-chat">{threadId}</span>;
+    }
+    const resize = (width: number, height: number): void =>
+      act(() => {
+        canvasSizes.at(-1)!([
+          { contentRect: { width, height } },
+        ] as unknown as ResizeObserverEntry[]);
+      });
+    try {
+      await draw({
+        threads: graphThreadsOf(3),
+        openCards: [openCard('thread-2')],
+        renderCardChat: (threadId) => <CardChat threadId={threadId} />,
+      });
+      expect(mounts).toEqual(['thread-2']);
+
+      resize(0, 0);
+      expect(container.querySelector('.react-flow')).not.toBeNull();
+      expect(all('card-chat').map((chat) => chat.textContent)).toEqual([
+        'thread-2',
+      ]);
+
+      resize(1200, 700);
+      expect(mounts).toEqual(['thread-2']);
+    } finally {
+      globalThis.ResizeObserver = previous;
+    }
   });
 
   it('draws no card for a collapsed thread, and asks for no chat of it', async () => {

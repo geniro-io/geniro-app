@@ -49,6 +49,7 @@ import { useSharedCapabilities } from '../use-capabilities';
 import { AnswerPopover } from './answer-popover';
 import {
   managerIdentityOf,
+  sameThreadIdentities,
   type TeamFace,
   teamFacesOf,
   threadCardViewOf,
@@ -350,7 +351,7 @@ export function CommandCenter({
       now,
       colorOfProject,
     );
-  const threadIdentities = useMemo(
+  const builtIdentities = useMemo(
     () =>
       threadIdentitiesOf(
         board.cards ?? [],
@@ -370,6 +371,13 @@ export function CommandCenter({
       colorOfProject,
     ],
   );
+  const [threadIdentities, setThreadIdentities] = useState(builtIdentities);
+  if (
+    builtIdentities !== threadIdentities &&
+    !sameThreadIdentities(builtIdentities, threadIdentities)
+  ) {
+    setThreadIdentities(builtIdentities);
+  }
 
   const bandOf = (card: CommandCenterCard): CardBand => {
     const view = viewOf(card);

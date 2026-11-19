@@ -40,7 +40,9 @@ export interface CanvasCard {
   size: CardSize;
 }
 
-type ResizeEdge = 's' | 'se';
+type ResizeEdge = 's' | 'e' | 'se';
+
+const RESIZE_EDGES: readonly ResizeEdge[] = ['s', 'e', 'se'];
 
 interface Gesture {
   pointerId: number;
@@ -87,7 +89,7 @@ export function clampCard(size: CardSize, largest: CardSize): CardSize {
   };
 }
 
-/** The size a drag from the card's bottom edge or its corner leaves it at. */
+/** The size a drag from the card's bottom edge, right edge or corner leaves it at, `delta` in the card's own pixels. */
 export function resizeCard(
   origin: CardSize,
   edge: ResizeEdge,
@@ -96,8 +98,8 @@ export function resizeCard(
 ): CardSize {
   return clampCard(
     {
-      width: edge === 'se' ? origin.width + delta.dx : origin.width,
-      height: origin.height + delta.dy,
+      width: edge === 's' ? origin.width : origin.width + delta.dx,
+      height: edge === 'e' ? origin.height : origin.height + delta.dy,
     },
     largest,
   );
@@ -119,14 +121,31 @@ const cardVariants = cva(
   },
 );
 
-const resizeVariants = cva('absolute z-10 touch-none select-none', {
+const resizeVariants = cva('absolute z-30 touch-none select-none', {
   variants: {
     edge: {
       s: 'inset-x-4 bottom-0 h-1.5 cursor-ns-resize',
-      se: 'right-0 bottom-0 size-3.5 cursor-nwse-resize',
+      e: 'inset-y-4 right-0 w-1.5 cursor-ew-resize',
+      se: 'right-0 bottom-0 flex size-4 items-end justify-end p-0.5 text-muted-foreground cursor-nwse-resize hover:text-foreground',
     } satisfies Record<ResizeEdge, string>,
   },
 });
+
+function ResizeGrip(): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      data-slot="thread-canvas-card-grip"
+      viewBox="0 0 10 10"
+      className="size-2.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round">
+      <path d="M9 3L3 9M9 6L6 9" />
+    </svg>
+  );
+}
 
 function CardHead({
   card,
@@ -234,6 +253,7 @@ function CardHead({
 function CanvasThreadCard({
   card,
   largest,
+  zoomOf,
   flash,
   onClose,
   onResize,
@@ -243,6 +263,8 @@ function CanvasThreadCard({
 }: {
   card: CanvasCard;
   largest: CardSize;
+  /** The flow's zoom now, which the card is drawn at. */
+  zoomOf: () => number;
   flash: number | null;
   onClose: () => void;
   onResize: (size: CardSize) => void;
@@ -275,13 +297,14 @@ function CanvasThreadCard({
     if (active === null || active.pointerId !== event.pointerId) {
       return;
     }
+    const zoom = zoomOf();
     setDraft(
       resizeCard(
         active.origin,
         active.edge,
         {
-          dx: event.clientX - active.startX,
-          dy: event.clientY - active.startY,
+          dx: (event.clientX - active.startX) / zoom,
+          dy: (event.clientY - active.startY) / zoom,
         },
         largest,
       ),
@@ -324,18 +347,20 @@ function CanvasThreadCard({
           className="cc-flash pointer-events-none absolute inset-0 z-10 rounded-card"
         />
       )}
-      {(['s', 'se'] as const).map((edge) => (
+      {RESIZE_EDGES.map((edge) => (
         <div
           key={edge}
           aria-hidden
           data-slot="thread-canvas-card-resize"
           data-edge={edge}
+          title={edge === 'se' ? 'Drag to resize' : undefined}
           className={resizeVariants({ edge })}
           onPointerDown={(event) => begin(event, edge)}
           onPointerMove={follow}
           onPointerUp={release}
-          onPointerCancel={release}
-        />
+          onPointerCancel={release}>
+          {edge === 'se' ? <ResizeGrip /> : null}
+        </div>
       ))}
     </section>
   );
@@ -359,9 +384,12 @@ export interface ThreadCardLayerProps {
 
 /**
  * The open threads' cards, drawn over the canvas beside the flow rather than
- * in it, each on its slot's top-left corner at its own pixel size at every
- * zoom. One subscription to the flow's transform moves them, so a pan or a
- * zoom never draws a card's chat again.
+ * in it, each on its slot's top-left corner and scaled with the flow's zoom by
+ * CSS `zoom`, so a card covers exactly its slot at every zoom. A transform
+ * would capture the fixed menus and dialogs inside the chat; `zoom` does not,
+ * and those overlays undo it themselves. One subscription to the flow's
+ * transform moves and scales them, so a pan or a zoom never draws a card's
+ * chat again.
  */
 export function ThreadCardLayer({
   cards,
@@ -377,9 +405,14 @@ export function ThreadCardLayer({
   const store = useStoreApi();
   const moving = useRef(new Map<string, { x: number; y: number }>());
   const wrappers = useRef(new Map<string, HTMLDivElement>());
+  const scalers = useRef(new Map<string, HTMLDivElement>());
   const placed = useRef(slots);
   placed.current = slots;
   const [front, setFront] = useState<string | null>(null);
+  const zoomOf = useLatestCallback(
+    (): number => store.getState().transform[2],
+    [store],
+  );
 
   const place = useLatestCallback((): void => {
     const [x, y, zoom] = store.getState().transform;
@@ -390,6 +423,10 @@ export function ThreadCardLayer({
       }
       wrapper.style.left = `${slot.x * zoom + x}px`;
       wrapper.style.top = `${slot.y * zoom + y}px`;
+      const scaler = scalers.current.get(runId);
+      if (scaler !== undefined && scaler.style.zoom !== String(zoom)) {
+        scaler.style.zoom = String(zoom);
+      }
     }
   }, [store]);
   useLayoutEffect(() => place());
@@ -442,19 +479,31 @@ export function ThreadCardLayer({
               wrappers.current.set(card.runId, element);
             }
           }}
+          data-slot="thread-canvas-card-place"
           className="absolute"
           style={{ zIndex: front === card.runId ? 2 : 1 }}
           onPointerDownCapture={() => setFront(card.runId)}>
-          <CanvasThreadCard
-            card={card}
-            largest={largest}
-            flash={flashing?.runId === card.runId ? flashing.seq : null}
-            onClose={() => onClose(card.runId)}
-            onResize={(size) => onResize(card.runId, size)}
-            onMove={(by, done) => move(card.runId, by, done)}
-            onOpenInChats={() => onOpenInChats(card.runId)}
-            chat={renderChat(card.runId)}
-          />
+          <div
+            data-slot="thread-canvas-card-zoom"
+            ref={(element) => {
+              if (element === null) {
+                scalers.current.delete(card.runId);
+              } else {
+                scalers.current.set(card.runId, element);
+              }
+            }}>
+            <CanvasThreadCard
+              card={card}
+              largest={largest}
+              zoomOf={zoomOf}
+              flash={flashing?.runId === card.runId ? flashing.seq : null}
+              onClose={() => onClose(card.runId)}
+              onResize={(size) => onResize(card.runId, size)}
+              onMove={(by, done) => move(card.runId, by, done)}
+              onOpenInChats={() => onOpenInChats(card.runId)}
+              chat={renderChat(card.runId)}
+            />
+          </div>
         </div>
       ))}
     </div>

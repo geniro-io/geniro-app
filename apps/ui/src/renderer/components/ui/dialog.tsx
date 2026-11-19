@@ -3,6 +3,7 @@ import * as React from 'react';
 
 import { useReportOverlayOpen } from '../browser-occlusion';
 import { Button } from './button';
+import { counterZoomStyle } from './css-zoom';
 import { pushEscapeLayer } from './escape-layers';
 import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
@@ -56,6 +57,13 @@ export function Dialog({
   coversBrowser?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const overlayRef = React.useRef<HTMLDivElement | null>(null);
+  const [counterZoom, setCounterZoom] = React.useState<{ zoom?: number }>({});
+  React.useLayoutEffect(() => {
+    if (open) {
+      setCounterZoom(counterZoomStyle(overlayRef.current?.parentElement));
+    }
+  }, [open]);
   // Read through a ref rather than put in the effect's dependencies: callers
   // pass inline arrows, so every render of the screen around an OUTER dialog
   // hands it a new `onClose` — and re-registering on that would move it back
@@ -136,8 +144,10 @@ export function Dialog({
 
   return (
     <div
+      ref={overlayRef}
       role="dialog"
       aria-modal="true"
+      style={counterZoom}
       className={cn(
         // Electron's title-bar drag region still intercepts native presses
         // beneath an overlay, regardless of its z-index. Exclude the whole

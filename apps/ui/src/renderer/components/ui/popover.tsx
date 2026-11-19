@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { useReportOverlayOpen } from '../browser-occlusion';
+import { counterZoomStyle } from './css-zoom';
 import { pushEscapeLayer } from './escape-layers';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
@@ -209,6 +210,7 @@ export function Popover({
         ...across,
         maxHeight,
         overflowY: 'auto',
+        ...counterZoomStyle(trigger),
       });
     };
     measure();

@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { POINTER_GRACE_MS } from '../use-pointer-grace';
 import { Menu, type MenuGroup } from './menu';
 
@@ -1077,6 +1078,35 @@ describe('Menu — escaping a clipping container', () => {
     value: `row-${i}`,
     label: `row ${i}`,
   }));
+
+  it('undoes a CSS zoom above its trigger, so the fixed panel lands at the trigger in viewport pixels', () => {
+    const restore = stubCssZoom(0.5);
+    try {
+      const { ref } = triggerAt({
+        top: 300,
+        bottom: 340,
+        left: 120,
+        right: 260,
+      });
+      const el = render(
+        <Menu
+          open
+          anchor="viewport"
+          triggerRef={ref}
+          side="bottom"
+          groups={BRANCHES}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      expect(panel(el).style.zoom).toBe('2');
+      expect(panel(el).style.top).toBe('346px');
+      expect(panel(el).style.left).toBe('120px');
+    } finally {
+      restore();
+    }
+  });
 
   it('positions from the VIEWPORT when asked, not from its ancestor', () => {
     // The whole point of the mode: an absolute panel is cut by any ancestor

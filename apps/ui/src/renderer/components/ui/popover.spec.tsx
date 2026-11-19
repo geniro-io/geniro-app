@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { Dialog } from './dialog';
 import { Menu } from './menu';
 import { Popover } from './popover';
@@ -192,6 +193,26 @@ describe('Popover — anchor="viewport"', () => {
     // inline box (`right-0` resolving against the wrapper, not the viewport).
     expect(panel?.className).not.toContain('top-full');
     expect(panel?.className).not.toContain('right-0');
+  });
+
+  it('undoes a CSS zoom above its trigger, and adds none where nothing is zoomed', () => {
+    const plain = panelOf(
+      render(<Harness anchor="viewport" rect={{ bottom: 140, right: 900 }} />),
+    );
+    expect(plain?.style.zoom).toBe('');
+
+    const restore = stubCssZoom(0.5);
+    try {
+      const zoomed = panelOf(
+        render(
+          <Harness anchor="viewport" rect={{ bottom: 140, right: 900 }} />,
+        ),
+      );
+      expect(zoomed?.style.zoom).toBe('2');
+      expect(zoomed?.style.top).toBe('146px');
+    } finally {
+      restore();
+    }
   });
 
   it('FLIPS above the trigger when the panel would run off the bottom', () => {

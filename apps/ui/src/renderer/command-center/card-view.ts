@@ -267,6 +267,41 @@ export function threadIdentitiesOf(
   );
 }
 
+function sameFace(a: ThreadFaceLook, b: ThreadFaceLook): boolean {
+  if (a.kind === 'team' && b.kind === 'team') {
+    return a.people === b.people && a.total === b.total;
+  }
+  if (a.kind === 'agent' && b.kind === 'agent') {
+    return a.icon === b.icon && a.name === b.name;
+  }
+  return a.kind === b.kind;
+}
+
+function sameIdentity(a: ThreadIdentity, b: ThreadIdentity): boolean {
+  const { face: faceA, ...restA } = a;
+  const { face: faceB, ...restB } = b;
+  return (
+    sameFace(faceA, faceB) && JSON.stringify(restA) === JSON.stringify(restB)
+  );
+}
+
+/** Whether two sets of thread identities name the same threads the same way. */
+export function sameThreadIdentities(
+  a: ReadonlyMap<string, ThreadIdentity>,
+  b: ReadonlyMap<string, ThreadIdentity>,
+): boolean {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const [runId, identity] of a) {
+    const other = b.get(runId);
+    if (other === undefined || !sameIdentity(identity, other)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * A board entry as the thread card draws it. A pull request's state comes
  * from main's `gh` read when there is one — the daemon stores no merge state.

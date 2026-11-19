@@ -764,7 +764,12 @@ function GraphCanvas({
 }: GraphViewProps): React.JSX.Element {
   const flow = useReactFlow();
   const reduced = usePrefersReducedMotion();
-  const [measure, size] = useElementSize();
+  const [measure, measured] = useElementSize();
+  const [size, setSize] = useState(measured);
+  // A hidden page measures 0×0; keeping the last real size keeps the flow and every open card's chat mounted.
+  if (measured !== size && measured.width > 0 && measured.height > 0) {
+    setSize(measured);
+  }
   const fittedSize = useRef<string | null>(null);
   const fittedWidth = useRef<number | null>(null);
   const userMoved = useRef(false);

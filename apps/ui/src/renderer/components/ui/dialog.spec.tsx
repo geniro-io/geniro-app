@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubCssZoom } from '../../__tests__/stub-css-zoom';
 import { Dialog } from './dialog';
 import { Select } from './select';
 
@@ -50,6 +51,27 @@ function pressTab(shiftKey = false): void {
     );
   });
 }
+
+describe('Dialog under a CSS zoom', () => {
+  it('undoes the zoom above it, so a dialog opened inside a scaled card is full size', () => {
+    const restore = stubCssZoom(0.5);
+    try {
+      renderDialog(true);
+      expect(
+        document.querySelector<HTMLElement>('[role="dialog"]')!.style.zoom,
+      ).toBe('2');
+    } finally {
+      restore();
+    }
+  });
+
+  it('adds no zoom where nothing above it is zoomed', () => {
+    renderDialog(true);
+    expect(
+      document.querySelector<HTMLElement>('[role="dialog"]')!.style.zoom,
+    ).toBe('');
+  });
+});
 
 describe('Dialog focus management', () => {
   it('moves initial focus to the first focusable child after the corner ✕', () => {

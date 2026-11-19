@@ -73,7 +73,7 @@ export interface ThreadCardProps {
   answerKind?: 'question' | 'approval' | null;
 }
 
-export const THREAD_CARD_WIDTH = 272;
+export const THREAD_CARD_WIDTH = 296;
 
 const PAD_PX = 10;
 const GAP_PX = 6;
@@ -270,9 +270,10 @@ export function OpenInChatsIcon({
 
 /**
  * One thread as a card — a node of the command center's graph: the thread's
- * head (its face, title, pull request and labels, with Show chat and Open in
- * Chats at its end), the manager's note, its latest message and when it last
- * moved. Its title and Show chat turn it into the thread's card on the canvas.
+ * head (its face, title, pull request and labels), the manager's note, its
+ * latest message, and a footer with when it last moved and its Show chat,
+ * Archive and Open in Chats icons, kept off the title line so the title has
+ * room. Its title and Show chat turn it into the thread's card on the canvas.
  */
 export function ThreadCard({
   runId,
@@ -337,21 +338,6 @@ export function ThreadCard({
           })}
           onOpen={onToggleCard}
           ringClassName="ring-card"
-          aside={
-            <>
-              {onToggleCard === undefined ? null : (
-                <ShowChatIcon
-                  title={title}
-                  open={false}
-                  onToggle={onToggleCard}
-                />
-              )}
-              {archive === null ? null : (
-                <ArchiveThreadIcon title={title} onArchive={archive} />
-              )}
-              <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
-            </>
-          }
         />
       </div>
       {note === null ? null : (
@@ -413,6 +399,21 @@ export function ThreadCard({
               {answerKind === 'approval' ? 'Review' : 'Answer'}
             </Button>
           )}
+          <span
+            data-slot="thread-card-actions"
+            className="flex items-center gap-0.5">
+            {onToggleCard === undefined ? null : (
+              <ShowChatIcon
+                title={title}
+                open={false}
+                onToggle={onToggleCard}
+              />
+            )}
+            {archive === null ? null : (
+              <ArchiveThreadIcon title={title} onArchive={archive} />
+            )}
+            <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
+          </span>
         </span>
       </div>
     </article>

@@ -392,6 +392,30 @@ describe('CommandCenter — the phone sidebar and the focus', () => {
     },
   );
 
+  it('shows the thread’s card instead of a popover when Reply is pressed on a phone', async () => {
+    stubMatchMedia(true);
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-a', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-a', 'item-7', 'Billing export')]);
+    await renderPage();
+    clickOn(timelineToggle());
+
+    clickOn(replyButton());
+
+    expect(answerPopover()).toBeNull();
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]'),
+    ).toBeNull();
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-a',
+    ]);
+  });
+
   it('keeps an open sidebar when a thread is shown on a wide screen', async () => {
     stubMatchMedia(false);
     await renderPage();
@@ -719,6 +743,98 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
     expect(answerPopover()).not.toBeNull();
 
     clickOn(container.querySelector('[aria-label="Close the sidebar"]'));
+
+    expect(answerPopover()).toBeNull();
+  });
+
+  it('shuts the popover and drops the Reply once the question is answered', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-q', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
+    await renderPage();
+    clickOn(timelineToggle());
+    clickOn(replyButton());
+    expect(answerPopover()).not.toBeNull();
+
+    fakes.requests = { requests: [], error: null, answer: vi.fn() };
+    await renderPage();
+
+    expect(answerPopover()).toBeNull();
+    expect(replyButton()).toBeNull();
+  });
+
+  it('keeps the popover on its row after one of the thread’s two questions is answered', async () => {
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element) {
+        const top = this.isConnected ? 100 : 0;
+        return {
+          top,
+          bottom: top + 30,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: this.isConnected ? 30 : 0,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-q', 'item-7', 'How should the export retry?'),
+        openRequestOf('run-q', 'item-8', 'Which month first?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([
+      questionEventOf('run-q', 'item-7', 'Billing export'),
+      questionEventOf('run-q', 'item-8', 'Billing export'),
+    ]);
+    await renderPage();
+    clickOn(timelineToggle());
+    clickOn(replyButton());
+
+    fakes.requests = {
+      requests: [openRequestOf('run-q', 'item-8', 'Which month first?')],
+      error: null,
+      answer: vi.fn(),
+    };
+    await renderPage();
+    act(() => {
+      document.dispatchEvent(new Event('scroll'));
+    });
+
+    const panel = answerPopover()!.closest<HTMLElement>('[style*="fixed"]')!;
+    expect(panel.style.top).toBe('136px');
+    rect.mockRestore();
+  });
+
+  it('shuts a popover opened from the graph when the view turns to the chat', async () => {
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-a', 'item-9', 'Which invoices should we export?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    await renderPage();
+    const anchor = document.createElement('button');
+    container.appendChild(anchor);
+    act(() => {
+      probes.graph!.onAnswer('run-a', anchor);
+    });
+    expect(answerPopover()).not.toBeNull();
+
+    clickOn(buttonNamed('Chat'));
 
     expect(answerPopover()).toBeNull();
   });

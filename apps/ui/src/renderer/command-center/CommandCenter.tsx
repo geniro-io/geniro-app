@@ -421,10 +421,11 @@ export function CommandCenter({
       showThread(runId);
       return;
     }
+    const row = anchor.closest('li') ?? anchor;
     setAnswering((last) =>
-      last?.anchor === anchor
+      last?.anchor === row
         ? null
-        : { runId, anchor, title, from: 'timeline' },
+        : { runId, anchor: row, title, from: 'timeline' },
     );
   };
   const renderCardChat = useLatestCallback(

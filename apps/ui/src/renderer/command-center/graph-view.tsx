@@ -809,13 +809,14 @@ function GraphCanvas({
       pinned.set(drag.id, drag.offset);
     }
   }
-  const drawn: GraphGeometry = narrow
-    ? layoutColumn(root, rows.flat())
-    : layoutRows(root, rows, pinned);
   const unopened =
     onCanvas.size === 0 && pinned.size === 0
-      ? drawn
+      ? null
       : layoutRows(root, graphRows(shown, hidden, canvasWidth));
+  const drawn: GraphGeometry = narrow
+    ? layoutColumn(root, rows.flat())
+    : layoutRows(root, rows, pinned, unopened?.width);
+  const automatic = unopened ?? drawn;
   const dragGone =
     drag !== null &&
     (narrow || !shown.some((t) => `thread:${t.id}` === drag.id));
@@ -836,10 +837,10 @@ function GraphCanvas({
   const fit = useLatestCallback((animate: boolean) => {
     const duration = animate && !reduced ? FIT_MS : 0;
     moveQuietly(duration);
-    void flow.setViewport(widthFit(unopened, size), { duration });
+    void flow.setViewport(widthFit(automatic, size), { duration });
   }, []);
   const sizeKey = `${Math.round(size.width)}x${Math.round(size.height)}`;
-  const graphWidth = Math.round(unopened.width);
+  const graphWidth = Math.round(automatic.width);
   useLayoutEffect(() => {
     if (narrow || size.width === 0) {
       return;
@@ -1158,7 +1159,7 @@ function GraphCanvas({
               <>
                 <ReactFlow
                   {...flowProps}
-                  defaultViewport={widthFit(unopened, size)}
+                  defaultViewport={widthFit(automatic, size)}
                   minZoom={MIN_ZOOM}
                   maxZoom={MAX_ZOOM}
                   translateExtent={[

@@ -482,6 +482,24 @@ describe('layoutRows with pinned boxes', () => {
     }
   });
 
+  it('centres the manager on the frame it is given, however wide a row has grown', () => {
+    const rows = rowsOf(8, 4);
+    const frame = layoutRows(ROOT, rows).width;
+    const grown = rows.map((row, index) =>
+      index === 0
+        ? row.map((box, at) => (at === 0 ? { ...box, width: 900 } : box))
+        : row,
+    );
+
+    const geometry = layoutRows(ROOT, grown, new Map(), frame);
+
+    expect(geometry.boxes.get('root')!.x).toBe(frame / 2 - ROOT.width / 2);
+    const rightmost = Math.max(
+      ...[...geometry.boxes.values()].map((box) => box.x + box.width),
+    );
+    expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
+  });
+
   it('lays out exactly as before when no box is pinned', () => {
     for (const rows of [rowsOf(9, 4), rowsOf(24, 6)]) {
       expect(layoutRows(ROOT, rows, new Map())).toEqual(layoutRows(ROOT, rows));

@@ -853,6 +853,24 @@ describe('GraphView', () => {
     expect(onResetLayout).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the manager where it stood when a card opens wider than its node, so moved nodes stay put', async () => {
+    await draw({
+      threads: graphThreadsOf(6),
+      positions: { 'thread-5': { x: -300, y: 400 } },
+    });
+    const manager = nodeAt('graph-manager');
+    const moved = nodeAt('graph-thread', 'thread-5');
+
+    await draw({
+      threads: graphThreadsOf(6),
+      positions: { 'thread-5': { x: -300, y: 400 } },
+      openCards: [openCard('thread-2', { width: 900, height: 420 })],
+    });
+
+    expect(nodeAt('graph-manager')).toEqual(manager);
+    expect(nodeAt('graph-thread', 'thread-5')).toEqual(moved);
+  });
+
   it('moves an open card’s slot with its head, and on the drop places it relative to the manager', async () => {
     Element.prototype.setPointerCapture = vi.fn();
     const onPlaceNode = vi.fn();

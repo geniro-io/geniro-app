@@ -108,13 +108,15 @@ function overlaps(box: PlacedBox, obstacle: PlacedBox): boolean {
  *
  * A box in `pinned` stands at the root's top-left plus its offset instead, and
  * a row that would touch it moves down past it. The width the root is centred
- * on still counts pinned boxes in their rows, so pinning one never moves the
- * root and with it every other pinned box.
+ * on still counts pinned boxes in their rows, and `frame`, when given, replaces
+ * it, so neither a pin nor a box grown in place moves the root and with it
+ * every pinned box.
  */
 export function layoutRows(
   root: GraphBox,
   rows: readonly (readonly GraphBox[])[],
   pinned: ReadonlyMap<string, Point> = new Map(),
+  frame?: number,
 ): GraphGeometry {
   const filled = rows.filter((row) => row.length > 0);
   const cell = Math.max(0, ...filled.flat().map((item) => item.width));
@@ -123,7 +125,7 @@ export function layoutRows(
     row.reduce((sum, item) => sum + item.width, 0) +
     COLUMN_GAP * (row.length - 1);
   const widest = Math.max(0, ...filled.map(spanOf)) + stagger;
-  const width = Math.max(widest, root.width) + MARGIN * 2;
+  const width = frame ?? Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
   const boxes = new Map<string, PlacedBox>();
@@ -229,9 +231,10 @@ export function layoutRows(
     );
   }
 
+  const placedBoxes = [...boxes.values()];
   const right = Math.max(
     width - MARGIN,
-    ...obstacles.map((b) => b.x + b.width),
+    ...placedBoxes.map((b) => b.x + b.width),
   );
   const lowest = Math.max(bottom, ...obstacles.map((b) => b.y + b.height));
   return {

@@ -276,9 +276,15 @@ export function CommandCenter({
   const [answering, setAnswering] = useState<{
     runId: string;
     anchor: HTMLElement;
+    title: string | null;
+    from: 'graph' | 'timeline';
   } | null>(null);
   const answerFrom = (runId: string, anchor: HTMLElement): void =>
-    setAnswering({ runId, anchor });
+    setAnswering({ runId, anchor, title: null, from: 'graph' });
+  const openItemIds = useMemo(
+    () => new Set(openRequests.requests.map((request) => request.item.id)),
+    [openRequests.requests],
+  );
   const answeringRequests =
     answering === null
       ? []
@@ -286,11 +292,14 @@ export function CommandCenter({
           (request) => request.runId === answering.runId,
         );
   const answeredAll = answering !== null && answeringRequests.length === 0;
+  const answeringHidden =
+    answering !== null &&
+    (answering.from === 'timeline' ? sidebar !== 'timeline' : view === 'chat');
   useEffect(() => {
-    if (answeredAll) {
+    if (answeredAll || answeringHidden) {
       setAnswering(null);
     }
-  }, [answeredAll]);
+  }, [answeredAll, answeringHidden]);
   const boardRunIds =
     board.cards === null
       ? null
@@ -403,6 +412,22 @@ export function CommandCenter({
     cards.open(runId, bandOf(card));
     setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
   }, []);
+  const replyFrom = (
+    runId: string,
+    anchor: HTMLElement,
+    title: string | null,
+  ): void => {
+    if (narrow) {
+      showThread(runId);
+      return;
+    }
+    const row = anchor.closest('li') ?? anchor;
+    setAnswering((last) =>
+      last?.anchor === row
+        ? null
+        : { runId, anchor: row, title, from: 'timeline' },
+    );
+  };
   const renderCardChat = useLatestCallback(
     (runId: string): React.ReactNode =>
       client === null ? null : (
@@ -728,10 +753,14 @@ export function CommandCenter({
                 />
               )}
             </div>
-            {graphShown && answering !== null ? (
+            {answering !== null && !answeringHidden ? (
               <AnswerPopover
                 anchor={answering.anchor}
-                title={threadIdentities.get(answering.runId)?.title ?? 'Thread'}
+                title={
+                  threadIdentities.get(answering.runId)?.title ??
+                  answering.title ??
+                  'Thread'
+                }
                 projectColor={
                   threadIdentities.get(answering.runId)?.projectColor ?? null
                 }
@@ -788,7 +817,9 @@ export function CommandCenter({
                   error={timeline.error}
                   hasMore={timeline.hasMore}
                   onLoadOlder={timeline.loadOlder}
-                  onOpenThread={showThread}
+                  onShowThread={showThread}
+                  onReply={replyFrom}
+                  openItemIds={openItemIds}
                   now={now}
                 />
               )}

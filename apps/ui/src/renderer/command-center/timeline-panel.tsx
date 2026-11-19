@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Milestone,
   Play,
+  Reply,
   Rocket,
   Send,
   ShieldAlert,
@@ -23,6 +24,12 @@ import type {
 import { formatClockTime } from '../chats/relative-time';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
+import { NavListItem } from '../components/nav-list-item';
+import {
+  ArchiveThreadButton,
+  useThreadArchive,
+} from '../components/thread-archive';
+import { ThreadActionButton } from '../components/thread-head';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
@@ -80,49 +87,49 @@ function toneOf(event: TimelineEvent): TimelineTone {
 
 interface Sentence {
   before: string;
-  linked: boolean;
+  named: boolean;
   after: string;
 }
 
 function sentenceOf(event: TimelineEvent): Sentence {
   switch (event.kind) {
     case 'user_message':
-      return { before: 'You wrote', linked: false, after: '' };
+      return { before: 'You wrote', named: false, after: '' };
     case 'manager_message':
-      return { before: 'Manager →', linked: true, after: '' };
+      return { before: 'Manager →', named: true, after: '' };
     case 'thread_message':
-      return { before: '', linked: true, after: 'replied' };
+      return { before: '', named: true, after: 'replied' };
     case 'thread_started':
-      return { before: '', linked: true, after: 'started' };
+      return { before: '', named: true, after: 'started' };
     case 'start_requested':
-      return { before: '', linked: true, after: 'Start requested' };
+      return { before: '', named: true, after: 'Start requested' };
     case 'pull_request':
       return {
         before: '',
-        linked: true,
+        named: true,
         after:
           event.detail === null ? 'opened a PR' : `opened PR #${event.detail}`,
       };
     case 'question':
-      return { before: '', linked: true, after: 'asked a question' };
+      return { before: '', named: true, after: 'asked a question' };
     case 'approval':
-      return { before: '', linked: true, after: 'needs approval' };
+      return { before: '', named: true, after: 'needs approval' };
     case 'stage':
       return {
         before: '',
-        linked: true,
+        named: true,
         after:
           event.detail === null ? 'stage changed' : `stage: ${event.detail}`,
       };
     case 'outcome':
       return {
         before: '',
-        linked: true,
+        named: true,
         after:
           event.detail === null ? 'finished' : `finished · ${event.detail}`,
       };
     case 'failed':
-      return { before: '', linked: true, after: 'failed' };
+      return { before: '', named: true, after: 'failed' };
   }
 }
 
@@ -179,52 +186,78 @@ export interface TimelinePanelProps {
   error: string | null;
   hasMore: boolean;
   onLoadOlder: () => void;
-  onOpenThread: (runId: string) => void;
+  /** Open the row's thread as its card on the canvas. */
+  onShowThread: (runId: string) => void;
+  /** Answer the row's still-open question in a popover hung from its Reply button. */
+  onReply: (runId: string, anchor: HTMLElement, title: string | null) => void;
+  /** The item ids of the questions and approvals a thread still waits on. */
+  openItemIds: ReadonlySet<string>;
   now: number;
   className?: string;
 }
 
-function ThreadLabel({
-  event,
-  onOpenThread,
-}: {
-  event: TimelineEvent;
-  onOpenThread: (runId: string) => void;
-}): React.JSX.Element {
-  const title = event.threadTitle ?? 'Untitled thread';
-  if (event.threadRunId === null) {
-    return <span className="min-w-0 truncate font-medium">{title}</span>;
-  }
-  const runId = event.threadRunId;
+/** Whether the event is a question or approval its thread still waits on. */
+export function isAnswerable(
+  event: TimelineEvent,
+  openItemIds: ReadonlySet<string>,
+): boolean {
   return (
-    <Button
-      type="button"
-      variant="link"
-      size="sm"
-      data-slot="timeline-thread-link"
-      title={title}
-      className="h-auto min-w-0 shrink justify-start p-0 text-sm font-medium"
-      onClick={() => onOpenThread(runId)}>
-      <span className="min-w-0 truncate">{title}</span>
-    </Button>
+    (event.kind === 'question' || event.kind === 'approval') &&
+    openItemIds.has(event.id.slice(event.kind.length + 1))
   );
 }
 
-function TimelineRow({
+function RowActions({
   event,
-  onOpenThread,
+  answerable,
+  onReply,
 }: {
   event: TimelineEvent;
-  onOpenThread: (runId: string) => void;
+  answerable: boolean;
+  onReply: TimelinePanelProps['onReply'];
+}): React.JSX.Element | null {
+  const runId = event.threadRunId;
+  const archive = useThreadArchive(event.kind === 'outcome' ? runId : null);
+  const title = event.threadTitle ?? 'Untitled thread';
+  if (runId === null || (!answerable && archive === null)) {
+    return null;
+  }
+  return (
+    <span className="flex shrink-0 items-center">
+      {answerable ? (
+        <ThreadActionButton
+          slot="timeline-event-reply"
+          label={`Reply to ${title}`}
+          title="Answer this here"
+          icon={<Reply aria-hidden="true" />}
+          onClick={(anchor) => onReply(runId, anchor, event.threadTitle)}>
+          Reply
+        </ThreadActionButton>
+      ) : null}
+      {archive === null ? null : (
+        <ArchiveThreadButton
+          slot="timeline-event-archive"
+          title={title}
+          onArchive={archive}
+        />
+      )}
+    </span>
+  );
+}
+
+function RowBody({
+  event,
+  actions,
+}: {
+  event: TimelineEvent;
+  actions: React.ReactNode;
 }): React.JSX.Element {
   const Icon = KIND_META[event.kind].icon;
   const sentence = sentenceOf(event);
   const awaiting = event.kind === 'manager_message' && event.awaitingReply;
+  const title = event.threadTitle ?? 'Untitled thread';
   return (
-    <li
-      data-slot="timeline-event"
-      data-kind={event.kind}
-      className="relative flex items-start gap-3 pb-4 before:absolute before:inset-y-0 before:left-3 before:w-px before:bg-border last:pb-0 last:before:hidden">
+    <>
       <span
         aria-hidden="true"
         className={timelineToneVariants({ tone: toneOf(event) })}>
@@ -238,8 +271,13 @@ function TimelineRow({
                 {sentence.before}
               </span>
             )}
-            {sentence.linked ? (
-              <ThreadLabel event={event} onOpenThread={onOpenThread} />
+            {sentence.named ? (
+              <span
+                data-slot="timeline-thread-title"
+                title={title}
+                className="min-w-0 truncate font-medium">
+                {title}
+              </span>
             ) : null}
             {sentence.after === '' ? null : (
               <span className="shrink-0 whitespace-nowrap text-muted-foreground">
@@ -265,8 +303,50 @@ function TimelineRow({
             {event.text}
           </p>
         )}
+        {actions}
       </div>
-    </li>
+    </>
+  );
+}
+
+const ROW_CLASS =
+  'gap-3 rounded-md px-2 py-1.5 before:absolute before:top-0 before:bottom-0 before:left-5 before:w-px before:bg-border first:before:top-3 last:before:bottom-auto last:before:h-3';
+
+function TimelineRow({
+  event,
+  answerable,
+  onShowThread,
+  onReply,
+}: {
+  event: TimelineEvent;
+  answerable: boolean;
+  onShowThread: (runId: string) => void;
+  onReply: TimelinePanelProps['onReply'];
+}): React.JSX.Element {
+  const runId = event.threadRunId;
+  const actions = (
+    <RowActions event={event} answerable={answerable} onReply={onReply} />
+  );
+  if (runId === null) {
+    return (
+      <li
+        data-slot="timeline-event"
+        data-kind={event.kind}
+        className={cn('relative flex items-start', ROW_CLASS)}>
+        <RowBody event={event} actions={actions} />
+      </li>
+    );
+  }
+  return (
+    <NavListItem
+      active={false}
+      activateLabel={`Show ${event.threadTitle ?? 'Untitled thread'} on the canvas`}
+      onActivate={() => onShowThread(runId)}
+      className={cn('flex-row items-start', ROW_CLASS)}
+      contentClassName="flex-1 flex-row items-start gap-3"
+      data={{ 'data-slot': 'timeline-event', 'data-kind': event.kind }}>
+      <RowBody event={event} actions={actions} />
+    </NavListItem>
   );
 }
 
@@ -276,7 +356,9 @@ export function TimelinePanel({
   error,
   hasMore,
   onLoadOlder,
-  onOpenThread,
+  onShowThread,
+  onReply,
+  openItemIds,
   now,
   className,
 }: TimelinePanelProps): React.JSX.Element {
@@ -315,12 +397,14 @@ export function TimelinePanel({
                 <h3 className="sticky top-0 z-[2] -mx-4 bg-card/95 px-4 py-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase backdrop-blur-sm">
                   {day.label}
                 </h3>
-                <ol className="flex flex-col">
+                <ol className="-mx-2 flex flex-col">
                   {day.events.map((event) => (
                     <TimelineRow
                       key={event.id}
                       event={event}
-                      onOpenThread={onOpenThread}
+                      answerable={isAnswerable(event, openItemIds)}
+                      onShowThread={onShowThread}
+                      onReply={onReply}
                     />
                   ))}
                 </ol>

@@ -3,8 +3,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ThreadArchiveContext,
+  type ThreadArchiveOf,
+} from '../components/thread-archive';
 import { TIMELINE_FIXTURE_NOW, timelineFixtures } from './timeline-fixtures';
 import {
+  isAnswerable,
   type TimelineEvent,
   TimelinePanel,
   type TimelinePanelProps,
@@ -26,6 +31,29 @@ afterEach(() => {
   container = null;
 });
 
+const EVENT_AT = new Date('2026-11-17T10:00:00').toISOString();
+const BILLING = { threadRunId: 'run-billing', threadTitle: 'Billing export' };
+const RELEASE = { threadRunId: 'run-release', threadTitle: 'Release notes' };
+
+/** A timeline row whose id is `<kind>:<itemId>`, as the daemon writes it. */
+function eventOf(
+  kind: TimelineEvent['kind'],
+  itemId: string,
+  over: Partial<TimelineEvent> = {},
+): TimelineEvent {
+  return {
+    id: `${kind}:${itemId}`,
+    kind,
+    at: EVENT_AT,
+    threadRunId: null,
+    threadTitle: null,
+    text: null,
+    detail: null,
+    awaitingReply: false,
+    ...over,
+  };
+}
+
 function props(over: Partial<TimelinePanelProps> = {}): TimelinePanelProps {
   return {
     events: timelineFixtures(),
@@ -33,13 +61,19 @@ function props(over: Partial<TimelinePanelProps> = {}): TimelinePanelProps {
     error: null,
     hasMore: true,
     onLoadOlder: vi.fn(),
-    onOpenThread: vi.fn(),
+    onShowThread: vi.fn(),
+    onReply: vi.fn(),
+    openItemIds: new Set(),
     now: TIMELINE_FIXTURE_NOW,
     ...over,
   };
 }
 
-function render(over: Partial<TimelinePanelProps> = {}): HTMLElement {
+/** Draws the panel, inside the archive context when one is given. */
+function render(
+  over: Partial<TimelinePanelProps> = {},
+  archiveOf?: ThreadArchiveOf,
+): HTMLElement {
   act(() => {
     root?.unmount();
   });
@@ -47,12 +81,27 @@ function render(over: Partial<TimelinePanelProps> = {}): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  const panel = <TimelinePanel {...props(over)} />;
   act(() => {
-    root!.render(<TimelinePanel {...props(over)} />);
+    root!.render(
+      archiveOf === undefined ? (
+        panel
+      ) : (
+        <ThreadArchiveContext.Provider value={archiveOf}>
+          {panel}
+        </ThreadArchiveContext.Provider>
+      ),
+    );
   });
   return container.querySelector<HTMLElement>(
     '[data-slot="command-center-timeline"]',
   )!;
+}
+
+function press(button: HTMLElement): void {
+  act(() => {
+    button.click();
+  });
 }
 
 function shownKinds(el: HTMLElement): string[] {
@@ -61,10 +110,34 @@ function shownKinds(el: HTMLElement): string[] {
   ].map((row) => row.dataset.kind ?? '');
 }
 
+function rowsOf(el: HTMLElement, kind: TimelineEvent['kind']): HTMLElement[] {
+  return [
+    ...el.querySelectorAll<HTMLElement>(
+      `[data-slot="timeline-event"][data-kind="${kind}"]`,
+    ),
+  ];
+}
+
 function rowOf(el: HTMLElement, kind: TimelineEvent['kind']): HTMLElement {
-  return el.querySelector<HTMLElement>(
-    `[data-slot="timeline-event"][data-kind="${kind}"]`,
+  return rowsOf(el, kind)[0]!;
+}
+
+function canvasButtonOf(row: HTMLElement, title: string): HTMLButtonElement {
+  return row.querySelector<HTMLButtonElement>(
+    `button[aria-label="Show ${title} on the canvas"]`,
   )!;
+}
+
+function replyButtonOf(row: HTMLElement): HTMLButtonElement | null {
+  return row.querySelector<HTMLButtonElement>(
+    '[data-slot="timeline-event-reply"]',
+  );
+}
+
+function archiveButtonOf(row: HTMLElement): HTMLButtonElement | null {
+  return row.querySelector<HTMLButtonElement>(
+    '[data-slot="timeline-event-archive"]',
+  );
 }
 
 describe('TimelinePanel — structure', () => {
@@ -153,17 +226,14 @@ describe('TimelinePanel — empty', () => {
 });
 
 describe('TimelinePanel — threads and messages', () => {
-  it('opens the thread from its title link', () => {
-    const onOpenThread = vi.fn();
-    const el = render({ onOpenThread });
+  it('shows the thread of a row on the canvas when the row is pressed', () => {
+    const onShowThread = vi.fn();
+    const el = render({ onShowThread });
 
-    act(() => {
-      rowOf(el, 'pull_request')
-        .querySelector<HTMLButtonElement>('[data-slot="timeline-thread-link"]')!
-        .click();
-    });
+    press(canvasButtonOf(rowOf(el, 'pull_request'), 'Fix the login redirect'));
 
-    expect(onOpenThread).toHaveBeenCalledWith('run-login');
+    expect(onShowThread).toHaveBeenCalledTimes(1);
+    expect(onShowThread).toHaveBeenCalledWith('run-login');
   });
 
   it('names the pull request by its number', () => {
@@ -172,15 +242,15 @@ describe('TimelinePanel — threads and messages', () => {
     expect(rowOf(el, 'pull_request').textContent).toContain('opened PR #418');
   });
 
-  it('gives a user message no thread link, only the words You wrote', () => {
+  it('gives a user message no button, only the words You wrote', () => {
     const el = render();
 
     const row = rowOf(el, 'user_message');
-    expect(row.querySelector('[data-slot="timeline-thread-link"]')).toBeNull();
+    expect(row.querySelector('button')).toBeNull();
     expect(row.textContent).toContain('You wrote');
   });
 
-  it('shows a thread row without a thread as plain text, not a link', () => {
+  it('shows a thread row without a thread as plain text, with no button', () => {
     const el = render({
       events: [
         {
@@ -197,7 +267,7 @@ describe('TimelinePanel — threads and messages', () => {
     });
 
     const row = rowOf(el, 'start_requested');
-    expect(row.querySelector('[data-slot="timeline-thread-link"]')).toBeNull();
+    expect(row.querySelector('button')).toBeNull();
     expect(row.textContent).toContain('Wire the thread-start conductor');
     expect(row.textContent).toContain('Start requested');
   });
@@ -230,6 +300,171 @@ describe('TimelinePanel — threads and messages', () => {
     expect(
       failed.querySelector('span[aria-hidden="true"]')!.className,
     ).toContain('text-destructive');
+  });
+
+  it('draws no link, and each button in the panel is one of its own actions', () => {
+    const onShowThread = vi.fn();
+    const onReply = vi.fn<TimelinePanelProps['onReply']>();
+    const onLoadOlder = vi.fn();
+    const archive = vi.fn();
+    const el = render(
+      {
+        events: [
+          eventOf('question', 'item-q1', BILLING),
+          eventOf('outcome', 'board-run', {
+            ...RELEASE,
+            detail: 'done',
+          }),
+        ],
+        onShowThread,
+        onReply,
+        onLoadOlder,
+        openItemIds: new Set(['item-q1']),
+      },
+      () => archive,
+    );
+
+    expect(el.querySelectorAll('a, [href], [role="link"]')).toHaveLength(0);
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('button')];
+    for (const button of buttons) {
+      press(button);
+    }
+
+    expect(onShowThread).toHaveBeenCalledTimes(2);
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TimelinePanel — answering from the timeline', () => {
+  it('draws Reply only on a question or an approval its thread still waits on', () => {
+    const el = render({
+      events: [
+        eventOf('question', 'item-q1', BILLING),
+        eventOf('question', 'item-q2', BILLING),
+        eventOf('approval', 'item-a1', BILLING),
+        eventOf('thread_message', 'item-q1', BILLING),
+      ],
+      openItemIds: new Set(['item-q1', 'item-a1']),
+    });
+
+    const [asked, answered] = rowsOf(el, 'question');
+    expect(replyButtonOf(asked!)).not.toBeNull();
+    expect(replyButtonOf(answered!)).toBeNull();
+    expect(replyButtonOf(rowOf(el, 'approval'))).not.toBeNull();
+    expect(replyButtonOf(rowOf(el, 'thread_message'))).toBeNull();
+  });
+
+  it('hands the popover the pressed button and the thread title, and shows no thread', () => {
+    const onReply = vi.fn<TimelinePanelProps['onReply']>();
+    const onShowThread = vi.fn();
+    const el = render({
+      events: [eventOf('question', 'item-q1', BILLING)],
+      openItemIds: new Set(['item-q1']),
+      onReply,
+      onShowThread,
+    });
+    const button = replyButtonOf(rowOf(el, 'question'))!;
+
+    expect(button.getAttribute('aria-label')).toBe('Reply to Billing export');
+    press(button);
+
+    expect(onReply).toHaveBeenCalledTimes(1);
+    const [runId, anchor, title] = onReply.mock.calls[0]!;
+    expect(runId).toBe('run-billing');
+    expect(anchor).toBe(button);
+    expect(title).toBe('Billing export');
+    expect(onShowThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('TimelinePanel — archiving a finished thread', () => {
+  it('draws Archive on a finished thread the archive context offers, and on no other row', () => {
+    const el = render(
+      {
+        events: [
+          eventOf('outcome', 'board-run', {
+            threadRunId: 'board-run',
+            threadTitle: 'Release notes',
+            detail: 'done',
+          }),
+          eventOf('outcome', 'off-board', {
+            threadRunId: 'off-board',
+            threadTitle: 'Billing export',
+            detail: 'done',
+          }),
+          eventOf('pull_request', 'board-run', {
+            threadRunId: 'board-run',
+            threadTitle: 'Release notes',
+            detail: '418',
+          }),
+        ],
+      },
+      (runId) => (runId === 'board-run' ? vi.fn() : null),
+    );
+
+    const [onBoard, offBoard] = rowsOf(el, 'outcome');
+    expect(archiveButtonOf(onBoard!)).not.toBeNull();
+    expect(archiveButtonOf(offBoard!)).toBeNull();
+    expect(archiveButtonOf(rowOf(el, 'pull_request'))).toBeNull();
+  });
+
+  it('draws no Archive where no archive context stands', () => {
+    const el = render({
+      events: [
+        eventOf('outcome', 'board-run', {
+          threadRunId: 'board-run',
+          threadTitle: 'Release notes',
+          detail: 'done',
+        }),
+      ],
+    });
+
+    expect(el.querySelector('[data-slot="timeline-event-archive"]')).toBeNull();
+  });
+
+  it('archives the thread when its Archive is pressed, and shows no thread', () => {
+    const archive = vi.fn();
+    const onShowThread = vi.fn();
+    const el = render(
+      {
+        events: [
+          eventOf('outcome', 'board-run', {
+            threadRunId: 'board-run',
+            threadTitle: 'Release notes',
+            detail: 'done',
+          }),
+        ],
+        onShowThread,
+      },
+      () => archive,
+    );
+
+    press(archiveButtonOf(rowOf(el, 'outcome'))!);
+
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(onShowThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('isAnswerable', () => {
+  const open = new Set(['item-q1', 'item-a1']);
+
+  it('is true for a question or an approval whose item the thread still waits on', () => {
+    expect(isAnswerable(eventOf('question', 'item-q1'), open)).toBe(true);
+    expect(isAnswerable(eventOf('approval', 'item-a1'), open)).toBe(true);
+  });
+
+  it('is false for a question the thread no longer waits on', () => {
+    expect(isAnswerable(eventOf('question', 'item-q2'), open)).toBe(false);
+  });
+
+  it('is false for any other kind, even when its item is one the thread waits on', () => {
+    expect(isAnswerable(eventOf('thread_message', 'item-q1'), open)).toBe(
+      false,
+    );
+    expect(isAnswerable(eventOf('outcome', 'item-a1'), open)).toBe(false);
   });
 });
 

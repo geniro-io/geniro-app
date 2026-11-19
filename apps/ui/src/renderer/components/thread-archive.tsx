@@ -59,11 +59,11 @@ export function ArchiveThreadButton({
     <Button
       type="button"
       size="sm"
-      variant="outline"
+      variant="ghost"
       data-slot={slot}
       aria-label={`Archive ${title}`}
       title="Archive this finished thread"
-      className="h-6 gap-1 rounded-full px-2.5 text-xs"
+      className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
       onClick={onArchive}>
       <Archive aria-hidden="true" className="size-3.5" />
       Archive

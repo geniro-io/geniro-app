@@ -145,6 +145,26 @@ describe('CommandCenterChatService', () => {
       expect(without).not.toContain("The user's standing instructions");
     });
 
+    it('re-briefs byte for byte the same when a roster thread finishes, so a finish never rewrites the brief', async () => {
+      current = { id: MANAGER, cwd: managerFolderPath() } as unknown as RunWire;
+      board.activeThreads.mockResolvedValue({
+        managerRunId: MANAGER,
+        runs: [
+          { id: 'thread-1', title: 'Billing cache', status: 'completed' },
+        ] as unknown as RunWire[],
+      });
+      board.columnsOf.mockResolvedValue(new Map([['thread-1', 'working']]));
+      await service.open(START);
+      board.columnsOf.mockResolvedValue(new Map([['thread-1', 'done']]));
+      await service.open(START);
+
+      const [working, finished] = chats.refreshTeamInstructions.mock.calls.map(
+        (call) => call[1] as string,
+      );
+      expect(working).toContain('- t1 · Billing cache');
+      expect(finished).toBe(working);
+    });
+
     it("creates the manager chat with the user's standing instructions in its brief", async () => {
       service.setInstructions('Keep reports to one line.');
 

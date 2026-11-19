@@ -217,13 +217,12 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   private async briefFor(managerRunId: string): Promise<string> {
     const threads = await this.rosterThreads(managerRunId);
     return composeManagerBrief(
-      threads.map(({ entry, run, done }) => ({
+      threads.map(({ entry, run }) => ({
         handle: entry.handle,
         title: run?.title ?? UNTITLED_THREAD,
         project: run?.project?.name ?? null,
         reason: entry.reason,
         note: entry.note,
-        done,
       })),
       this.userInstructions,
     );

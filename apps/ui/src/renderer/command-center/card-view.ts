@@ -12,6 +12,7 @@ import type { ThreadIdentity } from '../components/thread-head';
 import type { ThreadAttention } from '../components/thread-labels';
 import {
   THREAD_STATUS_TEXT,
+  threadCardIdentity,
   type ThreadCardProps,
   type ThreadCardStatus,
 } from './thread-card';
@@ -19,7 +20,7 @@ import {
 /** What a thread's card shows. */
 export type ThreadCardView = Omit<
   ThreadCardProps,
-  'onGo' | 'onOpenHere' | 'summary' | 'height'
+  'onOpenInChats' | 'onToggleCard' | 'summary' | 'height'
 >;
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -204,24 +205,6 @@ function faceOf(
       };
 }
 
-/** A thread as transcripts head it, from what its node on the graph shows. */
-export function threadIdentityOfView(
-  view: ThreadCardView,
-  face: ThreadFaceLook,
-): ThreadIdentity {
-  return {
-    title: view.title,
-    face,
-    pullRequest: view.pullRequest,
-    status: { attention: view.attention, text: view.statusText },
-    agentLabel: view.agentLabel,
-    isTeam: view.isTeam,
-    boardCard: view.boardCard,
-    project: view.project,
-    projectColor: view.projectColor ?? null,
-  };
-}
-
 /** The name the graph's manager node and the transcripts give the command center manager. */
 export const MANAGER_TITLE = 'Manager';
 
@@ -262,7 +245,7 @@ export function threadIdentitiesOf(
 ): ReadonlyMap<string, ThreadIdentity> {
   const threads = cards.map((card): [string, ThreadIdentity] => [
     card.run.id,
-    threadIdentityOfView(
+    threadCardIdentity(
       threadCardViewOf(
         card,
         pullRequestOf(card),
@@ -271,7 +254,6 @@ export function threadIdentitiesOf(
         now,
         projectColors,
       ),
-      faceOf(card, identities, teams),
     ),
   ]);
   return new Map(
@@ -293,7 +275,6 @@ export function threadCardViewOf(
   now: number,
   projectColors: ReadonlyMap<string, ProfileColor> = new Map(),
 ): ThreadCardView {
-  const team = card.run.teamId == null ? undefined : teams.get(card.run.teamId);
   const lastAt = card.run.lastActivityAt ?? card.run.createdAt;
   const status = statusOf(card);
   const attention = attentionOf(card, now);
@@ -313,8 +294,7 @@ export function threadCardViewOf(
     idleDays: idleDaysOf(lastAt, now),
     lastAt,
     now,
-    crew:
-      team === undefined ? null : { people: team.people, total: team.total },
+    face: faceOf(card, identities, teams),
     pullRequest: pullRequestOf(card, pullRequest),
     note: card.note ?? null,
     lastMessage: card.activity ?? null,

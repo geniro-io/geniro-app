@@ -1,4 +1,4 @@
-import { ArrowUpRight, PictureInPicture2 } from 'lucide-react';
+import { MessageSquareText } from 'lucide-react';
 import { useMemo } from 'react';
 
 import type { ProfileColor } from '../../shared/contracts';
@@ -18,8 +18,8 @@ export interface AnswerPopoverProps {
   requests: readonly OpenRequest[];
   error: string | null;
   onAnswer: NeedsYouPanelProps['onAnswer'];
-  onOpenHere: () => void;
-  onOpenThread: () => void;
+  /** Open the thread as its card on the canvas. */
+  onShowThread: () => void;
   onClose: () => void;
 }
 
@@ -35,8 +35,7 @@ export function AnswerPopover({
   requests,
   error,
   onAnswer,
-  onOpenHere,
-  onOpenThread,
+  onShowThread,
   onClose,
 }: AnswerPopoverProps): React.JSX.Element | null {
   const triggerRef = useMemo(() => ({ current: anchor }), [anchor]);
@@ -68,23 +67,12 @@ export function AnswerPopover({
             type="button"
             variant="ghost"
             size="icon"
-            data-slot="answer-popover-open-here"
+            data-slot="answer-popover-show-chat"
             className="size-6 text-muted-foreground hover:text-foreground"
-            aria-label={`Open ${title} here`}
-            title="Open in a window over the graph"
-            onClick={onOpenHere}>
-            <PictureInPicture2 aria-hidden="true" className="size-3.5" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            data-slot="answer-popover-go"
-            className="size-6 text-muted-foreground hover:text-foreground"
-            aria-label={`Go to ${title}`}
-            title="Go to the thread in Chats"
-            onClick={onOpenThread}>
-            <ArrowUpRight aria-hidden="true" className="size-3.5" />
+            aria-label={`Show the chat of ${title}`}
+            title="Show chat"
+            onClick={onShowThread}>
+            <MessageSquareText aria-hidden="true" className="size-3.5" />
           </Button>
         </header>
         {error === null ? null : (

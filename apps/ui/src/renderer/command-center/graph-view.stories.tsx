@@ -43,8 +43,16 @@ const meta = {
     pulses: [],
     now: FIXTURE_NOW,
     narrow: false,
-    onOpen: () => {},
-    onOpenHere: () => {},
+    active: true,
+    onOpenInChats: () => {},
+    onToggleCard: () => {},
+    openCards: [],
+    onCloseCard: () => {},
+    onResizeCard: () => {},
+    renderCardChat: () => (
+      <p className="p-4 text-sm text-muted-foreground">The thread's chat</p>
+    ),
+    focus: null,
     projects: FIXTURE_PROJECTS,
     asking: new Map([['thread-2', 'question' as const]]),
     onAnswer: () => {},
@@ -78,4 +86,20 @@ export const ManagerNotStarted: Story = {
 export const Phone: Story = {
   args: { narrow: true },
   decorators: [(story) => <div className="h-[700px] w-[390px]">{story()}</div>],
+};
+
+/** A thread open as a card in its node's place, its chat under the node's own head. */
+export const OpenCard: Story = {
+  args: {
+    openCards: [
+      {
+        runId: 'thread-2',
+        band: {
+          attention: 'question',
+          lastAt: new Date(FIXTURE_NOW).toISOString(),
+        },
+        size: { width: 420, height: 300 },
+      },
+    ],
+  },
 };

@@ -13,7 +13,7 @@ const meta = {
     project: 'Geniro',
     agentLabel: 'claude',
     isTeam: false,
-    crew: null,
+    face: { kind: 'agent', icon: 'bot', name: 'Claude' },
     pullRequest: null,
     note: null,
     lastMessage:
@@ -22,7 +22,8 @@ const meta = {
     idleDays: null,
     lastAt: new Date(Date.parse('2026-11-17T11:55:00Z')).toISOString(),
     now: Date.parse('2026-11-17T12:00:00Z'),
-    onGo: () => {},
+    onOpenInChats: () => {},
+    onToggleCard: () => {},
   },
   decorators: [(story) => <div className="p-4">{story()}</div>],
 } satisfies Meta<typeof ThreadCard>;
@@ -82,7 +83,8 @@ export const Team: Story = {
   args: {
     agentLabel: 'dev-team',
     isTeam: true,
-    crew: {
+    face: {
+      kind: 'team',
       people: [
         {
           key: 'lead',

@@ -11,10 +11,18 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
 import { Maximize, Minus, Plus, RadioTower } from 'lucide-react';
-import { createContext, useContext, useLayoutEffect, useRef } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import { type Point, roundedPath } from '../components/stage-graph-layout';
 import type { ThreadAttention } from '../components/thread-labels';
@@ -47,7 +55,9 @@ import {
   layoutColumn,
   layoutRows,
   perLineFor,
+  type PlacedBox,
 } from './graph-layout';
+import type { CardBand, CardSize } from './open-cards';
 import type { ProjectColor } from './project-colors';
 import {
   ATTENTION_TEXT,
@@ -55,7 +65,14 @@ import {
   THREAD_CARD_WIDTH,
   ThreadCard,
   threadCardHeight,
+  threadCardIdentity,
 } from './thread-card';
+import {
+  type CanvasCard,
+  CARD_HEAD_HEIGHT,
+  PhoneThreadCard,
+  ThreadCardLayer,
+} from './thread-card-layer';
 
 export const MAX_THREAD_NODES = 24;
 
@@ -63,6 +80,19 @@ export interface GraphThread {
   id: string;
   createdAt: string;
   view: ThreadCardView;
+}
+
+/** A thread open as a card on the canvas: where it stood when it opened, and the size it is at. */
+export interface GraphOpenCard {
+  runId: string;
+  band: CardBand;
+  size: CardSize;
+}
+
+/** The thread to bring into view, once per `seq`. */
+export interface GraphFocus {
+  runId: string;
+  seq: number;
 }
 
 /** The manager's own chat, as its node shows it; null while there is none. */
@@ -84,9 +114,20 @@ export interface GraphViewProps {
   now: number;
   /** One column for a narrow screen, scrolled rather than panned. */
   narrow: boolean;
-  onOpen: (threadId: string) => void;
-  /** Open the thread in a window over the graph. */
-  onOpenHere: (threadId: string) => void;
+  /** Whether the page is on screen, so a phone's open card may hold a back entry. */
+  active: boolean;
+  /** Leave the command center for the thread in Chats. */
+  onOpenInChats: (threadId: string) => void;
+  /** Open the thread as a card in its node's place, or turn the card back into its node. */
+  onToggleCard: (threadId: string) => void;
+  /** The threads open as cards, in the order they opened. */
+  openCards: readonly GraphOpenCard[];
+  onCloseCard: (threadId: string) => void;
+  onResizeCard: (threadId: string, size: CardSize) => void;
+  /** The chat a card holds under its head. */
+  renderCardChat: (threadId: string) => React.ReactNode;
+  /** The thread to pan to and flash; null for none. */
+  focus: GraphFocus | null;
   /** The projects of the threads on the graph, each with its colour, for the legend. */
   projects: readonly ProjectColor[];
   /** Threads holding a question or an approval the user can answer here, by what they hold. */
@@ -111,6 +152,9 @@ const MAX_ZOOM = 1.5;
 const FIT_MARGIN = 16;
 const FIT_MS = 400;
 const PAN_ROOM = 160;
+const FLASH_MS = 1200;
+/** How long after a move of the view's own a start of motion is still that move, not the user's. */
+const QUIET_MOVE_SLACK_MS = 120;
 const PRO_OPTIONS = { hideAttribution: true };
 
 /** Wires share their trunk, so the louder states are painted last, on top. */
@@ -151,19 +195,21 @@ interface LinkEdgeData extends Record<string, unknown> {
 
 type ManagerFlowNode = Node<ManagerNodeData, 'manager'>;
 type ThreadFlowNode = Node<ThreadNodeData, 'thread'>;
+type SlotFlowNode = Node<ThreadNodeData, 'slot'>;
 type MoreFlowNode = Node<MoreNodeData, 'more'>;
-type GraphFlowNode = ManagerFlowNode | ThreadFlowNode | MoreFlowNode;
+type GraphFlowNode =
+  ManagerFlowNode | ThreadFlowNode | SlotFlowNode | MoreFlowNode;
 type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
-  open: (threadId: string) => void;
-  openHere: (threadId: string) => void;
+  openInChats: (threadId: string) => void;
+  toggleCard: (threadId: string) => void;
   answer: (threadId: string, anchor: HTMLElement) => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
-  open: () => undefined,
-  openHere: () => undefined,
+  openInChats: () => undefined,
+  toggleCard: () => undefined,
   answer: () => undefined,
 });
 
@@ -320,7 +366,7 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
 }
 
 function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
-  const { open, openHere, answer } = useContext(GraphActionsContext);
+  const { openInChats, toggleCard, answer } = useContext(GraphActionsContext);
   const { thread, summary, asking } = data;
   return (
     <div
@@ -331,14 +377,29 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
       <ThreadCard
         {...thread.view}
         summary={summary}
-        onGo={() => open(thread.id)}
-        onOpenHere={() => openHere(thread.id)}
+        onOpenInChats={() => openInChats(thread.id)}
+        onToggleCard={() => toggleCard(thread.id)}
         answerKind={asking}
         onAnswer={
           asking === null ? undefined : (anchor) => answer(thread.id, anchor)
         }
       />
     </div>
+  );
+}
+
+/** The place an open thread's card holds in the graph: its wire ends and an outline the card stands on. */
+function SlotNode({ data }: NodeProps<SlotFlowNode>): React.JSX.Element {
+  return (
+    <>
+      <WireEnds />
+      <div
+        aria-label={data.summary}
+        data-slot="graph-slot"
+        data-thread-id={data.thread.id}
+        className="size-full rounded-card border border-dashed border-border-strong"
+      />
+    </>
   );
 }
 
@@ -375,6 +436,7 @@ function LinkEdge({ id, data }: EdgeProps<LinkFlowEdge>): React.JSX.Element {
 const NODE_TYPES = {
   manager: ManagerNode,
   thread: ThreadNode,
+  slot: SlotNode,
   more: MoreNode,
 };
 const EDGE_TYPES = { contact: ContactEdge, link: LinkEdge };
@@ -410,19 +472,38 @@ function summaryOf(
   ].join(', ');
 }
 
-/** The threads in bands by attention, each band on lines of its own, then "+N more" alone. */
+/** The box an open thread's card takes in the graph at zoom 1. */
+export function cardBox(size: CardSize): { width: number; height: number } {
+  return { width: size.width, height: CARD_HEAD_HEIGHT + size.height };
+}
+
+/**
+ * The threads in bands by attention, each band on lines of its own, then
+ * "+N more" alone. A thread whose card is open stands in the band it had when
+ * the card opened, as big as its card.
+ */
 export function graphRows(
   shown: readonly GraphThread[],
   hidden: number,
   canvasWidth = 0,
+  open: ReadonlyMap<string, GraphOpenCard> = new Map(),
 ): GraphBox[][] {
-  const boxOf = (thread: GraphThread): GraphBox => ({
-    id: `thread:${thread.id}`,
-    width: THREAD_CARD_WIDTH,
-    height: threadCardHeight(thread.view),
-  });
+  const boxOf = (thread: GraphThread): GraphBox => {
+    const card = open.get(thread.id);
+    return {
+      id: `thread:${thread.id}`,
+      ...(card === undefined
+        ? {
+            width: THREAD_CARD_WIDTH,
+            height: threadCardHeight(thread.view),
+          }
+        : cardBox(card.size)),
+    };
+  };
+  const bandOf = (thread: GraphThread): ThreadAttention =>
+    open.get(thread.id)?.band.attention ?? thread.view.attention;
   const bands = ATTENTION_ORDER.map((attention) =>
-    shown.filter((thread) => thread.view.attention === attention).map(boxOf),
+    shown.filter((thread) => bandOf(thread) === attention).map(boxOf),
   );
   return [
     ...bandRows(
@@ -435,9 +516,24 @@ export function graphRows(
   ];
 }
 
-/** Which threads get a node: the first {@link MAX_THREAD_NODES} by attention. */
-export function shownThreads(threads: readonly GraphThread[]): GraphThread[] {
-  return orderByAttention(threads).slice(0, MAX_THREAD_NODES);
+/**
+ * Which threads get a node: the first {@link MAX_THREAD_NODES} by attention,
+ * and every thread open as a card wherever it falls. An open card's thread
+ * keeps the band and the order it had when it opened.
+ */
+export function shownThreads(
+  threads: readonly GraphThread[],
+  open: ReadonlyMap<string, Pick<GraphOpenCard, 'band'>> = new Map(),
+): GraphThread[] {
+  const keyed = threads.map((thread) => ({
+    id: thread.id,
+    createdAt: thread.createdAt,
+    view: open.get(thread.id)?.band ?? thread.view,
+    thread,
+  }));
+  return orderByAttention(keyed)
+    .filter((entry, index) => index < MAX_THREAD_NODES || open.has(entry.id))
+    .map((entry) => entry.thread);
 }
 
 /** How many threads stand in each attention band. */
@@ -616,8 +712,14 @@ function GraphCanvas({
   pulses,
   now,
   narrow,
-  onOpen,
-  onOpenHere,
+  active,
+  onOpenInChats,
+  onToggleCard,
+  openCards,
+  onCloseCard,
+  onResizeCard,
+  renderCardChat,
+  focus,
   projects,
   asking,
   onAnswer,
@@ -628,10 +730,19 @@ function GraphCanvas({
   const reduced = usePrefersReducedMotion();
   const [measure, size] = useElementSize();
   const fitted = useRef<string | null>(null);
+  const quietUntil = useRef(0);
+  const focused = useRef<number | null>(null);
+  const [flashing, setFlashing] = useState<string | null>(null);
+  const panZoomReady = useStore((state) => state.panZoom !== null);
 
-  const shown = shownThreads(threads);
+  const open = new Map(openCards.map((card) => [card.runId, card]));
+  const onCanvas: ReadonlyMap<string, GraphOpenCard> = narrow
+    ? new Map()
+    : open;
+  const shown = shownThreads(threads, open);
   const hidden = threads.length - shown.length;
-  const rows = graphRows(shown, hidden, narrow ? 0 : size.width);
+  const canvasWidth = narrow ? 0 : size.width;
+  const rows = graphRows(shown, hidden, canvasWidth, onCanvas);
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
@@ -640,13 +751,20 @@ function GraphCanvas({
   const drawn: GraphGeometry = narrow
     ? layoutColumn(root, rows.flat())
     : layoutRows(root, rows);
+  const unopened =
+    onCanvas.size === 0
+      ? drawn
+      : layoutRows(root, graphRows(shown, hidden, canvasWidth));
 
+  const moveQuietly = (duration: number): void => {
+    quietUntil.current = performance.now() + duration + QUIET_MOVE_SLACK_MS;
+  };
   const fit = useLatestCallback((animate: boolean) => {
-    void flow.setViewport(widthFit(drawn, size), {
-      duration: animate && !reduced ? FIT_MS : 0,
-    });
+    const duration = animate && !reduced ? FIT_MS : 0;
+    moveQuietly(duration);
+    void flow.setViewport(widthFit(unopened, size), { duration });
   }, []);
-  const fitKey = `${Math.round(drawn.width)}#${Math.round(size.width)}x${Math.round(size.height)}`;
+  const fitKey = `${Math.round(unopened.width)}#${Math.round(size.width)}x${Math.round(size.height)}`;
   useLayoutEffect(() => {
     if (narrow || size.width === 0 || fitted.current === fitKey) {
       return;
@@ -656,10 +774,52 @@ function GraphCanvas({
     fit(!first);
   }, [fitKey, narrow, size.width, fit]);
 
-  const open = useLatestCallback(onOpen, []);
-  const openHere = useLatestCallback(onOpenHere, []);
+  const focusSlot =
+    focus === null ? undefined : drawn.boxes.get(`thread:${focus.runId}`);
+  useEffect(() => {
+    if (
+      focus === null ||
+      focused.current === focus.seq ||
+      narrow ||
+      size.width === 0 ||
+      !panZoomReady ||
+      focusSlot === undefined
+    ) {
+      return;
+    }
+    focused.current = focus.seq;
+    const zoom = flow.getZoom();
+    const room = size.height - FIT_MARGIN * 2;
+    const y =
+      focusSlot.height <= room
+        ? focusSlot.y + focusSlot.height / 2 / zoom
+        : focusSlot.y + (size.height / 2 - FIT_MARGIN) / zoom;
+    const duration = reduced ? 0 : FIT_MS;
+    moveQuietly(duration);
+    void flow.setCenter(
+      focusSlot.x + Math.min(focusSlot.width, size.width) / 2 / zoom,
+      y,
+      { zoom, duration },
+    );
+    setFlashing(focus.runId);
+  }, [focus, focusSlot, narrow, size, panZoomReady, flow, reduced]);
+  useEffect(() => {
+    if (flashing === null) {
+      return;
+    }
+    const timer = setTimeout(() => setFlashing(null), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [flashing]);
+
+  const openInChats = useLatestCallback(onOpenInChats, []);
+  const toggleCard = useLatestCallback(onToggleCard, []);
   const answer = useLatestCallback(onAnswer, []);
-  const viewportMoved = useLatestCallback(() => onViewportMove?.(), []);
+  const viewportMoved = useLatestCallback(() => {
+    if (performance.now() < quietUntil.current) {
+      return;
+    }
+    onViewportMove?.();
+  }, []);
 
   const states = new Map(
     shown.map((thread) => {
@@ -714,23 +874,34 @@ function GraphCanvas({
   ];
   const contactEdges: ContactFlowEdge[] = [];
   const linkEdges: LinkFlowEdge[] = [];
+  const slots = new Map<string, PlacedBox>();
+  const canvasCards: CanvasCard[] = [];
   for (const thread of shown) {
     const id = `thread:${thread.id}`;
     const entry = states.get(thread.id)!;
-    nodes.push({
-      ...base(id),
-      type: 'thread',
-      data: {
-        thread,
-        asking: asking.get(thread.id) ?? null,
-        summary: summaryOf(
-          thread.view,
-          entry.state,
-          entry.contact?.lastAt ?? null,
-          now,
-        ),
-      },
-    });
+    const card = onCanvas.get(thread.id);
+    const data = {
+      thread,
+      asking: asking.get(thread.id) ?? null,
+      summary: summaryOf(
+        thread.view,
+        entry.state,
+        entry.contact?.lastAt ?? null,
+        now,
+      ),
+    };
+    if (card === undefined) {
+      nodes.push({ ...base(id), type: 'thread', data });
+    } else {
+      nodes.push({ ...base(id), type: 'slot', data });
+      slots.set(thread.id, drawn.boxes.get(id)!);
+      canvasCards.push({
+        runId: thread.id,
+        identity: threadCardIdentity(thread.view),
+        attention: thread.view.attention,
+        size: card.size,
+      });
+    }
     const wire = drawn.routes.get(id);
     if (wire !== undefined) {
       contactEdges.push({
@@ -770,6 +941,20 @@ function GraphCanvas({
         EDGE_PAINT_ORDER[a.data!.state] - EDGE_PAINT_ORDER[b.data!.state],
     ),
   ];
+  const overhang = canvasCards.reduce(
+    (most, card) => ({
+      x: Math.max(most.x, card.size.width),
+      y: Math.max(most.y, cardBox(card.size).height),
+    }),
+    { x: 0, y: 0 },
+  );
+  const stretch = 1 / MIN_ZOOM - 1;
+
+  const phoneCard = narrow ? openCards.at(-1) : undefined;
+  const phoneThread =
+    phoneCard === undefined
+      ? undefined
+      : threads.find((thread) => thread.id === phoneCard.runId);
 
   const label = `Manager and ${shown.length} ${shown.length === 1 ? 'thread' : 'threads'}`;
   const flowProps = {
@@ -793,30 +978,46 @@ function GraphCanvas({
   };
 
   return (
-    <GraphActionsContext.Provider value={{ open, openHere, answer }}>
+    <GraphActionsContext.Provider value={{ openInChats, toggleCard, answer }}>
       {narrow ? (
         <div
           role="group"
           aria-label={label}
           data-slot="command-center-graph"
           data-layout="column"
-          className={cn('overflow-y-auto', className)}>
-          <AttentionLegend threads={threads} />
-          <ProjectLegend projects={projects} className="px-4 pt-1.5" />
-          <div
-            className="cc-touch-scroll mx-auto"
-            style={{ width: drawn.width, height: drawn.height }}>
-            <ReactFlow
-              {...flowProps}
-              defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-              panOnDrag={false}
-              panOnScroll={false}
-              zoomOnScroll={false}
-              zoomOnPinch={false}
-              zoomOnDoubleClick={false}
-              preventScrolling={false}
-            />
+          className={cn('relative flex flex-col', className)}>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <AttentionLegend threads={threads} />
+            <ProjectLegend projects={projects} className="px-4 pt-1.5" />
+            <div
+              className="cc-touch-scroll mx-auto"
+              style={{ width: drawn.width, height: drawn.height }}>
+              <ReactFlow
+                {...flowProps}
+                defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+                panOnDrag={false}
+                panOnScroll={false}
+                zoomOnScroll={false}
+                zoomOnPinch={false}
+                zoomOnDoubleClick={false}
+                preventScrolling={false}
+              />
+            </div>
           </div>
+          {phoneCard === undefined || phoneThread === undefined ? null : (
+            <PhoneThreadCard
+              card={{
+                runId: phoneThread.id,
+                identity: threadCardIdentity(phoneThread.view),
+                attention: phoneThread.view.attention,
+                size: phoneCard.size,
+              }}
+              active={active}
+              onClose={() => onCloseCard(phoneThread.id)}
+              onOpenInChats={() => openInChats(phoneThread.id)}
+              chat={renderCardChat(phoneThread.id)}
+            />
+          )}
         </div>
       ) : (
         <div
@@ -832,12 +1033,15 @@ function GraphCanvas({
               <>
                 <ReactFlow
                   {...flowProps}
-                  defaultViewport={widthFit(drawn, size)}
+                  defaultViewport={widthFit(unopened, size)}
                   minZoom={MIN_ZOOM}
                   maxZoom={MAX_ZOOM}
                   translateExtent={[
                     [-PAN_ROOM, -PAN_ROOM],
-                    [drawn.width + PAN_ROOM, drawn.height + PAN_ROOM],
+                    [
+                      drawn.width + PAN_ROOM + overhang.x * stretch,
+                      drawn.height + PAN_ROOM + overhang.y * stretch,
+                    ],
                   ]}
                   panOnDrag
                   panOnScroll
@@ -856,6 +1060,16 @@ function GraphCanvas({
                       duration: reduced ? 0 : FIT_MS,
                     })
                   }
+                />
+                <ThreadCardLayer
+                  cards={canvasCards}
+                  slots={slots}
+                  pane={size}
+                  flashing={flashing}
+                  onClose={onCloseCard}
+                  onResize={onResizeCard}
+                  onOpenInChats={openInChats}
+                  renderChat={renderCardChat}
                 />
               </>
             )}

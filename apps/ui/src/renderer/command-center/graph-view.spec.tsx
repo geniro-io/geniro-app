@@ -30,6 +30,42 @@ import {
   widthFit,
 } from './graph-view';
 import { THREAD_CARD_WIDTH, threadCardHeight } from './thread-card';
+import { CARD_HEAD_HEIGHT, largestCard } from './thread-card-layer';
+
+const seams = vi.hoisted(() => ({
+  setViewport: [] as unknown[][],
+  moveStart: null as (() => void) | null,
+}));
+
+vi.mock('@xyflow/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xyflow/react')>();
+  const spied = new WeakMap<object, object>();
+  return {
+    ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      seams.moveStart =
+        props.onMoveStart === undefined
+          ? null
+          : () => props.onMoveStart?.(null, { x: 0, y: 0, zoom: 1 });
+      return <actual.ReactFlow {...props} />;
+    },
+    useReactFlow: () => {
+      const flow = actual.useReactFlow();
+      let wrapped = spied.get(flow);
+      if (wrapped === undefined) {
+        wrapped = {
+          ...flow,
+          setViewport: (...args: Parameters<typeof flow.setViewport>) => {
+            seams.setViewport.push(args);
+            return flow.setViewport(...args);
+          },
+        };
+        spied.set(flow, wrapped);
+      }
+      return wrapped;
+    },
+  };
+});
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -163,6 +199,8 @@ describe('GraphView', () => {
   });
 
   beforeEach(() => {
+    seams.setViewport.splice(0);
+    seams.moveStart = null;
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
     container = document.createElement('div');
@@ -195,9 +233,9 @@ describe('GraphView', () => {
           openCards={[]}
           onCloseCard={() => undefined}
           onResizeCard={() => undefined}
+          onFocused={() => undefined}
           renderCardChat={() => null}
           focus={null}
-          onFocused={() => undefined}
           projects={[]}
           asking={new Map()}
           onAnswer={() => undefined}
@@ -617,6 +655,99 @@ describe('GraphView', () => {
     expect(
       new Set(renderCardChat.mock.calls.map(([threadId]) => threadId)),
     ).toEqual(new Set(['thread-2']));
+  });
+
+  it('does not refit the graph when a card opens, and refits once the graph grows wider', async () => {
+    await draw({ threads: graphThreadsOf(3) });
+    seams.setViewport.splice(0);
+
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+    });
+    expect(seams.setViewport).toEqual([]);
+
+    await draw({
+      threads: graphThreadsOf(12),
+      openCards: [openCard('thread-2')],
+    });
+    expect(seams.setViewport.length).toBeGreaterThan(0);
+  });
+
+  it('hands a focus over at once on the narrow column, with no pan to wait for', async () => {
+    const onFocused = vi.fn();
+
+    await draw({
+      threads: graphThreadsOf(4),
+      narrow: true,
+      focus: { runId: 'thread-3', seq: 7 },
+      onFocused,
+    });
+
+    expect(onFocused).toHaveBeenCalledWith(7);
+    expect(onFocused).toHaveBeenCalledTimes(1);
+    expect(seams.setViewport).toEqual([]);
+  });
+
+  it('hands a focus over after its pan, and the pan is no move the viewer made', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    const onViewportMove = vi.fn();
+    const onFocused = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onViewportMove });
+
+    clock.mockReturnValue(5_000);
+    await draw({
+      threads: graphThreadsOf(3),
+      onViewportMove,
+      focus: { runId: 'thread-2', seq: 1 },
+      onFocused,
+    });
+    expect(onFocused).toHaveBeenCalledWith(1);
+
+    act(() => seams.moveStart?.());
+    expect(onViewportMove).not.toHaveBeenCalled();
+
+    clock.mockReturnValue(6_000);
+    act(() => seams.moveStart?.());
+    expect(onViewportMove).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws a stored card no bigger than the pane, its slot and its card agreeing on that size', async () => {
+    const largest = largestCard({ width: 1200, height: 700 });
+    expect(largest.width).toBe(1200 - 32);
+
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2', { width: 2000, height: 2000 })],
+    });
+
+    const node = container
+      .querySelector<HTMLElement>(
+        '[data-slot="graph-slot"][data-thread-id="thread-2"]',
+      )!
+      .closest<HTMLElement>('.react-flow__node')!;
+    expect(node.style.width).toBe(`${largest.width}px`);
+    expect(node.style.height).toBe(`${CARD_HEAD_HEIGHT + largest.height}px`);
+    const card = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="thread-2"]',
+    )!;
+    expect(card.style.width).toBe(`${largest.width}px`);
+    expect(card.style.height).toBe(`${CARD_HEAD_HEIGHT + largest.height}px`);
+  });
+
+  it('flashes the open card the graph pans to', async () => {
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+      focus: { runId: 'thread-2', seq: 1 },
+      onFocused: () => undefined,
+    });
+
+    expect(
+      container.querySelector(
+        '[data-slot="thread-canvas-card"][data-run-id="thread-2"] [data-slot="thread-canvas-card-flash"]',
+      ),
+    ).not.toBeNull();
   });
 });
 

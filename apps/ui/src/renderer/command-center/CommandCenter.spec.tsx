@@ -331,3 +331,88 @@ describe('CommandCenter — showing a thread on the canvas', () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 });
+
+describe('CommandCenter — the phone sidebar and the focus', () => {
+  function stubMatchMedia(matches: boolean): void {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }),
+    });
+  }
+
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+
+  it.each([
+    ['command-center-needs-toggle'],
+    ['command-center-timeline-toggle'],
+  ])(
+    'closes an open sidebar (%s) when a thread is shown on a phone',
+    async (toggle) => {
+      stubMatchMedia(true);
+      await renderPage();
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>(`[data-slot="${toggle}"]`)!
+          .click();
+      });
+      expect(
+        container.querySelector('[data-slot="command-center-sidebar"]'),
+      ).not.toBeNull();
+
+      act(() => {
+        probes.dock!.onOpenThread('run-b');
+      });
+
+      expect(
+        container.querySelector('[data-slot="command-center-sidebar"]'),
+      ).toBeNull();
+    },
+  );
+
+  it('keeps an open sidebar when a thread is shown on a wide screen', async () => {
+    stubMatchMedia(false);
+    await renderPage();
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="command-center-needs-toggle"]',
+        )!
+        .click();
+    });
+
+    act(() => {
+      probes.dock!.onOpenThread('run-b');
+    });
+
+    expect(
+      container.querySelector('[data-slot="command-center-sidebar"]'),
+    ).not.toBeNull();
+  });
+
+  it('clears the focus once the graph has handled it, and a stale seq leaves it be', async () => {
+    await renderPage();
+    act(() => {
+      probes.dock!.onOpenThread('run-b');
+    });
+    const focus = probes.graph!.focus!;
+    expect(focus.runId).toBe('run-b');
+
+    act(() => {
+      probes.graph!.onFocused(focus.seq - 1);
+    });
+    expect(probes.graph!.focus).toEqual(focus);
+
+    act(() => {
+      probes.graph!.onFocused(focus.seq);
+    });
+    expect(probes.graph!.focus).toBeNull();
+  });
+});

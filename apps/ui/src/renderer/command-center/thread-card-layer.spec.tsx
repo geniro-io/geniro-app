@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { ReactFlowProvider } from '@xyflow/react';
+import { ReactFlowProvider, useStoreApi } from '@xyflow/react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -136,14 +136,34 @@ function layerProps(
   };
 }
 
+let flowStore: ReturnType<typeof useStoreApi> | null = null;
+
+function StoreProbe(): null {
+  flowStore = useStoreApi();
+  return null;
+}
+
 function drawLayer(over: Partial<ThreadCardLayerProps> = {}): void {
   act(() => {
     root.render(
       <ReactFlowProvider>
+        <StoreProbe />
         <ThreadCardLayer {...layerProps(over)} />
       </ReactFlowProvider>,
     );
   });
+}
+
+function placedOf(runId: string): HTMLElement {
+  return container.querySelector<HTMLElement>(
+    `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
+  )!.parentElement!;
+}
+
+function flashOf(runId: string): Element | null {
+  return container.querySelector(
+    `[data-slot="thread-canvas-card"][data-run-id="${runId}"] [data-slot="thread-canvas-card-flash"]`,
+  );
 }
 
 function pointer(type: string, clientX: number, clientY: number): MouseEvent {
@@ -309,5 +329,95 @@ describe('PhoneThreadCard — the open thread on a phone', () => {
     expect(
       container.querySelector('[data-slot="card-chat"]')!.textContent,
     ).toBe('chat of a');
+  });
+});
+
+describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
+  it('places each card on its slot at the flow’s zoom and pan, and moves it with each pan or zoom', () => {
+    drawLayer({ slots: new Map([['a', box(100, 50)]]) });
+    const wrapper = placedOf('a');
+
+    act(() => {
+      flowStore!.setState({ transform: [20, 10, 2] });
+    });
+    expect(wrapper.style.left).toBe('220px');
+    expect(wrapper.style.top).toBe('110px');
+
+    act(() => {
+      flowStore!.setState({ transform: [30, 5, 0.5] });
+    });
+    expect(wrapper.style.left).toBe('80px');
+    expect(wrapper.style.top).toBe('30px');
+  });
+
+  it('keeps the card’s own width and height at every zoom', () => {
+    drawLayer({ slots: new Map([['a', box(0, 0)]]) });
+    const section = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="a"]',
+    )!;
+
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 2] });
+    });
+    expect(section.style.width).toBe('400px');
+    expect(section.style.height).toBe('366px');
+
+    act(() => {
+      flowStore!.setState({ transform: [0, 0, 0.5] });
+    });
+    expect(section.style.width).toBe('400px');
+    expect(section.style.height).toBe('366px');
+  });
+
+  it('does not render the chat again for a pan or a zoom', () => {
+    let renders = 0;
+    function ChatProbe(): React.JSX.Element {
+      renders += 1;
+      return <span data-slot="card-chat" />;
+    }
+    drawLayer({ renderChat: () => <ChatProbe /> });
+    const mounted = renders;
+
+    act(() => {
+      flowStore!.setState({ transform: [30, 5, 0.5] });
+    });
+    act(() => {
+      flowStore!.setState({ transform: [-10, 0, 1.5] });
+    });
+    expect(renders).toBe(mounted);
+
+    drawLayer({
+      renderChat: () => <ChatProbe />,
+      pane: { width: 1001, height: 800 },
+    });
+    expect(renders).toBeGreaterThan(mounted);
+  });
+});
+
+describe('ThreadCardLayer — the flash', () => {
+  it('flashes only the card it is given, and replays it for a new seq', () => {
+    drawLayer({
+      cards: [card('a', 400, 300), card('b', 400, 300)],
+      slots: new Map([
+        ['a', box(0, 0)],
+        ['b', box(500, 0)],
+      ]),
+      flashing: { runId: 'a', seq: 1 },
+    });
+    const first = flashOf('a');
+
+    expect(first).not.toBeNull();
+    expect(flashOf('b')).toBeNull();
+
+    drawLayer({
+      cards: [card('a', 400, 300), card('b', 400, 300)],
+      slots: new Map([
+        ['a', box(0, 0)],
+        ['b', box(500, 0)],
+      ]),
+      flashing: { runId: 'a', seq: 2 },
+    });
+    expect(flashOf('a')).not.toBeNull();
+    expect(flashOf('a')).not.toBe(first);
   });
 });

@@ -1,7 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { fn } from 'storybook/test';
 
+import { ThreadArchiveContext } from '../components/thread-archive';
 import { TIMELINE_FIXTURE_NOW, timelineFixtures } from './timeline-fixtures';
 import { TimelinePanel } from './timeline-panel';
+
+const ASKED_ITEM = 'item-billing-export';
+const archiveRelease = fn();
 
 const meta = {
   title: 'Command center/Timeline',
@@ -12,7 +17,9 @@ const meta = {
     error: null,
     hasMore: true,
     onLoadOlder: () => {},
-    onOpenThread: () => {},
+    onShowThread: fn(),
+    onReply: fn(),
+    openItemIds: new Set<string>(),
     now: TIMELINE_FIXTURE_NOW,
   },
   decorators: [
@@ -39,6 +46,25 @@ export const Narrow: Story = {
       <div className="h-[640px] w-[320px] overflow-hidden rounded-card border border-border">
         {story()}
       </div>
+    ),
+  ],
+};
+
+export const ReplyAndArchive: Story = {
+  args: {
+    events: timelineFixtures().map((event) =>
+      event.kind === 'question'
+        ? { ...event, id: `question:${ASKED_ITEM}` }
+        : event,
+    ),
+    openItemIds: new Set([ASKED_ITEM]),
+  },
+  decorators: [
+    (story) => (
+      <ThreadArchiveContext.Provider
+        value={(runId) => (runId === 'run-release' ? archiveRelease : null)}>
+        {story()}
+      </ThreadArchiveContext.Provider>
     ),
   ],
 };

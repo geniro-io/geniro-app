@@ -573,3 +573,207 @@ describe('CommandCenter — archiving a finished thread', () => {
     expect(board.reload.mock.calls.length).toBe(reloads);
   });
 });
+
+function openRequestOf(runId: string, itemId: string, text: string): unknown {
+  return {
+    runId,
+    title: `Thread ${runId}`,
+    isTeam: false,
+    requestId: `req-${itemId}`,
+    item: {
+      id: itemId,
+      runId,
+      kind: 'approval_request',
+      payload: {
+        id: `req-${itemId}`,
+        toolName: 'AskUserQuestion',
+        questions: [
+          {
+            question: text,
+            options: [{ label: 'Retry' }, { label: 'Park' }],
+          },
+        ],
+      },
+    },
+  };
+}
+
+function questionEventOf(
+  runId: string,
+  itemId: string,
+  threadTitle: string,
+): unknown {
+  return {
+    id: `question:${itemId}`,
+    kind: 'question',
+    at: NOW_ISO,
+    threadRunId: runId,
+    threadTitle,
+    text: 'How should the export retry?',
+    detail: null,
+    awaitingReply: false,
+  };
+}
+
+function timelineWith(events: unknown[]): void {
+  fakes.timeline = {
+    events,
+    loading: false,
+    error: null,
+    hasMore: false,
+    loadOlder: vi.fn(),
+  };
+}
+
+function clickOn(el: Element | null): void {
+  act(() => {
+    (el as HTMLElement).click();
+  });
+}
+
+function timelineToggle(): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>(
+    '[data-slot="command-center-timeline-toggle"]',
+  )!;
+}
+
+function replyButton(): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>(
+    '[data-slot="timeline-event-reply"]',
+  );
+}
+
+function answerPopover(): HTMLElement | null {
+  return container.querySelector<HTMLElement>('[data-slot="answer-popover"]');
+}
+
+describe('CommandCenter — answering a timeline question in the chat view', () => {
+  it('answers a question from the timeline in a popover, titled with its thread, while the view is chat', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-q', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
+    await renderPage();
+
+    clickOn(timelineToggle());
+    expect(probes.graph).toBeNull();
+    clickOn(replyButton());
+
+    expect(answerPopover()).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="answer-popover-title"]')!
+        .textContent,
+    ).toBe('Billing export');
+  });
+
+  it('offers no Reply on a question the thread no longer waits on', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = { requests: [], error: null, answer: vi.fn() };
+    timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
+    await renderPage();
+
+    clickOn(timelineToggle());
+
+    expect(replyButton()).toBeNull();
+  });
+
+  it('shuts the popover when its Reply is pressed again', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-q', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
+    await renderPage();
+    clickOn(timelineToggle());
+    const reply = replyButton();
+
+    clickOn(reply);
+    expect(answerPopover()).not.toBeNull();
+    clickOn(reply);
+
+    expect(answerPopover()).toBeNull();
+  });
+
+  it('shuts the popover when the timeline sidebar is closed', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-q', 'item-7', 'How should the export retry?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
+    await renderPage();
+    clickOn(timelineToggle());
+    clickOn(replyButton());
+    expect(answerPopover()).not.toBeNull();
+
+    clickOn(container.querySelector('[aria-label="Close the sidebar"]'));
+
+    expect(answerPopover()).toBeNull();
+  });
+
+  it('titles the popover with the thread’s name on the board when the board has the thread', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    fakes.requests = {
+      requests: [
+        openRequestOf('run-a', 'item-9', 'Which invoices should we export?'),
+      ],
+      error: null,
+      answer: vi.fn(),
+    };
+    timelineWith([questionEventOf('run-a', 'item-9', 'Old billing name')]);
+    await renderPage();
+    clickOn(timelineToggle());
+
+    clickOn(replyButton());
+
+    expect(
+      container.querySelector('[data-slot="answer-popover-title"]')!
+        .textContent,
+    ).toBe('Thread run-a');
+  });
+});
+
+describe('CommandCenter — showing a timeline row on the canvas', () => {
+  it('shows a timeline row’s thread on the canvas from the chat view, switching to Both, and never goes to Chats', async () => {
+    localStorage.setItem('commandCenter.view', 'chat');
+    timelineWith([
+      {
+        id: 'pull_request:418',
+        kind: 'pull_request',
+        at: NOW_ISO,
+        threadRunId: 'run-b',
+        threadTitle: 'Thread run-b',
+        text: null,
+        detail: '418',
+        awaitingReply: false,
+      },
+    ]);
+    await renderPage();
+    clickOn(timelineToggle());
+
+    clickOn(
+      container.querySelector(
+        'button[aria-label="Show Thread run-b on the canvas"]',
+      ),
+    );
+    await settle();
+
+    expect(localStorage.getItem('commandCenter.view')).toBe('both');
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-b',
+    ]);
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});

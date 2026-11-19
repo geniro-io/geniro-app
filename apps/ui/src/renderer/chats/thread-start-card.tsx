@@ -23,8 +23,8 @@ import {
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { RunSettledContext } from './live-row';
-import { ThreadOpenContext } from './thread-message-card';
 import { readThreadStart, type ThreadStart } from './thread-start-payload';
+import { ThreadOpenContext } from './thread-title';
 import type { ToolPair } from './transcript-groups';
 import { type LiveTask, useLiveTask } from './use-live-task';
 

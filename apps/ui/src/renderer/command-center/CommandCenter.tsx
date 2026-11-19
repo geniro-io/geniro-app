@@ -38,16 +38,17 @@ import { useProjects } from '../projects/use-projects';
 import { useRunConfigSources } from '../projects/use-run-config-sources';
 import { useSharedCapabilities } from '../use-capabilities';
 import { AnswerPopover } from './answer-popover';
-import { type TeamFace, teamFacesOf, threadCardViewOf } from './card-view';
+import {
+  type TeamFace,
+  teamFacesOf,
+  threadCardViewOf,
+  threadIdentitiesOf,
+} from './card-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
 import { NeedsYouPanel } from './needs-you-panel';
 import { projectColorsOf } from './project-colors';
-import {
-  ThreadWindowsLayer,
-  type ThreadWindowSubject,
-  useThreadWindows,
-} from './thread-windows';
+import { ThreadWindowsLayer, useThreadWindows } from './thread-windows';
 import { TimelinePanel } from './timeline-panel';
 import { useCommandCenterBoard } from './use-command-center-board';
 import { useCommandCenterTimeline } from './use-command-center-timeline';
@@ -301,11 +302,13 @@ export function CommandCenter({
       ),
     [board.cards, projectFilter],
   );
-  const projectColors = projectColorsOf(
-    (board.cards ?? []).map((card) => card.run.project),
+  const projectColors = useMemo(
+    () => projectColorsOf((board.cards ?? []).map((card) => card.run.project)),
+    [board.cards],
   );
-  const colorOfProject = new Map(
-    projectColors.map((project) => [project.id, project.color]),
+  const colorOfProject = useMemo(
+    () => new Map(projectColors.map((project) => [project.id, project.color])),
+    [projectColors],
   );
   const shownProjects = projectColors.filter((project) =>
     shown.some((card) => card.run.project?.id === project.id),
@@ -319,20 +322,15 @@ export function CommandCenter({
       now,
       colorOfProject,
     );
-  const windowSubjects = new Map(
-    (board.cards ?? []).map((card): [string, ThreadWindowSubject] => [
-      card.run.id,
-      {
-        title: card.run.title ?? 'Untitled thread',
-        project:
-          card.run.project == null
-            ? null
-            : {
-                name: card.run.project.name,
-                color: colorOfProject.get(card.run.project.id) ?? null,
-              },
-      },
-    ]),
+  const threadIdentities = useMemo(
+    () =>
+      threadIdentitiesOf(
+        board.cards ?? [],
+        identities,
+        teamFaces,
+        colorOfProject,
+      ),
+    [board.cards, identities, teamFaces, colorOfProject],
   );
 
   const workingThreads = (board.cards ?? []).flatMap((card) =>
@@ -574,6 +572,7 @@ export function CommandCenter({
                 hidden={!chatShown}
                 active={active}
                 workingThreads={workingThreads}
+                threadIdentities={threadIdentities}
                 onOpenThread={onOpenThread}
                 onTurnSettled={board.reload}
                 onDiscarded={board.reload}
@@ -585,7 +584,7 @@ export function CommandCenter({
               windows={windows}
               bounds={windowArea}
               narrow={narrow}
-              subjects={windowSubjects}
+              subjects={threadIdentities}
               onOpenThread={onOpenThread}
               apis={apis}
               handle={handle}
@@ -596,9 +595,9 @@ export function CommandCenter({
           {graphShown && answering !== null ? (
             <AnswerPopover
               anchor={answering.anchor}
-              title={windowSubjects.get(answering.runId)?.title ?? 'Thread'}
+              title={threadIdentities.get(answering.runId)?.title ?? 'Thread'}
               projectColor={
-                windowSubjects.get(answering.runId)?.project?.color ?? null
+                threadIdentities.get(answering.runId)?.projectColor ?? null
               }
               requests={answeringRequests}
               error={openRequests.error}

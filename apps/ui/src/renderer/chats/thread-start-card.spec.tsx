@@ -11,8 +11,8 @@ import {
 import { aTask } from '../tasks/__tests__/fixtures';
 import { EntryCard } from './entry-card';
 import { RunSettledContext } from './live-row';
-import { ThreadOpenContext } from './thread-message-card';
 import { ThreadStartCard } from './thread-start-card';
+import { ThreadOpenContext } from './thread-title';
 import {
   groupTranscript,
   isCardEntry,

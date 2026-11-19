@@ -107,6 +107,19 @@ afterEach(() => {
   container.remove();
 });
 
+const IDENTITIES = new Map([
+  [
+    'run-a',
+    {
+      title: 'Fix the login redirect',
+      project: 'Web',
+      projectColor: 'teal' as const,
+      agentLabel: 'claude',
+      isTeam: false,
+    },
+  ],
+]);
+
 async function paint(): Promise<void> {
   await act(async () => {
     root.render(
@@ -116,6 +129,7 @@ async function paint(): Promise<void> {
         client={CLIENT}
         choice={CHOICE}
         hidden={false}
+        threadIdentities={IDENTITIES}
         active
         workingThreads={[]}
         onOpenThread={vi.fn()}
@@ -153,6 +167,12 @@ async function click(button: HTMLButtonElement): Promise<void> {
 }
 
 describe('ManagerDock', () => {
+  it('hands the board threads’ identities to the manager’s transcript', async () => {
+    await paint();
+
+    expect(drawn.hosted?.threadIdentities).toBe(IDENTITIES);
+  });
+
   it('starts a new manager chat from its header, after the confirmation, without re-opening the old one', async () => {
     await paint();
     expect(openCommandCenterChat).toHaveBeenCalledTimes(1);

@@ -62,7 +62,11 @@ import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
 import { TeamNoteOpenContext } from './team-note-row';
-import { ThreadOpenContext } from './thread-message-card';
+import {
+  type ThreadIdentity,
+  ThreadIdentityContext,
+  ThreadOpenContext,
+} from './thread-title';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
@@ -97,6 +101,8 @@ export interface TranscriptValues {
   openTeamNote: ((seq: number) => void) | null;
   /** Open another thread by its run id, or null where none opens — see `ThreadOpenContext`. */
   openThread: ((runId: string) => void) | null;
+  /** The threads the view can name as the canvas does — see `ThreadIdentityContext`. */
+  threadIdentities?: ReadonlyMap<string, ThreadIdentity>;
   /** Open Settings → Memory on one entry — see `MemoryOpenContext`. */
   openMemory?: ((handle: string) => void) | null;
   /** Open the Knowledge page on one document — see `KnowledgeOpenContext`. */
@@ -325,6 +331,8 @@ export function ChatProviders({
   );
 }
 
+const NO_THREAD_IDENTITIES: ReadonlyMap<string, ThreadIdentity> = new Map();
+
 /** Provides the {@link TranscriptValues} — see there for who passes them where. */
 export function TranscriptContexts({
   collapseToolSteps,
@@ -337,6 +345,7 @@ export function TranscriptContexts({
   runStages,
   openTeamNote,
   openThread,
+  threadIdentities = NO_THREAD_IDENTITIES,
   openMemory = null,
   openKnowledge = null,
   children,
@@ -355,7 +364,10 @@ export function TranscriptContexts({
                         value={openSubagentDetail}>
                         <KnowledgeOpenContext.Provider value={openKnowledge}>
                           <ThreadOpenContext.Provider value={openThread}>
-                            {children}
+                            <ThreadIdentityContext.Provider
+                              value={threadIdentities}>
+                              {children}
+                            </ThreadIdentityContext.Provider>
                           </ThreadOpenContext.Provider>
                         </KnowledgeOpenContext.Provider>
                       </SubagentDetailContext.Provider>

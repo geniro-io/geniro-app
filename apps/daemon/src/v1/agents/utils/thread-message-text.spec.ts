@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { ThreadMessageRowEntry } from '../chat.types';
 import {
+  THREAD_MESSAGE_SENT_TEXT_MAX,
   threadMessageExcerpt,
   threadMessageNotDeliveredNote,
+  threadMessageSentRow,
   threadMessagesPrompt,
   threadMessagesRow,
   threadWakeRow,
@@ -207,5 +209,46 @@ describe('threadMessageExcerpt', () => {
     expect([...excerpt]).toHaveLength(200);
     expect(excerpt.endsWith('…')).toBe(true);
     expect(excerpt).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+});
+
+describe('threadMessageSentRow', () => {
+  const sent = {
+    toRunId: 'run-1',
+    title: 'Target',
+    outcome: 'woken',
+    reason: null,
+  } as const;
+
+  it('carries the message text', () => {
+    expect(
+      threadMessageSentRow({ ...sent, text: 'hello' }, null).threadMessageSent,
+    ).toEqual({ ...sent, text: 'hello' });
+  });
+
+  it('caps a longer text to the maximum, ending in an ellipsis', () => {
+    const text = threadMessageSentRow(
+      { ...sent, text: 'x'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX + 50) },
+      null,
+    ).threadMessageSent!.text!;
+
+    expect(text).toHaveLength(THREAD_MESSAGE_SENT_TEXT_MAX);
+    expect(text.endsWith('…')).toBe(true);
+  });
+
+  it('never cuts an emoji in half at the cap', () => {
+    const text = threadMessageSentRow(
+      {
+        ...sent,
+        text: `${'x'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX - 2)}${'😀'.repeat(5)}`,
+      },
+      null,
+    ).threadMessageSent!.text!;
+
+    expect(text).toBe(`${'x'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX - 2)}😀…`);
+  });
+
+  it('has no text field when the caller gave none', () => {
+    expect(threadMessageSentRow(sent, null).threadMessageSent).toEqual(sent);
   });
 });

@@ -10844,6 +10844,7 @@ export function Chats({
                           ? (hosted?.onOpenThread ?? null)
                           : handleActivateRun
                       }
+                      threadIdentities={hosted?.threadIdentities}
                       openMemory={onOpenMemory ?? null}
                       openKnowledge={onOpenKnowledge ? openKnowledge : null}
                       collapseToolSteps={collapseToolSteps}

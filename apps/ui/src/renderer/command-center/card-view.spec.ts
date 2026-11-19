@@ -7,7 +7,9 @@ import {
   orderByAttention,
   statusTextOf,
   threadCardViewOf,
+  threadIdentitiesOf,
 } from './card-view';
+import { projectColorsOf } from './project-colors';
 
 const NOW = Date.parse('2026-11-17T12:00:00Z');
 const DAY = 24 * 60 * 60_000;
@@ -262,5 +264,78 @@ describe('threadCardViewOf — project colour', () => {
         colors,
       ).projectColor,
     ).toBeNull();
+  });
+});
+
+describe('threadIdentitiesOf', () => {
+  const boardCard = (
+    id: string,
+    over: {
+      project?: { id: string; name: string } | null;
+      teamId?: string | null;
+      agentKind?: string | null;
+      title?: string | null;
+    },
+  ) =>
+    ({
+      run: {
+        id,
+        title: over.title === undefined ? `Thread ${id}` : over.title,
+        status: 'completed',
+        awaiting: null,
+        lastActivityAt: new Date(NOW - HOUR).toISOString(),
+        createdAt: new Date(NOW - DAY).toISOString(),
+        project: over.project ?? null,
+        teamId: over.teamId ?? null,
+        agentKind: over.agentKind ?? null,
+        pullRequests: [],
+      },
+      column: 'idle',
+      contact: { lastAt: null, awaitingReply: false },
+      task: null,
+      note: null,
+      activity: null,
+    }) as unknown as Parameters<typeof threadCardViewOf>[0];
+
+  it('names each board thread with the project colour, agent and team the canvas card shows', () => {
+    const cards = [
+      boardCard('run-web', {
+        project: { id: 'p-web', name: 'Web' },
+        agentKind: 'claude',
+      }),
+      boardCard('run-api', {
+        project: { id: 'p-api', name: 'Api' },
+        teamId: 'dev-team',
+      }),
+      boardCard('run-loose', { title: null }),
+    ];
+    const teams = new Map([
+      ['dev-team', { name: 'Dev Team', people: [], total: 3 }],
+    ]);
+    const canvasColors = new Map(
+      projectColorsOf(cards.map((card) => card.run.project)).map((p) => [
+        p.id,
+        p.color,
+      ]),
+    );
+
+    const identities = threadIdentitiesOf(cards, [], teams, canvasColors);
+
+    for (const card of cards) {
+      const view = threadCardViewOf(card, null, [], teams, NOW, canvasColors);
+      expect(identities.get(card.run.id)).toEqual({
+        title: view.title,
+        project: view.project,
+        projectColor: view.projectColor,
+        agentLabel: view.agentLabel,
+        isTeam: view.isTeam,
+      });
+    }
+    expect(identities.get('run-api')?.agentLabel).toBe('Dev Team');
+    expect(identities.get('run-api')?.isTeam).toBe(true);
+    expect(identities.get('run-loose')?.title).toBe('Untitled thread');
+    expect(identities.get('run-web')?.projectColor).toBe(
+      canvasColors.get('p-web'),
+    );
   });
 });

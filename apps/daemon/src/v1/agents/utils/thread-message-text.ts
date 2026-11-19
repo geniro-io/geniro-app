@@ -8,6 +8,8 @@ import { randomFenceTag } from './fence-tag';
 
 /** What a thread's Remove and the sender's limits measure against. */
 export const THREAD_MESSAGE_MAX_CHARS = 16_000;
+/** The longest message text a sender's sent row keeps. */
+export const THREAD_MESSAGE_SENT_TEXT_MAX = 4000;
 /** Text one turn carries; what is past it waits for the next turn. */
 export const THREAD_MESSAGES_TURN_MAX_CHARS = 32_000;
 export const THREAD_MESSAGES_PER_MINUTE = 5;
@@ -143,6 +145,13 @@ function sentSentence(sent: ThreadMessageSentRow): string {
   return `Message to ${to} ${sent.reason === null ? 'is waiting' : threadMessageReasonWords(sent.reason)}.`;
 }
 
+function cappedSentText(text: string): string {
+  const chars = [...text];
+  return chars.length > THREAD_MESSAGE_SENT_TEXT_MAX
+    ? `${chars.slice(0, THREAD_MESSAGE_SENT_TEXT_MAX - 1).join('')}…`
+    : text;
+}
+
 /** The row the sender's transcript keeps of a send. */
 export function threadMessageSentRow(
   sent: ThreadMessageSentRow,
@@ -151,7 +160,10 @@ export function threadMessageSentRow(
   return {
     severity: 'info',
     message: sentSentence(sent),
-    threadMessageSent: sent,
+    threadMessageSent:
+      sent.text === undefined
+        ? sent
+        : { ...sent, text: cappedSentText(sent.text) },
     woke: false,
     ...(conversationId === null ? {} : { conversationId }),
   };

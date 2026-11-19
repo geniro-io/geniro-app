@@ -382,6 +382,7 @@ describe('ThreadDeliveryService: an idle chat', () => {
       title: 'Target',
       outcome: 'woken',
       reason: null,
+      text: 'hello',
     });
   });
 

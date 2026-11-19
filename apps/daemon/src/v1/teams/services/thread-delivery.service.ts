@@ -284,6 +284,7 @@ export class ThreadDeliveryService implements OnModuleInit {
           title,
           outcome: routed.outcome,
           reason: routed.reason,
+          text: draft.text,
         },
         draft.from.conversationId,
       ),

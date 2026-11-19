@@ -70,6 +70,7 @@ export function joinHostWakes(wakes: readonly HostWake[]): {
 } {
   const threadWake = wakes.find((wake) => wake.row.threadWake !== undefined)
     ?.row.threadWake;
+  const threadDone = wakes.flatMap((wake) => wake.row.threadDone ?? []);
   return {
     prompt: wakes.map((wake) => wake.prompt).join('\n\n'),
     row: {
@@ -78,6 +79,7 @@ export function joinHostWakes(wakes: readonly HostWake[]): {
       shares: wakes.flatMap((wake) => wake.row.shares ?? []),
       woke: true,
       ...(threadWake === undefined ? {} : { threadWake }),
+      ...(threadDone.length === 0 ? {} : { threadDone }),
     },
   };
 }

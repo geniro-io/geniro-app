@@ -4628,7 +4628,11 @@ describe('withLiveText', () => {
           },
           'orch',
         ),
-        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item(
+          'status',
+          { status: 'running', callId: 'call-1', offTurn: true },
+          'poet',
+        ),
         item(
           'message',
           { text: 'Reviewers are back.', callId: 'call-1' },
@@ -4688,6 +4692,95 @@ describe('withLiveText', () => {
 
   it('does not call a settled callee working once its carried-on stretch ended', () => {
     expect(calleeBlock(carriedOnCall(true)).calleeWorking).toBe(false);
+  });
+
+  /**
+   * A call HELD open by its callee's monitor: the callee's turn ended with no
+   * status row, the monitor's output woke the kept process off-turn, and the
+   * executor bracketed that stretch with an `offTurn` running row and the
+   * status that restores it. Then the monitor's end woke the turn that writes
+   * the answer — no `running` row of its own, since the call's first one is
+   * still unanswered. `settled` adds that answer and the call's real ending
+   * row, ahead of the `call_result` the broker writes after it.
+   */
+  const heldCallAfterOffTurnStretch = (settled = false): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Run the e2e.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'Started the monitor.', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'status',
+          { status: 'running', callId: 'call-1', offTurn: true },
+          'poet',
+        ),
+        item('status', { status: 'completed', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          {
+            text: 'All runs are back, collecting the report.',
+            callId: 'call-1',
+          },
+          'poet',
+        ),
+        item(
+          'system',
+          { severity: 'info', message: 'Told this agent that QA finished.' },
+          'orch',
+        ),
+        ...(settled
+          ? [
+              item(
+                'message',
+                { text: 'Seven specs fixed and pushed.', callId: 'call-1' },
+                'poet',
+              ),
+              item('status', { status: 'completed', callId: 'call-1' }, 'poet'),
+            ]
+          : []),
+      ]),
+    );
+
+  it('keeps a call open through an off-turn stretch that ended before the call settled', () => {
+    const block = calleeBlock(heldCallAfterOffTurnStretch());
+
+    expect(block.status).toBe('running');
+    expect(block.result).toBeNull();
+  });
+
+  it('settles a held call on its real ending after that stretch, with the answer as its result', () => {
+    const block = calleeBlock(heldCallAfterOffTurnStretch(true));
+
+    expect(block.status).toBe('completed');
+    expect(block.result).toBe('Seven specs fixed and pushed.');
+    expect(block.calleeWorking).toBe(false);
+  });
+
+  it('files a held call’s streaming answer inside its card, never as a card of its own at the tail', () => {
+    const entries = withLiveText(
+      heldCallAfterOffTurnStretch(),
+      new Map([['poet::call-1', live({ text: 'Seven specs fixed and' })]]),
+      new Set(['poet']),
+    );
+
+    expect(
+      entries.some(
+        (entry) => entry.type === 'turn-block' && entry.memberId === 'poet',
+      ),
+      'the streaming answer opened a turn block of its own',
+    ).toBe(false);
+    const tail = calleeBlock(entries).entries.at(-1);
+    expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
+      text: 'Seven specs fixed and',
+    });
   });
 
   it('does NOT double up for a callee whose live key carries its call id', () => {

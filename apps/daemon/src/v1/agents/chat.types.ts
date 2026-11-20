@@ -1360,11 +1360,7 @@ export interface ThreadTimeline {
 /** What kind of thread an analysis reads — it decides what may be recommended. */
 export type AnalysedThreadKind = 'team' | 'chat';
 
-/**
- * How many of its team's newest runs a builder chat's turn reads — the
- * "Analyze & improve" dialog's default (`DEFAULT_ANALYSED_RUNS` in the
- * renderer).
- */
+/** How many of its team's newest runs a builder chat's turn reads. */
 export const BUILDER_CHAT_ANALYSED_RUNS = 10;
 
 /** One run a team analysis reads, and where its snapshot ends. */
@@ -1458,8 +1454,8 @@ export interface StartThreadAnalysis {
 
 /** What "Analyze & improve" on a team starts with — `AnalyzeTeamDto`'s body. */
 export interface StartTeamAnalysis extends StartThreadAnalysis {
-  /** How many of the team's newest runs to read. */
-  runs: number;
+  /** The period to read, in days: the runs the team started within it. */
+  days: number;
 }
 
 /** One analysed run as `view=runs` folds it, read at its own snapshot. */

@@ -834,14 +834,57 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.create({ id: 'c1', createdAt: new Date(7_000) });
 
       expect(
-        (await dao.newestTeamRuns('team', 2)).map((run) => run.id),
+        (await dao.newestTeamRuns('team', 2, null)).map((run) => run.id),
       ).toEqual(['w4', 'w3']);
       expect(
-        (await dao.newestTeamRuns('team', 10)).map((run) => run.id),
+        (await dao.newestTeamRuns('team', 10, null)).map((run) => run.id),
       ).toEqual(['w4', 'w3', 'w2', 'w1']);
       expect(
-        (await dao.newestTeamRuns('team', null)).map((run) => run.id),
+        (await dao.newestTeamRuns('team', null, null)).map((run) => run.id),
       ).toEqual(['w4', 'w3', 'w2', 'w1']);
+    });
+
+    it('reads and counts a team’s runs started since an instant, archived ones included', async () => {
+      await dao.create({
+        id: 'w1',
+        teamId: 'team',
+        createdAt: new Date(1_000),
+      });
+      await dao.create({
+        id: 'w2',
+        teamId: 'team',
+        createdAt: new Date(2_000),
+      });
+      await dao.create({
+        id: 'w3',
+        teamId: 'team',
+        createdAt: new Date(3_000),
+        archivedAt: new Date(5_000),
+      });
+      await dao.create({
+        id: 'w4',
+        teamId: 'team',
+        createdAt: new Date(4_000),
+      });
+      await dao.create({
+        id: 'x1',
+        teamId: 'other',
+        createdAt: new Date(6_000),
+      });
+
+      expect(
+        (await dao.newestTeamRuns('team', null, new Date(2_500))).map(
+          (run) => run.id,
+        ),
+      ).toEqual(['w4', 'w3']);
+      expect(
+        (await dao.newestTeamRuns('team', 1, new Date(2_500))).map(
+          (run) => run.id,
+        ),
+      ).toEqual(['w4']);
+      expect(await dao.countTeamRunsSince('team', new Date(2_500))).toBe(2);
+      expect(await dao.countTeamRunsSince('team', new Date(0))).toBe(4);
+      expect(await dao.countTeamRunsSince('team', new Date(9_000))).toBe(0);
     });
   });
 

@@ -313,6 +313,9 @@ describe('AnalyzeThreadDialog', () => {
           sameVendor: [],
           alternatives: [],
         }),
+      countTeamAnalysisRuns: ReturnType<typeof vi.fn> = vi
+        .fn()
+        .mockResolvedValue({ inPeriod: 12, analysed: 12 }),
     ): Promise<void> {
       container = document.createElement('div');
       document.body.appendChild(container);
@@ -327,6 +330,7 @@ describe('AnalyzeThreadDialog', () => {
               api: {
                 analyzeTeam,
                 checkTeamAnalysisJudge,
+                countTeamAnalysisRuns,
               } as unknown as TeamsApi,
             }}
             sourceLabel="Dev Team"
@@ -379,27 +383,131 @@ describe('AnalyzeThreadDialog', () => {
       ).toBeNull();
     });
 
-    it('starts a team analysis over the number of latest runs picked', async () => {
-      const analyzeTeam = vi.fn().mockResolvedValue({ id: 'analysis' });
-      const onStarted = vi.fn();
-      await renderTeam(analyzeTeam, onStarted);
+    function periodTrigger(): HTMLElement {
+      return document.querySelector<HTMLElement>(
+        '[aria-label="Period of the runs to analyse"]',
+      )!;
+    }
+
+    function countLine(): HTMLElement {
+      return document.querySelector<HTMLElement>(
+        '[data-slot="analysis-period-count"]',
+      )!;
+    }
+
+    async function pickPeriod(label: string): Promise<void> {
+      act(() => {
+        periodTrigger().click();
+      });
+      const option = [
+        ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+      ].find((el) => el.textContent === label);
+      await act(async () => {
+        option!.click();
+      });
+    }
+
+    it('offers the period of runs to analyse, opening on the last 7 days', async () => {
+      const countTeamAnalysisRuns = vi
+        .fn()
+        .mockResolvedValue({ inPeriod: 12, analysed: 12 });
+      await renderTeam(vi.fn(), vi.fn(), undefined, countTeamAnalysisRuns);
 
       expect(document.body.textContent).toContain('Analyze team');
       expect(document.body.textContent).toContain(
         'compares how its agents and their models did',
       );
       expect(
-        document
-          .querySelector('[aria-label="Latest runs to analyse"]')
-          ?.textContent?.trim(),
-      ).toBe('10');
-      await act(async () => {
-        (
-          document.querySelector(
-            '[aria-label="Decrease Latest runs to analyse"]',
-          ) as HTMLButtonElement
-        ).click();
+        document.querySelector('[aria-label="Latest runs to analyse"]'),
+      ).toBeNull();
+      expect(periodTrigger().textContent).toContain('Last 7 days');
+      expect(countTeamAnalysisRuns).toHaveBeenCalledWith({
+        slug: 'dev-team',
+        days: 7,
       });
+      expect(countLine().textContent).toBe('12 runs will be analysed');
+    });
+
+    it('says how many runs the period holds, and that the cap leaves some out', async () => {
+      const counts: Record<number, { inPeriod: number; analysed: number }> = {
+        1: { inPeriod: 1, analysed: 1 },
+        7: { inPeriod: 12, analysed: 12 },
+        30: { inPeriod: 45, analysed: 30 },
+      };
+      await renderTeam(
+        vi.fn(),
+        vi.fn(),
+        undefined,
+        vi.fn(async ({ days }: { days: number }) => counts[days]),
+      );
+
+      expect(countLine().textContent).toBe('12 runs will be analysed');
+      await pickPeriod('Last day');
+      expect(countLine().textContent).toBe('1 run will be analysed');
+      await pickPeriod('Last 30 days');
+      expect(countLine().textContent).toBe(
+        '45 runs in this period — the newest 30 will be analysed',
+      );
+    });
+
+    it('says there are no runs in the period, and does not start the analysis', async () => {
+      const analyzeTeam = vi.fn();
+      await renderTeam(
+        analyzeTeam,
+        vi.fn(),
+        undefined,
+        vi.fn(async ({ days }: { days: number }) =>
+          days === 3
+            ? { inPeriod: 0, analysed: 0 }
+            : { inPeriod: 12, analysed: 12 },
+        ),
+      );
+
+      await pickPeriod('Last 3 days');
+
+      expect(countLine().textContent).toBe('No runs in this period');
+      expect(button('Start analysis').disabled).toBe(true);
+      expect(analyzeTeam).not.toHaveBeenCalled();
+    });
+
+    it('counts again on each period, and never lets an earlier period’s answer land', async () => {
+      const answers = new Map<
+        number,
+        (answer: { inPeriod: number; analysed: number }) => void
+      >();
+      const countTeamAnalysisRuns = vi.fn(
+        ({ days }: { days: number }) =>
+          new Promise((resolve) => answers.set(days, resolve)),
+      );
+      await renderTeam(vi.fn(), vi.fn(), undefined, countTeamAnalysisRuns);
+      expect(countLine().textContent).toBe('Counting…');
+
+      await pickPeriod('Last 30 days');
+      expect(countTeamAnalysisRuns).toHaveBeenLastCalledWith({
+        slug: 'dev-team',
+        days: 30,
+      });
+      await act(async () => {
+        answers.get(30)!({ inPeriod: 45, analysed: 30 });
+      });
+      expect(countLine().textContent).toBe(
+        '45 runs in this period — the newest 30 will be analysed',
+      );
+
+      await act(async () => {
+        answers.get(7)!({ inPeriod: 12, analysed: 12 });
+      });
+      expect(countLine().textContent).toBe(
+        '45 runs in this period — the newest 30 will be analysed',
+      );
+    });
+
+    it('starts a team analysis over the period picked', async () => {
+      const analyzeTeam = vi.fn().mockResolvedValue({ id: 'analysis' });
+      const onStarted = vi.fn();
+      await renderTeam(analyzeTeam, onStarted);
+
+      await pickPeriod('Last 14 days');
       await press('Start analysis');
 
       expect(analyzeTeam).toHaveBeenCalledWith({
@@ -408,7 +516,7 @@ describe('AnalyzeThreadDialog', () => {
           agentKind: 'claude',
           approval: 'auto',
           model: 'opus',
-          runs: 9,
+          days: 14,
         },
       });
       expect(onStarted).toHaveBeenCalledWith({ id: 'analysis' });

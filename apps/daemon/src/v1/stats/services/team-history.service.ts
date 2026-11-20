@@ -126,9 +126,9 @@ export class TeamHistoryService {
   ): Promise<TeamOtherRun[]> {
     const em = this.em.fork();
     const sampled = new Set(scope.analysedRunIds);
-    const runs = (await this.runDao.newestTeamRuns(slug, null, em)).filter(
-      (run) => !sampled.has(run.id),
-    );
+    const runs = (
+      await this.runDao.newestTeamRuns(slug, null, null, em)
+    ).filter((run) => !sampled.has(run.id));
     const totals = await this.stats.totalsOf(
       runs.map((run) => run.id),
       em,

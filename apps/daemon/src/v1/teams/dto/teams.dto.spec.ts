@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../../agents/chat.types';
+import { AnalysisRunsQuerySchema } from '../teams.types';
 import { runTeamSchema } from './teams.dto';
 
 const IMAGE = { mediaType: 'image/png', data: 'aGk=' } as const;
+
+describe('AnalysisRunsQuerySchema', () => {
+  it('reads the period from the query string, 1 to 365 whole days', () => {
+    expect(AnalysisRunsQuerySchema.parse({ days: '7' }).days).toBe(7);
+    for (const days of ['0', '366', '1.5', 'x']) {
+      expect(AnalysisRunsQuerySchema.safeParse({ days }).success).toBe(false);
+    }
+    expect(AnalysisRunsQuerySchema.safeParse({}).success).toBe(false);
+  });
+});
 
 describe('runTeamSchema', () => {
   it('starts a run from pasted images alone, as a chat message may', () => {

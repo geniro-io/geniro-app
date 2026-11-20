@@ -20,6 +20,7 @@ describe('TeamAnalysisService', () => {
   let analyses: {
     startTeam: ReturnType<typeof vi.fn>;
     findTeamAnalysis: ReturnType<typeof vi.fn>;
+    countTeamRunsInPeriod: ReturnType<typeof vi.fn>;
     deleteTeamAnalyses: ReturnType<typeof vi.fn>;
     analysedTeamSlugs: ReturnType<typeof vi.fn>;
   };
@@ -31,6 +32,9 @@ describe('TeamAnalysisService', () => {
     analyses = {
       startTeam: vi.fn().mockResolvedValue({ id: 'analysis' } as RunWire),
       findTeamAnalysis: vi.fn().mockResolvedValue(null),
+      countTeamRunsInPeriod: vi
+        .fn()
+        .mockResolvedValue({ inPeriod: 3, analysed: 3 }),
       deleteTeamAnalyses: vi.fn().mockResolvedValue(undefined),
       analysedTeamSlugs: vi.fn().mockResolvedValue([]),
     };
@@ -47,23 +51,41 @@ describe('TeamAnalysisService', () => {
   it('starts the analysis with the team’s name', async () => {
     const { slug } = await store.create(WF);
 
-    await service.start(slug, { agentKind: 'claude', runs: 5 });
+    await service.start(slug, { agentKind: 'claude', days: 7 });
 
     expect(analyses.startTeam).toHaveBeenCalledWith(
       { slug, name: 'Review Team' },
-      { agentKind: 'claude', runs: 5 },
+      { agentKind: 'claude', days: 7 },
     );
   });
 
   it('refuses a team the library does not hold, before touching any analysis', async () => {
     await expect(
-      service.start('no-such-team', { agentKind: 'claude', runs: 5 }),
+      service.start('no-such-team', { agentKind: 'claude', days: 7 }),
     ).rejects.toThrow(NotFoundException);
     await expect(service.find('no-such-team')).rejects.toThrow(
       NotFoundException,
     );
+    await expect(service.count('no-such-team', 7)).rejects.toThrow(
+      NotFoundException,
+    );
     expect(analyses.startTeam).not.toHaveBeenCalled();
     expect(analyses.findTeamAnalysis).not.toHaveBeenCalled();
+    expect(analyses.countTeamRunsInPeriod).not.toHaveBeenCalled();
+  });
+
+  it('counts the team’s runs in the period through the analyses that start it', async () => {
+    const { slug } = await store.create(WF);
+    analyses.countTeamRunsInPeriod.mockResolvedValue({
+      inPeriod: 45,
+      analysed: 30,
+    });
+
+    await expect(service.count(slug, 30)).resolves.toEqual({
+      inPeriod: 45,
+      analysed: 30,
+    });
+    expect(analyses.countTeamRunsInPeriod).toHaveBeenCalledWith(slug, 30);
   });
 
   it('sweeps the analyses of teams the library no longer holds, and only those', async () => {

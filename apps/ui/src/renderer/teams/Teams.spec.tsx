@@ -133,6 +133,10 @@ vi.mock('../daemon-api', async (importOriginal) => ({
         sameVendor: [],
         alternatives: [],
       })),
+      countTeamAnalysisRuns: vi.fn(async () => ({
+        inPeriod: 12,
+        analysed: 12,
+      })),
       uploadTeamAvatar,
       readTeamHealth,
       listTeamOverlays,
@@ -2112,7 +2116,7 @@ describe('Teams — the builder header', () => {
     ]);
   });
 
-  it('sets up an analysis of the team’s latest runs when it has none, then opens it', async () => {
+  it('sets up an analysis of the team’s runs over the last 7 days when it has none, then opens it', async () => {
     await openBuilder();
 
     await menuRow('Analyze & improve…');
@@ -2126,7 +2130,7 @@ describe('Teams — the builder header', () => {
 
     expect(analyzeTeam).toHaveBeenCalledWith({
       slug: 'dev-team',
-      analyzeTeamDto: expect.objectContaining({ runs: 10 }),
+      analyzeTeamDto: expect.objectContaining({ days: 7 }),
     });
     expect(document.querySelector('[data-slot="analysis-dialog"]')).not.toBe(
       null,

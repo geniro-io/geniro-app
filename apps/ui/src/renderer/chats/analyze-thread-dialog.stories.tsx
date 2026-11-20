@@ -57,7 +57,7 @@ export const TeamThread: Story = {};
 /** The thread already has an analysis, which starting replaces. */
 export const ReplacesAnalysis: Story = { args: { replaces: true } };
 
-/** "Analyze & improve" on a team: how many of its latest runs to read. */
+/** "Analyze & improve" on a team: which period of its runs to read. */
 export const Team: Story = {
   args: {
     subject: {
@@ -66,6 +66,8 @@ export const Team: Story = {
       name: 'Dev Team',
       api: {
         analyzeTeam: () => Promise.resolve(SOURCE),
+        countTeamAnalysisRuns: () =>
+          Promise.resolve({ inPeriod: 12, analysed: 12 }),
       } as unknown as TeamsApi,
     },
     sourceLabel: 'Dev Team',

@@ -41,16 +41,19 @@ export async function runSnapshotOf(
 
 /**
  * A team's newest runs, archived ones included, newest first, each read at its own
- * snapshot, with the folder it ran in. A run with no rows yet is skipped.
+ * snapshot, with the folder it ran in. Only runs started at or after `since` (null
+ * for all of them) count, at most `limit`. A run with no rows yet is skipped.
  */
 export async function teamRunSnapshots(
   readers: RunSnapshotReaders,
   slug: string,
   limit: number,
+  since: Date | null,
 ): Promise<(AnalysedRun & { cwd: string | null })[]> {
   const candidates = await readers.runDao.newestTeamRuns(
     slug,
     limit,
+    since,
     readers.em.fork(),
   );
   const runs: (AnalysedRun & { cwd: string | null })[] = [];

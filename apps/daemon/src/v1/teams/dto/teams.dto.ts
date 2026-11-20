@@ -16,6 +16,8 @@ import {
 import {
   AnalysisJudgeCheckSchema,
   AnalysisJudgeQuerySchema,
+  AnalysisRunsCountSchema,
+  AnalysisRunsQuerySchema,
   InstructionSizesWireSchema,
   MemberHealthSchema,
   NodeStateWireSchema,
@@ -272,6 +274,16 @@ export class AnalysisJudgeQueryDto extends createZodDto(
 /** Whether that judge shares the members' vendor — see {@link AnalysisJudgeCheckSchema}. */
 export class AnalysisJudgeCheckDto extends createZodDto(
   AnalysisJudgeCheckSchema,
+) {}
+
+/** The period a team analysis reads — see {@link AnalysisRunsQuerySchema}. */
+export class AnalysisRunsQueryDto extends createZodDto(
+  AnalysisRunsQuerySchema,
+) {}
+
+/** How many runs that period holds — see {@link AnalysisRunsCountSchema}. */
+export class AnalysisRunsCountDto extends createZodDto(
+  AnalysisRunsCountSchema,
 ) {}
 
 export class TeamOverlayDto extends createZodDto(TeamOverlayWireSchema) {}

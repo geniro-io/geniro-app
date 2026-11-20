@@ -17,6 +17,7 @@ import * as runtime from '../runtime';
 import type {
   ActionPressDto,
   AnalysisJudgeCheckDto,
+  AnalysisRunsCountDto,
   AnalyzeTeamDto,
   CancelledDto,
   CreateTeamDto,
@@ -73,6 +74,11 @@ export interface TeamsApiCheckTeamAnalysisJudgeRequest {
     slug: string;
     agent: string;
     model?: string;
+}
+
+export interface TeamsApiCountTeamAnalysisRunsRequest {
+    slug: string;
+    days: number;
 }
 
 export interface TeamsApiCreateTeamRequest {
@@ -434,6 +440,62 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async checkTeamAnalysisJudge(requestParameters: TeamsApiCheckTeamAnalysisJudgeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AnalysisJudgeCheckDto> {
         const response = await this.checkTeamAnalysisJudgeRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async countTeamAnalysisRunsRaw(requestParameters: TeamsApiCountTeamAnalysisRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AnalysisRunsCountDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling countTeamAnalysisRuns().'
+            );
+        }
+
+        if (requestParameters['days'] == null) {
+            throw new runtime.RequiredError(
+                'days',
+                'Required parameter "days" was null or undefined when calling countTeamAnalysisRuns().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['days'] != null) {
+            queryParameters['days'] = requestParameters['days'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/analysis-runs`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async countTeamAnalysisRuns(requestParameters: TeamsApiCountTeamAnalysisRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AnalysisRunsCountDto> {
+        const response = await this.countTeamAnalysisRunsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

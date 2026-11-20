@@ -43,17 +43,27 @@ export interface ProposalDiffEntry {
   fields: ProposalDiffField[];
 }
 
+/** A team field a replacement changes; `values` is null on a card raised before they were quoted. */
+export interface ProposalTeamField {
+  field: string;
+  values: Omit<ProposalDiffField, 'field'> | null;
+}
+
+/**
+ * A removed entry quotes what it held; on a card raised before that, it is
+ * its id with no fields. An added entry is an id, read whole from the team.
+ */
 export interface ProposalDiff {
   identical: boolean;
-  teamFields: string[];
+  teamFields: ProposalTeamField[];
   addedMembers: string[];
-  removedMembers: string[];
+  removedMembers: ProposalDiffEntry[];
   changedMembers: ProposalDiffEntry[];
   addedBlocks: string[];
-  removedBlocks: string[];
+  removedBlocks: ProposalDiffEntry[];
   changedBlocks: ProposalDiffEntry[];
   addedStages: string[];
-  removedStages: string[];
+  removedStages: ProposalDiffEntry[];
   changedStages: ProposalDiffEntry[];
 }
 
@@ -378,54 +388,78 @@ function readTeam(value: unknown): Team | null {
     : teamFromLegacyGraph(team);
 }
 
-function readChangedEntries(value: unknown): ProposalDiffEntry[] | null {
+function readDiffField(raw: unknown): ProposalDiffField | null {
+  const field = record(raw);
+  return field !== null &&
+    isString(field.field) &&
+    isString(field.before) &&
+    isString(field.after)
+    ? { field: field.field, before: field.before, after: field.after }
+    : null;
+}
+
+function readDiffEntry(raw: unknown): ProposalDiffEntry | null {
+  const entry = record(raw);
+  if (entry === null || !isString(entry.id) || !Array.isArray(entry.fields)) {
+    return null;
+  }
+  const fields = entry.fields.map(readDiffField);
+  return fields.every((field) => field !== null)
+    ? { id: entry.id, fields: fields as ProposalDiffField[] }
+    : null;
+}
+
+function readList<T>(
+  value: unknown,
+  read: (raw: unknown) => T | null,
+): T[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const entries: ProposalDiffEntry[] = [];
-  for (const raw of value) {
-    const entry = record(raw);
-    if (entry === null || !isString(entry.id) || !Array.isArray(entry.fields)) {
-      return null;
-    }
-    const fields: ProposalDiffField[] = [];
-    for (const rawField of entry.fields) {
-      const field = record(rawField);
-      if (
-        field === null ||
-        !isString(field.field) ||
-        !isString(field.before) ||
-        !isString(field.after)
-      ) {
-        return null;
-      }
-      fields.push({
-        field: field.field,
-        before: field.before,
-        after: field.after,
-      });
-    }
-    entries.push({ id: entry.id, fields });
-  }
-  return entries;
+  const items = value.map(read);
+  return items.every((item) => item !== null) ? (items as T[]) : null;
 }
+
+const readChangedEntries = (value: unknown): ProposalDiffEntry[] | null =>
+  readList(value, readDiffEntry);
+
+const readRemovedEntries = (value: unknown): ProposalDiffEntry[] | null =>
+  readList(value, (raw) =>
+    isString(raw) ? { id: raw, fields: [] } : readDiffEntry(raw),
+  );
+
+const readTeamFields = (value: unknown): ProposalTeamField[] | null =>
+  readList(value, (raw): ProposalTeamField | null => {
+    if (isString(raw)) {
+      return { field: raw, values: null };
+    }
+    const quoted = readDiffField(raw);
+    return quoted === null
+      ? null
+      : {
+          field: quoted.field,
+          values: { before: quoted.before, after: quoted.after },
+        };
+  });
 
 function readDiff(value: unknown): ProposalDiff | null {
   const diff = record(value);
   if (diff === null || typeof diff.identical !== 'boolean') {
     return null;
   }
-  const teamFields = stringList(diff.teamFields ?? diff.workflowFields);
+  const teamFields = readTeamFields(diff.teamFields ?? diff.workflowFields);
   const addedMembers = stringList(diff.addedMembers ?? diff.addedNodes);
-  const removedMembers = stringList(diff.removedMembers ?? diff.removedNodes);
+  const removedMembers = readRemovedEntries(
+    diff.removedMembers ?? diff.removedNodes,
+  );
   const changedMembers = readChangedEntries(
     diff.changedMembers ?? diff.changedNodes,
   );
   const addedBlocks = stringList(diff.addedBlocks ?? []);
-  const removedBlocks = stringList(diff.removedBlocks ?? []);
+  const removedBlocks = readRemovedEntries(diff.removedBlocks ?? []);
   const changedBlocks = readChangedEntries(diff.changedBlocks ?? []);
   const addedStages = stringList(diff.addedStages);
-  const removedStages = stringList(diff.removedStages);
+  const removedStages = readRemovedEntries(diff.removedStages);
   const changedStages = readChangedEntries(diff.changedStages);
   if (
     teamFields === null ||
@@ -613,17 +647,25 @@ export function proposalScanText(proposal: ParsedTeamProposal): string {
     ],
     strings,
   );
-  // A changed field's values arrive JSON-quoted and are drawn decoded
-  // (`shown`), so the decoded form is scanned too: the quoted form hides a
-  // control character behind its `\u` escape.
-  for (const { fields } of [
-    ...(proposal.diff?.changedMembers ?? []),
-    ...(proposal.diff?.changedBlocks ?? []),
-    ...(proposal.diff?.changedStages ?? []),
-  ]) {
-    for (const { before, after } of fields) {
-      strings.push(shown(before), shown(after));
-    }
+  // A quoted value arrives JSON-quoted and is drawn decoded (`shown`), so the
+  // decoded form is scanned too: the quoted form hides a control character
+  // behind its `\u` escape.
+  const diff = proposal.diff;
+  const quoted = [
+    ...(diff?.teamFields ?? []).flatMap(({ values }) =>
+      values === null ? [] : [values],
+    ),
+    ...[
+      ...(diff?.changedMembers ?? []),
+      ...(diff?.removedMembers ?? []),
+      ...(diff?.changedBlocks ?? []),
+      ...(diff?.removedBlocks ?? []),
+      ...(diff?.changedStages ?? []),
+      ...(diff?.removedStages ?? []),
+    ].flatMap(({ fields }) => fields),
+  ];
+  for (const { before, after } of quoted) {
+    strings.push(shown(before), shown(after));
   }
   return strings.join(' ').replace(/[\n\t\r]/g, ' ');
 }
@@ -685,8 +727,15 @@ export interface DiffRow {
   subject: string;
   /** For a changed field: which one, and from what to what. */
   detail: { field: string; before: string; after: string } | null;
+  /** For an added or removed entry: each field it holds or held. */
+  entry: DiffEntryField[];
   /** The change makes an agent run tools without asking. */
   toAuto: boolean;
+}
+
+export interface DiffEntryField {
+  field: string;
+  value: string;
 }
 
 /** How the daemon quotes a field one side of the diff does not have. */
@@ -700,6 +749,16 @@ function shown(json: string): string {
   } catch {
     return json;
   }
+}
+
+/** Each field an entry of the proposed team sets, drawn as the quoted diff values are. */
+function entryFields(entry: object | undefined): DiffEntryField[] {
+  return Object.entries(entry ?? {})
+    .filter(([field, value]) => field !== 'id' && value !== undefined)
+    .map(([field, value]) => ({
+      field,
+      value: typeof value === 'string' ? value : JSON.stringify(value),
+    }));
 }
 
 /**
@@ -745,19 +804,52 @@ export function diffRows(diff: ProposalDiff, team: Team): DiffRow[] {
       oldPoolRunsUnasked(member.approval, before) !== true
     );
   };
+  const proposed = {
+    member: members,
+    block: new Map(team.instructionBlocks.map((block) => [block.id, block])),
+    stage: new Map((team.stages ?? []).map((stage) => [stage.id, stage])),
+  } satisfies Record<Exclude<DiffRow['scope'], 'team'>, Map<string, object>>;
   const listed = (
-    scope: DiffRow['scope'],
+    scope: Exclude<DiffRow['scope'], 'team'>,
     marker: 'added' | 'removed',
-    ids: readonly string[],
+    entries: readonly { id: string; entry: DiffEntryField[] }[],
   ): DiffRow[] =>
-    ids.map((id) => ({
+    entries.map(({ id, entry }) => ({
       key: `${marker}-${scope}:${id}`,
       marker,
       scope,
       subject: id,
       detail: null,
+      entry,
       toAuto: scope === 'member' && marker === 'added' && unasked.has(id),
     }));
+  const added = (
+    scope: Exclude<DiffRow['scope'], 'team'>,
+    ids: readonly string[],
+  ): DiffRow[] =>
+    listed(
+      scope,
+      'added',
+      ids.map((id) => ({
+        id,
+        entry: entryFields(proposed[scope].get(id)),
+      })),
+    );
+  const removed = (
+    scope: Exclude<DiffRow['scope'], 'team'>,
+    entries: readonly ProposalDiffEntry[],
+  ): DiffRow[] =>
+    listed(
+      scope,
+      'removed',
+      entries.map(({ id, fields }) => ({
+        id,
+        entry: fields.map(({ field, before }) => ({
+          field,
+          value: shown(before),
+        })),
+      })),
+    );
   const changed = (
     scope: DiffRow['scope'],
     entries: readonly ProposalDiffEntry[],
@@ -769,6 +861,7 @@ export function diffRows(diff: ProposalDiff, team: Team): DiffRow[] {
         scope,
         subject: id,
         detail: { field, before: shown(before), after: shown(after) },
+        entry: [],
         toAuto:
           scope === 'member' &&
           (field === 'approval'
@@ -777,23 +870,31 @@ export function diffRows(diff: ProposalDiff, team: Team): DiffRow[] {
       })),
     );
   const rows: DiffRow[] = [
-    ...diff.teamFields.map((field): DiffRow => ({
+    ...diff.teamFields.map(({ field, values }): DiffRow => ({
       key: `team:${field}`,
       marker: 'changed',
       scope: 'team',
       subject: field,
-      detail: null,
+      detail:
+        values === null
+          ? null
+          : {
+              field,
+              before: shown(values.before),
+              after: shown(values.after),
+            },
+      entry: [],
       toAuto: false,
     })),
-    ...listed('member', 'added', diff.addedMembers),
+    ...added('member', diff.addedMembers),
     ...changed('member', diff.changedMembers),
-    ...listed('member', 'removed', diff.removedMembers),
-    ...listed('block', 'added', diff.addedBlocks),
+    ...removed('member', diff.removedMembers),
+    ...added('block', diff.addedBlocks),
     ...changed('block', diff.changedBlocks),
-    ...listed('block', 'removed', diff.removedBlocks),
-    ...listed('stage', 'added', diff.addedStages),
+    ...removed('block', diff.removedBlocks),
+    ...added('stage', diff.addedStages),
     ...changed('stage', diff.changedStages),
-    ...listed('stage', 'removed', diff.removedStages),
+    ...removed('stage', diff.removedStages),
   ];
   return [
     ...rows.filter((row) => row.toAuto),

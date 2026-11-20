@@ -54,6 +54,32 @@ export const LongText: Story = {
           after:
             '…route it, keep it moving until it is DONE, and report the result. Before you report, save at most three verified notes to the team memory, then…',
         },
+        entry: [],
+        toAuto: false,
+      },
+    ],
+  },
+};
+
+/** A new instruction block: what it says, whom it addresses, a long text drawn as its one side. */
+export const AddedBlock: Story = {
+  args: {
+    rows: [
+      {
+        key: 'added-block:review-rules',
+        marker: 'added',
+        scope: 'block',
+        subject: 'review-rules',
+        detail: null,
+        entry: [
+          { field: 'title', value: 'Review rules' },
+          {
+            field: 'text',
+            value:
+              'Before a pull request goes to the user, read its whole diff.\nEvery finding names a file and line, and every fix is pushed before the acceptance question.',
+          },
+          { field: 'audience', value: '["reviewer"]' },
+        ],
         toAuto: false,
       },
     ],

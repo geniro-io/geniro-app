@@ -383,7 +383,8 @@ export function AnalyzeThreadDialog({
           onClose();
         }
       }}
-      title={team === null ? 'Analyze thread' : 'Analyze team'}>
+      title={team === null ? 'Analyze thread' : 'Analyze team'}
+      className="max-w-2xl">
       <div data-slot="analyze-thread" className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <p className="flex items-center gap-2 text-sm font-medium">
@@ -413,7 +414,7 @@ export function AnalyzeThreadDialog({
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">
           {team === null ? null : (
             <SettingRow label="Period">
-              <span className="flex flex-wrap items-center gap-2">
+              <span className="flex flex-wrap items-center">
                 <Select
                   variant="ghost"
                   aria-label="Period of the runs to analyse"
@@ -430,7 +431,7 @@ export function AnalyzeThreadDialog({
                   onValueChange={(next) => setDays(Number(next))}
                 />
                 <span
-                  className="text-xs text-muted-foreground"
+                  className="px-2 text-xs text-muted-foreground"
                   data-slot="analysis-period-count">
                   {countText}
                 </span>

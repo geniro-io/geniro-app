@@ -3870,15 +3870,20 @@ function buildCallBlock(
   // never the last — see `ended`. Null when neither a terminal status row nor
   // the settle envelope is in the window.
   let settledAt: number | null = null;
-  // How the call's ONE sub-turn ended — its first terminal status row. Every
-  // status row after it is the callee carrying on by itself under the same
-  // call id (the executor's off-turn rows), and that stretch's own `completed`
-  // is not how the call ended: taking the LAST terminal row made a background
-  // reviewer's later "nothing new" the card's RESULT, in place of the answer
-  // the caller actually received.
+  // How the call's ONE sub-turn ended — its first terminal status row that
+  // does not close an off-turn stretch. Every status row after it is the
+  // callee carrying on by itself under the same call id (the executor's
+  // off-turn rows), and that stretch's own `completed` is not how the call
+  // ended: taking the LAST terminal row made a background reviewer's later
+  // "nothing new" the card's RESULT, in place of the answer the caller
+  // actually received.
   let ended: CallBlockEntry['status'] | null = null;
   // What the callee's own status ROWS last said.
   let lastRowStatus: string | null = null;
+  // An `offTurn` running row opens a stretch whose next terminal row only
+  // restores the member's badge. A call held open by its callee's monitor gets
+  // such a stretch BEFORE it settles, so that row is never the call's ending.
+  let offTurnOpen = false;
   // The broker's settle envelope, which carries the answer the caller received.
   let settle: ChatItem | null = null;
   // The window holds no terminal status row of the sub-turn, so its closing
@@ -3889,6 +3894,12 @@ function buildCallBlock(
       const value = payloadString(item.payload, 'status');
       if (value && BLOCK_STATUSES.has(value)) {
         lastRowStatus = value;
+        if (value === 'running') {
+          offTurnOpen = payloadBoolean(item.payload, 'offTurn') === true;
+        } else if (offTurnOpen) {
+          offTurnOpen = false;
+          continue;
+        }
         if (ended === null) {
           status = value as CallBlockEntry['status'];
           if (value !== 'running') {

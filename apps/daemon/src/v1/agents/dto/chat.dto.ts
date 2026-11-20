@@ -226,17 +226,22 @@ export const analyzeThreadSchema = z.object({
 });
 export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}
 
-/** At most this many of a team's newest runs are read by one analysis. */
+/** At most this many of a team's runs in the period are read by one analysis. */
 export const MAX_ANALYSED_TEAM_RUNS = 30;
+
+/** The longest period, in days, a team analysis reaches back over. */
+export const MAX_ANALYSED_TEAM_DAYS = 365;
 
 /** `POST /v1/teams/:slug/analyses` — "Analyze & improve" on a team. */
 export const analyzeTeamSchema = analyzeThreadSchema.extend({
-  runs: z
+  days: z
     .number()
     .int()
     .min(1)
-    .max(MAX_ANALYSED_TEAM_RUNS)
-    .describe("How many of the team's newest runs to read"),
+    .max(MAX_ANALYSED_TEAM_DAYS)
+    .describe(
+      `The period to read, in days: the team's runs started within it, newest first, at most ${MAX_ANALYSED_TEAM_RUNS} of them`,
+    ),
 });
 export class AnalyzeTeamDto extends createZodDto(analyzeTeamSchema) {}
 

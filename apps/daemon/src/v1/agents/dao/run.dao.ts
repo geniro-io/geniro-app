@@ -462,17 +462,22 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * A library team's newest runs, newest first, archived ones included: at
-   * most `limit`, the ones a team analysis reads, or with null all of them.
+   * most `limit` (null for all) of those started at or after `since` (null for
+   * every one). A team analysis reads the first of these.
    */
   async newestTeamRuns(
     slug: string,
     limit: number | null,
+    since: Date | null,
     txEm?: EntityManager,
   ): Promise<
     Pick<Run, 'id' | 'status' | 'title' | 'createdAt' | 'cwd' | 'archivedAt'>[]
   > {
     return this.getRepo(txEm).find(
-      { teamId: slug },
+      {
+        teamId: slug,
+        ...(since === null ? {} : { createdAt: { $gte: since } }),
+      },
       {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         ...(limit === null ? {} : { limit }),
@@ -480,6 +485,18 @@ export class RunDao extends BaseDao<Run> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /** How many of a library team's runs, archived ones included, started at or after `since`. */
+  async countTeamRunsSince(
+    slug: string,
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.getRepo(txEm).count({
+      teamId: slug,
+      createdAt: { $gte: since },
+    });
   }
 
   /**

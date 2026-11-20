@@ -6024,6 +6024,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         { em: this.em, runDao: this.runDao, itemDao: this.itemDao },
         slug,
         BUILDER_CHAT_ANALYSED_RUNS,
+        null,
       );
       return teamAnalysisTurn(runId, slug, runs);
     } catch (err) {

@@ -41,6 +41,8 @@ import type { KnowledgeRenamed } from '../../projects/projects.types';
 import {
   AnalysisJudgeCheckDto,
   AnalysisJudgeQueryDto,
+  AnalysisRunsCountDto,
+  AnalysisRunsQueryDto,
   CreateTeamDto,
   DeleteTeamOverlayQueryDto,
   DeleteTeamQueryDto,
@@ -89,6 +91,7 @@ import { TeamOverlayService } from '../services/team-overlay.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
   AnalysisJudgeCheckWire,
+  AnalysisRunsCountWire,
   InstructionSizesWire,
   MemberHealth,
   NodeStateWire,
@@ -564,10 +567,25 @@ export class TeamsController {
   }
 
   /**
-   * Start this team's analysis ("Analyze & improve") over its `runs`
-   * newest runs, replacing the one it had. 409 `ANALYSIS_NO_RUNS` for a
-   * team never run, `ANALYSIS_FOLDER_GONE` until a folder that exists is
-   * sent as `cwd`.
+   * How many of this team's runs started in the last `days` days the
+   * "Analyze & improve" dialog would analyse, and how many they hold. 404 for
+   * a team the library does not hold.
+   */
+  @Get(':slug/analysis-runs')
+  @ApiOperation({ operationId: 'countTeamAnalysisRuns' })
+  @ZodResponse({ status: 200, type: AnalysisRunsCountDto })
+  countAnalysisRuns(
+    @Param('slug') slug: string,
+    @Query() query: AnalysisRunsQueryDto,
+  ): Promise<AnalysisRunsCountWire> {
+    return this.teamAnalyses.count(slug, query.days);
+  }
+
+  /**
+   * Start this team's analysis ("Analyze & improve") over the runs it
+   * started in the last `days` days, replacing the one it had. 409
+   * `ANALYSIS_NO_RUNS` for a period with no runs, `ANALYSIS_FOLDER_GONE` until
+   * a folder that exists is sent as `cwd`.
    */
   @Post(':slug/analyses')
   @ApiOperation({ operationId: 'analyzeTeam' })

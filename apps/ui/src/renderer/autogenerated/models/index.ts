@@ -1625,6 +1625,25 @@ export interface AnalysisJudgeCheckDto {
 /**
  * 
  * @export
+ * @interface AnalysisRunsCountDto
+ */
+export interface AnalysisRunsCountDto {
+    /**
+     * every run of the team started in the period, archived ones included
+     * @type {number}
+     * @memberof AnalysisRunsCountDto
+     */
+    inPeriod: number;
+    /**
+     * the runs a team analysis over the period would read, at most the cap
+     * @type {number}
+     * @memberof AnalysisRunsCountDto
+     */
+    analysed: number;
+}
+/**
+ * 
+ * @export
  * @interface AnalyzeTeamDto
  */
 export interface AnalyzeTeamDto {
@@ -1707,11 +1726,11 @@ export interface AnalyzeTeamDto {
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
     /**
-     * How many of the team's newest runs to read
+     * The period to read, in days: the team's runs started within it, newest first, at most 30 of them
      * @type {number}
      * @memberof AnalyzeTeamDto
      */
-    runs: number;
+    days: number;
 }
 
 

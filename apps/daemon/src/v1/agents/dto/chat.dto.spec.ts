@@ -9,6 +9,7 @@ import {
   REPLY_LANGUAGE_MAX_LENGTH,
 } from '../chat.types';
 import {
+  analyzeTeamSchema,
   analyzeThreadSchema,
   callMessagesQuerySchema,
   createChatSchema,
@@ -17,6 +18,25 @@ import {
   setRunNotesSchema,
   updateChatSettingsSchema,
 } from './chat.dto';
+
+describe('analyzeTeamSchema', () => {
+  const body = { agentKind: 'claude' } as const;
+
+  it('takes a period of 1 to 365 whole days', () => {
+    for (const days of [1, 365]) {
+      expect(analyzeTeamSchema.safeParse({ ...body, days }).success).toBe(true);
+    }
+    for (const days of [0, 366, 7.5]) {
+      expect(analyzeTeamSchema.safeParse({ ...body, days }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('refuses a body with no period', () => {
+    expect(analyzeTeamSchema.safeParse(body).success).toBe(false);
+  });
+});
 
 describe('callMessagesQuerySchema', () => {
   it('coerces a limit in range from the query string', () => {

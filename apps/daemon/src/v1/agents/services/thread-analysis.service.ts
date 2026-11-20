@@ -22,6 +22,7 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { MAX_ANALYSED_TEAM_RUNS } from '../dto/chat.dto';
 import { isAnalysisRun } from '../utils/analysed-runs';
 import {
   existingDirectory,
@@ -41,6 +42,13 @@ import {
 } from '../utils/thread-analysis-guide';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
+
+const DAY_MS = 86_400_000;
+
+/** The instant a period of `days` days reaches back to, from the daemon's clock. */
+function periodStart(days: number): Date {
+  return new Date(Date.now() - days * DAY_MS);
+}
 
 /** The newest of these runs' folders that still exists: an archived run's worktree may be gone. */
 function newestExistingFolder(
@@ -266,25 +274,43 @@ export class ThreadAnalysisService
   }
 
   /**
-   * Start a team's analysis over its newest runs: ONE chat per team,
-   * replacing the one it had on the same terms as {@link start}. The runs are
-   * chosen here, from every run of the team, never from a list a client
-   * loaded; each is read up to its own snapshot.
+   * How many of a team's runs started in the last `days` days (archived ones
+   * included), and how many of them a team analysis over that period reads: the
+   * same set {@link startTeam} reads.
+   */
+  async countTeamRunsInPeriod(
+    slug: string,
+    days: number,
+  ): Promise<{ inPeriod: number; analysed: number }> {
+    const since = periodStart(days);
+    const inPeriod = await this.runDao.countTeamRunsSince(
+      slug,
+      since,
+      this.em.fork(),
+    );
+    const analysed = await this.teamRunsSince(slug, since);
+    return { inPeriod, analysed: analysed.length };
+  }
+
+  /**
+   * Start a team's analysis over the runs it started in the last `input.days`
+   * days: ONE chat per team, replacing the one it had on the same terms as
+   * {@link start}. The runs are chosen here, from every run of the team, never
+   * from a list a client loaded; each is read up to its own snapshot.
    */
   async startTeam(
     target: { slug: string; name: string },
     input: StartTeamAnalysis,
   ): Promise<RunWire> {
     const em = this.em.fork();
-    const snapshots = await teamRunSnapshots(
-      this.snapshotReaders(),
+    const snapshots = await this.teamRunsSince(
       target.slug,
-      input.runs,
+      periodStart(input.days),
     );
     if (snapshots.length === 0) {
       throw new ConflictException(
         'ANALYSIS_NO_RUNS',
-        'the team has no runs to analyse yet — run it first',
+        'the team has no runs in that period to analyse — run it first, or pick a longer period',
       );
     }
     const runs: AnalysedRun[] = snapshots.map(
@@ -382,6 +408,18 @@ export class ThreadAnalysisService
         );
       });
     }
+  }
+
+  private teamRunsSince(
+    slug: string,
+    since: Date,
+  ): Promise<(AnalysedRun & { cwd: string | null })[]> {
+    return teamRunSnapshots(
+      this.snapshotReaders(),
+      slug,
+      MAX_ANALYSED_TEAM_RUNS,
+      since,
+    );
   }
 
   private snapshotReaders(): RunSnapshotReaders {

@@ -467,6 +467,7 @@ describe('ThreadAnalysisService.start', () => {
 });
 
 describe('ThreadAnalysisService.startTeam', () => {
+  const DAY_MS = 86_400_000;
   let folder: string;
 
   beforeEach(() => {
@@ -503,16 +504,22 @@ describe('ThreadAnalysisService.startTeam', () => {
         ({
           status: 'completed',
           cwd: folder,
-          createdAt: new Date(0),
+          createdAt: new Date(),
           ...run,
         }) as Run,
     );
+    const startedSince = (since: Date | null) =>
+      rows.filter((run) => since === null || run.createdAt >= since);
     const runDao = {
       getById: vi.fn((id: string) =>
         Promise.resolve(rows.find((run) => run.id === id) ?? null),
       ),
-      newestTeamRuns: vi.fn((_slug: string, limit: number) =>
-        Promise.resolve(rows.slice(0, limit)),
+      newestTeamRuns: vi.fn(
+        (_slug: string, limit: number | null, since: Date | null) =>
+          Promise.resolve(startedSince(since).slice(0, limit ?? undefined)),
+      ),
+      countTeamRunsSince: vi.fn((_slug: string, since: Date) =>
+        Promise.resolve(startedSince(since).length),
       ),
       listTeamAnalyses: vi.fn(() =>
         Promise.resolve([...listed, ...earlier].map((id) => ({ id }) as Run)),
@@ -550,7 +557,7 @@ describe('ThreadAnalysisService.startTeam', () => {
       ],
       { r2: 5, r1: 5 },
     );
-    await shared.service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+    await shared.service.startTeam(TARGET, { agentKind: 'claude', days: 7 });
     expect(shared.createChat.mock.calls[0]![0].projectId).toBe('p-billing');
 
     const spanning = build(
@@ -560,11 +567,11 @@ describe('ThreadAnalysisService.startTeam', () => {
       ],
       { r2: 5, r1: 5 },
     );
-    await spanning.service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+    await spanning.service.startTeam(TARGET, { agentKind: 'claude', days: 7 });
     expect(spanning.createChat.mock.calls[0]![0].projectId).toBeNull();
   });
 
-  it('reads the newest runs up to the count, each at its own snapshot, skipping an empty one', async () => {
+  it('reads the period’s newest runs, each at its own snapshot, skipping an empty one', async () => {
     const { service, createChat, sendMessage, runDao } = build(
       [
         { id: 'r3', status: 'running' },
@@ -577,13 +584,14 @@ describe('ThreadAnalysisService.startTeam', () => {
 
     await service.startTeam(TARGET, {
       agentKind: 'claude',
-      runs: 3,
+      days: 7,
       focus: 'cheaper',
     });
 
     expect(runDao.newestTeamRuns).toHaveBeenCalledWith(
       'team',
-      3,
+      30,
+      expect.any(Date),
       expect.anything(),
     );
     const input = createChat.mock.calls[0]![0];
@@ -592,6 +600,7 @@ describe('ThreadAnalysisService.startTeam', () => {
       runs: [
         { runId: 'r3', snapshotSeq: 12, working: true },
         { runId: 'r1', snapshotSeq: 40, working: false },
+        { runId: 'r0', snapshotSeq: 7, working: false },
       ],
     });
     expect(input.analysisSource).toBeUndefined();
@@ -602,8 +611,90 @@ describe('ThreadAnalysisService.startTeam', () => {
     expect(input.taskInstructions).toContain('cheaper');
     expect(sendMessage).toHaveBeenCalledWith(
       'analysis',
-      expect.stringContaining('across its 2 latest runs'),
+      expect.stringContaining('across its 3 latest runs'),
     );
+  });
+
+  it('reads the runs started in the period, newest first, at most 30, and counts that same set', async () => {
+    const rows = Array.from({ length: 45 }, (_, index) => ({
+      id: `p${index}`,
+      createdAt: new Date(Date.now() - index * 60_000),
+    }));
+    const seqs = Object.fromEntries(rows.map((row) => [row.id, 3]));
+    const { service, createChat } = build(
+      [...rows, { id: 'old', createdAt: new Date(Date.now() - 10 * DAY_MS) }],
+      { ...seqs, old: 3 },
+    );
+
+    await expect(
+      service.countTeamRunsInPeriod(TARGET.slug, 7),
+    ).resolves.toEqual({ inPeriod: 45, analysed: 30 });
+    await service.startTeam(TARGET, { agentKind: 'claude', days: 7 });
+
+    expect(
+      createChat.mock.calls[0]![0].analysisTeam?.runs.map(
+        (run: { runId: string }) => run.runId,
+      ),
+    ).toEqual(rows.slice(0, 30).map((row) => row.id));
+  });
+
+  it('counts and reads only the runs started inside the period it is given', async () => {
+    const runs = [
+      { id: 'fresh', createdAt: new Date(Date.now() - 2 * DAY_MS) },
+      { id: 'older', createdAt: new Date(Date.now() - 20 * DAY_MS) },
+    ];
+    const seqs = { fresh: 4, older: 4 };
+    const readIds = (chat: ReturnType<typeof build>) =>
+      chat.createChat.mock.calls[0]![0].analysisTeam?.runs.map(
+        (run: { runId: string }) => run.runId,
+      );
+
+    const short = build(runs, seqs);
+    await expect(
+      short.service.countTeamRunsInPeriod(TARGET.slug, 3),
+    ).resolves.toEqual({ inPeriod: 1, analysed: 1 });
+    await short.service.startTeam(TARGET, { agentKind: 'claude', days: 3 });
+    expect(readIds(short)).toEqual(['fresh']);
+
+    const long = build(runs, seqs);
+    await expect(
+      long.service.countTeamRunsInPeriod(TARGET.slug, 30),
+    ).resolves.toEqual({ inPeriod: 2, analysed: 2 });
+    await long.service.startTeam(TARGET, { agentKind: 'claude', days: 30 });
+    expect(readIds(long)).toEqual(['fresh', 'older']);
+  });
+
+  it('counts the archived runs of the period too', async () => {
+    const { service } = build(
+      [
+        {
+          id: 'a1',
+          archivedAt: new Date(),
+          createdAt: new Date(Date.now() - DAY_MS),
+        },
+        { id: 'old', createdAt: new Date(Date.now() - 10 * DAY_MS) },
+      ],
+      { a1: 5, old: 5 },
+    );
+
+    await expect(
+      service.countTeamRunsInPeriod(TARGET.slug, 7),
+    ).resolves.toEqual({ inPeriod: 1, analysed: 1 });
+  });
+
+  it('refuses a period with no runs the way a team never run is refused', async () => {
+    const { service, createChat } = build(
+      [{ id: 'old', createdAt: new Date(Date.now() - 10 * DAY_MS) }],
+      { old: 5 },
+    );
+
+    await expect(
+      service.countTeamRunsInPeriod(TARGET.slug, 7),
+    ).resolves.toEqual({ inPeriod: 0, analysed: 0 });
+    await expect(
+      service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
+    ).rejects.toMatchObject({ errorCode: 'ANALYSIS_NO_RUNS' });
+    expect(createChat).not.toHaveBeenCalled();
   });
 
   it('replaces the team’s earlier analysis only once the new one has its brief', async () => {
@@ -613,7 +704,7 @@ describe('ThreadAnalysisService.startTeam', () => {
 
     const started = await service.startTeam(TARGET, {
       agentKind: 'claude',
-      runs: 5,
+      days: 7,
     });
 
     expect(remove).toHaveBeenCalledWith('old');
@@ -630,7 +721,7 @@ describe('ThreadAnalysisService.startTeam', () => {
     ]);
 
     await expect(
-      service.startTeam(TARGET, { agentKind: 'claude', runs: 5 }),
+      service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_NO_RUNS' });
     expect(createChat).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
@@ -648,21 +739,21 @@ describe('ThreadAnalysisService.startTeam', () => {
       const first = build(runs, { empty: -1, r1: 2 });
       await first.service.startTeam(TARGET, {
         agentKind: 'claude',
-        runs: 2,
+        days: 7,
       });
       expect(first.createChat.mock.calls[0]![0].cwd).toBe(own);
 
       const sent = build(runs, { empty: -1, r1: 2 });
       await sent.service.startTeam(TARGET, {
         agentKind: 'claude',
-        runs: 2,
+        days: 7,
         cwd: picked,
       });
       expect(sent.createChat.mock.calls[0]![0].cwd).toBe(picked);
 
       const gone = build([{ id: 'r1', cwd: join(own, 'gone') }], { r1: 2 });
       await expect(
-        gone.service.startTeam(TARGET, { agentKind: 'claude', runs: 1 }),
+        gone.service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
       ).rejects.toMatchObject({ errorCode: 'ANALYSIS_FOLDER_GONE' });
       expect(gone.createChat).not.toHaveBeenCalled();
     } finally {
@@ -690,7 +781,7 @@ describe('ThreadAnalysisService.startTeam', () => {
     sendMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
 
     await expect(
-      service.startTeam(TARGET, { agentKind: 'claude', runs: 1 }),
+      service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
     ).rejects.toThrow('RUN_BUSY');
     expect(remove).toHaveBeenCalledWith('analysis');
     expect(remove).not.toHaveBeenCalledWith('old');
@@ -707,7 +798,7 @@ describe('ThreadAnalysisService.startTeam', () => {
         { r2: 9, r1: 4 },
       );
 
-      await service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+      await service.startTeam(TARGET, { agentKind: 'claude', days: 7 });
 
       expect(createChat.mock.calls[0]![0].cwd).toBe(own);
     } finally {
@@ -725,7 +816,7 @@ describe('ThreadAnalysisService.startTeam', () => {
     );
 
     await expect(
-      service.startTeam(TARGET, { agentKind: 'claude', runs: 2 }),
+      service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_FOLDER_GONE' });
     expect(createChat).not.toHaveBeenCalled();
   });

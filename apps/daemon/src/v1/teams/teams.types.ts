@@ -23,7 +23,10 @@ import {
   type StageProgress,
   StageProgressSchema,
 } from '../agents/chat.types';
-import { createChatSchema } from '../agents/dto/chat.dto';
+import {
+  createChatSchema,
+  MAX_ANALYSED_TEAM_DAYS,
+} from '../agents/dto/chat.dto';
 import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
 import {
   LessonOverrideSchema,
@@ -2703,3 +2706,31 @@ export const AnalysisJudgeCheckSchema = z.object({
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type AnalysisJudgeCheckWire = z.infer<typeof AnalysisJudgeCheckSchema>;
+
+/** The period a team analysis would read: the days back from now. */
+export const AnalysisRunsQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_ANALYSED_TEAM_DAYS)
+    .describe('how many days back the runs started in'),
+});
+
+/** How many of a team's runs a period holds, and how many a team analysis over it reads. */
+export const AnalysisRunsCountSchema = z.object({
+  inPeriod: z
+    .number()
+    .int()
+    .describe(
+      'every run of the team started in the period, archived ones included',
+    ),
+  analysed: z
+    .number()
+    .int()
+    .describe(
+      'the runs a team analysis over the period would read, at most the cap',
+    ),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type AnalysisRunsCountWire = z.infer<typeof AnalysisRunsCountSchema>;

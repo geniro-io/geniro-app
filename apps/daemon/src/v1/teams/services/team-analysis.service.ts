@@ -54,10 +54,19 @@ export class TeamAnalysisService implements OnApplicationBootstrap {
     return this.analyses.findTeamAnalysis(slug);
   }
 
-  /** Start the team's analysis over its newest runs, replacing its last. */
+  /** Start the team's analysis over the runs of its period, replacing its last. */
   async start(slug: string, input: StartTeamAnalysis): Promise<RunWire> {
     const { team } = await this.store.get(slug);
     return this.analyses.startTeam({ slug, name: team.name }, input);
+  }
+
+  /** How many of the team's runs a period of `days` holds, and how many it would analyse; 404 for a team the library lacks. */
+  async count(
+    slug: string,
+    days: number,
+  ): Promise<{ inPeriod: number; analysed: number }> {
+    await this.store.get(slug);
+    return this.analyses.countTeamRunsInPeriod(slug, days);
   }
 
   /**

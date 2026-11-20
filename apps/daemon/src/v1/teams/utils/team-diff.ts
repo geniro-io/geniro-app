@@ -5,17 +5,28 @@ const MAX_QUOTED_CHARS = 400;
 /** How much unchanged text a quoted excerpt keeps on each side of a change. */
 const EXCERPT_CONTEXT_CHARS = 80;
 
+export interface QuotedField {
+  field: string;
+  before: string;
+  after: string;
+}
+
 /** One member, block or stage whose definition differs, and which of its fields did. */
 export interface ChangedEntry {
   id: string;
-  fields: { field: string; before: string; after: string }[];
+  fields: QuotedField[];
 }
 
 /**
  * What changed between two teams, by member, instruction block and stage id —
  * structural rather than a text diff of the YAML, which reports a reordered
  * list as a rewrite and says nothing about which member a changed line belongs
- * to. A list whose kept entries moved is named in `teamFields`.
+ * to. A list whose kept entries moved is a `teamFields` entry quoting each
+ * side's order of ids.
+ *
+ * An added entry is named by id alone, since a proposal carries the whole new
+ * team; a removed one quotes every field it held (`after` is `(unset)`), since
+ * nothing else carries the old team.
  *
  * TWIN PARSER: `readDiff` / `diffRows` in
  * `apps/ui/src/renderer/chats/team-proposal-payload.ts`, which reads the
@@ -23,15 +34,15 @@ export interface ChangedEntry {
  */
 export interface TeamDiff {
   identical: boolean;
-  teamFields: string[];
+  teamFields: QuotedField[];
   addedMembers: string[];
-  removedMembers: string[];
+  removedMembers: ChangedEntry[];
   changedMembers: ChangedEntry[];
   addedBlocks: string[];
-  removedBlocks: string[];
+  removedBlocks: ChangedEntry[];
   changedBlocks: ChangedEntry[];
   addedStages: string[];
-  removedStages: string[];
+  removedStages: ChangedEntry[];
   changedStages: ChangedEntry[];
 }
 
@@ -99,10 +110,22 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function changedFields(
+  before: object,
+  after: object,
+  keys: readonly string[],
+): QuotedField[] {
+  const was = before as Record<string, unknown>;
+  const now = after as Record<string, unknown>;
+  return [...new Set(keys)]
+    .filter((key) => !same(was[key], now[key]))
+    .map((field) => ({ field, ...quoteChange(was[field], now[field]) }));
+}
+
 function diffById<T extends { id: string }>(
   before: readonly T[],
   after: readonly T[],
-): { added: string[]; removed: string[]; changed: ChangedEntry[] } {
+): { added: string[]; removed: ChangedEntry[]; changed: ChangedEntry[] } {
   const beforeById = new Map(before.map((entry) => [entry.id, entry]));
   const afterById = new Map(after.map((entry) => [entry.id, entry]));
   const changed: ChangedEntry[] = [];
@@ -111,61 +134,67 @@ function diffById<T extends { id: string }>(
     if (previous === undefined) {
       continue;
     }
-    const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
-    const fields = [...keys]
-      .filter(
-        (key) =>
-          !same(
-            (previous as Record<string, unknown>)[key],
-            (next as Record<string, unknown>)[key],
-          ),
-      )
-      .map((field) => ({
-        field,
-        ...quoteChange(
-          (previous as Record<string, unknown>)[field],
-          (next as Record<string, unknown>)[field],
-        ),
-      }));
+    const fields = changedFields(previous, next, [
+      ...Object.keys(previous),
+      ...Object.keys(next),
+    ]);
     if (fields.length > 0) {
       changed.push({ id, fields });
     }
   }
   return {
     added: [...afterById.keys()].filter((id) => !beforeById.has(id)),
-    removed: [...beforeById.keys()].filter((id) => !afterById.has(id)),
+    removed: before
+      .filter((entry) => !afterById.has(entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        fields: changedFields(
+          entry,
+          {},
+          Object.keys(entry).filter((key) => key !== 'id'),
+        ),
+      })),
     changed,
   };
 }
 
-/** Whether the entries both sides keep are listed in another order. */
+/** Each side's order of the entries both keep, or null when it did not change. */
 function reordered(
+  field: string,
   before: readonly { id: string }[],
   after: readonly { id: string }[],
-): boolean {
-  const kept = new Set(after.map((stage) => stage.id));
-  const was = before.map((stage) => stage.id).filter((id) => kept.has(id));
+): QuotedField | null {
+  const kept = new Set(after.map((entry) => entry.id));
+  const was = before.map((entry) => entry.id).filter((id) => kept.has(id));
   const had = new Set(was);
-  const now = after.map((stage) => stage.id).filter((id) => had.has(id));
-  return was.some((id, index) => now[index] !== id);
+  const now = after.map((entry) => entry.id).filter((id) => had.has(id));
+  return was.some((id, index) => now[index] !== id)
+    ? { field, ...quoteChange(was, now) }
+    : null;
 }
 
-const LISTS = ['members', 'instructionBlocks', 'stages'] as const;
+const LISTS: readonly string[] = ['members', 'instructionBlocks', 'stages'];
 
 export function diffTeams(before: Team, after: Team): TeamDiff {
-  const teamFields = [
-    ...new Set([...Object.keys(before), ...Object.keys(after)]),
-  ].filter(
-    (field) =>
-      !(LISTS as readonly string[]).includes(field) &&
-      !same(
-        (before as Record<string, unknown>)[field],
-        (after as Record<string, unknown>)[field],
-      ),
+  const teamFields = changedFields(
+    before,
+    after,
+    [...Object.keys(before), ...Object.keys(after)].filter(
+      (field) => !LISTS.includes(field),
+    ),
   );
-  for (const list of LISTS) {
-    if (reordered(before[list] ?? [], after[list] ?? [])) {
-      teamFields.push(list);
+  const moves = [
+    reordered('members', before.members, after.members),
+    reordered(
+      'instructionBlocks',
+      before.instructionBlocks,
+      after.instructionBlocks,
+    ),
+    reordered('stages', before.stages ?? [], after.stages ?? []),
+  ];
+  for (const moved of moves) {
+    if (moved !== null) {
+      teamFields.push(moved);
     }
   }
   const members = diffById(before.members, after.members);

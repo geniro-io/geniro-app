@@ -15,7 +15,7 @@ function team(stages?: TeamStage[]): Team {
 }
 
 describe('diffTeams — stages', () => {
-  it('names each added, removed and changed stage by id instead of the whole field', () => {
+  it('names each added and changed stage by id, and quotes what a removed stage held', () => {
     const before = team([
       stage('plan', { next: ['build'] }),
       stage('build'),
@@ -32,7 +32,15 @@ describe('diffTeams — stages', () => {
     expect(diff.identical).toBe(false);
     expect(diff.teamFields).toEqual([]);
     expect(diff.addedStages).toEqual(['review']);
-    expect(diff.removedStages).toEqual(['old']);
+    expect(diff.removedStages).toEqual([
+      {
+        id: 'old',
+        fields: [
+          { field: 'title', before: '"old"', after: '(unset)' },
+          { field: 'goal', before: '"old is done"', after: '(unset)' },
+        ],
+      },
+    ]);
     expect(diff.changedStages).toEqual([
       {
         id: 'build',
@@ -58,13 +66,15 @@ describe('diffTeams — stages', () => {
     expect(diff.identical).toBe(false);
   });
 
-  it('reports a reorder of kept stages as the stages field, since no stage changed', () => {
+  it('reports a reorder of kept stages as the stages field with each side’s order, since no stage changed', () => {
     const diff = diffTeams(
       team([stage('a'), stage('b')]),
       team([stage('b'), stage('a')]),
     );
 
-    expect(diff.teamFields).toEqual(['stages']);
+    expect(diff.teamFields).toEqual([
+      { field: 'stages', before: '["a","b"]', after: '["b","a"]' },
+    ]);
     expect(diff.changedStages).toEqual([]);
     expect(diff.identical).toBe(false);
   });
@@ -85,11 +95,11 @@ describe('diffTeams — members, blocks and team fields', () => {
     ...extra,
   });
 
-  it('names each added, removed and changed member by id', () => {
+  it('names each added and changed member by id, and quotes what a removed member held', () => {
     const before = teamOf([
       member('lead'),
       member('dev', { model: 'a' }),
-      member('old'),
+      member('old', { role: 'Retired reviewer' }),
     ]);
     const after = teamOf([
       member('lead'),
@@ -100,7 +110,18 @@ describe('diffTeams — members, blocks and team fields', () => {
     const diff = diffTeams(before, after);
 
     expect(diff.addedMembers).toEqual(['qa']);
-    expect(diff.removedMembers).toEqual(['old']);
+    expect(diff.removedMembers).toHaveLength(1);
+    expect(diff.removedMembers[0]!.id).toBe('old');
+    expect(diff.removedMembers[0]!.fields).toContainEqual({
+      field: 'role',
+      before: '"Retired reviewer"',
+      after: '(unset)',
+    });
+    expect(
+      diff.removedMembers[0]!.fields.every(
+        ({ field, after: value }) => field !== 'id' && value === '(unset)',
+      ),
+    ).toBe(true);
     expect(diff.changedMembers).toEqual([
       {
         id: 'dev',
@@ -114,7 +135,7 @@ describe('diffTeams — members, blocks and team fields', () => {
     expect(diff.identical).toBe(false);
   });
 
-  it('names each added, removed and changed instruction block by id', () => {
+  it('names each added and changed instruction block by id, and quotes what a removed block said', () => {
     const base = [member('lead'), member('dev')];
     const diff = diffTeams(
       teamOf(base, {
@@ -130,7 +151,16 @@ describe('diffTeams — members, blocks and team fields', () => {
     );
 
     expect(diff.addedBlocks).toEqual(['fresh']);
-    expect(diff.removedBlocks).toEqual(['gone']);
+    expect(diff.removedBlocks).toEqual([
+      {
+        id: 'gone',
+        fields: [
+          { field: 'title', before: '"gone"', after: '(unset)' },
+          { field: 'text', before: '"gone text"', after: '(unset)' },
+          { field: 'audience', before: '"everyone"', after: '(unset)' },
+        ],
+      },
+    ]);
     expect(diff.changedBlocks).toEqual([
       {
         id: 'style',
@@ -149,23 +179,49 @@ describe('diffTeams — members, blocks and team fields', () => {
       }),
     );
 
-    expect(diff.teamFields).toEqual(['members', 'instructionBlocks']);
+    expect(diff.teamFields).toEqual([
+      { field: 'members', before: '["lead","dev"]', after: '["dev","lead"]' },
+      {
+        field: 'instructionBlocks',
+        before: '["a","b"]',
+        after: '["b","a"]',
+      },
+    ]);
     expect(diff.changedMembers).toEqual([]);
     expect(diff.changedBlocks).toEqual([]);
     expect(diff.identical).toBe(false);
   });
 
-  it('names a changed scalar team field', () => {
+  it('quotes a changed scalar team field’s old and new value', () => {
     const members = [member('lead')];
     const diff = diffTeams(
       teamOf(members, { maxActiveTurns: 2 }),
       teamOf(members, { maxActiveTurns: 3, mode: 'relay' }),
     );
 
-    expect(diff.teamFields.sort()).toEqual(['maxActiveTurns', 'mode']);
+    expect(diff.teamFields).toEqual([
+      { field: 'mode', before: '"lead"', after: '"relay"' },
+      { field: 'maxActiveTurns', before: '2', after: '3' },
+    ]);
   });
 
-  it('names a moved trigger as the triggers field', () => {
+  it('quotes a team field one side does not set as unset', () => {
+    const members = [member('lead')];
+    const diff = diffTeams(
+      teamOf(members),
+      teamOf(members, { description: 'Ships reviewed changes.' }),
+    );
+
+    expect(diff.teamFields).toEqual([
+      {
+        field: 'description',
+        before: '(unset)',
+        after: '"Ships reviewed changes."',
+      },
+    ]);
+  });
+
+  it('quotes a moved trigger as the triggers field', () => {
     const members = [member('lead'), member('dev')];
     const diff = diffTeams(
       teamOf(members),
@@ -174,7 +230,13 @@ describe('diffTeams — members, blocks and team fields', () => {
       }),
     );
 
-    expect(diff.teamFields).toEqual(['triggers']);
+    expect(diff.teamFields).toEqual([
+      {
+        field: 'triggers',
+        before: '[{"kind":"first-message","member":"lead"}]',
+        after: '[{"kind":"first-message","member":"dev"}]',
+      },
+    ]);
   });
 
   it('is identical for equal teams', () => {

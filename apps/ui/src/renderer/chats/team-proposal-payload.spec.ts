@@ -491,12 +491,13 @@ describe('diffRows', () => {
         scope: 'member',
         subject: 'reviewer',
         detail: { field: 'approval', before: 'auto', after: 'ask' },
+        entry: [],
         toAuto: false,
       },
     ]);
   });
 
-  it('lists each added, changed and removed stage by id', () => {
+  it('lists each stage added and removed with what it holds or held, and each change by field', () => {
     const proposal = parsed(STAGES_PROPOSAL);
     expect(diffRows(proposal.diff!, proposal.team)).toEqual([
       {
@@ -505,6 +506,11 @@ describe('diffRows', () => {
         scope: 'stage',
         subject: 'review',
         detail: null,
+        entry: [
+          { field: 'title', value: 'Review' },
+          { field: 'goal', value: 'The reviewer approved the change.' },
+          { field: 'responsible', value: '["reviewer"]' },
+        ],
         toAuto: false,
       },
       {
@@ -513,6 +519,7 @@ describe('diffRows', () => {
         scope: 'stage',
         subject: 'build',
         detail: { field: 'next', before: '["ship"]', after: '["review"]' },
+        entry: [],
         toAuto: false,
       },
       {
@@ -521,20 +528,29 @@ describe('diffRows', () => {
         scope: 'stage',
         subject: 'ship',
         detail: null,
+        entry: [
+          { field: 'title', value: 'Ship' },
+          { field: 'goal', value: 'The change is merged.' },
+        ],
         toAuto: false,
       },
     ]);
   });
 
-  it('lists the team fields, then each block added, changed and removed, by id', () => {
+  it('lists the team fields with their values, then each block added, changed and removed', () => {
     const proposal = parsed(REPLACE_TO_AUTO_PROPOSAL);
     const rows = diffRows(
       {
         ...proposal.diff!,
-        teamFields: ['description'],
+        teamFields: [
+          {
+            field: 'description',
+            values: { before: '"Old."', after: '"New."' },
+          },
+        ],
         addedMembers: [],
         changedMembers: [],
-        addedBlocks: ['tone'],
+        addedBlocks: ['style'],
         changedBlocks: [
           {
             id: 'style',
@@ -543,17 +559,25 @@ describe('diffRows', () => {
             ],
           },
         ],
-        removedBlocks: ['old'],
+        removedBlocks: [
+          {
+            id: 'old',
+            fields: [
+              { field: 'text', before: '"Old rule."', after: '(unset)' },
+            ],
+          },
+        ],
       },
       proposal.team,
     );
     expect(
-      rows.map(({ key, marker, scope, subject, detail, toAuto }) => ({
+      rows.map(({ key, marker, scope, subject, detail, entry, toAuto }) => ({
         key,
         marker,
         scope,
         subject,
         detail,
+        entry,
         toAuto,
       })),
     ).toEqual([
@@ -562,15 +586,24 @@ describe('diffRows', () => {
         marker: 'changed',
         scope: 'team',
         subject: 'description',
-        detail: null,
+        detail: { field: 'description', before: 'Old.', after: 'New.' },
+        entry: [],
         toAuto: false,
       },
       {
-        key: 'added-block:tone',
+        key: 'added-block:style',
         marker: 'added',
         scope: 'block',
-        subject: 'tone',
+        subject: 'style',
         detail: null,
+        entry: [
+          { field: 'title', value: 'Style' },
+          {
+            field: 'text',
+            value: 'Follow the repository conventions in AGENTS.md.',
+          },
+          { field: 'audience', value: '["coder"]' },
+        ],
         toAuto: false,
       },
       {
@@ -579,6 +612,7 @@ describe('diffRows', () => {
         scope: 'block',
         subject: 'style',
         detail: { field: 'audience', before: '["coder"]', after: 'everyone' },
+        entry: [],
         toAuto: false,
       },
       {
@@ -587,9 +621,26 @@ describe('diffRows', () => {
         scope: 'block',
         subject: 'old',
         detail: null,
+        entry: [{ field: 'text', value: 'Old rule.' }],
         toAuto: false,
       },
     ]);
+  });
+
+  it('reads a card raised before removed entries and team fields were quoted: ids and names with nothing quoted', () => {
+    const proposal = parsed({
+      ...(STAGES_PROPOSAL as { diff: object }),
+      diff: {
+        ...(STAGES_PROPOSAL as { diff: object }).diff,
+        teamFields: ['mode'],
+        removedStages: ['ship'],
+      },
+    });
+    const rows = diffRows(proposal.diff!, proposal.team);
+    expect(rows.find((row) => row.key === 'team:mode')?.detail).toBeNull();
+    expect(rows.find((row) => row.key === 'removed-stage:ship')?.entry).toEqual(
+      [],
+    );
   });
 
   it('flags a block row as nothing to auto, even when its id is a member that runs unasked', () => {
@@ -851,7 +902,7 @@ describe('a card raised while teams were node graphs', () => {
     expect(
       parsed({ ...rest, diff: { ...ownDiff, workflowFields: teamFields } }).diff
         ?.teamFields,
-    ).toEqual(['description']);
+    ).toEqual([{ field: 'description', values: null }]);
   });
 
   it('rejects a diff whose node list is not a list of ids', () => {

@@ -16,10 +16,11 @@ const MARKER: Record<DiffMarker, { glyph: string; word: string }> = {
 /** A value short enough to read inline, `before → after`. */
 const INLINE_VALUE_CHARS = 60;
 
+const fitsInline = (value: string): boolean =>
+  value.length <= INLINE_VALUE_CHARS && !value.includes('\n');
+
 function inline(detail: NonNullable<DiffRow['detail']>): boolean {
-  return [detail.before, detail.after].every(
-    (value) => value.length <= INLINE_VALUE_CHARS && !value.includes('\n'),
-  );
+  return fitsInline(detail.before) && fitsInline(detail.after);
 }
 
 function subjectText(row: DiffRow): string {
@@ -40,11 +41,45 @@ function rowText(row: DiffRow): string {
   if (row.detail === null) {
     return `${subjectText(row)} ${MARKER[row.marker].word}`;
   }
-  const head = `${subjectText(row)} · ${row.detail.field}`;
+  const head =
+    row.scope === 'team'
+      ? subjectText(row)
+      : `${subjectText(row)} · ${row.detail.field}`;
   return inline(row.detail)
     ? `${head}: ${row.detail.before} → ${row.detail.after}`
     : head;
 }
+
+const SIDE = {
+  before: {
+    glyph: '−',
+    className: 'bg-destructive/10 text-destructive',
+  },
+  after: { glyph: '+', className: 'bg-success/10 text-success' },
+} as const;
+
+function ValueSide({
+  side,
+  value,
+}: {
+  side: keyof typeof SIDE;
+  value: string;
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'flex gap-1.5 rounded-sm px-1.5 py-0.5',
+        SIDE[side].className,
+      )}>
+      <span aria-hidden="true">{SIDE[side].glyph}</span>
+      <span className="sr-only">{side}: </span>
+      <span className="min-w-0 whitespace-pre-wrap">{value}</span>
+    </span>
+  );
+}
+
+const VALUE_CLASS =
+  'mt-1 flex flex-col gap-0.5 font-mono text-[11px] leading-snug';
 
 /** A long value's two sides, one under the other, as a diff draws them. */
 function ValueChange({
@@ -53,19 +88,34 @@ function ValueChange({
   detail: NonNullable<DiffRow['detail']>;
 }): React.JSX.Element {
   return (
+    <span data-slot="team-diff-value" className={VALUE_CLASS}>
+      <ValueSide side="before" value={detail.before} />
+      <ValueSide side="after" value={detail.after} />
+    </span>
+  );
+}
+
+/** What an added entry holds, or a removed one held: short fields inline, long ones as their one side. */
+function EntryFields({ row }: { row: DiffRow }): React.JSX.Element {
+  const side = row.marker === 'removed' ? 'before' : 'after';
+  return (
     <span
-      data-slot="team-diff-value"
-      className="mt-1 flex flex-col gap-0.5 font-mono text-[11px] leading-snug">
-      <span className="flex gap-1.5 rounded-sm bg-destructive/10 px-1.5 py-0.5 text-destructive">
-        <span aria-hidden="true">−</span>
-        <span className="sr-only">before: </span>
-        <span className="min-w-0 whitespace-pre-wrap">{detail.before}</span>
-      </span>
-      <span className="flex gap-1.5 rounded-sm bg-success/10 px-1.5 py-0.5 text-success">
-        <span aria-hidden="true">+</span>
-        <span className="sr-only">after: </span>
-        <span className="min-w-0 whitespace-pre-wrap">{detail.after}</span>
-      </span>
+      data-slot="team-diff-entry"
+      className="mt-0.5 flex flex-col gap-0.5 text-muted-foreground">
+      {row.entry.map(({ field, value }) =>
+        fitsInline(value) ? (
+          <span key={field} className="block">
+            {`${field}: ${value}`}
+          </span>
+        ) : (
+          <span key={field} className="block">
+            {field}
+            <span data-slot="team-diff-value" className={VALUE_CLASS}>
+              <ValueSide side={side} value={value} />
+            </span>
+          </span>
+        ),
+      )}
     </span>
   );
 }
@@ -132,6 +182,7 @@ export const TeamDiffList = memo(function TeamDiffList({
                     {RUNS_UNASKED_LABEL.toLowerCase()}
                   </span>
                 ) : null}
+                {row.entry.length > 0 ? <EntryFields row={row} /> : null}
               </span>
             </li>
           ))}

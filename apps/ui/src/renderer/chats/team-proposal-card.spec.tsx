@@ -183,6 +183,110 @@ describe('TeamProposalCard', () => {
     );
   });
 
+  const diffRow = (el: HTMLElement, text: string): HTMLElement =>
+    [...el.querySelectorAll<HTMLElement>('[data-slot="team-diff"] li')].find(
+      (row) => row.textContent?.includes(text),
+    )!;
+
+  it('shows what an added instruction block says, whom it addresses and its title', () => {
+    const el = render(card());
+    const row = diffRow(el, 'block style added');
+    expect(row.textContent).toContain('title: Style');
+    expect(row.textContent).toContain('audience: ["coder"]');
+    expect(row.textContent).toContain(
+      'text: Follow the repository conventions in AGENTS.md.',
+    );
+  });
+
+  it('draws a long added block text whole as its new side, and a long removed one as its old side', () => {
+    const input = REPLACE_TO_AUTO_PROPOSAL as {
+      team: { instructionBlocks: Record<string, unknown>[] };
+      diff: Record<string, unknown>;
+    };
+    const text = `Read the whole diff before review.\n${'Name every file and line. '.repeat(4)}`;
+    const old = `Merge only green pull requests. ${'Never skip the checks. '.repeat(4)}`;
+    const el = render(
+      card({
+        input: {
+          ...input,
+          team: {
+            ...input.team,
+            instructionBlocks: input.team.instructionBlocks.map((block) =>
+              block.id === 'style' ? { ...block, text } : block,
+            ),
+          },
+          diff: {
+            ...input.diff,
+            removedBlocks: [
+              {
+                id: 'merge',
+                fields: [
+                  {
+                    field: 'text',
+                    before: JSON.stringify(old),
+                    after: '(unset)',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const sideOf = (rowText: string) =>
+      diffRow(el, rowText).querySelector(
+        '[data-slot="team-diff-entry"] [data-slot="team-diff-value"]',
+      )?.textContent;
+    expect(sideOf('block style added')).toBe(`+after: ${text}`);
+    expect(sideOf('block merge removed')).toBe(`−before: ${old}`);
+  });
+
+  it('shows what an added agent is set to, on a card recorded before removed entries were quoted too', () => {
+    const el = render(card({ input: LEGACY_REPLACE_TO_AUTO_PROPOSAL }));
+    const row = diffRow(el, 'tester added');
+    expect(row.textContent).toContain('name: Tester');
+  });
+
+  it('shows what a removed instruction block said and a team field’s old and new value', () => {
+    const input = REPLACE_TO_AUTO_PROPOSAL as { diff: Record<string, unknown> };
+    const el = render(
+      card({
+        input: {
+          ...input,
+          diff: {
+            ...input.diff,
+            teamFields: [
+              {
+                field: 'description',
+                before: '"A coder and a reviewer."',
+                after: '"A coder, a tester and a reviewer."',
+              },
+            ],
+            removedBlocks: [
+              {
+                id: 'scope',
+                fields: [
+                  { field: 'title', before: '"Scope"', after: '(unset)' },
+                  {
+                    field: 'text',
+                    before: '"Touch only the files the task names."',
+                    after: '(unset)',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(diffRow(el, 'block scope removed').textContent).toContain(
+      'text: Touch only the files the task names.',
+    );
+    expect(diffRow(el, 'team description').textContent).toContain(
+      'team description: A coder and a reviewer. → A coder, a tester and a reviewer.',
+    );
+  });
+
   it('says what a new team is, with no diff and no overwrite warning', () => {
     const el = render(card({ input: RECORDED_NEW_PROPOSAL }));
     expect(el.textContent).toContain('Review Pair');
@@ -425,6 +529,74 @@ describe('TeamProposalCard', () => {
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
+  it('holds Approve over a control character in a removed block or an old team value the change list decodes', () => {
+    const input = RECORDED_REPLACE_PROPOSAL as {
+      diff: Record<string, unknown>;
+    };
+    for (const quoted of [
+      {
+        removedBlocks: [
+          {
+            id: 'old',
+            fields: [
+              {
+                field: 'text',
+                before: JSON.stringify('Old \u001b[2Jrule'),
+                after: '(unset)',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        teamFields: [
+          {
+            field: 'description',
+            before: JSON.stringify('Old \u001b[2Jteam'),
+            after: '"New"',
+          },
+        ],
+      },
+      {
+        removedMembers: [
+          {
+            id: 'old',
+            fields: [
+              {
+                field: 'role',
+                before: JSON.stringify('Old \u001b[2Jrole'),
+                after: '(unset)',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        removedStages: [
+          {
+            id: 'old',
+            fields: [
+              {
+                field: 'goal',
+                before: JSON.stringify('Old \u001b[2Jgoal'),
+                after: '(unset)',
+              },
+            ],
+          },
+        ],
+      },
+    ]) {
+      const el = render(
+        card({ input: { ...input, diff: { ...input.diff, ...quoted } } }),
+      );
+      expect(
+        el.querySelector('[data-slot="hazard-warning"]')?.textContent,
+      ).toContain('U+001B');
+      expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
+      unmount();
+    }
+  });
+
   it('holds Approve over a control character JSON would have escaped', () => {
     const input = RECORDED_NEW_PROPOSAL as {
       team: { members: Record<string, unknown>[] };
@@ -484,9 +656,9 @@ describe('TeamProposalCard', () => {
       (row) => row.textContent,
     );
     expect(rows).toEqual([
-      '+stage review added',
+      '+stage review addedtitle: Reviewgoal: The reviewer approved the change.responsible: ["reviewer"]',
       '~stage build · next: ["ship"] → ["review"]',
-      '−stage ship removed',
+      '−stage ship removedtitle: Shipgoal: The change is merged.',
     ]);
   });
 

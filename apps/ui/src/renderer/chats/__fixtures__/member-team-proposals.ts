@@ -88,7 +88,13 @@ export const REPLACE_TO_AUTO_PROPOSAL: unknown = {
   'replacesName': 'Review Pair',
   'diff': {
     'identical': false,
-    'teamFields': ['description'],
+    'teamFields': [
+      {
+        'field': 'description',
+        'before': '"A coder and a reviewer."',
+        'after': '"A coder, a tester and a reviewer."',
+      },
+    ],
     'addedMembers': ['tester'],
     'removedMembers': [],
     'changedMembers': [
@@ -196,7 +202,19 @@ export const STAGES_PROPOSAL: unknown = {
     'removedBlocks': [],
     'changedBlocks': [],
     'addedStages': ['review'],
-    'removedStages': ['ship'],
+    'removedStages': [
+      {
+        'id': 'ship',
+        'fields': [
+          { 'field': 'title', 'before': '"Ship"', 'after': '(unset)' },
+          {
+            'field': 'goal',
+            'before': '"The change is merged."',
+            'after': '(unset)',
+          },
+        ],
+      },
+    ],
     'changedStages': [
       {
         'id': 'build',

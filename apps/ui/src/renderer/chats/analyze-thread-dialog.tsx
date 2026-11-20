@@ -121,7 +121,7 @@ export type AnalysisSubject =
 
 /**
  * "Analyze thread": who analyses the subject, and what to look at — for a
- * team ("Analyze & improve"), how many of its newest runs to read too.
+ * team ("Analyze & improve"), how many past days of its runs to read too.
  *
  * Starts a NEW chat linked to its subject (`POST /v1/chats/:runId/analyses`,
  * `POST /v1/teams/:slug/analyses`); the analysis itself happens there.

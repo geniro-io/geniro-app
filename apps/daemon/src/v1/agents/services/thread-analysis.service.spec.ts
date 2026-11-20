@@ -638,6 +638,32 @@ describe('ThreadAnalysisService.startTeam', () => {
     ).toEqual(rows.slice(0, 30).map((row) => row.id));
   });
 
+  it('counts and reads only the runs started inside the period it is given', async () => {
+    const runs = [
+      { id: 'fresh', createdAt: new Date(Date.now() - 2 * DAY_MS) },
+      { id: 'older', createdAt: new Date(Date.now() - 20 * DAY_MS) },
+    ];
+    const seqs = { fresh: 4, older: 4 };
+    const readIds = (chat: ReturnType<typeof build>) =>
+      chat.createChat.mock.calls[0]![0].analysisTeam?.runs.map(
+        (run: { runId: string }) => run.runId,
+      );
+
+    const short = build(runs, seqs);
+    await expect(
+      short.service.countTeamRunsInPeriod(TARGET.slug, 3),
+    ).resolves.toEqual({ inPeriod: 1, analysed: 1 });
+    await short.service.startTeam(TARGET, { agentKind: 'claude', days: 3 });
+    expect(readIds(short)).toEqual(['fresh']);
+
+    const long = build(runs, seqs);
+    await expect(
+      long.service.countTeamRunsInPeriod(TARGET.slug, 30),
+    ).resolves.toEqual({ inPeriod: 2, analysed: 2 });
+    await long.service.startTeam(TARGET, { agentKind: 'claude', days: 30 });
+    expect(readIds(long)).toEqual(['fresh', 'older']);
+  });
+
   it('counts the archived runs of the period too', async () => {
     const { service } = build(
       [

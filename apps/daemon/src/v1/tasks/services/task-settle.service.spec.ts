@@ -1365,7 +1365,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(idleReap.reap).not.toHaveBeenCalled();
   });
 
-  it('over the real reap, stops what a finished card’s agents left running once its CLI has gone, and tells the user and the agent', async () => {
+  it('over the real reap, stops what a finished card’s agents left running once its CLI has gone, and tells only the agent', async () => {
     const task = await working();
     const owner = 'aaaaaaaaaaaaaaaa';
     const devServer: ScannedProcess = {
@@ -1415,6 +1415,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       () => undefined,
     );
     kept[0]?.endTurn();
+    const owed = vi.spyOn(realSessions, 'oweRunNote');
     service = build(realSessions, realReap);
     service.onModuleInit();
     await settleRun('run-1', 'completed');
@@ -1423,16 +1424,13 @@ describe('TaskSettleService (in-memory sqlite)', () => {
 
     await vi.waitFor(() => expect(kept[0]?.alive).toBe(false));
     expect(signals).toEqual([]);
-    await vi.waitFor(
-      async () => expect(await stoppedNotes('run-1')).toHaveLength(1),
-      { timeout: 5_000 },
-    );
+    await vi.waitFor(() => expect(owed).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(
       signals.filter(([, sig]) => sig === 'SIGTERM').map(([pid]) => pid),
     ).toEqual([10]);
-    const [note] = await stoppedNotes('run-1');
-    expect(note).toContain("This card's work is finished");
-    expect(note).toContain('pnpm dev --port 3000');
+    expect(await stoppedNotes('run-1')).toEqual([]);
 
     realSessions.startTurn(
       'run-1',

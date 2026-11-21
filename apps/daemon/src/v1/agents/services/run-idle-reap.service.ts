@@ -15,7 +15,7 @@ import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import { persistItemAndEmit } from '../utils/persist-item';
 import type { ScannedProcess } from '../utils/run-process-scan';
 import {
-  finishedStoppedNote,
+  finishedStoppedPrompt,
   idleStoppedNote,
 } from '../utils/session-replacement-notes';
 import { AgentEventBus } from './agent-events.bus';
@@ -122,17 +122,20 @@ export class RunIdleReapService implements OnModuleInit, OnApplicationShutdown {
     if (run === null || run.archivedAt !== null) {
       return;
     }
-    const commands = commandsOf(stopped);
     const executables = executablesOf(stopped);
-    const note =
-      cause === 'finished-card'
-        ? finishedStoppedNote(commands, executables, stopped.length)
-        : idleStoppedNote(
-            this.sessions.idleMinutes,
-            commands,
-            executables,
-            stopped.length,
-          );
+    if (cause === 'finished-card') {
+      this.sessions.oweRunNote(
+        runId,
+        finishedStoppedPrompt(executables, stopped.length),
+      );
+      return;
+    }
+    const note = idleStoppedNote(
+      this.sessions.idleMinutes,
+      commandsOf(stopped),
+      executables,
+      stopped.length,
+    );
     const row = mapEventToItem({
       type: 'notice',
       message: note.transcript,

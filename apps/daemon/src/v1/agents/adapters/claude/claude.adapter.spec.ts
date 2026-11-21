@@ -2013,6 +2013,81 @@ describe('ClaudeAdapter — the AskUserQuestion channel', () => {
       answers: { [QUESTION_INPUT.questions[0]!.question]: 'Blue' },
     });
   });
+
+  async function answerAfter(content: unknown[]): Promise<string> {
+    const { spawn, child } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
+    const handle = adapter.start(
+      { prompt: 'p', cwd: '/proj', approvalMode: 'ask' },
+      () => {},
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: { role: 'assistant', content },
+      })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'control_request',
+        request_id: 'req-q',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'AskUserQuestion',
+          input: QUESTION_INPUT,
+          requires_user_interaction: true,
+        },
+      })}\n`,
+    );
+    handle.respondApproval(
+      'req-q',
+      true,
+      adapter.withAnswer(QUESTION_INPUT, 'Blue'),
+    );
+    const response = JSON.parse(
+      child.stdin.written.split('\n').filter(Boolean).at(-1)!,
+    ).response.response as {
+      updatedInput: { answers: Record<string, string> };
+    };
+    child.emit('close', 0, null);
+    await handle.done;
+    return response.updatedInput.answers['Which color?']!;
+  }
+
+  const askToolUse = {
+    type: 'tool_use',
+    id: 'toolu_q',
+    name: 'AskUserQuestion',
+    input: QUESTION_INPUT,
+  };
+
+  it('tells the agent its pre-question text reached the screen only as a summary', async () => {
+    const answer = await answerAfter([
+      { type: 'thinking', thinking: '', signature: 'sig-a' },
+      {
+        type: 'thinking',
+        thinking: 'Here is the frame from the stand: the tag is yellow.\n\n',
+        signature: 'sig-b',
+      },
+      askToolUse,
+    ]);
+
+    expect(answer).toMatch(/^Blue\n\n\(Geniro: /);
+    expect(answer).toContain(
+      'the user saw only this summary: «Here is the frame from the stand: the tag is yellow.»',
+    );
+    expect(answer).toContain('Any picture you put there was not shown');
+  });
+
+  it('sends the answer untouched when the text before the question arrived whole', async () => {
+    expect(
+      await answerAfter([
+        { type: 'text', text: 'Here is the frame: ![tag](/tmp/tag.png)' },
+        askToolUse,
+      ]),
+    ).toBe('Blue');
+  });
 });
 
 describe('ClaudeAdapter — skills and commands on disk', () => {

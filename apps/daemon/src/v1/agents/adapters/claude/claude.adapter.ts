@@ -238,6 +238,7 @@ import {
   claudeCardQuestions,
   withResponse,
 } from './utils/claude-question.utils';
+import { ClaudeQuestionLeadIn } from './utils/claude-question-lead-in.utils';
 import {
   carryClaudeSession,
   claudeProjectDirName,
@@ -2753,6 +2754,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // nothing to wait for, rather than a gate that resolves instantly.
       const driver = super.createTurnDriver(input);
       const modelMismatch = new ClaudeModelMismatchNotice(input.model);
+      const questionLeadIn = new ClaudeQuestionLeadIn();
       return {
         ...driver,
         onStdinReady: (io) => {
@@ -2761,8 +2763,18 @@ export class ClaudeAdapter extends AgentAdapter {
         },
         onMessage: (obj) => {
           delegateSettler.observe(obj);
-          return modelMismatch.onMessage(obj, driver.onMessage(obj));
+          return modelMismatch.onMessage(
+            obj,
+            questionLeadIn.observe(obj, driver.onMessage(obj)),
+          );
         },
+        buildApprovalResponse: (id, allow, updatedInput, option) =>
+          driver.buildApprovalResponse?.(
+            id,
+            allow,
+            questionLeadIn.withNotice(id, allow, updatedInput),
+            option,
+          ),
       };
     }
     return new ClaudeTurnDriver({

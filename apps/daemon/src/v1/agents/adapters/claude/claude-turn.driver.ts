@@ -40,6 +40,7 @@ import {
   readSessionCostReply,
   usageRequestLine,
 } from './utils/claude-plan-limits.utils';
+import { ClaudeQuestionLeadIn } from './utils/claude-question-lead-in.utils';
 
 /** The one cost question in flight, and what its answer is for. */
 interface CostAsk {
@@ -100,6 +101,7 @@ interface OpenPoll {
  */
 export class ClaudeTurnDriver implements TurnDriver {
   private readonly modelMismatch: ClaudeModelMismatchNotice;
+  private readonly questionLeadIn = new ClaudeQuestionLeadIn();
   private polls = 0;
   private openPoll: OpenPoll | null = null;
   /**
@@ -314,10 +316,13 @@ export class ClaudeTurnDriver implements TurnDriver {
     // ahead of the `turn_complete` that records the same money durably — a
     // reader adding the two never sees the turn's cost in both at once.
     const cost = this.trackCost(obj);
-    const mapped = this.deps
-      .mapMessage(obj)
-      .flatMap((event) => this.trackWindow(event))
-      .map((event) => this.withFailureDetail(event));
+    const mapped = this.questionLeadIn.observe(
+      obj,
+      this.deps
+        .mapMessage(obj)
+        .flatMap((event) => this.trackWindow(event))
+        .map((event) => this.withFailureDetail(event)),
+    );
     return this.modelMismatch.onMessage(obj, [
       ...cost,
       ...this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj)),
@@ -770,7 +775,12 @@ export class ClaudeTurnDriver implements TurnDriver {
     updatedInput?: unknown,
     option?: ApprovalOption,
   ): string | undefined {
-    return this.deps.buildApprovalResponse(id, allow, updatedInput, option);
+    return this.deps.buildApprovalResponse(
+      id,
+      allow,
+      this.questionLeadIn.withNotice(id, allow, updatedInput),
+      option,
+    );
   }
 
   /**

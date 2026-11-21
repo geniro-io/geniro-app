@@ -1795,16 +1795,18 @@ export type ParkQuestionInput = {
 
 /**
  * A member's own `ask_user_question` card on a CLI that will not hold the call
- * open: raised in its flow, standing past its turn, its verdict waking that
- * member's own conversation. Kept by `TeamCardsService`, handed to the
- * executor, which may not import it.
+ * open, or one a holding CLI's turn ended on unanswered: raised in its flow,
+ * standing past its turn, its verdict waking that member's own conversation.
+ * Kept by `TeamCardsService`, handed to the executor, which may not import it.
  */
 export interface MemberQuestionCards {
+  /** `onScreen` names a card already drawn under that request id: it is kept, not drawn again. */
   ask(
     runId: string,
     memberId: string,
     questions: HostQuestion[],
     title: string | null,
+    onScreen?: string,
   ): Promise<HostQuestionOutcome>;
   /** The user wrote to the run instead of answering: close every standing one. */
   retireForUserMessage(runId: string): Promise<void>;

@@ -108,8 +108,8 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       this.proposeProjectInstructions(runId, change),
     );
     this.executor.useMemberQuestionCards({
-      ask: (runId, memberId, questions, title) =>
-        this.askMember(runId, memberId, questions, title),
+      ask: (runId, memberId, questions, title, onScreen) =>
+        this.askMember(runId, memberId, questions, title, onScreen),
       retireForUserMessage: (runId) => this.retireMemberQuestions(runId),
     });
   }
@@ -438,23 +438,24 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
    * card up and answer at once. One standing per member — the same words
    * adopt it, others are refused — claimed synchronously, so two racing calls
    * never both draw one.
+   *
+   * `onScreen` is a card a holding CLI's turn ended on, already drawn: it is
+   * kept under its own id, or retired here when it cannot be kept.
    */
   askMember(
     runId: string,
     memberId: string,
     questions: HostQuestion[],
     title: string | null,
+    onScreen?: string,
   ): Promise<HostQuestionOutcome> {
     const key = StandingQuestions.keyFor(title, questions);
     const claim = `${runId}::${memberId}`;
     const inFlight = this.asking.get(claim);
     if (inFlight !== undefined) {
-      return inFlight.key === key
+      return inFlight.key === key && onScreen === undefined
         ? inFlight.outcome
-        : Promise.resolve({
-            status: 'unavailable',
-            reason: QUESTION_ALREADY_STANDING,
-          });
+        : this.refuseMemberQuestion(runId, onScreen);
     }
     const outcome = this.raiseMemberQuestion(
       runId,
@@ -462,6 +463,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       key,
       questions,
       title,
+      onScreen,
     );
     this.asking.set(claim, { key, outcome });
     return outcome.finally(() => {
@@ -477,25 +479,27 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     key: string,
     questions: HostQuestion[],
     title: string | null,
+    onScreen: string | undefined,
   ): Promise<HostQuestionOutcome> {
     const standing = (await this.memberQuestions(runId)).find(
       (entry) => entry.memberId === memberId,
     );
     if (standing !== undefined) {
-      return StandingQuestions.keyFor(
-        standing.card.title,
-        standing.card.questions,
-      ) === key
+      return onScreen === undefined &&
+        StandingQuestions.keyFor(
+          standing.card.title,
+          standing.card.questions,
+        ) === key
         ? { status: 'posted' }
-        : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+        : this.refuseMemberQuestion(runId, onScreen);
     }
     const card: PendingQuestionSnapshot = {
       kind: 'question',
-      requestId: randomUUID(),
+      requestId: onScreen ?? randomUUID(),
       title,
       questions,
     };
-    let raised = false;
+    let raised = onScreen !== undefined;
     try {
       if (await this.isArchived(runId)) {
         throw new ConflictException(
@@ -503,14 +507,16 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
           'this team run is archived',
         );
       }
-      await this.persist(runId, memberId, 'approval_request', {
-        id: card.requestId,
-        nodeId: memberId,
-        toolName: HOST_QUESTION_TOOL,
-        input: hostQuestionCardInput(title, questions),
-        questions: hostCardQuestions(questions),
-      });
-      raised = true;
+      if (onScreen === undefined) {
+        await this.persist(runId, memberId, 'approval_request', {
+          id: card.requestId,
+          nodeId: memberId,
+          toolName: HOST_QUESTION_TOOL,
+          input: hostQuestionCardInput(title, questions),
+          questions: hostCardQuestions(questions),
+        });
+        raised = true;
+      }
       this.trackMemberQuestion(runId, { memberId, card });
       await this.changeMemberQuestions(runId, (entries) => [
         ...entries.filter((entry) => entry.memberId !== memberId),
@@ -538,6 +544,17 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       };
     }
     return { status: 'posted' };
+  }
+
+  /** Another question stands for this member; a card already drawn for this one is retired. */
+  private async refuseMemberQuestion(
+    runId: string,
+    onScreen: string | undefined,
+  ): Promise<HostQuestionOutcome> {
+    if (onScreen !== undefined) {
+      await this.retireOwnedCard(runId, onScreen, HOST_QUESTION_TOOL);
+    }
+    return { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
   }
 
   private trackMemberQuestion(

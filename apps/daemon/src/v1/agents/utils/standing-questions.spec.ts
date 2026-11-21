@@ -214,3 +214,40 @@ describe('StandingQuestions.sweep', () => {
     });
   });
 });
+
+describe('StandingQuestions — handing a card over at the turn end', () => {
+  it('names the newest open card, skipping one already answered', () => {
+    const cards = new StandingQuestions();
+    const older = StandingQuestions.keyFor('Older', QUESTIONS);
+    const newer = StandingQuestions.keyFor('Newer', QUESTIONS);
+    const answered = StandingQuestions.keyFor('Answered', QUESTIONS);
+    cards.open(older, 'req-1', vi.fn());
+    cards.open(newer, 'req-2', vi.fn());
+    const done = cards.open(answered, 'req-3', vi.fn());
+    cards.deliver(answered, done, { status: 'declined' });
+
+    expect(cards.newestUnanswered()).toEqual({
+      key: newer,
+      requestId: 'req-2',
+    });
+  });
+
+  it('hands back the parked call unanswered, and the sweep no longer closes that card', () => {
+    const cards = new StandingQuestions();
+    const kept = StandingQuestions.keyFor('Kept', QUESTIONS);
+    const other = StandingQuestions.keyFor('Other', QUESTIONS);
+    const keptCall = vi.fn();
+    const otherCall = vi.fn();
+    cards.open(kept, 'req-1', keptCall);
+    cards.open(other, 'req-2', otherCall);
+
+    const parked = cards.handOver(kept);
+    cards.sweep(SWEPT);
+
+    expect(parked).toBe(keptCall);
+    expect(keptCall).not.toHaveBeenCalled();
+    expect(otherCall).toHaveBeenCalledWith(SWEPT);
+    expect(cards.handOver(kept)).toBeNull();
+    expect(cards.newestUnanswered()).toBeNull();
+  });
+});

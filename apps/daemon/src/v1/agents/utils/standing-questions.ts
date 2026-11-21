@@ -4,6 +4,10 @@ import {
   type StandingHostQuestion,
 } from '../chat.types';
 
+/** Why a card the turn left unanswered could not reach the user. */
+export const TURN_ENDED_UNANSWERED =
+  'the turn ended before the question was answered';
+
 /** The agent call parked on a card, resolved once the card answers it. */
 export type HostQuestionResolver = (outcome: HostQuestionOutcome) => void;
 
@@ -160,6 +164,34 @@ export class StandingQuestions {
     const waiting = card.waiting;
     card.waiting = null;
     waiting?.(outcome);
+  }
+
+  /** The newest card still waiting on the user, or null when none is. */
+  newestUnanswered(): { key: string; requestId: string } | null {
+    let newest: { key: string; requestId: string } | null = null;
+    for (const [key, card] of this.cards) {
+      if (!card.closed) {
+        newest = { key, requestId: card.requestId };
+      }
+    }
+    return newest;
+  }
+
+  /**
+   * HAND OVER one open card to a holder that outlives the turn: it leaves this
+   * turn's record unanswered, so {@link sweep} no longer closes it, and the call
+   * parked on it is handed back for the new holder to answer.
+   */
+  handOver(key: string): HostQuestionResolver | null {
+    const card = this.cards.get(key);
+    if (card === undefined || card.closed) {
+      return null;
+    }
+    card.closed = true;
+    this.cards.delete(key);
+    const waiting = card.waiting;
+    card.waiting = null;
+    return waiting;
   }
 
   /**

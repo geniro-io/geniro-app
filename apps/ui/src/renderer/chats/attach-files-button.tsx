@@ -22,9 +22,13 @@ const ATTACH_LABEL = 'Attach files or images';
 export function AttachFilesButton({
   onFiles,
   disabled = false,
+  accept,
+  label = ATTACH_LABEL,
 }: {
   onFiles: (files: File[]) => void;
   disabled?: boolean;
+  accept?: string;
+  label?: string;
 }): React.JSX.Element {
   return (
     <span
@@ -39,8 +43,9 @@ export function AttachFilesButton({
         multiple
         data-slot="composer-attach-input"
         className="absolute inset-0 size-full cursor-pointer opacity-0"
-        aria-label={ATTACH_LABEL}
-        title={ATTACH_LABEL}
+        aria-label={label}
+        title={label}
+        accept={accept}
         disabled={disabled}
         onChange={(event) => {
           const picked = [...(event.target.files ?? [])];

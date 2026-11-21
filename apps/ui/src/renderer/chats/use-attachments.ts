@@ -24,6 +24,8 @@ export const MAX_ATTACHMENTS = 8;
 
 const ACCEPTED: string[] = Object.values(AttachmentMediaType);
 
+export const ACCEPTED_IMAGE_TYPES = ACCEPTED.join(',');
+
 /** One image staged in the composer, not yet sent. */
 export interface StagedAttachment {
   /** Local-only id — the daemon mints the durable one when the message lands. */

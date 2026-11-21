@@ -232,7 +232,12 @@ export class ThreadAnalysisService
     try {
       await this.chats.sendMessage(
         run.id,
-        threadAnalysisBrief({ title: source.title, kind }),
+        threadAnalysisBrief({
+          title: source.title,
+          kind,
+          images: input.images?.length ?? 0,
+        }),
+        input.images ?? [],
       );
     } catch (error) {
       // An analysis chat that never got its brief is an empty thread with a
@@ -357,7 +362,12 @@ export class ThreadAnalysisService
     try {
       await this.chats.sendMessage(
         run.id,
-        teamAnalysisBrief({ name: target.name, runs: runs.length }),
+        teamAnalysisBrief({
+          name: target.name,
+          runs: runs.length,
+          images: input.images?.length ?? 0,
+        }),
+        input.images ?? [],
       );
     } catch (error) {
       await this.chats.delete(run.id).catch(() => undefined);

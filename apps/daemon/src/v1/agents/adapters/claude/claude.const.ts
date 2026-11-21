@@ -299,6 +299,18 @@ export const CLAUDE_PERMISSION_PROMPT_TOOL_STDIO = 'stdio';
 export const CLAUDE_QUESTION_TOOL_NAME = 'AskUserQuestion';
 
 /**
+ * Appended to the answer of an AskUserQuestion that followed a `thinking`
+ * block: the API returns prose written before a tool call only as a summary
+ * of it, so the agent would otherwise believe the user read the whole text
+ * and saw its pictures. Worded to stay true when the block was the model's
+ * own reasoning instead, since the stream marks the two the same way.
+ */
+export const CLAUDE_SUMMARIZED_LEAD_IN_NOTICE =
+  "(Geniro: of everything you wrote or thought before this question, the user saw only this summary: «%summary». Any picture you put there was not shown. Put what is needed to answer, pictures included, into the question text or an option's preview.)";
+
+export const CLAUDE_SUMMARIZED_LEAD_IN_MAX_CHARS = 600;
+
+/**
  * Bypasses every permission check — and STRIPS the question tool with them.
  *
  * Re-probed on 2.1.227 by reading `system/init`'s own `tools` list, which

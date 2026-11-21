@@ -602,6 +602,69 @@ describe('the driver’s other half is the stateless default', () => {
   });
 });
 
+describe('a question asked after text the API returned only as a summary', () => {
+  const question = {
+    questions: [{ question: 'Is this right?', header: 'Check', options: [] }],
+  };
+
+  function askAfter(content: unknown[]): unknown {
+    const ledger = new ClaudeSessionCostLedger();
+    const buildApprovalResponse = vi.fn(() => 'LINE\n');
+    const driver = new ClaudeTurnDriver({
+      mapMessage: (obj) => mapClaudeMessage(obj, ledger),
+      buildApprovalResponse,
+    });
+    driver.onMessage({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: [
+          ...content,
+          {
+            type: 'tool_use',
+            id: 't1',
+            name: 'AskUserQuestion',
+            input: question,
+          },
+        ],
+      },
+    });
+    driver.onMessage({
+      type: 'control_request',
+      request_id: 'req-q',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: 'AskUserQuestion',
+        input: question,
+      },
+    });
+    driver.buildApprovalResponse('req-q', true, {
+      ...question,
+      answers: { 'Is this right?': 'Yes' },
+    });
+    return (buildApprovalResponse.mock.calls[0] as unknown[])[2];
+  }
+
+  it('hands the encoder an answer that says what the user actually saw', () => {
+    const sent = askAfter([
+      { type: 'thinking', thinking: 'Plan for the user.\n\n', signature: 's' },
+    ]) as { answers: Record<string, string> };
+
+    expect(sent.answers['Is this right?']).toMatch(
+      /^Yes\n\n\(Geniro: .*«Plan for the user\.»/,
+    );
+  });
+
+  it('hands the encoder the answer untouched after visible text', () => {
+    const sent = askAfter([{ type: 'text', text: 'Plan for the user.' }]) as {
+      answers: Record<string, string>;
+    };
+
+    expect(sent.answers['Is this right?']).toBe('Yes');
+  });
+});
+
 describe('the window a compaction left behind', () => {
   /** A driver whose mapper replays one scripted line's events at a time. */
   const driverOver = (script: AgentEvent[][]) => {

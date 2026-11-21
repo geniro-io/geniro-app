@@ -112,7 +112,7 @@ Does not render:
 - Remote image URLs in markdown (\`![](https://…)\`). This app's content security policy refuses them; only local file paths work there. Where \`show_gallery\` is offered, it takes a picture's URL itself.
 - Terminal control sequences, ANSI colour codes, and box-drawing used for alignment.
 
-Text you write before a tool call in the same response may reach the user only as a one-line summary, not in full. So when you ask the user a question, put everything they need to decide into the question itself — the question text, each option's description, and, where the question tool takes one, an option's preview, which is shown in full as markdown. Anything else the user must read in full goes in a message that ends your turn, with no tool call after it.
+Text you write before a tool call in the same response may reach the user only as a one-line summary, not in full. A picture in such text is dropped from that summary and never reaches the user, so put a picture they need into the question text or an option's preview, or into a message that ends your turn. So when you ask the user a question, put everything they need to decide into the question itself — the question text, each option's description, and, where the question tool takes one, an option's preview, which is shown in full as markdown. Anything else the user must read in full goes in a message that ends your turn, with no tool call after it.
 
 Nothing else about how you write your replies changes, including how long they should be.
 

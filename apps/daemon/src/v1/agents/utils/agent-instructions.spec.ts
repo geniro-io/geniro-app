@@ -121,6 +121,15 @@ describe('GENIRO_UI_PREAMBLE', () => {
     expect(GENIRO_UI_PREAMBLE).toContain('with no tool call after it');
   });
 
+  it('says a picture written before a tool call never reaches the user, and where it goes instead', () => {
+    expect(GENIRO_UI_PREAMBLE).toContain(
+      'A picture in such text is dropped from that summary and never reaches the user',
+    );
+    expect(GENIRO_UI_PREAMBLE).toContain(
+      "put a picture they need into the question text or an option's preview",
+    );
+  });
+
   it('tells the agent how to embed an image', () => {
     expect(GENIRO_UI_PREAMBLE).toContain('![alt](/full/path/to/file.png)');
   });

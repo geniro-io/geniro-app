@@ -291,6 +291,20 @@ describe('ThreadAnalysisService.start', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       'analysis',
       expect.stringContaining('a team thread'),
+      [],
+    );
+  });
+
+  it('sends the images attached to the focus with the brief, and says so in it', async () => {
+    const { service, sendMessage } = build({ teamId: 'dev-team' });
+    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
+
+    await service.start('source', { agentKind: 'claude', images });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'analysis',
+      expect.stringContaining('The user attached an image to this message'),
+      images,
     );
   });
 
@@ -612,6 +626,7 @@ describe('ThreadAnalysisService.startTeam', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       'analysis',
       expect.stringContaining('across its 3 latest runs'),
+      [],
     );
   });
 
@@ -695,6 +710,22 @@ describe('ThreadAnalysisService.startTeam', () => {
       service.startTeam(TARGET, { agentKind: 'claude', days: 7 }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_NO_RUNS' });
     expect(createChat).not.toHaveBeenCalled();
+  });
+
+  it('sends the images attached to the focus with the team brief, and says so in it', async () => {
+    const { service, sendMessage } = build([{ id: 'r1' }], { r1: 3 });
+    const images = [
+      { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' },
+      { mediaType: 'image/jpeg' as const, data: '/9j/4AAQ' },
+    ];
+
+    await service.startTeam(TARGET, { agentKind: 'claude', days: 7, images });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'analysis',
+      expect.stringContaining('The user attached 2 images to this message'),
+      images,
+    );
   });
 
   it('replaces the team’s earlier analysis only once the new one has its brief', async () => {

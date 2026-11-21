@@ -310,9 +310,21 @@ ${subAgents('view=overview')}`,
 export function threadAnalysisBrief(source: {
   title: string | null;
   kind: AnalysedThreadKind;
+  images?: number;
 }): string {
   const name = source.title === null ? 'the thread' : `"${source.title}"`;
-  return `Analyse ${name} (a ${source.kind === 'team' ? 'team' : 'chat'} thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with ${HOST_ANALYZED_THREAD_TOOL} view=overview.`;
+  return withAttachedImages(
+    `Analyse ${name} (a ${source.kind === 'team' ? 'team' : 'chat'} thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with ${HOST_ANALYZED_THREAD_TOOL} view=overview.`,
+    source.images ?? 0,
+  );
+}
+
+function withAttachedImages(brief: string, images: number): string {
+  if (images === 0) {
+    return brief;
+  }
+  const what = images === 1 ? 'an image' : `${images} images`;
+  return `${brief}\n\nThe user attached ${what} to this message to show what this analysis should look at: look at ${images === 1 ? 'it' : 'them'} before you start, and read ${images === 1 ? 'it' : 'them'} together with any focus in your instructions.`;
 }
 
 /** What a team analysis's reply shows the user, section by section. */
@@ -445,6 +457,10 @@ When the user asks you to analyse, review or improve this team, or to suggest ch
 export function teamAnalysisBrief(team: {
   name: string;
   runs: number;
+  images?: number;
 }): string {
-  return `Analyse the team "${team.name}" across its ${team.runs === 1 ? 'latest run' : `${team.runs} latest runs`}: explain where its runs' time and money went and why, how useful each agent's work was and how well it held up, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the team or its environment would make the next runs faster, cheaper or less error-prone. Start with ${HOST_ANALYZED_THREAD_TOOL} view=history, then view=runs.`;
+  return withAttachedImages(
+    `Analyse the team "${team.name}" across its ${team.runs === 1 ? 'latest run' : `${team.runs} latest runs`}: explain where its runs' time and money went and why, how useful each agent's work was and how well it held up, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the team or its environment would make the next runs faster, cheaper or less error-prone. Start with ${HOST_ANALYZED_THREAD_TOOL} view=history, then view=runs.`,
+    team.images ?? 0,
+  );
 }

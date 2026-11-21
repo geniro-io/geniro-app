@@ -1708,6 +1708,12 @@ export interface AnalyzeTeamDto {
      */
     focus?: string;
     /**
+     * Images the user attached to the focus, sent with the analysis's first message
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof AnalyzeTeamDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
+    /**
      * 
      * @type {string}
      * @memberof AnalyzeTeamDto
@@ -1800,6 +1806,12 @@ export interface AnalyzeThreadDto {
      * @memberof AnalyzeThreadDto
      */
     focus?: string;
+    /**
+     * Images the user attached to the focus, sent with the analysis's first message
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof AnalyzeThreadDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
     /**
      * 
      * @type {string}

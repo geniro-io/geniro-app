@@ -5,6 +5,7 @@ import { runTeamSchema } from '../../teams/dto/teams.dto';
 import { StartTeamChatSchema } from '../../teams/teams.types';
 import {
   CALL_MESSAGES_MAX,
+  MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_RUN_NOTES_LENGTH,
   REPLY_LANGUAGE_MAX_LENGTH,
 } from '../chat.types';
@@ -211,6 +212,35 @@ describe('updateChatSettingsSchema — the auto-compact threshold', () => {
 });
 
 describe('analyzeThreadSchema', () => {
+  it('carries images attached to the focus, on the bounds a message has', () => {
+    const image = { mediaType: 'image/png', data: 'iVBORw0KGgo=' };
+    expect(
+      analyzeThreadSchema.parse({ agentKind: 'claude', images: [image] }),
+    ).toMatchObject({ images: [image] });
+    expect(
+      analyzeTeamSchema.parse({
+        agentKind: 'claude',
+        days: 7,
+        images: [image],
+      }),
+    ).toMatchObject({ images: [image] });
+    expect(
+      analyzeThreadSchema.safeParse({
+        agentKind: 'claude',
+        images: Array.from(
+          { length: MAX_ATTACHMENTS_PER_MESSAGE + 1 },
+          () => image,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      analyzeThreadSchema.safeParse({
+        agentKind: 'claude',
+        images: [{ mediaType: 'image/tiff', data: 'AAAA' }],
+      }).success,
+    ).toBe(false);
+  });
+
   it('refuses a focus carrying a control character, and keeps multi-line prose', () => {
     expect(
       analyzeThreadSchema.safeParse({ agentKind: 'claude', focus: 'a\u0000b' })

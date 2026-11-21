@@ -189,6 +189,26 @@ describe('threadAnalysisBrief', () => {
       'Analyse "Dev Team run" (a team thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with read_analyzed_thread view=overview.',
     );
   });
+
+  it('tells the agent about the images attached to the focus, and only when there are some', () => {
+    const plain = threadAnalysisBrief({ title: 'Dev Team run', kind: 'chat' });
+    expect(
+      threadAnalysisBrief({ title: 'Dev Team run', kind: 'chat', images: 0 }),
+    ).toBe(plain);
+    expect(
+      threadAnalysisBrief({ title: 'Dev Team run', kind: 'chat', images: 1 }),
+    ).toBe(
+      `${plain}\n\nThe user attached an image to this message to show what this analysis should look at: look at it before you start, and read it together with any focus in your instructions.`,
+    );
+    expect(
+      teamAnalysisBrief({ name: 'Dev Team', runs: 5, images: 2 }),
+    ).toContain(
+      'The user attached 2 images to this message to show what this analysis should look at: look at them before you start',
+    );
+    expect(teamAnalysisBrief({ name: 'Dev Team', runs: 5 })).not.toContain(
+      'attached',
+    );
+  });
 });
 
 describe('teamAnalysisGuide', () => {

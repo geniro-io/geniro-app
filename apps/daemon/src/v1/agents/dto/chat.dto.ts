@@ -192,6 +192,18 @@ export const createChatSchema = z.object({
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 
+/** Pasted images riding one message — shared by the chat and team routes. */
+export const messageImagesSchema = z
+  .array(
+    z
+      .object({
+        mediaType: AttachmentMediaTypeSchema,
+        data: z.string().min(1).describe('base64-encoded image bytes'),
+      })
+      .meta({ title: 'SendMessageDtoImagesInner' }),
+  )
+  .max(MAX_ATTACHMENTS_PER_MESSAGE);
+
 /**
  * `POST /v1/chats/:runId/analyses` — start a chat that analyses `:runId`.
  *
@@ -220,6 +232,11 @@ export const analyzeThreadSchema = z.object({
     )
     .optional()
     .describe("The user's focus or extra instructions for this analysis"),
+  images: messageImagesSchema
+    .optional()
+    .describe(
+      "Images the user attached to the focus, sent with the analysis's first message",
+    ),
   customInstructions: CustomInstructionsSchema.optional(),
   replyLanguage: ReplyLanguageSchema.optional(),
   agentOptions: AgentOptionsSchema.optional(),
@@ -334,16 +351,6 @@ export const updateChatSettingsSchema = z
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
 ) {}
-
-/** Pasted images riding one message — shared by the chat and team routes. */
-export const messageImagesSchema = z
-  .array(
-    z.object({
-      mediaType: AttachmentMediaTypeSchema,
-      data: z.string().min(1).describe('base64-encoded image bytes'),
-    }),
-  )
-  .max(MAX_ATTACHMENTS_PER_MESSAGE);
 
 export const sendMessageSchema = z
   .object({

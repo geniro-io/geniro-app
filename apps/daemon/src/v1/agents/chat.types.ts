@@ -1447,6 +1447,7 @@ export interface StartThreadAnalysis {
   configDir?: string;
   cwd?: string;
   focus?: string;
+  images?: SendMessageImage[];
   customInstructions?: string;
   replyLanguage?: string;
   agentOptions?: AgentOptionsSnapshot;

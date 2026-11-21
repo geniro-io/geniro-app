@@ -82,29 +82,37 @@ async function render(
   run: RunDto,
   analyzeThread: ReturnType<typeof vi.fn>,
   onStarted = vi.fn(),
-): Promise<void> {
+): Promise<{ show: (next: RunDto | null) => Promise<void> }> {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  const draw = (shown: RunDto | null): React.JSX.Element => (
+    <AnalyzeThreadDialog
+      subject={shown === null ? null : { kind: 'thread', run: shown }}
+      sourceLabel={shown?.title ?? 'thread'}
+      chatApi={{ analyzeThread } as unknown as ChatsApi}
+      agentsApi={null}
+      cliDetections={null}
+      composerSetup={COMPOSER}
+      recentConfigDirsFor={() => []}
+      configProfilesFor={() => []}
+      configDirReasonFor={() => null}
+      approvalCapabilityFor={() => CLAUDE_APPROVALS}
+      runSettings={() => Promise.resolve({ customInstructions: 'be brief' })}
+      onClose={() => undefined}
+      onStarted={onStarted}
+    />
+  );
   await act(async () => {
-    root!.render(
-      <AnalyzeThreadDialog
-        subject={{ kind: 'thread', run }}
-        sourceLabel={run.title ?? 'thread'}
-        chatApi={{ analyzeThread } as unknown as ChatsApi}
-        agentsApi={null}
-        cliDetections={null}
-        composerSetup={COMPOSER}
-        recentConfigDirsFor={() => []}
-        configProfilesFor={() => []}
-        configDirReasonFor={() => null}
-        approvalCapabilityFor={() => CLAUDE_APPROVALS}
-        runSettings={() => Promise.resolve({ customInstructions: 'be brief' })}
-        onClose={() => undefined}
-        onStarted={onStarted}
-      />,
-    );
+    root!.render(draw(run));
   });
+  return {
+    show: async (next) => {
+      await act(async () => {
+        root!.render(draw(next));
+      });
+    },
+  };
 }
 
 function button(name: string): HTMLButtonElement {
@@ -123,7 +131,129 @@ async function press(name: string): Promise<void> {
   });
 }
 
+async function flush(): Promise<void> {
+  for (let tick = 0; tick < 8; tick += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+function pasteInto(field: HTMLElement, files: File[]): Event {
+  const paste = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { files } });
+  field.dispatchEvent(paste);
+  return paste;
+}
+
+function pick(files: File[]): void {
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-slot="composer-attach-input"]',
+  )!;
+  Object.defineProperty(input, 'files', { value: files, configurable: true });
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
 describe('AnalyzeThreadDialog', () => {
+  it('sends an image pasted into the focus with the analysis, and can drop it again', async () => {
+    const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
+    await render(source(), analyzeThread);
+    const field = document.querySelector<HTMLTextAreaElement>(
+      '#analyze-thread-focus',
+    )!;
+
+    let paste!: Event;
+    await act(async () => {
+      paste = pasteInto(field, [
+        new File([PNG], 'shot.png', { type: 'image/png' }),
+        new File([PNG, PNG], 'second.png', { type: 'image/png' }),
+      ]);
+    });
+    await flush();
+
+    expect(paste.defaultPrevented).toBe(true);
+    const staged = document.querySelectorAll('[data-slot="staged-attachment"]');
+    expect(staged).toHaveLength(2);
+    await act(async () => {
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Remove second.png"]')!
+        .click();
+    });
+    await press('Start analysis');
+
+    expect(analyzeThread).toHaveBeenCalledWith({
+      runId: 'source',
+      analyzeThreadDto: expect.objectContaining({
+        images: [
+          { mediaType: 'image/png', data: Buffer.from(PNG).toString('base64') },
+        ],
+      }),
+    });
+  });
+
+  it('attaches a picked image, refuses a picked document, and holds Start while an image is still being read', async () => {
+    const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
+    await render(source(), analyzeThread);
+
+    await act(async () => {
+      pick([
+        new File([PNG], 'shot.png', { type: 'image/png' }),
+        new File(['%PDF'], 'notes.pdf', { type: 'application/pdf' }),
+      ]);
+    });
+
+    expect(button('Start analysis').disabled).toBe(true);
+    await flush();
+    expect(button('Start analysis').disabled).toBe(false);
+    expect(
+      document.querySelectorAll('[data-slot="staged-attachment"]'),
+    ).toHaveLength(1);
+    expect(document.body.textContent).toContain(
+      'notes.pdf — only PNG, JPEG, GIF or WebP images up to 5MB can be attached',
+    );
+  });
+
+  it('opens again with no images and no refusal left from the last time', async () => {
+    const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
+    const { show } = await render(source(), analyzeThread);
+    await act(async () => {
+      pick([
+        new File([PNG], 'shot.png', { type: 'image/png' }),
+        new File(['%PDF'], 'notes.pdf', { type: 'application/pdf' }),
+      ]);
+    });
+    await flush();
+    expect(
+      document.querySelectorAll('[data-slot="staged-attachment"]'),
+    ).toHaveLength(1);
+
+    await show(null);
+    await show(source({ id: 'other' }));
+    await flush();
+
+    expect(
+      document.querySelector('[data-slot="staged-attachment"]'),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain('notes.pdf');
+    await press('Start analysis');
+    expect(analyzeThread.mock.calls[0]![0].analyzeThreadDto).not.toHaveProperty(
+      'images',
+    );
+  });
+
+  it('sends no images when none are attached', async () => {
+    const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
+    await render(source(), analyzeThread);
+
+    await press('Start analysis');
+
+    expect(analyzeThread.mock.calls[0]![0].analyzeThreadDto).not.toHaveProperty(
+      'images',
+    );
+  });
+
   it("starts from the composer's setup the first time, and remembers the choice", async () => {
     const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
     const onStarted = vi.fn();
@@ -316,40 +446,69 @@ describe('AnalyzeThreadDialog', () => {
       countTeamAnalysisRuns: ReturnType<typeof vi.fn> = vi
         .fn()
         .mockResolvedValue({ inPeriod: 12, analysed: 12 }),
-    ): Promise<void> {
+    ): Promise<{ rerender: () => Promise<void> }> {
       container = document.createElement('div');
       document.body.appendChild(container);
       root = createRoot(container);
+      const api = {
+        analyzeTeam,
+        checkTeamAnalysisJudge,
+        countTeamAnalysisRuns,
+      } as unknown as TeamsApi;
+      const draw = (): React.JSX.Element => (
+        <AnalyzeThreadDialog
+          subject={{ kind: 'team', slug: 'dev-team', name: 'Dev Team', api }}
+          sourceLabel="Dev Team"
+          chatApi={{} as ChatsApi}
+          agentsApi={null}
+          cliDetections={null}
+          composerSetup={COMPOSER}
+          recentConfigDirsFor={() => []}
+          configProfilesFor={() => []}
+          configDirReasonFor={() => null}
+          approvalCapabilityFor={() => CLAUDE_APPROVALS}
+          agentLabelOf={(kind) => (kind === 'codex' ? 'Codex' : kind)}
+          runSettings={() => Promise.resolve({})}
+          onClose={() => undefined}
+          onStarted={onStarted}
+        />
+      );
       await act(async () => {
-        root!.render(
-          <AnalyzeThreadDialog
-            subject={{
-              kind: 'team',
-              slug: 'dev-team',
-              name: 'Dev Team',
-              api: {
-                analyzeTeam,
-                checkTeamAnalysisJudge,
-                countTeamAnalysisRuns,
-              } as unknown as TeamsApi,
-            }}
-            sourceLabel="Dev Team"
-            chatApi={{} as ChatsApi}
-            agentsApi={null}
-            cliDetections={null}
-            composerSetup={COMPOSER}
-            recentConfigDirsFor={() => []}
-            configProfilesFor={() => []}
-            configDirReasonFor={() => null}
-            approvalCapabilityFor={() => CLAUDE_APPROVALS}
-            agentLabelOf={(kind) => (kind === 'codex' ? 'Codex' : kind)}
-            runSettings={() => Promise.resolve({})}
-            onClose={() => undefined}
-            onStarted={onStarted}
-          />,
-        );
+        root!.render(draw());
       });
+      return {
+        rerender: async () => {
+          await act(async () => {
+            root!.render(draw());
+          });
+        },
+      };
     }
+
+    it('keeps the judge hint and the run count when the page re-renders with the same team', async () => {
+      const check = vi.fn().mockResolvedValue({
+        judgeVendor: 'anthropic',
+        members: 2,
+        sameVendor: ['lead', 'reviewer'],
+        alternatives: ['codex'],
+      });
+      const count = vi.fn().mockResolvedValue({ inPeriod: 12, analysed: 12 });
+      const { rerender } = await renderTeam(vi.fn(), vi.fn(), check, count);
+      check.mockReturnValue(new Promise(() => undefined));
+      count.mockReturnValue(new Promise(() => undefined));
+
+      await rerender();
+
+      expect(
+        document.querySelector('[data-slot="analysis-judge-hint"]'),
+      ).not.toBeNull();
+      expect(check).toHaveBeenCalledTimes(1);
+      expect(count).toHaveBeenCalledTimes(1);
+      expect(
+        document.querySelector('[data-slot="analysis-period-count"]')
+          ?.textContent,
+      ).toBe('12 runs will be analysed');
+    });
 
     it('warns when most members run the judge’s own vendor, and switches to another agent on a press', async () => {
       const check = vi.fn().mockImplementation(async ({ agent }) => ({
@@ -500,6 +659,32 @@ describe('AnalyzeThreadDialog', () => {
       expect(countLine().textContent).toBe(
         '45 runs in this period — the newest 30 will be analysed',
       );
+    });
+
+    it('sends the images attached to the focus with a team analysis', async () => {
+      const analyzeTeam = vi.fn().mockResolvedValue({ id: 'analysis' });
+      await renderTeam(analyzeTeam);
+      await act(async () => {
+        pasteInto(document.querySelector('#analyze-thread-focus')!, [
+          new File([PNG], 'shot.png', { type: 'image/png' }),
+        ]);
+      });
+      await flush();
+
+      await press('Start analysis');
+
+      expect(analyzeTeam).toHaveBeenCalledWith({
+        slug: 'dev-team',
+        analyzeTeamDto: expect.objectContaining({
+          days: 7,
+          images: [
+            {
+              mediaType: 'image/png',
+              data: Buffer.from(PNG).toString('base64'),
+            },
+          ],
+        }),
+      });
     });
 
     it('starts a team analysis over the period picked', async () => {

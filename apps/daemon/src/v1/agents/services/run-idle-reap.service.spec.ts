@@ -399,6 +399,37 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
     },
   );
 
+  it('stops what a finished card’s run left and owes only the agent a note, writing no row', async () => {
+    const run = await runDao.create({ status: 'completed' });
+    const { service, sessions, kept, adapter, signals } = setup([
+      tagged(10, run.id, `pnpm dev --token=${SECRET}`),
+      tagged(11, run.id, 'node next-server.js', 10),
+    ]);
+
+    const stopped = await service.reap(run.id, 'finished-card');
+
+    expect(stopped.map((process) => process.pid)).toEqual([10, 11]);
+    expect(
+      signals.filter(([, sig]) => sig === 'SIGTERM').map(([pid]) => pid),
+    ).toEqual([10, 11]);
+    expect(
+      await itemDao.getAll({ runId: run.id }, undefined, orm.em.fork()),
+    ).toEqual([]);
+
+    sessions.startTurn(
+      run.id,
+      adapter,
+      { prompt: 'again', cwd: '/p' },
+      () => undefined,
+    );
+    const prompt = kept[0]?.inputs[0]?.prompt ?? '';
+    expect(prompt).toContain(
+      "When this card's work was finished, geniro stopped 2 processes",
+    );
+    expect(prompt).toContain('started by: pnpm.');
+    expect(prompt).not.toContain('--token');
+  });
+
   it('writes one note when two idle reaps of a run share a reap', async () => {
     // The idle close and the sweep can both ask while another run's reap is
     // still in its grace period, and then share the next one.

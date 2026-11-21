@@ -111,56 +111,54 @@ export function idleStoppedNote(
   processes: number,
 ): SessionNote {
   const window = `the kept-session window, ${minutes} min`;
-  return leftRunningNote(
-    `This conversation sat unused for ${window}`,
-    `While this conversation sat unused (${window})`,
-    commands,
-    executables,
-    processes,
-  );
+  return {
+    transcript:
+      `This conversation sat unused for ${window}, so geniro stopped ` +
+      `${processCount(processes)} its agents had left running:\n` +
+      `${commandList(commands, commands.length)}\nThe next message ` +
+      `lets the agent start again any it still needs.`,
+    prompt: leftRunningPrompt(
+      `While this conversation sat unused (${window})`,
+      executables,
+      processes,
+    ),
+  };
 }
 
 /**
  * The run's card was finished, so the `processes` its agents had left running
- * outside any CLI were stopped before its worktree is collected — told as
- * {@link idleStoppedNote} is.
+ * outside any CLI were stopped before its worktree is collected. Only the
+ * agent is told, should the conversation go on; the user reads no row.
  */
-export function finishedStoppedNote(
-  commands: readonly string[],
+export function finishedStoppedPrompt(
   executables: readonly string[],
   processes: number,
-): SessionNote {
-  return leftRunningNote(
-    "This card's work is finished",
+): string {
+  return leftRunningPrompt(
     "When this card's work was finished",
-    commands,
     executables,
     processes,
   );
 }
 
-function leftRunningNote(
-  why: string,
+function leftRunningPrompt(
   when: string,
-  commands: readonly string[],
   executables: readonly string[],
   processes: number,
-): SessionNote {
-  const count = processes === 1 ? '1 process' : `${processes} processes`;
+): string {
   const named = executables.slice(0, MAX_NAMED_COMMANDS).map(clip);
   const more = executables.length - named.length;
   const starters =
     more > 0 ? `${named.join(', ')} and ${more} more` : named.join(', ');
-  return {
-    transcript:
-      `${why}, so geniro stopped ${count} its agents ` +
-      `had left running:\n${commandList(commands, commands.length)}\nThe next message ` +
-      `lets the agent start again any it still needs.`,
-    prompt:
-      `${when}, geniro stopped ${count} its agents ` +
-      `had left running outside their own processes, started by: ${starters}. ` +
-      `If you started any of them and still need it, start it again.`,
-  };
+  return (
+    `${when}, geniro stopped ${processCount(processes)} its agents ` +
+    `had left running outside their own processes, started by: ${starters}. ` +
+    `If you started any of them and still need it, start it again.`
+  );
+}
+
+function processCount(processes: number): string {
+  return processes === 1 ? '1 process' : `${processes} processes`;
 }
 
 function commandCount(running: number): string {

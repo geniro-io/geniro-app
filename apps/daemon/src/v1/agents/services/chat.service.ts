@@ -6349,7 +6349,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // inside, an armed project's intake column, or a card's approval set
         // to `auto` — are refused by the board itself for any chat not
         // already in `auto` (`TaskBoardToolService.refuseUnattended`), since
-        // this gate sees only the tool name.
+        // this gate sees only the tool name. `delete_task` is left out: a
+        // deleted card has no undo, so outside `auto` the user decides.
         isHostBoardCall(hostServerName, toolName) ||
         // The analysis chat's own reader and card, installed only on an
         // analysis and scoped to its one source — see `isHostAnalysisReadCall`.

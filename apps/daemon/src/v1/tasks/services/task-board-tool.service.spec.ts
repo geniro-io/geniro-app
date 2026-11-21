@@ -1085,6 +1085,119 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     });
   });
 
+  it('deletes a card by key through the board’s own delete — chats released, card gone, change announced', async () => {
+    const task = await working('run-1');
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+    changes.length = 0;
+
+    const answer = await call('delete_task', { task: 'gen-1' });
+
+    expect(answer.isError).toBe(false);
+    expect(answer.text).toMatch(
+      /^Deleted GEN-1 "ship it" from `in_review` on project GEN \(Geniro\)\. The chats that worked it and its branch are kept\./,
+    );
+    expect(jsonOf(answer.text)).toMatchObject({
+      key: 'GEN-1',
+      id: task.id,
+      status: 'in_review',
+      runId: 'run-1',
+    });
+    expect(await fresh(task.id)).toBeNull();
+    const run = await runDao.getById('run-1', orm.em.fork() as EntityManager);
+    expect(run).toMatchObject({ id: 'run-1', taskId: null });
+    expect(changes).toEqual([
+      {
+        taskId: task.id,
+        projectId: project.id,
+        status: 'in_review',
+        reason: 'deleted',
+      },
+    ]);
+  });
+
+  it('refuses the card this conversation is working — its run works in that worktree', async () => {
+    const task = await working('run-1');
+    changes.length = 0;
+
+    const answer = await call('delete_task', { task: 'GEN-1' }, 'run-1');
+
+    expect(answer).toMatchObject({ isError: true });
+    expect(answer.text).toMatch(
+      /^Refused: GEN-1 is the card this conversation is working/,
+    );
+    expect(await fresh(task.id)).not.toBeNull();
+    expect(changes).toEqual([]);
+  });
+
+  it('never defaults to the card this conversation works — a delete names its card', async () => {
+    const task = await working('run-1');
+
+    const answer = await call('delete_task', {}, 'run-1');
+
+    expect(answer).toMatchObject({ isError: true });
+    expect(answer.text).toContain("INVALID_ARGS: pass 'task'");
+    expect(await fresh(task.id)).not.toBeNull();
+  });
+
+  it('lets an `ask` chat delete a card in an ARMED intake — a delete starts nothing, and the user approved the call', async () => {
+    await arm();
+    const created = await call('create_task', {
+      project: 'GEN',
+      title: 'queued',
+      status: 'todo',
+    });
+    const { id } = jsonOf(created.text) as { id: string };
+
+    const answer = await call('delete_task', { task: 'GEN-1' }, 'ask-chat');
+
+    expect(answer.isError).toBe(false);
+    expect(await fresh(id)).toBeNull();
+  });
+
+  it('refuses an unknown card and deletes nothing', async () => {
+    await call('create_task', { project: 'GEN', title: 'keep me' });
+    changes.length = 0;
+
+    const answer = await call('delete_task', { task: 'GEN-9' });
+
+    expect(answer).toMatchObject({ isError: true });
+    expect(answer.text).toContain('UNKNOWN_TASK: there is no card "GEN-9"');
+    expect(await taskDao.listAll(orm.em.fork() as EntityManager)).toHaveLength(
+      1,
+    );
+    expect(changes).toEqual([]);
+  });
+
+  it('refuses a key two projects share, deleting neither card', async () => {
+    const twin = await projectDao.create({
+      name: 'Twin',
+      folder: '/tmp/geniro-task-board-tool-spec-twin',
+      taskKey: 'GEN',
+    });
+    await call('create_task', { project: project.id, title: 'a' });
+    await call('create_task', { project: twin.id, title: 'b' });
+
+    const answer = await call('delete_task', { task: 'GEN-1' });
+
+    expect(answer).toMatchObject({ isError: true });
+    expect(answer.text).toContain('pass the card id instead');
+    expect(await taskDao.listAll(orm.em.fork() as EntityManager)).toHaveLength(
+      2,
+    );
+  });
+
+  it('refuses an argument delete_task does not take, and deletes nothing', async () => {
+    await call('create_task', { project: 'GEN', title: 'keep me' });
+
+    const answer = await call('delete_task', { task: 'GEN-1', force: true });
+
+    expect(answer).toMatchObject({ isError: true });
+    expect(answer.text).toContain("unknown argument 'force'");
+    expect(await taskDao.listAll(orm.em.fork() as EntityManager)).toHaveLength(
+      1,
+    );
+  });
+
   it('refuses arguments a tool does not take, naming the ones it does', async () => {
     const answer = await call('list_tasks', { columns: ['todo'] });
 

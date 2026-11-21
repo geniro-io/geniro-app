@@ -781,6 +781,7 @@ export class TasksService implements OnModuleInit {
       taskId: task.id,
       projectId: task.projectId,
       status: task.status,
+      reason: 'deleted',
     });
     return { deleted: true };
   }

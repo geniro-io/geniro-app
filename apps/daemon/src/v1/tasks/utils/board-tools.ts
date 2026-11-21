@@ -372,7 +372,7 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
       ' ' +
       NOT_A_CHECKLIST +
       ' Do NOT use it to narrate progress while you work — a report is the final account — and do not use it to ' +
-      'create a card (create_task).',
+      'create a card (create_task) or delete one (delete_task).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -402,6 +402,29 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
             'leave the report as it is.',
         },
       },
+      additionalProperties: false,
+    },
+  },
+  delete_task: {
+    name: 'delete_task',
+    description:
+      'Delete a card from the board for good — the same as the Delete in the card’s menu in the app. Use it ' +
+      'when the user asks to delete or remove a card, and only then (a duplicate, a card filed by mistake, one copied ' +
+      'to another project). It cannot be undone from the board: the card, its report and its attached files ' +
+      'go. The chats that worked it stay (no longer tied to a card), its branch and commits stay, and its ' +
+      'worktree is removed only when it holds no unsaved work. A conversation not running in `auto` approval ' +
+      'is asked by the user to approve each call. The card this conversation is working cannot be deleted ' +
+      'here — its run works in that worktree. Do NOT use it to finish or park a card — move it with ' +
+      'update_task (`done`, `failed` or `backlog`) — nor to undo a card you just created unless the user ' +
+      'wants it gone. ' +
+      NOT_A_CHECKLIST +
+      ' The answer names the card that was deleted and the column it was in.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: TASK_REF_ARG,
+      },
+      required: ['task'],
       additionalProperties: false,
     },
   },

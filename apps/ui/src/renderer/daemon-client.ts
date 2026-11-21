@@ -1070,14 +1070,20 @@ export interface TaskChangedEvent {
   projectId: string;
   status: TaskStatus;
   /**
-   * Present only when the DAEMON has decided this card's work is finished —
+   * `work-finished` when the DAEMON has decided this card's work is finished —
    * Done, with no run working in it. Nothing a client can derive: a card's
    * column is written optimistically the moment it is dragged, and a run
    * settling is not the work ending, since the user continues that chat after
-   * review.
+   * review. `deleted` when the card was deleted, by the app or by an agent.
    */
-  reason?: 'work-finished';
+  reason?: TaskChangeReason;
 }
+
+const TASK_CHANGE_REASONS = ['work-finished', 'deleted'] as const;
+type TaskChangeReason = (typeof TASK_CHANGE_REASONS)[number];
+
+const isTaskChangeReason = (value: unknown): value is TaskChangeReason =>
+  (TASK_CHANGE_REASONS as readonly unknown[]).includes(value);
 
 /**
  * Read a `task_changed` payload, or null when it is not one.
@@ -1111,10 +1117,10 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
     taskId,
     projectId,
     status: status as TaskStatus,
-    // Narrowed to the one value this renderer acts on, unlike `status` above:
+    // Narrowed to the values this renderer acts on, unlike `status` above:
     // the reason gates a DESTRUCTIVE act, so an unknown one from a newer
     // daemon must read as "no reason given" rather than be passed through.
-    ...(reason === 'work-finished' ? { reason } : {}),
+    ...(isTaskChangeReason(reason) ? { reason } : {}),
   };
 }
 

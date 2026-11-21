@@ -564,8 +564,13 @@ export interface TaskChangedEvent {
   projectId: string;
   status: TaskStatus;
   /**
-   * Present only when the DAEMON has decided this card's work is FINISHED —
-   * the card is Done and no run is working in it (`isWorkFinished`).
+   * `deleted` marks the announce of a card's deletion (`TasksService.remove`,
+   * the app's Delete and the `delete_task` tool alike): the board prunes the
+   * card's worktree off it, so a delete no window made still collects a clean
+   * checkout.
+   *
+   * `work-finished` marks the DAEMON's decision that this card's work is
+   * FINISHED — the card is Done and no run is working in it (`isWorkFinished`).
    * `TasksService` sets it on a move to Done whose run has already stopped,
    * `TaskSettleService` when a run settles under a card already in Done, and
    * nothing else does.
@@ -617,4 +622,4 @@ export interface BoardVocabulary {
 }
 
 /** Why a card changed, where the reason is one a client has to act on. */
-export type TaskChangeReason = 'work-finished';
+export type TaskChangeReason = 'work-finished' | 'deleted';

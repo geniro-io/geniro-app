@@ -2187,8 +2187,8 @@ export interface GeniroApi {
    * the worktree instead — the branch is the only place the work would
    * survive, so nothing is removed until it is on there.
    *
-   * Separate from `pruneTaskWorktree`, which is the FAILED-START path and must
-   * never commit: there is nothing of the agent's to rescue, and the only
+   * Separate from `pruneTaskWorktree`, the failed-start and card-delete path,
+   * which must never commit: it removes only a clean tree, and the only
    * changes in that directory would be the user's own.
    */
   settleTaskWorktree(taskId: string): Promise<TaskWorktreeSettleResult>;

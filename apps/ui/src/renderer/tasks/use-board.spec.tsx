@@ -1208,6 +1208,72 @@ describe('useBoard', () => {
 
       expect(settle).not.toHaveBeenCalled();
     });
+
+    it('prunes a deleted card’s worktree — on any board, without committing anything', async () => {
+      const prune = vi.fn(() => Promise.resolve(true));
+      window.geniro.pruneTaskWorktree = prune;
+      await mountWithClient();
+
+      await act(async () => {
+        emit?.({
+          taskId: 't9',
+          projectId: 'OTHER',
+          status: 'in_review',
+          reason: 'deleted',
+        });
+      });
+
+      expect(prune).toHaveBeenCalledWith('t9');
+      expect(settle).not.toHaveBeenCalled();
+    });
+
+    it('handles a prune that fails, and keeps handling the next event', async () => {
+      const handled = vi.fn();
+      const prune = vi.fn(() => {
+        const failed = Promise.reject(new Error('git refused'));
+        const handle = failed.catch.bind(failed);
+        failed.catch = (onRejected) => {
+          handled();
+          return handle(onRejected);
+        };
+        return failed;
+      });
+      window.geniro.pruneTaskWorktree = prune;
+      await mountWithClient();
+
+      await act(async () => {
+        emit?.({
+          taskId: 't9',
+          projectId: 'p1',
+          status: 'todo',
+          reason: 'deleted',
+        });
+      });
+      await act(async () => {
+        emit?.({
+          taskId: 't8',
+          projectId: 'p1',
+          status: 'done',
+          reason: 'work-finished',
+        });
+      });
+
+      expect(prune).toHaveBeenCalledWith('t9');
+      expect(handled).toHaveBeenCalled();
+      expect(settle).toHaveBeenCalledWith('t8');
+    });
+
+    it('prunes nothing for a card that merely changed', async () => {
+      const prune = vi.fn(() => Promise.resolve(true));
+      window.geniro.pruneTaskWorktree = prune;
+      await mountWithClient();
+
+      await act(async () => {
+        emit?.({ taskId: 't9', projectId: 'p1', status: 'done' });
+      });
+
+      expect(prune).not.toHaveBeenCalled();
+    });
   });
 });
 

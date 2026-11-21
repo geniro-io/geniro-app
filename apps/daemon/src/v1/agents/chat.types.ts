@@ -2406,13 +2406,15 @@ export type HostNotifyOutcome =
   { status: 'sent' } | { status: 'unavailable'; reason: string };
 
 /**
- * The BOARD tools — reading the task board and filing or changing cards on it.
+ * The BOARD tools — reading the task board and filing, changing or deleting
+ * cards on it.
  *
  * Served on geniro's own MCP server to every chat and every team member
  * holding the endpoint, and answered by the tasks module, which installs
  * itself behind the teams module's `TaskBoardBroker`. The names live here
- * because the chat's permission gate auto-approves them, and this module may
- * import neither of the other two.
+ * because the chat's permission gate auto-approves all of them but
+ * {@link HOST_BOARD_ASKED_TOOLS}, and this module may import neither of the
+ * other two.
  */
 export const HOST_BOARD_TOOLS = [
   'list_projects',
@@ -2421,8 +2423,15 @@ export const HOST_BOARD_TOOLS = [
   'get_task',
   'create_task',
   'update_task',
+  'delete_task',
 ] as const;
 export type HostBoardTool = (typeof HOST_BOARD_TOOLS)[number];
+
+/**
+ * The board tools a chat's permission gate never approves by itself: a deleted
+ * card cannot be put back from the board, so outside `auto` the user decides.
+ */
+export const HOST_BOARD_ASKED_TOOLS: readonly HostBoardTool[] = ['delete_task'];
 
 /**
  * The render family's third tool, and the first that is not only a drawing.

@@ -97,6 +97,7 @@ const BOARD_TOOLS_NAMED: readonly HostBoardTool[] = [
   'get_task',
   'create_task',
   'update_task',
+  'delete_task',
   'list_projects',
 ];
 

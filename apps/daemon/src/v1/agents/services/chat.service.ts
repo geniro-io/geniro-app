@@ -240,6 +240,7 @@ import {
   askThroughStanding,
   hostQuestionOutcomeOf,
   StandingQuestions,
+  TURN_ENDED_UNANSWERED,
 } from '../utils/standing-questions';
 import { memberQuestionIds } from '../utils/team-member-questions';
 import { teamProjectCardId } from '../utils/team-project-card';
@@ -2062,6 +2063,38 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     );
   }
 
+  /**
+   * A card a holding CLI's turn ended on, already drawn under `requestId`,
+   * kept standing as the run's deferred question. Refused while the run
+   * stands on, or is raising, any other card.
+   */
+  private keepQuestionStanding(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    asked: { questions: HostQuestion[]; title: string | null },
+    requestId: string,
+  ): Promise<HostQuestionOutcome> {
+    if (this.deferredAsks.has(runId)) {
+      return Promise.resolve({
+        status: 'unavailable',
+        reason: QUESTION_ALREADY_STANDING,
+      });
+    }
+    return this.withDeferredClaim(runId, key, async () => {
+      if ((await this.standingCard(em, runId, key)) !== null) {
+        return { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
+      }
+      return this.commitDeferredCard(
+        em,
+        runId,
+        { kind: 'question', requestId, ...asked },
+        null,
+        'the question card could not be kept',
+      );
+    });
+  }
+
   private proposePlanDeferred(
     em: EntityManager,
     runId: string,
@@ -2256,7 +2289,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * Persist the card, then the column that points at it, then track it.
+   * Persist the card, then the column that points at it, then track it. A
+   * null `row` is a card already drawn.
    *
    * The column is written AFTER the row: a pointer written first would survive
    * a failed persist as a run parked on a card that was never drawn.
@@ -2265,18 +2299,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     em: EntityManager,
     runId: string,
     snapshot: PendingCardSnapshot,
-    row: Record<string, unknown>,
+    row: Record<string, unknown> | null,
     failureReason: string,
   ): Promise<{ status: 'posted' } | { status: 'unavailable'; reason: string }> {
     try {
-      await this.persist(
-        em,
-        runId,
-        await this.seqs.reserve(runId),
-        'approval_request',
-        null,
-        row,
-      );
+      if (row !== null) {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          'approval_request',
+          null,
+          row,
+        );
+      }
       await this.runDao.setPendingQuestion(
         runId,
         serializePendingQuestion(snapshot),
@@ -6799,6 +6835,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * outliving the turn would offer a card the sweep has already closed.
        */
       const standingQuestions = new StandingQuestions();
+      /** What each of this turn's own cards asks, by request id, for a hand-over at its end. */
+      const askedCards = new Map<
+        string,
+        { questions: HostQuestion[]; title: string | null }
+      >();
       /**
        * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
        * widening of the one above.
@@ -6943,6 +6984,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             return requestId;
           },
           (requestId, record) => {
+            askedCards.set(requestId, { questions, title });
             this.approvals.track({
               runId,
               memberId: SINGLE_AGENT_NODE,
@@ -8299,6 +8341,61 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         return true;
       });
 
+      /**
+       * A holding CLI can end its turn while a call still waits on its card
+       * (codex's code mode yields the call back to the model). On a completed
+       * turn the newest such card is not closed with it: it becomes the run's
+       * deferred question under its own id, and the user's verdict starts a
+       * turn of its own.
+       */
+      const handOverQuestion = async (): Promise<void> => {
+        const newest = standingQuestions.newestUnanswered();
+        if (settledStatus !== 'completed' || newest === null) {
+          return;
+        }
+        const asked = askedCards.get(newest.requestId);
+        if (asked === undefined) {
+          return;
+        }
+        const approval = this.approvals.abandon(runId, newest.requestId);
+        if (approval === null) {
+          return;
+        }
+        const parked = standingQuestions.handOver(newest.key);
+        const outcome = await this.keepQuestionStanding(
+          em,
+          runId,
+          newest.key,
+          asked,
+          newest.requestId,
+        ).catch((err: unknown): HostQuestionOutcome => {
+          this.logger.error(
+            `run ${runId} could not keep its question standing: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return { status: 'unavailable', reason: TURN_ENDED_UNANSWERED };
+        });
+        if (outcome.status !== 'posted') {
+          try {
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'unanswerable',
+              null,
+              unanswerablePayload(approval),
+            );
+          } catch (err) {
+            this.logger.error(
+              `run ${runId} unanswerable item write failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        parked?.(
+          outcome.status === 'posted'
+            ? outcome
+            : { status: 'unavailable', reason: TURN_ENDED_UNANSWERED },
+        );
+      };
       const finalized = handle.done
         .then(async () => {
           await chain; // drain pending persists before finalizing
@@ -8310,9 +8407,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           // has just been drained, so a report landing after this point would
           // reserve a seq against a turn that has finished writing.
           disposeHostTools();
+          await handOverQuestion();
           standingQuestions.sweep({
             status: 'unavailable',
-            reason: 'the turn ended before the question was answered',
+            reason: TURN_ENDED_UNANSWERED,
           });
           for (const settle of [...outstandingPatches]) {
             settle({

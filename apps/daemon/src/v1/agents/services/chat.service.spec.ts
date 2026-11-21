@@ -3537,8 +3537,121 @@ describe('ChatService', () => {
       await settle(cursor);
     });
 
-    it('answers an ask left parked when the turn ends, instead of leaving it hanging', async () => {
-      const { service, cursor, userQuestions } = setup();
+    it('keeps an unanswered card standing when the turn completes, and sends its answer as the next message', async () => {
+      const { service, cursor, userQuestions, approvals, itemDao, runDao } =
+        setup();
+      holdsCallsOpen(cursor);
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'Which database?', options: [{ label: 'Postgres' }] }],
+        'Pick',
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]!.requestId;
+      await settle(cursor);
+
+      expect(await asked).toEqual({ status: 'posted' });
+      expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+        false,
+      );
+      expect(
+        itemDao.items.filter((item) => item.kind === 'approval_request'),
+      ).toHaveLength(1);
+      expect(approvals.listByRun(run.id)).toMatchObject([
+        { requestId, deferred: true, question: true },
+      ]);
+      expect(runDao.runs.get(run.id)?.pendingQuestion).toContain(requestId);
+
+      const turnsBefore = cursor.start.mock.calls.length;
+      expect(approvals.resolve(run.id, requestId, true, 'Postgres')).toBe(true);
+      await drain();
+      await drain();
+      await drain();
+      expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
+      expect(
+        (cursor.start.mock.calls.at(-1)?.[0] as AgentTurnInput).prompt,
+      ).toContain('Postgres');
+    });
+
+    it('closes an unanswered card when the turn completes while another card already stands', async () => {
+      const { service, cursor, userQuestions, approvals, itemDao, runDao } =
+        setup();
+      holdsCallsOpen(cursor);
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'Which?', options: [{ label: 'A' }] }],
+        null,
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]!.requestId;
+      const other = serializePendingQuestion({
+        kind: 'question',
+        requestId: 'card-x',
+        title: null,
+        questions: [{ question: 'Other?', options: [{ label: 'B' }] }],
+      });
+      runDao.runs.get(run.id)!.pendingQuestion = other;
+
+      await settle(cursor);
+
+      expect(await asked).toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the question was answered',
+      });
+      expect(runDao.runs.get(run.id)?.pendingQuestion).toBe(other);
+      expect(
+        itemDao.items
+          .filter((item) => item.kind === 'unanswerable')
+          .map((item) => (JSON.parse(item.payload) as { id: string }).id),
+      ).toEqual([requestId]);
+    });
+
+    it('closes an unanswered card when the turn fails', async () => {
+      const { service, cursor, userQuestions, itemDao, runDao } = setup();
+      holdsCallsOpen(cursor);
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'Which?', options: [{ label: 'A' }] }],
+        null,
+      );
+      await drain();
+
+      cursor.emit({ type: 'error', message: 'the CLI died' });
+      cursor.finish();
+      await drain();
+      await drain();
+
+      expect(await asked).toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the question was answered',
+      });
+      expect(runDao.runs.get(run.id)?.pendingQuestion ?? null).toBeNull();
+      expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+        true,
+      );
+    });
+
+    it('answers an ask left parked when the turn is stopped, instead of leaving it hanging', async () => {
+      const { service, cursor, userQuestions, runDao } = setup();
       holdsCallsOpen(cursor);
       const run = await service.createChat({
         agentKind: 'cursor-agent',
@@ -3553,11 +3666,15 @@ describe('ChatService', () => {
         null,
       );
       await drain();
-      await settle(cursor);
+      cursor.emit({ type: 'turn_cancelled' });
+      cursor.finish();
+      await drain();
+      await drain();
 
       // `ApprovalRegistry.sweepNode` only DROPS the card; the promise the MCP
       // request is blocked on has to be settled here or that call waits for
       // its own client timeout with the turn long gone.
+      expect(runDao.runs.get(run.id)?.pendingQuestion ?? null).toBeNull();
       expect(await asked).toEqual({
         status: 'unavailable',
         reason: 'the turn ended before the question was answered',

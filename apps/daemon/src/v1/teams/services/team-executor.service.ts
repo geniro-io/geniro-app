@@ -232,6 +232,7 @@ import {
   askThroughStanding,
   hostQuestionOutcomeOf,
   StandingQuestions,
+  TURN_ENDED_UNANSWERED,
 } from '../../agents/utils/standing-questions';
 import { teamProjectCardId } from '../../agents/utils/team-project-card';
 import {
@@ -5211,6 +5212,11 @@ export class TeamExecutorService
         adapter.getConfig().hostQuestionDeferredReason !== null;
       /** The question cards this turn has up, swept when it ends. */
       const standingQuestions = new StandingQuestions();
+      /** What each of this turn's own cards asks, by card id, for a hand-over at its end. */
+      const askedCards = new Map<
+        string,
+        { questions: HostQuestion[]; title: string | null }
+      >();
       /**
        * A callee's question goes to its CALLER, as a claude callee's own
        * AskUserQuestion does: parked on its call and answered with
@@ -5286,7 +5292,8 @@ export class TeamExecutorService
       };
       /**
        * A member's own question, on a CLI that holds the call open: one card in
-       * its flow, closed with the turn like every card this turn raises.
+       * its flow, closed with the turn like every card this turn raises — unless
+       * the turn completes with it unanswered ({@link handOverQuestion}).
        */
       const askUser = (
         questions: HostQuestion[],
@@ -5321,6 +5328,7 @@ export class TeamExecutorService
             const blockerId = `${sessionKey}#${cardId}`;
             this.callBroker.noteCallerBlocked(runId, caller, blockerId);
             openCards.set(cardId, blockerId);
+            askedCards.set(cardId, { questions, title });
             this.approvals.track({
               runId,
               memberId: node.id,
@@ -6703,12 +6711,49 @@ export class TeamExecutorService
         restoreCarried();
         throw err;
       }
+      /**
+       * A holding CLI can end its turn while a call still waits on its card
+       * (codex's code mode yields the call back to the model). On a completed
+       * turn of the member's own conversation the newest such card is not
+       * closed with it: it moves to the standing member cards under its own id,
+       * and the user's verdict wakes this conversation as a turn of its own.
+       */
+      const handOverQuestion = (): void => {
+        const cards = this.memberQuestionCards;
+        const newest = standingQuestions.newestUnanswered();
+        if (cards === null || outcome !== 'completed' || newest === null) {
+          return;
+        }
+        const asked = askedCards.get(newest.requestId);
+        const blockerId = openCards.get(newest.requestId);
+        if (asked === undefined || blockerId === undefined) {
+          return;
+        }
+        const released = releaseCard(newest.requestId, blockerId);
+        if (released === null) {
+          return;
+        }
+        const parked = standingQuestions.handOver(newest.key);
+        void cards
+          .ask(runId, node.id, asked.questions, asked.title, newest.requestId)
+          .catch((err: unknown): HostQuestionOutcome => {
+            this.logger.error(
+              `team run ${runId} could not keep ${node.id}'s question standing: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            enqueue(recordUnanswerable(node.id, [released]));
+            return { status: 'unavailable', reason: TURN_ENDED_UNANSWERED };
+          })
+          .then((outcome) => {
+            parked?.(outcome);
+          });
+      };
       if (disposeQuestions !== null) {
         const endQuestions = (): void => {
           disposeQuestions();
+          handOverQuestion();
           standingQuestions.sweep({
             status: 'unavailable',
-            reason: 'the turn ended before the question was answered',
+            reason: TURN_ENDED_UNANSWERED,
           });
         };
         void handle.done.then(endQuestions, endQuestions);

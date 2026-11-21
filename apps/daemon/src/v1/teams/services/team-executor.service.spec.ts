@@ -21236,11 +21236,19 @@ describe("TeamExecutorService — geniro's own question tool", () => {
   function questionSetup() {
     const userQuestions = new UserQuestionBroker();
     const harness = setup(4870, { userQuestions });
-    const deferred: { memberId: string; title: string | null }[] = [];
+    const deferred: {
+      memberId: string;
+      title: string | null;
+      onScreen?: string;
+    }[] = [];
     const retired: string[] = [];
     harness.service.useMemberQuestionCards({
-      ask: async (_runId, memberId, _questions, title) => {
-        deferred.push({ memberId, title });
+      ask: async (_runId, memberId, _questions, title, onScreen) => {
+        deferred.push({
+          memberId,
+          title,
+          ...(onScreen === undefined ? {} : { onScreen }),
+        });
         return { status: 'posted' };
       },
       retireForUserMessage: async (runId) => {
@@ -21440,6 +21448,177 @@ describe("TeamExecutorService — geniro's own question tool", () => {
     expect(await answer).toEqual({ status: 'declined' });
     completeTurn(cursor.starts[0]!, 'done');
     await drain();
+  });
+
+  it('on a CLI that holds the call open, keeps an unanswered card standing when the turn completes, so the answer reaches the member as a new turn', async () => {
+    const { service, cursor, userQuestions, approvals, itemDao, deferred } =
+      questionSetup();
+    cursor.holdsQuestionCallsOpen = true;
+    const run = await service.startRun({
+      slug: 'q',
+      team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 'q' }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const answer = userQuestions.ask(run.id, 'a', QUESTIONS, 'Storage');
+    await drain();
+    const id = (
+      JSON.parse(
+        itemDao.items.find((i) => i.kind === 'approval_request')!.payload,
+      ) as { id: string }
+    ).id;
+
+    completeTurn(cursor.starts[0]!, 'Waiting for your answer on the card.');
+    await drain();
+
+    expect(await answer).toEqual({ status: 'posted' });
+    expect(deferred).toEqual([
+      { memberId: 'a', title: 'Storage', onScreen: id },
+    ]);
+    expect(
+      itemDao.items.filter((i) => i.kind === 'approval_request'),
+    ).toHaveLength(1);
+    expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(false);
+    expect(
+      approvals.listByRun(run.id).some((entry) => entry.requestId === id),
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      'refuses it',
+      async () => ({
+        status: 'unavailable' as const,
+        reason: 'another question stands',
+      }),
+      'another question stands',
+      false,
+    ],
+    [
+      'fails',
+      async (): Promise<never> => {
+        throw new Error('disk full');
+      },
+      'the turn ended before the question was answered',
+      true,
+    ],
+  ])(
+    'on a CLI that holds the call open, answers the parked call unavailable when the standing store %s',
+    async (_label, ask, reason, closedHere) => {
+      const { service, cursor, userQuestions, itemDao } = questionSetup();
+      service.useMemberQuestionCards({
+        ask,
+        retireForUserMessage: async () => {},
+      });
+      cursor.holdsQuestionCallsOpen = true;
+      const run = await service.startRun({
+        slug: 'q',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 'q' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const answer = userQuestions.ask(run.id, 'a', QUESTIONS, null);
+      await drain();
+
+      completeTurn(cursor.starts[0]!, 'Waiting for your answer.');
+      await drain();
+
+      expect(await answer).toEqual({ status: 'unavailable', reason });
+      await drain();
+      expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(
+        closedHere,
+      );
+    },
+  );
+
+  it.each([
+    [
+      'the user stops it',
+      async (service: TeamExecutorService, runId: string): Promise<void> => {
+        await service.cancel(runId);
+      },
+    ],
+    [
+      'it fails',
+      async (
+        _service: TeamExecutorService,
+        _runId: string,
+        turn: FakeTurn,
+      ): Promise<void> => {
+        turn.emit({ type: 'error', message: 'the CLI died' });
+        turn.finish();
+      },
+    ],
+    [
+      'it ends with no terminal event',
+      async (
+        _service: TeamExecutorService,
+        _runId: string,
+        turn: FakeTurn,
+      ): Promise<void> => {
+        turn.finish();
+      },
+    ],
+  ])(
+    'on a CLI that holds the call open, still closes an unanswered card when %s',
+    async (_label, end) => {
+      const { service, cursor, userQuestions, itemDao, deferred } =
+        questionSetup();
+      cursor.holdsQuestionCallsOpen = true;
+      const run = await service.startRun({
+        slug: 'q',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 'q' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const answer = userQuestions.ask(run.id, 'a', QUESTIONS, null);
+      await drain();
+
+      await end(service, run.id, cursor.starts[0]!);
+      await drain();
+
+      expect(await answer).toMatchObject({ status: 'unavailable' });
+      expect(deferred).toEqual([]);
+      expect(itemDao.items.some((i) => i.kind === 'unanswerable')).toBe(true);
+    },
+  );
+
+  it('on a CLI that holds the call open, never hands a callee’s parked question to the member’s own cards', async () => {
+    const { service, cursor, userQuestions, callBroker, deferred } =
+      questionSetup();
+    cursor.holdsQuestionCallsOpen = true;
+    const run = await service.startRun({
+      slug: 'q',
+      team: teamOf([member('a'), member('callee', { agent: 'cursor-agent' })], {
+        name: 'q',
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'work',
+      mode: 'async',
+    });
+    await drain();
+    const answer = userQuestions.ask(
+      run.id,
+      callerKey('callee', 'call-1'),
+      QUESTIONS,
+      null,
+    );
+    await drain();
+
+    completeTurn(cursor.starts[0]!, 'Waiting on my question.');
+    await drain();
+
+    expect(await answer).toMatchObject({ status: 'unavailable' });
+    expect(deferred).toEqual([]);
   });
 
   it('keeps the card standing when the call is abandoned, and hands its answer to an identical re-ask instead of raising a second card', async () => {

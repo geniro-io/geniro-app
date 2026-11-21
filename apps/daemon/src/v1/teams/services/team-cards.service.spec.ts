@@ -537,6 +537,46 @@ describe('TeamCardsService — a member’s own question', () => {
     );
   });
 
+  it('keeps a card already on screen under its own id, drawing no second card, and wakes the member with its answer', async () => {
+    const { service, runs, rowsOf, approvals, wakeLead } = harness();
+    const onScreen = 'run-1::node:worker#turn#card';
+
+    expect(
+      await service.askMember(RUN, 'worker', QUESTIONS, 'Storage', onScreen),
+    ).toEqual({ status: 'posted' });
+    expect(rowsOf('approval_request')).toEqual([]);
+    expect(approvals.listByRun(RUN)).toMatchObject([
+      { requestId: onScreen, memberId: 'worker', deferred: true },
+    ]);
+    expect(runs.get(RUN)!.pendingMemberQuestions).toContain(onScreen);
+
+    expect(approvals.resolve(RUN, onScreen, true, 'Postgres')).toBe(true);
+    await settle(wakeLead);
+    expect(rowsOf('approval_verdict')[0]).toMatchObject({
+      memberId: 'worker',
+      payload: { id: onScreen, allow: true, answer: 'Postgres' },
+    });
+    expect(wakeLead).toHaveBeenCalledWith(
+      RUN,
+      'worker',
+      `card:${RUN}:${onScreen}`,
+      'Postgres',
+      expect.any(String),
+    );
+  });
+
+  it('retires a card already on screen when another question of the member stands', async () => {
+    const { service, rowsOf } = harness();
+    await service.askMember(RUN, 'worker', QUESTIONS, 'Storage');
+
+    expect(
+      await service.askMember(RUN, 'worker', QUESTIONS, 'Storage', 'on-screen'),
+    ).toEqual({ status: 'unavailable', reason: QUESTION_ALREADY_STANDING });
+    expect(rowsOf('unanswerable')).toMatchObject([
+      { payload: { id: 'on-screen', toolName: HOST_QUESTION_TOOL } },
+    ]);
+  });
+
   it('closes every standing member question when the user writes instead of answering', async () => {
     const { service, runs, rowsOf, approvals } = harness();
     await service.askMember(RUN, 'worker', QUESTIONS, null);

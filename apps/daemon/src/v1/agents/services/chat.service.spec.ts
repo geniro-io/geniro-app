@@ -75,6 +75,7 @@ import type {
   SettleFigures,
 } from '../chat.types';
 import {
+  HOST_BOARD_ASKED_TOOLS,
   HOST_BOARD_TOOLS,
   HOST_BROWSER_TOOLS,
   HOST_COMPARISON_TOOL,
@@ -12926,7 +12927,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
-  it('auto-approves every board tool in an `ask` chat', async () => {
+  it('auto-approves every board tool but delete_task in an `ask` chat', async () => {
     // The writes that would start unattended work are refused by the board
     // itself (`TaskBoardToolService.refuseUnattended`), not by this gate.
     const { service, claude, approvals, itemDao } = setup();
@@ -12936,7 +12937,10 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'ask',
     });
     await service.sendMessage(run.id, 'hi');
-    for (const tool of HOST_BOARD_TOOLS) {
+    const approved = HOST_BOARD_TOOLS.filter(
+      (tool) => !HOST_BOARD_ASKED_TOOLS.includes(tool),
+    );
+    for (const tool of approved) {
       claude.emit({
         type: 'approval_request',
         id: `p-${tool}`,
@@ -12946,7 +12950,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     }
     await drain();
 
-    for (const tool of HOST_BOARD_TOOLS) {
+    for (const tool of approved) {
       expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
         `p-${tool}`,
         true,
@@ -12957,6 +12961,51 @@ describe('ChatService — approval modes (parity M1)', () => {
       false,
     );
     expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('asks the user before delete_task in an `ask` chat, and not in an `auto` one', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const asked = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(asked.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-delete',
+      toolName: `mcp__${hostMcpServerName(asked.id)}__delete_task`,
+      input: { task: 'GEN-1' },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+    expect(
+      itemDao.items.filter(
+        (i) => i.runId === asked.id && i.kind === 'approval_request',
+      ),
+    ).toHaveLength(1);
+    expect(approvals.listByRun(asked.id)).toHaveLength(1);
+
+    const unattended = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+    });
+    await service.sendMessage(unattended.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-delete-auto',
+      toolName: `mcp__${hostMcpServerName(unattended.id)}__delete_task`,
+      input: { task: 'GEN-1' },
+    });
+    await drain();
+
+    expect(claude.handles[1]!.respondApproval).toHaveBeenCalledWith(
+      'p-delete-auto',
+      true,
+      { task: 'GEN-1' },
+    );
   });
 
   it('asks before a history search in an `ask` chat — it reads every project', async () => {

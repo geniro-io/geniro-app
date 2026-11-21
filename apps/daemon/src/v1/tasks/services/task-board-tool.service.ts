@@ -187,6 +187,8 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
         return this.createTask(runId, args);
       case 'update_task':
         return this.updateTask(runId, args);
+      case 'delete_task':
+        return this.deleteTask(runId, args);
     }
   }
 
@@ -544,6 +546,46 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     notes.push(...startNotes(project, moved?.status ?? task.status));
     const view = await this.cardView(task.id, em, own);
     return withJson([`${lead}.`, ...notes].join(' '), view);
+  }
+
+  private async deleteTask(
+    runId: string,
+    args: Record<string, unknown>,
+  ): Promise<string> {
+    if (args.task === undefined) {
+      throw invalid(
+        "pass 'task' (a key like GEN-53, or an id) — delete_task deletes only a card it is named",
+      );
+    }
+    const em = this.em.fork();
+    const { task, own } = await this.target(runId, args.task, em);
+    const project = await this.projectDao.getById(task.projectId, em);
+    const key = keyOf(task, project);
+    if (own) {
+      throw new BoardAnswer(
+        `Refused: ${key ?? `card ${task.id}`} is the card this conversation is working — deleting it would remove ` +
+          'the worktree this run works in. Nothing was deleted. Finish it with update_task, and tell the user to ' +
+          'delete it in the app if it should go.',
+        true,
+      );
+    }
+    await this.tasks.remove(task.id);
+    return withJson(
+      `Deleted ${key ?? `card ${task.id}`} "${task.title}" from \`${task.status}\` on project ${projectLabel(project)}. ` +
+        'The chats that worked it and its branch are kept.',
+      {
+        key,
+        id: task.id,
+        project:
+          project === null
+            ? null
+            : { id: project.id, key: project.taskKey, name: project.name },
+        title: task.title,
+        status: task.status,
+        runId: task.runId,
+        branch: task.branch,
+      },
+    );
   }
 
   /**

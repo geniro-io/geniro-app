@@ -159,7 +159,7 @@ Rules when adding or changing routes:
 - `shell-output` names a tool call, never a path.
 - Run snapshot (`Run.teamSnapshot`): unreadable is `409 TEAM_SNAPSHOT_UNREADABLE`, never re-frozen.
 - Never store merged/open state for pull requests; never date them by capture time.
-- `/ws` counts (`holdingFor`, `shellsOpen`, `subagentsOut`) are announced on transitions; every path that ends one must announce. `run_status.status` is nullable (activity announces assert none). `runs_changed` rows carry 0 for `rootsWorking` / `awaitingCalls`. `task_changed` is a twin of the UI's `parseTaskChanged`; the renderer collects worktrees only off `reason: 'work-finished'`.
+- `/ws` counts (`holdingFor`, `shellsOpen`, `subagentsOut`) are announced on transitions; every path that ends one must announce. `run_status.status` is nullable (activity announces assert none). `runs_changed` rows carry 0 for `rootsWorking` / `awaitingCalls`. `task_changed` is a twin of the UI's `parseTaskChanged`; the renderer settles worktrees only off `reason: 'work-finished'` and prunes one only off `reason: 'deleted'`.
 
 Destructive or irreversible routes (and one that only looks it — `DELETE /v1/tasks/:taskId/files/:attachmentId` drops a reference, never the file):
 

@@ -53,5 +53,7 @@ describe('BOARD_TOOLS — the listing is the whole manual', () => {
       expect.arrayContaining(['task', 'status', 'fromStatus', 'report']),
     );
     expect(boardToolArgs('create_task')).not.toContain('runId');
+    expect(boardToolArgs('delete_task')).toEqual(['task']);
+    expect(tool('delete_task').inputSchema.required).toEqual(['task']);
   });
 });

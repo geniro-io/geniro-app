@@ -533,6 +533,12 @@ export function useBoard(
       if (event.reason === 'work-finished') {
         void window.geniro.settleTaskWorktree(event.taskId);
       }
+      // A deleted card's worktree goes the way the Delete press takes it, so a
+      // card an agent deleted does not leave its checkout behind. Unscoped for
+      // the same reason; a second prune of one task finds no registry row.
+      if (event.reason === 'deleted') {
+        void window.geniro.pruneTaskWorktree(event.taskId).catch(() => false);
+      }
       // The broadcast is client-wide, so most events belong to a board this
       // one is not showing — unless it is showing every project.
       if (

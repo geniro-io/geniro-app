@@ -322,7 +322,7 @@ describe('TasksService (in-memory sqlite)', () => {
     ]);
   });
 
-  it('emits on the task bus after a delete, naming the status it held', async () => {
+  it('emits on the task bus after a delete, naming the status it held and that it was deleted', async () => {
     const task = await service.create({
       projectId,
       title: 'to delete',
@@ -332,7 +332,9 @@ describe('TasksService (in-memory sqlite)', () => {
 
     await service.remove(task.id);
 
-    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'todo', reason: 'deleted' },
+    ]);
   });
 
   /** A card in `status` whose run is in `runStatus`. */

@@ -1309,6 +1309,27 @@ describe('parseTaskChanged — the task_changed reader', () => {
       parseTaskChanged({ taskId: 't1', projectId: 'p1', status: 'blocked' }),
     ).toEqual({ taskId: 't1', projectId: 'p1', status: 'blocked' });
   });
+
+  it('keeps the two reasons the board acts on, and drops any other', () => {
+    for (const reason of ['work-finished', 'deleted']) {
+      expect(
+        parseTaskChanged({
+          taskId: 't1',
+          projectId: 'p1',
+          status: 'done',
+          reason,
+        })?.reason,
+      ).toBe(reason);
+    }
+    expect(
+      parseTaskChanged({
+        taskId: 't1',
+        projectId: 'p1',
+        status: 'done',
+        reason: 'run-settled',
+      }),
+    ).toEqual({ taskId: 't1', projectId: 'p1', status: 'done' });
+  });
 });
 
 describe('parseUsageRecorded — the usage_recorded twin', () => {

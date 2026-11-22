@@ -349,4 +349,46 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     ).toEqual(['m3b']);
     expect(await dao.neighbours(target!, 'before', 0)).toEqual([]);
   });
+
+  it('reads one run’s matching messages oldest first, up to its snapshot, never its reasoning', async () => {
+    await db.run(RUN_A, { archivedAt: new Date() });
+    await db.run(RUN_B);
+    await db.item('late', {
+      runId: RUN_A,
+      seq: 9,
+      payload: said('DONE CHECK late'),
+    });
+    await db.item('first', {
+      runId: RUN_A,
+      seq: 2,
+      payload: said('DELIVERY REPORT first'),
+    });
+    await db.item('past', {
+      runId: RUN_A,
+      seq: 20,
+      payload: said('DONE CHECK past the snapshot'),
+    });
+    await db.item('other', {
+      runId: RUN_B,
+      seq: 3,
+      payload: said('DONE CHECK of another run'),
+    });
+    await db.item('thought', {
+      runId: RUN_A,
+      seq: 5,
+      kind: 'reasoning',
+      role: null,
+      payload: said('DONE CHECK planned in reasoning'),
+    });
+    await db.ensureIndex();
+
+    const rows = await db
+      .dao()
+      .runRowsMatching(RUN_A, '"DONE CHECK" OR "DELIVERY REPORT"', 10, 50);
+
+    expect(rows.map((row) => [row.seq, row.text])).toEqual([
+      [2, 'DELIVERY REPORT first'],
+      [9, 'DONE CHECK late'],
+    ]);
+  });
 });

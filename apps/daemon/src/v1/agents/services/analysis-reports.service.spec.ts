@@ -12,6 +12,7 @@ import {
   type ItemWire,
   MAX_RECOMMENDATIONS_PER_TARGET,
   type MemberAssessment,
+  type PullRequestLifecycle,
   type RecommendationItem,
   type RecommendationsPayload,
   type RecommendationsReport,
@@ -20,6 +21,7 @@ import {
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
+import type { CardPullRequest } from '../utils/team-runs-fold';
 import {
   AnalysisReportsService,
   checkItems,
@@ -670,6 +672,8 @@ const POPULATION: RecommendationsTeamPopulation = {
 function teamReporter(
   existing?: (runId: string, seqs: number[], upTo: number) => number[],
   opened?: Map<string, AnalysedRun>,
+  cardPullRequests: () => Promise<Map<string, CardPullRequest[]>> = () =>
+    Promise.resolve(new Map()),
 ) {
   const written: { kind: string; payload: object }[] = [];
   const asked: { runId: string; seqs: number[] }[] = [];
@@ -704,6 +708,7 @@ function teamReporter(
             folded: entry.runId === 'gone' ? null : folded(entry.runId),
           })),
         ),
+      cardPullRequests,
     } as unknown as ThreadReaderService,
     {} as ProjectScopeService,
   );
@@ -780,6 +785,101 @@ describe('AnalysisReportsService — a team card', () => {
       ['r2', 'Run r2', 3, true],
       ['r1', 'Run r1', 3, true],
     ]);
+  });
+
+  it("files each team version's pull requests after done, measured from the runs' own pull requests", async () => {
+    const lifecycle: PullRequestLifecycle = {
+      state: 'merged',
+      isDraft: false,
+      headSha: 'head',
+      headRef: 'feature/x',
+      createdAt: '2026-11-20T08:00:00Z',
+      readyAt: '2026-11-20T09:00:00Z',
+      readyEvents: ['2026-11-20T09:00:00Z'],
+      draftedAt: [],
+      mergedAt: null,
+      closedAt: null,
+      mergeable: 'MERGEABLE',
+      pushes: [{ sha: 'b', at: '2026-11-20T10:00:00Z', force: true }],
+      reviewThreads: [
+        {
+          openedAt: '2026-11-20T09:30:00Z',
+          author: 'coderabbitai',
+          bot: true,
+          resolved: false,
+          outdated: false,
+        },
+      ],
+      changesRequested: [],
+      failedChecks: [],
+      skippedWhileDraft: [],
+      truncated: [],
+      actionsRunsRead: true,
+    };
+    const { report, written } = teamReporter(undefined, undefined, () =>
+      Promise.resolve(
+        new Map([
+          [
+            'r2',
+            [
+              {
+                key: 'o/r#7',
+                marks: [
+                  {
+                    seq: 5,
+                    at: '2026-11-20T08:30:00Z',
+                    source: 'record_outcome' as const,
+                    memberId: 'reviewer',
+                  },
+                ],
+                read: { lifecycle },
+              },
+            ],
+          ],
+        ]),
+      ),
+    );
+
+    await report(
+      { whole: { hotspots: [], items: [ITEM], members: [REVIEWER] } },
+      index,
+      null,
+    );
+
+    expect(
+      (written[0]?.payload as RecommendationsPayload).teamStats
+        ?.pullRequestsAfterDone,
+    ).toEqual([
+      {
+        version: 3,
+        current: true,
+        pullRequests: 1,
+        measured: 1,
+        perPullRequest: {
+          botThreads: 1,
+          humanThreads: 0,
+          pushes: 1,
+          failedChecks: 0,
+        },
+      },
+    ]);
+  });
+
+  it('files the card without pull-request figures when they cannot be read', async () => {
+    const { report, written } = teamReporter(undefined, undefined, () =>
+      Promise.reject(new Error('SQLITE_BUSY')),
+    );
+
+    expect(
+      await report(
+        { whole: { hotspots: [], items: [ITEM], members: [REVIEWER] } },
+        index,
+        null,
+      ),
+    ).toMatchObject({ status: 'recorded' });
+    const stats = (written[0]?.payload as RecommendationsPayload).teamStats;
+    expect(stats?.runs).toBe(2);
+    expect(stats).not.toHaveProperty('pullRequestsAfterDone');
   });
 
   it('files the runs by hash alone when the version index cannot be read', async () => {

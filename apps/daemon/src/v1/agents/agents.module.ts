@@ -16,6 +16,7 @@ import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CodexAdapter } from './adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
+import { GH_COMMAND_RUNNER, type GhCommandRunner } from './chat.types';
 import { AgentActivityController } from './controllers/agent-activity.controller';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
@@ -132,7 +133,9 @@ import { ProcessRegistry } from './services/process-registry';
 import { ProjectChatBroker } from './services/project-chat.broker';
 import { ProjectInstructionsBroker } from './services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
+import { PullRequestAfterDoneService } from './services/pull-request-after-done.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
+import { PullRequestLifecycleService } from './services/pull-request-lifecycle.service';
 import { RecommendationsApplyService } from './services/recommendations-apply.service';
 import { ResourceAlertEventBus } from './services/resource-alert-events.bus';
 import { ResourceWatchService } from './services/resource-watch.service';
@@ -182,6 +185,7 @@ import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
 import { WriteFailureNotices } from './services/write-failure.notices';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
+import { runManagedCommand } from './utils/managed-command';
 import { defaultSpawn } from './utils/spawn-cli';
 
 /**
@@ -309,6 +313,16 @@ import { defaultSpawn } from './utils/spawn-cli';
     GoalsService,
     GoalDao,
     RunOutcomeHistoryService,
+    {
+      provide: GH_COMMAND_RUNNER,
+      useFactory:
+        (processes: ProcessRegistry): GhCommandRunner =>
+        (command) =>
+          runManagedCommand({ ...command, command: 'gh', processes }),
+      inject: [ProcessRegistry],
+    },
+    PullRequestLifecycleService,
+    PullRequestAfterDoneService,
     HostWakeBus,
     HostWakeChatDelivery,
     {

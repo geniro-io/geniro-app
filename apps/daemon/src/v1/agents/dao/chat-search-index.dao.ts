@@ -13,6 +13,7 @@ import { Item } from '../../runs/entity/item.entity';
 import type {
   ChatContextRow,
   ChatContextRun,
+  ChatRunTextMatch,
   ChatTextDatabase,
   ChatTextMatch,
   GlobalChatSearchQuery,
@@ -136,6 +137,31 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .orderBy('seq', before ? 'desc' : 'asc')
       .orderBy('id', before ? 'desc' : 'asc')
       .limit(count)
+      .execute();
+  }
+
+  /**
+   * One run's messages matching a ready-made FTS5 query, at or below `maxSeq`,
+   * oldest first — whatever kind of run it is. Reasoning is left out: what an
+   * agent thought is not what it said.
+   */
+  runRowsMatching(
+    runId: string,
+    matchQuery: string,
+    maxSeq: number,
+    limit: number,
+  ): Promise<ChatRunTextMatch[]> {
+    return this.database()
+      .selectFrom('chat_text')
+      .innerJoin('items as i', 'i.id', 'chat_text.item_id')
+      .select(['i.seq', 'i.member_id', 'i.created_at', 'chat_text.text'])
+      .where('chat_text', 'match', matchQuery)
+      .where('i.run_id', '=', runId)
+      .where('i.kind', '=', 'message')
+      .where('i.deleted_at', 'is', null)
+      .where('i.seq', '<=', maxSeq)
+      .orderBy('i.seq')
+      .limit(limit)
       .execute();
   }
 

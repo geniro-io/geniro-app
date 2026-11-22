@@ -112,6 +112,17 @@ function subAgents(ownReads: string): string {
   return `Sub-agents. Read ${ownReads} yourself, and hand a sub-agent only a deep dive into a few runs or moments: a fresh one with a narrow brief — which runs and views to read, what to return and in how many characters — never one that starts from a copy of your conversation (a fork). A copy carries every page you have read into each request it makes, so a handful of them costs more than the rest of the analysis. Re-read yourself every row you cite from a sub-agent's report.`;
 }
 
+/**
+ * The method step that reads each pull request's life after the run said it
+ * was done, and asks who should have caught each later event first.
+ */
+function pullRequestsAfterDone(team: boolean): string {
+  const where = team
+    ? "view=runs gives each run's pull requests their `lifecycle`; view=pr runId=… lists one run's, and with `pullRequest` it is one of them as a timeline beside the run"
+    : "view=pr lists the thread's pull requests with their `lifecycle`, and with `pullRequest` it is one of them as a timeline beside the thread";
+  return `PR after done. ${where}. For every pull request the run said was done (\`afterDone\`: the first done mark, and what came after it — pushes and force pushes, bot and human review threads, failed checks, changes requested, a conflict now), take each event after the mark and say who should have caught it before the mark: no local check ran (the failing check's command was never run before the mark), the agents' own review missed it, a bot reviews only outside draft (its threads open after \`readyAt\`, none before), a CI job is skipped on draft (\`skippedWhileDraft\`), or a human reviewer. Name the instruction or check that would have closed it, as WHEN <situation> → <action> — for example marking the pull request ready and waiting for the bots and CI before saying done. \`lifecycle: null\` means GitHub was not read for it (\`lifecycleUnavailable\` says why): say so, and never guess its life. ${team ? 'Report it as section 3 below.' : 'In your reply, a table per pull request: done → ready, done → merge, pushes (force pushes), bot and human threads, failed checks and changes requested after done.'} Every card item about pull-request quality cites a run row (seq) as evidence and names, in its \`basis\`, the pull-request event it explains — its kind and time from view=pr.`;
+}
+
 const TOOL_ECONOMY =
   'Tool economy. Failed tool calls (`failed`, `failedToolCalls`), the same call repeated, oversized outputs, and tools whose time or tokens outweighed what they returned.';
 
@@ -270,11 +281,12 @@ ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT
 11. ${TOOL_ECONOMY}
 12. ${INFORMATION_ACCESS}
 13. Model and effort. Was each member's model and effort fit for what it actually did?
+14. ${pullRequestsAfterDone(false)}
 ${
   team
-    ? `14. ${memberAssessment('thread')}
-15`
-    : '14'
+    ? `15. ${memberAssessment('thread')}
+16`
+    : '15'
 }. Cluster by root cause, then re-read every seq you will cite (view=item) and confirm the quote is really there.
 
 Use view=spans with kinds=["tool"] and minMs to find slow tools, view=items with memberId / kinds / afterSeq / fromTime to read around a moment, and view=item seq=N for one row in full. Read pages until you have what you need, not the whole thread.
@@ -330,14 +342,15 @@ function withAttachedImages(brief: string, images: number): string {
 /** What a team analysis's reply shows the user, section by section. */
 const TEAM_REPORT = `## The report
 
-The card draws the figures geniro measured over the analysed runs by itself — time, cost and failed turns per run, every run with its version, every agent's working time, share, cost and critical path, every model and the calls between agents — and your hotspots, your items with their estimates and your marks and verdict for each member. Never repeat those in your reply: no scorecard, chart or table of them. Your reply carries what the card does not, in this order, every section present: one that has nothing to show says so in a line. Every figure comes from the tool's answers — copy it, formatted for reading (1h 12m, 38k tokens, $4.20), never estimate one the tool did not give, and write "not measured" for a null. Name runs by title and date, agents by member.
+The card draws the figures geniro measured over the analysed runs by itself — time, cost and failed turns per run, every run with its version, every agent's working time, share, cost and critical path, every model, the calls between agents and each version's average pull-request threads, pushes and failed checks after done — and your hotspots, your items with their estimates and your marks and verdict for each member. Never repeat those in your reply: no scorecard, chart or table of them. Your reply carries what the card does not, in this order, every section present: one that has nothing to show says so in a line. Every figure comes from the tool's answers — copy it, formatted for reading (1h 12m, 38k tokens, $4.20), never estimate one the tool did not give, and write "not measured" for a null. Name runs by title and date, agents by member.
 
 1. Versions and earlier changes — a table per version that has runs, newest first: its number, its dates, runs (how many of them analysed), wall time and cost per run, failed turns, pull requests and their acceptance, times sent back for changes, time to acceptance and questions to the user per run (up to its last recorded outcome), and what made it (each logged change's source and summary, or "edited by hand"); then, for every change since the last analysis and every recommendation marked applied, your verdict — helped, no effect, worse or too few runs — with the figures on either side of it; then one line per earlier recommendation still open, passed over or unanswered, saying whether the runs since still call for it and, when your card asks again, the id of that item.
 2. Outcomes — a table per run, newest first: its questions to the user, and each pull request's acceptance, review rounds, times sent back for changes and time to acceptance.
-3. Models — your verdict on each agent's model and effort: fit, too strong or too weak for what it did, with the figures behind it, saying where the data is too thin to judge.
-4. Instruction size — a table per agent: its always-on block per turn (characters, approximate tokens), its two largest parts, and approximate tokens per run (per turn times turns per run); then every instruction file its CLI loads — its own user file, the repo's AGENTS.md / CLAUDE.md and rules — with its size.
-5. Instruction quality — a table per agent: its mark on each of clear, specific, consistent, lean and followed, and an overall grade from A (nothing to fix) to D (misleads the agent), with a row of its own for the project's instructions when the runs belong to a project; under it, every weak or poor mark with the line behind it, the run and seq where it cost something when the runs show one, and the id of the item that fixes it.
-6. The one change that matters most, and what it would save.`;
+3. Pull requests after done — a table per pull request, newest run first: its run, done → ready, done → merge, pushes (force pushes), bot and human review threads, failed checks and changes requested after done, and what CI skipped while it was a draft; under it, for each event after done, who should have caught it and the item that closes it. A pull request GitHub was not read for says why in its row.
+4. Models — your verdict on each agent's model and effort: fit, too strong or too weak for what it did, with the figures behind it, saying where the data is too thin to judge.
+5. Instruction size — a table per agent: its always-on block per turn (characters, approximate tokens), its two largest parts, and approximate tokens per run (per turn times turns per run); then every instruction file its CLI loads — its own user file, the repo's AGENTS.md / CLAUDE.md and rules — with its size.
+6. Instruction quality — a table per agent: its mark on each of clear, specific, consistent, lean and followed, and an overall grade from A (nothing to fix) to D (misleads the agent), with a row of its own for the project's instructions when the runs belong to a project; under it, every weak or poor mark with the line behind it, the run and seq where it cost something when the runs show one, and the id of the item that fixes it.
+7. The one change that matters most, and what it would save.`;
 
 /**
  * The sections a team's analysis shares, wherever it runs: the scope, the
@@ -375,7 +388,8 @@ ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT
 14. ${checks(folder)}
 15. ${TOOL_ECONOMY}
 16. ${INFORMATION_ACCESS}
-17. Cluster by root cause, then re-read every row you will cite (view=item runId=… seq=…) and confirm the quote is really there.
+17. ${pullRequestsAfterDone(true)}
+18. Cluster by root cause, then re-read every row you will cite (view=item runId=… seq=…) and confirm the quote is really there.
 
 Read pages until you have what you need, not every run whole.
 

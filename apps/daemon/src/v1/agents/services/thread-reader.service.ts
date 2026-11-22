@@ -29,6 +29,7 @@ import {
   type ReadAnalyzedThreadArgs,
   type RecommendationsTeamPopulation,
   type RunFold,
+  type RunPullRequestOutcomes,
   type RunWaterfallTurn,
   StageChangePayloadSchema,
   type TeamPopulationReader,
@@ -46,6 +47,10 @@ import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord, parseJsonColumn } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
+import {
+  lifecycleEvents,
+  lifecycleSummary,
+} from '../utils/pull-request-lifecycle';
 import { threadOutcomeOf } from '../utils/run-goals';
 import { runSnapshotOf } from '../utils/run-snapshots';
 import {
@@ -65,8 +70,16 @@ import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { goalIdOf } from './goals.service';
+import {
+  PullRequestAfterDoneService,
+  type RunAtSnapshot,
+  type RunPullRequestLife,
+} from './pull-request-after-done.service';
 import { RunKindRowsCache } from './run-kind-rows.cache';
-import { RunOutcomeHistoryService } from './run-outcome-history.service';
+import {
+  type RunOutcomeHistory,
+  RunOutcomeHistoryService,
+} from './run-outcome-history.service';
 import { ThreadTimelineService } from './thread-timeline.service';
 
 /** The overview's byte budget — small enough to read whole, first. */
@@ -153,6 +166,95 @@ function clip(text: string, max: number, seq: number): string {
 }
 
 /**
+ * The run's pull request an analysis named: by owner, repository and number,
+ * or by number alone when exactly one of them has it.
+ */
+function matchPullRequest(
+  asked: PullRequestAsked,
+  candidates: readonly RunPullRequestLife[],
+): RunPullRequestLife | null {
+  if (asked.owner !== undefined && asked.repo !== undefined) {
+    const key = pullRequestOutcomeKey({
+      owner: asked.owner,
+      repo: asked.repo,
+      number: asked.number,
+    });
+    return candidates.find((candidate) => candidate.key === key) ?? null;
+  }
+  const byNumber = candidates.filter(
+    (candidate) => candidate.number === asked.number,
+  );
+  return byNumber.length === 1 ? byNumber[0]! : null;
+}
+
+interface PullRequestAsked {
+  owner?: string;
+  repo?: string;
+  number: number;
+}
+
+/** What a view=pr argument names: `owner/repo#N` or its URL, else `#N` / `N`. */
+function pullRequestAsked(named: string): PullRequestAsked | null {
+  const text = named.trim();
+  const full =
+    /github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i.exec(text) ??
+    /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(text);
+  if (full !== null) {
+    return { owner: full[1]!, repo: full[2]!, number: Number(full[3]) };
+  }
+  const number = /^#?(\d+)$/.exec(text)?.[1];
+  return number === undefined ? null : { number: Number(number) };
+}
+
+/**
+ * A run's pull requests for view=runs: each recorded one with its newest
+ * outcome's figures, then each one it only opened or touched, every one with
+ * its GitHub life when that was read.
+ */
+function pullRequestEntries(
+  recorded: readonly RunPullRequestOutcomes[],
+  lives: readonly RunPullRequestLife[] | null,
+): Answer[] {
+  const lifeOf = new Map(lives?.map((life) => [life.key, life]));
+  const lifecycle = (key: string): Answer => {
+    const life = lifeOf.get(key);
+    return life === undefined ? {} : lifecycleSummary(life.read, life.marks);
+  };
+  const entries: Answer[] = recorded.flatMap(
+    ({ outcomes: [newest], ...pullRequest }) => {
+      if (newest === undefined) {
+        return [];
+      }
+      const key = pullRequestOutcomeKey(pullRequest);
+      return [
+        {
+          pullRequest: key,
+          acceptance: newest.acceptance,
+          reviewRounds: newest.reviewRounds,
+          draft: newest.draft,
+          changesRequestedRounds: pullRequest.changesRequestedRounds,
+          msToAccepted: pullRequest.msToAccepted,
+          ...lifecycle(key),
+        },
+      ];
+    },
+  );
+  const listed = new Set(
+    recorded.map((pullRequest) => pullRequestOutcomeKey(pullRequest)),
+  );
+  for (const life of lives ?? []) {
+    if (!listed.has(life.key)) {
+      entries.push({
+        pullRequest: life.key,
+        outcomeRecorded: false,
+        ...lifecycleSummary(life.read, life.marks),
+      });
+    }
+  }
+  return entries;
+}
+
+/**
  * Reads ONE source run for an analysis, in pages small enough for a CLI to take
  * as a tool result whole, and never past the snapshot the analysis started at.
  *
@@ -183,6 +285,7 @@ export class ThreadReaderService {
     private readonly projectScope: ProjectScopeService,
     private readonly projectChanges: ProjectInstructionChangeDao,
     @Optional() private readonly goalDao?: GoalDao,
+    @Optional() private readonly pullRequestLives?: PullRequestAfterDoneService,
   ) {}
 
   /**
@@ -282,6 +385,11 @@ export class ThreadReaderService {
         return this.items(source, args, em);
       case 'item':
         return this.item(source, args, em);
+      case 'pr':
+        return pagedAnswer(
+          await this.pullRequest(source, run, args.pullRequest, em),
+          args.offset ?? 0,
+        );
       case 'team':
         return {
           error: 'UNSUPPORTED',
@@ -466,6 +574,172 @@ export class ThreadReaderService {
   }
 
   /**
+   * view=pr: the run's pull requests with their life after each was done, or
+   * one of them as a timeline — its GitHub events in time order beside the
+   * run's done marks, each event with the run's newest message at or before
+   * it, so the two can be read against each other.
+   */
+  private async pullRequest(
+    source: AnalysisSource,
+    run: Run,
+    named: string | undefined,
+    em: EntityManager,
+  ): Promise<Answer> {
+    if (this.pullRequestLives === undefined) {
+      return {
+        error: 'UNSUPPORTED',
+        message: 'Pull requests cannot be read here.',
+      };
+    }
+    const outcomes = await this.outcomes.read(
+      source.sourceRunId,
+      source.snapshotSeq,
+      em,
+    );
+    const atSnapshot = {
+      run,
+      snapshotSeq: source.snapshotSeq,
+      outcomes: outcomes.pullRequests,
+    };
+    if (named === undefined) {
+      const lives = await this.livesOf([atSnapshot]);
+      return maskedAnswer({
+        runId: run.id,
+        pullRequests: pullRequestEntries(
+          outcomes.pullRequests,
+          lives.get(run.id) ?? [],
+        ),
+        next: 'view=pr pullRequest=<owner/repo#N> is one of them as a timeline beside the run.',
+      });
+    }
+    const candidates =
+      (await this.pullRequestLives.forRuns([atSnapshot], () => false)).get(
+        run.id,
+      ) ?? [];
+    const asked = pullRequestAsked(named);
+    const match = asked === null ? null : matchPullRequest(asked, candidates);
+    const mentioned =
+      asked === null || match !== null
+        ? null
+        : await this.pullRequestLives.mentioned(atSnapshot, asked);
+    if (match === null && mentioned === null) {
+      return {
+        error: 'UNKNOWN_PULL_REQUEST',
+        message: `The run names no pull request "${named}"${candidates.length > 1 ? ' alone' : ''}, and none of its messages links to one.`,
+        pullRequests: candidates.map((candidate) => candidate.key),
+      };
+    }
+    const life =
+      mentioned ??
+      (
+        await this.pullRequestLives.forRuns(
+          [atSnapshot],
+          (key) => key === match!.key,
+        )
+      )
+        .get(run.id)
+        ?.find((candidate) => candidate.key === match!.key) ??
+      match!;
+    const summary = {
+      ...(mentioned === null ? {} : { onlyLinkedFromMessages: true }),
+      ...lifecycleSummary(life.read, life.marks),
+    };
+    if (!('lifecycle' in life.read)) {
+      return maskedAnswer({
+        pullRequest: life.key,
+        url: life.url,
+        doneMarks: life.marks,
+        ...summary,
+      });
+    }
+    const messages = (
+      await this.itemDao.spineRowsOfKinds(run.id, ['message'], em)
+    ).filter((row) => row.seq <= source.snapshotSeq);
+    const nearest = (at: string): Answer | null => {
+      const time = Date.parse(at);
+      let found: (typeof messages)[number] | null = null;
+      for (const row of messages) {
+        if (row.createdAt.getTime() > time) {
+          break;
+        }
+        found = row;
+      }
+      return found === null
+        ? null
+        : { seq: found.seq, memberId: found.memberId, role: found.role };
+    };
+    const events: Answer[] = [
+      ...lifecycleEvents(life.read.lifecycle).map((event) => ({
+        ...event,
+        runBefore: nearest(event.at),
+      })),
+      ...life.marks.map((mark) => ({
+        at: mark.at,
+        kind: 'done-mark',
+        detail: mark.source,
+        seq: mark.seq,
+        memberId: mark.memberId,
+      })),
+    ].sort((a, b) => Date.parse(String(a.at)) - Date.parse(String(b.at)));
+    return maskedAnswer({
+      pullRequest: life.key,
+      url: life.url,
+      ...summary,
+      skippedWhileDraft: life.read.lifecycle.skippedWhileDraft,
+      events,
+      next: 'view=items afterSeq=<seq> reads the run around a moment; view=item seq=<seq> one row whole.',
+    });
+  }
+
+  /** Each folded run's recorded outcomes, and its pull requests with their done marks and GitHub life. */
+  private async outcomesAndLives(
+    folds: readonly RunFold[],
+    em: EntityManager,
+  ): Promise<{
+    recorded: Map<string, RunOutcomeHistory>;
+    lives: Map<string, RunPullRequestLife[]>;
+  }> {
+    const recorded = new Map<string, RunOutcomeHistory>();
+    const runs: RunAtSnapshot[] = [];
+    for (const { analysed, run } of folds) {
+      if (run === null) {
+        continue;
+      }
+      const history = await this.outcomes.read(
+        analysed.runId,
+        analysed.snapshotSeq,
+        em,
+      );
+      recorded.set(analysed.runId, history);
+      runs.push({
+        run,
+        snapshotSeq: analysed.snapshotSeq,
+        outcomes: history.pullRequests,
+      });
+    }
+    return { recorded, lives: await this.livesOf(runs) };
+  }
+
+  /** The folded runs' pull requests with their GitHub life, for the card's figures. */
+  async cardPullRequests(
+    folds: readonly RunFold[],
+  ): Promise<Map<string, RunPullRequestLife[]>> {
+    return (await this.outcomesAndLives(folds, this.em.fork())).lives;
+  }
+
+  /**
+   * Each run's pull requests with their done marks and GitHub life; empty
+   * when this reader was built without the lifecycle reader.
+   */
+  private async livesOf(
+    runs: readonly RunAtSnapshot[],
+  ): Promise<Map<string, RunPullRequestLife[]>> {
+    return this.pullRequestLives === undefined || runs.length === 0
+      ? new Map()
+      : this.pullRequestLives.forRuns(runs);
+  }
+
+  /**
    * A team analysis's runs side by side: each run's totals and outcome,
    * every member's figures, and every member's turns per model — each folded from
    * every row up to that run's snapshot, never from a window.
@@ -480,32 +754,17 @@ export class ThreadReaderService {
     const em = this.em.fork();
     const folded: FoldedRun[] = [];
     const runs: Answer[] = [];
-    for (const { analysed, run, folded: entry } of await this.foldRuns(
-      analysedRuns,
-    )) {
+    const sampled = await this.foldRuns(analysedRuns);
+    const { recorded, lives } = await this.outcomesAndLives(sampled, em);
+    for (const { analysed, run, folded: entry } of sampled) {
       if (run === null) {
         runs.push({ runId: analysed.runId, gone: true });
         continue;
       }
-      const outcomes = await this.outcomes.read(
-        analysed.runId,
-        analysed.snapshotSeq,
-        em,
-      );
-      const pullRequests = outcomes.pullRequests.flatMap(
-        ({ outcomes: [newest], ...pullRequest }) =>
-          newest === undefined
-            ? []
-            : [
-                {
-                  pullRequest: pullRequestOutcomeKey(pullRequest),
-                  acceptance: newest.acceptance,
-                  reviewRounds: newest.reviewRounds,
-                  draft: newest.draft,
-                  changesRequestedRounds: pullRequest.changesRequestedRounds,
-                  msToAccepted: pullRequest.msToAccepted,
-                },
-              ],
+      const outcomes = recorded.get(analysed.runId)!;
+      const pullRequests = pullRequestEntries(
+        outcomes.pullRequests,
+        lives.get(analysed.runId) ?? null,
       );
       const header = {
         runId: run.id,
@@ -546,7 +805,7 @@ export class ThreadReaderService {
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open.",
+      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
     });
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });

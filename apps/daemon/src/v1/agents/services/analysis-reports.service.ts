@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -46,7 +46,7 @@ import {
 } from '../utils/recommendations-card';
 import { patchedCard } from '../utils/recommendations-patch';
 import { existingDirectory } from '../utils/resolve-directory';
-import { teamCardStats } from '../utils/team-runs-fold';
+import { type CardPullRequest, teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { ThreadReaderService } from './thread-reader.service';
 import { ThreadTimelineService } from './thread-timeline.service';
@@ -91,6 +91,8 @@ function isRepositoryRoot(path: string): boolean {
  */
 @Injectable()
 export class AnalysisReportsService {
+  private readonly logger = new Logger(AnalysisReportsService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -355,11 +357,26 @@ export class AnalysisReportsService {
       versionIndex === null
         ? null
         : await versionIndex(turn.team.slug).catch(() => null);
+    const pullRequests = await this.threads
+      .cardPullRequests(folds)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `the card's pull requests could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return new Map<string, readonly CardPullRequest[]>();
+      });
     return teamCardStats(
-      folds.flatMap(({ run, folded }) =>
+      folds.flatMap(({ analysed, run, folded }) =>
         run === null || folded === null
           ? []
-          : [{ title: run.title, createdAt: run.createdAt, folded }],
+          : [
+              {
+                title: run.title,
+                createdAt: run.createdAt,
+                folded,
+                pullRequests: pullRequests.get(analysed.runId),
+              },
+            ],
       ),
       index,
       population === null

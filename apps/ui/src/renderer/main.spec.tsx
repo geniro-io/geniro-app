@@ -144,4 +144,18 @@ describe('renderer entry', () => {
     expect(mocks.browserWindowApp).not.toHaveBeenCalled();
     expect(containsType(rendered, mocks.App)).toBe(true);
   });
+
+  it('puts a window the keyboard left lifted back at the top', async () => {
+    stubMatchMedia(false);
+    mocks.getSettings.mockReturnValue(new Promise(() => {}));
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+    await import('./main');
+    Object.defineProperty(window, 'scrollY', { value: 62, configurable: true });
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true });
+    scrollTo.mockRestore();
+  });
 });

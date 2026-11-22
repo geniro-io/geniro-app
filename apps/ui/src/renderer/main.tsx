@@ -7,6 +7,7 @@ import { parseBrowserWindowHash } from '../shared/browser-window-route';
 import { renderLoadedApp } from './boot-app';
 import { ErrorBoundary } from './components/error-boundary';
 import { PairingScreen } from './components/pairing-screen';
+import { keepWindowUnscrolled } from './keep-window-unscrolled';
 import { installRemoteBridge } from './remote/install-remote-bridge';
 import { isRemoteRuntime, readSession } from './remote/remote-session';
 import { recoverFromStaleBundles } from './stale-bundle';
@@ -33,6 +34,8 @@ installRemoteBridge();
 
 // Before anything is imported lazily — the app itself is, a few lines down.
 recoverFromStaleBundles();
+
+keepWindowUnscrolled(window);
 
 // Before `createRoot`, so `<html data-theme>` is set for the FIRST paint —
 // after it, a dark-theme window shows one frame of the light palette.

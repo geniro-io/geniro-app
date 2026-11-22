@@ -111,6 +111,92 @@ describe('foldLessonSignals', () => {
     expect(signals).toEqual([]);
   });
 
+  it('finds an error then success of a claude tool, whose results carry no name and whose calls do', () => {
+    const signals = foldLessonSignals([
+      item(1, 'tool_call', { id: 't1', name: 'Bash', input: {} }),
+      item(2, 'tool_result', {
+        id: 't1',
+        name: null,
+        isError: true,
+        result: 'boom',
+      }),
+      item(3, 'tool_call', { id: 't2', name: 'Bash', input: {} }),
+      item(4, 'tool_result', {
+        id: 't2',
+        name: null,
+        isError: false,
+        result: 'ok',
+      }),
+    ]);
+
+    expect(signals).toEqual([
+      { kind: 'error_then_success', seq: 2, excerpt: 'Bash: boom' },
+    ]);
+  });
+
+  it('does not count a claude error whose tool never succeeded after it', () => {
+    const signals = foldLessonSignals([
+      item(1, 'tool_call', { id: 't1', name: 'Bash', input: {} }),
+      item(2, 'tool_result', {
+        id: 't1',
+        name: null,
+        isError: true,
+        result: 'boom',
+      }),
+      item(3, 'tool_call', { id: 't2', name: 'Read', input: {} }),
+      item(4, 'tool_result', {
+        id: 't2',
+        name: null,
+        isError: false,
+        result: 'x',
+      }),
+    ]);
+
+    expect(signals).toEqual([]);
+  });
+
+  it('skips a name-less result whose call is not in the stretch', () => {
+    const signals = foldLessonSignals([
+      item(1, 'tool_result', {
+        id: 't1',
+        name: null,
+        isError: true,
+        result: 'boom',
+      }),
+      item(2, 'tool_call', { id: 't2', name: 'Bash', input: {} }),
+      item(3, 'tool_result', {
+        id: 't2',
+        name: null,
+        isError: false,
+        result: 'ok',
+      }),
+    ]);
+
+    expect(signals).toEqual([]);
+  });
+
+  it('reads the name a result carries itself over the name of its call', () => {
+    const signals = foldLessonSignals([
+      item(1, 'tool_call', { id: 't1', name: 'Read', input: {} }),
+      item(2, 'tool_result', {
+        id: 't1',
+        name: 'Bash',
+        isError: true,
+        result: 'boom',
+      }),
+      item(3, 'tool_result', {
+        id: 't2',
+        name: 'Bash',
+        isError: false,
+        result: 'ok',
+      }),
+    ]);
+
+    expect(signals).toEqual([
+      { kind: 'error_then_success', seq: 2, excerpt: 'Bash: boom' },
+    ]);
+  });
+
   it('finds a declined approval, a failed outcome, a reopened stage and review findings', () => {
     const signals = foldLessonSignals([
       item(1, 'approval_verdict', { id: 'a', allow: false }),

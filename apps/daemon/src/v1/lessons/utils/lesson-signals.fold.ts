@@ -13,6 +13,7 @@ export interface LessonSignalItem {
 export const LESSON_SIGNAL_ITEM_KINDS: ItemKind[] = [
   'message',
   'turn_complete',
+  'tool_call',
   'tool_result',
   'approval_verdict',
   'thread_outcome',
@@ -52,12 +53,21 @@ export function foldLessonSignals(
   const signals: LessonSignal[] = [];
   let agentFinished = options.afterFinishedTurn ?? false;
   const failedTools = new Map<string, { seq: number; excerpt: string }>();
+  const callNames = new Map<string, string>();
   for (const item of items) {
     const payload = parsePayload(item.payload);
     switch (item.kind) {
       case 'turn_complete':
         agentFinished = true;
         break;
+      case 'tool_call': {
+        const id = stringField(payload, 'id');
+        const name = stringField(payload, 'name');
+        if (id !== null && name !== null) {
+          callNames.set(id, name);
+        }
+        break;
+      }
       case 'message': {
         if (item.role !== 'user') {
           break;
@@ -85,7 +95,7 @@ export function foldLessonSignals(
         }
         break;
       case 'tool_result': {
-        const name = stringField(payload, 'name');
+        const name = resultToolName(payload, callNames);
         if (name === null) {
           break;
         }
@@ -166,6 +176,18 @@ function stringField(
 ): string | null {
   const value = payload?.[key];
   return typeof value === 'string' ? value : null;
+}
+
+function resultToolName(
+  payload: Record<string, unknown> | null,
+  callNames: ReadonlyMap<string, string>,
+): string | null {
+  const own = stringField(payload, 'name');
+  if (own !== null) {
+    return own;
+  }
+  const callId = stringField(payload, 'id');
+  return callId === null ? null : (callNames.get(callId) ?? null);
 }
 
 function resultText(result: unknown): string {

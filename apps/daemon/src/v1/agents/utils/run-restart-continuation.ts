@@ -163,8 +163,11 @@ export function restartContinuationPrompt(
     working,
     calls,
     monitors,
+    fresh = false,
   }: {
     working: 'turn' | 'call' | 'idle';
+    /** Its session could not be resumed: the transcript excerpt follows instead. */
+    fresh?: boolean;
     calls: readonly { callId: string; callee: string }[];
     monitors: readonly StoppedMonitor[];
   },
@@ -174,7 +177,7 @@ export function restartContinuationPrompt(
   const parts = [
     working === 'idle'
       ? `[geniro] ${head} while you were waiting.`
-      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. Your session is intact — check what is already done, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
+      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
   ];
   if (calls.length > 0) {
     const named = calls

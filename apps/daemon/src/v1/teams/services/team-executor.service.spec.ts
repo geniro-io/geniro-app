@@ -132,6 +132,7 @@ import {
   NO_ATTENTION_MEMORY,
   readAttention,
 } from '../../agents/utils/run-attention';
+import { readRestartContinuation } from '../../agents/utils/run-restart-continuation';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
 import { isFolderGone } from '../../agents/utils/turn-folder';
@@ -149,7 +150,7 @@ import type { ProjectScopeService } from '../../projects/services/project-scope.
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import { AgentKind } from '../../runs/runs.types';
+import { AgentKind, type ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import { member, teamOf } from '../__tests__/team-builders';
 import {
@@ -298,6 +299,20 @@ class FakeRunDao {
       run.resetWakes = value;
     }
   }
+  async setRestartContinuation(
+    id: string,
+    value: string | null,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.restartContinuation = value;
+    }
+  }
+  async listRunsWithRestartContinuation(): Promise<Run[]> {
+    return [...this.runs.values()].filter(
+      (run) => (run.restartContinuation ?? null) !== null,
+    );
+  }
   async listRunsWithResetWakes(): Promise<Run[]> {
     return [...this.runs.values()].filter((run) => run.resetWakes !== null);
   }
@@ -337,7 +352,7 @@ class FakeItemDao {
     );
   }
 
-  readonly items: Item[] = [];
+  items: Item[] = [];
   async stageChangeRows(runId: string): Promise<Item[]> {
     return this.items
       .filter((item) => item.runId === runId && item.kind === 'stage_change')
@@ -1272,6 +1287,7 @@ function setup(
     hardDeleted: unknown[];
     rows: Map<string, FakeCallContextRow>;
     forgotContext: { runId: string; callId: string }[];
+    sessions: Map<string, string[]>;
   };
   registry: ProcessRegistry;
   approvals: ApprovalRegistry;
@@ -4877,6 +4893,193 @@ describe('TeamExecutorService', () => {
         }),
       }),
     );
+  });
+
+  describe('a run an update or a restart cut off', () => {
+    const cutOffRows = [
+      ['orch', 'status', { nodeId: 'orch', status: 'running' }],
+      [
+        'orch',
+        'call_started',
+        {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'poet',
+          mode: 'async',
+          message: 'write',
+        },
+      ],
+      [
+        'poet',
+        'status',
+        { nodeId: 'poet', status: 'running', callId: 'call-1' },
+      ],
+    ] as const;
+
+    async function cutOffRun(
+      ctx: ReturnType<typeof setup>,
+      extra: readonly (readonly [
+        string,
+        ItemKind,
+        Record<string, unknown>,
+      ])[] = [],
+    ) {
+      const orphan = await ctx.runDao.create({
+        teamId: 'ghost',
+        status: 'running',
+        cwd: dir,
+      });
+      await ctx.nodeDao.createPending(orphan.id, 'orch');
+      await ctx.nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+      for (const [index, [memberId, kind, payload]] of [
+        ...cutOffRows,
+        ...extra,
+      ].entries()) {
+        await ctx.itemDao.create({
+          runId: orphan.id,
+          memberId,
+          seq: index,
+          kind,
+          payload: JSON.stringify(payload),
+        });
+      }
+      return orphan;
+    }
+
+    it.each(['self-update', 'restart'] as const)(
+      'after a %s keeps the run running and records its cut-off turn and call for the drain',
+      async (cause) => {
+        const ctx = setup();
+        const orphan = await cutOffRun(ctx);
+        ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
+
+        await ctx.service.reconcileOrphanedRuns(cause);
+
+        const run = ctx.runDao.runs.get(orphan.id)!;
+        expect(run.status).toBe('running');
+        expect(readRestartContinuation(run.restartContinuation)).toEqual({
+          cause,
+          turns: [{ memberId: 'orch' }],
+          calls: [
+            {
+              callId: 'call-1',
+              callerMemberId: 'orch',
+              callerConversationId: null,
+              calleeMemberId: 'poet',
+              conversationId: 'call-1',
+              mode: 'async',
+              sessionId: 'sess-poet',
+              member: null,
+            },
+          ],
+          monitors: [],
+        });
+        const written = ctx.itemDao.items.filter(
+          (i) => i.runId === orphan.id && i.seq >= cutOffRows.length,
+        );
+        expect(written.some((i) => i.kind === 'call_result')).toBe(false);
+        const boot = written.find((i) => i.kind === 'error');
+        expect(JSON.parse(boot!.payload)).toMatchObject({
+          interrupted: true,
+          interruptCause: cause,
+          continues: true,
+        });
+        expect(
+          written
+            .filter((i) => i.kind === 'status')
+            .map((i) => JSON.parse(i.payload) as { status: string }),
+        ).toEqual([
+          { nodeId: 'orch', status: 'cancelled' },
+          { nodeId: 'poet', status: 'cancelled', callId: 'call-1' },
+        ]);
+        expect(ctx.nodeDao.row(orphan.id, 'orch')?.status).toBe('cancelled');
+      },
+    );
+
+    it('fails a call it already continued once, naming its thread', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx, [
+        [
+          'poet',
+          'system',
+          {
+            callId: 'call-1',
+            message: 'continued',
+            restartContinued: 'call-1',
+          },
+        ],
+      ]);
+      ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
+
+      await ctx.service.reconcileOrphanedRuns('restart');
+
+      const result = ctx.itemDao.items.find(
+        (i) => i.runId === orphan.id && i.kind === 'call_result',
+      );
+      expect(JSON.parse(result!.payload)).toMatchObject({
+        callId: 'call-1',
+        status: 'error',
+        error: expect.stringMatching(
+          /^CALLEE_FAILED\[daemon_restart\]: .*thread: 'call-1'/,
+        ),
+      });
+      const run = ctx.runDao.runs.get(orphan.id)!;
+      expect(readRestartContinuation(run.restartContinuation)?.calls).toEqual(
+        [],
+      );
+    });
+
+    it('a crash after the record was written drops it and fails the run as today', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx);
+      await ctx.service.reconcileOrphanedRuns('self-update');
+
+      await ctx.service.reconcileOrphanedRuns('crash');
+
+      const run = ctx.runDao.runs.get(orphan.id)!;
+      expect(run.status).toBe('failed');
+      expect(run.restartContinuation).toBeNull();
+      const errors = ctx.itemDao.items.filter(
+        (i) => i.runId === orphan.id && i.kind === 'error',
+      );
+      expect(JSON.parse(errors.at(-1)!.payload)).toEqual({
+        message:
+          'team run interrupted — the daemon crashed while it was running',
+        interrupted: true,
+        interruptCause: 'crash',
+      });
+    });
+
+    it('a second restart before the drain keeps one record and writes no second boot row', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx);
+      await ctx.service.reconcileOrphanedRuns('restart');
+
+      await ctx.service.reconcileOrphanedRuns('self-update');
+
+      expect(
+        ctx.itemDao.items.filter(
+          (i) => i.runId === orphan.id && i.kind === 'error',
+        ),
+      ).toHaveLength(1);
+      const record = readRestartContinuation(
+        ctx.runDao.runs.get(orphan.id)!.restartContinuation,
+      );
+      expect(record?.cause).toBe('self-update');
+      expect(record?.calls.map((call) => call.callId)).toEqual(['call-1']);
+      expect(record?.turns).toEqual([{ memberId: 'orch' }]);
+    });
+
+    it('quit is not continued: the run fails as today', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx);
+
+      await ctx.service.reconcileOrphanedRuns('quit');
+
+      const run = ctx.runDao.runs.get(orphan.id)!;
+      expect(run.status).toBe('failed');
+      expect(run.restartContinuation ?? null).toBeNull();
+    });
   });
 
   it('boot reconcile settles the members of an ENDED run whose endings were never saved, keeping the run’s status', async () => {
@@ -16526,6 +16729,155 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     await drain();
     completeTurn(claude.starts[claude.starts.length - 1]!, 'done again');
     await drain();
+  });
+
+  it('leaves an in-flight call and its turns open when the daemon’s shutdown ends them, for the next boot to continue', async () => {
+    const { service, claude, callBroker, itemDao, registry } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const started = await callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+      mode: 'async',
+    });
+    expect(started.status).toBe('ok');
+    await drain();
+    expect(claude.starts).toHaveLength(2);
+
+    service.beforeApplicationShutdown();
+    await registry.onApplicationShutdown();
+    await drain();
+
+    expect(claude.starts[1]!.cancelled).toBe(true);
+    const rows = itemDao.items.filter((i) => i.runId === run.id);
+    expect(rows.some((i) => i.kind === 'call_result')).toBe(false);
+    expect(
+      rows
+        .filter((i) => i.kind === 'status')
+        .map((i) => (JSON.parse(i.payload) as { status: string }).status)
+        .filter((status) => status !== 'running'),
+    ).toEqual([]);
+  });
+
+  describe('continued after an update or a restart', () => {
+    async function cutOffByUpdate(leadCutOff: boolean) {
+      const ctx = setup();
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await ctx.callBroker.callAgent(run.id, 'a', {
+        title: 'work',
+        agent: 'callee',
+        message: 'build it',
+        mode: 'async',
+      });
+      await drain();
+      completeTurn(ctx.claude.starts[1]!, 'half done');
+      completeTurn(ctx.claude.starts[0]!, 'waiting');
+      await drain();
+      while (ctx.registry.has(run.id)) {
+        completeTurn(ctx.claude.starts.at(-1)!, 'collected');
+        await drain();
+      }
+      const cutSeq = ctx.itemDao.items.find(
+        (i) => i.runId === run.id && i.kind === 'call_started',
+      )!.seq;
+      ctx.itemDao.items = ctx.itemDao.items.filter((i) => {
+        if (i.runId !== run.id || i.seq <= cutSeq) {
+          return true;
+        }
+        if (i.kind === 'call_result' || i.kind === 'turn_complete') {
+          return false;
+        }
+        if (i.kind !== 'status') {
+          return true;
+        }
+        const payload = JSON.parse(i.payload) as {
+          nodeId: string;
+          status: string;
+        };
+        return payload.nodeId === 'callee' && payload.status === 'running';
+      });
+      if (!leadCutOff) {
+        await ctx.itemDao.create({
+          runId: run.id,
+          memberId: 'a',
+          seq: (await ctx.itemDao.maxSeq(run.id)) + 1,
+          kind: 'status',
+          payload: JSON.stringify({ nodeId: 'a', status: 'completed' }),
+        });
+      }
+      ctx.runDao.runs.get(run.id)!.status = 'running';
+      ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      await ctx.service.reconcileOrphanedRuns('self-update');
+      const record = readRestartContinuation(
+        ctx.runDao.runs.get(run.id)!.restartContinuation,
+      );
+      return { ...ctx, run, record: record! };
+    }
+
+    it('continues the cut-off call under its own id in its session, and the lead with one note', async () => {
+      const ctx = await cutOffByUpdate(true);
+      expect(ctx.record.turns).toEqual([{ memberId: 'a' }]);
+      const before = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('continued');
+      await drain();
+
+      const fresh = ctx.claude.starts.slice(before);
+      const lead = fresh.find((t) => t.input.prompt.includes('collect it'));
+      const callee = fresh.find((t) => t.input.prompt.includes('on this call'));
+      expect(lead!.input.prompt).toMatch(
+        /^\[geniro\] The app was updated while you were working\. Check what is already done, then carry on\. Still open: call-1 \(callee\) continues; collect it with await_agent\(call-1\)\.\n\nYour earlier session could not be resumed after the restart/,
+      );
+      expect(callee!.input.resumeSessionId).toBe('sess-callee');
+      const rows = ctx.itemDao.items.filter((i) => i.runId === ctx.run.id);
+      expect(rows.filter((i) => i.kind === 'call_started')).toHaveLength(1);
+      expect(
+        rows.some(
+          (i) =>
+            i.kind === 'system' &&
+            (JSON.parse(i.payload) as { restartContinued?: string })
+              .restartContinued === 'call-1',
+        ),
+      ).toBe(true);
+
+      completeTurn(callee!, 'all done');
+      await drain();
+      expect(
+        await ctx.callBroker.awaitAgent(ctx.run.id, 'a', { call_id: 'call-1' }),
+      ).toMatchObject({ status: 'ok', result: { call_id: 'call-1' } });
+      completeTurn(lead!, 'collected');
+      await drain();
+    });
+
+    it('starts no lead turn when only the call was cut off', async () => {
+      const ctx = await cutOffByUpdate(false);
+      expect(ctx.record.turns).toEqual([]);
+      const before = ctx.claude.starts.length;
+
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
+      await drain();
+
+      const fresh = ctx.claude.starts.slice(before);
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0]!.input.prompt).toContain('on this call');
+      expect(fresh[0]!.input.resumeSessionId).toBe('sess-callee');
+      completeTurn(fresh[0]!, 'all done');
+      await drain();
+    });
   });
 
   it('leaves a WOKEN run `running` when the daemon’s shutdown cancels its wake', async () => {

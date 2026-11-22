@@ -314,6 +314,7 @@ import {
   poolMoveNotice,
   poolSize,
   poolSwitchNotice,
+  RESTART_TRANSCRIPT_LEAD,
 } from '../utils/agent-pool';
 import { probeCallEndpoint } from '../utils/call-endpoint-self-check';
 import {
@@ -1599,6 +1600,7 @@ export class TeamExecutorService
         working: cutOff.has(memberId) ? 'turn' : 'idle',
         calls: callsOf(memberId, null),
         monitors: monitorsOf(memberId, null),
+        fresh: !sessionOf.get(memberId),
       });
       return sessionOf.get(memberId)
         ? prompt
@@ -1606,6 +1608,7 @@ export class TeamExecutorService
             prompt,
             memberId,
             await this.itemDao.nodePoolContextRows(runId, memberId, em),
+            RESTART_TRANSCRIPT_LEAD,
           );
     };
     const clause = interruptCauseClause(record.cause);
@@ -1619,6 +1622,7 @@ export class TeamExecutorService
             working: 'call',
             calls: callsOf(call.calleeMemberId, call.conversationId),
             monitors: monitorsOf(call.calleeMemberId, call.conversationId),
+            fresh: call.sessionId === null,
           });
           return {
             call,
@@ -1632,6 +1636,7 @@ export class TeamExecutorService
                       [call.conversationId, call.callId],
                       em,
                     ),
+                    RESTART_TRANSCRIPT_LEAD,
                   ),
           };
         }),

@@ -50,13 +50,15 @@ export type ProjectSource = (typeof PROJECT_SOURCES)[number];
 
 /**
  * What an analysis chat is for: the user's own "Analyze thread" (`review`;
- * null on rows written before purposes), a hidden lessons reflection, or the
- * hidden second-model check of the lessons a reflection found.
+ * null on rows written before purposes), a hidden lessons reflection, the
+ * hidden second-model check of the lessons a reflection found, or the system
+ * analysis started from Settings over a period's troubled threads.
  */
 export const ANALYSIS_PURPOSES = [
   'review',
   'lessons',
   'lessons_check',
+  'system',
 ] as const;
 export type AnalysisPurpose = (typeof ANALYSIS_PURPOSES)[number];
 

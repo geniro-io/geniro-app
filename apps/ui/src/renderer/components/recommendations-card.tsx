@@ -2,6 +2,7 @@ import { cva } from 'class-variance-authority';
 import { ArrowRight, Check, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
+import type { ProjectRef } from '../projects/use-projects';
 import { ErrorBanner } from './error-banner';
 import { MemberMarks, type MemberVerdict } from './member-marks';
 import {
@@ -17,9 +18,13 @@ import {
   type TeamStatsView,
   workedShare,
 } from './recommendations-figures';
+import { SplitButton } from './split-button';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Dialog } from './ui/dialog';
+import type { MenuGroup } from './ui/menu';
 import { OptionIndicator } from './ui/option-list';
+import { Select } from './ui/select';
 
 export type {
   RecommendationsFolds,
@@ -31,18 +36,28 @@ export type RecommendationRisk = 'low' | 'medium' | 'high';
 export type RecommendationTerritory = 'process' | 'domain';
 export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 
+export const RECOMMENDATION_TARGETS = [
+  'team',
+  'repo',
+  'user',
+  'memory',
+  'project',
+  'overlay',
+  'knowledge',
+  'external',
+  'geniro',
+] as const;
+export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
+
+/** What the card's split button does with the ticked items. */
+export const RECOMMENDATION_ACTIONS = ['cards', 'implement', 'report'] as const;
+export type RecommendationAction = (typeof RECOMMENDATION_ACTIONS)[number];
+type ChosenAction = Exclude<RecommendationAction, 'report'>;
+
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
-  target:
-    | 'team'
-    | 'repo'
-    | 'user'
-    | 'memory'
-    | 'project'
-    | 'overlay'
-    | 'knowledge'
-    | 'external';
+  target: RecommendationTarget;
   territory: RecommendationTerritory;
   kind: string;
   location: string;
@@ -68,6 +83,8 @@ export interface RecommendationView {
   document?: { place: string; handle: string | null; title: string | null };
   /** A knowledge item: the item holding the other side of a move. */
   movesWith?: string | null;
+  /** A system analysis: the flag handles this item answers. */
+  addressesFlags: readonly string[];
 }
 
 /** The other side of a move `id` is one side of, or null: the two are ticked together. */
@@ -150,6 +167,56 @@ const OUTCOME_BADGE: Record<
   skipped: { variant: 'muted', label: 'Skipped' },
   failed: { variant: 'destructive', label: 'Failed' },
 };
+
+const SYSTEM_ACTION_LABEL: Record<RecommendationAction, string> = {
+  cards: 'Create cards',
+  implement: 'Implement right away',
+  report: 'Keep as report',
+};
+
+const SYSTEM_ACTION_GROUPS: MenuGroup[] = [
+  {
+    items: RECOMMENDATION_ACTIONS.map((value) => ({
+      value,
+      label: SYSTEM_ACTION_LABEL[value],
+    })),
+  },
+];
+
+const TICKET_KEY = /^[A-Z][A-Z0-9]*-\d+$/;
+const TASK_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const FILED_NOTE = /^(?<phrase>filed to start|filed|started) (?<key>\S+)$/;
+
+export interface SystemOutcome {
+  /** The ticket key the card was filed as, or the task id when it has none. */
+  key: string;
+  state: 'filed' | 'start requested' | 'started';
+}
+
+/** What an applied system item's outcome note says it became, or null for any other note. */
+export function systemOutcomeOf(note: string | null): SystemOutcome | null {
+  const match = note === null ? null : FILED_NOTE.exec(note);
+  const phrase = match?.groups?.phrase;
+  const key = match?.groups?.key;
+  if (key === undefined || phrase === undefined) {
+    return null;
+  }
+  if (!TICKET_KEY.test(key) && !TASK_ID.test(key)) {
+    return null;
+  }
+  const state =
+    phrase === 'filed to start'
+      ? 'start requested'
+      : phrase === 'started'
+        ? 'started'
+        : 'filed';
+  return { key, state };
+}
+
+function isRecommendationAction(value: string): value is RecommendationAction {
+  return (RECOMMENDATION_ACTIONS as readonly string[]).includes(value);
+}
 
 /**
  * Where the card's ticked items are kept until Apply — per thread, by the
@@ -333,6 +400,23 @@ function ItemToggles({
   );
 }
 
+function FiledBadges({ filed }: { filed: SystemOutcome }): React.JSX.Element {
+  return (
+    <>
+      <Badge variant="outline" data-slot="recommendation-filed">
+        {filed.key}
+      </Badge>
+      {filed.state === 'filed' ? null : (
+        <Badge
+          variant={filed.state === 'started' ? 'success' : 'muted'}
+          data-slot="recommendation-outcome">
+          {filed.state === 'started' ? 'Started' : 'Start requested'}
+        </Badge>
+      )}
+    </>
+  );
+}
+
 function ItemRow({
   item,
   moveWith,
@@ -359,7 +443,11 @@ function ItemRow({
 }): React.JSX.Element {
   const risk = RISK_BADGE[item.risk];
   const territory = TERRITORY_BADGE[item.territory];
-  const result = outcome === null ? null : OUTCOME_BADGE[outcome.status];
+  const filed =
+    outcome?.status === 'applied' ? systemOutcomeOf(outcome.note) : null;
+  const result =
+    outcome === null || filed !== null ? null : OUTCOME_BADGE[outcome.status];
+  const note = outcome === null || filed !== null ? null : outcome.note;
   return (
     <li
       data-slot="recommendation-row"
@@ -417,7 +505,9 @@ function ItemRow({
               )}
               <Badge variant="muted">confidence {item.confidence}/5</Badge>
               <Badge variant={risk.variant}>{risk.label}</Badge>
-              {result ? (
+              {filed !== null ? (
+                <FiledBadges filed={filed} />
+              ) : result ? (
                 <Badge
                   variant={result.variant}
                   data-slot="recommendation-outcome">
@@ -443,13 +533,9 @@ function ItemRow({
           </span>
         </button>
       </div>
-      {outcome !== null &&
-      (outcome.note !== null || outcome.backup !== null) ? (
+      {outcome !== null && (note !== null || outcome.backup !== null) ? (
         <p className="m-0 pl-6 text-xs text-muted-foreground">
-          {[
-            outcome.note,
-            outcome.backup === null ? null : `backup: ${outcome.backup}`,
-          ]
+          {[note, outcome.backup === null ? null : `backup: ${outcome.backup}`]
             .filter((part): part is string => part !== null)
             .join(' · ')}
         </p>
@@ -465,6 +551,13 @@ function ItemRow({
             <p className="m-0 text-muted-foreground">
               Estimate: {sentence(item.basis)} If wrong: {item.riskNote}
             </p>
+            {item.addressesFlags.length === 0 ? null : (
+              <p
+                data-slot="recommendation-flags"
+                className="m-0 text-muted-foreground">
+                Answers flags {item.addressesFlags.join(', ')}
+              </p>
+            )}
           </div>
         </Disclosure>
         <Disclosure
@@ -682,6 +775,71 @@ function MemberAssessments({
   );
 }
 
+function ChooseProjectDialog({
+  action,
+  projects,
+  onConfirm,
+  onClose,
+}: {
+  action: ChosenAction;
+  projects: readonly ProjectRef[];
+  onConfirm: (projectId: string) => void;
+  onClose: () => void;
+}): React.JSX.Element {
+  const [projectId, setProjectId] = useState<string | null>(null);
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={
+        action === 'cards'
+          ? 'Create cards in which project?'
+          : 'Implement right away in which project?'
+      }>
+      <div className="flex min-w-0 flex-col gap-3">
+        {projects.length === 0 ? (
+          <p className="m-0 text-sm text-muted-foreground">
+            There is no project to file cards in.
+          </p>
+        ) : (
+          <Select
+            aria-label="Project"
+            variant="ghost"
+            groups={[
+              {
+                items: projects.map((project) => ({
+                  value: project.id,
+                  label: project.name,
+                  title: project.folder,
+                })),
+              },
+            ]}
+            value={projectId}
+            placeholder="Choose a project"
+            onValueChange={setProjectId}
+          />
+        )}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={projectId === null}
+            onClick={() => {
+              if (projectId !== null) {
+                onConfirm(projectId);
+              }
+            }}>
+            {SYSTEM_ACTION_LABEL[action]}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 function projectionScope(
   kept: readonly string[] | null,
   picked: readonly string[],
@@ -724,6 +882,7 @@ export function RecommendationsCard({
   folds,
   selection,
   onApply,
+  actions,
   onDismissError,
 }: {
   summary: string | null;
@@ -746,12 +905,27 @@ export function RecommendationsCard({
   selection?: RecommendationsSelection;
   /** Absent draws the card read-only (no Apply). */
   onApply?: (ids: string[]) => void;
+  /**
+   * A system analysis's card: its button files the ticked items as cards, or
+   * starts them, in a project chosen in a dialog; it replaces `onApply`.
+   */
+  actions?: {
+    projects: readonly ProjectRef[];
+    onAction: (
+      action: RecommendationAction,
+      ids: string[],
+      projectId: string | null,
+    ) => void;
+  };
   onDismissError?: () => void;
 }): React.JSX.Element {
   const [localPicked, setLocalPicked] = useState<readonly string[]>([]);
   const picked = selection?.picked ?? localPicked;
   const setPicked = selection?.setPicked ?? setLocalPicked;
   const [localFolds, setLocalFolds] = useState<ReadonlySet<string>>(new Set());
+  const [systemAction, setSystemAction] =
+    useState<RecommendationAction>('cards');
+  const [choosing, setChoosing] = useState<ChosenAction | null>(null);
   const foldsInUse: RecommendationsFolds = folds ?? {
     isOpen: (key) => localFolds.has(key),
     toggle: (key) =>
@@ -764,7 +938,8 @@ export function RecommendationsCard({
       }),
   };
   const selected = applied ?? picked;
-  const locked = applied !== null || sending || onApply === undefined;
+  const canAct = actions !== undefined || onApply !== undefined;
+  const locked = applied !== null || sending || !canAct;
   const pending =
     applied !== null && applied.some((id) => outcomes[id] === undefined);
   const kept =
@@ -790,6 +965,7 @@ export function RecommendationsCard({
       : priced.reduce((sum, item) => sum + (item.costSavedUsd ?? 0), 0);
   const groups = (
     [
+      ['geniro', 'Geniro — code and system instructions'],
       ['team', 'Team'],
       ['repo', 'Repository'],
       ['user', 'Your agent instructions'],
@@ -820,6 +996,17 @@ export function RecommendationsCard({
       hotspot.node === null ? [] : [hotspot.node],
     ),
   );
+
+  const pressSystemAction = (action: RecommendationAction): void => {
+    if (actions === undefined) {
+      return;
+    }
+    if (action === 'report') {
+      actions.onAction('report', [], null);
+      return;
+    }
+    setChoosing(action);
+  };
 
   const toggle = (id: string): void => {
     const partner = movePartnerOf(items, id);
@@ -946,9 +1133,7 @@ export function RecommendationsCard({
           onDismiss={onDismissError ?? (() => undefined)}
         />
       )}
-      {items.length === 0 ||
-      applied !== null ||
-      onApply === undefined ? null : (
+      {items.length === 0 || applied !== null || !canAct ? null : (
         <div
           data-slot="recommendations-footer"
           className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
@@ -971,15 +1156,46 @@ export function RecommendationsCard({
             onClick={() => setPicked([])}>
             Clear
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="max-[420px]:w-full"
-            disabled={sending || selected.length === 0}
-            onClick={() => onApply([...selected])}>
-            {sending ? 'Applying…' : 'Apply selected'}
-          </Button>
+          {actions === undefined ? (
+            <Button
+              type="button"
+              size="sm"
+              className="max-[420px]:w-full"
+              disabled={sending || selected.length === 0}
+              onClick={() => onApply?.([...selected])}>
+              {sending ? 'Applying…' : 'Apply selected'}
+            </Button>
+          ) : (
+            <SplitButton
+              className="max-[420px]:w-full"
+              groups={SYSTEM_ACTION_GROUPS}
+              value={systemAction}
+              menuLabel="Report actions"
+              disabled={
+                sending || (systemAction !== 'report' && selected.length === 0)
+              }
+              menuDisabled={sending}
+              onClick={() => pressSystemAction(systemAction)}
+              onSelect={(value) => {
+                if (isRecommendationAction(value)) {
+                  setSystemAction(value);
+                }
+              }}>
+              {SYSTEM_ACTION_LABEL[systemAction]}
+            </SplitButton>
+          )}
         </div>
+      )}
+      {actions === undefined || choosing === null ? null : (
+        <ChooseProjectDialog
+          action={choosing}
+          projects={actions.projects}
+          onClose={() => setChoosing(null)}
+          onConfirm={(projectId) => {
+            actions.onAction(choosing, [...selected], projectId);
+            setChoosing(null);
+          }}
+        />
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import type { Run } from '../runs/entity/run.entity';
 import {
   type AgentKind,
   AgentKindSchema,
+  ANALYSIS_PURPOSES,
   type AnalysisPurpose,
   type ItemKind,
   ItemKindSchema,
@@ -536,6 +537,7 @@ export const ANALYSIS_VIEWS = [
   'spend',
   'project',
   'pr',
+  'digest',
 ] as const;
 /** What view=history reads a page of; `diff` is one version's diff, on request. */
 export const ANALYSIS_HISTORY_SECTIONS = [
@@ -674,10 +676,18 @@ export const RECOMMENDATION_TARGETS = [
   'overlay',
   'knowledge',
   'external',
+  'geniro',
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`, `X-1`. */
+/** The only targets a system analysis's card may carry: geniro itself, the user's instruction files, the shared memory. */
+export const SYSTEM_RECOMMENDATION_TARGETS: readonly RecommendationTarget[] = [
+  'geniro',
+  'user',
+  'memory',
+];
+
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`, `X-1`, `G-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
@@ -687,6 +697,7 @@ export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   overlay: 'O-',
   knowledge: 'K-',
   external: 'X-',
+  geniro: 'G-',
 };
 
 /** The targets whose items can carry out a member's verdict: a team's, or one project's about it. */
@@ -728,8 +739,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRUMPOKX]-\d{1,3}$/,
-    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team, K-<n> for a knowledge document, X-<n> for another repository",
+    /^[WRUMPOKXG]-\d{1,3}$/,
+    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team, K-<n> for a knowledge document, X-<n> for another repository, G-<n> for geniro itself",
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -794,7 +805,7 @@ const RecommendationImpactSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; O-1, O-2… project overlay; K-1, K-2… knowledge; X-1, X-2… another repository',
+    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; O-1, O-2… project overlay; K-1, K-2… knowledge; X-1, X-2… another repository; G-1, G-2… geniro itself (a system analysis only)',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -807,14 +818,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire; external: as repo, or code',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire; external: as repo, or code; geniro: code|instruction',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, for knowledge the document handle, or new to add, or for external the absolute root folder of that repository on this Mac',
+      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, for knowledge the document handle, or new to add, for external the absolute root folder of that repository on this Mac, or for geniro the component it changes (daemon: read_analyzed_thread, host preamble, lessons reflection guide)',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -862,6 +873,13 @@ export const RecommendationItemSchema = z.object({
     'Knowledge items only: the W-, R-, U-, P- or O- item on this card holding the other side of a move. The user selects the two together',
   ),
   evidence: z.array(RecommendationEvidenceSchema).min(1).max(6),
+  addressesFlags: z
+    .array(z.string().regex(/^F-[0-9a-f]{6}$/, 'a flag handle is F-<6 hex>'))
+    .max(20)
+    .optional()
+    .describe(
+      'A system analysis: the handles of the flags this item answers (view=digest lists them)',
+    ),
   rootCause: z.string().min(1).max(600),
   impact: RecommendationImpactSchema,
   risk: z.object({
@@ -1215,7 +1233,7 @@ export const RecommendationsPayloadSchema = RecommendationsReportSchema.extend({
   items: z.array(CardRecommendationItemSchema).max(MAX_RECOMMENDATIONS),
   members: RecommendationsReportSchema.shape.members.catch(undefined),
   sourceRunId: z.string(),
-  sourceKind: z.enum(['team', 'chat']),
+  sourceKind: z.enum(['team', 'chat', 'system']),
   timing: RecommendationsTimingSchema.nullable(),
   teamStats: RecommendationsTeamStatsSchema.nullable().optional().catch(null),
 });
@@ -1274,6 +1292,17 @@ export const RecommendationApplySchema = z.object({
   ids: z.array(RecommendationIdSchema).min(1).max(MAX_RECOMMENDATIONS),
 });
 export type RecommendationApply = z.infer<typeof RecommendationApplySchema>;
+
+/**
+ * A system analysis's Apply as its row records it: what the press asked for,
+ * the project it filed on, and the cards it filed. The selection half is
+ * {@link RecommendationApply}, which the card and the ledger read.
+ */
+export interface SystemRecommendationApply extends RecommendationApply {
+  action: 'cards' | 'implement' | 'report';
+  projectId: string | null;
+  filed: { id: string; taskId: string; identifier: string | null }[];
+}
 
 /* Thread timeline — `utils/thread-timeline.ts` folds these. */
 
@@ -1400,7 +1429,7 @@ export interface ThreadTimeline {
 }
 
 /** What kind of thread an analysis reads — it decides what may be recommended. */
-export type AnalysedThreadKind = 'team' | 'chat';
+export type AnalysedThreadKind = 'team' | 'chat' | 'system';
 
 /** How many of its team's newest runs a builder chat's turn reads. */
 export const BUILDER_CHAT_ANALYSED_RUNS = 10;
@@ -1438,6 +1467,12 @@ export interface AnalysisTurn {
   sourceWorking: boolean;
   /** Set only for a team analysis ("Analyze & improve"). */
   team?: AnalysedTeam | null;
+  /**
+   * Set only for a system analysis: the threads its digest ranks, each
+   * pinned at its snapshot. `sourceRunId` is then the top-ranked one, the
+   * thread a read naming none is about.
+   */
+  system?: { runs: AnalysedRun[] } | null;
   /** `Run.analysisPurpose`; absent is the user's own review. */
   purpose?: AnalysisPurpose;
 }
@@ -1474,7 +1509,9 @@ export interface AnalysedTeamRef {
 }
 
 /** What one read is scoped to: the source, and for a team analysis its runs. */
-export type AnalysisReadScope = AnalysisSource & Pick<AnalysisTurn, 'team'>;
+export type AnalysisReadScope = AnalysisSource &
+  Pick<AnalysisTurn, 'team' | 'system'> &
+  Partial<Pick<AnalysisTurn, 'analysisRunId'>>;
 
 /** What "Analyze thread" starts with — `AnalyzeThreadDto`'s body. */
 export interface StartThreadAnalysis {
@@ -4814,6 +4851,87 @@ export interface TeamNotesReadOutcome {
   /** Notes the reading conversation has still not been shown. */
   unread: number;
 }
+
+/** geniro's own tool any agent records a problem that cost work or met the user's disagreement with. */
+export const HOST_FLAG_ISSUE_TOOL = 'flag_issue';
+
+export const AgentFlagCostSchema = z
+  .enum(['work', 'disagreement'])
+  .meta({ id: 'AgentFlagCost' });
+export type AgentFlagCost = z.infer<typeof AgentFlagCostSchema>;
+
+export const AgentFlagCategorySchema = z
+  .enum([
+    'geniro_tool',
+    'geniro_instructions',
+    'user_instructions',
+    'memory',
+    'other',
+  ])
+  .meta({ id: 'AgentFlagCategory' });
+export type AgentFlagCategory = z.infer<typeof AgentFlagCategorySchema>;
+
+/** What kind of thread a flag was raised in, stamped at the write so it outlives the run. */
+export const AgentFlagRunKindSchema = z
+  .enum([
+    'chat',
+    'team',
+    'thread_analysis',
+    'team_analysis',
+    'lessons',
+    'lessons_check',
+    'system_analysis',
+    'builder',
+    'project',
+    'command_center',
+  ])
+  .meta({ id: 'AgentFlagRunKind' });
+export type AgentFlagRunKind = z.infer<typeof AgentFlagRunKindSchema>;
+
+export const AGENT_FLAG_SUMMARY_MAX = 300;
+export const AGENT_FLAG_DETAIL_MAX = 2000;
+export const AGENT_FLAG_MINUTES_MAX = 600;
+/** Flags one conversation may raise; the eleventh is refused. */
+export const AGENT_FLAGS_PER_CONVERSATION = 10;
+
+/** One `agent_flags` row as every analysis reads it. */
+export const AgentFlagWireSchema = z
+  .object({
+    handle: z.string(),
+    runId: z.string(),
+    seq: z.number().int(),
+    occurredAt: z.iso.datetime(),
+    memberId: z.string().nullable(),
+    callId: z.string().nullable(),
+    agentKind: z.string().nullable(),
+    model: z.string().nullable(),
+    teamSlug: z.string().nullable(),
+    projectId: z.string().nullable(),
+    runKind: AgentFlagRunKindSchema,
+    runTitle: z.string().nullable(),
+    cost: AgentFlagCostSchema,
+    category: AgentFlagCategorySchema,
+    minutesLost: z.number().int().nullable(),
+    summary: z.string(),
+    detail: z.string().nullable(),
+  })
+  .meta({ id: 'AgentFlag' });
+export type AgentFlagWire = z.infer<typeof AgentFlagWireSchema>;
+
+/** A `flag_issue` call's arguments as the reader found them. */
+export interface FlagIssueInput {
+  cost: AgentFlagCost;
+  category: AgentFlagCategory;
+  summary: string;
+  detail: string | null;
+  minutesLost: number | null;
+}
+
+export type FlagIssueRefusal = 'DUPLICATE_FLAG' | 'FLAG_LIMIT';
+
+export type FlagIssueOutcome =
+  | { status: 'recorded'; handle: string; flagsLeft: number }
+  | { status: 'refused'; code: FlagIssueRefusal; reason: string };
 
 /** geniro's own tool a team member records a pull request's outcome with. */
 export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';
@@ -8171,6 +8289,12 @@ export const RunWireSchema = z.object({
     .describe(
       'The library team this chat analyses across its recent runs ("Analyze & improve"); null for every chat that is not a team analysis',
     ),
+  analysisPurpose: z
+    .enum(ANALYSIS_PURPOSES)
+    .nullable()
+    .describe(
+      "What an analysis chat is for — the user's own review, a hidden lessons reflection or its check, or the system analysis started from Settings (which names neither source); null for every chat that is not an analysis, and for a review written before purposes",
+    ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of
    * the loose list, when it belongs to none); null while it is not pinned.
@@ -8881,6 +9005,7 @@ export interface ChatTextDatabase {
     edits_team_slug: Run['editsTeamSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
     analysis_team_slug: Run['analysisTeamSlug'];
+    analysis_purpose: Run['analysisPurpose'];
     deleted_at: StoredDate | null;
   };
   chat_text: {

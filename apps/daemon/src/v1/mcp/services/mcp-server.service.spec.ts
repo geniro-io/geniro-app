@@ -85,6 +85,7 @@ import { CommandCenterBroker } from '../../agents/services/command-center.broker
 import { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { FlagBroker } from '../../agents/services/flag.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GalleryImageService } from '../../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
@@ -144,6 +145,7 @@ import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
+import type { SystemAnalysisHistoryService } from '../../system-analysis/services/system-analysis-history.service';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { CallBroker } from '../../teams/services/call-broker.service';
@@ -271,6 +273,8 @@ function service(
   browser = fakeBrowser({ status: 'done', text: '' }, false).broker,
   // Off unless a case registers a sink: no manager tool is listed.
   commandCenters = new CommandCenterBroker(),
+  // Off unless a case registers a sink: the tool is not listed.
+  flags = flagBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -293,6 +297,7 @@ function service(
       monitors,
       teamNotes,
       runOutcomes,
+      flags,
       goals,
       goalWriters: new GoalWritersBroker(),
       stages,
@@ -308,6 +313,7 @@ function service(
       projectInstructionCards,
       // Never asked by the cases that list tools.
       teamHistory: {} as TeamHistoryService,
+      systemHistory: {} as SystemAnalysisHistoryService,
       teamGate,
       teamBuilders,
       projectChats,
@@ -366,6 +372,9 @@ async function everyHostTool(): Promise<ToolListing[]> {
   teamNotes.register('run-1', 'agent', noop as never);
   const runOutcomes = runOutcomeBroker();
   runOutcomes.register('run-1', 'agent', noop as never);
+  const flags = flagBroker();
+  flags.register('run-1', 'agent', noop as never);
+  flags.register('run-lessons', 'agent', noop as never);
   const projectCards = new ProjectInstructionsBroker();
   projectCards.register('run-1', 'agent', noop as never);
   for (const broker of [
@@ -441,6 +450,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
     undefined,
     fakeKnowledge(true).service,
     fakeBrowser({ status: 'done', text: '' }, true).broker,
+    undefined,
+    flags,
   );
   const listedOn = async (runId: string): Promise<ToolListing[]> =>
     (
@@ -469,6 +480,15 @@ function stageService(
       staged.memberId === memberId,
     move,
   } as unknown as StageService;
+}
+
+/** A `flag_issue` broker no case here raises through: listing only. */
+function flagBroker(): FlagBroker {
+  return new FlagBroker(
+    ...([{}, {}, {}, {}] as unknown as ConstructorParameters<
+      typeof FlagBroker
+    >),
+  );
 }
 
 /** A `record_outcome` broker no case here records through: listing only. */
@@ -4182,6 +4202,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const tool = createMcpTools({
       ...({} as Parameters<typeof createMcpTools>[0]),
       runOutcomes: outcomes,
+      flags: flagBroker(),
       board: new TaskBoardBroker(),
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
@@ -4806,6 +4827,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
+      systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: openGate(),
       teamBuilders: builders,
       projectChats: new ProjectChatBroker(),
@@ -4821,6 +4843,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      flags: flagBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -4913,6 +4936,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: cards,
       teamHistory: {} as TeamHistoryService,
+      systemHistory: {} as SystemAnalysisHistoryService,
       teamGate,
       teamBuilders: new TeamBuilderBroker(),
       projectChats,
@@ -4928,6 +4952,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      flags: flagBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -5229,6 +5254,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
+      systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: openGate(),
       teamBuilders: builders,
       projectChats: new ProjectChatBroker(),
@@ -5266,6 +5292,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      flags: flagBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -5373,6 +5400,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         projectInstructions: {} as ProjectInstructionsChangeService,
         projectInstructionCards: new ProjectInstructionsBroker(),
         teamHistory: {} as TeamHistoryService,
+        systemHistory: {} as SystemAnalysisHistoryService,
         teamGate: openGate(),
         teamBuilders: builders,
         projectChats: new ProjectChatBroker(),
@@ -5388,6 +5416,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
+        flags: flagBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
         stages: stageService(),
@@ -5522,6 +5551,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
+      systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: gate,
       teamBuilders: new TeamBuilderBroker(),
       projectChats: new ProjectChatBroker(),
@@ -5592,6 +5622,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         projectInstructions: {} as ProjectInstructionsChangeService,
         projectInstructionCards: new ProjectInstructionsBroker(),
         teamHistory: {} as TeamHistoryService,
+        systemHistory: {} as SystemAnalysisHistoryService,
         teamGate: gate,
         teamBuilders: new TeamBuilderBroker(),
         projectChats,
@@ -5624,6 +5655,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
+        flags: flagBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
         stages: stageService(),

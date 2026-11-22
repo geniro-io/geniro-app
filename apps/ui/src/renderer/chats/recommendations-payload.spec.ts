@@ -122,6 +122,38 @@ describe('recommendations payload readers', () => {
     expect(card?.items.map((entry) => entry.target)).toEqual(['team']);
   });
 
+  it('reads a system card: its geniro item, the system source, and the flag handles an item answers, dropping a malformed one', () => {
+    const [w1, u1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        sourceKind: 'system',
+        items: [
+          {
+            ...w1,
+            id: 'G-1',
+            target: 'geniro',
+            addressesFlags: ['F-1a2b3c', 'F-zz9999', 'GEN-1', 42],
+          },
+          u1,
+        ],
+      }),
+    );
+
+    expect(card?.sourceKind).toBe('system');
+    expect(card?.items.map((entry) => [entry.id, entry.target])).toEqual([
+      ['G-1', 'geniro'],
+      ['U-1', 'user'],
+    ]);
+    expect(card?.items[0]?.addressesFlags).toEqual(['F-1a2b3c']);
+    expect(card?.items[1]?.addressesFlags).toEqual([]);
+    expect(
+      readRecommendations(
+        item(5, 'recommendations', { ...CARD, sourceKind: 'other' }),
+      )?.sourceKind,
+    ).toBe('chat');
+  });
+
   it('reads a memory item, and still drops an item whose target is unknown', () => {
     const [w1] = CARD.items as Record<string, unknown>[];
     const card = readRecommendations(

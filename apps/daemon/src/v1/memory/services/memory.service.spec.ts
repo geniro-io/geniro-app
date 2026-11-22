@@ -1530,6 +1530,24 @@ describe('MemoryService', () => {
         model: 'opus',
       });
     });
+
+    it('names a system analysis an analysis, though it reads no one thread or team', async () => {
+      const em = db.em.fork();
+      em.persist(
+        make(Run, {
+          id: 'system',
+          status: 'running',
+          agentKind: 'claude',
+          model: 'opus',
+          analysisPurpose: 'system',
+        }),
+      );
+      await em.flush();
+
+      expect(await db.service.actorOf('system', 'agent')).toMatchObject({
+        kind: 'analysis',
+      });
+    });
   });
 
   describe('the user’s own view', () => {

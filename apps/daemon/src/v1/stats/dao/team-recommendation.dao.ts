@@ -5,9 +5,10 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { TeamRecommendation } from '../entity/team-recommendation.entity';
-import type {
-  FiledRecommendation,
-  TeamRecommendationRow,
+import {
+  type FiledRecommendation,
+  SYSTEM_LEDGER_SLUG,
+  type TeamRecommendationRow,
 } from '../stats.types';
 
 /** `team_recommendations` as SQLite stores it; dates are epoch milliseconds, since value conversion is off. */
@@ -41,6 +42,8 @@ interface RecommendationDatabase {
     outcome_note: string | null;
     outcome_at: number | null;
     outcome_seq: number | null;
+    task_id: string | null;
+    apply_action: TeamRecommendation['applyAction'];
   };
 }
 
@@ -102,6 +105,8 @@ export class TeamRecommendationDao extends BaseDao<TeamRecommendation> {
           outcome_note: null,
           outcome_at: null,
           outcome_seq: null,
+          task_id: null,
+          apply_action: null,
         })),
       )
       .onConflict((conflict) =>
@@ -207,6 +212,63 @@ export class TeamRecommendationDao extends BaseDao<TeamRecommendation> {
       outcomeNote: row.outcome_note,
       outcomeAt: dateOf(row.outcome_at),
       outcomeSeq: row.outcome_seq,
+      taskId: row.task_id,
+      applyAction: row.apply_action,
     }));
+  }
+
+  /** What a system analysis's press did with one item: the card it filed, and how far it got. */
+  async markApplied(
+    chatRunId: string,
+    cardSeq: number,
+    itemId: string,
+    applied: {
+      taskId: string | null;
+      applyAction: NonNullable<TeamRecommendation['applyAction']>;
+    },
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork())
+      .getKysely<RecommendationDatabase>({ convertValues: false })
+      .updateTable('team_recommendations')
+      .set({
+        ...(applied.taskId === null ? {} : { task_id: applied.taskId }),
+        apply_action: applied.applyAction,
+        updated_at: Date.now(),
+      })
+      .where('chat_run_id', '=', chatRunId)
+      .where('card_seq', '=', cardSeq)
+      .where('item_id', '=', itemId)
+      .execute();
+  }
+
+  /** A system item by the card its press filed, or null. */
+  async byTaskId(
+    taskId: string,
+    txEm?: EntityManager,
+  ): Promise<{ chatRunId: string; cardSeq: number; itemId: string } | null> {
+    const row = await (txEm ?? this.em.fork())
+      .getKysely<RecommendationDatabase>({ convertValues: false })
+      .selectFrom('team_recommendations')
+      .select(['chat_run_id', 'card_seq', 'item_id'])
+      .where('task_id', '=', taskId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    return row === undefined
+      ? null
+      : {
+          chatRunId: row.chat_run_id,
+          cardSeq: row.card_seq,
+          itemId: row.item_id,
+        };
+  }
+
+  /** Every item one chat filed, oldest card first. */
+  async rowsOfChat(
+    chatRunId: string,
+    txEm?: EntityManager,
+  ): Promise<TeamRecommendationRow[]> {
+    const rows = await this.rowsOf(SYSTEM_LEDGER_SLUG, txEm);
+    return rows.filter((row) => row.chatRunId === chatRunId);
   }
 }

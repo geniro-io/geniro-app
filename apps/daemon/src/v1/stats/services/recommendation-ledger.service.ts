@@ -11,7 +11,10 @@ import { TeamStoreService } from '../../teams/services/team-store.service';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
-import type { MemberAssessmentSource } from '../stats.types';
+import {
+  type MemberAssessmentSource,
+  SYSTEM_LEDGER_SLUG,
+} from '../stats.types';
 import {
   applyIn,
   assessmentSourceOf,
@@ -86,35 +89,49 @@ export class RecommendationLedgerService implements OnModuleInit {
       if (source === null) {
         continue;
       }
-      const rows: LedgerRow[] = [
-        ...(
-          await this.itemDao.rowsOfKinds(
-            chat.id,
-            ['recommendations', 'recommendation_outcome'],
-            undefined,
-            em,
-          )
-        ).map((row) => ({
-          seq: row.seq,
-          kind: row.kind,
-          role: row.role,
-          createdAt: row.createdAt,
-          payload: parseJsonColumn(row.payload),
-        })),
-        ...(await this.itemDao.userMessagesInOrder(chat.id, em)).map((row) => ({
-          seq: row.seq,
-          kind: 'message',
-          role: 'user',
-          createdAt: row.createdAt,
-          payload: parseJsonColumn(row.payload),
-        })),
-      ].sort((a, b) => a.seq - b.seq);
-      for (const row of rows) {
+      for (const row of await this.ledgerRowsOf(chat.id, em)) {
         await this.copy(source, row, null);
       }
       read += 1;
     }
+    for (const chatRunId of await this.runDao.systemAnalysisIds(em)) {
+      for (const row of await this.ledgerRowsOf(chatRunId, em)) {
+        await this.copySystem(chatRunId, row);
+      }
+      read += 1;
+    }
     return read;
+  }
+
+  /** A chat's cards, marks and Applies, in seq order. */
+  private async ledgerRowsOf(
+    chatRunId: string,
+    em: EntityManager,
+  ): Promise<LedgerRow[]> {
+    const rows: LedgerRow[] = [
+      ...(
+        await this.itemDao.rowsOfKinds(
+          chatRunId,
+          ['recommendations', 'recommendation_outcome'],
+          undefined,
+          em,
+        )
+      ).map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        role: row.role,
+        createdAt: row.createdAt,
+        payload: parseJsonColumn(row.payload),
+      })),
+      ...(await this.itemDao.userMessagesInOrder(chatRunId, em)).map((row) => ({
+        seq: row.seq,
+        kind: 'message',
+        role: 'user',
+        createdAt: row.createdAt,
+        payload: parseJsonColumn(row.payload),
+      })),
+    ];
+    return rows.sort((a, b) => a.seq - b.seq);
   }
 
   /** Whether a row is one the ledger copies, judged from the row alone. */
@@ -150,6 +167,16 @@ export class RecommendationLedgerService implements OnModuleInit {
   private async recordLive(event: RunItemEvent): Promise<void> {
     const em = this.em.fork();
     const run = await this.runDao.getById(event.runId, em);
+    if (run?.analysisPurpose === 'system') {
+      await this.copySystem(run.id, {
+        seq: event.item.seq,
+        kind: event.item.kind,
+        role: event.item.role,
+        createdAt: new Date(event.item.createdAt),
+        payload: event.item.payload,
+      });
+      return;
+    }
     const source = run === null ? null : await this.sourceOf(run, em);
     if (source === null) {
       return;
@@ -199,6 +226,29 @@ export class RecommendationLedgerService implements OnModuleInit {
     if (source.chatKind === 'thread') {
       return;
     }
+    await this.copyMarks(source.chatRunId, row);
+  }
+
+  /**
+   * A system analysis's rows: its items are filed under the reserved slug,
+   * and its card carries no member assessments.
+   */
+  private async copySystem(chatRunId: string, row: LedgerRow): Promise<void> {
+    if (row.kind === 'recommendations') {
+      await this.ledger.file(
+        filedRecommendationsOf(
+          { chatRunId, slug: SYSTEM_LEDGER_SLUG, chatKind: 'system' },
+          row,
+          null,
+        ) ?? [],
+      );
+      return;
+    }
+    await this.copyMarks(chatRunId, row);
+  }
+
+  /** An item's mark, or the selection an Apply made. */
+  private async copyMarks(chatRunId: string, row: LedgerRow): Promise<void> {
     if (row.kind === 'recommendation_outcome') {
       const marks = marksIn(row.payload);
       if (marks === null) {
@@ -206,7 +256,7 @@ export class RecommendationLedgerService implements OnModuleInit {
       }
       for (const outcome of marks.outcomes) {
         await this.ledger.markOutcome(
-          source.chatRunId,
+          chatRunId,
           marks.cardSeq,
           {
             itemId: outcome.id,
@@ -221,7 +271,7 @@ export class RecommendationLedgerService implements OnModuleInit {
     const apply = row.role === 'user' ? applyIn(row.payload) : null;
     if (apply !== null) {
       await this.ledger.markSelected(
-        source.chatRunId,
+        chatRunId,
         apply.cardSeq,
         apply.ids,
         row.createdAt,

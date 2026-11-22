@@ -10,7 +10,10 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { TeamRecommendationChat } from '../stats.types';
+import type {
+  SystemApplyLedgerAction,
+  TeamRecommendationChat,
+} from '../stats.types';
 
 /**
  * One item of a recommendations card filed about a library team — by its
@@ -104,4 +107,12 @@ export class TeamRecommendation extends TimestampsEntity {
   /** The marking row's seq: a later mark replaces an earlier one, never the reverse. */
   @Property({ type: 'integer', nullable: true })
   outcomeSeq: number | null = null;
+
+  /** A system analysis's item: the board card its press filed. */
+  @Property({ type: 'string', nullable: true })
+  taskId: string | null = null;
+
+  /** A system analysis's item: what its press did — filed, start requested, started, kept as a report. */
+  @Property({ type: 'string', nullable: true })
+  applyAction: SystemApplyLedgerAction | null = null;
 }

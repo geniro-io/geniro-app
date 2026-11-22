@@ -468,6 +468,7 @@ describe('CommandCenterStartsService', () => {
           title: 'First',
           status: 'backlog',
           folder: '/work/geniro',
+          startedBy: 'manager',
         },
         {
           taskId: withFolder.id,
@@ -475,6 +476,7 @@ describe('CommandCenterStartsService', () => {
           title: 'Second',
           status: 'backlog',
           folder: '/work/custom',
+          startedBy: 'manager',
         },
       ]);
     });
@@ -584,6 +586,80 @@ describe('CommandCenterStartsService', () => {
       await vi.waitFor(() => expect(noticeInfo).toHaveBeenCalledTimes(1));
       expect(addToRoster).toHaveBeenCalledTimes(2);
       expect(wakePublish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a start a system analysis asked for', () => {
+    const ANALYSIS_RUN = 'analysis-1';
+
+    it('lists it among the approved starts as the user’s, and a manager’s as the manager’s', async () => {
+      const manager = await seedTask({
+        number: 8,
+        startRequestedAt: new Date(),
+        startRequestedByRunId: MANAGER,
+        startApprovedAt: new Date(),
+        startRequestKind: 'manager',
+      });
+      const analysis = await seedTask({
+        number: 9,
+        startRequestedAt: new Date(),
+        startRequestedByRunId: ANALYSIS_RUN,
+        startApprovedAt: new Date(),
+        startRequestKind: 'analysis',
+      });
+
+      const starts = await service.approvedStarts();
+
+      expect(starts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ taskId: manager.id, startedBy: 'manager' }),
+          expect.objectContaining({ taskId: analysis.id, startedBy: 'user' }),
+        ]),
+      );
+    });
+
+    it('never adds the started card to a manager roster, nor tells a manager of it', async () => {
+      const task = await seedTask({
+        startRequestedAt: null,
+        startRequestedByRunId: ANALYSIS_RUN,
+        startRequestKind: 'analysis',
+        runId: THREAD,
+      });
+      const reports = service as unknown as { reportStarted(): Promise<void> };
+
+      await reports.reportStarted();
+
+      expect(addToRoster).not.toHaveBeenCalled();
+      expect(noticeInfo).not.toHaveBeenCalled();
+      expect(wakePublish).not.toHaveBeenCalled();
+      expect((await taskOf(task.id)).startRequestedByRunId).toBe(ANALYSIS_RUN);
+    });
+
+    it('publishes its failure for the analysis to report, and wakes no manager', async () => {
+      const task = await seedTask({
+        startRequestedAt: new Date(),
+        startRequestedByRunId: ANALYSIS_RUN,
+        startApprovedAt: new Date(),
+        startRequestKind: 'analysis',
+      });
+      const failures: unknown[] = [];
+      const subscription = taskEvents
+        .startFailures()
+        .subscribe((failure) => failures.push(failure));
+
+      await service.failed(task.id, 'no agent on the project');
+      subscription.unsubscribe();
+
+      expect(failures).toEqual([
+        {
+          taskId: task.id,
+          byRunId: ANALYSIS_RUN,
+          title: 'Billing cache',
+          reason: 'no agent on the project',
+        },
+      ]);
+      expect(wakePublish).not.toHaveBeenCalled();
+      expect((await taskOf(task.id)).startRequestedByRunId).toBeNull();
     });
   });
 });

@@ -10,6 +10,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ThreadListCursor, ThreadListFilter } from '../chat.types';
+import { isAnalysisRun } from '../utils/analysed-runs';
 import { ItemDao } from './item.dao';
 import { RunDao } from './run.dao';
 
@@ -349,6 +350,26 @@ describe('RunDao (in-memory sqlite)', () => {
       ).toEqual([newer.id, older.id]);
     });
 
+    it('leaves the system analysis, which names no source, out of EVERY scope while a chat of no purpose stays', async () => {
+      const chat = await dao.create({ createdAt: new Date(1_000) });
+      const reviewed = await dao.create({
+        createdAt: new Date(2_000),
+        analysisPurpose: 'review',
+      });
+      const system = await dao.create({
+        createdAt: new Date(3_000),
+        analysisPurpose: 'system',
+      });
+
+      for (const scope of ['active', 'all'] as const) {
+        const ids = (await dao.listChats(scope)).map((run) => run.id);
+        expect(ids).not.toContain(system.id);
+        expect(ids).toEqual(expect.arrayContaining([chat.id, reviewed.id]));
+      }
+      expect(isAnalysisRun(system)).toBe(true);
+      expect(isAnalysisRun(chat)).toBe(false);
+    });
+
     it('keeps a lessons reflection out of every listing and out of the thread’s own analysis, and still cascades it', async () => {
       const source = await dao.create({ createdAt: new Date(1_000) });
       const review = await dao.create({
@@ -540,7 +561,7 @@ describe('RunDao (in-memory sqlite)', () => {
       }
     }
 
-    it('leaves out archived threads, builder chats, project chats, both kinds of analysis and the caller, and keeps team runs', async () => {
+    it('leaves out archived threads, builder chats, project chats, every kind of analysis and the caller, and keeps team runs', async () => {
       const chat = await dao.create({
         title: 'Pelican',
         createdAt: new Date(2_000),
@@ -566,6 +587,10 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.create({
         title: 'Pelican team analysis',
         analysisTeamSlug: 'dev-team',
+      });
+      await dao.create({
+        title: 'Pelican system analysis',
+        analysisPurpose: 'system',
       });
       await dao.create({ id: 'caller', createdAt: new Date(8_000) });
 

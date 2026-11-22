@@ -293,6 +293,20 @@ export function geniroKnowledgeToolOf(
 }
 
 /**
+ * The flag tool, which tells its story as one compact row inside the tool group
+ * (`FlagToolRow`) and so is kept OUT of {@link GENIRO_TOOLS} for the reason
+ * {@link GENIRO_MEMORY_TOOLS} is.
+ *
+ * TWIN PARSER: `HOST_FLAG_ISSUE_TOOL` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ */
+export const GENIRO_FLAG_TOOL = 'flag_issue';
+
+/** Whether a tool call NAMES geniro's `flag_issue` on this run's own geniro server. */
+export function isGeniroFlagToolCall(name: string, runId: string): boolean {
+  return namesToolOnRunServer(name, runId, GENIRO_FLAG_TOOL);
+}
+
+/**
  * Whether `tool` appears in `name` as a whole word — not inside a longer tool
  * name, so cursor's label for `team_notes` is not read as `team_note`.
  */

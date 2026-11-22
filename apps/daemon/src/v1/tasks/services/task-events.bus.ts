@@ -18,9 +18,34 @@ import type { TaskChangedEvent } from '../tasks.types';
 @Injectable()
 export class TaskEventBus {
   private readonly changes = new Subject<TaskChangedEvent>();
+  private readonly failedStarts = new Subject<{
+    taskId: string;
+    byRunId: string;
+    title: string;
+    reason: string;
+  }>();
 
   publishTaskChanged(event: TaskChangedEvent): void {
     this.changes.next(event);
+  }
+
+  /** A start a system analysis asked for that the drain could not make. */
+  publishStartFailed(event: {
+    taskId: string;
+    byRunId: string;
+    title: string;
+    reason: string;
+  }): void {
+    this.failedStarts.next(event);
+  }
+
+  startFailures(): Observable<{
+    taskId: string;
+    byRunId: string;
+    title: string;
+    reason: string;
+  }> {
+    return this.failedStarts.asObservable();
   }
 
   /** Every task write, for the single fan-out subscriber (the gateway). */

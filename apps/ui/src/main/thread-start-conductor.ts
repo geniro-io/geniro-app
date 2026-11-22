@@ -32,6 +32,8 @@ interface ApprovedStart {
    * project's folder, as the autopilot's queue handout is. Read as given.
    */
   folder: string;
+  /** Who the run is started for, as the daemon recorded the request. */
+  startedBy: 'manager' | 'user';
 }
 
 export interface ThreadStartDeps extends RunStartDeps {
@@ -164,7 +166,7 @@ export class ThreadStartConductor {
 
     try {
       await startRunOn(this.deps, handle, start, worktree, {
-        startedBy: 'manager',
+        startedBy: start.startedBy === 'user' ? 'user' : 'manager',
       });
       this.deps.log(
         `thread start began "${start.title}" ${workPlaceOf(worktree)}`,

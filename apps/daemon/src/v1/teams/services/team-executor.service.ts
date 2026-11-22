@@ -96,6 +96,7 @@ import {
   CommandEndWakeService,
   memberWakeOwner,
 } from '../../agents/services/command-end-wake.service';
+import { FlagBroker } from '../../agents/services/flag.broker';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -167,6 +168,7 @@ import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-backgrou
 import { isHostArtifactAnswersCall } from '../../agents/utils/host-artifact';
 import { isHostBrowserCall } from '../../agents/utils/host-browser';
 import { hostEndpointPath } from '../../agents/utils/host-endpoint';
+import { isHostFlagIssueCall } from '../../agents/utils/host-flag-issue';
 import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { isHostProjectInstructionsCall } from '../../agents/utils/host-project-instructions';
@@ -1031,6 +1033,8 @@ export class TeamExecutorService
     /** Where a turn starts once the run's folder is gone, optional on `artifacts`' terms. */
     @Optional() private readonly turnFolders?: TurnFolderService,
     @Optional() private readonly cacheKeepAlive?: PromptCacheKeepAliveService,
+    /** `flag_issue`, optional on `artifacts`' terms. */
+    @Optional() private readonly flags?: FlagBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1099,6 +1103,7 @@ export class TeamExecutorService
 
   /** Each run's `record_outcome` sinks, on the same terms. */
   private readonly runOutcomeDisposers = new Map<string, (() => void)[]>();
+  private readonly flagDisposers = new Map<string, (() => void)[]>();
 
   /** Each run's browser sinks, on the same terms. */
   private readonly browserDisposers = new Map<string, (() => void)[]>();
@@ -2725,6 +2730,7 @@ export class TeamExecutorService
       this.monitorDisposers,
       this.teamNoteDisposers,
       this.runOutcomeDisposers,
+      this.flagDisposers,
       this.browserDisposers,
       this.leadCardDisposers,
     ]) {
@@ -2741,6 +2747,7 @@ export class TeamExecutorService
     this.approvals.sweepDeferred(runId);
     this.teamNotes?.forgetRun(runId);
     this.runOutcomes?.forgetRun(runId);
+    this.flags?.forgetRun(runId);
     this.stages?.forget(runId);
   }
 
@@ -3288,6 +3295,43 @@ export class TeamExecutorService
     return this.leadNow(
       runId,
       await this.runTeams.teamOf(assertTeamRun(run, runId), em),
+    );
+  }
+
+  /**
+   * Give each member of this pass `flag_issue`, on
+   * {@link registerArtifactPublishers}' terms. The flag is stamped with the
+   * conversation that raised it and the call it answers.
+   */
+  private registerFlagSinks(
+    runId: string,
+    hostToolNodes: readonly TeamMember[],
+  ): void {
+    const broker = this.flags;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.flagDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const byId = new Map(hostToolNodes.map((node) => [node.id, node]));
+    this.flagDisposers.set(
+      runId,
+      hostToolNodes.map((node) =>
+        broker.register(runId, node.id, {
+          raiser: (caller) => {
+            const memberId = callerNodeOf(caller);
+            const member = byId.get(memberId) ?? node;
+            return {
+              memberId,
+              conversationId: callerConversationOf(caller),
+              callId: this.callBroker.callAnsweredBy(runId, caller),
+              agentKind: member.agent,
+              model: member.model ?? null,
+            };
+          },
+        }),
+      ),
     );
   }
 
@@ -6780,6 +6824,7 @@ export class TeamExecutorService
             if (
               !isQuestion &&
               (isHostMemoryCall(hostMcpServerName(runId), event.toolName) ||
+                isHostFlagIssueCall(hostMcpServerName(runId), event.toolName) ||
                 isHostQuestionCall(hostMcpServerName(runId), event.toolName) ||
                 isHostKnowledgeCall(hostMcpServerName(runId), event.toolName) ||
                 isHostArtifactAnswersCall(
@@ -7322,6 +7367,7 @@ export class TeamExecutorService
             request.toolName,
           )) ||
         isHostMemoryCall(hostMcpServerName(runId), request.toolName) ||
+        isHostFlagIssueCall(hostMcpServerName(runId), request.toolName) ||
         isHostQuestionCall(hostMcpServerName(runId), request.toolName) ||
         isHostKnowledgeCall(hostMcpServerName(runId), request.toolName) ||
         isHostArtifactAnswersCall(hostMcpServerName(runId), request.toolName) ||
@@ -9835,6 +9881,7 @@ export class TeamExecutorService
     );
     this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
     this.registerRunOutcomeSinks(runId, hostToolNodes, persistItem);
+    this.registerFlagSinks(runId, hostToolNodes);
     this.registerBrowserSinks(
       runId,
       hostToolNodes,

@@ -47,7 +47,7 @@ const analysis = (hidden: boolean) => ({
 });
 
 describe('gatedForHiddenLessons', () => {
-  it('lists a hidden lessons chat only the five lessons tools', () => {
+  it('lists a hidden lessons chat only its lessons tools', () => {
     const gated = gatedForHiddenLessons(innerTool(), analysis(true));
 
     expect(gated.list(CONTEXT).map((entry) => entry.name)).toEqual([
@@ -65,10 +65,11 @@ describe('gatedForHiddenLessons', () => {
     expect(gated.list(CONTEXT)[0]).toEqual(listing('read_analyzed_thread'));
   });
 
-  it('names exactly those five tools in the allowed set', () => {
+  it('names exactly those six tools in the allowed set', () => {
     expect([...HIDDEN_LESSONS_TOOLS].sort()).toEqual(
       [
         'check_lessons',
+        'flag_issue',
         'memory_read',
         'memory_search',
         'propose_lessons',

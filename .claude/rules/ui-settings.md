@@ -1,5 +1,5 @@
 ---
-description: Settings pages — Storage, Lessons, Knowledge, Memory, agents and MCP, custom instructions, sign-in
+description: Settings pages — Storage, Lessons, Knowledge, Memory, System analysis, agents and MCP, custom instructions, sign-in
 paths:
   - "apps/ui/src/renderer/settings/**"
   - "apps/ui/src/renderer/knowledge/**"
@@ -40,6 +40,8 @@ paths:
 - The import dialog groups rows by `agentKind` + `profile` + `folder` (the daemon's display paths), pages them (`IMPORT_PAGE_SIZE`), and filters and searches over every row, never the page; Tick shown, a group's tick and the filters' counts reach every matching row. A row is ticked by the user's own press first, else by its default (new, similar to nothing, importable, not forgotten earlier) and, once the AI sort judged it, only if it was kept.
 - **Sort with AI** (`settings/use-memory-triage.ts`) sends the default-ticked rows not judged yet to `POST /v1/memories/import/triage` in batches of `TRIAGE_BATCH` (twin of the daemon's cap), a few at a time, stops on the first failure, and keeps its verdicts by note key in the pane, so reopening the dialog neither loses nor re-asks them. Offered only for the CLIs the preview names (`triageAgents`); never on a paired phone, where import is hidden. Beside its button the user picks the agent and, through the composer's own `ModelSettingsSelect` (`settings/memory-triage-settings.tsx`), everything a chat runs with but approval and auto-compact (a one-off answer has neither); the pick is saved as `lastMemoryTriage` on every change and the next dialog opens on it, and switching agent starts its settings blank.
 - A near-duplicate refusal offers saving again past exactly the handles it named (`nearDuplicateHandles`).
+
+**Settings → System analysis** (`settings/system-analysis.tsx`, data in `settings/use-system-analysis.ts`, section `system-analysis` after Knowledge): the scope of the picked period (`GET /v1/system-analyses/scope`, 1 / 3 / 7 / 30 days) with its ranked threads behind Show threads, the agent and model from `lastAnalysisConfig` (saved back on Start), Start (`POST /v1/system-analyses`, hidden on a paired device: the daemon refuses it there), and Past analyses (`GET /v1/system-analyses`, newest three, Show all pages on `next`). A row and a start open the report in `AnalysisDialog` with the `{ kind: 'system', run }` subject, hosted by `Chats` like a team's analysis; its card's button is the system applier (`chats/recommendations-apply-context.ts` → `SystemRecommendationsApplyContext`, `.claude/rules/ui-chats-cards.md`).
 
 Data-loss rules:
 

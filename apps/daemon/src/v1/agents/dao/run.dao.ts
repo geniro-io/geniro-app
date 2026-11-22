@@ -29,6 +29,7 @@ import {
   windowBounds,
 } from '../utils/run-activity';
 import { readRunStageProgress, stageLineOf } from '../utils/stage-progress';
+import { notSystemAnalysis } from '../utils/system-analysis-filter';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -86,6 +87,7 @@ export class RunDao extends BaseDao<Run> {
         editsProjectId: null,
         analysisSourceRunId: null,
         analysisTeamSlug: null,
+        ...NOT_SYSTEM_ANALYSIS,
         commandCenter: null,
         ...scopeFilter(scope),
       },
@@ -129,6 +131,7 @@ export class RunDao extends BaseDao<Run> {
       .where('r.edits_project_id', 'is', null)
       .where('r.analysis_source_run_id', 'is', null)
       .where('r.analysis_team_slug', 'is', null)
+      .where((eb) => notSystemAnalysis(eb, eb.ref('r.analysis_purpose')))
       .where('r.command_center', 'is', null)
       .where('r.id', '!=', filter.excludeRunId);
     if (!filter.includeArchived) {
@@ -422,6 +425,40 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /** Every system analysis, archived ones included, newest first. */
+  async systemAnalysisIds(txEm?: EntityManager): Promise<string[]> {
+    return (
+      await this.getRepo(txEm ?? this.em.fork()).find(
+        { analysisPurpose: 'system' },
+        {
+          fields: ['id'],
+          orderBy: { createdAt: 'desc' },
+          disableIdentityMap: true,
+        },
+      )
+    ).map((run) => run.id);
+  }
+
+  /** One page of system analyses, newest first, created before `before` when given. */
+  async listSystemAnalyses(
+    page: { limit: number; before?: Date },
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm ?? this.em.fork()).find(
+      {
+        analysisPurpose: 'system',
+        ...(page.before === undefined
+          ? {}
+          : { createdAt: { $lt: page.before } }),
+      },
+      {
+        orderBy: { createdAt: 'desc', id: 'desc' },
+        limit: page.limit,
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /**
    * Where the runs created since `since` were filed — any at all, their
    * projects and their teams — archived ones included.
@@ -635,6 +672,26 @@ export class RunDao extends BaseDao<Run> {
       }
     }
     return out;
+  }
+
+  /**
+   * What a system digest needs of these runs: their kind, place and title.
+   * A run that no longer exists is absent; earlier system analyses are left
+   * out, since an analysis of analyses of itself would only grow.
+   */
+  async digestFactsOf(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<DigestRunFacts[]> {
+    const rows: DigestRunFacts[] = [];
+    for (const batch of idBatches([...new Set(runIds)])) {
+      const found = await this.getRepo(txEm ?? this.em.fork()).find(
+        { id: { $in: batch }, ...NOT_SYSTEM_ANALYSIS },
+        { fields: [...DIGEST_RUN_FIELDS], disableIdentityMap: true },
+      );
+      rows.push(...found);
+    }
+    return rows;
   }
 
   /** The titles of these runs that still exist, by id. */
@@ -1778,6 +1835,32 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 }
+
+const DIGEST_RUN_FIELDS = [
+  'id',
+  'title',
+  'teamId',
+  'projectId',
+  'archivedAt',
+  'updatedAt',
+  'analysisPurpose',
+  'analysisSourceRunId',
+  'analysisTeamSlug',
+  'editsTeamSlug',
+  'editsProjectId',
+  'commandCenter',
+] as const;
+
+/** What {@link RunDao.digestFactsOf} reads of a run. */
+export type DigestRunFacts = Pick<Run, (typeof DIGEST_RUN_FIELDS)[number]>;
+
+/**
+ * Not the system analysis, which names neither analysis source, so the two
+ * source columns alone would list it. NULL-safe: a run of no purpose passes.
+ */
+export const NOT_SYSTEM_ANALYSIS = {
+  $or: [{ analysisPurpose: null }, { analysisPurpose: { $ne: 'system' } }],
+} satisfies FilterQuery<Run>;
 
 /** An analysis that is the user's own review, not a lessons reflection. */
 const REVIEW_PURPOSE: FilterQuery<Run> = {

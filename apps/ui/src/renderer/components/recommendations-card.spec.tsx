@@ -11,11 +11,13 @@ import {
   MEMBERS,
   recommendation,
   SAMPLED_TEAM_STATS,
+  SYSTEM_ITEMS,
   TEAM_POPULATION,
   TEAM_STATS,
   TIMING,
 } from '../__fixtures__/recommendations';
-import { RecommendationsCard } from './recommendations-card';
+import type { ProjectRef } from '../projects/use-projects';
+import { RecommendationsCard, systemOutcomeOf } from './recommendations-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -1078,5 +1080,245 @@ describe('RecommendationsCard', () => {
     expect(footer(el)).toContain('1 of 5 selected');
     click(button(el, 'Apply selected'));
     expect(onApply).toHaveBeenCalledWith(['X-1']);
+  });
+});
+
+const PROJECTS: ProjectRef[] = [
+  { id: 'p1', name: 'Billing', folder: '/work/billing' },
+  { id: 'p2', name: 'Storefront', folder: '/work/storefront' },
+];
+
+type OnAction = NonNullable<
+  React.ComponentProps<typeof RecommendationsCard>['actions']
+>['onAction'];
+
+function systemCard(
+  onAction: OnAction,
+  extra: Partial<React.ComponentProps<typeof RecommendationsCard>> = {},
+): HTMLDivElement {
+  return render(
+    <RecommendationsCard
+      look={LOOK}
+      summary={null}
+      timing={null}
+      team={false}
+      items={SYSTEM_ITEMS}
+      applied={null}
+      outcomes={{}}
+      actions={{ projects: PROJECTS, onAction }}
+      {...extra}
+    />,
+  );
+}
+
+function splitMain(el: HTMLElement): HTMLButtonElement {
+  return el.querySelector<HTMLButtonElement>(
+    '[data-slot="split-button"] button',
+  )!;
+}
+
+function splitMenu(el: HTMLElement): HTMLElement {
+  return el.querySelector<HTMLElement>(
+    '[data-slot="split-button"] [data-menu-trigger]',
+  )!;
+}
+
+function menuOption(label: string): HTMLElement {
+  const found = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes(label));
+  if (!found) {
+    throw new Error(`no option "${label}"`);
+  }
+  return found;
+}
+
+function dialogOf(el: HTMLElement): HTMLElement | null {
+  return el.querySelector<HTMLElement>('[role="dialog"]');
+}
+
+function systemRow(el: HTMLElement, id: string): HTMLElement {
+  return el.querySelector<HTMLElement>(
+    `[data-slot="recommendation-row"][data-id="${id}"]`,
+  )!;
+}
+
+describe('RecommendationsCard with system actions', () => {
+  it('draws the split button in place of Apply', () => {
+    const el = systemCard(vi.fn<OnAction>());
+
+    expect(el.querySelector('[data-slot="split-button"]')).not.toBeNull();
+    expect(el.textContent).not.toContain('Apply selected');
+    expect(splitMain(el).textContent).toBe('Create cards');
+  });
+
+  it('needs a picked item to create cards, then opens the dialog with no project chosen', () => {
+    const el = systemCard(vi.fn<OnAction>());
+
+    expect(splitMain(el).disabled).toBe(true);
+    click(button(el, 'G-1'));
+    expect(splitMain(el).disabled).toBe(false);
+    click(splitMain(el));
+
+    const dialog = dialogOf(el);
+    expect(dialog?.textContent).toContain('Create cards in which project?');
+    expect(dialog?.textContent).toContain('Choose a project');
+    expect(button(dialog!, 'Create cards').disabled).toBe(true);
+  });
+
+  it('hands the picked items and the chosen project to onAction on confirm', () => {
+    const onAction = vi.fn<OnAction>();
+    const el = systemCard(onAction);
+
+    click(button(el, 'G-1'));
+    click(splitMain(el));
+    click(dialogOf(el)!.querySelector<HTMLElement>('[data-menu-trigger]')!);
+    click(menuOption('Storefront'));
+    click(button(dialogOf(el)!, 'Create cards'));
+
+    expect(onAction).toHaveBeenCalledWith('cards', ['G-1'], 'p2');
+    expect(dialogOf(el)).toBeNull();
+  });
+
+  it('implements right away through its own dialog', () => {
+    const onAction = vi.fn<OnAction>();
+    const el = systemCard(onAction);
+
+    click(button(el, 'G-2'));
+    click(splitMenu(el));
+    click(menuOption('Implement right away'));
+    expect(splitMain(el).textContent).toBe('Implement right away');
+    click(splitMain(el));
+    expect(dialogOf(el)?.textContent).toContain(
+      'Implement right away in which project?',
+    );
+    click(dialogOf(el)!.querySelector<HTMLElement>('[data-menu-trigger]')!);
+    click(menuOption('Billing'));
+    click(button(dialogOf(el)!, 'Implement right away'));
+
+    expect(onAction).toHaveBeenCalledWith('implement', ['G-2'], 'p1');
+  });
+
+  it('keeps the picks as a report at once, with no dialog and no project', () => {
+    const onAction = vi.fn<OnAction>();
+    const el = systemCard(onAction);
+
+    click(splitMenu(el));
+    click(menuOption('Keep as report'));
+    expect(splitMain(el).textContent).toBe('Keep as report');
+    expect(splitMain(el).disabled).toBe(false);
+    click(splitMain(el));
+
+    expect(onAction).toHaveBeenCalledWith('report', [], null);
+    expect(dialogOf(el)).toBeNull();
+  });
+
+  it('draws the Geniro group first', () => {
+    const el = systemCard(vi.fn<OnAction>(), {
+      items: [EXTERNAL_ITEM, ...SYSTEM_ITEMS],
+    });
+
+    const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
+    expect(headings).toEqual([
+      'Geniro — code and system instructions',
+      'Other repositories',
+    ]);
+  });
+
+  it('shows the ticket a filed item became, and whether its start was requested or made', () => {
+    const el = systemCard(vi.fn<OnAction>(), {
+      outcomes: {
+        'G-1': { status: 'applied', note: 'started BIL-43', backup: null },
+        'G-2': {
+          status: 'applied',
+          note: 'filed to start BIL-42',
+          backup: null,
+        },
+      },
+    });
+
+    expect(
+      systemRow(el, 'G-1').querySelector('[data-slot="recommendation-filed"]')
+        ?.textContent,
+    ).toBe('BIL-43');
+    expect(
+      systemRow(el, 'G-1').querySelector('[data-slot="recommendation-outcome"]')
+        ?.textContent,
+    ).toBe('Started');
+    expect(
+      systemRow(el, 'G-2').querySelector('[data-slot="recommendation-filed"]')
+        ?.textContent,
+    ).toBe('BIL-42');
+    expect(
+      systemRow(el, 'G-2').querySelector('[data-slot="recommendation-outcome"]')
+        ?.textContent,
+    ).toBe('Start requested');
+  });
+
+  it('shows a plain filing as its key alone, and a failed item as Failed with its note', () => {
+    const el = systemCard(vi.fn<OnAction>(), {
+      outcomes: {
+        'G-1': { status: 'applied', note: 'filed BIL-41', backup: null },
+        'G-2': {
+          status: 'failed',
+          note: 'the project folder is gone',
+          backup: null,
+        },
+      },
+    });
+
+    expect(
+      systemRow(el, 'G-1').querySelector('[data-slot="recommendation-filed"]')
+        ?.textContent,
+    ).toBe('BIL-41');
+    expect(
+      systemRow(el, 'G-1').querySelector(
+        '[data-slot="recommendation-outcome"]',
+      ),
+    ).toBeNull();
+    expect(systemRow(el, 'G-2').textContent).toContain('Failed');
+    expect(systemRow(el, 'G-2').textContent).toContain(
+      'the project folder is gone',
+    );
+    expect(
+      systemRow(el, 'G-2').querySelector('[data-slot="recommendation-filed"]'),
+    ).toBeNull();
+  });
+
+  it('names the flags an item answers in its Why detail', () => {
+    const el = systemCard(vi.fn<OnAction>());
+
+    const why = [...systemRow(el, 'G-2').querySelectorAll('button')].find(
+      (b) => b.textContent === 'Why',
+    )!;
+    click(why);
+
+    expect(systemRow(el, 'G-2').textContent).toContain(
+      'Answers flags F-4d5e6f, F-7a8b9c',
+    );
+  });
+});
+
+describe('systemOutcomeOf', () => {
+  it.each([
+    ['filed BIL-41', { key: 'BIL-41', state: 'filed' }],
+    ['filed to start BIL-42', { key: 'BIL-42', state: 'start requested' }],
+    ['started BIL-43', { key: 'BIL-43', state: 'started' }],
+    [
+      'filed 3f6b1c2e-9d4a-4b7e-8f1a-2c5d6e7f8a9b',
+      { key: '3f6b1c2e-9d4a-4b7e-8f1a-2c5d6e7f8a9b', state: 'filed' },
+    ],
+  ])('reads %s as its filing', (note, expected) => {
+    expect(systemOutcomeOf(note)).toEqual(expected);
+  });
+
+  it.each([
+    ['filed'],
+    ['filed bil-41'],
+    ['failed: no folder'],
+    ['started '],
+    [null],
+  ])('reads %s as no filing', (note) => {
+    expect(systemOutcomeOf(note)).toBeNull();
   });
 });

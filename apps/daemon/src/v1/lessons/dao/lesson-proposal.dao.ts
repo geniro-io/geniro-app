@@ -48,6 +48,47 @@ export class LessonProposalDao extends BaseDao<LessonProposal> {
     });
   }
 
+  /**
+   * How many lessons a second-model check dropped, per run: under the
+   * reflection that proposed them and under the check that dropped them.
+   */
+  async droppedByCheckOf(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    const add = (runId: string | null): void => {
+      if (runId !== null) {
+        counts.set(runId, (counts.get(runId) ?? 0) + 1);
+      }
+    };
+    for (const batch of idBatches(runIds)) {
+      const rows = await this.getRepo(txEm).find(
+        {
+          status: 'dropped_by_check',
+          $or: [
+            { reflectionRunId: { $in: batch } },
+            { checkRunId: { $in: batch } },
+          ],
+        },
+        {
+          fields: ['reflectionRunId', 'checkRunId'],
+          disableIdentityMap: true,
+        },
+      );
+      const wanted = new Set(batch);
+      for (const row of rows) {
+        add(wanted.has(row.reflectionRunId) ? row.reflectionRunId : null);
+        add(
+          row.checkRunId !== null && wanted.has(row.checkRunId)
+            ? row.checkRunId
+            : null,
+        );
+      }
+    }
+    return counts;
+  }
+
   /** Every proposal filed on these segments, read in windows of segment ids. */
   async ofSegments(
     segmentIds: readonly string[],

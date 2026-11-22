@@ -666,6 +666,15 @@ export class Run extends TimestampsEntity {
   analysisRuns: string | null = null;
 
   /**
+   * What a system analysis was started on — the period's ranked threads, its
+   * flags and totals — frozen as JSON (`SystemDigest`), so every read of
+   * `view=digest` and every check of its card answers from the same set.
+   * Null for every chat that is not one.
+   */
+  @Property({ type: 'text', nullable: true })
+  analysisDigest: string | null = null;
+
+  /**
    * Where this run sits in the PINNED band at the top of its own scope, or
    * null for one that is not pinned at all.
    *

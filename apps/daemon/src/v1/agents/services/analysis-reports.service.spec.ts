@@ -1601,3 +1601,180 @@ describe('checkMembers', () => {
     ).toEqual([]);
   });
 });
+
+const GENIRO_ITEM: RecommendationItem = {
+  ...ITEM,
+  id: 'G-1',
+  target: 'geniro',
+  kind: 'ADD',
+  location: 'apps/daemon/src/v1/tasks',
+};
+
+const SYSTEM_MEMBER: MemberAssessment = {
+  ...REVIEWER,
+  evidence: [{ seq: 4, quote: 'waiting' }],
+  items: ['G-1'],
+};
+
+function systemSink() {
+  const written: { kind: string; payload: object }[] = [];
+  const service = new AnalysisReportsService(
+    { fork: () => ({}) } as unknown as EntityManager,
+    {} as RunDao,
+    {
+      existingSeqs: (_runId: string, seqs: number[]) =>
+        Promise.resolve(new Set(seqs)),
+    } as unknown as ItemDao,
+    {} as ThreadTimelineService,
+    { enabled: true } as MemoryService,
+    {} as ThreadReaderService,
+    {} as ProjectScopeService,
+  );
+  const analysis = service.sinkFor(
+    {
+      analysisRunId: 'analysis',
+      sourceRunId: 'thread-a',
+      snapshotSeq: 9,
+      sourceWorking: false,
+      system: { runs: [{ runId: 'thread-a', snapshotSeq: 9, working: false }] },
+    },
+    (kind, payload) => {
+      written.push({ kind, payload });
+      return Promise.resolve({ seq: 40 } as ItemWire);
+    },
+  );
+  return { written, report: analysis.report };
+}
+
+describe('AnalysisReportsService — a system card', () => {
+  it('records a geniro card that cites only the threads its digest pins', async () => {
+    const { report, written } = systemSink();
+
+    expect(
+      await report(
+        { whole: { hotspots: [], items: [GENIRO_ITEM] } },
+        null,
+        null,
+      ),
+    ).toEqual({ status: 'recorded', seq: 40, count: 1 });
+    expect(written[0]?.payload).toMatchObject({ sourceKind: 'system' });
+  });
+
+  it('refuses a team item on a system card as TARGET_NOT_FOR_SYSTEM', async () => {
+    const { report, written } = systemSink();
+
+    expect(
+      await report({ whole: { hotspots: [], items: [ITEM] } }, null, null),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining('TARGET_NOT_FOR_SYSTEM'),
+    });
+    expect(written).toEqual([]);
+  });
+
+  it('refuses evidence from a run outside the threads its digest pins', async () => {
+    const { report, written } = systemSink();
+    const cited: RecommendationItem = {
+      ...GENIRO_ITEM,
+      evidence: [{ runId: 'thread-b', seq: 4, quote: 'waiting' }],
+    };
+
+    expect(
+      await report({ whole: { hotspots: [], items: [cited] } }, null, null),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining(
+        'evidence runId thread-b has not been read in this turn',
+      ),
+    });
+    expect(written).toEqual([]);
+  });
+
+  it('refuses members on a system card, which judges geniro and no team', async () => {
+    const { report, written } = systemSink();
+
+    expect(
+      await report(
+        {
+          whole: {
+            hotspots: [],
+            items: [GENIRO_ITEM],
+            members: [SYSTEM_MEMBER],
+          },
+        },
+        null,
+        null,
+      ),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining(
+        'a system analysis judges geniro, not a team',
+      ),
+    });
+    expect(written).toEqual([]);
+  });
+});
+
+describe('checkItems — a system card', () => {
+  it('refuses a team or a repo item on a system card, and takes a geniro one', () => {
+    const repo: RecommendationItem = {
+      ...ITEM,
+      id: 'R-1',
+      target: 'repo',
+      kind: 'check',
+      location: 'package.json:1',
+    };
+
+    expect(
+      checkItems(
+        { hotspots: [], items: [ITEM, repo] },
+        'system',
+        true,
+        new Set(),
+      ),
+    ).toEqual([
+      expect.stringContaining('TARGET_NOT_FOR_SYSTEM — W-1'),
+      expect.stringContaining('TARGET_NOT_FOR_SYSTEM — R-1'),
+    ]);
+    expect(
+      checkItems(
+        { hotspots: [], items: [GENIRO_ITEM] },
+        'system',
+        true,
+        new Set(),
+      ),
+    ).toEqual([]);
+  });
+
+  it('refuses a geniro item on a team or a chat card', () => {
+    for (const sourceKind of ['team', 'chat'] as const) {
+      expect(
+        checkItems(
+          { hotspots: [], items: [GENIRO_ITEM] },
+          sourceKind,
+          true,
+          new Set(),
+        ),
+      ).toContainEqual(
+        'G-1: only a system analysis proposes changes to geniro itself',
+      );
+    }
+  });
+});
+
+describe('checkMembers — a system card', () => {
+  it('refuses members on a system card, whatever they assess', () => {
+    expect(
+      checkMembers(
+        { hotspots: [], items: [GENIRO_ITEM], members: [SYSTEM_MEMBER] },
+        'system',
+        new Set(['reviewer']),
+      ),
+    ).toEqual([
+      'a system analysis judges geniro, not a team, so it has no members to assess — leave members out',
+    ]);
+    expect(
+      checkMembers({ hotspots: [], items: [GENIRO_ITEM] }, 'system', new Set()),
+    ).toEqual([]);
+  });
+});

@@ -69,6 +69,11 @@ import { UsageRecorderService } from './services/usage-recorder.service';
   // answers a team's history from these ledgers — the same direction as
   // everything else here: both sit above this module, which observes nothing
   // above it.
-  exports: [UsageEventBus, TeamHistoryService],
+  exports: [
+    UsageEventBus,
+    TeamHistoryService,
+    MetricLedgerDao,
+    TeamRecommendationDao,
+  ],
 })
 export class StatsModule {}

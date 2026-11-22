@@ -142,11 +142,17 @@ describe('useThreadAnalysis', () => {
 });
 
 describe('isAnalysisRun', () => {
-  it('tells a thread’s or a team’s analysis from any other run', () => {
-    const none = { analysisSourceRunId: null, analysisTeamSlug: null };
+  it('tells a thread’s, a team’s or a system analysis from any other run', () => {
+    const none = {
+      analysisSourceRunId: null,
+      analysisTeamSlug: null,
+      analysisPurpose: null,
+    };
 
     expect(isAnalysisRun(none)).toBe(false);
     expect(isAnalysisRun({ ...none, analysisSourceRunId: 'src' })).toBe(true);
     expect(isAnalysisRun({ ...none, analysisTeamSlug: 'team' })).toBe(true);
+    expect(isAnalysisRun({ ...none, analysisPurpose: 'system' })).toBe(true);
+    expect(isAnalysisRun({ ...none, analysisPurpose: 'lessons' })).toBe(false);
   });
 });

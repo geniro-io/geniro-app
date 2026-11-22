@@ -119,6 +119,11 @@ export const CommandCenterStartSchema = z
       .describe(
         "The card's folder, else its project's — where the worktree is cut",
       ),
+    startedBy: z
+      .enum(['manager', 'user'])
+      .describe(
+        "Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away",
+      ),
   })
   .meta({ id: 'CommandCenterStart' });
 export type CommandCenterStart = z.infer<typeof CommandCenterStartSchema>;

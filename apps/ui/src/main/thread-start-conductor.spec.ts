@@ -22,6 +22,7 @@ interface ApprovedRow {
   title: string;
   status: string;
   folder: string;
+  startedBy?: 'manager' | 'user';
 }
 
 function row(taskId: string, over: Partial<ApprovedRow> = {}): ApprovedRow {
@@ -161,6 +162,26 @@ describe('ThreadStartConductor', () => {
       agentOptions: { claude: { browserTools: true } },
     });
     expect(starts[0]?.body).not.toHaveProperty('approval');
+  });
+
+  it('starts a card a system analysis asked for as the user, never as a manager', async () => {
+    const { fetchMock, starts } = daemon([
+      row('t1', { startedBy: 'user' }),
+      row('t2', { startedBy: 'manager' }),
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new ThreadStartConductor(deps()).tick();
+
+    expect(
+      starts.map((start) => [
+        start.path,
+        (start.body as { startedBy: string }).startedBy,
+      ]),
+    ).toEqual([
+      ['/v1/tasks/t1/runs', 'user'],
+      ['/v1/tasks/t2/runs', 'manager'],
+    ]);
   });
 
   it('does not start a thread again while the tick that started it is still in flight', async () => {

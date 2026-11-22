@@ -9,9 +9,11 @@ import {
   MEMBERS,
   recommendation,
   SAMPLED_TEAM_STATS,
+  SYSTEM_ITEMS,
   TEAM_STATS,
   TIMING,
 } from '../__fixtures__/recommendations';
+import type { ProjectRef } from '../projects/use-projects';
 import { RecommendationsCard } from './recommendations-card';
 
 /** Selecting, with a working Apply that moves the card to "applying". */
@@ -257,6 +259,52 @@ export const Phone: Story = {
         applied={null}
         outcomes={{}}
         onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
+const SYSTEM_PROJECTS: ProjectRef[] = [
+  { id: 'p1', name: 'Billing', folder: '/work/billing' },
+  { id: 'p2', name: 'Storefront', folder: '/work/storefront' },
+];
+
+export const SystemSelecting: Story = {
+  render: () => (
+    <div className="w-[600px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary="Two changes to Geniro itself: the reader hides the error of a failed call, and the preamble does not say when to flag an issue."
+        timing={null}
+        team={false}
+        items={SYSTEM_ITEMS}
+        applied={null}
+        outcomes={{}}
+        actions={{ projects: SYSTEM_PROJECTS, onAction: () => undefined }}
+      />
+    </div>
+  ),
+};
+
+export const SystemFiled: Story = {
+  render: () => (
+    <div className="w-[600px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        team={false}
+        items={SYSTEM_ITEMS}
+        applied={['G-1', 'G-2']}
+        outcomes={{
+          'G-1': { status: 'applied', note: 'filed BIL-41', backup: null },
+          'G-2': {
+            status: 'applied',
+            note: 'filed to start BIL-42',
+            backup: null,
+          },
+        }}
+        actions={{ projects: SYSTEM_PROJECTS, onAction: () => undefined }}
       />
     </div>
   ),

@@ -62,7 +62,7 @@ export interface RunTask {
  * default applies.
  */
 export interface RunStarter {
-  startedBy: 'autopilot' | 'manager';
+  startedBy: 'autopilot' | 'manager' | 'user';
   approval?: string;
 }
 

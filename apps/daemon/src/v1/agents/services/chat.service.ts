@@ -48,6 +48,7 @@ import {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
+  type AnalysedRun,
   type AnalysedTeam,
   type AnalysisTurn,
   type AttachmentDataWire,
@@ -101,6 +102,7 @@ import {
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
+  type SystemRecommendationApply,
   type TeamProposalOutcome,
   type UnanswerableWire,
 } from '../chat.types';
@@ -168,6 +170,7 @@ import {
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { hostEndpointPath } from '../utils/host-endpoint';
 import { isHostFindingsCall } from '../utils/host-findings';
+import { isHostFlagIssueCall } from '../utils/host-flag-issue';
 import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
 import { isHostKnowledgeCall } from '../utils/host-knowledge';
 import { isHostMemoryCall } from '../utils/host-memory';
@@ -292,6 +295,7 @@ import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
+import { FlagBroker } from './flag.broker';
 import { GalleryBroker } from './gallery.broker';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
@@ -973,6 +977,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly writeFailures?: WriteFailureNotices,
     /** Where a turn starts once the run's folder is gone. Optional for the positional specs. */
     @Optional() private readonly turnFolders?: TurnFolderService,
+    /** `flag_issue`'s sink, kept with the chat. Optional for the positional specs. */
+    @Optional() private readonly flags?: FlagBroker,
   ) {}
 
   /**
@@ -2496,6 +2502,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * `Run.analysisTeamSlug`.
      */
     analysisTeam?: AnalysedTeam;
+    /**
+     * The system analysis started from Settings: the threads it reads, each
+     * pinned at its snapshot, and the digest it was started on, frozen
+     * (`Run.analysisRuns`, `Run.analysisDigest`). Hidden like every analysis.
+     */
+    analysisSystem?: { runs: AnalysedRun[]; digest: string };
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -2590,12 +2602,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         analysisSourceRunId: input.analysisSource?.runId ?? null,
         analysisSourceSeq: input.analysisSource?.seq ?? null,
         analysisSourceWorking: input.analysisSource?.working ?? null,
-        analysisPurpose: input.analysisSource?.purpose ?? null,
+        analysisPurpose:
+          input.analysisSystem !== undefined
+            ? 'system'
+            : (input.analysisSource?.purpose ?? null),
         analysisTeamSlug: input.analysisTeam?.slug ?? null,
         analysisRuns:
-          input.analysisTeam === undefined
-            ? null
-            : writeAnalysedRuns(input.analysisTeam.runs),
+          input.analysisSystem !== undefined
+            ? writeAnalysedRuns(input.analysisSystem.runs)
+            : input.analysisTeam === undefined
+              ? null
+              : writeAnalysedRuns(input.analysisTeam.runs),
+        analysisDigest: input.analysisSystem?.digest ?? null,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -3350,6 +3368,59 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     const previews = await this.wireReads([run], em);
     return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /** Write a row of an analysis chat's own — a mark of its card, or a notice. */
+  async recordAnalysisRow(
+    runId: string,
+    kind: ItemKind,
+    payload: unknown,
+  ): Promise<ItemWire> {
+    return this.persist(
+      this.em.fork(),
+      runId,
+      await this.seqs.reserve(runId),
+      kind,
+      null,
+      payload,
+    );
+  }
+
+  /**
+   * Write an Apply row and start no turn: a system analysis's press that picked
+   * only items Geniro files itself. Persisted, then emitted, like any row.
+   */
+  async recordApply(
+    runId: string,
+    text: string,
+    apply: SystemRecommendationApply,
+  ): Promise<ItemWire> {
+    const em = this.em.fork();
+    return this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'message',
+      'user',
+      { text, apply },
+    );
+  }
+
+  /**
+   * One page of system analyses with their rows and digests, newest first —
+   * hidden chats, listed only on Settings' System analysis page.
+   */
+  async listSystemAnalyses(page: {
+    limit: number;
+    before?: Date;
+  }): Promise<{ run: Run; wire: RunWire }[]> {
+    const em = this.em.fork();
+    const runs = await this.runDao.listSystemAnalyses(page, em);
+    const previews = await this.wireReads(runs, em);
+    return runs.map((run) => ({
+      run,
+      wire: this.toRunWire(run, previews.of(run.id)),
+    }));
   }
 
   /**
@@ -6044,7 +6115,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * row as `payload.apply`, the durable record `save_team_change`
        * checks a write against. Refused while a turn runs.
        */
-      apply?: RecommendationApply;
+      apply?: RecommendationApply | SystemRecommendationApply;
       /**
        * Start a turn of its own or be refused `RUN_BUSY` — never be delivered
        * into a running one. An owned card's verdict, which must reach the
@@ -6141,7 +6212,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     images: SendMessageImage[],
     options: {
       resumeOnly?: boolean;
-      apply?: RecommendationApply;
+      apply?: RecommendationApply | SystemRecommendationApply;
       ownTurn?: boolean;
       backgroundWork?: FollowUpBackgroundWork;
       waitForAnswer?: boolean;
@@ -6459,6 +6530,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The shared memory: its limits live in `MemoryService` — see
         // `isHostMemoryCall`.
         isHostMemoryCall(hostServerName, toolName) ||
+        // One row the analyses read, capped in `FlagBroker`.
+        isHostFlagIssueCall(hostServerName, toolName) ||
         // The knowledge store, on the same terms: `isHostKnowledgeCall`.
         isHostKnowledgeCall(hostServerName, toolName) ||
         // The browser tools, in every mode: calling one is not the decision.
@@ -9365,6 +9438,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 memberId: SINGLE_AGENT_NODE,
                 conversationId: null,
                 callId: null,
+              }),
+            }),
+          ]),
+      ...(this.flags === undefined
+        ? []
+        : [
+            this.flags.register(runId, SINGLE_AGENT_NODE, {
+              raiser: () => ({
+                memberId: SINGLE_AGENT_NODE,
+                conversationId: null,
+                callId: null,
+                agentKind: null,
+                model: null,
               }),
             }),
           ]),

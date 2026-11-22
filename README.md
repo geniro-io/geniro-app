@@ -124,7 +124,7 @@ Charts, comparisons, scorecards, image galleries, review findings, patches, plan
 <td valign="top">
 
 <b>🔬 Thread analyzer</b><br>
-An agent studies a finished run, or a team's runs over a period you pick, shows where the time and money went and why, and proposes fixes with what each should save — including to the project's instructions. Tick the ones you like and press **Apply selected**.
+An agent studies a finished run, or a team's runs over a period you pick, shows where the time and money went and why, and proposes fixes with what each should save — including to the project's instructions. Tick the ones you like and press **Apply selected**. A **system analysis** in Settings reads every troubled thread of a period, Geniro's own analyses included, and files what Geniro itself should fix as cards on your board.
 
 </td>
 <td valign="top">
@@ -391,6 +391,11 @@ On a team, **Analyze & improve** reads the runs of the period you pick together,
 Each fix shows the time and money it should save per run, or add, and what the next runs look like with it. Ticking fixes projects the time and cost per run with exactly those.
 
 ![The same analysis's fixes: W-1, ticked, saves 18 seconds and $0.15 per run with its evidence quoted from both runs; W-2 adds 12 seconds and $0.10 per run to stop shipping a known defect; the projection reads 45s to 27s and $0.62 to $0.47 per run with the one selected](docs/screenshots/workflow-analysis-fixes.png)
+
+### Flags and the system analysis
+
+- **Agents flag what went wrong.** Every agent — in a chat, a team, an analysis or a lessons chat — has a `flag_issue` tool for something that cost real work or ended in a disagreement with you: a tool that failed, an instruction that misled it, a memory that was wrong. Each conversation may raise up to ten, and the same problem once per thread. Flags outlive the thread, so an analysis of a deleted thread's period still reads them, and every analysis — of a thread, of a team, the lessons reflection and its check — reads a thread's flags before its transcript.
+- **System analysis.** Settings → **System analysis** picks a period (the last day to the last 30 days, 7 by default), shows how many threads in it had trouble — flags, failed tool calls, failed outcomes, unmet goals, refusals and your corrections — including Geniro's own analyses and lessons chats, which no other analysis reads, and lists them with **Show threads**. Pick the agent and model and press **Start**: it reads up to the 30 most troubled threads, what earlier system analyses proposed and what became of it, and reports what to change in Geniro itself (`G-` items: its tools, code and system instructions), in your own agent instructions (`U-`) and in shared memory (`M-`). The report opens in a popup; the button under it **creates cards** for the Geniro items in the project you pick, **implements right away** (creates them and starts each on the project's default agent or team), or **keeps it as a report**. Your-instructions and memory items are applied by the analysis agent, as in any analysis. **Past analyses** lists each with its period, what it read and proposed, and what became of it.
 
 ## 📚 Knowledge
 

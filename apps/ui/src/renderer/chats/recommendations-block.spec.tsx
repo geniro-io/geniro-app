@@ -3,8 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ITEMS } from '../__fixtures__/recommendations';
-import { RecommendationsApplyContext } from './recommendations-apply-context';
+import { ITEMS, SYSTEM_ITEMS } from '../__fixtures__/recommendations';
+import {
+  RecommendationsApplyContext,
+  type SystemRecommendationsApplier,
+  SystemRecommendationsApplyContext,
+} from './recommendations-apply-context';
 import { RecommendationsBlock } from './recommendations-block';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import type { RecommendationsEntry } from './transcript-groups';
@@ -143,5 +147,57 @@ describe('RecommendationsBlock', () => {
     expect(
       again.querySelector('[data-slot="recommendations-footer"]')?.textContent,
     ).toContain('1 of 4 selected');
+  });
+
+  it("sends a system card's button to the system applier, never the thread Apply, and shows every item as sent for Keep as report", async () => {
+    const apply = vi.fn().mockResolvedValue(undefined);
+    const systemApply = vi
+      .fn<SystemRecommendationsApplier['apply']>()
+      .mockResolvedValue({ recorded: true });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const entry: RecommendationsEntry = {
+      ...ENTRY,
+      card: { ...ENTRY.card, sourceKind: 'system', items: SYSTEM_ITEMS },
+    };
+    await act(async () => {
+      root!.render(
+        <RecommendationsApplyContext.Provider value={apply}>
+          <SystemRecommendationsApplyContext.Provider
+            value={{
+              projects: [
+                { id: 'p1', name: 'Billing', folder: '/work/billing' },
+              ],
+              apply: systemApply,
+            }}>
+            <RecommendationsBlock entry={entry} />
+          </SystemRecommendationsApplyContext.Provider>
+        </RecommendationsApplyContext.Provider>,
+      );
+    });
+    const el = container;
+
+    expect(button(el, 'Apply selected')).toBeUndefined();
+    await click(
+      el.querySelector<HTMLElement>(
+        '[data-slot="split-button"] [data-menu-trigger]',
+      )!,
+    );
+    const keep = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('Keep as report'))!;
+    await click(keep);
+    await click(
+      el.querySelector<HTMLButtonElement>('[data-slot="split-button"] button')!,
+    );
+
+    expect(systemApply).toHaveBeenCalledWith('analysis', 5, 'report', [], null);
+    expect(apply).not.toHaveBeenCalled();
+    expect(
+      el
+        .querySelector('[data-slot="recommendations-card"]')!
+        .getAttribute('data-state'),
+    ).toBe('applying');
   });
 });

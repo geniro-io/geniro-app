@@ -9,6 +9,7 @@ import type { CommandCenterBroker } from '../../agents/services/command-center.b
 import type { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
 import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import type { FlagBroker } from '../../agents/services/flag.broker';
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GalleryImageService } from '../../agents/services/gallery-image.service';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
@@ -35,6 +36,7 @@ import type { LessonFilingService } from '../../lessons/services/lesson-filing.s
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
+import type { SystemAnalysisHistoryService } from '../../system-analysis/services/system-analysis-history.service';
 import type { CallBroker } from '../../teams/services/call-broker.service';
 import type { StageService } from '../../teams/services/stage.service';
 import type { TaskBoardBroker } from '../../teams/services/task-board.broker';
@@ -55,6 +57,7 @@ import { createBrowserTools } from './browser-shared/browser-tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { CheckLessonsTool } from './check-lessons/check-lessons.tool';
+import { FlagIssueTool } from './flag-issue/flag-issue.tool';
 import { GoalsTool } from './goals/goals.tool';
 import { gatedForHiddenLessons } from './hidden-lessons-gate';
 import { KnowledgeReadTool } from './knowledge-read/knowledge-read.tool';
@@ -123,6 +126,7 @@ export interface McpToolDeps {
   monitors: MonitorBroker;
   teamNotes: TeamNoteBroker;
   runOutcomes: RunOutcomeBroker;
+  flags: FlagBroker;
   goals: GoalsService;
   goalWriters: GoalWritersBroker;
   stages: StageService;
@@ -142,6 +146,7 @@ export interface McpToolDeps {
   projectInstructions: ProjectInstructionsChangeService;
   projectInstructionCards: ProjectInstructionsBroker;
   teamHistory: TeamHistoryService;
+  systemHistory: SystemAnalysisHistoryService;
   teamGate: TeamProposalBroker;
   teamBuilders: TeamBuilderBroker;
   projectChats: ProjectChatBroker;
@@ -183,6 +188,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new RecordOutcomeTool(deps.runOutcomes),
     new MoveStageTool(deps.stages, deps.calls),
     new GoalsTool(deps.goals, deps.goalWriters),
+    new FlagIssueTool(deps.flags),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),
@@ -235,6 +241,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
       deps.threads,
       deps.teamChanges,
       deps.teamHistory,
+      deps.systemHistory,
     ),
     new ReportRecommendationsTool(
       deps.analysis,

@@ -126,6 +126,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     analysisSourceRunId: null,
     analysisSourceSeq: null,
     analysisTeamSlug: null,
+    analysisPurpose: null,
     awaiting: null,
     holdingFor: 0,
     awaitingCalls: 0,

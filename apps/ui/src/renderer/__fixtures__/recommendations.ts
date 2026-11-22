@@ -95,9 +95,43 @@ export function recommendation(
     confidence: 4,
     risk: team ? 'medium' : 'low',
     riskNote: 'reviewers stop seeing each other’s notes',
+    addressesFlags: [],
     ...over,
   };
 }
+
+/** A system analysis's card: changes to geniro itself, each answering the flags it names. */
+export const SYSTEM_ITEMS: RecommendationView[] = [
+  recommendation('G-1', {
+    target: 'geniro',
+    kind: 'code',
+    location: 'read_analyzed_thread',
+    title: 'Show the error text of a failed tool call next to its arguments',
+    change:
+      'The reader returns the failing call’s error text with its arguments, so a reviewer sees what failed without opening the transcript.',
+    minutesSaved: 5,
+    costSavedUsd: null,
+    outcome: 'Analyses find the failure in one read',
+    confidence: 4,
+    risk: 'low',
+    addressesFlags: ['F-1a2b3c'],
+  }),
+  recommendation('G-2', {
+    target: 'geniro',
+    kind: 'instruction',
+    location: 'host preamble',
+    title: 'Say when an agent should flag an issue',
+    change:
+      'WHEN a step fails in a way the user has to act on → flag it once, with the step and the error.',
+    minutesSaved: 3,
+    costSavedUsd: null,
+    outcome: 'Flags arrive for the failures that cost work',
+    confidence: 3,
+    risk: 'medium',
+    riskNote: 'agents may flag too much',
+    addressesFlags: ['F-4d5e6f', 'F-7a8b9c'],
+  }),
+];
 
 export const ITEMS: RecommendationView[] = [
   recommendation('W-1'),

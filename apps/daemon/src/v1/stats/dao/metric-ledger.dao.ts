@@ -251,6 +251,27 @@ export class MetricLedgerDao extends BaseDao<ToolCallEvent> {
     }));
   }
 
+  /** The failed tool calls of `[from, to)`: which run, which tool on which server. */
+  async failedToolCalls(
+    from: Date,
+    to: Date,
+    txEm?: EntityManager,
+  ): Promise<{ runId: string; tool: string; mcpServer: string | null }[]> {
+    const rows = await this.db(txEm)
+      .selectFrom('tool_call_events')
+      .select(['run_id', 'tool', 'mcp_server'])
+      .where('deleted_at', 'is', null)
+      .where('ok', '=', 0)
+      .where('occurred_at', '>=', from.getTime())
+      .where('occurred_at', '<', to.getTime())
+      .execute();
+    return rows.map((row) => ({
+      runId: row.run_id,
+      tool: row.tool,
+      mcpServer: row.mcp_server,
+    }));
+  }
+
   async stages(
     scope: LedgerScope,
     txEm?: EntityManager,

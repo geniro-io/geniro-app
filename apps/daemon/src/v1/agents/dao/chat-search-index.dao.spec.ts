@@ -182,12 +182,14 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     // An analysis quotes its source, so it would answer the same words.
     await db.run('analysis', { analysisSourceRunId: RUN_A });
     await db.run('wf-analysis', { analysisTeamSlug: 'dev-team' });
+    await db.run('system', { analysisPurpose: 'system' });
     await db.item('a', { runId: RUN_A, payload: said('shared word') });
     await db.item('b', { runId: RUN_B, payload: said('shared word') });
     await db.item('c', { runId: 'gone', payload: said('shared word') });
     await db.item('e', { runId: 'builder', payload: said('shared word') });
     await db.item('f', { runId: 'analysis', payload: said('shared word') });
     await db.item('g', { runId: 'wf-analysis', payload: said('shared word') });
+    await db.item('h', { runId: 'system', payload: said('shared word') });
     await db.item('d', {
       runId: RUN_A,
       seq: 2,

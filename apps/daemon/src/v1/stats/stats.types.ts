@@ -211,7 +211,14 @@ export interface ThreadLedgerRow {
 }
 
 /** Which kind of chat filed a team's recommendations card. */
-export type TeamRecommendationChat = 'analysis' | 'builder';
+export type TeamRecommendationChat = 'analysis' | 'builder' | 'system';
+
+/** The ledger slug a system analysis's items are filed under; `SLUG_RE` refuses it as a team's, so no team ever shares it. */
+export const SYSTEM_LEDGER_SLUG = '_system';
+
+/** What a system analysis's press did with an item, beside its mark. */
+export type SystemApplyLedgerAction =
+  'filed' | 'start_requested' | 'started' | 'kept';
 
 /** One `team_recommendations` row (see the entity). */
 export interface TeamRecommendationRow {
@@ -239,12 +246,21 @@ export interface TeamRecommendationRow {
   outcomeNote: string | null;
   outcomeAt: Date | null;
   outcomeSeq: number | null;
+  /** A system item's board card, once filed. */
+  taskId: string | null;
+  applyAction: SystemApplyLedgerAction | null;
 }
 
 /** A card's item as the ledger first files it: nothing selected or marked yet. */
 export type FiledRecommendation = Omit<
   TeamRecommendationRow,
-  'selectedAt' | 'outcome' | 'outcomeNote' | 'outcomeAt' | 'outcomeSeq'
+  | 'selectedAt'
+  | 'outcome'
+  | 'outcomeNote'
+  | 'outcomeAt'
+  | 'outcomeSeq'
+  | 'taskId'
+  | 'applyAction'
 >;
 
 /** One team's chat as the recommendation ledger files it. */
@@ -258,7 +274,7 @@ export interface TeamRecommendationSource {
  * Which kind of chat assessed a team's members: one that files the team's
  * recommendations, or a thread analysis of one of its runs.
  */
-export type MemberAssessmentChat = TeamRecommendationChat | 'thread';
+export type MemberAssessmentChat = 'analysis' | 'builder' | 'thread';
 
 /** A chat whose cards' member assessments the ledger files, and the CLI and model it judged with. */
 export interface MemberAssessmentSource {

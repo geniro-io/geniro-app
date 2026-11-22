@@ -268,7 +268,10 @@ import {
 } from './published-artifact';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
-import type { RecommendationsApplier } from './recommendations-apply-context';
+import type {
+  RecommendationsApplier,
+  SystemRecommendationsApplier,
+} from './recommendations-apply-context';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
 import {
@@ -2355,6 +2358,27 @@ export function Chats({
       }
     },
     [chatApi, startHostedTurn, refuseHostedTurn],
+  );
+
+  /** A system analysis report's button, for `SystemRecommendationsApplyContext`. */
+  const applySystemRecommendations = useMemo<SystemRecommendationsApplier>(
+    () => ({
+      projects,
+      apply: async (runId, cardSeq, action, ids, projectId) => {
+        const result = await apis.systemAnalyses.applySystemAnalysis({
+          runId,
+          systemApplyDto: {
+            cardSeq,
+            ids,
+            action,
+            ...(projectId === null ? {} : { projectId }),
+            clientMessageId: randomId(),
+          },
+        });
+        return { recorded: result.apply != null };
+      },
+    }),
+    [apis, projects],
   );
 
   /** An analysis chat's header chip: the thread it reads, one press away. */
@@ -9797,6 +9821,7 @@ export function Chats({
         delegateConversations={delegateConversations}
         liveText={liveText}
         applyRecommendations={applyRecommendations}
+        applySystemRecommendations={applySystemRecommendations}
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}

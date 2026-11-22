@@ -42,7 +42,10 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
  * adding it afterwards would mean deciding retroactively what every row
  * already on disk had been.
  */
-export const TASK_SOURCES = ['geniro'] as const;
+export const TASK_SOURCES = ['geniro', 'system_analysis'] as const;
+
+/** Who asked to start a card: the command center's manager, or a system analysis's Implement right away. */
+export type TaskStartRequestKind = 'manager' | 'analysis';
 export const TaskSourceSchema = z.enum(TASK_SOURCES).meta({ id: 'TaskSource' });
 export type TaskSource = z.infer<typeof TaskSourceSchema>;
 

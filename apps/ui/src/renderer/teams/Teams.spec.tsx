@@ -347,9 +347,10 @@ beforeEach(() => {
       team: EMPTY,
       hash: 'loaded-1',
     }));
-  uploadTeamAvatar
-    .mockReset()
-    .mockImplementation(async () => ({ id: `${'a'.repeat(64)}.png` }));
+  uploadTeamAvatar.mockReset().mockImplementation(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { id: `${'a'.repeat(64)}.png` };
+  });
   saveTeam.mockReset().mockImplementation(async (request: SaveRequest) => ({
     slug: request.slug,
     team: request.saveTeamDto.team,
@@ -492,7 +493,7 @@ function stubPictureDrawing(): ReturnType<typeof vi.fn> {
   return drawImage;
 }
 
-/** The user picks a file in the avatar picker's file chooser. */
+/** Picks a file and keeps the act open until the picker's upload settles. */
 async function choosePictureFile(): Promise<void> {
   const input = document.querySelector<HTMLInputElement>(
     '[data-slot="avatar-picker"] input[type="file"]',
@@ -503,9 +504,9 @@ async function choosePictureFile(): Promise<void> {
   });
   await act(async () => {
     input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() =>
+      expect(uploadTeamAvatar.mock.settledResults).toHaveLength(1),
+    );
   });
 }
 

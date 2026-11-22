@@ -116,6 +116,8 @@ pnpm --filter @geniro/ui test:unit src/shared/themes.spec.ts   # one spec, path 
 pnpm test:cov                                    # coverage, vendored packages only (common, http-server, metrics); the apps define no `test:cov`
 ```
 
+- `apps/ui/turbo.json` drops `^build` from the UI's `check-types` and test tasks, so a daemon-only edit replays them from turbo's cache. That is sound only while the UI imports no workspace package (`@geniro/daemon`, `@packages/*`), which an eslint `no-restricted-imports` rule enforces; a change that needs one restores `^build` there and lifts the rule.
+
 ### Seeding a throwaway profile
 
 ```bash

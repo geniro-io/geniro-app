@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.org/schema.json",
+  "extends": ["//"],
+  // No `^build`: the UI imports no workspace package (eslint's
+  // no-restricted-imports holds that). `build` keeps it for packaging.
+  "tasks": {
+    "check-types": { "dependsOn": [] },
+    "test": { "dependsOn": [] },
+    "test:unit": { "dependsOn": [] },
+    "test:cov": { "dependsOn": [] },
+    "build:tests": { "dependsOn": [] },
+    "test:integration": { "dependsOn": [] }
+  }
+}

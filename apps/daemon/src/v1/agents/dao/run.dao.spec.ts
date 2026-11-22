@@ -82,6 +82,20 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('titlesOf', () => {
+    it('answers the titles of the runs that still exist, archived ones included', async () => {
+      await dao.create({ id: 'live-1', title: 'Fix scroll' });
+      await dao.create({ id: 'live-2', title: null, archivedAt: new Date(1) });
+
+      expect(await dao.titlesOf(['live-1', 'gone', 'live-2'])).toEqual(
+        new Map([
+          ['live-1', 'Fix scroll'],
+          ['live-2', null],
+        ]),
+      );
+    });
+  });
+
   describe('listChats', () => {
     it('lists chat runs only (teamId null), newest first', async () => {
       // Oldest inserted first, with explicit createdAt values: a dropped

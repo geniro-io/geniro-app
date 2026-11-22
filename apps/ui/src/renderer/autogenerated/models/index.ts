@@ -2037,6 +2037,168 @@ export type AttachmentMediaType = typeof AttachmentMediaType[keyof typeof Attach
 /**
  * 
  * @export
+ * @interface BackgroundJob
+ */
+export interface BackgroundJob {
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    kind: BackgroundJobKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    status: BackgroundJobStatusEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    phase: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    endedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof BackgroundJob
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof BackgroundJob
+     */
+    durationMs: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJob
+     */
+    error: string | null;
+    /**
+     * 
+     * @type {BackgroundJobLessons}
+     * @memberof BackgroundJob
+     */
+    lessons: BackgroundJobLessons | null;
+}
+
+
+/**
+ * @export
+ */
+export const BackgroundJobKindEnum = {
+    Lessons: 'lessons'
+} as const;
+export type BackgroundJobKindEnum = typeof BackgroundJobKindEnum[keyof typeof BackgroundJobKindEnum];
+
+/**
+ * @export
+ */
+export const BackgroundJobStatusEnum = {
+    Queued: 'queued',
+    Running: 'running',
+    Done: 'done',
+    Failed: 'failed'
+} as const;
+export type BackgroundJobStatusEnum = typeof BackgroundJobStatusEnum[keyof typeof BackgroundJobStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface BackgroundJobLessons
+ */
+export interface BackgroundJobLessons {
+    /**
+     * Lessons saved into memory, active and found by agents
+     * @type {number}
+     * @memberof BackgroundJobLessons
+     */
+    saved: number;
+    /**
+     * Lessons that wait for the user: proposed, a failed check, or saved into memory pending review
+     * @type {number}
+     * @memberof BackgroundJobLessons
+     */
+    waiting: number;
+    /**
+     * Lessons the check dropped or that memory already held
+     * @type {number}
+     * @memberof BackgroundJobLessons
+     */
+    dropped: number;
+}
+/**
+ * 
+ * @export
+ * @interface BackgroundJobListDto
+ */
+export interface BackgroundJobListDto {
+    /**
+     * Every queued and running job, running first
+     * @type {Array<BackgroundJob>}
+     * @memberof BackgroundJobListDto
+     */
+    active: Array<BackgroundJob>;
+    /**
+     * One page of finished jobs, newest first
+     * @type {Array<BackgroundJob>}
+     * @memberof BackgroundJobListDto
+     */
+    finished: Array<BackgroundJob>;
+    /**
+     * 
+     * @type {string}
+     * @memberof BackgroundJobListDto
+     */
+    nextBefore: string | null;
+    /**
+     * How many jobs are queued or running
+     * @type {number}
+     * @memberof BackgroundJobListDto
+     */
+    running: number;
+}
+/**
+ * 
+ * @export
  * @interface BlockedTask
  */
 export interface BlockedTask {
@@ -7464,6 +7626,43 @@ export interface LessonSpendByStep {
  * @export
  */
 export type LessonTarget = LessonKnowledgeTarget | LessonMemberInstructionsTarget | LessonMemoryTarget | LessonProjectInstructionsTarget;
+/**
+ * 
+ * @export
+ * @interface LessonTypicalSpend
+ */
+export interface LessonTypicalSpend {
+    /**
+     * How many finished runs the medians are taken over
+     * @type {number}
+     * @memberof LessonTypicalSpend
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonTypicalSpend
+     */
+    usd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonTypicalSpend
+     */
+    durationMs: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonTypicalSpend
+     */
+    model: string | null;
+    /**
+     * Whether only runs on the model this reflection would use were counted
+     * @type {boolean}
+     * @memberof LessonTypicalSpend
+     */
+    sameModel: boolean;
+}
 /**
  * 
  * @export
@@ -17993,6 +18192,12 @@ export interface ThreadLessonEstimateDto {
      * @memberof ThreadLessonEstimateDto
      */
     estimate: LessonEstimate;
+    /**
+     * 
+     * @type {LessonTypicalSpend}
+     * @memberof ThreadLessonEstimateDto
+     */
+    typical: LessonTypicalSpend | null;
     /**
      * 
      * @type {LessonEstimate}

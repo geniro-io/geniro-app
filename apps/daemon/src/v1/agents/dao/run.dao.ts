@@ -637,6 +637,24 @@ export class RunDao extends BaseDao<Run> {
     return out;
   }
 
+  /** The titles of these runs that still exist, by id. */
+  async titlesOf(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, string | null>> {
+    const out = new Map<string, string | null>();
+    for (const batch of idBatches([...new Set(runIds)])) {
+      const rows = await this.getRepo(txEm).find(
+        { id: { $in: batch } },
+        { fields: ['id', 'title'], disableIdentityMap: true },
+      );
+      for (const run of rows) {
+        out.set(run.id, run.title);
+      }
+    }
+    return out;
+  }
+
   /** Which of these runs still exist. */
   async existingIds(
     runIds: readonly string[],

@@ -70,6 +70,41 @@ export class LessonSegmentDao extends BaseDao<LessonSegment> {
     );
   }
 
+  /** Up to `limit` segments in these statuses closed no later than `notAfter`, newest first. */
+  page(
+    statuses: readonly LessonSegmentStatus[],
+    notAfter: Date | null,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<LessonSegment[]> {
+    return this.getRepo(txEm).find(
+      {
+        status: { $in: [...statuses] },
+        ...(notAfter === null ? {} : { closedAt: { $lte: notAfter } }),
+      },
+      {
+        orderBy: [{ closedAt: 'desc' }, { id: 'desc' }],
+        limit,
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /** The newest segments a reflection finished on, filing lessons or none. */
+  listFinished(limit: number, txEm?: EntityManager): Promise<LessonSegment[]> {
+    return this.getRepo(txEm).find(
+      {
+        status: { $in: ['reflected', 'empty'] },
+        reflectionRunId: { $ne: null },
+      },
+      {
+        orderBy: [{ closedAt: 'desc' }, { id: 'desc' }],
+        limit,
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** Stretches in one of these statuses last changed since a moment, newest first. */
   listChangedSince(
     statuses: readonly LessonSegmentStatus[],

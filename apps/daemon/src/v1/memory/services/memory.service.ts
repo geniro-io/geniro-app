@@ -906,6 +906,11 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     };
   }
 
+  /** Which of these lesson proposals own an entry that still waits for the user's review. */
+  pendingLessonProposals(proposalIds: readonly string[]): Promise<Set<string>> {
+    return this.memories.pendingLessonProposalIds(proposalIds, this.em.fork());
+  }
+
   /** One entry by id, whatever its status or scope — the user's read. */
   async get(id: string): Promise<MemoryEntry | null> {
     const row = await this.memories.getById(id, this.em.fork());

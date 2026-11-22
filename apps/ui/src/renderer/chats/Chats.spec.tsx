@@ -904,6 +904,7 @@ beforeEach(() => {
     check: null,
     signals: 0,
     lessonsOn: true,
+    typical: null,
     fromSeq: 0,
     toSeq: 0,
   });
@@ -13115,6 +13116,7 @@ describe('Chats sidebar list', () => {
       check: null,
       signals: 2,
       lessonsOn: true,
+      typical: null,
       fromSeq: 1,
       toSeq: 40,
     };
@@ -13151,8 +13153,17 @@ describe('Chats sidebar list', () => {
       });
     }
 
-    it('offers the box ticked when lessons are on for the thread, names the model and price, and asks the daemon to reflect', async () => {
-      lessonsApi.estimateLessons.mockResolvedValue(WITH_SIGNALS);
+    it('offers the box ticked when lessons are on for the thread, names the model and what runs typically cost, and asks the daemon to reflect', async () => {
+      lessonsApi.estimateLessons.mockResolvedValue({
+        ...WITH_SIGNALS,
+        typical: {
+          runs: 14,
+          usd: 0.13,
+          durationMs: 134_000,
+          model: 'claude-haiku-5-5',
+          sameModel: true,
+        },
+      });
       agentsApi.listAgentModels.mockResolvedValue([
         {
           id: 'haiku',
@@ -13165,9 +13176,12 @@ describe('Chats sidebar list', () => {
 
       expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
       expect(boxOf(container)!.checked).toBe(true);
-      expect(container.querySelector('[role="dialog"]')!.textContent).toContain(
-        'Extract lessons · Haiku 5.5 · ≈$0.50',
+      const text = container.querySelector('[role="dialog"]')!.textContent;
+      expect(text).toContain('a background agent (Haiku 5.5) reads the thread');
+      expect(text).toContain(
+        'Usually ~$0.13 and ~2m — median of the last 14 runs on Haiku 5.5',
       );
+      expect(text).not.toContain('$0.50');
 
       await press(container, 'Archive');
 
@@ -13196,6 +13210,7 @@ describe('Chats sidebar list', () => {
       lessonsApi.estimateLessons.mockResolvedValue({
         ...WITH_SIGNALS,
         lessonsOn: false,
+        typical: null,
       });
       const container = await openArchiveDialog();
       expect(boxOf(container)!.checked).toBe(false);
@@ -13211,7 +13226,7 @@ describe('Chats sidebar list', () => {
       });
     });
 
-    it('adds the price of the check when the daemon will check what it finds', async () => {
+    it('says a second model checks what it finds when the daemon will check', async () => {
       lessonsApi.estimateLessons.mockResolvedValue({
         ...WITH_SIGNALS,
         estimate: { ...WITH_SIGNALS.estimate, usd: 0.02 },
@@ -13225,7 +13240,7 @@ describe('Chats sidebar list', () => {
       const container = await openArchiveDialog();
 
       expect(container.querySelector('[role="dialog"]')!.textContent).toContain(
-        'Extract lessons · claude-haiku-5-5 · ≈$0.02 · check ≈$0.27 if a lesson is found',
+        'A second model checks each lesson it finds.',
       );
     });
 
@@ -13634,6 +13649,7 @@ describe('Chats sidebar list', () => {
       check: null,
       signals: 2,
       lessonsOn: true,
+      typical: null,
       fromSeq: 1,
       toSeq: 40,
     });

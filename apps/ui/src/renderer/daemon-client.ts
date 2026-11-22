@@ -1222,6 +1222,27 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
   };
 }
 
+/** A `background_jobs_changed` broadcast: a background job of this kind started, moved or ended. */
+export interface BackgroundJobsChangedEvent {
+  kind: string;
+}
+
+/**
+ * Read a `background_jobs_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `BackgroundJobsChangedEvent`
+ * (`apps/daemon/src/v1/background-jobs/background-jobs.types.ts`).
+ */
+export function parseBackgroundJobsChanged(
+  data: unknown,
+): BackgroundJobsChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { kind } = data as Record<string, unknown>;
+  return typeof kind === 'string' ? { kind } : null;
+}
+
 /** A `lessons_changed` broadcast: the thread whose lesson offers or proposals changed. */
 export interface LessonsChangedEvent {
   runId: string | null;
@@ -1460,6 +1481,9 @@ export class DaemonClient {
   private readonly lessonsChangedListeners = new Set<
     (event: LessonsChangedEvent) => void
   >();
+  private readonly backgroundJobsChangedListeners = new Set<
+    (event: BackgroundJobsChangedEvent) => void
+  >();
   private readonly knowledgeChangedListeners = new Set<
     (event: KnowledgeChangedEvent) => void
   >();
@@ -1685,6 +1709,14 @@ export class DaemonClient {
         if (memory) {
           for (const listener of this.memoryChangedListeners) {
             listener(memory);
+          }
+        }
+      }
+      if (event === 'background_jobs_changed') {
+        const change = parseBackgroundJobsChanged(data);
+        if (change) {
+          for (const listener of this.backgroundJobsChangedListeners) {
+            listener(change);
           }
         }
       }
@@ -1921,6 +1953,16 @@ export class DaemonClient {
     this.memoryChangedListeners.add(listener);
     return () => {
       this.memoryChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every start, move and end of a background job, client-wide. */
+  onBackgroundJobsChanged(
+    listener: (event: BackgroundJobsChangedEvent) => void,
+  ): () => void {
+    this.backgroundJobsChangedListeners.add(listener);
+    return () => {
+      this.backgroundJobsChangedListeners.delete(listener);
     };
   }
 

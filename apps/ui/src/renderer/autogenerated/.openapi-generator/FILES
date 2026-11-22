@@ -1,5 +1,6 @@
 .openapi-generator-ignore
 apis/AgentsApi.ts
+apis/BackgroundJobsApi.ts
 apis/CapabilitiesApi.ts
 apis/ChatsApi.ts
 apis/CliAuthApi.ts

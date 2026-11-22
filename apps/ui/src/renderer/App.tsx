@@ -15,6 +15,8 @@ import {
 import { WaitingStatus } from './chats/waiting-status';
 import { AppUsageButton } from './components/app-usage-button';
 import { AvatarImageLoaderContext } from './components/avatar-images';
+import { BackgroundJobsButton } from './components/background-jobs-button';
+import { BackgroundJobsHistoryDialog } from './components/background-jobs-history-dialog';
 import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
@@ -51,6 +53,10 @@ import {
 import { footerUpdate } from './updates/update-status';
 import { useUpdateState } from './updates/use-update-state';
 import { useAppProcesses } from './use-app-processes';
+import {
+  useBackgroundJobHistory,
+  useBackgroundJobs,
+} from './use-background-jobs';
 import {
   CapabilitiesContext,
   useAgentIdentities,
@@ -341,6 +347,8 @@ export function App(): React.JSX.Element {
   );
   /** Whether the title bar's usage panel is open — the only time it polls. */
   const [usageOpen, setUsageOpen] = useState(false);
+  const [backgroundJobsOpen, setBackgroundJobsOpen] = useState(false);
+  const [backgroundHistoryOpen, setBackgroundHistoryOpen] = useState(false);
   const appProcesses = useAppProcesses(apis, usageOpen);
   const agentIdentities = useAgentIdentities(capabilities.capabilities);
 
@@ -588,6 +596,23 @@ export function App(): React.JSX.Element {
     }
   }, [openRunId]);
   const knowledgeCounts = useKnowledgeCounts(apis, clientRef.current);
+  const backgroundJobs = useBackgroundJobs(apis, clientRef.current);
+  const backgroundHistory = useBackgroundJobHistory(
+    apis,
+    clientRef.current,
+    backgroundHistoryOpen,
+  );
+  // Both writes, in this order, on `Tasks`' reason: the request is what
+  // `Chats` acts on.
+  const openThreadFromTitleBar = useLatestCallback((runId: string): void => {
+    setThreadRequest(runId);
+    setView('chats');
+  }, []);
+  const openLessonsReview = useLatestCallback((): void => {
+    setSettingsSection('memory');
+    setSettingsSectionOpen(true);
+    setView('settings');
+  }, []);
   const memoryWaiting = useMemoryWaitingCount(apis, clientRef.current);
   const cliUpdatesAvailable = useCliUpdatesAvailable();
   const agentName = useLatestCallback(
@@ -747,6 +772,19 @@ export function App(): React.JSX.Element {
               // Not on a phone, for the update control's reason: the bar's
               // trailing edge there belongs to the run-details opener, which
               // floats over it and would cover this glyph.
+              background={
+                apis && !narrowViewport ? (
+                  <BackgroundJobsButton
+                    open={backgroundJobsOpen}
+                    onOpenChange={setBackgroundJobsOpen}
+                    data={backgroundJobs.data}
+                    error={backgroundJobs.error}
+                    onOpenThread={openThreadFromTitleBar}
+                    onReview={openLessonsReview}
+                    onShowHistory={() => setBackgroundHistoryOpen(true)}
+                  />
+                ) : null
+              }
               usage={
                 apis && !narrowViewport ? (
                   <AppUsageButton
@@ -755,12 +793,7 @@ export function App(): React.JSX.Element {
                     data={appProcesses.data}
                     loading={appProcesses.loading}
                     error={appProcesses.error}
-                    // Both writes, in this order, on `Tasks`' reason: the
-                    // request is what `Chats` acts on.
-                    onOpenThread={(runId) => {
-                      setThreadRequest(runId);
-                      setView('chats');
-                    }}
+                    onOpenThread={openThreadFromTitleBar}
                   />
                 ) : null
               }
@@ -792,6 +825,17 @@ export function App(): React.JSX.Element {
                 {/* Not while the daemon is still starting: that is the startup
             screen's to say, and a start is not a failure. On Settings, with no
             daemon yet, it appears once the start has actually failed. */}
+                <BackgroundJobsHistoryDialog
+                  open={backgroundHistoryOpen}
+                  onClose={() => setBackgroundHistoryOpen(false)}
+                  jobs={backgroundHistory.jobs}
+                  hasMore={backgroundHistory.hasMore}
+                  loading={backgroundHistory.loading}
+                  error={backgroundHistory.error}
+                  onLoadMore={backgroundHistory.loadMore}
+                  onOpenThread={openThreadFromTitleBar}
+                  onReview={openLessonsReview}
+                />
                 {connected ||
                 showStartup ||
                 (handle === null && startError === null) ? null : (

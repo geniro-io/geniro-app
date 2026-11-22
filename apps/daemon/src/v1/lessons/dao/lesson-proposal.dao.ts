@@ -3,6 +3,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
+import { idBatches } from '../../agents/utils/id-batches';
 import { LessonProposal } from '../entity/lesson-proposal.entity';
 import type { LessonProposalStatus } from '../lessons.types';
 
@@ -45,6 +46,23 @@ export class LessonProposalDao extends BaseDao<LessonProposal> {
       status: 'saved',
       decidedAt: { $gte: since },
     });
+  }
+
+  /** Every proposal filed on these segments, read in windows of segment ids. */
+  async ofSegments(
+    segmentIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<LessonProposal[]> {
+    const rows: LessonProposal[] = [];
+    for (const batch of idBatches(segmentIds)) {
+      rows.push(
+        ...(await this.getRepo(txEm).find(
+          { segmentId: { $in: batch } },
+          { disableIdentityMap: true },
+        )),
+      );
+    }
+    return rows;
   }
 
   /** The proposals one reflection filed, in the order it filed them. */

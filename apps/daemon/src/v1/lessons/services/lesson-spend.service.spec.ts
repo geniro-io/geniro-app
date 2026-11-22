@@ -35,15 +35,32 @@ function build(
     failed?: { id: string; runId: string; failReason: string | null }[];
     saved?: number;
     titles?: Record<string, string>;
+    finished?: {
+      id: string;
+      reflectionRunId: string | null;
+      checkRunId: string | null;
+    }[];
+    ledger?: {
+      runId: string;
+      model: string | null;
+      costUsd: number | null;
+      durationMs: number | null;
+    }[];
   } = {},
 ) {
   const em = { fork: () => em } as unknown as EntityManager;
   const usage = {
     ofPurposesSince: vi.fn(() => Promise.resolve(options.usage ?? [])),
+    rowsByRuns: vi.fn((runIds: string[]) =>
+      Promise.resolve(
+        (options.ledger ?? []).filter((entry) => runIds.includes(entry.runId)),
+      ),
+    ),
   };
   const segments = {
     listChangedSince: vi.fn(() => Promise.resolve(options.ended ?? [])),
     listByStatus: vi.fn(() => Promise.resolve(options.failed ?? [])),
+    listFinished: vi.fn(() => Promise.resolve(options.finished ?? [])),
   };
   const proposals = {
     savedSince: vi.fn(() => Promise.resolve(options.saved ?? 0)),
@@ -186,5 +203,58 @@ describe('LessonSpendService.spend', () => {
     });
 
     expect((await service.spend(NOW)).failed).toHaveLength(5);
+  });
+});
+
+describe('LessonSpendService.typical', () => {
+  it('sums each finished run’s reflection and check from the ledger and takes the median over runs on the model asked for', async () => {
+    const { service, usage } = build({
+      finished: [
+        { id: 's1', reflectionRunId: 'refl-1', checkRunId: 'check-1' },
+        { id: 's2', reflectionRunId: 'refl-2', checkRunId: null },
+        { id: 's3', reflectionRunId: 'refl-3', checkRunId: null },
+        { id: 's4', reflectionRunId: null, checkRunId: null },
+      ],
+      ledger: [
+        {
+          runId: 'refl-1',
+          model: 'sonnet-x',
+          costUsd: 0.2,
+          durationMs: 20_000,
+        },
+        { runId: 'refl-1', model: 'sonnet-x', costUsd: 0.1, durationMs: 5_000 },
+        { runId: 'check-1', model: 'opus-x', costUsd: 0.05, durationMs: 5_000 },
+        {
+          runId: 'refl-2',
+          model: 'sonnet-x',
+          costUsd: 0.5,
+          durationMs: 50_000,
+        },
+        {
+          runId: 'refl-3',
+          model: 'sonnet-x',
+          costUsd: null,
+          durationMs: 40_000,
+        },
+      ],
+    });
+
+    expect(await service.typical('sonnet-x')).toEqual({
+      runs: 3,
+      usd: expect.closeTo(0.425, 10),
+      durationMs: 40_000,
+      model: 'sonnet-x',
+      sameModel: true,
+    });
+    expect(usage.rowsByRuns).toHaveBeenCalledWith(
+      ['refl-1', 'check-1', 'refl-2', 'refl-3'],
+      expect.anything(),
+    );
+  });
+
+  it('answers null before any run finished', async () => {
+    const { service } = build();
+
+    expect(await service.typical('sonnet-x')).toBeNull();
   });
 });

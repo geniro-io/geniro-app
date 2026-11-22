@@ -45,6 +45,7 @@ import {
   type UpdateLessonRule,
 } from '../lessons.types';
 import { billedModelOf } from '../utils/billed-model';
+import { sumMeasured } from '../utils/sum-measured';
 import { LessonRowWriter } from './lesson-row.writer';
 
 /** The project instruction block saved lessons are appended to. */
@@ -843,12 +844,4 @@ function toWire(
     createdAt: row.createdAt.toISOString(),
     decidedAt: row.decidedAt?.toISOString() ?? null,
   };
-}
-
-/** A sum over figures where null is "not measured": null when none was. */
-function sumMeasured(values: readonly (number | null)[]): number | null {
-  const measured = values.filter((value): value is number => value !== null);
-  return measured.length === 0
-    ? null
-    : measured.reduce((total, value) => total + value, 0);
 }

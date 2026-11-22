@@ -11,6 +11,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ResourceAlertEventBus } from '../../agents/services/resource-alert-events.bus';
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
+import { BackgroundJobsRegistry } from '../../background-jobs/services/background-jobs.registry';
 import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
@@ -186,6 +187,51 @@ describe('NotificationsGateway', () => {
     gw.onModuleDestroy();
     lessons.publishChanged('run-2');
     expect(emit).toHaveBeenCalledTimes(2);
+  });
+
+  it('broadcasts a background jobs change to every client, naming the kind only, and stops on destroy', () => {
+    const lessons = new LessonsEventBus();
+    const registry = new BackgroundJobsRegistry();
+    registry.register({
+      kind: 'lessons',
+      active: () => Promise.resolve([]),
+      finished: () => Promise.resolve([]),
+      changes: () => lessons.allChanges(),
+    });
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
+      undefined,
+      undefined,
+      registry,
+    );
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    lessons.publishChanged('run-1');
+
+    expect(emit).toHaveBeenCalledWith('background_jobs_changed', {
+      kind: 'lessons',
+    });
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    lessons.publishChanged('run-2');
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 
   it('disconnects a socket presenting a bad token and never says hello', () => {

@@ -29,7 +29,19 @@ const SETTLED: ArchiveTarget = {
 const LESSONS: ThreadLessonEstimateDto = {
   signals: 4,
   lessonsOn: true,
-  estimate: { agentKind: 'claude', model: null, tokens: 42_000, usd: 0.21 },
+  estimate: {
+    agentKind: 'claude',
+    model: 'claude-haiku-5-5',
+    tokens: 42_000,
+    usd: 0.21,
+  },
+  typical: {
+    runs: 14,
+    usd: 0.13,
+    durationMs: 134_000,
+    model: 'claude-haiku-5-5',
+    sameModel: true,
+  },
   check: null,
   fromSeq: 1,
   toSeq: 120,
@@ -106,11 +118,13 @@ function renderDialog({
   target = SETTLED,
   lessons = null,
   extractLessons = false,
+  lessonModel = null,
   onExtractLessonsChange = vi.fn(),
 }: {
   target?: ArchiveTarget | null;
   lessons?: ThreadLessonEstimateDto | null;
   extractLessons?: boolean;
+  lessonModel?: string | null;
   onExtractLessonsChange?: (extract: boolean) => void;
 } = {}): void {
   act(() => {
@@ -121,7 +135,7 @@ function renderDialog({
         error={null}
         lessons={lessons}
         extractLessons={extractLessons}
-        lessonModel={null}
+        lessonModel={lessonModel}
         onExtractLessonsChange={onExtractLessonsChange}
         onCancel={vi.fn()}
         onConfirm={vi.fn()}
@@ -167,7 +181,30 @@ describe('ArchiveThreadDialog', () => {
 
     renderDialog({ lessons: LESSONS });
     expect(checkbox()).not.toBeNull();
-    expect(container.textContent).toContain('Extract lessons · ');
+    expect(container.textContent).toContain('Extract lessons from this thread');
+  });
+
+  it('says what extracting does and what finished runs typically cost and took', () => {
+    renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
+
+    expect(container.textContent).toContain(
+      'a background agent (Haiku 5.5) reads the thread and saves up to 3 lessons to memory',
+    );
+    expect(container.textContent).toContain('Progress shows in the top bar');
+    expect(
+      container.querySelector('[data-slot="archive-lessons-typical"]')
+        ?.textContent,
+    ).toBe('Usually ~$0.13 and ~2m — median of the last 14 runs on Haiku 5.5');
+    expect(container.textContent).not.toContain('$0.21');
+  });
+
+  it('says the cost is not measured yet before any extraction finished', () => {
+    renderDialog({ lessons: { ...LESSONS, typical: null } });
+
+    expect(
+      container.querySelector('[data-slot="archive-lessons-typical"]')
+        ?.textContent,
+    ).toBe('Cost not measured yet — no extraction has finished so far');
   });
 
   it('reports the lessons choice when its box is toggled', () => {

@@ -42,6 +42,7 @@ Main process (git, task worktrees, **Daemon supervision**, **Terminal panel**, *
   - The title bar is the only drag region (`.app-drag`). Any control inside it needs `.app-no-drag`.
   - The title is centred on the window, never measured from a column's width. Never put a flex `gap` on the bar row. The title bar is the one header band: no per-column header rows and no divider.
   - The debug log is ⌥⌘L only.
+  - `components/background-jobs-button.tsx` is the bar's background work, desktop only like the usage glyph: `use-background-jobs.ts` reads `GET /v1/background-jobs` on mount, on `background_jobs_changed` and after a reconnect, never by polling; its "All runs" history pages from `nextBefore` while open and starts over on a change. A new kind of background work registers a daemon source and adds its words to `components/background-job-labels.ts`.
   - `chats/waiting-status.tsx` counts what waits on the user (asking, failed, unread); a press or ⌘J (`chats/use-next-waiting-shortcut.ts`) opens the next one. Window-wide chords go through `components/use-global-chord.ts`.
 - A Settings note under a control is one line: what flipping it does, plus the one consequence nobody would guess.
 

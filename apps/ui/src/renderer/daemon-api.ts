@@ -1,6 +1,7 @@
 import type { DaemonHandle } from '../shared/contracts';
 import {
   AgentsApi,
+  BackgroundJobsApi,
   CapabilitiesApi,
   ChatsApi,
   CliAuthApi,
@@ -266,6 +267,8 @@ export interface DaemonApis {
   lessons: LessonsApi;
   /** What the data folder holds and its clean-ups (`/v1/storage`) — desktop only. */
   storage: StorageApi;
+  /** The work geniro does in the background, running and finished (`/v1/background-jobs`). */
+  backgroundJobs: BackgroundJobsApi;
   /** The command center's board, manager chat and starts (`/v1/command-center`). */
   commandCenter: CommandCenterApi;
 }
@@ -328,6 +331,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     knowledge: new KnowledgeApi(config),
     lessons: new LessonsApi(config),
     storage: new StorageApi(config),
+    backgroundJobs: new BackgroundJobsApi(config),
     commandCenter: new CommandCenterApi(config),
   };
 }

@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export * from './AgentsApi';
+export * from './BackgroundJobsApi';
 export * from './CapabilitiesApi';
 export * from './ChatsApi';
 export * from './CliAuthApi';

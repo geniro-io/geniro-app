@@ -38,6 +38,7 @@ import { claudeToolCallMetric } from '../adapters/claude/utils/claude-mcp-tool-n
 import type {
   AnalysedTeam,
   AnalysisSource,
+  PullRequestLifecycle,
   RecommendationsTeamPopulation,
 } from '../chat.types';
 import { GoalDao } from '../dao/goal.dao';
@@ -49,6 +50,10 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
 import type { PolledSpendService } from './polled-spend.service';
+import type {
+  PullRequestAfterDoneService,
+  RunPullRequestLife,
+} from './pull-request-after-done.service';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import {
   fitToBudget,
@@ -127,7 +132,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     await orm.close(true);
   });
 
-  function newReader(): ThreadReaderService {
+  function newReader(lives?: PullRequestAfterDoneService): ThreadReaderService {
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
     wallTurns = new WallTurnDao(em);
@@ -179,6 +184,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       } as unknown as ProjectRootsService),
       new ProjectInstructionChangeDao(em),
       new GoalDao(em),
+      lives,
     );
   }
 
@@ -1536,6 +1542,254 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         );
 
         expect(answer).toMatchObject({ runsRead: 3, population: null });
+      });
+    });
+
+    describe('pull requests on GitHub', () => {
+      const at = (seconds: number): string =>
+        new Date(T0 + seconds * 1000).toISOString();
+      const lifecycle: PullRequestLifecycle = {
+        state: 'merged',
+        isDraft: false,
+        headSha: 'abc1234def',
+        headRef: 'feature/x',
+        createdAt: at(1),
+        readyAt: at(20),
+        readyEvents: [at(20)],
+        draftedAt: [],
+        mergedAt: at(40),
+        closedAt: at(40),
+        mergeable: 'UNKNOWN',
+        pushes: [{ sha: 'abc1234def', at: at(30), force: true }],
+        reviewThreads: [
+          {
+            openedAt: at(25),
+            author: 'coderabbitai',
+            bot: true,
+            resolved: true,
+            outdated: false,
+          },
+        ],
+        changesRequested: [],
+        failedChecks: [],
+        skippedWhileDraft: ['PR Checks'],
+        truncated: [],
+        actionsRunsRead: true,
+      };
+      const lives: Record<string, RunPullRequestLife[]> = {
+        'wf-new': [
+          {
+            key: 'o/r#7',
+            owner: 'o',
+            repo: 'r',
+            number: 7,
+            url: 'https://github.com/o/r/pull/7',
+            marks: [
+              {
+                seq: 3,
+                at: at(10),
+                source: 'record_outcome',
+                memberId: 'dev',
+              },
+            ],
+            read: { lifecycle },
+          },
+          {
+            key: 'o/r#9',
+            owner: 'o',
+            repo: 'r',
+            number: 9,
+            url: 'https://github.com/o/r/pull/9',
+            marks: [],
+            read: { unavailable: 'gh-signed-out' },
+          },
+        ],
+      };
+      const asked: string[][] = [];
+      const fakeLives = {
+        forRuns: (
+          runs: readonly { run: { id: string } }[],
+          only?: (key: string) => boolean,
+        ) => {
+          const entries = runs.flatMap(({ run }) => lives[run.id] ?? []);
+          asked.push(
+            entries
+              .filter((entry) => only === undefined || only(entry.key))
+              .map((entry) => entry.key),
+          );
+          return Promise.resolve(
+            new Map(
+              runs.map(({ run }) => [
+                run.id,
+                (lives[run.id] ?? []).map((entry) =>
+                  only === undefined || only(entry.key)
+                    ? entry
+                    : {
+                        ...entry,
+                        read: { unavailable: 'read-budget-spent' as const },
+                      },
+                ),
+              ]),
+            ),
+          );
+        },
+        mentioned: (
+          _at: unknown,
+          named: { owner?: string; repo?: string; number: number },
+        ) =>
+          Promise.resolve(
+            named.number === 8761
+              ? {
+                  key: 'o/r#8761',
+                  owner: 'o',
+                  repo: 'r',
+                  number: 8761,
+                  url: 'https://github.com/o/r/pull/8761',
+                  marks: [],
+                  read: { lifecycle },
+                }
+              : null,
+          ),
+      } as unknown as PullRequestAfterDoneService;
+
+      beforeEach(() => {
+        asked.length = 0;
+        reader = newReader(fakeLives);
+      });
+
+      it('gives each pull request of a run its life after the run said done, and lists one the run only touched', async () => {
+        const answer = await reader.read(scope, { view: 'runs' });
+
+        expect(answer.runs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              runId: 'wf-new',
+              pullRequests: [
+                expect.objectContaining({
+                  pullRequest: 'o/r#7',
+                  acceptance: 'accepted',
+                  lifecycle: expect.objectContaining({
+                    readyAt: at(20),
+                    mergedAt: at(40),
+                    afterDone: {
+                      doneSeq: 3,
+                      doneAt: at(10),
+                      doneSource: 'record_outcome',
+                      msDoneToReady: 10_000,
+                      msDoneToMerge: 30_000,
+                      pushes: 1,
+                      forcePushes: 1,
+                      botThreads: 1,
+                      humanThreads: 0,
+                      failedChecks: 0,
+                      changesRequested: 0,
+                      conflictingNow: false,
+                    },
+                  }),
+                }),
+                {
+                  pullRequest: 'o/r#9',
+                  outcomeRecorded: false,
+                  lifecycle: null,
+                  lifecycleUnavailable: 'gh-signed-out',
+                },
+              ],
+            }),
+          ]),
+        );
+      });
+
+      it('reads one pull request as a timeline beside the run, asking GitHub about it alone', async () => {
+        const answer = await reader.read(scope, {
+          view: 'pr',
+          runId: 'wf-new',
+          pullRequest: 'https://github.com/o/r/pull/7',
+        });
+
+        expect(asked.at(-1)).toEqual(['o/r#7']);
+        expect(answer).toMatchObject({
+          pullRequest: 'o/r#7',
+          skippedWhileDraft: ['PR Checks'],
+        });
+        expect(
+          (answer.events as { kind: string }[]).map((event) => event.kind),
+        ).toEqual([
+          'opened',
+          'done-mark',
+          'ready',
+          'review-thread',
+          'force-push',
+          'merged',
+        ]);
+        expect(answer.events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: 'review-thread',
+              runBefore: { seq: 0, memberId: 'dev', role: null },
+            }),
+          ]),
+        );
+      });
+
+      it('lists every pull request of the run with its life when no pull request is named', async () => {
+        const answer = await reader.read(scope, {
+          view: 'pr',
+          runId: 'wf-new',
+        });
+
+        expect(answer).toMatchObject({
+          runId: 'wf-new',
+          pullRequests: [
+            expect.objectContaining({ pullRequest: 'o/r#7' }),
+            expect.objectContaining({
+              pullRequest: 'o/r#9',
+              lifecycleUnavailable: 'gh-signed-out',
+            }),
+          ],
+        });
+      });
+
+      it('answers a pull request GitHub could not be asked about with its done marks and the reason, and no events', async () => {
+        const answer = await reader.read(scope, {
+          view: 'pr',
+          runId: 'wf-new',
+          pullRequest: 'o/r#9',
+        });
+
+        expect(answer).toEqual({
+          pullRequest: 'o/r#9',
+          url: 'https://github.com/o/r/pull/9',
+          doneMarks: [],
+          lifecycle: null,
+          lifecycleUnavailable: 'gh-signed-out',
+        });
+      });
+
+      it('reads a pull request the run only links to from its messages, and says so', async () => {
+        const answer = await reader.read(scope, {
+          view: 'pr',
+          runId: 'wf-new',
+          pullRequest: '#8761',
+        });
+
+        expect(answer).toMatchObject({
+          pullRequest: 'o/r#8761',
+          onlyLinkedFromMessages: true,
+          lifecycle: expect.objectContaining({ readyAt: at(20) }),
+        });
+      });
+
+      it('names the pull requests it has when asked about one the run never named', async () => {
+        const answer = await reader.read(scope, {
+          view: 'pr',
+          runId: 'wf-new',
+          pullRequest: '#12',
+        });
+
+        expect(answer).toMatchObject({
+          error: 'UNKNOWN_PULL_REQUEST',
+          pullRequests: ['o/r#7', 'o/r#9'],
+        });
       });
     });
 

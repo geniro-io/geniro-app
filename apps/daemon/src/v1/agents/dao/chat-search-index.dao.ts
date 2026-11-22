@@ -13,6 +13,7 @@ import { Item } from '../../runs/entity/item.entity';
 import type {
   ChatContextRow,
   ChatContextRun,
+  ChatRunTextMatch,
   ChatTextDatabase,
   ChatTextMatch,
   GlobalChatSearchQuery,
@@ -136,6 +137,39 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .orderBy('seq', before ? 'desc' : 'asc')
       .orderBy('id', before ? 'desc' : 'asc')
       .limit(count)
+      .execute();
+  }
+
+  /**
+   * One run's messages matching a ready-made FTS5 query, at or below `maxSeq`,
+   * oldest first — whatever kind of run it is. Reasoning is left out: what an
+   * agent thought is not what it said. The match runs once over the whole
+   * index as a list of rowids, and the run's rows are joined to their text by
+   * rowid: with the match on the join, SQLite walks the run's messages and
+   * runs the whole query again for each one.
+   */
+  runRowsMatching(
+    runId: string,
+    matchQuery: string,
+    maxSeq: number,
+    limit: number,
+  ): Promise<ChatRunTextMatch[]> {
+    return this.database()
+      .selectFrom('items as i')
+      .innerJoin('chat_text', 'chat_text.rowid', 'i.rowid')
+      .select(['i.seq', 'i.member_id', 'i.created_at', 'chat_text.text'])
+      .where('i.rowid', 'in', (eb) =>
+        eb
+          .selectFrom('chat_text as hit')
+          .select('hit.rowid')
+          .where('hit.chat_text', 'match', matchQuery),
+      )
+      .where('i.run_id', '=', runId)
+      .where('i.kind', '=', 'message')
+      .where('i.deleted_at', 'is', null)
+      .where('i.seq', '<=', maxSeq)
+      .orderBy('i.seq')
+      .limit(limit)
       .execute();
   }
 

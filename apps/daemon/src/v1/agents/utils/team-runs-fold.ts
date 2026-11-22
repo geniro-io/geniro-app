@@ -13,6 +13,10 @@ import {
   MAX_CARD_CALL_EDGES,
   type ModelFigures,
   type NodeFigures,
+  type PullRequestCountsAfter,
+  type PullRequestDoneMark,
+  type PullRequestLifecycleRead,
+  type RecommendationsPullRequestsAfterDone,
   type RecommendationsTeamPopulation,
   type RecommendationsTeamStats,
   type RunFigures,
@@ -21,6 +25,7 @@ import {
   type VersionRunFigures,
 } from '../chat.types';
 import { laneOf } from './analysis-lane';
+import { countsAfter } from './pull-request-lifecycle';
 import { snapshotNodePoolProfiles } from './snapshot-config-dirs';
 import { servedWorkedMs } from './wall-worked';
 
@@ -597,8 +602,89 @@ function cardAgentStats(runs: readonly FoldedRun[]): CardAgentStats[] {
     .slice(0, MAX_CARD_AGENTS);
 }
 
+/** A run's pull request as the card's figures read it. */
+export interface CardPullRequest {
+  key: string;
+  marks: readonly PullRequestDoneMark[];
+  read: PullRequestLifecycleRead;
+}
+
+function oneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/**
+ * Per team version, newest run's version first: how many pull requests its
+ * runs recorded, how many of them GitHub answered for and the run marked done,
+ * and the average bot threads, human threads, pushes and failed checks after
+ * that mark. A pull request two runs of a version named counts once. Absent
+ * when no run named a pull request.
+ */
+export function pullRequestsAfterDone(
+  runs: readonly {
+    folded: FoldedRun;
+    pullRequests?: readonly CardPullRequest[];
+  }[],
+  index: TeamVersionIndex | null,
+): RecommendationsPullRequestsAfterDone[] | undefined {
+  const byVersion = new Map<
+    string | null,
+    { ref: AnalysedVersionRef; pullRequests: Map<string, CardPullRequest> }
+  >();
+  for (const run of runs) {
+    const group = byVersion.get(run.folded.version) ?? {
+      ref: versionRef(run.folded.version, index),
+      pullRequests: new Map<string, CardPullRequest>(),
+    };
+    byVersion.set(run.folded.version, group);
+    for (const pullRequest of run.pullRequests ?? []) {
+      if (!group.pullRequests.has(pullRequest.key)) {
+        group.pullRequests.set(pullRequest.key, pullRequest);
+      }
+    }
+  }
+  const versions = [...byVersion.values()].filter(
+    (group) => group.pullRequests.size > 0,
+  );
+  if (versions.length === 0) {
+    return undefined;
+  }
+  return versions.slice(0, 50).map(({ ref, pullRequests }) => {
+    const counts = [...pullRequests.values()].flatMap((pullRequest) => {
+      const done = pullRequest.marks[0];
+      return 'lifecycle' in pullRequest.read && done !== undefined
+        ? [countsAfter(pullRequest.read.lifecycle, done.at)]
+        : [];
+    });
+    const average = (pick: (count: PullRequestCountsAfter) => number) =>
+      oneDecimal(
+        counts.reduce((total, count) => total + pick(count), 0) / counts.length,
+      );
+    return {
+      version: ref.number,
+      current: ref.current,
+      pullRequests: pullRequests.size,
+      measured: counts.length,
+      perPullRequest:
+        counts.length === 0
+          ? null
+          : {
+              botThreads: average((count) => count.botThreads),
+              humanThreads: average((count) => count.humanThreads),
+              pushes: average((count) => count.pushes),
+              failedChecks: average((count) => count.failedChecks),
+            },
+    };
+  });
+}
+
 export function teamCardStats(
-  runs: readonly { title: string | null; createdAt: Date; folded: FoldedRun }[],
+  runs: readonly {
+    title: string | null;
+    createdAt: Date;
+    folded: FoldedRun;
+    pullRequests?: readonly CardPullRequest[];
+  }[],
   index: TeamVersionIndex | null,
   population: RecommendationsTeamPopulation | null = null,
 ): RecommendationsTeamStats | null {
@@ -608,6 +694,7 @@ export function teamCardStats(
   const folded = runs.map((run) => run.folded);
   const figures = folded.map(runFigures);
   const edges = callFigures(folded);
+  const afterDone = pullRequestsAfterDone(runs, index);
   const count = runs.length;
   const sum = (pick: (run: RunFigures) => number): number =>
     figures.reduce((total, run) => total + pick(run), 0);
@@ -677,5 +764,6 @@ export function teamCardStats(
       maxMs: Math.round(call.maxMs),
       workedMs: call.workedMs === null ? null : Math.round(call.workedMs),
     })),
+    ...(afterDone === undefined ? {} : { pullRequestsAfterDone: afterDone }),
   };
 }

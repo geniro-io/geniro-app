@@ -15,6 +15,10 @@ import {
 } from '../runs/runs.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
+import type {
+  ManagedCommandOptions,
+  ManagedCommandResult,
+} from './utils/managed-command';
 import {
   isOrderedWindow,
   UNORDERED_WINDOW_MESSAGE,
@@ -530,6 +534,7 @@ export const ANALYSIS_VIEWS = [
   'history',
   'spend',
   'project',
+  'pr',
 ] as const;
 /** What view=history reads a page of; `diff` is one version's diff, on request. */
 export const ANALYSIS_HISTORY_SECTIONS = [
@@ -562,7 +567,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them. pr: the pull requests the run recorded, each with its life on GitHub after the run said it was done (pushes, bot and human review threads, failed checks, changes requested); with `pullRequest`, that one's GitHub events in time order beside the run's done marks and the run's nearest message before each",
     ),
   runId: z
     .string()
@@ -591,13 +596,20 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
       'items: start at the first row written at or after this ISO time',
     ),
   seq: z.number().int().min(0).optional().describe('item: which row'),
+  pullRequest: z
+    .string()
+    .max(300)
+    .optional()
+    .describe(
+      'pr: which pull request — owner/repo#N as view=runs or view=pr names it, its URL, or #N when the run has one of that number; a pull request the run only links to from its messages is read too; omitted, every pull request of the run',
+    ),
   offset: z
     .number()
     .int()
     .min(0)
     .optional()
     .describe(
-      'item, runs, team, history, spend, project: the `next.offset` the previous page returned',
+      'item, runs, team, history, spend, project, pr: the `next.offset` the previous page returned',
     ),
   section: z
     .enum([
@@ -1121,6 +1133,30 @@ export type RecommendationsTeamPopulation = z.infer<
   typeof RecommendationsTeamPopulationSchema
 >;
 
+/**
+ * One team version's pull requests and what GitHub saw of them after the run
+ * said each was done — averages over the measured ones (read, with a done
+ * mark). TWIN PARSER: `readPullRequestsAfterDone` in
+ * apps/ui/src/renderer/chats/recommendations-payload.ts.
+ */
+export const RecommendationsPullRequestsAfterDoneSchema = z.object({
+  version: z.number().int().min(1).nullable(),
+  current: z.boolean(),
+  pullRequests: countSchema,
+  measured: countSchema,
+  perPullRequest: z
+    .object({
+      botThreads: z.number().min(0),
+      humanThreads: z.number().min(0),
+      pushes: z.number().min(0),
+      failedChecks: z.number().min(0),
+    })
+    .nullable(),
+});
+export type RecommendationsPullRequestsAfterDone = z.infer<
+  typeof RecommendationsPullRequestsAfterDoneSchema
+>;
+
 export const RecommendationsTeamStatsSchema = z.object({
   runs: countSchema,
   population: RecommendationsTeamPopulationSchema.nullable().optional(),
@@ -1149,6 +1185,11 @@ export const RecommendationsTeamStatsSchema = z.object({
   agents: z.array(RecommendationsAgentStatsSchema).max(MAX_CARD_AGENTS),
   callEdges: countSchema,
   calls: z.array(RecommendationsCallStatsSchema).max(MAX_CARD_CALL_EDGES),
+  pullRequestsAfterDone: z
+    .array(RecommendationsPullRequestsAfterDoneSchema)
+    .max(50)
+    .optional()
+    .catch(undefined),
 });
 export type RecommendationsTeamStats = z.infer<
   typeof RecommendationsTeamStatsSchema
@@ -4973,6 +5014,99 @@ export type RunPullRequestOutcomes = z.infer<
   typeof RunPullRequestOutcomesSchema
 >;
 
+/** Why a pull request's GitHub lifecycle could not be read. */
+export type PullRequestLifecycleUnavailable =
+  | 'gh-missing'
+  | 'gh-signed-out'
+  | 'not-found'
+  | 'timed-out'
+  | 'unreadable'
+  | 'read-budget-spent';
+
+export interface PullRequestPush {
+  sha: string;
+  /** Null when nothing GitHub kept dates it. */
+  at: string | null;
+  force: boolean;
+}
+
+export interface PullRequestReviewThread {
+  openedAt: string;
+  author: string | null;
+  bot: boolean;
+  resolved: boolean;
+  outdated: boolean;
+}
+
+export interface PullRequestChangesRequest {
+  at: string;
+  author: string | null;
+  bot: boolean;
+}
+
+export interface PullRequestFailedCheck {
+  sha: string;
+  at: string;
+  workflow: string;
+  conclusion: string;
+}
+
+/** What GitHub kept of one pull request's life, read by `PullRequestLifecycleService`. */
+export interface PullRequestLifecycle {
+  state: 'open' | 'merged' | 'closed';
+  isDraft: boolean;
+  headSha: string;
+  headRef: string;
+  createdAt: string;
+  /** The first ready-for-review; `readyEvents` holds every one. */
+  readyAt: string | null;
+  readyEvents: string[];
+  draftedAt: string[];
+  mergedAt: string | null;
+  closedAt: string | null;
+  /** GitHub's state now; it records no time for a conflict. */
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null;
+  pushes: PullRequestPush[];
+  reviewThreads: PullRequestReviewThread[];
+  changesRequested: PullRequestChangesRequest[];
+  failedChecks: PullRequestFailedCheck[];
+  /** Workflow runs and jobs GitHub skipped while the pull request was a draft. */
+  skippedWhileDraft: string[];
+  /** Lists GitHub answered only in part: `timeline`, `reviewThreads`, `reviews`, `actionsRuns`. */
+  truncated: string[];
+  /** False when the repository's Actions runs could not be listed. */
+  actionsRunsRead: boolean;
+}
+
+/** The DI token of the {@link GhCommandRunner}. */
+export const GH_COMMAND_RUNNER = Symbol('GH_COMMAND_RUNNER');
+
+/** Runs one `gh` command under the daemon's process rules. */
+export type GhCommandRunner = (
+  command: Omit<ManagedCommandOptions, 'processes' | 'command'>,
+) => Promise<ManagedCommandResult>;
+
+export type PullRequestLifecycleRead =
+  | { lifecycle: PullRequestLifecycle }
+  | { unavailable: PullRequestLifecycleUnavailable };
+
+/** A row of the run that says a pull request was done. */
+export interface PullRequestDoneMark {
+  seq: number;
+  at: string;
+  source: 'record_outcome' | 'done_check' | 'delivery_report';
+  memberId: string | null;
+}
+
+export interface PullRequestCountsAfter {
+  pushes: number;
+  forcePushes: number;
+  botThreads: number;
+  humanThreads: number;
+  failedChecks: number;
+  changesRequested: number;
+}
+
 /**
  * Every pull request a run recorded an outcome for, the most recently recorded
  * first. No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
@@ -8698,6 +8832,13 @@ export type ChatContextRow = Pick<
 export type ChatTextMatch = Omit<ChatContextRow, 'payload'> &
   Pick<ChatTextDatabase['runs'], 'title' | 'cwd' | 'archived_at'> &
   Pick<ChatTextDatabase['chat_text'], 'text' | 'rank'>;
+
+/** A row of one run that matched a text query. */
+export type ChatRunTextMatch = Pick<
+  ChatTextDatabase['items'],
+  'seq' | 'member_id' | 'created_at'
+> &
+  Pick<ChatTextDatabase['chat_text'], 'text'>;
 
 /** The run a context read is about. */
 export type ChatContextRun = Pick<

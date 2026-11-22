@@ -3,12 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
-import type { FoldedRun } from '../chat.types';
+import {
+  type FoldedRun,
+  type PullRequestLifecycle,
+  RecommendationsTeamStatsSchema,
+} from '../chat.types';
 import {
   callFigures,
   configuredModels,
   modelFigures,
   nodeFigures,
+  pullRequestsAfterDone,
   runFigures,
   runNodeFigures,
   snapshotVersion,
@@ -988,5 +993,155 @@ describe('teamCardStats', () => {
 
   it('is null when no run could be folded', () => {
     expect(teamCardStats([], index)).toBeNull();
+  });
+});
+
+describe('pullRequestsAfterDone', () => {
+  const index = {
+    current: 'v-b',
+    numbers: new Map([
+      ['v-a', 1],
+      ['v-b', 2],
+    ]),
+  };
+  const lifecycleOf = (
+    threads: { at: string; bot: boolean }[],
+    pushes: string[] = [],
+    failed: string[] = [],
+  ): PullRequestLifecycle => ({
+    state: 'merged',
+    isDraft: false,
+    headSha: 'head',
+    headRef: 'feature/x',
+    createdAt: '2026-11-20T08:00:00Z',
+    readyAt: '2026-11-20T09:00:00Z',
+    readyEvents: ['2026-11-20T09:00:00Z'],
+    draftedAt: [],
+    mergedAt: '2026-11-21T08:00:00Z',
+    closedAt: '2026-11-21T08:00:00Z',
+    mergeable: 'UNKNOWN',
+    pushes: pushes.map((at, n) => ({ sha: `s${n}`, at, force: false })),
+    reviewThreads: threads.map(({ at, bot }) => ({
+      openedAt: at,
+      author: bot ? 'coderabbitai' : 'sergey',
+      bot,
+      resolved: false,
+      outdated: false,
+    })),
+    changesRequested: [],
+    failedChecks: failed.map((at) => ({
+      sha: 'head',
+      at,
+      workflow: 'PR Checks',
+      conclusion: 'failure',
+    })),
+    skippedWhileDraft: [],
+    truncated: [],
+    actionsRunsRead: true,
+  });
+  const done = (at: string) => [
+    { seq: 5, at, source: 'done_check' as const, memberId: 'senior' },
+  ];
+
+  it('averages what happened after each done mark per version, a pull request named twice counting once', () => {
+    const first = {
+      key: 'o/r#1',
+      marks: done('2026-11-20T08:30:00Z'),
+      read: {
+        lifecycle: lifecycleOf(
+          [
+            { at: '2026-11-20T08:00:00Z', bot: true },
+            { at: '2026-11-20T09:10:00Z', bot: true },
+            { at: '2026-11-20T09:20:00Z', bot: false },
+          ],
+          ['2026-11-20T10:00:00Z'],
+          ['2026-11-20T09:00:05Z'],
+        ),
+      },
+    };
+    const second = {
+      key: 'o/r#2',
+      marks: done('2026-11-20T08:30:00Z'),
+      read: {
+        lifecycle: lifecycleOf([
+          { at: '2026-11-20T09:10:00Z', bot: true },
+          { at: '2026-11-20T09:11:00Z', bot: true },
+        ]),
+      },
+    };
+    const unread = {
+      key: 'o/r#3',
+      marks: done('2026-11-20T08:30:00Z'),
+      read: { unavailable: 'gh-signed-out' as const },
+    };
+    const unmarked = {
+      key: 'o/r#4',
+      marks: [],
+      read: { lifecycle: lifecycleOf([]) },
+    };
+
+    expect(
+      pullRequestsAfterDone(
+        [
+          { folded: run('r3', [], { version: 'v-b' }), pullRequests: [first] },
+          {
+            folded: run('r2', [], { version: 'v-b' }),
+            pullRequests: [first, second, unread],
+          },
+          {
+            folded: run('r1', [], { version: 'v-a' }),
+            pullRequests: [unmarked],
+          },
+          { folded: run('r0', [], { version: 'v-zz' }), pullRequests: [] },
+        ],
+        index,
+      ),
+    ).toEqual([
+      {
+        version: 2,
+        current: true,
+        pullRequests: 3,
+        measured: 2,
+        perPullRequest: {
+          botThreads: 1.5,
+          humanThreads: 0.5,
+          pushes: 0.5,
+          failedChecks: 0.5,
+        },
+      },
+      {
+        version: 1,
+        current: false,
+        pullRequests: 1,
+        measured: 0,
+        perPullRequest: null,
+      },
+    ]);
+  });
+
+  it('is absent from the card when no run named a pull request', () => {
+    const stats = teamCardStats(
+      [{ title: 'r', createdAt: new Date(0), folded: run('r1', []) }],
+      index,
+    );
+
+    expect(stats).not.toHaveProperty('pullRequestsAfterDone');
+  });
+
+  it('lets a card filed before the field existed parse, and drops a malformed one', () => {
+    const stats = teamCardStats(
+      [{ title: 'r', createdAt: new Date(0), folded: run('r1', []) }],
+      index,
+    )!;
+
+    expect(RecommendationsTeamStatsSchema.parse(stats)).not.toHaveProperty(
+      'pullRequestsAfterDone',
+    );
+    expect(
+      RecommendationsTeamStatsSchema.parse({
+        ...stats,
+        pullRequestsAfterDone: [{ version: 'two' }],
+      }).pullRequestsAfterDone,
+    ).toBeUndefined();
   });
 });

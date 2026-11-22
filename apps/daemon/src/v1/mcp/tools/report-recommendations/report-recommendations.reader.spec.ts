@@ -112,7 +112,10 @@ function setup(
         }),
     } as unknown as ThreadTimelineService,
     memory,
-    { foldRuns: () => Promise.resolve([]) } as unknown as ThreadReaderService,
+    {
+      foldRuns: () => Promise.resolve([]),
+      cardPullRequests: () => Promise.resolve(new Map()),
+    } as unknown as ThreadReaderService,
     {} as ProjectScopeService,
     knowledge as KnowledgeService,
   );

@@ -6,6 +6,9 @@ paths:
   - "apps/daemon/src/v1/agents/**/run-named-paths*"
   - "apps/daemon/src/v1/agents/**/task-list-*"
   - "apps/daemon/src/v1/tasks/**/task-merge*"
+  - "apps/daemon/src/v1/agents/**/pull-request-lifecycle*"
+  - "apps/daemon/src/v1/agents/**/pull-request-after-done*"
+  - "apps/daemon/src/v1/agents/**/pull-request-done-marks*"
 ---
 
 # Pull requests and task lists
@@ -21,5 +24,6 @@ paths:
   - The marker stops at `ItemSeqAllocator.writtenThrough` (a reserved seq is not on disk yet); a pass reads candidates in seq windows with a yield between them and looks up their calls in one `rowsByPayloadId`, never a per-result `LIKE` over the history.
   - Store identity only (owner, repo, number, url), never title or state.
   - Every list the run wire or a run-status announce carries attaches each pull request's newest recorded outcome (`Run.runOutcomes`, read fresh by the capture pass), since the renderer replaces the whole list from each announce.
+- A pull request's GitHub life is read only for an analysis (`PullRequestLifecycleService`, `.claude/rules/daemon-thread-analysis.md` → *Pull requests after done*), through the user's `gh`, and only for a pull request the analysed run named; it is kept in memory, never in a column (no merged/open state is stored).
 - Worktrees a thread worked in (`RunNamedPathsService`, `POST /v1/chats/:runId/named-paths`): of the candidate folders the desktop app lists, the ones a `tool_call` of the run names — the path or its run-folder-relative form (two segments or more), followed by a path boundary; a relative form must also begin one (a shell word boundary, a quote, an escaped newline or tab, or `./`), so it is never found inside another repository's path. Never the run's folder or one holding it. Each run's reading is remembered in memory (scanned seq, clamped to `writtenThrough`, + verdicts), so a later ask reads only newer rows — a folder asked about for the first time reads the whole history once, in seq windows that yield the event loop. Asks for one run are serialized.
 - `task_list` rows: `mode` says snapshot vs patch and is never inferred; absent means patch. The run fold is keyed by member AND `callId` and skips delegate rows (`parentToolUseId`).

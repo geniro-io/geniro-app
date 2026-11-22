@@ -52,13 +52,39 @@ describe('threadAnalysisGuide', () => {
     const team = threadAnalysisGuide('team', null, true);
     const chat = threadAnalysisGuide('chat', null, true);
 
-    expect(team).toContain('14. Member performance.');
-    expect(team).toContain('15. Cluster by root cause');
+    expect(team).toContain('15. Member performance.');
+    expect(team).toContain('16. Cluster by root cause');
     expect(team).toContain('One run is a thin sample');
     expect(team).toContain('and in `members` your assessment of each member');
     expect(chat).not.toContain('Member performance');
     expect(chat).not.toContain('`members`');
-    expect(chat).toContain('14. Cluster by root cause');
+    expect(chat).toContain('15. Cluster by root cause');
+  });
+
+  it('has every analysis read each pull request after the run said done and ask who should have caught each later event', () => {
+    const thread = threadAnalysisGuide('chat', null, true);
+    const team = teamAnalysisGuide(null, true);
+    const builder = builderChatAnalysisGuide(true, 5);
+
+    expect(thread).toContain('14. PR after done. view=pr lists');
+    expect(thread).toContain('In your reply, a table per pull request');
+    for (const guide of [team, builder]) {
+      expect(guide).toContain('17. PR after done. view=runs gives');
+      expect(guide).toContain(
+        '3. Pull requests after done — a table per pull request',
+      );
+      expect(guide).toContain('18. Cluster by root cause');
+    }
+    for (const guide of [thread, team, builder]) {
+      expect(guide).toContain(
+        '`pushes` leaves out the opening push (every head GitHub first saw within 60 s of the pull request opening)',
+      );
+      expect(guide).toContain('a bot reviews only outside draft');
+      expect(guide).toContain('a CI job is skipped on draft');
+      expect(guide).toContain(
+        'names, in its `basis`, the pull-request event it explains',
+      );
+    }
   });
 
   it('tells both analyses a change the user asks for in words goes on its own card, to any team or project', () => {
@@ -404,10 +430,11 @@ describe('teamAnalysisGuide', () => {
     const sections = [
       '1. Versions and earlier changes — a table per version that has runs',
       '2. Outcomes — a table per run, newest first: its questions to the user',
-      "3. Models — your verdict on each agent's model and effort",
-      '4. Instruction size — a table per agent',
-      '5. Instruction quality — a table per agent',
-      '6. The one change that matters most',
+      '3. Pull requests after done — a table per pull request',
+      "4. Models — your verdict on each agent's model and effort",
+      '5. Instruction size — a table per agent',
+      '6. Instruction quality — a table per agent',
+      '7. The one change that matters most',
     ].map((section) => guide.indexOf(section, report));
 
     expect(report).toBeGreaterThan(-1);

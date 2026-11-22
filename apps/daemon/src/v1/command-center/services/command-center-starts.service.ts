@@ -132,6 +132,7 @@ export class CommandCenterStartsService
         byRunId: managerRunId,
         approvedAt: auto ? requestedAt : null,
         note: input.note?.trim() ? input.note.trim() : null,
+        watch: input.watch,
       },
       em,
     );
@@ -319,6 +320,7 @@ export class CommandCenterStartsService
         [task.runId],
         'manager',
         task.startRequestNote,
+        task.startRequestWatch,
       );
     } catch (error) {
       await this.taskDao.releaseStartReport(task.id, managerRunId, em);

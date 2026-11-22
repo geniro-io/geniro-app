@@ -117,6 +117,38 @@ describe('ThreadEventCard', () => {
     expect(opened).toEqual(['r-otter']);
   });
 
+  it('offers Open chat on a finished thread only, opening that thread', () => {
+    const opened: string[] = [];
+    const done = render(
+      <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
+        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+      </ThreadOpenContext.Provider>,
+    );
+    const button = done.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-event-open"]',
+    );
+    expect(button?.textContent).toBe('Open chat');
+    act(() => {
+      button?.click();
+    });
+    expect(opened).toEqual(['r-otter']);
+
+    const sent = render(
+      <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
+        <ThreadEventCard kind="sent" runId="r-otter" title="Otter" />
+      </ThreadOpenContext.Provider>,
+    );
+    expect(sent.querySelector('[data-slot="thread-event-open"]')).toBeNull();
+  });
+
+  it('draws no Open chat where the view cannot open a thread', () => {
+    const el = render(
+      <ThreadEventCard kind="done" runId="r-otter" title="Otter" />,
+    );
+
+    expect(el.querySelector('[data-slot="thread-event-open"]')).toBeNull();
+  });
+
   it('labels each kind by what happened', () => {
     const labels = (['sent', 'received', 'woken', 'done'] as const).map(
       (kind) => {

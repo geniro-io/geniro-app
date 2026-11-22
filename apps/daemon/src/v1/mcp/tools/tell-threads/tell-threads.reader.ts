@@ -35,6 +35,15 @@ function nextStepOf(answer: TellThreadsAnswer): string {
       `Waiting at ${waiting.map((row) => `${row.to} (${row.code ?? 'waiting'})`).join(', ')}: it is read with that thread's next turn, not now.`,
     );
   }
+  if (answer.watch === true) {
+    lines.push(
+      'Watching these threads: each one reaching done wakes you, once per finish.',
+    );
+  } else if (answer.watch === false) {
+    lines.push(
+      'No longer watching these threads: a finish only puts a Done card in your chat.',
+    );
+  }
   lines.push(
     refused.length + waiting.length === 0
       ? 'Each thread above got the message. A reply reaches you as a message of your own; do not poll for it.'

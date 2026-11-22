@@ -104,6 +104,12 @@ describe('readTellThreadsArgs', () => {
         expect_reply: true,
       },
     });
+    expect(
+      readTellThreadsArgs({ to: ['t1'], message: 'x', watch: false }),
+    ).toEqual({
+      ok: true,
+      query: { to: ['t1'], message: 'x', expect_reply: true, watch: false },
+    });
   });
 
   it('refuses no thread, too many threads, a missing message and an unknown key', () => {
@@ -125,6 +131,16 @@ describe('readTellThreadsArgs', () => {
 });
 
 describe('tellThreadsResultText', () => {
+  it('says the threads are watched, or no longer watched, when the call set it', () => {
+    expect(tellThreadsResultText({ ...SENT, watch: true })).toContain(
+      '\nWatching these threads: each one reaching done wakes you, once per finish.\n',
+    );
+    expect(tellThreadsResultText({ ...SENT, watch: false })).toContain(
+      '\nNo longer watching these threads: a finish only puts a Done card in your chat.\n',
+    );
+    expect(tellThreadsResultText(SENT)).not.toMatch(/watching/i);
+  });
+
   it('tells the manager a sent message needs no polling, and says so for an unresolved one', () => {
     expect(tellThreadsResultText(SENT)).toBe(
       `${JSON.stringify(SENT)}\nEach thread above got the message. A reply reaches you as a message of your own; do not poll for it.`,

@@ -3,6 +3,7 @@ import {
   CornerDownRight,
   Inbox,
   type LucideIcon,
+  MessageSquare,
   Reply,
   RotateCw,
   Send,
@@ -16,6 +17,7 @@ import {
 } from '../components/thread-archive';
 import {
   bareThreadIdentity,
+  ThreadActionButton,
   ThreadHead,
   type ThreadIdentity,
 } from '../components/thread-head';
@@ -164,13 +166,25 @@ export const ThreadEventCard = memo(function ThreadEventCard({
           />
         </div>
       )}
-      {archive === null || kind !== 'done' ? null : (
+      {kind !== 'done' || (open === null && archive === null) ? null : (
         <div className="flex justify-end">
-          <ArchiveThreadButton
-            slot="thread-event-archive"
-            title={identity.title}
-            onArchive={archive}
-          />
+          {open === null ? null : (
+            <ThreadActionButton
+              slot="thread-event-open"
+              label={`Open ${identity.title}`}
+              title="Open this thread's chat"
+              icon={<MessageSquare aria-hidden="true" />}
+              onClick={() => open(runId)}>
+              Open chat
+            </ThreadActionButton>
+          )}
+          {archive === null ? null : (
+            <ArchiveThreadButton
+              slot="thread-event-archive"
+              title={identity.title}
+              onArchive={archive}
+            />
+          )}
         </div>
       )}
       {outcome === null ? null : (

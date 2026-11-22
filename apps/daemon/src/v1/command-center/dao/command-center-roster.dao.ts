@@ -126,6 +126,22 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
     );
   }
 
+  async setWatch(
+    managerRunId: string,
+    threadRunIds: readonly string[],
+    watch: boolean,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (threadRunIds.length === 0) {
+      return;
+    }
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      CommandCenterRosterEntry,
+      { managerRunId, threadRunId: { $in: [...threadRunIds] } },
+      { watch },
+    );
+  }
+
   /** Every row of a manager being deleted. */
   async deleteOf(managerRunId: string, txEm?: EntityManager): Promise<void> {
     await (txEm ?? this.em.fork()).nativeDelete(CommandCenterRosterEntry, {

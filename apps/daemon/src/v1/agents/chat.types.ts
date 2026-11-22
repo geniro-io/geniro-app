@@ -8918,6 +8918,12 @@ export const TellThreadsSchema = z.object({
     .describe(
       "True when you want each thread's answer: its first reply wakes you even past your wake budget, within 2 hours.",
     ),
+  watch: z
+    .boolean()
+    .optional()
+    .describe(
+      'True only when the user asked you to watch these threads or tell them when they finish: each one reaching done then wakes you. False stops watching them. Omit it to leave watching as it is; an unwatched thread that finishes only gets a Done card in your chat, with no turn of yours.',
+    ),
 });
 export type TellThreadsInput = z.infer<typeof TellThreadsSchema>;
 
@@ -8938,6 +8944,8 @@ export interface TellThreadsAnswer {
     code: TellThreadsUnresolvedCode;
     candidates: { handle: string; title: string }[];
   }[];
+  /** What the call set watching to for every thread it reached; absent when it left watching as it was. */
+  watch?: boolean;
 }
 
 /** `note_thread`'s arguments. */
@@ -9015,6 +9023,12 @@ export const StartThreadSchema = z.object({
     .max(THREAD_NOTE_MAX_CHARS)
     .optional()
     .describe('Your note on the new thread, kept on your roster.'),
+  watch: z
+    .boolean()
+    .default(false)
+    .describe(
+      'True only when the user asked you to watch the new thread or tell them when it finishes: its reaching done then wakes you. Otherwise leave it off; a finished thread then only gets a Done card in your chat, with no turn of yours.',
+    ),
 });
 export type StartThreadInput = z.infer<typeof StartThreadSchema>;
 

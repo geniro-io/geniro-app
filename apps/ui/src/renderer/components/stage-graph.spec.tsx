@@ -313,6 +313,13 @@ describe('StageGraph', () => {
     expect(pills().some((each) => each.hasAttribute('tabindex'))).toBe(false);
   });
 
+  it('puts its flow pane, pills included, under flow-touch-scroll, so a finger swipe on the graph scrolls the page', async () => {
+    await paint(<StageGraph stages={FORK} />);
+    const pane = container.querySelector('.react-flow__pane')!;
+    expect(pane.closest('.flow-touch-scroll')).not.toBeNull();
+    expect(pills().every((each) => pane.contains(each))).toBe(true);
+  });
+
   it('hands a pressed or keyed pill to onSelect, and marks the selected one', async () => {
     const onSelect = vi.fn();
     await paint(

@@ -873,13 +873,13 @@
 }
 
 /*
- * The phone's graph column scrolls the page, so its pane hands a vertical
- * swipe back to the browser. Unlayered and two classes deep, because the
- * vendor's `.react-flow__pane { touch-action: none }` is itself unlayered and
- * would beat any utility in a layer.
+ * A flow that never pans or zooms hands every swipe and pinch back to the
+ * browser. Unlayered and two classes deep, because the vendor's
+ * `.react-flow__pane { touch-action: none }` is itself unlayered and would beat
+ * any utility in a layer.
  */
-.cc-touch-scroll .react-flow__pane {
-  touch-action: pan-y;
+.flow-touch-scroll .react-flow__pane {
+  touch-action: manipulation;
 }
 
 @media (prefers-reduced-motion: reduce) {

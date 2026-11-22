@@ -1121,7 +1121,7 @@ function GraphCanvas({
             <AttentionLegend threads={threads} />
             <ProjectLegend projects={projects} className="px-4 pt-1.5" />
             <div
-              className="cc-touch-scroll mx-auto"
+              className="flow-touch-scroll mx-auto"
               style={{ width: drawn.width, height: drawn.height }}>
               <ReactFlow
                 {...flowProps}

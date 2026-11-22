@@ -33,6 +33,13 @@ describe('the phone viewport', () => {
     expect(rule?.[1]).toContain('font-size: 16px !important');
   });
 
+  it('hands a swipe on a flow under flow-touch-scroll back to the browser', () => {
+    const rule = /\.flow-touch-scroll \.react-flow__pane\s*\{([^}]*)\}/.exec(
+      GLOBAL_CSS,
+    );
+    expect(rule?.[1]).toContain('touch-action: manipulation');
+  });
+
   it('lets the page frame an artifact served from its own origin', () => {
     // On a phone `daemonBaseUrl` is the gateway's (or the tunnel's) origin, so
     // an artifact frame is same-origin; with loopback alone the browser

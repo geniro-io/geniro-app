@@ -587,7 +587,7 @@ function StageGraphCanvas<S extends StageGraphStage>({
               role="group"
               aria-label={graphLabel(layout)}
               data-slot="stage-graph-canvas"
-              className="mx-auto"
+              className="flow-touch-scroll mx-auto"
               style={{
                 width: drawn.geometry.width,
                 height: drawn.geometry.height,

@@ -606,18 +606,18 @@ describe('GraphView', () => {
     expect(all('contact-edge')).toHaveLength(4);
   });
 
-  it('puts the phone column’s flow pane under cc-touch-scroll, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
+  it('puts the phone column’s flow pane under flow-touch-scroll, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
     await draw({ threads: graphThreadsOf(4), narrow: true });
 
     const pane = container.querySelector('.react-flow__pane')!;
-    expect(pane.closest('.cc-touch-scroll')).not.toBeNull();
+    expect(pane.closest('.flow-touch-scroll')).not.toBeNull();
   });
 
   it('leaves the desktop canvas’s pane to React Flow, which pans it by drag', async () => {
     await draw({ threads: graphThreadsOf(4), narrow: false });
 
     const pane = container.querySelector('.react-flow__pane')!;
-    expect(pane.closest('.cc-touch-scroll')).toBeNull();
+    expect(pane.closest('.flow-touch-scroll')).toBeNull();
   });
 
   it('draws an open thread as a slot in the graph, with its card over the slot holding the chat renderCardChat gives', async () => {

@@ -7820,6 +7820,8 @@ export interface RestartContinuation {
   turns: RestartContinuationTurn[];
   /** Calls whose callee was working, each continued once under its own id. */
   calls: RestartContinuationCall[];
+  /** Calls the boot closed failed instead, told to their caller in its continuation. */
+  failedCalls: RestartContinuationFailedCall[];
   /** Monitors the stop ended, told to their owner in its continuation. */
   monitors: RestartContinuationMonitor[];
 }
@@ -7841,6 +7843,15 @@ export interface RestartContinuationCall {
   sessionId: string | null;
   /** The callee pool member that session belongs to, null without a pool. */
   member: number | null;
+}
+
+export interface RestartContinuationFailedCall {
+  callId: string;
+  callerMemberId: string;
+  callerConversationId: string | null;
+  calleeMemberId: string;
+  /** It had already been continued once after an earlier restart. */
+  again: boolean;
 }
 
 export interface RestartContinuationMonitor {

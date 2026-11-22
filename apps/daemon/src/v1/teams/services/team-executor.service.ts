@@ -224,6 +224,7 @@ import {
   resetWakesWire,
 } from '../../agents/utils/run-reset-wakes';
 import {
+  failedCallsText,
   isEmptyContinuation,
   mergeRestartContinuations,
   readRestartContinuation,
@@ -1546,10 +1547,11 @@ export class TeamExecutorService
    * run (`Run.restartContinuation`, written by the boot reconcile and the
    * monitor sweep). One pass, started through `walkAgain` with a `system`
    * seed row — never `sendMessage`, which would write the user's row and
-   * retire member cards: the lead's turn only when its own turn was cut off
-   * or it owns a stopped monitor, each cut-off call re-opened under its own id
-   * in its callee's session, each cut-off relay member woken in its own
-   * conversation. A conversation with no saved session gets the transcript
+   * retire member cards: the lead's turn only when its own turn was cut off,
+   * it owns a stopped monitor or a call of its failed, each cut-off call
+   * re-opened under its own id in its callee's session, each cut-off relay
+   * member woken in its own conversation. A conversation with no saved
+   * session gets the transcript
    * excerpt a pool hand-off gives a fresh one. When a pass the user started
    * is already live, the user's message continues the lead and the rest is
    * re-opened into that pass. `busy` when the run is still settling a pass.
@@ -1593,6 +1595,18 @@ export class TeamExecutorService
           callId: call.callId,
           callee: nameOf(call.calleeMemberId),
         }));
+    const failedOf = (memberId: string, conversationId: string | null) =>
+      record.failedCalls
+        .filter(
+          (call) =>
+            call.callerMemberId === memberId &&
+            call.callerConversationId === conversationId,
+        )
+        .map((call) => ({
+          callId: call.callId,
+          callee: nameOf(call.calleeMemberId),
+          again: call.again,
+        }));
     const cutOff = new Set(record.turns.map((turn) => turn.memberId));
     const sessionOf = new Map(
       (await this.nodeStateDao.listByRun(runId, em)).map((state) => [
@@ -1604,6 +1618,7 @@ export class TeamExecutorService
       const prompt = restartContinuationPrompt(record.cause, {
         working: cutOff.has(memberId) ? 'turn' : 'idle',
         calls: callsOf(memberId, null),
+        failedCalls: failedOf(memberId, null),
         monitors: monitorsOf(memberId, null),
         fresh: !sessionOf.get(memberId),
       });
@@ -1626,6 +1641,7 @@ export class TeamExecutorService
           const prompt = restartContinuationPrompt(record.cause, {
             working: 'call',
             calls: callsOf(call.calleeMemberId, call.conversationId),
+            failedCalls: failedOf(call.calleeMemberId, call.conversationId),
             monitors: monitorsOf(call.calleeMemberId, call.conversationId),
             fresh: call.sessionId === null,
           });
@@ -1654,6 +1670,9 @@ export class TeamExecutorService
             ? [monitor.memberId]
             : [],
         ),
+        ...record.failedCalls.flatMap((call) =>
+          call.callerConversationId === null ? [call.callerMemberId] : [],
+        ),
       ]),
     ];
     const leadTurn = lead !== null && wakeIds.includes(lead);
@@ -1665,19 +1684,24 @@ export class TeamExecutorService
           prompt: await ownPrompt(memberId),
         })),
     );
-    const owedMonitors = (
+    const owedNews = (
       memberId: string,
       conversationId: string | null,
     ): void => {
       const monitors = monitorsOf(memberId, conversationId);
-      if (monitors.length === 0) {
+      const failed = failedOf(memberId, conversationId);
+      if (monitors.length === 0 && failed.length === 0) {
         return;
       }
       this.sessions.oweKeyNote(
         conversationId === null
           ? nodeSessionKey(runId, memberId)
           : callSessionKey(runId, conversationId),
-        `[geniro] ${clause.charAt(0).toUpperCase()}${clause.slice(1)}, which stopped your monitors. ${stoppedMonitorsText(monitors)}`,
+        [
+          `[geniro] ${clause.charAt(0).toUpperCase()}${clause.slice(1)}${monitors.length > 0 ? ', which stopped your monitors' : ''}.`,
+          ...(failed.length > 0 ? [failedCallsText(failed)] : []),
+          ...(monitors.length > 0 ? [stoppedMonitorsText(monitors)] : []),
+        ].join(' '),
       );
     };
     const reached = new Set([
@@ -1685,11 +1709,17 @@ export class TeamExecutorService
       ...wakeIds,
     ]);
     const afterRegister = (): void => {
-      for (const monitor of record.monitors) {
-        const key = monitor.conversationId ?? monitor.memberId;
-        if (monitor.memberId !== null && key !== null && !reached.has(key)) {
+      for (const owner of [
+        ...record.monitors,
+        ...record.failedCalls.map((call) => ({
+          memberId: call.callerMemberId,
+          conversationId: call.callerConversationId,
+        })),
+      ]) {
+        const key = owner.conversationId ?? owner.memberId;
+        if (owner.memberId !== null && key !== null && !reached.has(key)) {
           reached.add(key);
-          owedMonitors(monitor.memberId, monitor.conversationId);
+          owedNews(owner.memberId, owner.conversationId);
         }
       }
       for (const { call, message } of calls) {
@@ -1712,7 +1742,7 @@ export class TeamExecutorService
             `run ${runId}: could not continue ${call.callId} after the restart: ${opened.refused}`,
           );
           void this.closeUncontinuedCall(runId, call, clause);
-          owedMonitors(call.calleeMemberId, call.conversationId);
+          owedNews(call.calleeMemberId, call.conversationId);
         }
       }
       for (const { memberId, prompt } of wakes) {
@@ -1720,11 +1750,14 @@ export class TeamExecutorService
           this.logger.warn(
             `run ${runId}: could not wake ${memberId} after the restart`,
           );
-          owedMonitors(memberId, null);
+          owedNews(memberId, null);
         }
       }
     };
     if (this.liveRuns.has(runId)) {
+      if (leadTurn && lead !== null) {
+        owedNews(lead, null);
+      }
       afterRegister();
       return 'continued';
     }
@@ -3952,11 +3985,13 @@ export class TeamExecutorService
    * doing is written into `Run.restartContinuation` for the drain after
    * listen, and the run stays `running`. Each cut-off own turn and each call
    * whose callee was working is kept; the rows that opened them are closed
-   * here, so the turn the drain opens is the only one shown working. A member
-   * whose standing card waits on the user is left to its answer, and a call
-   * already continued once after a restart is not continued again: it fails
-   * `CALLEE_FAILED[daemon_restart]`, naming its thread. Answers the next free
-   * seq, or null — nothing written — when nothing is left to continue, so the
+   * here, marked `continues` so the transcript reads no ending into them, and
+   * the turn the drain opens is the only one shown working. A member whose
+   * standing card waits on the user is left to its answer, and a call already
+   * continued once after a restart is not continued again: it fails
+   * `CALLEE_FAILED[daemon_restart]`, naming its thread. Every call closed here
+   * is told to its caller in the continuation (`failedCalls`). Answers the
+   * next free seq, or null — nothing written — when nothing is left to continue, so the
    * run is closed as a stop nobody continues.
    */
   private async keepOpenForContinuation(
@@ -4021,6 +4056,19 @@ export class TeamExecutorService
       cause,
       turns: [...turns].map((memberId) => ({ memberId })),
       calls,
+      failedCalls: closing.flatMap(({ call, again }) =>
+        call.callerMemberId !== null && call.calleeMemberId !== null
+          ? [
+              {
+                callId: call.callId,
+                callerMemberId: call.callerMemberId,
+                callerConversationId: call.callerConversationId,
+                calleeMemberId: call.calleeMemberId,
+                again,
+              },
+            ]
+          : [],
+      ),
       monitors: [],
     });
     if (isEmptyContinuation(record)) {
@@ -4068,6 +4116,7 @@ export class TeamExecutorService
       await this.persist(em, run.id, turn.memberId, seq++, 'status', null, {
         nodeId: turn.memberId,
         status: kept ? 'cancelled' : 'failed',
+        ...(kept ? { continues: true } : {}),
         ...(turn.callId !== null ? { callId: turn.callId } : {}),
       });
     }
@@ -6742,7 +6791,12 @@ export class TeamExecutorService
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           this.backgroundWork.record(runId, event, node.id);
-          const mapped = mapEventToItem(event);
+          // The shutdown, not a Stop, cancelled this turn: its row would read
+          // as the user's Stop, and the next boot closes the turn itself.
+          const mapped =
+            event.type === 'turn_cancelled' && leftForBoot()
+              ? null
+              : mapEventToItem(event);
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
           for (const row of compactions.rowsBefore(event, mapped)) {
@@ -7119,7 +7173,10 @@ export class TeamExecutorService
             }
             return;
           }
-          const mapped = mapEventToItem(event);
+          const mapped =
+            event.type === 'turn_cancelled' && leftForBoot()
+              ? null
+              : mapEventToItem(event);
           const settles = terminalStatus(event) !== null;
           // AHEAD of the rows this event produces, so the live row stands above
           // the work rather than appearing under the last of it.

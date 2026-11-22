@@ -523,7 +523,7 @@ function isInterrupted(payload: unknown): boolean {
   );
 }
 
-/** Does an interrupted row say the work carries on by itself? */
+/** Does an interrupted row, or a turn the boot closed, say the work carries on by itself? */
 export function continuesAfterInterrupt(payload: unknown): boolean {
   return (
     typeof payload === 'object' &&

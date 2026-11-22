@@ -463,7 +463,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     }
     case 'status': {
       const status = payloadString(item.payload, 'status');
-      if (!status) {
+      if (!status || continuesAfterInterrupt(item.payload)) {
         return null;
       }
       // A trigger firing is not news — the user's own message sits right

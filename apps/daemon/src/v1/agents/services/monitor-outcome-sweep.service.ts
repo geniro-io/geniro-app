@@ -233,6 +233,7 @@ export class MonitorOutcomeSweep {
             cause,
             turns: [],
             calls: [],
+            failedCalls: [],
             monitors,
           }),
         ),

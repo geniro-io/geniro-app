@@ -2,10 +2,11 @@ import { interruptCauseClause } from '../../../utils/stop-cause';
 import type {
   RestartContinuation,
   RestartContinuationCall,
+  RestartContinuationFailedCall,
   RestartContinuationMonitor,
   RestartContinuationTurn,
 } from '../chat.types';
-import { asArray, asNumber, asRecord, asString } from './json-util';
+import { asArray, asBoolean, asNumber, asRecord, asString } from './json-util';
 import { type StoppedMonitor, stoppedMonitorsText } from './monitor-text';
 
 /**
@@ -35,6 +36,7 @@ export function readRestartContinuation(
     cause,
     turns: asArray(record?.turns).flatMap(readTurn),
     calls: asArray(record?.calls).flatMap(readCall),
+    failedCalls: asArray(record?.failedCalls).flatMap(readFailedCall),
     monitors: asArray(record?.monitors).flatMap(readMonitor),
   };
   return isEmptyContinuation(continuation) ? null : continuation;
@@ -55,6 +57,7 @@ export function isEmptyContinuation(
   return (
     continuation.turns.length === 0 &&
     continuation.calls.length === 0 &&
+    continuation.failedCalls.length === 0 &&
     continuation.monitors.length === 0
   );
 }
@@ -73,8 +76,16 @@ export function mergeRestartContinuations(
   const turns = new Map(
     [...older.turns, ...newer.turns].map((turn) => [turn.memberId, turn]),
   );
+  const failedCalls = new Map(
+    [...older.failedCalls, ...newer.failedCalls].map((call) => [
+      call.callId,
+      call,
+    ]),
+  );
   const calls = new Map(
-    [...older.calls, ...newer.calls].map((call) => [call.callId, call]),
+    [...older.calls, ...newer.calls]
+      .filter((call) => !failedCalls.has(call.callId))
+      .map((call) => [call.callId, call]),
   );
   const monitors = new Map(
     [...older.monitors, ...newer.monitors].map((monitor) => [
@@ -86,6 +97,7 @@ export function mergeRestartContinuations(
     cause: newer.cause,
     turns: [...turns.values()],
     calls: [...calls.values()],
+    failedCalls: [...failedCalls.values()],
     monitors: [...monitors.values()],
   };
 }
@@ -129,6 +141,25 @@ function readCall(value: unknown): RestartContinuationCall[] {
   ];
 }
 
+function readFailedCall(value: unknown): RestartContinuationFailedCall[] {
+  const call = asRecord(value);
+  const callId = asString(call?.callId);
+  const callerMemberId = asString(call?.callerMemberId);
+  const calleeMemberId = asString(call?.calleeMemberId);
+  if (callId === null || callerMemberId === null || calleeMemberId === null) {
+    return [];
+  }
+  return [
+    {
+      callId,
+      callerMemberId,
+      callerConversationId: asString(call?.callerConversationId),
+      calleeMemberId,
+      again: asBoolean(call?.again),
+    },
+  ];
+}
+
 function readMonitor(value: unknown): RestartContinuationMonitor[] {
   const monitor = asRecord(value);
   const id = asString(monitor?.id);
@@ -152,16 +183,18 @@ function readMonitor(value: unknown): RestartContinuationMonitor[] {
 
 /**
  * The short message geniro continues a cut-off conversation with, in the same
- * session: what stopped it, to check what is done before carrying on, the
- * calls of its own that continue, and the monitors that were not started
- * again. `working` is what the conversation was doing: its own turn, a call
- * it answers, or nothing (only its monitors are news).
+ * session: what stopped it, that the CLI's own "the user doesn't want to
+ * proceed" note does not apply, to check what is done and run the interrupted
+ * command again, the calls of its own that continue or failed, and the
+ * monitors that were not started again. `working` is what the conversation
+ * was doing: its own turn, a call it answers, or nothing.
  */
 export function restartContinuationPrompt(
   cause: RestartContinuation['cause'],
   {
     working,
     calls,
+    failedCalls = [],
     monitors,
     fresh = false,
   }: {
@@ -169,6 +202,7 @@ export function restartContinuationPrompt(
     /** Its session could not be resumed: the transcript excerpt follows instead. */
     fresh?: boolean;
     calls: readonly { callId: string; callee: string }[];
+    failedCalls?: readonly { callId: string; callee: string; again: boolean }[];
     monitors: readonly StoppedMonitor[];
   },
 ): string {
@@ -177,7 +211,7 @@ export function restartContinuationPrompt(
   const parts = [
     working === 'idle'
       ? `[geniro] ${head} while you were waiting.`
-      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
+      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. That stop was geniro's, not the user's: a "user doesn't want to proceed" or "stop and wait" note it left in your transcript does not apply. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, run the interrupted command again, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
   ];
   if (calls.length > 0) {
     const named = calls
@@ -189,8 +223,24 @@ export function restartContinuationPrompt(
         : `Still open: ${named} continue; collect them with await_agent.`,
     );
   }
+  if (failedCalls.length > 0) {
+    parts.push(failedCallsText(failedCalls));
+  }
   if (monitors.length > 0) {
     parts.push(stoppedMonitorsText(monitors));
   }
   return parts.join(' ');
+}
+
+/** What a caller is told of its calls the boot closed failed. */
+export function failedCallsText(
+  calls: readonly { callId: string; callee: string; again: boolean }[],
+): string {
+  const named = calls
+    .map(
+      (call) =>
+        `${call.callId} (${call.callee}) — ${call.again ? 'the daemon stopped again while it was being continued after an earlier restart' : 'it could not be continued'}`,
+    )
+    .join('; ');
+  return `Failed and not continued: ${named}. ${calls.length === 1 ? 'Its' : 'Their'} work is unfinished — take it over or call again.`;
 }

@@ -395,6 +395,24 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('a turn the boot closed for its continuation draws no cancelled note', () => {
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'cancelled', continues: true })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toBe('');
+
+    render(
+      <TranscriptItem
+        item={item('status', { status: 'cancelled' })}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toContain('⊘ Orchestrator cancelled');
+  });
+
   it('a trigger node\'s status row is hidden entirely ("start → completed" noise)', () => {
     render(
       <TranscriptItem

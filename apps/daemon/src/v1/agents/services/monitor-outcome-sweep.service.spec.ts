@@ -317,6 +317,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
         cause,
         turns: [],
         calls: [],
+        failedCalls: [],
         monitors: [
           {
             memberId: 'agent',
@@ -358,6 +359,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'self-update',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [
         expect.objectContaining({
           id: 'm1',
@@ -392,6 +394,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'self-update',
       turns: [{ memberId: 'agent' }],
       calls: [],
+      failedCalls: [],
       monitors: [],
     });
     const h = harness(
@@ -405,6 +408,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'restart',
       turns: [{ memberId: 'agent' }],
       calls: [],
+      failedCalls: [],
       monitors: [
         {
           memberId: null,
@@ -459,6 +463,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'self-update',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [
         {
           memberId: 'agent',
@@ -486,6 +491,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'self-update',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [
         expect.objectContaining({ id: 'm1', command: null, remainingMs: null }),
       ],
@@ -503,6 +509,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       cause: 'self-update',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [expect.objectContaining({ id: 'm1', remainingMs: 360_000 })],
     });
   });

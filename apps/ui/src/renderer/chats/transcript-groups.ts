@@ -3892,6 +3892,11 @@ function buildCallBlock(
   for (const item of shell.bucket) {
     if (item.kind === 'status') {
       const value = payloadString(item.payload, 'status');
+      // Closed at boot only so the continuation's turn is the one shown
+      // working: the call goes on under the same id.
+      if (payloadBoolean(item.payload, 'continues') === true) {
+        continue;
+      }
       if (value && BLOCK_STATUSES.has(value)) {
         lastRowStatus = value;
         if (value === 'running') {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   RestartContinuation,
   RestartContinuationCall,
+  RestartContinuationFailedCall,
   RestartContinuationMonitor,
 } from '../chat.types';
 import {
@@ -24,6 +25,14 @@ const call: RestartContinuationCall = {
   member: 2,
 };
 
+const failed: RestartContinuationFailedCall = {
+  callId: 'call-2',
+  callerMemberId: 'orch',
+  callerConversationId: null,
+  calleeMemberId: 'writer',
+  again: true,
+};
+
 const monitor: RestartContinuationMonitor = {
   memberId: 'agent',
   conversationId: null,
@@ -37,6 +46,7 @@ const record: RestartContinuation = {
   cause: 'self-update',
   turns: [{ memberId: 'agent' }],
   calls: [call],
+  failedCalls: [failed],
   monitors: [monitor],
 };
 
@@ -85,6 +95,7 @@ describe('readRestartContinuation', () => {
       cause: 'restart',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [monitor],
     };
     expect(readRestartContinuation(JSON.stringify(monitorsOnly))).toEqual(
@@ -112,7 +123,37 @@ describe('readRestartContinuation', () => {
       cause: 'restart',
       turns: [{ memberId: 'agent' }],
       calls: [call],
+      failedCalls: [],
       monitors: [monitor],
+    });
+  });
+
+  it('drops a failed call that cannot name its caller or callee, and reads a missing again as false', () => {
+    const json = JSON.stringify({
+      cause: 'restart',
+      turns: [],
+      calls: [],
+      failedCalls: [
+        { ...failed, callerMemberId: undefined },
+        { ...failed, calleeMemberId: undefined },
+        { callId: 'call-7', callerMemberId: 'orch', calleeMemberId: 'poet' },
+      ],
+      monitors: [],
+    });
+    expect(readRestartContinuation(json)).toEqual({
+      cause: 'restart',
+      turns: [],
+      calls: [],
+      failedCalls: [
+        {
+          callId: 'call-7',
+          callerMemberId: 'orch',
+          callerConversationId: null,
+          calleeMemberId: 'poet',
+          again: false,
+        },
+      ],
+      monitors: [],
     });
   });
 
@@ -135,6 +176,7 @@ describe('readRestartContinuation', () => {
         { ...call, callId: 'call-4', member: null },
         { ...call, callId: 'call-5', member: null },
       ],
+      failedCalls: [],
       monitors: [],
     });
   });
@@ -153,6 +195,7 @@ describe('readRestartContinuation', () => {
       cause: 'restart',
       turns: [],
       calls: [],
+      failedCalls: [],
       monitors: [
         { ...monitor, remainingMs: null },
         { ...monitor, id: 'm2', remainingMs: null },
@@ -190,6 +233,7 @@ describe('readRestartContinuation', () => {
           member: null,
         },
       ],
+      failedCalls: [],
       monitors: [
         {
           memberId: null,
@@ -212,6 +256,7 @@ describe('restartContinuationColumn', () => {
         cause: 'restart',
         turns: [],
         calls: [],
+        failedCalls: [],
         monitors: [],
       }),
     ).toBeNull();
@@ -229,6 +274,7 @@ describe('isEmptyContinuation', () => {
     cause: 'restart',
     turns: [],
     calls: [],
+    failedCalls: [],
     monitors: [],
   };
 
@@ -238,6 +284,7 @@ describe('isEmptyContinuation', () => {
       isEmptyContinuation({ ...none, turns: [{ memberId: 'agent' }] }),
     ).toBe(false);
     expect(isEmptyContinuation({ ...none, calls: [call] })).toBe(false);
+    expect(isEmptyContinuation({ ...none, failedCalls: [failed] })).toBe(false);
     expect(isEmptyContinuation({ ...none, monitors: [monitor] })).toBe(false);
   });
 });
@@ -252,6 +299,7 @@ describe('mergeRestartContinuations', () => {
       cause: 'self-update',
       turns: [{ memberId: 'agent' }, { memberId: 'writer' }],
       calls: [call],
+      failedCalls: [],
       monitors: [monitor],
     };
     const newer: RestartContinuation = {
@@ -261,6 +309,7 @@ describe('mergeRestartContinuations', () => {
         { ...call, sessionId: 'sess-2' },
         { ...call, callId: 'call-4' },
       ],
+      failedCalls: [],
       monitors: [
         { ...monitor, remainingMs: 120_000 },
         { ...monitor, id: 'm2' },
@@ -274,11 +323,34 @@ describe('mergeRestartContinuations', () => {
         { ...call, sessionId: 'sess-2' },
         { ...call, callId: 'call-4' },
       ],
+      failedCalls: [],
       monitors: [
         { ...monitor, remainingMs: 120_000 },
         { ...monitor, id: 'm2' },
       ],
     });
+  });
+});
+
+describe('mergeRestartContinuations with failed calls', () => {
+  it('keeps a call the newer boot failed out of the calls that continue', () => {
+    const older: RestartContinuation = {
+      cause: 'restart',
+      turns: [],
+      calls: [call],
+      failedCalls: [],
+      monitors: [],
+    };
+    const newer: RestartContinuation = {
+      cause: 'restart',
+      turns: [],
+      calls: [],
+      failedCalls: [{ ...failed, callId: 'call-3' }],
+      monitors: [],
+    };
+    const merged = mergeRestartContinuations(older, newer);
+    expect(merged.calls).toEqual([]);
+    expect(merged.failedCalls).toEqual([{ ...failed, callId: 'call-3' }]);
   });
 });
 
@@ -291,7 +363,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. Your session is intact — check what is already done, then carry on.',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on.',
     );
   });
 
@@ -303,7 +375,50 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The app was updated while you were working on this call. Your session is intact — check what is already done, then carry on and answer the call.',
+      '[geniro] The app was updated while you were working on this call. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on and answer the call.',
+    );
+  });
+
+  it("tells a conversation that was working that the CLI's stop-and-wait note was geniro's, and to run the interrupted command again", () => {
+    const prompt = restartContinuationPrompt('self-update', {
+      working: 'turn',
+      fresh: true,
+      calls: [],
+      monitors: [],
+    });
+    expect(prompt).toContain("That stop was geniro's, not the user's");
+    expect(prompt).toContain('does not apply');
+    expect(prompt).toContain(
+      'Check what is already done, run the interrupted command again',
+    );
+  });
+
+  it('names a call the boot failed and asks to take it over', () => {
+    expect(
+      restartContinuationPrompt('restart', {
+        working: 'idle',
+        calls: [],
+        failedCalls: [{ callId: 'call-2', callee: 'writer', again: true }],
+        monitors: [],
+      }),
+    ).toBe(
+      '[geniro] The daemon was restarted while you were waiting. Failed and not continued: call-2 (writer) — the daemon stopped again while it was being continued after an earlier restart. Its work is unfinished — take it over or call again.',
+    );
+  });
+
+  it('names every call the boot failed, each with its reason', () => {
+    expect(
+      restartContinuationPrompt('restart', {
+        working: 'idle',
+        calls: [],
+        failedCalls: [
+          { callId: 'call-2', callee: 'writer', again: true },
+          { callId: 'call-5', callee: 'critic', again: false },
+        ],
+        monitors: [],
+      }),
+    ).toBe(
+      '[geniro] The daemon was restarted while you were waiting. Failed and not continued: call-2 (writer) — the daemon stopped again while it was being continued after an earlier restart; call-5 (critic) — it could not be continued. Their work is unfinished — take it over or call again.',
     );
   });
 
@@ -325,7 +440,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. Your session is intact — check what is already done, then carry on. Still open: call-3 (critic) continues; collect it with await_agent(call-3).',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. Still open: call-3 (critic) continues; collect it with await_agent(call-3).',
     );
   });
 
@@ -340,7 +455,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. Your session is intact — check what is already done, then carry on. Still open: call-3 (critic), call-4 (writer) continue; collect them with await_agent.',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. Still open: call-3 (critic), call-4 (writer) continue; collect them with await_agent.',
     );
   });
 

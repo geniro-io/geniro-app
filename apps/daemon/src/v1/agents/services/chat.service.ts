@@ -1073,6 +1073,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 cause,
                 turns: [{ memberId: SINGLE_AGENT_NODE }],
                 calls: [],
+                failedCalls: [],
                 monitors: [],
               }),
             ),

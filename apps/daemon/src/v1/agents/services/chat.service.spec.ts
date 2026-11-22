@@ -10290,6 +10290,7 @@ describe('ChatService', () => {
         cause,
         turns: [{ memberId: 'agent' }],
         calls: [],
+        failedCalls: [],
         monitors: [],
       });
     },

@@ -852,6 +852,162 @@ describe('the expanded readout the meter opens onto', () => {
     expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
   });
 
+  function refreshButton(): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      '[data-slot="plan-limits-refresh"]',
+    );
+  }
+
+  function pressOutcome(): string | null {
+    return (
+      container.querySelector('[data-slot="plan-limits-press"]')?.textContent ??
+      null
+    );
+  }
+
+  async function press(): Promise<void> {
+    act(() => refreshButton()?.click());
+    await act(async () => {});
+  }
+
+  it('acknowledges a press that brings a newer reading with a ✓ and "Updated just now"', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockResolvedValueOnce(withPlanAged(0));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+    expect(pressOutcome()).toBeNull();
+
+    await press();
+
+    expect(pressOutcome()).toBe('Updated just now');
+    expect(refreshButton()?.querySelector('.text-success')).not.toBeNull();
+  });
+
+  it('says only "Updated" when the newer reading a press brings is itself over a minute old', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(4))
+      .mockResolvedValueOnce(withPlanAged(2));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+
+    await press();
+
+    expect(pressOutcome()).toBe('Updated');
+    expect(container.textContent).toContain('Updated 2m ago');
+  });
+
+  it('does not replay a settled press’s ✓ when the readout is reopened', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockResolvedValueOnce(withPlanAged(0))
+      .mockReturnValue(new Promise(() => {}));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+    await press();
+    expect(refreshButton()?.querySelector('.text-success')).not.toBeNull();
+
+    openMeter();
+    openMeter();
+    await act(async () => {});
+
+    expect(refreshButton()?.querySelector('.text-success')).toBeNull();
+  });
+
+  it('acknowledges a press the live re-read superseded once the carried request answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce(withPlanAged(1))
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValue(withPlanAged(0));
+      renderWithLoader(load, 'run-1', true);
+      openMeter();
+      await act(async () => {});
+      await press();
+      expect(pressOutcome()).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+      expect(pressOutcome()).toBe('Updated just now');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a failed press once, in the sentence section, when the account has no limits to draw', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(METRICS)
+      .mockRejectedValueOnce(new Error('the agent did not answer'));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+
+    await press();
+
+    expect(pressOutcome()).toBe('Couldn’t refresh');
+    const alerts = panel()?.querySelectorAll('[role="alert"]') ?? [];
+    expect(alerts).toHaveLength(1);
+    expect(
+      alerts[0]?.closest('[data-slot="plan-limits-reason"]'),
+    ).not.toBeNull();
+  });
+
+  it('says "No newer reading" when a press brings back the reading already on screen', async () => {
+    const same = withPlanAged(2);
+    const load = vi.fn().mockResolvedValue(same);
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+
+    await press();
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(pressOutcome()).toBe('No newer reading');
+  });
+
+  it('shows a ✗ and the reason inside the plan section when a press fails', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockRejectedValueOnce(new Error('the agent did not answer'));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+
+    await press();
+
+    expect(pressOutcome()).toBe('Couldn’t refresh');
+    expect(refreshButton()?.querySelector('.text-destructive')).not.toBeNull();
+    const alerts = panel()?.querySelectorAll('[role="alert"]') ?? [];
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toBe('the agent did not answer');
+    expect(alerts[0]?.closest('[data-slot="plan-limits"]')).not.toBeNull();
+  });
+
+  it('flashes nothing and states no press outcome for the automatic refresh', async () => {
+    const load = vi.fn().mockResolvedValue(withPlanAged(17));
+    renderWithLoader(load);
+    openMeter();
+    await act(async () => {});
+    await act(async () => {});
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(pressOutcome()).toBeNull();
+    expect(refreshButton()?.querySelector('.text-success')).toBeNull();
+  });
+
   it('shows what the window holds, by category and with its own figures', async () => {
     renderWithLoader(() => Promise.resolve(METRICS));
     openMeter();

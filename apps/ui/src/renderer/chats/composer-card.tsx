@@ -67,7 +67,7 @@ export function ComposerCard({
       // card's own border.
       data-slot="composer-card"
       className={cn(
-        'rounded-2xl border border-border bg-card shadow-panel-md transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30',
+        'rounded-2xl border border-border bg-card shadow-panel-md transition-[color,box-shadow] has-[textarea:focus]:border-ring has-[textarea:focus]:ring-[3px] has-[textarea:focus]:ring-ring/30',
         className,
       )}>
       {children}

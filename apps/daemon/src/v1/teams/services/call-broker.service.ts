@@ -1668,6 +1668,13 @@ export class CallBroker implements OnModuleInit {
         this.dropPendingMessages(state, callId, call);
         state.settledMadeIn.set(callId, call.madeIn);
         state.activeCalls.delete(callId);
+        if (
+          final.status !== 'ok' &&
+          call.failReason === null &&
+          state.capability.leftForBoot?.() === true
+        ) {
+          return final;
+        }
         state.capability.persistItem(callerMemberId, 'call_result', null, {
           callId,
           callerNodeId: callerMemberId,

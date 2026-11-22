@@ -21,8 +21,12 @@ export interface OpenNodeTurn {
 export interface OpenCall {
   callId: string;
   callerMemberId: string | null;
+  /** The callee conversation the caller made it from, null for its own. */
+  callerConversationId: string | null;
   calleeMemberId: string | null;
   mode: string | null;
+  /** The callee pool member it started on, null without a pool. */
+  member: number | null;
 }
 
 /** Every status that ends a turn — `skipped` included, which may have no start. */
@@ -114,11 +118,17 @@ export function openCalls(items: readonly Item[]): OpenCall[] {
       open.delete(callId);
       continue;
     }
+    const member = payload?.member;
     open.set(callId, {
       callId,
       callerMemberId: stringField(payload, 'callerNodeId') ?? item.memberId,
+      callerConversationId: stringField(payload, 'callerConversationId'),
       calleeMemberId: stringField(payload, 'calleeNodeId'),
       mode: stringField(payload, 'mode'),
+      member:
+        typeof member === 'number' && Number.isInteger(member) && member >= 1
+          ? member
+          : null,
     });
   }
   return [...open.values()];

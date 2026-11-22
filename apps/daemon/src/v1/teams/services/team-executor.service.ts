@@ -18,6 +18,7 @@ import {
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
+  continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
@@ -59,6 +60,8 @@ import {
   type RunWire,
   type SendMessageImage,
   type StandingHostQuestion,
+  type RestartContinuation,
+  type RestartContinuationCall,
 } from '../../agents/chat.types';
 import {
   CALL_CONTEXT_SNAPSHOT_LIMIT,
@@ -138,6 +141,7 @@ import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts'
 import { callClocksFrom } from '../../agents/utils/call-clock';
 import {
   CALL_RECORDS,
+  callConversation,
   callNumber,
   readCallSeed,
 } from '../../agents/utils/call-seed';
@@ -217,6 +221,12 @@ import {
   resetWakesWire,
 } from '../../agents/utils/run-reset-wakes';
 import {
+  mergeRestartContinuations,
+  readRestartContinuation,
+  restartContinuationColumn,
+} from '../../agents/utils/run-restart-continuation';
+import { readMemberQuestions } from '../../agents/utils/team-member-questions';
+import {
   type RunStatusAnnounce,
   writeRunStatus,
 } from '../../agents/utils/run-status';
@@ -266,6 +276,7 @@ import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { placedFacts } from '../../projects/utils/placed-facts';
 import type { Item } from '../../runs/entity/item.entity';
+import type { Run } from '../../runs/entity/run.entity';
 import {
   AgentKind,
   type ItemKind,
@@ -302,7 +313,11 @@ import {
   poolSwitchNotice,
 } from '../utils/agent-pool';
 import { probeCallEndpoint } from '../utils/call-endpoint-self-check';
-import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
+import {
+  calleeFailedEnvelopeError,
+  geniroSideFailure,
+  readCalleeFailure,
+} from '../utils/callee-failure';
 import {
   callerConversationOf,
   callerKey,
@@ -3516,12 +3531,17 @@ export class TeamExecutorService
           continue; // a live executor legitimately owns this run
         }
         let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
-        await this.persist(em, run.id, null, seq++, 'error', null, {
-          message: `team run interrupted — ${interruptCauseClause(cause)} while it was running`,
-          // Written at BOOT — see the chat twin in `ChatService`.
-          interrupted: true,
-          interruptCause: cause,
-        });
+        const owed = readRestartContinuation(run.restartContinuation ?? null);
+        const continues = continuesUnattended(cause) && run.archivedAt === null;
+        if (!continues || owed === null) {
+          await this.persist(em, run.id, null, seq++, 'error', null, {
+            message: `team run interrupted — ${interruptCauseClause(cause)} while it was running${continues ? ' — work continues' : ''}`,
+            // Written at BOOT — see the chat twin in `ChatService`.
+            interrupted: true,
+            interruptCause: cause,
+            ...(continues ? { continues: true } : {}),
+          });
+        }
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not the lead's standing cards, which are put back at boot from their
@@ -3554,6 +3574,16 @@ export class TeamExecutorService
             },
           );
         }
+        if (continues) {
+          await this.keepOpenForContinuation(em, run, history, seq, {
+            cause,
+            owed,
+          });
+          continue;
+        }
+        if (owed !== null) {
+          await this.runDao.setRestartContinuation(run.id, null, em);
+        }
         await this.closeOpenMemberWork(em, run.id, history, seq, {
           member: 'interrupted',
           call: `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
@@ -3573,6 +3603,130 @@ export class TeamExecutorService
         `boot reconcile of orphaned team runs failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * The boot half of a team run an update or a restart cut off: what it was
+   * doing is written into `Run.restartContinuation` for the drain after
+   * listen, and the run stays `running`. Each cut-off own turn and each call
+   * whose callee was working is kept; the rows that opened them are closed
+   * here, so the turn the drain opens is the only one shown working. A member
+   * whose standing card waits on the user is left to its answer, and a call
+   * already continued once after a restart is not continued again: it fails
+   * `CALLEE_FAILED[daemon_restart]`, naming its thread.
+   */
+  private async keepOpenForContinuation(
+    em: EntityManager,
+    run: Run,
+    history: readonly Item[],
+    from: number,
+    { cause, owed }: { cause: 'self-update' | 'restart'; owed: RestartContinuation | null },
+  ): Promise<void> {
+    let seq = from;
+    const carded = new Set(
+      readMemberQuestions(run.pendingMemberQuestions ?? null).map(
+        (entry) => entry.memberId,
+      ),
+    );
+    const seed = readCallSeed(
+      await this.kindRows.rowsOfView(run.id, CALL_RECORDS, 'fresh'),
+    );
+    const sessions = await this.callContextDao.sessionsByCall(run.id, em);
+    const calls: RestartContinuationCall[] = [];
+    for (const call of openCalls(history)) {
+      const record = seed.records.find((entry) => entry.callId === call.callId);
+      const conversation = callConversation(seed.records, call.callId);
+      const sessionId =
+        sessions.get(call.callId)?.at(-1) ?? conversation?.sessionId ?? null;
+      const continuedBefore = record?.continuedAfterRestart === true;
+      if (
+        call.callerMemberId !== null &&
+        call.calleeMemberId !== null &&
+        !continuedBefore &&
+        !carded.has(call.calleeMemberId)
+      ) {
+        calls.push({
+          callId: call.callId,
+          callerMemberId: call.callerMemberId,
+          callerConversationId: call.callerConversationId,
+          calleeMemberId: call.calleeMemberId,
+          conversationId: conversation?.conversationId ?? call.callId,
+          mode: call.mode ?? 'sync',
+          sessionId,
+          member: call.member,
+        });
+        continue;
+      }
+      await this.persist(
+        em,
+        run.id,
+        call.callerMemberId,
+        seq++,
+        'call_result',
+        null,
+        {
+          callId: call.callId,
+          callerNodeId: call.callerMemberId,
+          ...(call.callerConversationId !== null
+            ? { callerConversationId: call.callerConversationId }
+            : {}),
+          calleeNodeId: call.calleeMemberId,
+          mode: call.mode,
+          status: 'error',
+          error: continuedBefore
+            ? calleeFailedEnvelopeError(
+                {
+                  status: 'failed',
+                  finalText: null,
+                  error: `the daemon stopped again (${interruptCauseClause(cause)}) while this call was being continued after an earlier restart`,
+                  failureClass: 'daemon_restart',
+                  resetsAt: null,
+                  sessionId,
+                },
+                call.callId,
+              )
+            : `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
+        },
+      );
+    }
+    const keptCalls = new Set(calls.map((call) => call.callId));
+    const turns = new Set<string>();
+    for (const turn of openNodeTurns(history)) {
+      const kept =
+        turn.callId === null
+          ? !carded.has(turn.memberId)
+          : keptCalls.has(turn.callId);
+      if (kept && turn.callId === null) {
+        turns.add(turn.memberId);
+      }
+      await this.persist(em, run.id, turn.memberId, seq++, 'status', null, {
+        nodeId: turn.memberId,
+        status: kept ? 'cancelled' : 'failed',
+        ...(turn.callId !== null ? { callId: turn.callId } : {}),
+      });
+    }
+    for (const node of await this.nodeStateDao.listByRun(run.id, em)) {
+      if (node.status === 'running') {
+        await this.nodeStateDao.setStatus(
+          run.id,
+          node.memberId,
+          { status: 'cancelled', endedAt: Date.now() },
+          em,
+        );
+      }
+    }
+    await this.runDao.setRestartContinuation(
+      run.id,
+      restartContinuationColumn(
+        mergeRestartContinuations(owed, {
+          cause,
+          turns: [...turns].map((memberId) => ({ memberId })),
+          calls,
+          monitors: [],
+        }),
+      ),
+      em,
+    );
   }
 
   /**
@@ -4267,7 +4421,13 @@ export class TeamExecutorService
      * finished as the shutdown began completed, and says so.
      */
     const endedByShutdown = (status: RunStatus): boolean =>
-      status !== 'completed' && this.shuttingDown && !stoppedByUser;
+      status !== 'completed' && leftForBoot();
+    /**
+     * Whether a turn ending now unfinished was ended by the shutdown rather
+     * than by anyone: its ending is then left unwritten, member row and call
+     * result alike, so the next boot finds the work open and may continue it.
+     */
+    const leftForBoot = (): boolean => this.shuttingDown && !stoppedByUser;
     let runFinished = false;
     /**
      * Whether the run's current reopened stretch was started by output of
@@ -7690,20 +7850,22 @@ export class TeamExecutorService
           runningHandles.delete(node.id);
           const { outcome } = finish();
           try {
-            await this.nodeStateDao.setStatus(
-              runId,
-              node.id,
-              {
+            if (outcome === 'completed' || !leftForBoot()) {
+              await this.nodeStateDao.setStatus(
+                runId,
+                node.id,
+                {
+                  status: outcome,
+                  endedAt: Date.now(),
+                  error: outcome === 'failed' ? 'member turn failed' : null,
+                },
+                em,
+              );
+              await persistItem(node.id, 'status', null, {
+                nodeId: node.id,
                 status: outcome,
-                endedAt: Date.now(),
-                error: outcome === 'failed' ? 'member turn failed' : null,
-              },
-              em,
-            );
-            await persistItem(node.id, 'status', null, {
-              nodeId: node.id,
-              status: outcome,
-            });
+              });
+            }
             settled.set(node.id, outcome);
           } catch (err) {
             persistenceFailed = true;
@@ -7815,6 +7977,9 @@ export class TeamExecutorService
                 severity: 'info',
                 message: `Not delivered — ${callee.name ?? callee.id}'s call was stopped before the turn that would have read it: ${message}`,
               });
+            }
+            if (outcome.status !== 'completed' && leftForBoot()) {
+              return;
             }
             await this.nodeStateDao.setStatus(
               runId,
@@ -7965,13 +8130,15 @@ export class TeamExecutorService
             ),
             sessionId: null,
           };
-          const handedOn = handsOn?.(outcome, false) ?? false;
+          const handedOn = leftForBoot()
+            ? false
+            : (handsOn?.(outcome, false) ?? false);
           enqueue(async () => {
             await recordSwept?.();
             // An attempt the pool hands on writes no ending: the call has
             // none yet, and a terminal row is what the transcript reads as
             // the call's own.
-            if (handedOn) {
+            if (handedOn || leftForBoot()) {
               return;
             }
             await this.nodeStateDao
@@ -8106,7 +8273,10 @@ export class TeamExecutorService
                 contextTokens: compaction.started ? null : reading.tokens,
                 contextWindowTokens: reading.window,
               };
-              handedOn = handsOn?.(result, settledCall.madeToolCalls) ?? false;
+              handedOn =
+                status !== 'completed' && leftForBoot()
+                  ? false
+                  : (handsOn?.(result, settledCall.madeToolCalls) ?? false);
               // Decided before the ending is written, for the turn-start
               // catch's reason: a handed-on attempt's call has no ending yet.
               if (handedOn) {
@@ -8157,6 +8327,9 @@ export class TeamExecutorService
                 if (callsStillOut > 0) {
                   result = { ...result, callsStillOut };
                 }
+              }
+              if (ending !== 'completed' && leftForBoot()) {
+                return;
               }
               await this.nodeStateDao.setStatus(
                 runId,
@@ -9363,6 +9536,7 @@ export class TeamExecutorService
             });
           },
           isCancelled: () => cancelRequested,
+          leftForBoot,
           isSuperseded: supersededByNextPass,
           conversationHoldsWork: (conversationId) =>
             this.sessions.holdsWorkFor(callSessionKey(runId, conversationId)),

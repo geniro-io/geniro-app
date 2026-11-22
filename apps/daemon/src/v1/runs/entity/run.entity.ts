@@ -752,6 +752,17 @@ export class Run extends TimestampsEntity {
   resetWakes: string | null = null;
 
   /**
+   * What an update or a deliberate restart cut off and the daemon continues by
+   * itself after listen — JSON `RestartContinuation` (see
+   * `utils/run-restart-continuation.ts`), null when nothing waits. Written by
+   * the boot reconcile, cleared entry by entry as the drain continues it, so a
+   * second stop before the drain finds what is still owed. TEXT so the
+   * `safe: true` schema sync adds it additively. Never on the wire.
+   */
+  @Property({ type: 'text', nullable: true })
+  restartContinuation: string | null = null;
+
+  /**
    * How far {@link pullRequests} has been scanned — the highest item `seq` the
    * capture pass has looked at, or null when it never ran.
    *

@@ -48,6 +48,17 @@ export function resumesUnattended(cause: InterruptCause): boolean {
   return cause === 'quit' || cause === 'self-update' || cause === 'restart';
 }
 
+/**
+ * Whether work cut off by this cause is continued by the daemon itself, in the
+ * same sessions, with no one sending a message: only after an update or a
+ * restart. A quit leaves the board's own resume to {@link resumesUnattended}.
+ */
+export function continuesUnattended(
+  cause: InterruptCause,
+): cause is 'self-update' | 'restart' {
+  return cause === 'self-update' || cause === 'restart';
+}
+
 export function interruptCauseClause(cause: InterruptCause): string {
   return INTERRUPT_CAUSE_CLAUSE[cause];
 }

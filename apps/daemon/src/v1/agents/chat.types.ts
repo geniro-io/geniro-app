@@ -7809,6 +7809,53 @@ export interface PersistedResetWake {
   owners: { owner: string; calls: { callId: string; callee: string }[] }[];
 }
 
+/**
+ * The work a stop the app made on purpose cut off, kept on the run row
+ * (`Run.restartContinuation`) from the boot that found it until the drain after
+ * listen has continued it. Daemon-internal: never on the wire.
+ */
+export interface RestartContinuation {
+  cause: 'self-update' | 'restart';
+  /** Own-conversation turns the stop cut off, each continued with a note. */
+  turns: RestartContinuationTurn[];
+  /** Calls whose callee was working, each continued once under its own id. */
+  calls: RestartContinuationCall[];
+  /** Monitors the stop ended, told to their owner in its continuation. */
+  monitors: RestartContinuationMonitor[];
+}
+
+export interface RestartContinuationTurn {
+  /** The member, or {@link SINGLE_AGENT_NODE} for a chat's own turn. */
+  memberId: string;
+}
+
+export interface RestartContinuationCall {
+  callId: string;
+  callerMemberId: string;
+  callerConversationId: string | null;
+  calleeMemberId: string;
+  /** The callee conversation the call runs in — its first call's id. */
+  conversationId: string;
+  mode: string;
+  /** The callee's CLI session the continuation resumes, null when none was saved. */
+  sessionId: string | null;
+  /** The callee pool member that session belongs to, null without a pool. */
+  member: number | null;
+}
+
+export interface RestartContinuationMonitor {
+  /** The member that started it; null in a chat. */
+  memberId: string | null;
+  /** The call conversation it ran in, null for a member's own conversation. */
+  conversationId: string | null;
+  id: string;
+  description: string;
+  /** The command as the agent passed it, null when its tool call was not found. */
+  command: string | null;
+  /** Approximate time it had left when the daemon stopped, null when unknown. */
+  remainingMs: number | null;
+}
+
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
@@ -8544,6 +8591,11 @@ export interface CallSeedRecord {
   promptCacheTtlMs?: number;
   contextTokens?: number;
   contextWindowTokens?: number;
+  /**
+   * The daemon already continued this call once after an update or a restart
+   * cut it off (a `restartContinued` system row): a second stop fails it.
+   */
+  continuedAfterRestart?: true;
 }
 
 /**

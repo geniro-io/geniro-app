@@ -1,15 +1,38 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
-import type { InterruptCause } from '../../../utils/stop-cause';
-import type { MonitorEnd, MonitorRowPayload } from '../chat.types';
+import {
+  continuesUnattended,
+  type InterruptCause,
+} from '../../../utils/stop-cause';
+import type { Item } from '../../runs/entity/item.entity';
+import {
+  MONITOR_TIMEOUT_DEFAULT_MS,
+  type MonitorEnd,
+  type MonitorRowPayload,
+  type RestartContinuationMonitor,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import {
+  asNumber,
+  asRecord,
+  asString,
+  parseJsonColumn,
+} from '../utils/json-util';
+import { bareToolName } from '../utils/mcp-tool-name';
 import {
   type MonitorMessage,
   monitorRowEntry,
   monitorRowOf,
+  type StoppedMonitor,
+  stoppedMonitorLine,
 } from '../utils/monitor-text';
+import {
+  mergeRestartContinuations,
+  readRestartContinuation,
+  restartContinuationColumn,
+} from '../utils/run-restart-continuation';
 import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { MonitorRegistry } from './monitor.registry';
@@ -27,6 +50,9 @@ interface CutOff {
   memberId: string | null;
   callId: string | null;
   conversationId: string | null;
+  /** The seq and time of its start row. */
+  startSeq: number;
+  startedAt: number;
 }
 
 /**
@@ -35,12 +61,18 @@ interface CutOff {
  * restart; its command is gone too — the stranded-child reaper, first at
  * boot, ended its group. A monitor is never started again.
  *
- * A chat is woken to be told — through `MonitorChatDelivery`, which waits
- * until the daemon listens and for any card the user still has to answer —
- * unless the daemon crashed (or nobody knows why it stopped), so an
- * unattended restart cannot start turns nobody asked for; such a chat's next
- * turn is owed a note instead. A team's turn state did not survive, so the
- * owning conversation's next turn is owed one. An archived run gets neither.
+ * Its owner is told the monitor's id, description, command and about how long
+ * it had left. After an update or a deliberate restart the monitor goes into
+ * the run's continuation record (`Run.restartContinuation`), and the drain
+ * after listen wakes its owner once with it — the record is created for a run
+ * the boot reconcile left none, a team whose lead ended its turn with only a
+ * monitor running. A chat without a record is woken through
+ * `MonitorChatDelivery`, which waits until the daemon listens and for any card
+ * the user still has to answer, unless the daemon crashed (or nobody knows why
+ * it stopped), so an unattended restart cannot start turns nobody asked for;
+ * such a chat's next turn is owed a note instead, as is the owning
+ * conversation of a team after a quit. An archived or cancelled run gets
+ * neither.
  *
  * Every id the rows of a run it reads hold is handed to the registry, whose
  * counter is per launch, so a new monitor never reuses one; `MonitorBroker`
@@ -123,6 +155,8 @@ export class MonitorOutcomeSweep {
             memberId: row.memberId,
             callId: payload.callId,
             conversationId: payload.conversationId,
+            startSeq: row.seq,
+            startedAt: row.createdAt.getTime(),
           },
         });
       }
@@ -161,18 +195,45 @@ export class MonitorOutcomeSweep {
     cutOff: CutOff[],
     cause: InterruptCause,
   ): Promise<boolean> {
-    const run = await this.runDao.getById(runId, this.em.fork());
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
     if (run === null) {
       return false;
     }
     const isChat = run.teamId === null || run.teamId === undefined;
+    const stopped = await this.stoppedOf(runId, cutOff);
     const message = (monitor: CutOff): MonitorMessage => ({
       id: monitor.id,
       description: monitor.description,
       batch: { lines: [], omitted: 0 },
       end: INTERRUPTED,
+      stopped: stopped.get(monitor.id),
     });
-    if (isChat && run.archivedAt === null && !UNCHOSEN_STOPS.includes(cause)) {
+    const live = run.archivedAt === null && run.status !== 'cancelled';
+    const owed = readRestartContinuation(run.restartContinuation ?? null);
+    const continued =
+      live && continuesUnattended(cause) && (!isChat || owed !== null);
+    if (continued) {
+      const monitors: RestartContinuationMonitor[] = cutOff.map((monitor) => ({
+        memberId: isChat ? null : monitor.memberId,
+        conversationId: monitor.conversationId,
+        ...stopped.get(monitor.id)!,
+      }));
+      await this.runDao.setRestartContinuation(
+        runId,
+        restartContinuationColumn(
+          mergeRestartContinuations(owed, {
+            cause,
+            turns: [],
+            calls: [],
+            monitors,
+          }),
+        ),
+        em,
+      );
+      return this.writeEnds(runId, cutOff, message, true);
+    }
+    if (isChat && live && !UNCHOSEN_STOPS.includes(cause)) {
       const [first] = cutOff;
       this.chats.holdInterrupted(
         {
@@ -185,6 +246,27 @@ export class MonitorOutcomeSweep {
       );
       return true;
     }
+    const unwritten = await this.writeEnds(runId, cutOff, message, false);
+    if (!live) {
+      return unwritten;
+    }
+    for (const monitor of cutOff) {
+      const note = `[geniro] geniro restarted, which stopped your monitor ${stoppedMonitorLine(stopped.get(monitor.id)!)}. It was not started again — start one with monitor if you still need it.`;
+      this.sessions.oweKeyNote(
+        this.conversationKey(runId, isChat, monitor),
+        note,
+      );
+    }
+    return unwritten;
+  }
+
+  /** Each monitor's end row; answers whether any could not be written. */
+  private async writeEnds(
+    runId: string,
+    cutOff: readonly CutOff[],
+    message: (monitor: CutOff) => MonitorMessage,
+    woke: boolean,
+  ): Promise<boolean> {
     let unwritten = false;
     for (const monitor of cutOff) {
       const written = await this.rows.write(
@@ -195,19 +277,67 @@ export class MonitorOutcomeSweep {
           conversationId: monitor.conversationId,
         },
         monitorRowEntry(message(monitor), 'end'),
+        woke,
       );
       unwritten ||= !written;
     }
-    if (run.archivedAt !== null) {
-      return unwritten;
-    }
-    for (const monitor of cutOff) {
-      const note = `[geniro] geniro restarted, which stopped your monitor ${monitor.id} (${monitor.description}). It was not started again — start one with monitor if you still need it.`;
-      this.sessions.oweKeyNote(
-        this.conversationKey(runId, isChat, monitor),
-        note,
+    return unwritten;
+  }
+
+  /**
+   * What each cut-off monitor's agent is told about it. Its own rows hold no
+   * command, so it is read off the `monitor` tool call that started it: the
+   * newest one of the same member before its start row naming its
+   * description. The time left counts from that start row.
+   */
+  private async stoppedOf(
+    runId: string,
+    cutOff: readonly CutOff[],
+  ): Promise<Map<string, StoppedMonitor>> {
+    let calls: Pick<Item, 'memberId' | 'seq' | 'payload'>[] = [];
+    try {
+      calls = await this.itemDao.monitorToolCallsOfRun(runId, this.em.fork());
+    } catch (err: unknown) {
+      this.logger.warn(
+        `run ${runId}: could not read the commands of its interrupted monitors: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    return unwritten;
+    const inputs = calls.flatMap((call) => {
+      const payload = asRecord(parseJsonColumn(call.payload));
+      const name = asString(payload?.name);
+      const input = asRecord(payload?.input);
+      return name !== null && bareToolName(name) === 'monitor' && input !== null
+        ? [{ memberId: call.memberId, seq: call.seq, input }]
+        : [];
+    });
+    const now = Date.now();
+    return new Map(
+      cutOff.map((monitor) => {
+        const started = inputs.findLast(
+          (call) =>
+            call.seq < monitor.startSeq &&
+            call.memberId === monitor.memberId &&
+            asString(call.input.description) === monitor.description,
+        );
+        const timeoutMs =
+          started === undefined
+            ? null
+            : (asNumber(started.input.timeout_ms) ??
+              MONITOR_TIMEOUT_DEFAULT_MS);
+        return [
+          monitor.id,
+          {
+            id: monitor.id,
+            description: monitor.description,
+            command:
+              started === undefined ? null : asString(started.input.command),
+            remainingMs:
+              timeoutMs === null
+                ? null
+                : Math.max(0, timeoutMs - (now - monitor.startedAt)),
+          },
+        ];
+      }),
+    );
   }
 }

@@ -1,3 +1,4 @@
+import { interruptCauseClause } from '../../../utils/stop-cause';
 import type {
   RestartContinuation,
   RestartContinuationCall,
@@ -5,6 +6,7 @@ import type {
   RestartContinuationTurn,
 } from '../chat.types';
 import { asArray, asNumber, asRecord, asString } from './json-util';
+import { type StoppedMonitor, stoppedMonitorsText } from './monitor-text';
 
 /**
  * The run row's continuation record (`Run.restartContinuation`), read back
@@ -47,7 +49,9 @@ export function restartContinuationColumn(
     : JSON.stringify(continuation);
 }
 
-export function isEmptyContinuation(continuation: RestartContinuation): boolean {
+export function isEmptyContinuation(
+  continuation: RestartContinuation,
+): boolean {
   return (
     continuation.turns.length === 0 &&
     continuation.calls.length === 0 &&
@@ -117,7 +121,10 @@ function readCall(value: unknown): RestartContinuationCall[] {
       conversationId,
       mode,
       sessionId: asString(call?.sessionId),
-      member: member !== null && Number.isInteger(member) && member >= 1 ? member : null,
+      member:
+        member !== null && Number.isInteger(member) && member >= 1
+          ? member
+          : null,
     },
   ];
 }
@@ -141,4 +148,46 @@ function readMonitor(value: unknown): RestartContinuationMonitor[] {
         remainingMs !== null && remainingMs >= 0 ? remainingMs : null,
     },
   ];
+}
+
+/**
+ * The short message geniro continues a cut-off conversation with, in the same
+ * session: what stopped it, to check what is done before carrying on, the
+ * calls of its own that continue, and the monitors that were not started
+ * again. `working` is what the conversation was doing: its own turn, a call
+ * it answers, or nothing (only its monitors are news).
+ */
+export function restartContinuationPrompt(
+  cause: RestartContinuation['cause'],
+  {
+    working,
+    calls,
+    monitors,
+  }: {
+    working: 'turn' | 'call' | 'idle';
+    calls: readonly { callId: string; callee: string }[];
+    monitors: readonly StoppedMonitor[];
+  },
+): string {
+  const clause = interruptCauseClause(cause);
+  const head = `${clause.charAt(0).toUpperCase()}${clause.slice(1)}`;
+  const parts = [
+    working === 'idle'
+      ? `[geniro] ${head} while you were waiting.`
+      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. Your session is intact — check what is already done, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
+  ];
+  if (calls.length > 0) {
+    const named = calls
+      .map((call) => `${call.callId} (${call.callee})`)
+      .join(', ');
+    parts.push(
+      calls.length === 1
+        ? `Still open: ${named} continues; collect it with await_agent(${calls[0]!.callId}).`
+        : `Still open: ${named} continue; collect them with await_agent.`,
+    );
+  }
+  if (monitors.length > 0) {
+    parts.push(stoppedMonitorsText(monitors));
+  }
+  return parts.join(' ');
 }

@@ -64,6 +64,7 @@ import { ShareService } from './v1/shares/services/share.service';
 import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
+import { RestartContinuationService } from './v1/teams/services/restart-continuation.service';
 import { TeamCardsService } from './v1/teams/services/team-cards.service';
 import { TeamExecutorService } from './v1/teams/services/team-executor.service';
 import { TeamProposalService } from './v1/teams/services/team-proposal.service';
@@ -140,6 +141,7 @@ const bootstrapper = buildBootstrapper({
 let callIndex: ItemCallIndexService | null = null;
 let monitorChats: MonitorChatDelivery | null = null;
 let hostWakeChats: HostWakeChatDelivery | null = null;
+let restartContinuations: RestartContinuationService | null = null;
 let shares: ShareService | null = null;
 let threadDelivery: ThreadDeliveryService | null = null;
 let wallWork: WallWorkService | null = null;
@@ -210,6 +212,10 @@ bootstrapper.addExtension(
         // On the same terms: an agent still owed the outcome of a share that
         // waited on the user's sign-in is woken again, once per boot.
         hostWakeChats?.startDelivering();
+        // What an update or a restart cut off continues by itself, on the
+        // same terms: its agents need geniro's tools, and the monitor wakes
+        // above must already be held for the chats it does not continue.
+        void restartContinuations?.drain();
         void shares?.republishOwedWakes();
         void threadDelivery?.republishOwed();
         // Off the boot path too: it folds every agent of every run settled
@@ -345,6 +351,7 @@ bootstrapper.addExtension(
       callIndex = app.get(ItemCallIndexService);
       monitorChats = app.get(MonitorChatDelivery);
       hostWakeChats = app.get(HostWakeChatDelivery);
+      restartContinuations = app.get(RestartContinuationService);
       shares = app.get(ShareService);
       threadDelivery = app.get(ThreadDeliveryService);
       wallWork = app.get(WallWorkService);

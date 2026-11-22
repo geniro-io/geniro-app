@@ -70,6 +70,40 @@ export interface MonitorMessage {
   batch: MonitorBatch;
   /** Set on the monitor's last message. */
   end?: MonitorEnd;
+  /** For a monitor a restart ended: what its agent needs to start it again. */
+  stopped?: StoppedMonitor;
+}
+
+/** A monitor a daemon stop ended, as its agent is told about it. */
+export interface StoppedMonitor {
+  id: string;
+  description: string;
+  /** The command the agent passed, null when its call was not found. */
+  command: string | null;
+  /** About how long it had left, null when unknown. */
+  remainingMs: number | null;
+}
+
+/** One stopped monitor in a line: id, description, command and time left. */
+export function stoppedMonitorLine(monitor: StoppedMonitor): string {
+  const command =
+    monitor.command === null
+      ? 'command not recorded — see your earlier monitor call'
+      : `\`${monitor.command}\``;
+  const left =
+    monitor.remainingMs === null
+      ? ''
+      : monitor.remainingMs === 0
+        ? ' (its timeout had passed)'
+        : ` (~${Math.max(1, Math.round(monitor.remainingMs / 60_000))} min were left)`;
+  return `${monitor.id} — ${monitor.description} — ${command}${left}`;
+}
+
+/** Every stopped monitor of one owner, said once, with what to do about them. */
+export function stoppedMonitorsText(
+  monitors: readonly StoppedMonitor[],
+): string {
+  return `Stopped monitors (not started again): ${monitors.map(stoppedMonitorLine).join('; ')}; start them again with monitor if you still need them.`;
 }
 
 /**
@@ -89,6 +123,11 @@ export function monitorMessageText(message: MonitorMessage): string {
   // Of every stop, only the user's from the process panel wakes the agent.
   if (message.end?.kind === 'stopped') {
     notes.push('The user stopped it from the process panel.');
+  }
+  if (message.end?.kind === 'interrupted' && message.stopped !== undefined) {
+    notes.push(
+      `It was not started again: ${stoppedMonitorLine(message.stopped)}. Start it again with monitor if you still need it.`,
+    );
   }
   if (message.end?.kind === 'flooded') {
     notes.push(

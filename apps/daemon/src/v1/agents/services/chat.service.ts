@@ -19,15 +19,10 @@ import {
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
-  type InterruptCause,
   continuesUnattended,
+  type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
-import {
-  mergeRestartContinuations,
-  readRestartContinuation,
-  restartContinuationColumn,
-} from '../utils/run-restart-continuation';
 import type { BrowserOp } from '../../browser/browser.types';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -239,6 +234,11 @@ import { isProjectChat } from '../utils/project-chat';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
+import {
+  mergeRestartContinuations,
+  readRestartContinuation,
+  restartContinuationColumn,
+} from '../utils/run-restart-continuation';
 import { teamRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { isSlashCommand } from '../utils/session-replacement-notes';
@@ -1098,6 +1098,34 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `boot reconcile of orphaned running runs failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * A chat whose continuation after a restart could not be started, ended as
+   * a stop nobody continues ends it: the red interrupted row and `failed`.
+   * Nothing when a turn owns the run again.
+   */
+  async abandonRestartContinuation(
+    runId: string,
+    cause: InterruptCause,
+  ): Promise<void> {
+    if (this.registry.has(runId)) {
+      return;
+    }
+    const em = this.em.fork();
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'error',
+      null,
+      {
+        message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running, and it could not be continued`,
+        interrupted: true,
+        interruptCause: cause,
+      },
+    );
+    await this.setRunStatus(em, runId, 'failed');
   }
 
   /**

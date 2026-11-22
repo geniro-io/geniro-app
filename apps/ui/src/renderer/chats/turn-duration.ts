@@ -523,6 +523,15 @@ function isInterrupted(payload: unknown): boolean {
   );
 }
 
+/** Does an interrupted row say the work carries on by itself? */
+export function continuesAfterInterrupt(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { continues?: unknown }).continues === true
+  );
+}
+
 /** Does this `status` row open a turn? Only the running one does. */
 function opensNodeTurn(payload: unknown): boolean {
   return (

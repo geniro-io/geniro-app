@@ -19,6 +19,7 @@ import {
   type TranscriptNodeMeta,
 } from './transcript-item';
 import { TurnBlock } from './turn-block';
+import { continuesAfterInterrupt } from './turn-duration';
 
 /** Item kinds that read as a MESSAGE from someone (avatar + name + time). */
 const SENDER_KINDS = new Set([
@@ -29,11 +30,18 @@ const SENDER_KINDS = new Set([
   'call_question',
 ]);
 
-/** The block's rows when every one of them is an error, else null. */
+/**
+ * The block's rows when every one of them is an error, else null. A row whose
+ * work continues is a note, not an error, so it never makes the block one.
+ */
 function errorOnlyBlock(block: TurnBlockEntry): ChatItem[] | null {
   const errors: ChatItem[] = [];
   for (const entry of block.entries) {
-    if (entry.type !== 'item' || entry.item.kind !== 'error') {
+    if (
+      entry.type !== 'item' ||
+      entry.item.kind !== 'error' ||
+      continuesAfterInterrupt(entry.item.payload)
+    ) {
       return null;
     }
     errors.push(entry.item);

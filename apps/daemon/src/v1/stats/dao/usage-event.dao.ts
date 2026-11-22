@@ -1,4 +1,7 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import {
+  EntityManager,
+  UniqueConstraintViolationException,
+} from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
@@ -6,9 +9,14 @@ import { idBatches } from '../../agents/utils/id-batches';
 import { UsageEvent } from '../entity/usage-event.entity';
 import {
   POLLED_SPEND_SEQ,
+  PROMPT_CACHE_WARMUP_SEQ,
   type UsageEventInput,
   type UsagePurpose,
 } from '../stats.types';
+
+function polledSeqRange(): { $gt: number; $lte: number } {
+  return { $gt: PROMPT_CACHE_WARMUP_SEQ, $lte: POLLED_SPEND_SEQ };
+}
 
 @Injectable()
 export class UsageEventDao extends BaseDao<UsageEvent> {
@@ -53,7 +61,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
    * An upsert where {@link recordOnce} refuses a second write, because the two
    * mean different things: a turn happens once, while the poll restates the
    * same run's bill every time the account bills it again. The run's rows are
-   * keyed `(runId, seq ≤ POLLED_SPEND_SEQ)` and the SET is replaced — a row
+   * keyed `(runId, seq)` within the polled range and the SET is replaced — a row
    * whose bucket no longer exists is deleted — which is what lets the ledger
    * hold that bill without ever holding it twice. Every row is forced into the
    * polled range here rather than trusted from the caller, since a polled row
@@ -72,7 +80,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
     const held =
       known ??
       (await this.getRepo(txEm).find(
-        { runId, seq: { $lte: POLLED_SPEND_SEQ } },
+        { runId, seq: polledSeqRange() },
         { disableIdentityMap: true },
       ));
     const bySeq = new Map(held.map((row) => [row.seq, row]));
@@ -114,6 +122,36 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
   }
 
   /**
+   * One warm-up, as its own row below the run's lowest warm-up, so the poll's set-replace
+   * never reaches it. A lost race for that seq is retried once.
+   */
+  async recordPromptCacheWarmup(
+    row: Omit<UsageEventInput, 'seq'>,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    try {
+      await this.insertBelowLowestWarmup(row, txEm);
+    } catch (err) {
+      if (!(err instanceof UniqueConstraintViolationException)) {
+        throw err;
+      }
+      await this.insertBelowLowestWarmup(row, txEm);
+    }
+  }
+
+  private async insertBelowLowestWarmup(
+    row: Omit<UsageEventInput, 'seq'>,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const lowest = await this.getRepo(txEm).findOne(
+      { runId: row.runId, seq: { $lte: PROMPT_CACHE_WARMUP_SEQ } },
+      { orderBy: { seq: 'asc' }, fields: ['seq'], disableIdentityMap: true },
+    );
+    const seq = lowest === null ? PROMPT_CACHE_WARMUP_SEQ : lowest.seq - 1;
+    await this.insertRow({ ...row, seq }, txEm);
+  }
+
+  /**
    * Every ledger row of these runs — finished turns and polled-spend rows alike — however
    * old, read in windows of run ids (`idBatches`).
    */
@@ -143,7 +181,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
       return out;
     }
     const rows = await this.getRepo(txEm).find(
-      { runId: { $in: [...runIds] }, seq: { $lte: POLLED_SPEND_SEQ } },
+      { runId: { $in: [...runIds] }, seq: polledSeqRange() },
       { disableIdentityMap: true },
     );
     for (const row of rows) {
@@ -247,7 +285,7 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
    * periods tile without a turn landing in both.
    *
    * Runs' POLLED-spend rows come back too, dated by their run's last activity —
-   * a caller that counts turns tells them apart with `isPolledSpend`.
+   * a caller that counts turns tells them apart with `isSpendWithoutTurn`.
    */
   /** Every row of these purposes since `from`, polled spend included — the lessons spend readout. */
   async ofPurposesSince(

@@ -618,6 +618,8 @@ export function terminalStatus(event: AgentEvent): RunStatus | null {
   }
 }
 
+export const COMPACTING_ACTIVITY = 'compacting the conversation';
+
 /**
  * The sentence under the badge for work the CLI did with no turn of ours open.
  *

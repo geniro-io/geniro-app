@@ -1281,6 +1281,7 @@ function setup(
   rootsEvents: { runId: string; rootsWorking: number; hostTurn?: true }[];
   /** Every PREVIEW announce (status null, `preview` set), in order. */
   previewEvents: { runId: string; preview: string }[];
+  activityEvents: { runId: string; activity: string | null }[];
   deletedRuns: string[];
   /**
    * Every run-created event the real bus carried, each with the row the DAO
@@ -1388,9 +1389,14 @@ function setup(
   // PREVIEW announces (status null, `preview` set): the sidebar line a
   // persisted message moves, filed apart because they say nothing about status.
   const previewEvents: { runId: string; preview: string }[] = [];
+  const activityEvents: { runId: string; activity: string | null }[] = [];
   bus.allStatuses().subscribe((event) => {
     if (event.status === null && event.preview !== undefined) {
       previewEvents.push({ runId: event.runId, preview: event.preview });
+      return;
+    }
+    if (event.status === null && event.activity !== undefined) {
+      activityEvents.push({ runId: event.runId, activity: event.activity });
       return;
     }
     if (event.status === null && event.rootsWorking !== undefined) {
@@ -1774,6 +1780,7 @@ function setup(
     countEvents,
     rootsEvents,
     previewEvents,
+    activityEvents,
     deletedRuns,
     createdRuns,
     removedAttachmentRuns,
@@ -15202,6 +15209,126 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       }),
     ]);
 
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('says the lead is compacting its conversation and drops the reply the compaction abandoned', async () => {
+    const { service, claude, partials, activityEvents } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const lead = claude.starts[0]!;
+    const leadTail = (): string =>
+      partials
+        .snapshot(run.id)
+        .find(
+          (event) => event.memberId === 'a' && !event.ownerKey.includes('::'),
+        )?.text ?? '';
+    lead.emit({
+      type: 'text_delta',
+      text: 'CI is green on 1193b54536. [CI](https://github.com/ma',
+    });
+    await drain();
+    expect(leadTail()).toBe(
+      'CI is green on 1193b54536. [CI](https://github.com/ma',
+    );
+
+    lead.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: 'auto',
+      preTokens: 380_242,
+      postTokens: null,
+    });
+    await drain();
+    expect(leadTail()).toBe('');
+    expect(activityEvents).toEqual([
+      { runId: run.id, activity: 'compacting the conversation' },
+    ]);
+
+    lead.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 380_242,
+      postTokens: 106_100,
+    });
+    await drain();
+    expect(activityEvents.at(-1)).toEqual({ runId: run.id, activity: null });
+
+    completeTurn(lead, 'done');
+    await drain();
+    expect(activityEvents).toHaveLength(2);
+  });
+
+  it('takes the compacting phrase down when the lead’s turn ends mid-compaction', async () => {
+    const { service, claude, activityEvents } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const lead = claude.starts[0]!;
+    lead.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: 'auto',
+      preTokens: 380_242,
+      postTokens: null,
+    });
+    await drain();
+    completeTurn(lead, 'done');
+    await drain();
+
+    expect(activityEvents).toEqual([
+      { runId: run.id, activity: 'compacting the conversation' },
+      { runId: run.id, activity: null },
+    ]);
+  });
+
+  it('drops a callee’s abandoned reply on compaction without naming the run’s activity after it', async () => {
+    const { service, claude, callBroker, partials, activityEvents } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'text_delta', text: 'The build is half' });
+    await drain();
+    callee.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: 'auto',
+      preTokens: 300_000,
+      postTokens: null,
+    });
+    await drain();
+
+    expect(
+      partials
+        .snapshot(run.id)
+        .find((event) => event.ownerKey === 'callee::call-1')?.text ?? '',
+    ).toBe('');
+    expect(activityEvents).toEqual([]);
+
+    completeTurn(callee, 'started it');
+    await call;
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });

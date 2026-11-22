@@ -341,6 +341,39 @@ export const TEAM_STATS: TeamStatsView = {
     },
   ],
   population: null,
+  pullRequestsAfterDone: [
+    {
+      version: 5,
+      current: true,
+      pullRequests: 6,
+      measured: 5,
+      perPullRequest: {
+        botThreads: 2.4,
+        humanThreads: 0.8,
+        pushes: 3.2,
+        failedChecks: 1.2,
+      },
+    },
+    {
+      version: 4,
+      current: false,
+      pullRequests: 3,
+      measured: 3,
+      perPullRequest: {
+        botThreads: 4,
+        humanThreads: 1.3,
+        pushes: 4.7,
+        failedChecks: 2,
+      },
+    },
+    {
+      version: null,
+      current: false,
+      pullRequests: 2,
+      measured: 0,
+      perPullRequest: null,
+    },
+  ],
 };
 
 /** Every run the team has: the 8 sampled above are among its 216. */

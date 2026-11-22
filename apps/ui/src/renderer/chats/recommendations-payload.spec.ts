@@ -71,6 +71,29 @@ const CARD = {
   ],
 };
 
+const sampled = {
+  runs: 5,
+  perRun: {
+    wallMs: 1000,
+    activeMs: 800,
+    waitingOnUserMs: 100,
+    criticalPathMs: 900,
+    turns: 4,
+    calls: 1,
+    pricedRuns: 5,
+  },
+  totals: {
+    wallMs: 5000,
+    activeMs: 4000,
+    turns: 20,
+    failedTurns: 0,
+    cancelledTurns: 0,
+    toolCalls: 30,
+    failedToolCalls: 0,
+    calls: 5,
+  },
+};
+
 describe('recommendations payload readers', () => {
   it('reads a card and drops an item that does not read', () => {
     const card = readRecommendations(item(5, 'recommendations', CARD));
@@ -245,28 +268,6 @@ describe('recommendations payload readers', () => {
   });
 
   it('reads the population of every run beside the sampled figures, a card without one as no population, and an unreadable one without losing the figures', () => {
-    const sampled = {
-      runs: 5,
-      perRun: {
-        wallMs: 1000,
-        activeMs: 800,
-        waitingOnUserMs: 100,
-        criticalPathMs: 900,
-        turns: 4,
-        calls: 1,
-        pricedRuns: 5,
-      },
-      totals: {
-        wallMs: 5000,
-        activeMs: 4000,
-        turns: 20,
-        failedTurns: 0,
-        cancelledTurns: 0,
-        toolCalls: 30,
-        failedToolCalls: 0,
-        calls: 5,
-      },
-    };
     const populated = readRecommendations(
       item(5, 'recommendations', {
         ...CARD,
@@ -311,6 +312,73 @@ describe('recommendations payload readers', () => {
       perRun: { turns: 4 },
     });
     expect(unreadable?.teamStats?.population).toBeNull();
+  });
+
+  it("reads each team version's pull requests after done, averages of none as null, and drops an entry that does not read", () => {
+    const measured = {
+      version: 5,
+      current: true,
+      pullRequests: 4,
+      measured: 3,
+      perPullRequest: {
+        botThreads: 2.5,
+        humanThreads: 1,
+        pushes: 3,
+        failedChecks: 0.5,
+      },
+    };
+    const unmeasured = {
+      version: null,
+      current: false,
+      pullRequests: 2,
+      measured: 0,
+      perPullRequest: null,
+    };
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        teamStats: {
+          ...sampled,
+          pullRequestsAfterDone: [
+            measured,
+            unmeasured,
+            { ...measured, version: 4, perPullRequest: undefined },
+            { ...measured, version: 3, pullRequests: -1 },
+            {
+              ...measured,
+              version: 2,
+              perPullRequest: { ...measured.perPullRequest, pushes: 'many' },
+            },
+            'v1',
+          ],
+        },
+      }),
+    );
+
+    expect(card?.teamStats?.pullRequestsAfterDone).toEqual([
+      measured,
+      unmeasured,
+    ]);
+  });
+
+  it('reads a card that names no pull requests, or a field that is not a list, as none, and keeps the rest of the figures', () => {
+    const older = readRecommendations(
+      item(5, 'recommendations', { ...CARD, teamStats: sampled }),
+    );
+    const notAList = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        teamStats: { ...sampled, pullRequestsAfterDone: { version: 5 } },
+      }),
+    );
+
+    expect(older?.teamStats?.pullRequestsAfterDone).toEqual([]);
+    expect(older?.items).toHaveLength(2);
+    expect(notAList?.teamStats?.pullRequestsAfterDone).toEqual([]);
+    expect(notAList?.teamStats).toMatchObject({
+      runs: 5,
+      perRun: { turns: 4 },
+    });
   });
 
   it("reads the team's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {

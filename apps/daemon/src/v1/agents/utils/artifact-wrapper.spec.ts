@@ -6,6 +6,7 @@ import {
   ARTIFACT_FRAME_SOURCE,
   ARTIFACT_HOST_SOURCE,
   ARTIFACT_PICTURE_SOURCE,
+  ARTIFACT_WHEEL_UP_GAP_MS,
   ARTIFACT_WRAPPER_SCRIPT,
 } from './artifact-page';
 import {
@@ -339,5 +340,51 @@ describe('the frame wrapper — the page answers', () => {
     );
 
     expect(heard).toEqual([{ values: { why: 'fine' }, confirmed: { why: 2 } }]);
+  });
+});
+
+describe('the frame wrapper — the reader scrolling over the page', () => {
+  const gestures = (): unknown[] =>
+    ofType('gesture').map((message) => message.gesture);
+
+  it('relays a touch starting and ending, a cancelled one as an end', () => {
+    runWrapper('<p>page</p>');
+    document.body.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    document.body.dispatchEvent(new Event('touchend', { bubbles: true }));
+    document.body.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    document.body.dispatchEvent(new Event('touchcancel', { bubbles: true }));
+    expect(gestures()).toEqual([
+      'touch-start',
+      'touch-end',
+      'touch-start',
+      'touch-end',
+    ]);
+    expect(
+      ofType('gesture').every(
+        (message) => message.source === ARTIFACT_FRAME_SOURCE,
+      ),
+    ).toBe(true);
+  });
+
+  it('relays a wheel turned up, at most once per gap, and never one turned down', () => {
+    vi.useFakeTimers();
+    try {
+      runWrapper('<p>page</p>');
+      const wheel = (deltaY: number): void => {
+        document.body.dispatchEvent(
+          new WheelEvent('wheel', { deltaY, bubbles: true }),
+        );
+      };
+      wheel(40);
+      expect(gestures()).toEqual([]);
+      wheel(-40);
+      wheel(-40);
+      expect(gestures()).toEqual(['wheel-up']);
+      vi.advanceTimersByTime(ARTIFACT_WHEEL_UP_GAP_MS);
+      wheel(-40);
+      expect(gestures()).toEqual(['wheel-up', 'wheel-up']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

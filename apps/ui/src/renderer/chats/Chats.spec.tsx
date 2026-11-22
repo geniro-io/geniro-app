@@ -37,7 +37,7 @@ import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { HostedThread } from './hosted-thread';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
-import { TOUCH_SETTLE_MS } from './scroll-follow';
+import { FRAME_GESTURE_EVENT, TOUCH_SETTLE_MS } from './scroll-follow';
 import { forgetThread } from './thread-ui-memory';
 import { HISTORY_PAGE } from './use-chat-run';
 import { PROCESS_POLL_MS } from './use-run-processes';
@@ -1918,6 +1918,45 @@ describe('Chats transcript auto-scroll', () => {
     });
     expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
   });
+
+  it.each(['touch-start', 'wheel-up'] as const)(
+    'stops following when a %s inside an embedded page scrolls the transcript up',
+    async (gesture) => {
+      api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      setScrollPosition(container, {
+        scrollTop: 3600,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+      const row = container.querySelector<HTMLElement>(
+        '[data-slot="transcript"] > *',
+      )!;
+      row.dispatchEvent(
+        new CustomEvent(FRAME_GESTURE_EVENT, {
+          bubbles: true,
+          detail: gesture,
+        }),
+      );
+      (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+      await act(async () => {
+        setScrollPosition(
+          container,
+          { scrollTop: 3200, scrollHeight: 4000, clientHeight: 400 },
+          { byReader: false },
+        );
+      });
+      expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
+
+      await act(async () => {
+        emitItem(msg(1, 'assistant', 'a later reply'));
+      });
+      expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
+    },
+  );
 
   const jumpControl = (container: HTMLElement): HTMLButtonElement | null =>
     container.querySelector<HTMLButtonElement>('[data-slot="jump-to-latest"]');

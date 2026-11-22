@@ -200,7 +200,8 @@ export function withMediaRoute(
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/artifact-frame.tsx — the host half of
  * the same channel. The frame sends `ready`, `height`, `link`, `picture`,
- * `escape`, `open-path` and `answer`; the host sends `theme` and `answers`.
+ * `escape`, `open-path`, `answer` and `gesture` (`touch-start`, `touch-end`,
+ * `wheel-up`); the host sends `theme` and `answers`.
  * There is no generated type for a
  * `postMessage` payload, so these two files are the whole contract; a message or
  * field added to one must be added to the other.
@@ -225,12 +226,21 @@ export const ARTIFACT_PICTURE_SOURCE =
  */
 export const ARTIFACT_ESCAPE_SETTLE_MS = 50;
 
+/** The shortest gap between two `wheel-up` gestures the frame relays. */
+export const ARTIFACT_WHEEL_UP_GAP_MS = 100;
+
 /**
  * geniro's own script inside the page — the only code here the agent did not
- * write, and it does seven things: it applies the theme, reports the height,
+ * write, and it does eight things: it applies the theme, reports the height,
  * relays link and picture clicks and folder buttons, carries the page's answers
- * both ways, hands over an Escape the page ignored, and announces itself to the
- * host once it runs.
+ * both ways, hands over an Escape the page ignored, relays the reader's scroll
+ * gestures, and announces itself to the host once it runs.
+ *
+ * It RELAYS a touch starting and ending, and a wheel turned up, as `gesture`:
+ * neither reaches the host's document from inside the frame, and the
+ * transcript reads them to tell a reader scrolling it from the layout moving
+ * it, so without them a swipe over the page while the chat follows its tail is
+ * snapped back down.
  *
  * It RELAYS a click on an element carrying `data-geniro-open="<absolute path>"` as
  * `open-path`, which the host shows in Finder (a plain folder opens, anything else
@@ -404,6 +414,20 @@ export const ARTIFACT_WRAPPER_SCRIPT = `
       if (!changed && !event.defaultPrevented) post({ type: 'escape' });
     }, ${ARTIFACT_ESCAPE_SETTLE_MS});
   }, true);
+  function gesture(name) {
+    post({ type: 'gesture', gesture: name });
+  }
+  var gestureOptions = { passive: true, capture: true };
+  window.addEventListener('touchstart', function () { gesture('touch-start'); }, gestureOptions);
+  window.addEventListener('touchend', function () { gesture('touch-end'); }, gestureOptions);
+  window.addEventListener('touchcancel', function () { gesture('touch-end'); }, gestureOptions);
+  var wheelUpAt = 0;
+  window.addEventListener('wheel', function (event) {
+    var now = Date.now();
+    if (event.deltaY >= 0 || now - wheelUpAt < ${ARTIFACT_WHEEL_UP_GAP_MS}) return;
+    wheelUpAt = now;
+    gesture('wheel-up');
+  }, gestureOptions);
   if (typeof ResizeObserver === 'function') {
     var observe = function () {
       if (document.body) new ResizeObserver(report).observe(document.body);

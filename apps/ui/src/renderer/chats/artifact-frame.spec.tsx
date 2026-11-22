@@ -26,6 +26,7 @@ import {
   ArtifactUrlContext,
   type PublishedArtifact,
 } from './published-artifact';
+import { FRAME_GESTURE_EVENT } from './scroll-follow';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -340,6 +341,34 @@ function focusFrame(): void {
 
 const viewer = (): HTMLElement | null =>
   document.body.querySelector<HTMLElement>('[role="dialog"]');
+
+describe('ArtifactFrame — a scroll gesture made inside the page', () => {
+  function heard(): string[] {
+    const gestures: string[] = [];
+    container.addEventListener(FRAME_GESTURE_EVENT, (event) => {
+      gestures.push(String((event as CustomEvent<unknown>).detail));
+    });
+    return gestures;
+  }
+
+  it('re-announces each gesture on its frame, bubbling, without the frame holding focus', async () => {
+    await render();
+    const gestures = heard();
+    await post({ type: 'gesture', gesture: 'touch-start' });
+    await post({ type: 'gesture', gesture: 'touch-end' });
+    await post({ type: 'gesture', gesture: 'wheel-up' });
+    expect(document.activeElement).not.toBe(frame());
+    expect(gestures).toEqual(['touch-start', 'touch-end', 'wheel-up']);
+  });
+
+  it('ignores a gesture it does not know, and one posted from anything but its own frame', async () => {
+    await render();
+    const gestures = heard();
+    await post({ type: 'gesture', gesture: 'pinch' });
+    await post({ type: 'gesture', gesture: 'touch-start' }, window);
+    expect(gestures).toEqual([]);
+  });
+});
 
 describe('ArtifactFrame — a picture the page asks the host to show', () => {
   const PICTURE = 'data:image/png;base64,iVBORw0KGgo=';

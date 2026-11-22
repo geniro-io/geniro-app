@@ -57,6 +57,28 @@ describe('closeInterruptedRuns', () => {
     ]);
   });
 
+  it.each([
+    ['crash', true],
+    ['quit', true],
+    ['unknown', true],
+    ['self-update', false],
+    ['restart', false],
+  ] as const)(
+    'after a %s drops continuations no drain reached first: %s',
+    async (cause, drops) => {
+      const h = harness();
+      h.deps.readCause = () => cause;
+      const dropped: string[] = [];
+      await closeInterruptedRuns({
+        ...h.deps,
+        dropRestartContinuations: async () => {
+          dropped.push(h.calls.length === 0 ? 'before-reconciles' : 'late');
+        },
+      });
+      expect(dropped).toEqual(drops ? ['before-reconciles'] : []);
+    },
+  );
+
   it('logs a failed board settle instead of failing the boot', async () => {
     const h = harness(async () => {
       throw new Error('database is locked');

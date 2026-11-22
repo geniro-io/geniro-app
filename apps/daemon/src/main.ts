@@ -30,6 +30,7 @@ import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { consumeStopCause } from './utils/stop-cause';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
+import { RunDao } from './v1/agents/dao/run.dao';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
@@ -304,6 +305,8 @@ bootstrapper.addExtension(
         chats: app.get(ChatService),
         teams: app.get(TeamExecutorService),
         tasks: app.get(TaskSettleService),
+        dropRestartContinuations: () =>
+          app.get(RunDao).clearRestartContinuations(),
         logError: (message) => new Logger('TaskSettleService').error(message),
       });
 

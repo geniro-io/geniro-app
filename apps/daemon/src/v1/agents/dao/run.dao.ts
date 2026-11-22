@@ -1192,6 +1192,14 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /** Forget every run's continuation record at once. */
+  async clearRestartContinuations(txEm?: EntityManager): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { restartContinuation: { $ne: null } },
+      { restartContinuation: null },
+    );
+  }
+
   /** Every run the daemon still owes a continuation — what the drain reads. */
   async listRunsWithRestartContinuation(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(

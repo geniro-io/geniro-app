@@ -696,9 +696,8 @@ export type AgentErrorRecovery = 'cli-login';
  *   daemon restarting beneath a run is the case this exists for, and a turn that
  *   could not be started, or whose bookkeeping write failed, reads the same way
  *   to a caller — nothing about the work was wrong, so retrying once is right.
- *   NOTE it is not directly observable as a turn outcome: a daemon that dies
- *   takes the whole run with it (there is no auto-resume), so what actually
- *   reaches this class is the geniro-side bucket above.
+ *   A call cut off by an update or a restart is continued once; one cut off
+ *   again while being continued fails with this class at the next boot.
  * - `crashed` — the CLI reported a failure this layer does not recognise. The
  *   honest default, and deliberately the one with no special handling: retry
  *   once, then report.

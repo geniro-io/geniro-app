@@ -1,4 +1,4 @@
-import { type InterruptCause } from './stop-cause';
+import { continuesUnattended, type InterruptCause } from './stop-cause';
 
 /** What the boot needs from each service that closes an interrupted run. */
 export interface InterruptedRunsDeps {
@@ -9,6 +9,11 @@ export interface InterruptedRunsDeps {
     reconcileOrphanedRuns: (cause: InterruptCause) => Promise<void>;
   };
   tasks: { settleCutOffCards: (projectId: null) => Promise<void> };
+  /**
+   * Forget every continuation an earlier boot recorded and no drain reached —
+   * called when this stop is not one the daemon continues after.
+   */
+  dropRestartContinuations?: () => Promise<void>;
   logError: (message: string) => void;
 }
 
@@ -26,6 +31,15 @@ export async function closeInterruptedRuns(
   deps: InterruptedRunsDeps,
 ): Promise<InterruptCause> {
   const cause = deps.readCause();
+  // Before the reconciles: a record left over from an update the daemon then
+  // crashed out of must not be continued, nor read as already announced.
+  if (!continuesUnattended(cause)) {
+    await deps.dropRestartContinuations?.().catch((err: unknown) => {
+      deps.logError(
+        `could not drop the continuations a crash cut short: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
   await deps.chats.reconcileOrphanedRuns(cause);
   await deps.teams.reconcileOrphanedRuns(cause);
   await deps.tasks.settleCutOffCards(null).catch((err: unknown) => {

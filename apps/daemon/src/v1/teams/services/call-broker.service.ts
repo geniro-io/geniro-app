@@ -12,7 +12,11 @@ import type {
   RunCallSeed,
 } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { callIdOf, callNumber } from '../../agents/utils/call-seed';
+import {
+  callIdOf,
+  callNumber,
+  RESTART_CONTINUED_KEY,
+} from '../../agents/utils/call-seed';
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
@@ -1378,6 +1382,75 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * Open again, under its OWN id, a call an update or a restart cut off — the
+   * drain's half of continuing it once. Its callee is continued in its saved
+   * session with `message`; no `call_started` is written (the call's card is
+   * already in the transcript) but a `restartContinued` row, which is what
+   * makes a second stop fail it instead of continuing it again. A sync call's
+   * caller turn died with the daemon, so it is filed for `await_agent` the
+   * way a sync call that outlived its wait is. Its settle then takes the
+   * ordinary path, waking an idle caller to collect it.
+   */
+  resumeCall(
+    runId: string,
+    call: {
+      callId: string;
+      caller: string;
+      calleeId: string;
+      conversationId: string;
+      mode: CallMode;
+      sessionId: string | null;
+      member: number | null;
+      /** The `restartContinued` row's words, naming what stopped it. */
+      note: string;
+    },
+    message: string,
+  ): { resumed: true } | { refused: string } {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return {
+        refused: 'RUN_NOT_ACTIVE: this run is not accepting agent calls',
+      };
+    }
+    if (state.activeCalls.has(call.callId)) {
+      return { refused: `CALL_RUNNING: '${call.callId}' is already running` };
+    }
+    const opened = this.openCall(runId, state, call.caller, {
+      agent: call.calleeId,
+      message,
+      mode: call.mode,
+      title: '',
+      wake: true,
+      resume: call,
+    });
+    if ('refused' in opened) {
+      return {
+        refused:
+          opened.refused.status === 'error'
+            ? opened.refused.error
+            : 'the call could not be opened',
+      };
+    }
+    if (call.mode === 'sync') {
+      makeCollectable(state, call.callId, opened.call);
+    }
+    return { resumed: true };
+  }
+
+  /**
+   * Open a turn of a member's OWN conversation with `prompt`, through the
+   * pass's wake — what continues a relay member an update or a restart cut
+   * off. False when no pass is registered or it refuses the wake.
+   */
+  wakeOwnConversation(
+    runId: string,
+    memberId: string,
+    prompt: string,
+  ): boolean {
+    return this.runs.get(runId)?.capability.wakeNode(memberId, prompt) === true;
+  }
+
+  /**
    * Everything `call_agent` decides before it waits: the refusals, the new
    * call id, its `call_started` row and its launch — synchronously, so a wake
    * that CONTINUES a callee's conversation on its caller's behalf
@@ -1407,6 +1480,14 @@ export class CallBroker implements OnModuleInit {
        * without waiting under the run's active-turn cap, as any wake is.
        */
       wake?: boolean;
+      /** {@link resumeCall}'s call: opened again under its own id. */
+      resume?: {
+        callId: string;
+        conversationId: string;
+        sessionId: string | null;
+        member: number | null;
+        note: string;
+      };
     },
   ):
     | { refused: CallEnvelope }
@@ -1434,7 +1515,10 @@ export class CallBroker implements OnModuleInit {
         `UNKNOWN_AGENT: '${args.agent}' is not a member of this team you can call (callable: ${callable})`,
       );
     }
-    const upTheChain = this.callUpTheChain(state, caller, callee);
+    const upTheChain =
+      args.resume === undefined
+        ? this.callUpTheChain(state, caller, callee)
+        : null;
     if (upTheChain !== null) {
       return refuse(upTheChain);
     }
@@ -1451,6 +1535,13 @@ export class CallBroker implements OnModuleInit {
     let conversationId: string | null = null;
     let continuedMember: number | null = null;
     let preferredMember = args.member ?? null;
+    if (args.resume !== undefined) {
+      resumeSessionId = args.resume.sessionId;
+      conversationId = args.resume.conversationId;
+      continuedMember = args.resume.member;
+      preferredMember ??=
+        state.threads.get(args.resume.conversationId)?.preferredMember ?? null;
+    }
     if (args.thread !== undefined) {
       let thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== caller) {
@@ -1514,8 +1605,13 @@ export class CallBroker implements OnModuleInit {
     if ('refused' in selected) {
       return selected;
     }
-    state.callSeq += 1;
-    const callId = callIdOf(state.callSeq);
+    let callId: string;
+    if (args.resume === undefined) {
+      state.callSeq += 1;
+      callId = callIdOf(state.callSeq);
+    } else {
+      callId = args.resume.callId;
+    }
     const mode: CallMode = args.mode ?? 'sync';
     const call: ActiveCall = {
       calleeId: callee.id,
@@ -1558,17 +1654,26 @@ export class CallBroker implements OnModuleInit {
     // from; `utils/call-seed.ts` reads it back so a restart keeps the call
     // owned by that conversation rather than by its member.
     const callerConversationId = callerConversationOf(caller);
-    state.capability.persistItem(callerMemberId, 'call_started', null, {
-      callId,
-      callerNodeId: callerMemberId,
-      ...(callerConversationId !== null ? { callerConversationId } : {}),
-      calleeNodeId: callee.id,
-      mode,
-      message: args.message,
-      ...(args.thread !== undefined ? { thread: args.thread } : {}),
-      title: args.title,
-      ...(selected.plan !== null ? { member: selected.plan.member } : {}),
-    } satisfies CallStartedPayload);
+    if (args.resume === undefined) {
+      state.capability.persistItem(callerMemberId, 'call_started', null, {
+        callId,
+        callerNodeId: callerMemberId,
+        ...(callerConversationId !== null ? { callerConversationId } : {}),
+        calleeNodeId: callee.id,
+        mode,
+        message: args.message,
+        ...(args.thread !== undefined ? { thread: args.thread } : {}),
+        title: args.title,
+        ...(selected.plan !== null ? { member: selected.plan.member } : {}),
+      } satisfies CallStartedPayload);
+    } else {
+      state.capability.persistItem(callee.id, 'system', null, {
+        callId,
+        severity: 'info',
+        message: args.resume.note,
+        [RESTART_CONTINUED_KEY]: callId,
+      });
+    }
 
     // The settled turn's CLI session id, mirrored into the call_result item so
     // the UI can open a terminal on (or reason about) that specific thread.
@@ -1668,6 +1773,13 @@ export class CallBroker implements OnModuleInit {
         this.dropPendingMessages(state, callId, call);
         state.settledMadeIn.set(callId, call.madeIn);
         state.activeCalls.delete(callId);
+        if (
+          final.status !== 'ok' &&
+          call.failReason === null &&
+          state.capability.leftForBoot?.() === true
+        ) {
+          return final;
+        }
         state.capability.persistItem(callerMemberId, 'call_result', null, {
           callId,
           callerNodeId: callerMemberId,

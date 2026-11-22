@@ -2444,6 +2444,12 @@ export interface RunCallCapability {
     options: { pool?: CalleePoolPlan; wake: boolean },
   ): Promise<CalleeTurnOutcome>;
   /**
+   * Whether the daemon is shutting down with nobody having stopped the run:
+   * a call that ends unfinished then writes no result, so the next boot finds
+   * it open and may continue it.
+   */
+  leftForBoot?: () => boolean;
+  /**
    * Stop ONE callee turn — the executor half of `cancel_agent`.
    *
    * It marks the call cancelled and cancels its turn if one is running, and

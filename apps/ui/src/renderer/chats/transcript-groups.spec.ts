@@ -4694,6 +4694,46 @@ describe('withLiveText', () => {
     expect(calleeBlock(carriedOnCall(true)).calleeWorking).toBe(false);
   });
 
+  it('reads a call continued after a restart by its real ending, not the row the boot closed it with', () => {
+    const block = calleeBlock(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'Write it.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item('turn_cancelled', { callId: 'call-1', continues: true }, 'poet'),
+          item(
+            'status',
+            { status: 'cancelled', callId: 'call-1', continues: true },
+            'poet',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'message',
+            { text: 'Waves rise and fall.', callId: 'call-1' },
+            'poet',
+          ),
+          item('status', { status: 'completed', callId: 'call-1' }, 'poet'),
+          item(
+            'call_result',
+            {
+              callId: 'call-1',
+              callerNodeId: 'orch',
+              calleeNodeId: 'poet',
+              status: 'ok',
+            },
+            'orch',
+          ),
+        ]),
+      ),
+    );
+
+    expect(block.status).toBe('completed');
+  });
+
   /**
    * A call HELD open by its callee's monitor: the callee's turn ended with no
    * status row, the monitor's output woke the kept process off-turn, and the

@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DAEMON_STOP_CAUSE_NAME } from './handshake';
 import {
   consumeStopCause,
+  continuesUnattended,
   parseInterruptCause,
+  peekStopCause,
   resumesUnattended,
 } from './stop-cause';
 
@@ -59,6 +61,33 @@ describe('consumeStopCause', () => {
   });
 });
 
+describe('peekStopCause', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-stop-cause-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads the cause of the stop under way and leaves the note for the next boot', () => {
+    const path = join(dir, DAEMON_STOP_CAUSE_NAME);
+    writeFileSync(path, 'restart\n');
+
+    expect(peekStopCause(dir)).toBe('restart');
+    expect(existsSync(path)).toBe(true);
+    expect(consumeStopCause(dir)).toBe('restart');
+  });
+
+  it('reads no note, or a word it does not know, as unknown', () => {
+    expect(peekStopCause(dir)).toBe('unknown');
+    writeFileSync(join(dir, DAEMON_STOP_CAUSE_NAME), 'reboot');
+    expect(peekStopCause(dir)).toBe('unknown');
+  });
+});
+
 describe('resumesUnattended', () => {
   it('continues only after a stop the app made on purpose', () => {
     expect(resumesUnattended('quit')).toBe(true);
@@ -74,5 +103,20 @@ describe('parseInterruptCause', () => {
     expect(parseInterruptCause('crash')).toBe('crash');
     expect(parseInterruptCause(undefined)).toBe('unknown');
     expect(parseInterruptCause(7)).toBe('unknown');
+  });
+});
+
+describe('continuesUnattended', () => {
+  it('continues only after an update or a deliberate restart', () => {
+    expect(continuesUnattended('self-update')).toBe(true);
+    expect(continuesUnattended('restart')).toBe(true);
+    expect(continuesUnattended('quit')).toBe(false);
+    expect(continuesUnattended('crash')).toBe(false);
+    expect(continuesUnattended('unknown')).toBe(false);
+  });
+
+  it('leaves a quit to the board, which resumes it without continuing it', () => {
+    expect(resumesUnattended('quit')).toBe(true);
+    expect(continuesUnattended('quit')).toBe(false);
   });
 });

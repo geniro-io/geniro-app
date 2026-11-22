@@ -353,6 +353,13 @@ export function poolHandOffPrompt(
   ].join('\n');
 }
 
+const POOL_HANDOFF_LEAD =
+  'Continue this team after another pool member became unavailable.';
+
+/** The excerpt's opening line for a session a restart left no way to resume. */
+export const RESTART_TRANSCRIPT_LEAD =
+  'Your earlier session could not be resumed after the restart, so this is a fresh one.';
+
 /** Carry a team member's work into a fresh account without reusing its CLI session. */
 export function nodePoolHandOffPrompt(
   prompt: string,
@@ -363,6 +370,7 @@ export function nodePoolHandOffPrompt(
     role: string | null;
     payload: string;
   }[],
+  lead = POOL_HANDOFF_LEAD,
 ): string {
   return poolTranscriptPrompt(
     prompt,
@@ -371,6 +379,7 @@ export function nodePoolHandOffPrompt(
         row.memberId === memberId ||
         (row.memberId === null && row.role === 'user'),
     ),
+    lead,
   );
 }
 
@@ -378,6 +387,7 @@ export function nodePoolHandOffPrompt(
 export function callPoolHandOffPrompt(
   prompt: string,
   rows: readonly { kind: string; role: string | null; payload: string }[],
+  lead = POOL_HANDOFF_LEAD,
 ): string {
   const firstAsk = rows.find((row) => row.kind === 'call_started');
   const original = asString(
@@ -388,12 +398,14 @@ export function callPoolHandOffPrompt(
       ? prompt
       : `${prompt}\n\nOriginal task:\n${redactSecrets(original).slice(0, 8_000)}`,
     rows,
+    lead,
   );
 }
 
 function poolTranscriptPrompt(
   prompt: string,
   rows: readonly { kind: string; role: string | null; payload: string }[],
+  lead: string,
 ): string {
   const history = rows
     .filter((row) =>
@@ -429,7 +441,7 @@ function poolTranscriptPrompt(
   return [
     prompt,
     '',
-    'Continue this team after another pool member became unavailable. Use the recent transcript below as context. Preserve completed work; do not repeat completed tool calls. Existing call IDs still belong to you: collect or message those calls instead of dispatching them again.',
+    `${lead} Use the recent transcript below as context. Preserve completed work; do not repeat completed tool calls. Existing call IDs still belong to you: collect or message those calls instead of dispatching them again.`,
     ...recent.reverse(),
   ].join('\n');
 }

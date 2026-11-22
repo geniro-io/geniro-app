@@ -22,6 +22,7 @@ import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service'
 import { PoolCooldowns } from './services/pool-cooldowns.store';
 import { ProjectChatService } from './services/project-chat.service';
 import { ProjectInstructionSizesService } from './services/project-instruction-sizes.service';
+import { RestartContinuationService } from './services/restart-continuation.service';
 import { RunTeamService } from './services/run-team.service';
 import { StageService } from './services/stage.service';
 import { StageWakeService } from './services/stage-wake.service';
@@ -96,6 +97,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
       inject: [ConfigDirPinService],
     },
     TeamExecutorService,
+    RestartContinuationService,
     CallBroker,
     TaskBoardBroker,
     RunTeamService,
@@ -128,7 +130,9 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
   // `TeamCardsService` for the same rehydration of a team lead's project card.
   // `TeamChangeLogService` is exported for the stats module's version
   // restore, which writes the library too, and for its team history read.
+  // `RestartContinuationService` for `main.ts`, which starts it on listen.
   exports: [
+    RestartContinuationService,
     ThreadDeliveryService,
     TeamStoreService,
     TeamOverlayStoreService,

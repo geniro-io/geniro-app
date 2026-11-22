@@ -17,9 +17,12 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import { environment } from '../../../environments';
 import {
+  continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
+  peekStopCause,
 } from '../../../utils/stop-cause';
 import {
   type AgentEvent,
@@ -54,6 +57,8 @@ import {
   type HostWakeOpener,
   type ItemWire,
   type PersistedResetWake,
+  type RestartContinuation,
+  type RestartContinuationCall,
   type RunCallSeed,
   type RunListPage,
   type RunWire,
@@ -138,6 +143,7 @@ import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts'
 import { callClocksFrom } from '../../agents/utils/call-clock';
 import {
   CALL_RECORDS,
+  callConversation,
   callNumber,
   readCallSeed,
 } from '../../agents/utils/call-seed';
@@ -152,6 +158,7 @@ import {
   COMPACTING_ACTIVITY,
   endsOffTurnStretch,
   mapEventToItem,
+  type MappedItem,
   restatesRunAsWorking,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
@@ -181,7 +188,10 @@ import {
 } from '../../agents/utils/live-words';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { offersMonitorTools } from '../../agents/utils/monitor-offer';
-import { wakesOnMonitorProgress } from '../../agents/utils/monitor-text';
+import {
+  stoppedMonitorsText,
+  wakesOnMonitorProgress,
+} from '../../agents/utils/monitor-text';
 import {
   readNodePoolMembers,
   readNodePoolPins,
@@ -217,6 +227,14 @@ import {
   resetWakesWire,
 } from '../../agents/utils/run-reset-wakes';
 import {
+  failedCallsText,
+  isEmptyContinuation,
+  mergeRestartContinuations,
+  readRestartContinuation,
+  restartContinuationColumn,
+  restartContinuationPrompt,
+} from '../../agents/utils/run-restart-continuation';
+import {
   type RunStatusAnnounce,
   writeRunStatus,
 } from '../../agents/utils/run-status';
@@ -237,6 +255,7 @@ import {
   StandingQuestions,
   TURN_ENDED_UNANSWERED,
 } from '../../agents/utils/standing-questions';
+import { readMemberQuestions } from '../../agents/utils/team-member-questions';
 import { teamProjectCardId } from '../../agents/utils/team-project-card';
 import {
   threadMessagesPrompt,
@@ -266,24 +285,27 @@ import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { placedFacts } from '../../projects/utils/placed-facts';
 import type { Item } from '../../runs/entity/item.entity';
+import type { Run } from '../../runs/entity/run.entity';
 import {
   AgentKind,
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
-import type {
-  CalleePoolPlan,
-  CalleeTurnOutcome,
-  CallHoldRelease,
-  MemberQuestionCards,
-  NodeStateWire,
-  PoolSkip,
-  ResetWakesCancelled,
-  SetPoolMemberResult,
-  ShellStillOut,
-  Team,
-  TeamAgentPoolMember,
-  TeamMember,
+import {
+  CALL_MODES,
+  type CalleePoolPlan,
+  type CalleeTurnOutcome,
+  type CallHoldRelease,
+  type CallMode,
+  type MemberQuestionCards,
+  type NodeStateWire,
+  type PoolSkip,
+  type ResetWakesCancelled,
+  type SetPoolMemberResult,
+  type ShellStillOut,
+  type Team,
+  type TeamAgentPoolMember,
+  type TeamMember,
 } from '../teams.types';
 import { CALL_START_BRIEF_MAX } from '../teams.types';
 import {
@@ -300,9 +322,14 @@ import {
   poolMoveNotice,
   poolSize,
   poolSwitchNotice,
+  RESTART_TRANSCRIPT_LEAD,
 } from '../utils/agent-pool';
 import { probeCallEndpoint } from '../utils/call-endpoint-self-check';
-import { geniroSideFailure, readCalleeFailure } from '../utils/callee-failure';
+import {
+  calleeFailedEnvelopeError,
+  geniroSideFailure,
+  readCalleeFailure,
+} from '../utils/callee-failure';
 import {
   callerConversationOf,
   callerKey,
@@ -315,6 +342,7 @@ import {
 } from '../utils/member-instructions';
 import {
   OPEN_WORK_KINDS,
+  type OpenCall,
   openCalls,
   openNodeTurns,
 } from '../utils/open-call-work';
@@ -630,6 +658,23 @@ interface RunContext {
   seedImages: TurnImage[];
   /** The same pictures as the seed row's attachments, when this pass writes it. */
   seedAttachments: readonly AttachmentWire[];
+  /** Set on a pass the daemon starts to continue a run a restart cut off. */
+  restart?: RestartPass;
+}
+
+/**
+ * What a pass started by {@link TeamExecutorService.continueAfterRestart}
+ * picks back up beside, or instead of, the lead's turn.
+ */
+interface RestartPass {
+  /** False starts no lead turn: only the work `afterRegister` re-opens runs. */
+  leadTurn: boolean;
+  /**
+   * Re-opens the cut-off calls and wakes the cut-off members, once the pass's
+   * call surface is registered and before its lead is scheduled, so the pass
+   * counts them live before it could find itself settled.
+   */
+  afterRegister: () => void;
 }
 
 /** How a follow-up reaches a team run that is still being walked. */
@@ -879,8 +924,14 @@ export class TeamExecutorService
    */
   private shuttingDown = false;
 
+  /** Whether the stop under way is one whose work the next boot continues. */
+  private shutdownContinues = false;
+
   beforeApplicationShutdown(): void {
     this.shuttingDown = true;
+    this.shutdownContinues = continuesUnattended(
+      peekStopCause(environment.userDataDir),
+    );
   }
 
   /**
@@ -1501,6 +1552,331 @@ export class TeamExecutorService
   }
 
   /**
+   * Continue, after listen, what an update or a restart cut off in one team
+   * run (`Run.restartContinuation`, written by the boot reconcile and the
+   * monitor sweep). One pass, started through `walkAgain` with a `system`
+   * seed row — never `sendMessage`, which would write the user's row and
+   * retire member cards: the lead's turn only when its own turn was cut off,
+   * it owns a stopped monitor or a call of its failed, each cut-off call
+   * re-opened under its own id in its callee's session, each cut-off relay
+   * member woken in its own conversation. A conversation with no saved
+   * session gets the transcript
+   * excerpt a pool hand-off gives a fresh one. When a pass the user started
+   * is already live, the user's message continues the lead and the rest is
+   * re-opened into that pass. `busy` when the run is still settling a pass.
+   */
+  async continueAfterRestart(
+    runId: string,
+    record: RestartContinuation,
+  ): Promise<'continued' | 'busy' | 'gone'> {
+    const em = this.em.fork();
+    const found = await this.runDao.getById(runId, em);
+    if (
+      found === null ||
+      found.teamId === null ||
+      found.archivedAt !== null ||
+      found.status === 'cancelled'
+    ) {
+      return 'gone';
+    }
+    const run = assertTeamRun(found, runId);
+    const team = await this.runTeams.teamOf(run, em);
+    const lead = await this.leadNow(runId, team);
+    const nameOf = (memberId: string): string =>
+      team.members.find((member) => member.id === memberId)?.name ?? memberId;
+    const monitorsOf = (
+      memberId: string | null,
+      conversationId: string | null,
+    ) =>
+      record.monitors.filter(
+        (monitor) =>
+          monitor.memberId === memberId &&
+          monitor.conversationId === conversationId,
+      );
+    const callsOf = (memberId: string, conversationId: string | null) =>
+      record.calls
+        .filter(
+          (call) =>
+            call.callerMemberId === memberId &&
+            call.callerConversationId === conversationId,
+        )
+        .map((call) => ({
+          callId: call.callId,
+          callee: nameOf(call.calleeMemberId),
+        }));
+    const failedOf = (memberId: string, conversationId: string | null) =>
+      record.failedCalls
+        .filter(
+          (call) =>
+            call.callerMemberId === memberId &&
+            call.callerConversationId === conversationId,
+        )
+        .map((call) => ({
+          callId: call.callId,
+          callee: nameOf(call.calleeMemberId),
+          again: call.again,
+        }));
+    const cutOff = new Set(record.turns.map((turn) => turn.memberId));
+    const sessionOf = new Map(
+      (await this.nodeStateDao.listByRun(runId, em)).map((state) => [
+        state.memberId,
+        state.agentSessionId,
+      ]),
+    );
+    const ownPrompt = async (memberId: string): Promise<string> => {
+      const prompt = restartContinuationPrompt(record.cause, {
+        working: cutOff.has(memberId) ? 'turn' : 'idle',
+        calls: callsOf(memberId, null),
+        failedCalls: failedOf(memberId, null),
+        monitors: monitorsOf(memberId, null),
+        fresh: !sessionOf.get(memberId),
+      });
+      return sessionOf.get(memberId)
+        ? prompt
+        : nodePoolHandOffPrompt(
+            prompt,
+            memberId,
+            await this.itemDao.nodePoolContextRows(runId, memberId, em),
+            RESTART_TRANSCRIPT_LEAD,
+          );
+    };
+    const clause = interruptCauseClause(record.cause);
+    const calls = await Promise.all(
+      [...record.calls]
+        .sort(
+          (a, b) => (callNumber(a.callId) ?? 0) - (callNumber(b.callId) ?? 0),
+        )
+        .map(async (call) => {
+          const prompt = restartContinuationPrompt(record.cause, {
+            working: 'call',
+            calls: callsOf(call.calleeMemberId, call.conversationId),
+            failedCalls: failedOf(call.calleeMemberId, call.conversationId),
+            monitors: monitorsOf(call.calleeMemberId, call.conversationId),
+            fresh: call.sessionId === null,
+          });
+          return {
+            call,
+            message:
+              call.sessionId !== null
+                ? prompt
+                : callPoolHandOffPrompt(
+                    prompt,
+                    await this.itemDao.callRowsOf(
+                      runId,
+                      [call.conversationId, call.callId],
+                      em,
+                    ),
+                    RESTART_TRANSCRIPT_LEAD,
+                  ),
+          };
+        }),
+    );
+    const wakeIds = [
+      ...new Set([
+        ...cutOff,
+        ...record.monitors.flatMap((monitor) =>
+          monitor.memberId !== null && monitor.conversationId === null
+            ? [monitor.memberId]
+            : [],
+        ),
+        ...record.failedCalls.flatMap((call) =>
+          call.callerConversationId === null ? [call.callerMemberId] : [],
+        ),
+      ]),
+    ];
+    const leadTurn = lead !== null && wakeIds.includes(lead);
+    const wakes = await Promise.all(
+      wakeIds
+        .filter((memberId) => memberId !== lead)
+        .map(async (memberId) => ({
+          memberId,
+          prompt: await ownPrompt(memberId),
+        })),
+    );
+    const owedNews = (
+      memberId: string,
+      conversationId: string | null,
+    ): void => {
+      const monitors = monitorsOf(memberId, conversationId);
+      const failed = failedOf(memberId, conversationId);
+      if (monitors.length === 0 && failed.length === 0) {
+        return;
+      }
+      this.sessions.oweKeyNote(
+        conversationId === null
+          ? nodeSessionKey(runId, memberId)
+          : callSessionKey(runId, conversationId),
+        [
+          `[geniro] ${clause.charAt(0).toUpperCase()}${clause.slice(1)}${monitors.length > 0 ? ', which stopped your monitors' : ''}.`,
+          ...(failed.length > 0 ? [failedCallsText(failed)] : []),
+          ...(monitors.length > 0 ? [stoppedMonitorsText(monitors)] : []),
+        ].join(' '),
+      );
+    };
+    const reached = new Set([
+      ...calls.map(({ call }) => call.conversationId),
+      ...wakeIds,
+    ]);
+    const afterRegister = (): void => {
+      for (const owner of [
+        ...record.monitors,
+        ...record.failedCalls.map((call) => ({
+          memberId: call.callerMemberId,
+          conversationId: call.callerConversationId,
+        })),
+      ]) {
+        const key = owner.conversationId ?? owner.memberId;
+        if (owner.memberId !== null && key !== null && !reached.has(key)) {
+          reached.add(key);
+          owedNews(owner.memberId, owner.conversationId);
+        }
+      }
+      for (const { call, message } of calls) {
+        const opened = this.callBroker.resumeCall(
+          runId,
+          {
+            callId: call.callId,
+            caller: callerKey(call.callerMemberId, call.callerConversationId),
+            calleeId: call.calleeMemberId,
+            conversationId: call.conversationId,
+            mode: isCallMode(call.mode) ? call.mode : 'sync',
+            sessionId: call.sessionId,
+            member: call.member,
+            note: `geniro continued this call after ${clause}.`,
+          },
+          message,
+        );
+        if ('refused' in opened) {
+          this.logger.warn(
+            `run ${runId}: could not continue ${call.callId} after the restart: ${opened.refused}`,
+          );
+          void this.closeUncontinuedCall(runId, call, clause);
+          owedNews(call.calleeMemberId, call.conversationId);
+        }
+      }
+      for (const { memberId, prompt } of wakes) {
+        if (!this.callBroker.wakeOwnConversation(runId, memberId, prompt)) {
+          this.logger.warn(
+            `run ${runId}: could not wake ${memberId} after the restart`,
+          );
+          owedNews(memberId, null);
+        }
+      }
+    };
+    if (this.liveRuns.has(runId)) {
+      if (leadTurn && lead !== null) {
+        owedNews(lead, null);
+      }
+      afterRegister();
+      return 'continued';
+    }
+    const named = [
+      ...(leadTurn && lead !== null ? [nameOf(lead)] : []),
+      ...calls.map(({ call }) => call.callId),
+      ...wakes.map(({ memberId }) => nameOf(memberId)),
+    ];
+    try {
+      await this.walkAgain(
+        em,
+        run,
+        leadTurn && lead !== null ? await ownPrompt(lead) : '',
+        [],
+        {
+          severity: 'info',
+          message: `${clause.charAt(0).toUpperCase()}${clause.slice(1)} — continuing ${named.join(', ') || 'the run'}.`,
+        },
+        { leadTurn, afterRegister },
+      );
+    } catch (err) {
+      if (err instanceof ConflictException && err.errorCode === 'RUN_BUSY') {
+        return 'busy';
+      }
+      throw err;
+    }
+    return 'continued';
+  }
+
+  /**
+   * A run whose continuation could not be started, ended the way a stop
+   * nobody continues ends it: the red interrupted row, every open turn and
+   * call closed, the run `failed`. Nothing when a pass owns the run again.
+   */
+  async abandonRestartContinuation(
+    runId: string,
+    cause: RestartContinuation['cause'],
+  ): Promise<void> {
+    if (this.registry.has(runId)) {
+      return;
+    }
+    const em = this.em.fork();
+    const clause = interruptCauseClause(cause);
+    await this.persist(
+      em,
+      runId,
+      null,
+      await this.seqs.reserve(runId),
+      'error',
+      null,
+      {
+        message: `team run interrupted — ${clause} while it was running, and it could not be continued`,
+        interrupted: true,
+        interruptCause: cause,
+      },
+    );
+    const history = await this.itemDao.rowsOfKinds(
+      runId,
+      [...OPEN_WORK_KINDS],
+      undefined,
+      em,
+    );
+    const closing = openNodeTurns(history).length + openCalls(history).length;
+    await this.closeOpenMemberWork(
+      em,
+      runId,
+      history,
+      closing > 0 ? await this.seqs.reserve(runId, closing) : 0,
+      {
+        member: 'interrupted',
+        call: `CALLEE_FAILED: interrupted — ${clause} before the call finished`,
+      },
+    );
+    await this.setRunStatus(em, runId, 'failed');
+  }
+
+  /** A cut-off call the continuation could not re-open, closed as today. */
+  private async closeUncontinuedCall(
+    runId: string,
+    call: RestartContinuationCall,
+    clause: string,
+  ): Promise<void> {
+    try {
+      await this.persist(
+        this.em.fork(),
+        runId,
+        call.callerMemberId,
+        await this.seqs.reserve(runId),
+        'call_result',
+        null,
+        {
+          callId: call.callId,
+          callerNodeId: call.callerMemberId,
+          ...(call.callerConversationId !== null
+            ? { callerConversationId: call.callerConversationId }
+            : {}),
+          calleeNodeId: call.calleeMemberId,
+          mode: call.mode,
+          status: 'error',
+          error: `CALLEE_FAILED: interrupted — ${clause} before the call finished`,
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `run ${runId}: could not close ${call.callId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * The adapter driving one agent kind — the single kind→adapter dispatch in
    * this file. Every other per-CLI decision asks the adapter it returns; an
    * `if (agent === …)` anywhere else is a missing abstract method.
@@ -2101,6 +2477,7 @@ export class TeamExecutorService
     text: string,
     images: SendMessageImage[],
     seedRow: Record<string, unknown> | null = null,
+    restart?: RestartPass,
   ): Promise<ItemWire> {
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException(
@@ -2110,7 +2487,14 @@ export class TeamExecutorService
     }
     let pass: Awaited<ReturnType<TeamExecutorService['prepareNextPass']>>;
     try {
-      pass = await this.prepareNextPass(em, run, text, images, seedRow);
+      pass = await this.prepareNextPass(
+        em,
+        run,
+        text,
+        images,
+        seedRow,
+        restart,
+      );
     } catch (err) {
       this.registry.release(run.id);
       throw err;
@@ -2150,6 +2534,7 @@ export class TeamExecutorService
      * but the transcript must not show geniro's words as the user's.
      */
     seedRow: Record<string, unknown> | null = null,
+    restart?: RestartPass,
   ): Promise<{
     team: Team;
     dropped: DroppedNodeSetting[];
@@ -2206,9 +2591,10 @@ export class TeamExecutorService
     // it, so `pending` there would promise a turn no pass gives it, and erase
     // how its last call ended.
     const lead = await this.leadNow(run.id, team);
+    const leadTurn = restart?.leadTurn !== false;
     const hasRow = new Set(states.map((state) => state.memberId));
     for (const node of team.members) {
-      if (node.id !== lead && hasRow.has(node.id)) {
+      if ((node.id !== lead || !leadTurn) && hasRow.has(node.id)) {
         continue;
       }
       await this.nodeStateDao.setStatus(
@@ -2231,7 +2617,9 @@ export class TeamExecutorService
       seedRow === null ? 'user' : null,
       seedRow ?? messagePayload(text, storedImages),
     );
-    this.markRootsStarting(run.id, lead);
+    if (leadTurn) {
+      this.markRootsStarting(run.id, lead);
+    }
     await this.setRunStatus(em, run.id, 'running');
     return {
       team,
@@ -2257,6 +2645,7 @@ export class TeamExecutorService
         seedPersisted: true,
         seedImages: turnImages,
         seedAttachments: [],
+        ...(restart !== undefined ? { restart } : {}),
       },
     };
   }
@@ -3516,12 +3905,8 @@ export class TeamExecutorService
           continue; // a live executor legitimately owns this run
         }
         let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
-        await this.persist(em, run.id, null, seq++, 'error', null, {
-          message: `team run interrupted — ${interruptCauseClause(cause)} while it was running`,
-          // Written at BOOT — see the chat twin in `ChatService`.
-          interrupted: true,
-          interruptCause: cause,
-        });
+        const owed = readRestartContinuation(run.restartContinuation ?? null);
+        const continues = continuesUnattended(cause) && run.archivedAt === null;
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not the lead's standing cards, which are put back at boot from their
@@ -3554,6 +3939,35 @@ export class TeamExecutorService
             },
           );
         }
+        if (continues) {
+          const kept = await this.keepOpenForContinuation(
+            em,
+            run,
+            history,
+            seq,
+            { cause, owed },
+          );
+          if (kept !== null) {
+            if (owed === null) {
+              await this.persist(em, run.id, null, kept, 'error', null, {
+                message: `team run interrupted — ${interruptCauseClause(cause)} while it was running — work continues`,
+                // Written at BOOT — see the chat twin in `ChatService`.
+                interrupted: true,
+                interruptCause: cause,
+                continues: true,
+              });
+            }
+            continue;
+          }
+        }
+        if (owed !== null) {
+          await this.runDao.setRestartContinuation(run.id, null, em);
+        }
+        await this.persist(em, run.id, null, seq++, 'error', null, {
+          message: `team run interrupted — ${interruptCauseClause(cause)} while it was running`,
+          interrupted: true,
+          interruptCause: cause,
+        });
         await this.closeOpenMemberWork(em, run.id, history, seq, {
           member: 'interrupted',
           call: `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
@@ -3573,6 +3987,164 @@ export class TeamExecutorService
         `boot reconcile of orphaned team runs failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * The boot half of a team run an update or a restart cut off: what it was
+   * doing is written into `Run.restartContinuation` for the drain after
+   * listen, and the run stays `running`. Each cut-off own turn and each call
+   * whose callee was working is kept; the rows that opened them are closed
+   * here, marked `continues` so the transcript reads no ending into them, and
+   * the turn the drain opens is the only one shown working. A member whose
+   * standing card waits on the user is left to its answer, and a call already
+   * continued once after a restart is not continued again: it fails
+   * `CALLEE_FAILED[daemon_restart]`, naming its thread. Every call closed here
+   * is told to its caller in the continuation (`failedCalls`). Answers the
+   * next free seq, or null — nothing written — when nothing is left to continue, so the
+   * run is closed as a stop nobody continues.
+   */
+  private async keepOpenForContinuation(
+    em: EntityManager,
+    run: Run,
+    history: readonly Item[],
+    from: number,
+    {
+      cause,
+      owed,
+    }: { cause: 'self-update' | 'restart'; owed: RestartContinuation | null },
+  ): Promise<number | null> {
+    let seq = from;
+    const carded = new Set(
+      readMemberQuestions(run.pendingMemberQuestions ?? null).map(
+        (entry) => entry.memberId,
+      ),
+    );
+    const seed = readCallSeed(
+      await this.kindRows.rowsOfView(run.id, CALL_RECORDS, 'fresh'),
+    );
+    const sessions = await this.callContextDao.sessionsByCall(run.id, em);
+    const calls: RestartContinuationCall[] = [];
+    const closing: {
+      call: OpenCall;
+      sessionId: string | null;
+      again: boolean;
+    }[] = [];
+    for (const call of openCalls(history)) {
+      const record = seed.records.find((entry) => entry.callId === call.callId);
+      const conversation = callConversation(seed.records, call.callId);
+      const sessionId =
+        sessions.get(call.callId)?.at(-1) ?? conversation?.sessionId ?? null;
+      const again = record?.continuedAfterRestart === true;
+      if (
+        call.callerMemberId !== null &&
+        call.calleeMemberId !== null &&
+        !again &&
+        !carded.has(call.calleeMemberId)
+      ) {
+        calls.push({
+          callId: call.callId,
+          callerMemberId: call.callerMemberId,
+          callerConversationId: call.callerConversationId,
+          calleeMemberId: call.calleeMemberId,
+          conversationId: conversation?.conversationId ?? call.callId,
+          mode: call.mode ?? 'sync',
+          sessionId,
+          member: call.member,
+        });
+        continue;
+      }
+      closing.push({ call, sessionId, again });
+    }
+    const openTurns = openNodeTurns(history);
+    const turns = new Set(
+      openTurns
+        .filter((turn) => turn.callId === null && !carded.has(turn.memberId))
+        .map((turn) => turn.memberId),
+    );
+    const record = mergeRestartContinuations(owed, {
+      cause,
+      turns: [...turns].map((memberId) => ({ memberId })),
+      calls,
+      failedCalls: closing.flatMap(({ call, again }) =>
+        call.callerMemberId !== null && call.calleeMemberId !== null
+          ? [
+              {
+                callId: call.callId,
+                callerMemberId: call.callerMemberId,
+                callerConversationId: call.callerConversationId,
+                calleeMemberId: call.calleeMemberId,
+                again,
+              },
+            ]
+          : [],
+      ),
+      monitors: [],
+    });
+    if (isEmptyContinuation(record)) {
+      return null;
+    }
+    for (const { call, sessionId, again } of closing) {
+      await this.persist(
+        em,
+        run.id,
+        call.callerMemberId,
+        seq++,
+        'call_result',
+        null,
+        {
+          callId: call.callId,
+          callerNodeId: call.callerMemberId,
+          ...(call.callerConversationId !== null
+            ? { callerConversationId: call.callerConversationId }
+            : {}),
+          calleeNodeId: call.calleeMemberId,
+          mode: call.mode,
+          status: 'error',
+          error: again
+            ? calleeFailedEnvelopeError(
+                {
+                  status: 'failed',
+                  finalText: null,
+                  error: `the daemon stopped again (${interruptCauseClause(cause)}) while this call was being continued after an earlier restart`,
+                  failureClass: 'daemon_restart',
+                  resetsAt: null,
+                  sessionId,
+                },
+                call.callId,
+              )
+            : `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
+        },
+      );
+    }
+    const keptCalls = new Set(calls.map((call) => call.callId));
+    for (const turn of openTurns) {
+      const kept =
+        turn.callId === null
+          ? turns.has(turn.memberId)
+          : keptCalls.has(turn.callId);
+      await this.persist(em, run.id, turn.memberId, seq++, 'status', null, {
+        nodeId: turn.memberId,
+        status: kept ? 'cancelled' : 'failed',
+        ...(kept ? { continues: true } : {}),
+        ...(turn.callId !== null ? { callId: turn.callId } : {}),
+      });
+    }
+    for (const node of await this.nodeStateDao.listByRun(run.id, em)) {
+      if (node.status === 'running') {
+        await this.nodeStateDao.setStatus(
+          run.id,
+          node.memberId,
+          { status: 'cancelled', endedAt: Date.now() },
+          em,
+        );
+      }
+    }
+    await this.runDao.setRestartContinuation(
+      run.id,
+      restartContinuationColumn(record),
+      em,
+    );
+    return seq;
   }
 
   /**
@@ -3817,7 +4389,9 @@ export class TeamExecutorService
     // Every other member runs per CallBroker call or, in `relay` mode, in its
     // own conversation once the run is handed to it — never in the settled
     // denominator (an uncalled one settles 'skipped' at run end).
-    const passMembers = nodes.filter((n) => n.id === run.lead);
+    const passMembers = nodes.filter(
+      (n) => n.id === run.lead && run.restart?.leadTurn !== false,
+    );
     const passMemberIds = new Set(passMembers.map((n) => n.id));
     // A member that may lead keeps its call turns' session and readings apart
     // from its own conversation.
@@ -4267,7 +4841,27 @@ export class TeamExecutorService
      * finished as the shutdown began completed, and says so.
      */
     const endedByShutdown = (status: RunStatus): boolean =>
-      status !== 'completed' && this.shuttingDown && !stoppedByUser;
+      status !== 'completed' && leftForBoot();
+    /**
+     * Whether a turn ending now unfinished was ended by the shutdown rather
+     * than by anyone: its ending is then left unwritten, member row and call
+     * result alike, so the next boot finds the work open and may continue it.
+     */
+    const leftForBoot = (): boolean => this.shuttingDown && !stoppedByUser;
+    /**
+     * A turn the shutdown cancelled ahead of an update or a restart keeps its
+     * row, which carries its usage, marked so nothing reads it as a Stop.
+     */
+    const markedForContinuation = (
+      event: AgentEvent,
+      mapped: MappedItem | null,
+    ): MappedItem | null =>
+      mapped !== null &&
+      event.type === 'turn_cancelled' &&
+      leftForBoot() &&
+      this.shutdownContinues
+        ? { ...mapped, payload: { ...mapped.payload, continues: true } }
+        : mapped;
     let runFinished = false;
     /**
      * Whether the run's current reopened stretch was started by output of
@@ -6220,7 +6814,7 @@ export class TeamExecutorService
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           this.backgroundWork.record(runId, event, node.id);
-          const mapped = mapEventToItem(event);
+          const mapped = markedForContinuation(event, mapEventToItem(event));
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
           for (const row of compactions.rowsBefore(event, mapped)) {
@@ -6597,7 +7191,7 @@ export class TeamExecutorService
             }
             return;
           }
-          const mapped = mapEventToItem(event);
+          const mapped = markedForContinuation(event, mapEventToItem(event));
           const settles = terminalStatus(event) !== null;
           // AHEAD of the rows this event produces, so the live row stands above
           // the work rather than appearing under the last of it.
@@ -7690,20 +8284,22 @@ export class TeamExecutorService
           runningHandles.delete(node.id);
           const { outcome } = finish();
           try {
-            await this.nodeStateDao.setStatus(
-              runId,
-              node.id,
-              {
+            if (outcome === 'completed' || !leftForBoot()) {
+              await this.nodeStateDao.setStatus(
+                runId,
+                node.id,
+                {
+                  status: outcome,
+                  endedAt: Date.now(),
+                  error: outcome === 'failed' ? 'member turn failed' : null,
+                },
+                em,
+              );
+              await persistItem(node.id, 'status', null, {
+                nodeId: node.id,
                 status: outcome,
-                endedAt: Date.now(),
-                error: outcome === 'failed' ? 'member turn failed' : null,
-              },
-              em,
-            );
-            await persistItem(node.id, 'status', null, {
-              nodeId: node.id,
-              status: outcome,
-            });
+              });
+            }
             settled.set(node.id, outcome);
           } catch (err) {
             persistenceFailed = true;
@@ -7815,6 +8411,9 @@ export class TeamExecutorService
                 severity: 'info',
                 message: `Not delivered — ${callee.name ?? callee.id}'s call was stopped before the turn that would have read it: ${message}`,
               });
+            }
+            if (outcome.status !== 'completed' && leftForBoot()) {
+              return;
             }
             await this.nodeStateDao.setStatus(
               runId,
@@ -7965,13 +8564,15 @@ export class TeamExecutorService
             ),
             sessionId: null,
           };
-          const handedOn = handsOn?.(outcome, false) ?? false;
+          const handedOn = leftForBoot()
+            ? false
+            : (handsOn?.(outcome, false) ?? false);
           enqueue(async () => {
             await recordSwept?.();
             // An attempt the pool hands on writes no ending: the call has
             // none yet, and a terminal row is what the transcript reads as
             // the call's own.
-            if (handedOn) {
+            if (handedOn || leftForBoot()) {
               return;
             }
             await this.nodeStateDao
@@ -8106,7 +8707,10 @@ export class TeamExecutorService
                 contextTokens: compaction.started ? null : reading.tokens,
                 contextWindowTokens: reading.window,
               };
-              handedOn = handsOn?.(result, settledCall.madeToolCalls) ?? false;
+              handedOn =
+                status !== 'completed' && leftForBoot()
+                  ? false
+                  : (handsOn?.(result, settledCall.madeToolCalls) ?? false);
               // Decided before the ending is written, for the turn-start
               // catch's reason: a handed-on attempt's call has no ending yet.
               if (handedOn) {
@@ -8157,6 +8761,9 @@ export class TeamExecutorService
                 if (callsStillOut > 0) {
                   result = { ...result, callsStillOut };
                 }
+              }
+              if (ending !== 'completed' && leftForBoot()) {
+                return;
               }
               await this.nodeStateDao.setStatus(
                 runId,
@@ -9363,6 +9970,7 @@ export class TeamExecutorService
             });
           },
           isCancelled: () => cancelRequested,
+          leftForBoot,
           isSuperseded: supersededByNextPass,
           conversationHoldsWork: (conversationId) =>
             this.sessions.holdsWorkFor(callSessionKey(runId, conversationId)),
@@ -9610,6 +10218,7 @@ export class TeamExecutorService
         }),
     };
     this.liveRuns.set(runId, liveControl);
+    run.restart?.afterRegister();
     schedule();
   }
 
@@ -9670,6 +10279,10 @@ export class TeamExecutorService
       },
     );
   }
+}
+
+function isCallMode(value: string): value is CallMode {
+  return (CALL_MODES as readonly string[]).includes(value);
 }
 
 /** Who leads: the trigger's member in `lead` mode, else the stage lead the progress names or the starting lead. */

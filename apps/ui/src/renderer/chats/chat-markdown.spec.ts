@@ -166,6 +166,21 @@ describe('chatToMarkdown', () => {
     expect(kinds.length).toBeGreaterThan(25);
   });
 
+  it('exports a turn the shutdown cut off for its continuation as interrupted, not cancelled', () => {
+    const out = chatToMarkdown(
+      teamDoc([
+        nodeRow('poet', 'turn_cancelled', {
+          callId: 'call-1',
+          continues: true,
+        }),
+        nodeRow('poet', 'turn_cancelled', { callId: 'call-2' }),
+      ]),
+    );
+
+    expect(out).toContain('**⏸ turn interrupted — geniro continued it**');
+    expect(out.match(/\*\*⊘ turn cancelled\*\*/g)).toHaveLength(1);
+  });
+
   it('exports a team note as its kind, author, number and text, naming the note it replaces', () => {
     const note = nodeRow('engineer', 'team_note', {
       kind: 'pitfall',

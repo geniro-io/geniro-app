@@ -1176,6 +1176,39 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Record — or, with null, forget — what the daemon still owes a run after
+   * an update or a restart cut it off (`Run.restartContinuation`). A bare
+   * `nativeUpdate`, like {@link setResetWakes}: the newest write is the whole
+   * record, and it must not move `updatedAt`.
+   */
+  async setRestartContinuation(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { restartContinuation: value },
+    );
+  }
+
+  /** Forget every run's continuation record at once. */
+  async clearRestartContinuations(txEm?: EntityManager): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { restartContinuation: { $ne: null } },
+      { restartContinuation: null },
+    );
+  }
+
+  /** Every run the daemon still owes a continuation — what the drain reads. */
+  async listRunsWithRestartContinuation(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { restartContinuation: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
    * Replace a run's {@link Run.unrecordedSpend}. A bare `nativeUpdate`, like
    * {@link setResetWakes}: it is bookkeeping about money, not activity in the
    * thread, so it must not move `updatedAt`.

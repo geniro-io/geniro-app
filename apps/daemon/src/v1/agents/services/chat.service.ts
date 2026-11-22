@@ -19,6 +19,7 @@ import {
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
+  continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
@@ -233,6 +234,11 @@ import { isProjectChat } from '../utils/project-chat';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
+import {
+  mergeRestartContinuations,
+  readRestartContinuation,
+  restartContinuationColumn,
+} from '../utils/run-restart-continuation';
 import { teamRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { isSlashCommand } from '../utils/session-replacement-notes';
@@ -1004,21 +1010,32 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         if (this.registry.has(run.id)) {
           continue; // an in-flight turn legitimately owns this run
         }
-        await this.persist(
-          em,
-          run.id,
-          await this.seqs.reserve(run.id),
-          'error',
-          null,
-          {
-            message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running`,
-            // Written at BOOT, which can be hours after the work stopped — so a
-            // clock reading this row as the turn's end must not (the renderer's
-            // wall-clock fallback ends such a turn at its last real row).
-            interrupted: true,
-            interruptCause: cause,
-          },
-        );
+        const owed = readRestartContinuation(run.restartContinuation ?? null);
+        // A standing question card waits for the user's answer, which is what
+        // continues that turn.
+        const continues =
+          continuesUnattended(cause) &&
+          run.archivedAt === null &&
+          readPendingQuestion(run.pendingQuestion ?? null) === null;
+        if (!continues || owed === null) {
+          await this.persist(
+            em,
+            run.id,
+            await this.seqs.reserve(run.id),
+            'error',
+            null,
+            {
+              message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running${continues ? ' — work continues' : ''}`,
+              // Written at BOOT, which can be hours after the work stopped — so
+              // a clock reading this row as the turn's end must not (the
+              // renderer's wall-clock fallback ends such a turn at its last
+              // real row).
+              interrupted: true,
+              interruptCause: cause,
+              ...(continues ? { continues: true } : {}),
+            },
+          );
+        }
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not a card that outlives its turn by design — the standing question,
@@ -1048,6 +1065,25 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             request.payload,
           );
         }
+        if (continues) {
+          await this.runDao.setRestartContinuation(
+            run.id,
+            restartContinuationColumn(
+              mergeRestartContinuations(owed, {
+                cause,
+                turns: [{ memberId: SINGLE_AGENT_NODE }],
+                calls: [],
+                failedCalls: [],
+                monitors: [],
+              }),
+            ),
+            em,
+          );
+          continue;
+        }
+        if (owed !== null) {
+          await this.runDao.setRestartContinuation(run.id, null, em);
+        }
         await this.setRunStatus(em, run.id, 'failed');
         reconciled += 1;
       }
@@ -1063,6 +1099,34 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `boot reconcile of orphaned running runs failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * A chat whose continuation after a restart could not be started, ended as
+   * a stop nobody continues ends it: the red interrupted row and `failed`.
+   * Nothing when a turn owns the run again.
+   */
+  async abandonRestartContinuation(
+    runId: string,
+    cause: InterruptCause,
+  ): Promise<void> {
+    if (this.registry.has(runId)) {
+      return;
+    }
+    const em = this.em.fork();
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'error',
+      null,
+      {
+        message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running, and it could not be continued`,
+        interrupted: true,
+        interruptCause: cause,
+      },
+    );
+    await this.setRunStatus(em, runId, 'failed');
   }
 
   /**

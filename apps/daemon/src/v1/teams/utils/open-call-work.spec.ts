@@ -58,10 +58,61 @@ describe('openCalls', () => {
       {
         callId: 'open',
         callerMemberId: 'orch',
+        callerConversationId: null,
         calleeMemberId: 'critic',
         mode: 'async',
+        member: null,
       },
     ]);
+  });
+
+  it('reads the conversation a call was made from, and the pool member it started on', () => {
+    const calls = openCalls([
+      row('call_started', 'orch', {
+        callId: 'open',
+        callerNodeId: 'orch',
+        callerConversationId: 'call-7',
+        calleeNodeId: 'critic',
+        mode: 'async',
+        member: 2,
+      }),
+    ]);
+
+    expect(calls).toEqual([
+      {
+        callId: 'open',
+        callerMemberId: 'orch',
+        callerConversationId: 'call-7',
+        calleeMemberId: 'critic',
+        mode: 'async',
+        member: 2,
+      },
+    ]);
+  });
+
+  it('reads no pool member that is not a whole number from one', () => {
+    const calls = openCalls([
+      row('call_started', 'orch', {
+        callId: 'a',
+        callerNodeId: 'orch',
+        calleeNodeId: 'critic',
+        member: 0,
+      }),
+      row('call_started', 'orch', {
+        callId: 'b',
+        callerNodeId: 'orch',
+        calleeNodeId: 'critic',
+        member: 1.5,
+      }),
+      row('call_started', 'orch', {
+        callId: 'c',
+        callerNodeId: 'orch',
+        calleeNodeId: 'critic',
+        member: '2',
+      }),
+    ]);
+
+    expect(calls.map((call) => call.member)).toEqual([null, null, null]);
   });
 });
 

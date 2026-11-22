@@ -6,6 +6,7 @@ import {
   cliTurnApiMs,
   cliTurnDurationMs,
   clockMs,
+  continuesAfterInterrupt,
   formatDuration,
   heldSinceOf,
   openTurnWorkedMs,
@@ -724,6 +725,20 @@ describe('scanTurns over a TEAM run', () => {
     const { durations, open } = scanTurns(items);
     expect([...durations.values()]).toEqual([{ ms: 7618, source: 'cli' }]);
     expect(openTurnWorkedMs(open, at('2026-08-14T10:05:30.000Z'))).toBe(30_000);
+  });
+});
+
+describe('continuesAfterInterrupt', () => {
+  it('reads only a continues flag set to true', () => {
+    expect(
+      continuesAfterInterrupt({ interrupted: true, continues: true }),
+    ).toBe(true);
+    expect(
+      continuesAfterInterrupt({ interrupted: true, continues: false }),
+    ).toBe(false);
+    expect(continuesAfterInterrupt({ interrupted: true })).toBe(false);
+    expect(continuesAfterInterrupt({ continues: 'true' })).toBe(false);
+    expect(continuesAfterInterrupt(null)).toBe(false);
   });
 });
 

@@ -104,6 +104,7 @@ import type { WallTurnDao } from '../dao/wall-turn.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
 import { serializePendingQuestion } from '../utils/pending-question';
 import { NO_ATTENTION_MEMORY, readAttention } from '../utils/run-attention';
+import { readRestartContinuation } from '../utils/run-restart-continuation';
 import {
   CHAT_WALL_CLOCK_ROW_KINDS,
   type WallClockRow,
@@ -257,6 +258,15 @@ class FakeRunDao {
    */
   beforeUpdate: ((data: Partial<Run>) => Promise<void> | undefined) | null =
     null;
+  async setRestartContinuation(
+    id: string,
+    value: string | null,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.restartContinuation = value;
+    }
+  }
   /** The durable half of a standing deferred question card. */
   async setPendingQuestion(id: string, value: string | null): Promise<void> {
     const run = this.runs.get(id);
@@ -10218,15 +10228,7 @@ describe('ChatService', () => {
       'crash',
       'run interrupted — the daemon crashed while this turn was running',
     ],
-    [
-      'self-update',
-      'run interrupted — the app was updated while this turn was running',
-    ],
     ['quit', 'run interrupted — the app was quit while this turn was running'],
-    [
-      'restart',
-      'run interrupted — the daemon was restarted while this turn was running',
-    ],
     [
       'unknown',
       'run interrupted — the daemon stopped unexpectedly while this turn was running',
@@ -10252,6 +10254,110 @@ describe('ChatService', () => {
       });
     },
   );
+
+  it.each([
+    [
+      'self-update',
+      'run interrupted — the app was updated while this turn was running — work continues',
+    ],
+    [
+      'restart',
+      'run interrupted — the daemon was restarted while this turn was running — work continues',
+    ],
+  ] as const)(
+    'keeps a chat an update or a restart (%s) cut off running, recorded for the drain',
+    async (cause, message) => {
+      const { service, runDao, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await runDao.updateById(run.id, { status: 'running' });
+
+      await service.reconcileOrphanedRuns(cause);
+
+      const error = (await itemDao.getByRun(run.id)).find(
+        (i) => i.kind === 'error',
+      );
+      expect(JSON.parse(error!.payload)).toEqual({
+        message,
+        interrupted: true,
+        interruptCause: cause,
+        continues: true,
+      });
+      const after = await runDao.getById(run.id);
+      expect(after?.status).toBe('running');
+      expect(
+        readRestartContinuation(after?.restartContinuation ?? null),
+      ).toEqual({
+        cause,
+        turns: [{ memberId: 'agent' }],
+        calls: [],
+        failedCalls: [],
+        monitors: [],
+      });
+    },
+  );
+
+  it('abandons a restart continuation the chat cannot start: the interrupted row, the run failed', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.abandonRestartContinuation(run.id, 'restart');
+
+    const error = (await itemDao.getByRun(run.id)).find(
+      (i) => i.kind === 'error',
+    );
+    expect(JSON.parse(error!.payload)).toEqual({
+      message:
+        'run interrupted — the daemon was restarted while this turn was running, and it could not be continued',
+      interrupted: true,
+      interruptCause: 'restart',
+    });
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+  });
+
+  it('does not continue a chat whose standing question waits on the user', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, {
+      status: 'running',
+      pendingQuestion: serializePendingQuestion({
+        kind: 'question',
+        requestId: 'q-1',
+        title: null,
+        questions: [{ question: 'Which?', options: [{ label: 'A' }] }],
+      }),
+    });
+
+    await service.reconcileOrphanedRuns('self-update');
+
+    const after = await runDao.getById(run.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.restartContinuation ?? null).toBeNull();
+  });
+
+  it('a second boot after a crash drops the record and fails the chat, writing no second continue row', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+    await service.reconcileOrphanedRuns('restart');
+    await service.reconcileOrphanedRuns('restart');
+    expect(
+      (await itemDao.getByRun(run.id)).filter((i) => i.kind === 'error'),
+    ).toHaveLength(1);
+
+    await service.reconcileOrphanedRuns('crash');
+
+    const after = await runDao.getById(run.id);
+    expect(after?.status).toBe('failed');
+    expect(after?.restartContinuation ?? null).toBeNull();
+    const errors = (await itemDao.getByRun(run.id)).filter(
+      (i) => i.kind === 'error',
+    );
+    expect(JSON.parse(errors.at(-1)!.payload)).toMatchObject({
+      interruptCause: 'crash',
+    });
+    expect(JSON.parse(errors.at(-1)!.payload).continues).toBeUndefined();
+  });
 
   it('boot reconcile closes cards a KILLED daemon never swept, and leaves answered ones alone', async () => {
     // The registry is in-memory, so a SIGKILL takes every pending entry with

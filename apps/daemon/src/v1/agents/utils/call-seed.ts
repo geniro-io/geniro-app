@@ -20,14 +20,23 @@ export interface CallSeedRow {
 
 /**
  * The rows {@link readCallSeed} folds: every call row, and the `system` rows
- * carrying the notices that acknowledge failed deliveries to their sender.
+ * carrying the notices that acknowledge failed deliveries to their sender or
+ * marking a call the daemon continued after a restart.
  */
 export const CALL_RECORDS: KindRowsView = {
   name: 'call-records',
   kinds: ['call_started', 'call_result', 'call_answer', 'system'],
   keep: (row) =>
-    row.kind !== 'system' || row.payload.includes('"messageDeliveryNotices"'),
+    row.kind !== 'system' ||
+    row.payload.includes('"messageDeliveryNotices"') ||
+    row.payload.includes(`"${RESTART_CONTINUED_KEY}"`),
 };
+
+/**
+ * The `system` payload key naming the call the daemon continued after an
+ * update or a restart, written once when it re-opens the call.
+ */
+export const RESTART_CONTINUED_KEY = 'restartContinued';
 
 /** The id the broker mints for a run's `n`th call — what {@link callNumber} reads back. */
 export function callIdOf(n: number): string {
@@ -107,6 +116,16 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       continue;
     }
     const delivery = payload as Record<string, unknown>;
+    if (row.kind === 'system') {
+      const continued = readString(delivery[RESTART_CONTINUED_KEY]);
+      if (continued !== null) {
+        const record = records.get(continued);
+        if (record !== undefined) {
+          record.continuedAfterRestart = true;
+        }
+        continue;
+      }
+    }
     if (
       row.kind === 'system' &&
       Array.isArray(delivery.messageDeliveryNotices)

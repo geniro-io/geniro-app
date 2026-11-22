@@ -80,6 +80,7 @@ import {
 import {
   cliTurnApiMs,
   cliTurnDurationMs,
+  continuesAfterInterrupt,
   formatDuration,
   TurnDurationContext,
 } from './turn-duration';
@@ -362,7 +363,13 @@ export const TranscriptItem = memo(function TranscriptItem({
         </MessageBubble>
       );
     }
-    case 'error':
+    case 'error': {
+      if (continuesAfterInterrupt(item.payload)) {
+        const message = payloadString(item.payload, 'message');
+        return message === null ? null : (
+          <MessageBubble variant="note">{message}</MessageBubble>
+        );
+      }
       return (
         <DisclosureRow
           memoryKey={`disclosure:${item.id}`}
@@ -383,6 +390,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           )}
         />
       );
+    }
     case 'turn_cancelled':
       // A node's cancel already lands as its "<Name> cancelled" status row —
       // only the run-level cancel note remains.
@@ -455,7 +463,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     }
     case 'status': {
       const status = payloadString(item.payload, 'status');
-      if (!status) {
+      if (!status || continuesAfterInterrupt(item.payload)) {
         return null;
       }
       // A trigger firing is not news — the user's own message sits right

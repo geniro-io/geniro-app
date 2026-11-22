@@ -84,6 +84,7 @@ export class MonitorRowWriter implements OnModuleInit {
   async write(
     owner: MonitorRowOwner,
     entry: MonitorRowPayload,
+    woke = false,
   ): Promise<boolean> {
     try {
       const em = this.em.fork();
@@ -108,7 +109,7 @@ export class MonitorRowWriter implements OnModuleInit {
           payload: monitorRowPayload(
             [entry],
             owner.callId,
-            false,
+            woke,
             owner.conversationId,
           ),
         },

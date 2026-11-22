@@ -3032,7 +3032,9 @@ export class ItemDao extends BaseDao<Item> {
   async monitorRowsOfRuns(
     runIds: readonly string[],
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload'>[]> {
+  ): Promise<
+    Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload' | 'createdAt'>[]
+  > {
     return inRunBatches(runIds, (batch) =>
       this.getRepo(txEm).find(
         {
@@ -3042,10 +3044,37 @@ export class ItemDao extends BaseDao<Item> {
         },
         {
           orderBy: { runId: 'asc', seq: 'asc' },
-          fields: ['runId', 'memberId', 'seq', 'payload'],
+          fields: ['runId', 'memberId', 'seq', 'payload', 'createdAt'],
           disableIdentityMap: true,
         },
       ),
+    );
+  }
+
+  /**
+   * One run's tool calls that may be geniro's `monitor` — what names an
+   * interrupted monitor's command, which its own rows never hold. Read by the
+   * promoted tool name, or by the payload for a row not stamped yet; the
+   * caller keeps only the calls its own name check accepts.
+   */
+  async monitorToolCallsOfRun(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'memberId' | 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: 'tool_call',
+        $or: [
+          { toolNameLower: { $like: '%monitor' } },
+          { toolNameLower: null, payload: { $like: '%monitor%' } },
+        ],
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['memberId', 'seq', 'payload'],
+        disableIdentityMap: true,
+      },
     );
   }
 

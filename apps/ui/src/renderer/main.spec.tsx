@@ -60,6 +60,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(window, 'scrollY');
   window.location.hash = '';
   mocks.browserWindowApp.mockClear();
 });
@@ -155,7 +157,5 @@ describe('renderer entry', () => {
     window.dispatchEvent(new Event('scroll'));
 
     expect(scrollTo).toHaveBeenCalledWith(0, 0);
-    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true });
-    scrollTo.mockRestore();
   });
 });

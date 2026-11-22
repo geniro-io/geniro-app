@@ -182,10 +182,6 @@ export function isSpendWithoutTurn(event: Pick<UsageEvent, 'seq'>): boolean {
   return event.seq <= POLLED_SPEND_SEQ;
 }
 
-/**
- * Whether a spend-without-turn row is the account poll's own (its polled range),
- * as opposed to a prompt-cache warm-up below it.
- */
 export function isPolledSpendRow(event: Pick<UsageEvent, 'seq'>): boolean {
   return event.seq > PROMPT_CACHE_WARMUP_SEQ && isSpendWithoutTurn(event);
 }

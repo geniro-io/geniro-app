@@ -42,7 +42,6 @@ import {
   PlanLimitsLedger,
   type PlanReading,
 } from '../utils/plan-limits-ledger';
-import { addPromptCacheWarmupSpend } from '../utils/prompt-cache-warmup-spend';
 import {
   addPolledSpendToTotals,
   applyPolledSpend,
@@ -55,6 +54,7 @@ import {
   readPolledSpendLedger,
 } from '../utils/polled-spend-ledger';
 import { resolvePricedModel } from '../utils/priced-model';
+import { addPromptCacheWarmupSpend } from '../utils/prompt-cache-warmup-spend';
 import {
   callSessionKey,
   nodeSessionKey,

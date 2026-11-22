@@ -4988,9 +4988,7 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
       waitForMcpServers: false,
       prices: {
         priceOf: (provider, model) =>
-          provider === 'anthropic' && model === 'claude-opus-5-5'
-            ? opus
-            : null,
+          provider === 'anthropic' && model === 'claude-opus-5-5' ? opus : null,
       },
     });
   }
@@ -5084,8 +5082,7 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
       .find((event) => event.type === 'turn_complete');
 
     const usage = done?.type === 'turn_complete' ? done.usage : null;
-    const expected =
-      (2 * 4 + 100 * 20 + 250_000 * 0.2 + 1_000 * 5) / 1_000_000;
+    const expected = (2 * 4 + 100 * 20 + 250_000 * 0.2 + 1_000 * 5) / 1_000_000;
     expect(usage?.costUsd).toBeCloseTo(expected, 9);
     expect(usage?.estimatedCostUsd).toBeCloseTo(expected, 9);
     expect(usage?.cacheReadTokens).toBe(250_000);
@@ -5104,9 +5101,7 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
       })
       .find((event) => event.type === 'turn_complete');
 
-    expect(done?.type === 'turn_complete' ? done.usage?.costUsd : null).toBe(
-      3,
-    );
+    expect(done?.type === 'turn_complete' ? done.usage?.costUsd : null).toBe(3);
   });
 });
 

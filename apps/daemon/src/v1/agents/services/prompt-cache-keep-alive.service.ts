@@ -7,12 +7,12 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 
-import type { AgentAdapter } from '../adapters/agent-adapter';
 import type {
   AgentTurnHandle,
   AgentTurnInput,
   AgentUsage,
 } from '../adapters/adapter.types';
+import type { AgentAdapter } from '../adapters/agent-adapter';
 import { runTagEnv } from '../utils/run-process-scan';
 import { AgentEventBus } from './agent-events.bus';
 import { ProcessRegistry } from './process-registry';

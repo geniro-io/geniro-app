@@ -30,16 +30,16 @@ import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { splitOf } from '../utils/model-costs';
 import { delegateIdOf } from '../utils/open-delegates';
 import {
-  addPromptCacheWarmupSpend,
-  type PromptCacheWarmupSpent,
-} from '../utils/prompt-cache-warmup-spend';
-import {
   addPolledSpendToTotals,
   applyPolledSpend,
   nodePolledSpend,
   polledDollars,
   type PolledSpend,
 } from '../utils/polled-spend';
+import {
+  addPromptCacheWarmupSpend,
+  type PromptCacheWarmupSpent,
+} from '../utils/prompt-cache-warmup-spend';
 import {
   snapshotNodePoolProfiles,
   snapshotPoolKinds,

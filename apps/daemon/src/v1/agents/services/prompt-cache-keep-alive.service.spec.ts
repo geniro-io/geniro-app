@@ -304,7 +304,9 @@ describe('PromptCacheKeepAliveService', () => {
   it('stops every conversation of a run that is archived or deleted', async () => {
     service.keepWarm(target());
     service.keepWarm(target({ runId: 'run-2' }));
-    bus.publishRunsChanged([{ id: 'run-1', archivedAt: '2026-11-22T10:00:00.000Z' } as RunWire]);
+    bus.publishRunsChanged([
+      { id: 'run-1', archivedAt: '2026-11-22T10:00:00.000Z' } as RunWire,
+    ]);
     bus.publishRunDeleted('run-2');
 
     await vi.advanceTimersByTimeAsync(ONE_HOUR);

@@ -555,7 +555,6 @@ export const POLLED_SPEND_SEQ = -1;
 // (PROMPT_CACHE_WARMUP_SEQ, POLLED_SPEND_SEQ] is polled spend and every one above
 // POLLED_SPEND_SEQ is a turn.
 
-/** The highest seq a prompt-cache warm-up row takes; the polled range sits above it. */
 export const PROMPT_CACHE_WARMUP_SEQ = -1_000_000_000;
 
 /**

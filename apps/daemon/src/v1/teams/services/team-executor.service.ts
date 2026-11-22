@@ -103,8 +103,8 @@ import {
   PartialStreamService,
 } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
-import { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
+import { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';

@@ -121,10 +121,6 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
     return changed;
   }
 
-  /**
-   * One warm-up, as its own row below the run's lowest warm-up, so the poll's set-replace
-   * never reaches it. A lost race for that seq is retried once.
-   */
   async recordPromptCacheWarmup(
     row: Omit<UsageEventInput, 'seq'>,
     txEm?: EntityManager,

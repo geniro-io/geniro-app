@@ -203,10 +203,6 @@ export class UsageRecorderService implements OnModuleInit {
     }
   }
 
-  /**
-   * Write one prompt-cache warm-up as money with no turn behind it: the figures a
-   * warm-up reports, and no timing, since it reports none.
-   */
   private async recordPromptCacheWarmup(
     spend: PromptCacheWarmupSpend,
   ): Promise<void> {

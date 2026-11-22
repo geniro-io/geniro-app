@@ -100,10 +100,9 @@ import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
-import { AgentKind } from '../../runs/runs.types';
-import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
+import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
@@ -150,6 +149,7 @@ import type { ProjectScopeService } from '../../projects/services/project-scope.
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
+import { AgentKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import { member, teamOf } from '../__tests__/team-builders';
 import {
@@ -659,8 +659,11 @@ class FakeNodeStateDao {
    * are totals rather than levels. A fake that overwrote here would let a
    * clobbering writer pass.
    */
-  readonly warmups: { runId: string; memberId: string; costUsd: number | null }[] =
-    [];
+  readonly warmups: {
+    runId: string;
+    memberId: string;
+    costUsd: number | null;
+  }[] = [];
 
   async addPromptCacheWarmup(
     runId: string,

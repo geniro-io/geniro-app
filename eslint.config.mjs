@@ -161,6 +161,24 @@ const config = defineConfig([
     },
   },
   {
+    files: ['apps/ui/src/**/*.{ts,tsx}', 'apps/ui/.storybook/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex:
+                '^(@geniro/daemon|@packages|(\\.\\./)+(apps/)?(daemon|packages))(/|$)',
+              message:
+                "apps/ui/turbo.json drops the UI tasks' `^build` because the UI imports no workspace package; importing one means restoring it there, or turbo replays a stale pass.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.spec.ts', '**/*.spec.tsx', '**/*.int.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

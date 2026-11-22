@@ -1,12 +1,9 @@
 import { Check, Copy, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
 
 import { writeClipboard } from '../clipboard';
 import { Button } from './ui/button';
 import { cn } from './ui/utils';
-
-/** How long the ✓ (or, after a failure, the ✗) stays before the icon reverts. */
-const COPIED_WINDOW_MS = 1500;
+import { useFlash } from './use-flash';
 
 /**
  * Copy a string to the clipboard, with a brief ✓ acknowledgement.
@@ -35,39 +32,17 @@ export function CopyButton({
   /** Write the label beside the icon. */
   showLabel?: boolean;
 }): React.JSX.Element {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const revertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (revertTimer.current) {
-        clearTimeout(revertTimer.current);
-      }
-    },
-    [],
-  );
+  const { flash, show } = useFlash<'copied' | 'failed'>();
+  const copied = flash === 'copied';
+  const failed = flash === 'failed';
 
   const handleClick = async (): Promise<void> => {
-    if (revertTimer.current) {
-      clearTimeout(revertTimer.current);
-    }
     try {
       await writeClipboard(text);
-      setFailed(false);
-      setCopied(true);
-      revertTimer.current = setTimeout(
-        () => setCopied(false),
-        COPIED_WINDOW_MS,
-      );
+      show('copied');
     } catch {
-      setCopied(false);
-      setFailed(true);
       // Shown, not only named: a phone has no tooltip to read it from.
-      revertTimer.current = setTimeout(
-        () => setFailed(false),
-        COPIED_WINDOW_MS,
-      );
+      show('failed');
     }
   };
 

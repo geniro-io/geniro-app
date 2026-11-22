@@ -1,4 +1,5 @@
-import { ChevronRight, RefreshCw } from 'lucide-react';
+import { Check, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 
 import type {
   ChatMetricsDto,
@@ -13,6 +14,7 @@ import { SegmentBreakdown } from '../components/segment-breakdown';
 import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { useFlash } from '../components/use-flash';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import { formatPercent } from '../stats/stats-format';
 import {
@@ -51,6 +53,8 @@ export function ContextPanel({
   error,
   live = false,
   refreshed = false,
+  press = null,
+  settledPresses = 0,
   runningCost = null,
   onRefresh,
 }: {
@@ -71,6 +75,10 @@ export function ContextPanel({
   live?: boolean;
   /** Whether {@link metrics} answers a REFRESH — see {@link Plan}'s note. */
   refreshed?: boolean;
+  /** The user's refresh press that {@link metrics} or {@link error} answers, or null. */
+  press?: PlanPress | null;
+  /** Presses answered or failed so far; each new one flashes the button. */
+  settledPresses?: number;
   /**
    * What the turn in flight has spent that no finished turn records yet, from
    * the live plane — added to the daemon's totals, as every other spend
@@ -91,6 +99,17 @@ export function ContextPanel({
     metrics && !metrics.context?.model && metrics.model
       ? { name: metrics.model, price: metrics.modelPrice ?? null }
       : null;
+  const outcome = loading
+    ? null
+    : pressOutcome(press, metrics?.planTakenAt ?? null, error);
+  const header = {
+    refreshing: loading,
+    outcome,
+    takenAt: metrics?.planTakenAt ?? null,
+    error,
+    settledPresses,
+    onRefresh,
+  };
   return (
     // Ordered by what a reader came for, not by where the figures came from.
     // The two HEADLINE readings lead — how full this window is, and how much of
@@ -134,9 +153,8 @@ export function ContextPanel({
           plan={metrics.plan}
           model={unnamedModel}
           takenAt={metrics.planTakenAt}
-          refreshing={loading}
-          refreshed={refreshed}
-          onRefresh={onRefresh}
+          refreshed={refreshed && press === null}
+          header={header}
         />
       ) : loading && !metrics ? (
         // REPORTED as "if they are not loaded yet, there should be some
@@ -163,12 +181,7 @@ export function ContextPanel({
           data-slot="plan-limits-reason"
           aria-busy={loading}
           className="flex flex-col gap-0.5 border-t border-border pt-2">
-          <div className="flex items-center gap-1.5">
-            <span className="font-medium text-foreground">Plan limits</span>
-            {onRefresh ? (
-              <PlanRefreshButton refreshing={loading} onRefresh={onRefresh} />
-            ) : null}
-          </div>
+          <PlanHeader {...header} plan={null} />
           <span className="text-muted-foreground">{metrics.planReason}</span>
         </div>
       ) : null}
@@ -185,7 +198,9 @@ export function ContextPanel({
           without a live region a failed fetch is announced to nobody — silence
           where the sighted user gets a red line. `text-xs` keeps the panel's
           scale, which the component forwards. */}
-      {error ? <ErrorText className="text-xs">{error}</ErrorText> : null}
+      {error && outcome !== 'failed' ? (
+        <ErrorText className="text-xs">{error}</ErrorText>
+      ) : null}
     </div>
   );
 }
@@ -522,14 +537,30 @@ function readingAge(iso: string, now: number): string {
  * The icon spins while ANY re-read is in flight, the automatic ones included —
  * the figures beside it are being retaken either way — and the button is
  * disabled for that time, since a second press would only cancel the first.
+ * Each settled press then flashes ✓ or ✗: the answer usually lands within a
+ * frame and changes no figure, so the spin alone is never seen.
  */
 function PlanRefreshButton({
   refreshing,
+  settledPresses,
+  failed,
   onRefresh,
 }: {
   refreshing: boolean;
+  settledPresses: number;
+  failed: boolean;
   onRefresh: () => void;
 }): React.JSX.Element {
+  const { flash, show } = useFlash<'done' | 'failed'>();
+  // Seeded with the count at mount, so reopening the panel replays nothing.
+  const seen = useRef(settledPresses);
+  useEffect(() => {
+    if (settledPresses === seen.current) {
+      return;
+    }
+    seen.current = settledPresses;
+    show(failed ? 'failed' : 'done');
+  }, [settledPresses, failed, show]);
   return (
     <Button
       type="button"
@@ -541,11 +572,143 @@ function PlanRefreshButton({
       title="Refresh — ask the agent for its current plan limits"
       disabled={refreshing}
       onClick={onRefresh}>
-      <RefreshCw
-        aria-hidden="true"
-        className={cn('size-3 shrink-0', refreshing && 'animate-spin')}
-      />
+      {refreshing || flash === null ? (
+        <RefreshCw
+          aria-hidden="true"
+          className={cn('size-3 shrink-0', refreshing && 'animate-spin')}
+        />
+      ) : flash === 'done' ? (
+        <Check aria-hidden="true" className="size-3 shrink-0 text-success" />
+      ) : (
+        <X aria-hidden="true" className="size-3 shrink-0 text-destructive" />
+      )}
     </Button>
+  );
+}
+
+/**
+ * What the user's refresh press came to, once it settled. Judged against the
+ * reading on screen when they pressed — both stamps are the daemon's, so a
+ * paired phone's clock cannot skew it.
+ */
+export interface PlanPress {
+  /** `planTakenAt` of the reading shown when the press was made. */
+  takenBefore: string | null;
+}
+
+type PressOutcome = 'updated' | 'unchanged' | 'failed';
+
+function pressOutcome(
+  press: PlanPress | null,
+  takenAt: string | null,
+  error: string | null,
+): PressOutcome | null {
+  if (press === null) {
+    return null;
+  }
+  if (error !== null) {
+    return 'failed';
+  }
+  if (takenAt === null) {
+    return 'unchanged';
+  }
+  if (press.takenBefore === null) {
+    return 'updated';
+  }
+  return Date.parse(takenAt) > Date.parse(press.takenBefore)
+    ? 'updated'
+    : 'unchanged';
+}
+
+function planReadingIsDated(takenMs: number, now: number): boolean {
+  return Number.isFinite(takenMs) && now - takenMs >= PLAN_STAMP_AFTER_MS;
+}
+
+/** The press outcome's words, beside the button, so the section keeps its height. */
+function pressOutcomeText(
+  outcome: PressOutcome,
+  takenAt: string | null,
+): string {
+  switch (outcome) {
+    case 'updated':
+      return takenAt !== null &&
+        planReadingIsDated(Date.parse(takenAt), Date.now())
+        ? 'Updated'
+        : 'Updated just now';
+    case 'unchanged':
+      return 'No newer reading';
+    case 'failed':
+      return 'Couldn’t refresh';
+  }
+}
+
+interface PlanHeaderState {
+  refreshing: boolean;
+  outcome: PressOutcome | null;
+  /** When the reading on screen was taken, which words an update gets. */
+  takenAt: string | null;
+  error: string | null;
+  settledPresses: number;
+  /** Retake the limits by hand; absent draws the plain spinner instead. */
+  onRefresh?: () => void;
+}
+
+/**
+ * The plan section's title row, shared by the limits and by the sentence that
+ * stands in for them: the refresh control, what its last press came to, and
+ * — under it, only when that press failed — why.
+ */
+function PlanHeader({
+  refreshing,
+  outcome,
+  takenAt,
+  error,
+  settledPresses,
+  onRefresh,
+  plan,
+}: PlanHeaderState & {
+  /** The CLI's word for the subscription, or null. */
+  plan: string | null;
+}): React.JSX.Element {
+  return (
+    <>
+      <div className="flex items-center gap-1.5">
+        <span className="font-medium text-foreground">Plan limits</span>
+        {onRefresh ? (
+          <PlanRefreshButton
+            refreshing={refreshing}
+            settledPresses={settledPresses}
+            failed={outcome === 'failed'}
+            onRefresh={onRefresh}
+          />
+        ) : refreshing ? (
+          <Spinner />
+        ) : null}
+        {outcome === null ? null : (
+          <span
+            data-slot="plan-limits-press"
+            role="status"
+            className={cn(
+              'truncate text-[11px]',
+              outcome === 'failed'
+                ? 'text-destructive'
+                : 'text-muted-foreground',
+            )}>
+            {pressOutcomeText(outcome, takenAt)}
+          </span>
+        )}
+        {plan === null ? null : (
+          // The CLI's own word for the subscription, cased as a plan name
+          // rather than reworded into one: 'max' is what it said.
+          <span className="ml-auto shrink-0 uppercase text-muted-foreground">
+            {plan}
+          </span>
+        )}
+      </div>
+      {outcome === 'failed' && error !== null ? (
+        <ErrorText className="text-[11px]">{error}</ErrorText>
+      ) : null}
+    </>
   );
 }
 
@@ -553,9 +716,8 @@ function Plan({
   plan,
   model,
   takenAt,
-  refreshing,
   refreshed,
-  onRefresh,
+  header,
 }: {
   plan: PlanLimits;
   /** The model the agent runs as, when no breakdown above names it. */
@@ -566,20 +728,17 @@ function Plan({
    * minutes old, and is dated on screen once it is.
    */
   takenAt: string | null;
-  /** A newer reading is on its way; these figures stay until it lands. */
-  refreshing: boolean;
-  /** These figures answer a REFRESH — the agent was just asked again. */
+  /** These figures answer the AUTOMATIC refresh — the agent was just asked again. */
   refreshed: boolean;
-  /** Retake them by hand; absent draws the plain spinner instead. */
-  onRefresh?: () => void;
+  header: PlanHeaderState;
 }): React.JSX.Element {
+  const { refreshing } = header;
   // Read ONCE for the whole block rather than per row, so three windows cannot
   // be counted down from three different moments. The panel is fetched on open
   // and never polled, so this is the moment the reading itself describes.
   const now = Date.now();
   const takenMs = takenAt === null ? Number.NaN : Date.parse(takenAt);
-  const dated =
-    Number.isFinite(takenMs) && now - takenMs >= PLAN_STAMP_AFTER_MS;
+  const dated = planReadingIsDated(takenMs, now);
   // The agent was asked again just now and the reading is STILL old: it gave
   // nothing newer. Said out loud, or a refresh that changed nothing reads as a
   // button that does nothing — which is the report it exists to answer.
@@ -590,21 +749,7 @@ function Plan({
       data-slot="plan-limits"
       aria-busy={refreshing}
       className="flex flex-col gap-1.5 border-t border-border pt-2">
-      <div className="flex items-center gap-1.5">
-        <span className="font-medium text-foreground">Plan limits</span>
-        {onRefresh ? (
-          <PlanRefreshButton refreshing={refreshing} onRefresh={onRefresh} />
-        ) : refreshing ? (
-          <Spinner />
-        ) : null}
-        {plan.plan === null ? null : (
-          // The CLI's own word for the subscription, cased as a plan name
-          // rather than reworded into one: 'max' is what it said.
-          <span className="ml-auto shrink-0 uppercase text-muted-foreground">
-            {plan.plan}
-          </span>
-        )}
-      </div>
+      <PlanHeader {...header} plan={plan.plan} />
       {model === null ? null : <ModelLine model={model} />}
       {/* An allowance is a countdown, so a percentage from an hour ago undated
           reads as the room left right now. A reading from moments ago needs no

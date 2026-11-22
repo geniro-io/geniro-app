@@ -15,7 +15,7 @@ import {
 } from './agent-activity';
 import type { LiveCost } from './call-context';
 import { ChatMetricsLoaderContext, planReadingIsStale } from './chat-metrics';
-import { ContextPanel } from './context-panel';
+import { ContextPanel, type PlanPress } from './context-panel';
 
 /**
  * Fraction above which the ring warns, then alarms. Below `WARN_AT` it is
@@ -158,6 +158,8 @@ function MeterReadout({
           live={live}
           runningCost={runningCost}
           refreshed={metrics.refreshed}
+          press={metrics.press}
+          settledPresses={metrics.settledPresses}
           onRefresh={metrics.refresh}
         />
       ) : null}
@@ -181,8 +183,15 @@ interface MetricsState {
   data: ChatMetricsDto | null;
   loading: boolean;
   error: string | null;
-  /** Whether {@link data} is the answer to a REFRESH rather than an ordinary read. */
+  /**
+   * Whether {@link data} — or {@link error} — is the answer to a REFRESH rather
+   * than an ordinary read.
+   */
   refreshed: boolean;
+  /** The user's press this state answers; null for an ordinary read and the automatic refresh. */
+  press: PlanPress | null;
+  /** How many presses have been answered or have failed, so each one is acknowledged. */
+  settledPresses: number;
 }
 
 /** A readout that knows nothing yet — the shape a chat starts on. */
@@ -191,11 +200,18 @@ const NO_READING: Omit<MetricsState, 'target'> = {
   loading: false,
   error: null,
   refreshed: false,
+  press: null,
+  settledPresses: 0,
 };
+
+/** A refresh waiting for the fetch effect; the automatic one carries no press. */
+interface PendingRefresh {
+  press: PlanPress | null;
+}
 
 /** What {@link useChatMetrics} hands the panel: the reading, and a way to retake it. */
 interface ChatMetricsHandle extends MetricsState {
-  /** Ask the agent again, past any reading the daemon would otherwise serve. */
+  /** The user's press: ask the agent again, past any reading the daemon would otherwise serve. */
   refresh: () => void;
 }
 
@@ -241,17 +257,30 @@ function useChatMetrics(
   // one request that effect owns knows whether it is the refresh. A ref rather
   // than state: it is a message to the next run of the effect, not something
   // to render.
-  const refreshPending = useRef(false);
+  const refreshPending = useRef<PendingRefresh | null>(null);
   // A press whose request was superseded before it answered, keyed by the
   // target it was made on: it rides on the next request for THAT target only.
-  const carriedPress = useRef<string | null>(null);
+  const carriedPress = useRef<{
+    target: string | null;
+    refresh: PendingRefresh;
+  } | null>(null);
   // One automatic refresh per OPEN, never a loop: a refresh that brings back
   // nothing newer must not keep asking for as long as the panel stays open.
   const autoRefreshed = useRef(false);
-  const refresh = useLatestCallback(() => {
-    refreshPending.current = true;
+  const requestRefresh = useLatestCallback((pending: PendingRefresh) => {
+    refreshPending.current = pending;
     setNonce((value) => value + 1);
   }, []);
+  const refresh = useLatestCallback(
+    () =>
+      requestRefresh({
+        press: {
+          takenBefore:
+            state.target === target ? (state.data?.planTakenAt ?? null) : null,
+        },
+      }),
+    [requestRefresh],
+  );
   useEffect(() => {
     if (!open) {
       autoRefreshed.current = false;
@@ -283,9 +312,15 @@ function useChatMetrics(
     // `live`, which is now the working-agent PROP this effect also depends on.
     let current = true;
     let answered = false;
-    const refreshing =
-      refreshPending.current || carriedPress.current === target;
-    refreshPending.current = false;
+    const pending =
+      refreshPending.current ??
+      (carriedPress.current?.target === target
+        ? carriedPress.current.refresh
+        : null);
+    const refreshing = pending !== null;
+    const press = pending?.press ?? null;
+    const pressed = press !== null ? 1 : 0;
+    refreshPending.current = null;
     carriedPress.current = null;
     setState((previous) =>
       // Re-reading the SAME chat keeps what is already on screen, so a refetch
@@ -301,13 +336,15 @@ function useChatMetrics(
         if (!current) {
           return;
         }
-        setState({
+        setState((previous) => ({
           target,
           data,
           loading: false,
           error: null,
           refreshed: refreshing,
-        });
+          press,
+          settledPresses: previous.settledPresses + pressed,
+        }));
         // ASKED FOR as "it should update itself every time I open the panel,
         // if it is older than five minutes". An ordinary open already asks the
         // agent, but the daemon can still answer with an older account reading
@@ -319,7 +356,7 @@ function useChatMetrics(
           planReadingIsStale(data.planTakenAt, Date.now())
         ) {
           autoRefreshed.current = true;
-          refresh();
+          requestRefresh({ press: null });
         }
       })
       .catch((err: unknown) => {
@@ -330,6 +367,9 @@ function useChatMetrics(
             target,
             loading: false,
             error: err instanceof Error ? err.message : String(err),
+            refreshed: refreshing,
+            press,
+            settledPresses: previous.settledPresses + pressed,
           }));
         }
       });
@@ -338,13 +378,23 @@ function useChatMetrics(
       // A press this request was still answering rides on the one that
       // replaces it — the live re-read supersedes requests every ten seconds,
       // and an ordinary read would serve the reading the press was for.
-      if (refreshing && !answered) {
-        carriedPress.current = target;
+      if (pending !== null && !answered) {
+        carriedPress.current = { target, refresh: pending };
       }
     };
     // `live` rides the deps so a settle takes one final reading; `nonce` is the
     // live re-read.
-  }, [load, runId, memberId, callId, target, open, live, nonce, refresh]);
+  }, [
+    load,
+    runId,
+    memberId,
+    callId,
+    target,
+    open,
+    live,
+    nonce,
+    requestRefresh,
+  ]);
   if (load === null || runId === null) {
     return null;
   }

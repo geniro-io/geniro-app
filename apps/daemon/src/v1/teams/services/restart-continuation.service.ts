@@ -5,7 +5,9 @@ import { ConflictException } from '@packages/common';
 import { interruptCauseClause } from '../../../utils/stop-cause';
 import type { RestartContinuation } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ChatService } from '../../agents/services/chat.service';
+import { stoppedMonitorsText } from '../../agents/utils/monitor-text';
 import {
   readRestartContinuation,
   restartContinuationColumn,
@@ -27,7 +29,8 @@ export const RESTART_CONTINUE_ATTEMPTS = 12;
  * in its session, opened with the short continuation message. The record is
  * cleared before its work is handed on: what a second stop cuts off is read
  * from the transcript again. A chat the user is already talking to, or whose
- * card waits on them, is left to them. A run whose continuation cannot start
+ * card waits on them, is left to them, its next turn owed the list of its
+ * stopped monitors. A run whose continuation cannot start
  * is ended as a stop nobody continues ends it.
  */
 @Injectable()
@@ -40,6 +43,7 @@ export class RestartContinuationService {
     private readonly runDao: RunDao,
     private readonly chats: ChatService,
     private readonly teams: TeamExecutorService,
+    private readonly sessions: AgentSessionRegistry,
   ) {}
 
   /** Continue every run holding a record — called once, from `onListening`. */
@@ -95,10 +99,19 @@ export class RestartContinuationService {
     runId: string,
     record: RestartContinuation,
   ): Promise<'continued' | 'busy' | 'gone'> {
-    if (this.chats.hostTurnHold(runId) !== null) {
-      return 'gone';
-    }
     const clause = interruptCauseClause(record.cause);
+    const leftToUser = (): 'gone' => {
+      if (record.monitors.length > 0) {
+        this.sessions.oweKeyNote(
+          runId,
+          `[geniro] ${clause.charAt(0).toUpperCase()}${clause.slice(1)}, which stopped your monitors. ${stoppedMonitorsText(record.monitors)}`,
+        );
+      }
+      return 'gone';
+    };
+    if (this.chats.hostTurnHold(runId) !== null) {
+      return leftToUser();
+    }
     try {
       await this.chats.sendMessage(
         runId,
@@ -118,9 +131,12 @@ export class RestartContinuationService {
         },
       );
     } catch (err) {
+      if (err instanceof ConflictException && err.errorCode === 'RUN_BUSY') {
+        return leftToUser();
+      }
       if (
         err instanceof ConflictException &&
-        (err.errorCode === 'RUN_BUSY' || err.errorCode === 'RUN_ARCHIVED')
+        err.errorCode === 'RUN_ARCHIVED'
       ) {
         return 'gone';
       }

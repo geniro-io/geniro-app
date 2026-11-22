@@ -5,6 +5,7 @@ import {
   continuesUnattended,
   type InterruptCause,
 } from '../../../utils/stop-cause';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { Item } from '../../runs/entity/item.entity';
 import {
   MONITOR_TIMEOUT_DEFAULT_MS,
@@ -78,6 +79,12 @@ interface CutOff {
  * counter is per launch, so a new monitor never reuses one; `MonitorBroker`
  * reads the ids of any other run before its first monitor of the launch.
  */
+/** A monitor's command as its agent is shown it again: registered secrets masked. */
+function commandOf(value: unknown): string | null {
+  const command = asString(value);
+  return command === null ? null : redactSecrets(command);
+}
+
 @Injectable()
 export class MonitorOutcomeSweep {
   private readonly logger = new Logger(MonitorOutcomeSweep.name);
@@ -329,8 +336,7 @@ export class MonitorOutcomeSweep {
           {
             id: monitor.id,
             description: monitor.description,
-            command:
-              started === undefined ? null : asString(started.input.command),
+            command: commandOf(started?.input.command),
             remainingMs:
               timeoutMs === null
                 ? null

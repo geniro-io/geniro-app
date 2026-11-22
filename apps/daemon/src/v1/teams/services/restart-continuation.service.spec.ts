@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RestartContinuation } from '../../agents/chat.types';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { Run } from '../../runs/entity/run.entity';
 import {
@@ -38,7 +39,6 @@ const CHAT_RECORD: RestartContinuation = {
 
 function setup(runs: Partial<Run>[]) {
   const rows = new Map(runs.map((run) => [run.id!, { ...run } as Run]));
-  const writes: { runId: string; value: string | null }[] = [];
   const runDao = {
     getById: vi.fn(async (id: string) => rows.get(id) ?? null),
     listRunsWithRestartContinuation: vi.fn(async () =>
@@ -46,7 +46,6 @@ function setup(runs: Partial<Run>[]) {
     ),
     setRestartContinuation: vi.fn(
       async (runId: string, value: string | null) => {
-        writes.push({ runId, value });
         const run = rows.get(runId);
         if (run) {
           run.restartContinuation = value;
@@ -65,14 +64,16 @@ function setup(runs: Partial<Run>[]) {
     ),
     abandonRestartContinuation: vi.fn(async () => undefined),
   };
+  const sessions = { oweKeyNote: vi.fn(() => true) };
   const em = { fork: () => ({}) } as unknown as EntityManager;
   const service = new RestartContinuationService(
     em,
     runDao as unknown as RunDao,
     chats as unknown as ChatService,
     teams as unknown as TeamExecutorService,
+    sessions as unknown as AgentSessionRegistry,
   );
-  return { service, runDao, chats, teams, rows, writes };
+  return { service, runDao, chats, teams, sessions, rows };
 }
 
 describe('RestartContinuationService', () => {
@@ -91,8 +92,9 @@ describe('RestartContinuationService', () => {
         restartContinuation: JSON.stringify(TEAM_RECORD),
       },
     ]);
+    let seenAtHandOff: string | null | undefined;
     ctx.teams.continueAfterRestart.mockImplementation(async () => {
-      expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+      seenAtHandOff = ctx.rows.get('team-1')!.restartContinuation;
       return 'continued';
     });
 
@@ -102,7 +104,8 @@ describe('RestartContinuationService', () => {
       'team-1',
       TEAM_RECORD,
     );
-    expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+    expect(seenAtHandOff).toBeNull();
+    expect(ctx.teams.abandonRestartContinuation).not.toHaveBeenCalled();
   });
 
   it('keeps the record of a run still settling a pass and tries again', async () => {
@@ -218,6 +221,28 @@ describe('RestartContinuationService', () => {
     expect(ctx.chats.sendMessage).toHaveBeenCalledTimes(how === 'hold' ? 0 : 1);
     expect(ctx.chats.abandonRestartContinuation).not.toHaveBeenCalled();
     expect(ctx.rows.get('chat-1')!.restartContinuation).toBeNull();
+    expect(ctx.sessions.oweKeyNote).toHaveBeenCalledWith(
+      'chat-1',
+      expect.stringContaining('m2 — CI run — `gh run watch 7`'),
+    );
+  });
+
+  it('owes nothing and ends nothing for a chat archived before its continuation', async () => {
+    const ctx = setup([
+      {
+        id: 'chat-1',
+        teamId: null,
+        restartContinuation: JSON.stringify(CHAT_RECORD),
+      },
+    ]);
+    ctx.chats.sendMessage.mockRejectedValue(
+      new ConflictException('RUN_ARCHIVED', 'archived'),
+    );
+
+    await ctx.service.drain();
+
+    expect(ctx.sessions.oweKeyNote).not.toHaveBeenCalled();
+    expect(ctx.chats.abandonRestartContinuation).not.toHaveBeenCalled();
   });
 
   it('ends a chat whose continuation turn cannot start', async () => {

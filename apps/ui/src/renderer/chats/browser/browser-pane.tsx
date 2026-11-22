@@ -540,6 +540,9 @@ export function BrowserPane({
             alt=""
             data-slot="browser-still"
             className="size-full object-cover object-left-top"
+            onMouseDown={() => {
+              window.geniro.browserFocus(runId).catch(() => undefined);
+            }}
           />
         )}
         {active?.authRequest ? (

@@ -7,8 +7,11 @@ import { AgentOp } from './browser-agent-op';
 
 interface FakeContents extends EventEmitter {
   url: string;
+  focused: boolean;
   loadURL: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
+  paste: ReturnType<typeof vi.fn>;
   windowOpenHandler: ((details: { url: string }) => { action: string }) | null;
 }
 
@@ -20,11 +23,12 @@ interface FakeView {
 }
 
 interface FakeWindow extends EventEmitter {
+  focused: boolean;
   contentView: {
     addChildView: ReturnType<typeof vi.fn>;
     removeChildView: ReturnType<typeof vi.fn>;
   };
-  webContents: { send: ReturnType<typeof vi.fn> };
+  webContents: { send: ReturnType<typeof vi.fn>; focused: boolean };
   close: ReturnType<typeof vi.fn>;
 }
 
@@ -39,6 +43,10 @@ const h = vi.hoisted(() => ({
   windows: [] as FakeWindow[],
   sessions: new Map<string, FakeSession>(),
   appListeners: new Map<string, (...args: unknown[]) => void>(),
+  menus: [] as {
+    template: { label?: string; role?: string; click?: () => void }[];
+    popup: ReturnType<typeof vi.fn>;
+  }[],
   configure: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
@@ -48,6 +56,16 @@ vi.mock('electron', async () => {
     id = ++h.seq;
     url = '';
     destroyed = false;
+    focused = false;
+    focus = vi.fn(() => {
+      this.focused = true;
+    });
+    isFocused = (): boolean => this.focused;
+    cut = vi.fn();
+    copy = vi.fn();
+    paste = vi.fn();
+    selectAll = vi.fn();
+    copyImageAt = vi.fn();
     windowOpenHandler:
       ((details: { url: string }) => { action: string }) | null = null;
     loadURL = vi.fn((url: string) => {
@@ -77,7 +95,11 @@ vi.mock('electron', async () => {
   }
   class View {
     webContents = new Contents();
-    setBounds = vi.fn();
+    bounds = { x: 0, y: 0, width: 0, height: 0 };
+    setBounds = vi.fn((bounds: View['bounds']) => {
+      this.bounds = bounds;
+    });
+    getBounds = (): View['bounds'] => this.bounds;
     setVisible = vi.fn();
     setBackgroundColor = vi.fn();
     constructor(public options: { webPreferences: { partition: string } }) {
@@ -87,9 +109,17 @@ vi.mock('electron', async () => {
   class Window extends Emitter {
     static getAllWindows = (): Window[] => h.windows as unknown as Window[];
     destroyed = false;
+    focused = true;
     contentView = { addChildView: vi.fn(), removeChildView: vi.fn() };
-    webContents = { send: vi.fn() };
+    webContents = {
+      send: vi.fn(),
+      focused: false,
+      isFocused(): boolean {
+        return this.focused;
+      },
+    };
     isDestroyed = (): boolean => this.destroyed;
+    isFocused = (): boolean => this.focused;
     getContentBounds = () => ({ x: 0, y: 0, width: 900, height: 600 });
     focus = vi.fn();
     destroy = vi.fn(() => {
@@ -114,6 +144,13 @@ vi.mock('electron', async () => {
     BrowserWindow: Window,
     WebContentsView: View,
     clipboard: { writeText: vi.fn() },
+    Menu: {
+      buildFromTemplate: (template: (typeof h.menus)[number]['template']) => {
+        const menu = { template, popup: vi.fn() };
+        h.menus.push(menu);
+        return menu;
+      },
+    },
     shell: { openExternal: vi.fn() },
     session: {
       fromPartition: (partition: string) => {
@@ -175,6 +212,7 @@ beforeEach(() => {
   h.windows.length = 0;
   h.sessions.clear();
   h.appListeners.clear();
+  h.menus.length = 0;
   h.configure.mockReset();
   h.configure.mockImplementation(() => Promise.resolve());
 });
@@ -672,6 +710,170 @@ describe('BrowserService', () => {
 
     expect(service.state('run-1').activeTabId).toBe('t1');
     expect(h.views[1]?.webContents.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BrowserService tab context menu', () => {
+  const rightClickOnField = {
+    x: 40,
+    y: 25,
+    linkURL: '',
+    pageURL: 'https://stand.test/',
+    frame: { url: 'https://stand.test/' },
+    mediaType: 'none',
+    hasImageContents: false,
+    isEditable: true,
+    selectionText: '',
+    editFlags: {
+      canCut: true,
+      canCopy: true,
+      canPaste: true,
+      canSelectAll: true,
+    },
+  };
+
+  it('opens over the host window at the click, offset by where the tab sits', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    h.views[0]?.webContents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.menus).toHaveLength(1);
+    expect(h.menus[0]?.popup).toHaveBeenCalledWith({
+      window: main,
+      x: DOCKED.x + 40,
+      y: DOCKED.y + 25,
+    });
+  });
+
+  it("pastes into the tab's own page, never through a role", async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    const contents = h.views[0]?.webContents as FakeContents;
+
+    contents.emit('context-menu', {}, rightClickOnField);
+    const template = h.menus[0]?.template ?? [];
+    template.find((item) => item.label === 'Paste')?.click?.();
+
+    expect(template.some((item) => item.role !== undefined)).toBe(false);
+    expect(contents.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens in the pop-out once the tab has moved there', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+
+    h.views[0]?.webContents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.menus[0]?.popup).toHaveBeenCalledWith({
+      window: popout,
+      x: WINDOWED.x + 40,
+      y: WINDOWED.y + 25,
+    });
+  });
+
+  it('shows no menu for a tab that is off screen', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+
+    h.views[0]?.webContents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.menus).toHaveLength(0);
+  });
+});
+
+describe('BrowserService tab keyboard focus', () => {
+  async function shownTab(): Promise<{
+    service: BrowserService;
+    main: FakeWindow;
+    contents: FakeContents;
+  }> {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    return { service, main, contents: h.views[0]?.webContents as FakeContents };
+  }
+
+  it('gives the page the keyboard back when its view returns after an overlay', async () => {
+    const { service, main, contents } = await shownTab();
+    contents.focused = true;
+
+    service.setBounds('run-1', null, asWindow(main));
+    contents.focused = false;
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the keyboard where the user moved it while the view was off', async () => {
+    const { service, main, contents } = await shownTab();
+    contents.focused = true;
+
+    service.setBounds('run-1', null, asWindow(main));
+    contents.focused = false;
+    main.webContents.focused = true;
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not take the keyboard for a page that did not have it', async () => {
+    const { service, main, contents } = await shownTab();
+
+    service.setBounds('run-1', null, asWindow(main));
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).not.toHaveBeenCalled();
+  });
+
+  it('never activates a window the user has left', async () => {
+    const { service, main, contents } = await shownTab();
+    contents.focused = true;
+
+    service.setBounds('run-1', null, asWindow(main));
+    contents.focused = false;
+    main.focused = false;
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).not.toHaveBeenCalled();
+  });
+
+  it('focuses the page when the user clicks its still, even though the click landed in the renderer', async () => {
+    const { service, main, contents } = await shownTab();
+    service.setBounds('run-1', null, asWindow(main));
+    main.webContents.focused = true;
+
+    service.focusActiveTab('run-1');
+    expect(contents.focus).not.toHaveBeenCalled();
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('focuses a page already on screen at once when asked', async () => {
+    const { service, contents } = await shownTab();
+
+    service.focusActiveTab('run-1');
+
+    expect(contents.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('never activates a window the user has left when the page is asked for', async () => {
+    const { service, main, contents } = await shownTab();
+    main.focused = false;
+
+    service.focusActiveTab('run-1');
+    service.setBounds('run-1', null, asWindow(main));
+    service.focusActiveTab('run-1');
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(contents.focus).not.toHaveBeenCalled();
   });
 });
 

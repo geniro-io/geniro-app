@@ -411,6 +411,7 @@ export function installRemoteBridge(): void {
     browserContinueInsecure: () => browserOnTheMac(),
     browserAnswerAuth: () => browserOnTheMac(),
     browserCapture: () => browserOnTheMac(),
+    browserFocus: () => browserOnTheMac(),
     browserForgetRun: () => browserOnTheMac(),
     browserStopAgent: () => browserOnTheMac(),
     browserLabelTab: () => browserOnTheMac(),

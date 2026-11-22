@@ -383,6 +383,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.browserCapture, runId) as ReturnType<
       GeniroApi['browserCapture']
     >,
+  browserFocus: (runId) =>
+    ipcRenderer.invoke(IPC.browserFocus, runId) as ReturnType<
+      GeniroApi['browserFocus']
+    >,
   browserForgetRun: (runId) =>
     ipcRenderer.invoke(IPC.browserForgetRun, runId) as ReturnType<
       GeniroApi['browserForgetRun']

@@ -4704,6 +4704,7 @@ describe('withLiveText', () => {
             'orch',
           ),
           item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item('turn_cancelled', { callId: 'call-1', continues: true }, 'poet'),
           item(
             'status',
             { status: 'cancelled', callId: 'call-1', continues: true },

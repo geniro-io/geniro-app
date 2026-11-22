@@ -259,11 +259,13 @@ export function foldRunDelegates({
 export function turnEndingOf(
   row: Pick<Item, 'seq' | 'memberId' | 'kind' | 'payload'>,
 ): TurnEnding {
+  const payload = parseJsonColumn(row.payload);
   return {
     seq: row.seq,
     memberId: row.memberId,
-    callId: payloadString(parseJsonColumn(row.payload), 'callId'),
-    cancelled: row.kind === 'turn_cancelled',
+    callId: payloadString(payload, 'callId'),
+    cancelled:
+      row.kind === 'turn_cancelled' && asRecord(payload)?.continues !== true,
   };
 }
 

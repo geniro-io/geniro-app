@@ -82,10 +82,8 @@ export function parseInterruptCause(value: unknown): InterruptCause {
  */
 export function consumeStopCause(userDataDir: string): InterruptCause {
   const path = join(userDataDir, DAEMON_STOP_CAUSE_NAME);
-  let written: string;
-  try {
-    written = readFileSync(path, 'utf8').trim();
-  } catch {
+  const written = readStopCauseNote(path);
+  if (written === null) {
     return 'unknown';
   }
   try {
@@ -99,4 +97,21 @@ export function consumeStopCause(userDataDir: string): InterruptCause {
     return 'unknown';
   }
   return parseInterruptCause(written);
+}
+
+/**
+ * The cause the UI wrote for the stop now under way, left in place for the
+ * next boot to consume. The UI writes it before it signals the daemon.
+ */
+export function peekStopCause(userDataDir: string): InterruptCause {
+  const written = readStopCauseNote(join(userDataDir, DAEMON_STOP_CAUSE_NAME));
+  return written === null ? 'unknown' : parseInterruptCause(written);
+}
+
+function readStopCauseNote(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8').trim();
+  } catch {
+    return null;
+  }
 }

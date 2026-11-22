@@ -17,10 +17,12 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import { environment } from '../../../environments';
 import {
   continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
+  peekStopCause,
 } from '../../../utils/stop-cause';
 import {
   type AgentEvent,
@@ -156,6 +158,7 @@ import {
   COMPACTING_ACTIVITY,
   endsOffTurnStretch,
   mapEventToItem,
+  type MappedItem,
   restatesRunAsWorking,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
@@ -921,8 +924,14 @@ export class TeamExecutorService
    */
   private shuttingDown = false;
 
+  /** Whether the stop under way is one whose work the next boot continues. */
+  private shutdownContinues = false;
+
   beforeApplicationShutdown(): void {
     this.shuttingDown = true;
+    this.shutdownContinues = continuesUnattended(
+      peekStopCause(environment.userDataDir),
+    );
   }
 
   /**
@@ -4839,6 +4848,20 @@ export class TeamExecutorService
      * result alike, so the next boot finds the work open and may continue it.
      */
     const leftForBoot = (): boolean => this.shuttingDown && !stoppedByUser;
+    /**
+     * A turn the shutdown cancelled ahead of an update or a restart keeps its
+     * row, which carries its usage, marked so nothing reads it as a Stop.
+     */
+    const markedForContinuation = (
+      event: AgentEvent,
+      mapped: MappedItem | null,
+    ): MappedItem | null =>
+      mapped !== null &&
+      event.type === 'turn_cancelled' &&
+      leftForBoot() &&
+      this.shutdownContinues
+        ? { ...mapped, payload: { ...mapped.payload, continues: true } }
+        : mapped;
     let runFinished = false;
     /**
      * Whether the run's current reopened stretch was started by output of
@@ -6791,12 +6814,7 @@ export class TeamExecutorService
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           this.backgroundWork.record(runId, event, node.id);
-          // The shutdown, not a Stop, cancelled this turn: its row would read
-          // as the user's Stop, and the next boot closes the turn itself.
-          const mapped =
-            event.type === 'turn_cancelled' && leftForBoot()
-              ? null
-              : mapEventToItem(event);
+          const mapped = markedForContinuation(event, mapEventToItem(event));
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
           for (const row of compactions.rowsBefore(event, mapped)) {
@@ -7173,10 +7191,7 @@ export class TeamExecutorService
             }
             return;
           }
-          const mapped =
-            event.type === 'turn_cancelled' && leftForBoot()
-              ? null
-              : mapEventToItem(event);
+          const mapped = markedForContinuation(event, mapEventToItem(event));
           const settles = terminalStatus(event) !== null;
           // AHEAD of the rows this event produces, so the live row stands above
           // the work rather than appearing under the last of it.

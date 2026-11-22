@@ -15,6 +15,7 @@ import {
   consumeStopCause,
   continuesUnattended,
   parseInterruptCause,
+  peekStopCause,
   resumesUnattended,
 } from './stop-cause';
 
@@ -57,6 +58,33 @@ describe('consumeStopCause', () => {
 
     expect(consumeStopCause(dir)).toBe('unknown');
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('peekStopCause', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-stop-cause-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads the cause of the stop under way and leaves the note for the next boot', () => {
+    const path = join(dir, DAEMON_STOP_CAUSE_NAME);
+    writeFileSync(path, 'restart\n');
+
+    expect(peekStopCause(dir)).toBe('restart');
+    expect(existsSync(path)).toBe(true);
+    expect(consumeStopCause(dir)).toBe('restart');
+  });
+
+  it('reads no note, or a word it does not know, as unknown', () => {
+    expect(peekStopCause(dir)).toBe('unknown');
+    writeFileSync(join(dir, DAEMON_STOP_CAUSE_NAME), 'reboot');
+    expect(peekStopCause(dir)).toBe('unknown');
   });
 });
 

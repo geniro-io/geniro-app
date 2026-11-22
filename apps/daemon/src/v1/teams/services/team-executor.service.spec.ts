@@ -183,6 +183,15 @@ vi.mock('../utils/call-endpoint-self-check', () => ({
   probeCallEndpoint: vi.fn(async () => null),
 }));
 
+const stopCause = vi.hoisted(() => ({
+  peek: vi.fn<() => string>(() => 'unknown'),
+}));
+
+vi.mock('../../../utils/stop-cause', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/stop-cause')>()),
+  peekStopCause: stopCause.peek,
+}));
+
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
   readonly runs = new Map<string, Run>();
@@ -16855,13 +16864,106 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     expect(claude.starts[1]!.cancelled).toBe(true);
     const rows = itemDao.items.filter((i) => i.runId === run.id);
     expect(rows.some((i) => i.kind === 'call_result')).toBe(false);
-    expect(rows.some((i) => i.kind === 'turn_cancelled')).toBe(false);
+    expect(
+      rows
+        .filter((i) => i.kind === 'turn_cancelled')
+        .map((i) => JSON.parse(i.payload) as Record<string, unknown>),
+    ).toEqual([{ nodeId: 'a' }, { nodeId: 'callee', callId: 'call-1' }]);
     expect(
       rows
         .filter((i) => i.kind === 'status')
         .map((i) => (JSON.parse(i.payload) as { status: string }).status)
         .filter((status) => status !== 'running'),
     ).toEqual([]);
+  });
+
+  it.each(['self-update', 'restart'] as const)(
+    'keeps the usage of a turn a %s cut off, on its turn_cancelled row marked as continued',
+    async (cause) => {
+      stopCause.peek.mockReturnValueOnce(cause);
+      const { service, claude, callBroker, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'a', {
+        title: 'work',
+        agent: 'callee',
+        message: 'build it',
+        mode: 'async',
+      });
+      await drain();
+
+      service.beforeApplicationShutdown();
+      claude.starts[1]!.emit({
+        type: 'turn_cancelled',
+        usage: { ...NO_USAGE, costUsd: 0.01 },
+      });
+      claude.starts[0]!.emit({
+        type: 'turn_cancelled',
+        usage: { ...NO_USAGE, costUsd: 0.24 },
+      });
+      await drain();
+
+      const cancelled = itemDao.items
+        .filter((i) => i.runId === run.id && i.kind === 'turn_cancelled')
+        .map((i) => ({
+          memberId: i.memberId,
+          payload: JSON.parse(i.payload) as Record<string, unknown>,
+        }));
+      expect(cancelled).toEqual([
+        {
+          memberId: 'callee',
+          payload: {
+            usage: { ...NO_USAGE, costUsd: 0.01 },
+            continues: true,
+            nodeId: 'callee',
+            callId: 'call-1',
+          },
+        },
+        {
+          memberId: 'a',
+          payload: {
+            usage: { ...NO_USAGE, costUsd: 0.24 },
+            continues: true,
+            nodeId: 'a',
+          },
+        },
+      ]);
+      expect(
+        itemDao.items.some(
+          (i) => i.runId === run.id && i.kind === 'call_result',
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('keeps the usage of a turn a quit cut off, on a plain turn_cancelled row as before', async () => {
+    stopCause.peek.mockReturnValueOnce('quit');
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    service.beforeApplicationShutdown();
+    claude.starts[0]!.emit({
+      type: 'turn_cancelled',
+      usage: { ...NO_USAGE, costUsd: 0.24 },
+    });
+    await drain();
+
+    expect(
+      itemDao.items
+        .filter((i) => i.runId === run.id && i.kind === 'turn_cancelled')
+        .map((i) => JSON.parse(i.payload) as Record<string, unknown>),
+    ).toEqual([{ usage: { ...NO_USAGE, costUsd: 0.24 }, nodeId: 'a' }]);
   });
 
   describe('continued after an update or a restart', () => {

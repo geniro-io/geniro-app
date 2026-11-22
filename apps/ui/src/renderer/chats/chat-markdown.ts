@@ -24,7 +24,7 @@ import {
   payloadNumber,
   payloadString,
 } from './transcript-payload';
-import { formatDuration } from './turn-duration';
+import { continuesAfterInterrupt, formatDuration } from './turn-duration';
 
 /**
  * One conversation as READABLE markdown — the second thing an export can be.
@@ -213,7 +213,11 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     }
     return [parts.join(' — ')];
   },
-  turn_cancelled: () => ['**⊘ turn cancelled**'],
+  turn_cancelled: (item) => [
+    continuesAfterInterrupt(item.payload)
+      ? '**⏸ turn interrupted — geniro continued it**'
+      : '**⊘ turn cancelled**',
+  ],
   call_question: (item) => {
     const question = payloadString(item.payload, 'question');
     return question === null ? null : [`**❓ asks**`, '', question];

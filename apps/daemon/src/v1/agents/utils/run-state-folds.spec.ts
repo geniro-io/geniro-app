@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { ItemKind } from '../../runs/runs.types';
 import { type ItemWire, RUN_CALL_BRIEF_MAX } from '../chat.types';
-import { foldRunCalls, foldRunDelegates } from './run-state-folds';
+import {
+  foldRunCalls,
+  foldRunDelegates,
+  turnEndingOf,
+} from './run-state-folds';
 
 function row(
   seq: number,
@@ -446,5 +450,29 @@ describe('foldRunDelegates', () => {
       status: 'untracked',
       processEnded: false,
     });
+  });
+});
+
+describe('turnEndingOf', () => {
+  const row = (payload: Record<string, unknown>) => ({
+    seq: 9,
+    memberId: 'poet',
+    kind: 'turn_cancelled' as const,
+    payload: JSON.stringify(payload),
+  });
+
+  it('reads a turn_cancelled row as a Stop', () => {
+    expect(turnEndingOf(row({ callId: 'call-1' }))).toEqual({
+      seq: 9,
+      memberId: 'poet',
+      callId: 'call-1',
+      cancelled: true,
+    });
+  });
+
+  it('does not read a turn the shutdown cut off for its continuation as a Stop', () => {
+    expect(
+      turnEndingOf(row({ callId: 'call-1', continues: true })).cancelled,
+    ).toBe(false);
   });
 });

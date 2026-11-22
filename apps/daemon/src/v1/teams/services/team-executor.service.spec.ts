@@ -13125,6 +13125,45 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
     });
 
+    it('does NOT hand on a failure whose call subfolder was deleted under it, though the chat folder stands', async () => {
+      const work = realpathSync(mkdtempSync(join(tmpdir(), 'pool-sub-')));
+      mkdirSync(join(work, 'api'));
+      const { service, claude, cursor, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'pool',
+        team: POOL_WF,
+        cwd: work,
+        prompt: 'go',
+      });
+      await drain();
+
+      const envelope = callBroker.callAgent(run.id, 'orch', {
+        title: 'work',
+        agent: 'helper',
+        message: 'x',
+        folder: 'api',
+      });
+      await drain();
+      rmSync(join(work, 'api'), { recursive: true, force: true });
+      claude.starts[1]!.emit({
+        type: 'error',
+        message: `spawn /bin/claude ENOENT`,
+      });
+      claude.starts[1]!.finish();
+
+      const settled = await envelope;
+      expect(settled.status).toBe('error');
+      if (settled.status === 'error') {
+        expect(settled.error).toContain('ENOENT');
+        expect(settled.error).not.toContain('FOLDER_NOT_FOUND');
+      }
+      expect(cursor.starts).toHaveLength(0);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+      rmSync(work, { recursive: true, force: true });
+    });
+
     it('does NOT hand on a failure that came after the member started working', async () => {
       const { claude, cursor, callBroker, run } = await startPoolRun();
 
@@ -22788,5 +22827,81 @@ describe("TeamExecutorService — geniro's own question tool", () => {
     expect(await answer).toEqual({ status: 'answered', answer: 'MySQL' });
     completeTurn(cursor.starts[0]!, 'done');
     await drain();
+  });
+});
+
+describe('TeamExecutorService — a callee started in a subfolder', () => {
+  const team = teamOf([member('orch'), member('helper')], { name: 'folders' });
+
+  it('starts the callee turn in the subfolder its caller named, the lead staying in the chat folder', async () => {
+    const api = join(dir, 'folders-a', 'api');
+    mkdirSync(api, { recursive: true });
+    const { service, claude, callBroker, skillHarvest } = setup();
+    const run = await service.startRun({
+      slug: 'f',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'work in the api',
+      mode: 'async',
+      folder: 'folders-a/api',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.cwd).toBe(dir);
+    expect(claude.starts[1]!.input.cwd).toBe(api);
+
+    claude.starts[1]!.emit({
+      type: 'slash_commands',
+      commands: [{ name: 'review', description: null }],
+    });
+    await drain();
+    expect(skillHarvest.record).toHaveBeenLastCalledWith('claude', api, null, [
+      { name: 'review', description: null },
+    ]);
+  });
+
+  it('fails a continued turn whose subfolder is gone instead of starting it elsewhere', async () => {
+    const api = join(dir, 'folders-b', 'api');
+    mkdirSync(api, { recursive: true });
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'f',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'work in the api',
+      folder: 'folders-b/api',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'helper-session' });
+    completeTurn(claude.starts[1]!, 'done');
+    expect((await first).status).toBe('ok');
+    rmSync(api, { recursive: true, force: true });
+
+    const continued = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+
+    expect(continued.status).toBe('error');
+    if (continued.status === 'error') {
+      expect(continued.error).toContain('turn start failed');
+      expect(continued.error).toContain('FOLDER_NOT_FOUND');
+    }
+    expect(claude.starts).toHaveLength(2);
   });
 });

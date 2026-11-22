@@ -36,6 +36,11 @@ export function callAgentSchema(): Record<string, unknown> {
         description:
           'async (preferred) returns a call_id at once — keep working or end your turn, you are notified when it finishes or asks, then collect it with await_agent; sync (the default when omitted) blocks until the result; fire_and_forget never returns a result.',
       },
+      folder: {
+        type: 'string',
+        description:
+          "Optional: a subfolder of this chat's folder for the callee to run in — relative to the chat's folder (e.g. \"services/api\"), or an absolute path inside it. It must exist. Use it when the work belongs to one project inside a folder that holds several, so the callee picks up that project's own instructions and repository. A conversation stays in the folder it started in: with `thread`, omit it (or repeat the same folder). Omit to run in the chat's folder.",
+      },
       member: {
         type: 'integer',
         minimum: 1,

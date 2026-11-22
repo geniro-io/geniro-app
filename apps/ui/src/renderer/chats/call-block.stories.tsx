@@ -141,6 +141,10 @@ export const BackupCompleted: Story = {
   args: { block: pooledBlock(true) },
 };
 
+export const InSubfolder: Story = {
+  args: { block: { ...pooledBlock(true), folder: 'services/api' } },
+};
+
 export const PoolSwitchOpened: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.click(

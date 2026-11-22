@@ -38,6 +38,7 @@ const CALL_AGENT_ARGS = [
   'mode',
   'member',
   'resume_cold',
+  'folder',
 ];
 
 /**
@@ -82,6 +83,14 @@ export function validateCallAgentArgs(
     (typeof args.thread !== 'string' || args.thread.length === 0)
   ) {
     return invalidArgsEnvelope("'thread' must be a non-empty call_id string");
+  }
+  if (
+    args.folder !== undefined &&
+    (typeof args.folder !== 'string' || args.folder.trim().length === 0)
+  ) {
+    return invalidArgsEnvelope(
+      "'folder' must be a non-empty path to a subfolder of this chat's folder",
+    );
   }
   if (args.member !== undefined && poolMemberArg(args.member) === null) {
     return invalidArgsEnvelope(

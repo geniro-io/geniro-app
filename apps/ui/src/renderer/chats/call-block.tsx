@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRightLeft, Timer } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Folder, Timer } from 'lucide-react';
 import { createContext, memo, useContext, useState } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';
@@ -1042,6 +1042,16 @@ export const CallBlock = memo(function CallBlock({
             ) : (
               <BlockTitle>{identityText}</BlockTitle>
             )}
+            {block.folder ? (
+              <Badge
+                variant="muted"
+                data-slot="call-folder"
+                className="min-w-0 max-w-[40%] shrink"
+                title={`${callee} works in ${block.folder}, inside this chat's folder`}>
+                <Folder aria-hidden />
+                <span className="truncate">{block.folder}</span>
+              </Badge>
+            ) : null}
             {/* WHICH CLI answered. The card is the callee's work, so it is the
                 callee's binary that is named — a graph routinely mixes the two,
                 and a node's name is the user's word for a persona rather than a

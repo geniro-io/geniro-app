@@ -1,3 +1,14 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
@@ -85,6 +96,7 @@ function harness(options?: {
     resumeSessionId: string | null;
     conversationId: string;
     pool?: CalleePoolPlan;
+    folder?: string;
   }[];
   deferred: Deferred[];
   /** Call ids launched as WAKES, which skip the active-turn cap's queue. */
@@ -104,6 +116,7 @@ function harness(options?: {
     resumeSessionId: string | null;
     conversationId: string;
     pool?: CalleePoolPlan;
+    folder?: string;
   }[] = [];
   const deferred: Deferred[] = [];
   const wakes: string[] = [];
@@ -132,6 +145,7 @@ function harness(options?: {
         resumeSessionId,
         conversationId,
         ...(launch.pool !== undefined ? { pool: launch.pool } : {}),
+        ...(launch.folder !== undefined ? { folder: launch.folder } : {}),
       });
       if (mode === 'throw') {
         return Promise.reject(new Error('spawn exploded'));
@@ -8522,5 +8536,205 @@ describe('CallBroker.owedACallOrMonitor', () => {
     });
 
     expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+  });
+});
+
+describe('CallBroker — a callee started in a subfolder', () => {
+  let root: string;
+  let outside: string;
+
+  beforeEach(() => {
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'call-folder-')));
+    root = join(parent, 'chat');
+    outside = join(parent, 'elsewhere');
+    mkdirSync(join(root, 'services', 'api'), { recursive: true });
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, 'services', 'escape'));
+    symlinkSync(join(root, 'services', 'api'), join(root, 'api-link'));
+  });
+
+  afterEach(() => {
+    rmSync(join(root, '..'), { recursive: true, force: true });
+  });
+
+  const call = (
+    h: ReturnType<typeof harness>,
+    extra: { folder?: string; thread?: string },
+  ) =>
+    h.broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'work there',
+      ...extra,
+    });
+
+  const startedRows = (h: ReturnType<typeof harness>) =>
+    h.items.filter((item) => item.kind === 'call_started');
+
+  it('launches the callee in the subfolder and records it on the call row', async () => {
+    const h = harness({ cwd: root });
+
+    expect((await call(h, { folder: 'services/api' })).status).toBe('ok');
+
+    expect(h.launches[0]!.folder).toBe(join('services', 'api'));
+    expect(startedRows(h)[0]!.payload.folder).toBe(join('services', 'api'));
+  });
+
+  it('takes an absolute path inside the chat folder, and a link that stays inside', async () => {
+    const h = harness({ cwd: root });
+
+    await call(h, { folder: join(root, 'services', 'api') });
+    await call(h, { folder: 'api-link' });
+
+    expect(h.launches.map((launch) => launch.folder)).toEqual([
+      join('services', 'api'),
+      join('services', 'api'),
+    ]);
+  });
+
+  it('takes an absolute path written through the link the run folder was started under', async () => {
+    const linked = join(root, '..', 'chat-link');
+    symlinkSync(root, linked);
+    const h = harness({ cwd: linked });
+
+    await call(h, { folder: join(linked, 'services', 'api') });
+
+    expect(h.launches[0]!.folder).toBe(join('services', 'api'));
+  });
+
+  it('takes an absolute path written through a link to a run folder recorded in its real form', async () => {
+    const linked = join(root, '..', 'chat-link');
+    symlinkSync(root, linked);
+    const h = harness({ cwd: root });
+
+    await call(h, { folder: join(linked, 'services', 'api') });
+
+    expect(h.launches[0]!.folder).toBe(join('services', 'api'));
+  });
+
+  it('runs a callee asked for the chat folder itself as one asked for no folder', async () => {
+    const h = harness({ cwd: root });
+
+    await call(h, { folder: '.' });
+
+    expect(h.launches[0]).not.toHaveProperty('folder');
+    expect(startedRows(h)[0]!.payload).not.toHaveProperty('folder');
+  });
+
+  it.each([
+    ['a path climbing out with ..', () => '../elsewhere', 'FOLDER_OUTSIDE'],
+    ['an absolute path elsewhere', () => outside, 'FOLDER_OUTSIDE'],
+    ['a link leading out', () => 'services/escape', 'FOLDER_OUTSIDE'],
+    ['a folder that does not exist', () => 'services/web', 'FOLDER_NOT_FOUND'],
+  ])('refuses %s before any call exists', async (_label, folder, code) => {
+    const h = harness({ cwd: root });
+
+    const refused = await call(h, { folder: folder() });
+
+    expect(errorOf(refused)).toMatch(new RegExp(`^${code}:`));
+    expect(h.launches).toHaveLength(0);
+    expect(startedRows(h)).toHaveLength(0);
+    expect((await call(h, {})).status).toBe('ok');
+    expect(h.launches[0]!.callId).toBe('call-1');
+  });
+
+  it('refuses a file where a folder was asked for', async () => {
+    const h = harness({ cwd: root });
+    writeFileSync(join(root, 'README.md'), 'x');
+
+    expect(errorOf(await call(h, { folder: 'README.md' }))).toMatch(
+      /^FOLDER_NOT_FOUND:/,
+    );
+    expect(h.launches).toHaveLength(0);
+  });
+
+  it('refuses a folder in a run that has none', async () => {
+    const h = harness();
+
+    expect(errorOf(await call(h, { folder: 'services/api' }))).toMatch(
+      /^FOLDER_UNAVAILABLE:/,
+    );
+    expect(h.launches).toHaveLength(0);
+  });
+
+  it('keeps a continued conversation in the folder it started in', async () => {
+    const h = harness({ cwd: root });
+    await call(h, { folder: 'services/api' });
+
+    await call(h, { thread: 'call-1' });
+    await call(h, { thread: 'call-2', folder: 'services/api/' });
+
+    expect(h.launches.map((launch) => launch.folder)).toEqual([
+      join('services', 'api'),
+      join('services', 'api'),
+      join('services', 'api'),
+    ]);
+    expect(startedRows(h)[1]!.payload.folder).toBe(join('services', 'api'));
+  });
+
+  it('refuses to move a conversation to another folder', async () => {
+    const h = harness({ cwd: root });
+    await call(h, { folder: 'services/api' });
+    await call(h, {});
+
+    expect(
+      errorOf(await call(h, { thread: 'call-1', folder: 'services' })),
+    ).toMatch(/^FOLDER_MISMATCH: call 'call-1' runs in 'services\/api'/);
+    expect(
+      errorOf(await call(h, { thread: 'call-2', folder: 'services' })),
+    ).toMatch(/^FOLDER_MISMATCH: call 'call-2' runs in this chat's folder/);
+    expect(h.launches).toHaveLength(2);
+  });
+
+  it('keeps the folder across a daemon restart', async () => {
+    const before = harness({ cwd: root });
+    await call(before, { folder: 'services/api' });
+
+    const after = harness({ cwd: root });
+    const restarted = new CallBroker();
+    restarted.registerRun(
+      'run-1',
+      after.capability,
+      readCallSeed(before.items),
+    );
+    await restarted.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+
+    expect(after.launches[0]!.resumeSessionId).toBe('sess-call-1');
+    expect(after.launches[0]!.folder).toBe(join('services', 'api'));
+  });
+
+  it('continues a call a restart cut off in its own folder', () => {
+    const before = harness({ cwd: root, launch: 'defer' });
+    void call(before, { folder: 'services/api' });
+
+    const after = harness({ cwd: root });
+    const restarted = new CallBroker();
+    restarted.registerRun(
+      'run-1',
+      after.capability,
+      readCallSeed(before.items),
+    );
+    const resumed = restarted.resumeCall(
+      'run-1',
+      {
+        callId: 'call-1',
+        caller: 'orch',
+        calleeId: 'helper',
+        conversationId: 'call-1',
+        mode: 'async',
+        sessionId: 'sess-cut',
+        member: null,
+        note: 'continued',
+      },
+      'pick it up',
+    );
+
+    expect(resumed).toEqual({ resumed: true });
+    expect(after.launches[0]!.folder).toBe(join('services', 'api'));
   });
 });

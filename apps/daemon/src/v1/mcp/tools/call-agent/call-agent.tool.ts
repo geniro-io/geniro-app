@@ -51,6 +51,9 @@ export class CallAgentTool extends CallMcpTool {
           mode: args.mode as CallMode | undefined,
           thread: args.thread as string | undefined,
           ...(args.resume_cold === true ? { resumeCold: true } : {}),
+          ...(typeof args.folder === 'string'
+            ? { folder: args.folder.trim() }
+            : {}),
           ...(args.member !== undefined
             ? { member: poolMemberArg(args.member)! }
             : {}),

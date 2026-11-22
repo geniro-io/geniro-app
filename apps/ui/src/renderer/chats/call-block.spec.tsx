@@ -75,7 +75,10 @@ function item(
   };
 }
 
-function makeBlock(title?: string): CallBlockEntry {
+function makeBlock(
+  title?: string,
+  extra: Record<string, unknown> = {},
+): CallBlockEntry {
   const entries = groupTranscript([
     item(
       'call_started',
@@ -85,6 +88,7 @@ function makeBlock(title?: string): CallBlockEntry {
         mode: 'async',
         message: 'Write a haiku about the sea.',
         ...(title !== undefined ? { title } : {}),
+        ...extra,
       },
       'orch',
     ),
@@ -461,6 +465,29 @@ describe('CallBlock', () => {
     );
     // …and the marker never falls through to the flat call row.
     expect(container.querySelector('[data-role="call"]')).toBeNull();
+  });
+
+  it('names the subfolder the callee works in on the header, and nothing for the chat folder', () => {
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock('Fix the API', { folder: 'services/api' })}
+          nodes={NODES}
+        />,
+      ),
+    );
+    const folder = container.querySelector('[data-slot="call-folder"]');
+    expect(folder?.textContent).toBe('services/api');
+    expect(folder?.getAttribute('title')).toBe(
+      "Poet works in services/api, inside this chat's folder",
+    );
+
+    act(() =>
+      root.render(
+        <TranscriptEntryView entry={makeBlock('Fix the API')} nodes={NODES} />,
+      ),
+    );
+    expect(container.querySelector('[data-slot="call-folder"]')).toBeNull();
   });
 
   it('puts the recorded title on the header’s FIRST line, with the caller→callee pair under it', () => {

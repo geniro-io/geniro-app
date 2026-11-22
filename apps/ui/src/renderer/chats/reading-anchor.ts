@@ -11,9 +11,12 @@
  * hold is never fought: only the layout's movement is paid back.
  *
  * The anchor is the first row that STARTS inside the viewport, not the first
- * one visible: the topmost loaded entry is the one an older page grows into (a
- * tool group or turn block gains the rows before it), so its own top does not
- * move while everything the reader was looking at inside it does.
+ * one visible, and the INNERMOST one (a jump anchor holding no other): the
+ * topmost loaded entry is the one an older page grows into (a tool group or
+ * turn block gains the rows before it), so its own top does not move while
+ * everything the reader was looking at inside it does, and it remounts under a
+ * new key. Its rows keep their jump keys, which is how a remounted anchor is
+ * found again.
  *
  * The hold starts BEFORE the page is requested (the loading row itself swaps
  * in above the reader) and lasts until the layout has stopped moving, not for a
@@ -40,8 +43,8 @@ export const READING_ANCHOR_MAX_MS = 5_000;
 
 /** Rows that are chrome around the transcript rather than a place to read. */
 const NOT_A_ROW = '[data-slot="older-messages"], [data-slot="thread-loading"]';
-/** The attribute an entry's wrapper carries — how a remounted anchor is found again. */
-const SEQ_ATTRIBUTE = 'data-transcript-seq';
+const KEY_ATTRIBUTE = 'data-jump-key';
+const JUMP_ANCHOR = `[${KEY_ATTRIBUTE}]`;
 
 export interface ReadingAnchorClock {
   frame: (callback: () => void) => void;
@@ -57,7 +60,7 @@ const DEFAULT_CLOCK: ReadingAnchorClock = {
 
 interface Hold {
   anchor: HTMLElement | null;
-  seq: string | null;
+  key: string | null;
   last: number;
   holders: number;
   releasedAt: number | null;
@@ -79,9 +82,23 @@ function rows(scroller: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * The drawn jump anchors inside `row` that hold no other, with their rects —
+ * a row inside a closed fold draws no box and is passed over.
+ */
+function innermostAnchors(
+  row: HTMLElement,
+): { element: HTMLElement; rect: DOMRect }[] {
+  return Array.from(row.querySelectorAll<HTMLElement>(JUMP_ANCHOR))
+    .filter((element) => element.querySelector(JUMP_ANCHOR) === null)
+    .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.bottom > rect.top);
+}
+
+/**
  * The first row that starts in view, else the first one reaching into it —
- * passing over the TOPMOST loaded row whenever another starts in view, since
- * that is the row an older page merges into and remounts under a new key.
+ * looking inside every row in view for its innermost anchors, and passing over
+ * the TOPMOST loaded one whenever another starts in view, since that is the
+ * row an older page merges into and remounts under a new key.
  */
 function pickAnchor(scroller: HTMLElement): HTMLElement | null {
   const { top, bottom } = scroller.getBoundingClientRect();
@@ -90,18 +107,31 @@ function pickAnchor(scroller: HTMLElement): HTMLElement | null {
   let first: HTMLElement | null = null;
   for (const row of all) {
     const rect = row.getBoundingClientRect();
-    if (rect.top >= top && rect.top < bottom) {
-      if (row !== all[0]) {
-        return row;
+    const inner =
+      rect.top < bottom && rect.bottom > top ? innermostAnchors(row) : [];
+    const candidates = inner.length > 0 ? inner : [{ element: row, rect }];
+    for (const [index, candidate] of candidates.entries()) {
+      if (candidate.rect.top >= top && candidate.rect.top < bottom) {
+        if (row !== all[0] || index > 0) {
+          return candidate.element;
+        }
+        first ??= candidate.element;
+        continue;
       }
-      first ??= row;
-      continue;
-    }
-    if (reaching === null && rect.bottom > top) {
-      reaching = row;
+      if (reaching === null && candidate.rect.bottom > top) {
+        reaching = candidate.element;
+      }
     }
   }
   return first ?? reaching;
+}
+
+function anchorByKey(scroller: HTMLElement, key: string): HTMLElement | null {
+  return (
+    Array.from(scroller.querySelectorAll<HTMLElement>(JUMP_ANCHOR)).find(
+      (element) => element.getAttribute(KEY_ATTRIBUTE) === key,
+    ) ?? null
+  );
 }
 
 /** Where `row` sits inside the scroll CONTENT — unmoved by scrolling. */
@@ -135,7 +165,7 @@ function anchorOn(
   row: HTMLElement | null,
 ): void {
   hold.anchor = row;
-  hold.seq = row?.getAttribute(SEQ_ATTRIBUTE) ?? null;
+  hold.key = row?.getAttribute(KEY_ATTRIBUTE) ?? null;
   hold.last = row === null ? 0 : contentOffset(scroller, row);
 }
 
@@ -152,7 +182,7 @@ export function holdReadingPlace(
   const existing = active.get(scroller);
   const hold: Hold = existing ?? {
     anchor: null,
-    seq: null,
+    key: null,
     last: 0,
     holders: 0,
     releasedAt: null,
@@ -188,17 +218,10 @@ export function holdReadingPlace(
       active.delete(scroller);
       return;
     }
-    if (
-      hold.anchor !== null &&
-      !hold.anchor.isConnected &&
-      hold.seq !== null &&
-      /^\d+$/.test(hold.seq)
-    ) {
-      // Remounted under the same seq: the replacement stands where the old
+    if (hold.anchor !== null && !hold.anchor.isConnected && hold.key !== null) {
+      // Remounted under the same key: the replacement stands where the old
       // row would have, so the shift is still owed.
-      hold.anchor = scroller.querySelector<HTMLElement>(
-        `[${SEQ_ATTRIBUTE}="${hold.seq}"]`,
-      );
+      hold.anchor = anchorByKey(scroller, hold.key);
     }
     if (hold.lift !== 0 && hold.liftHost !== scroller.firstElementChild) {
       liftContent(scroller, hold, hold.lift);

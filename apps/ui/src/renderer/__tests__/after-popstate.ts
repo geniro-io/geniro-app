@@ -13,29 +13,37 @@ export async function afterPopstate(
 ): Promise<void> {
   await act(async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let fired = false;
     let onPop: () => void = () => undefined;
+    const noPopstate = () => new Error(`${what} raised no popstate`);
     const popped = new Promise<void>((resolve, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`${what} raised no popstate`)),
-        2000,
-      );
+      timer = setTimeout(() => reject(noPopstate()), 2000);
       onPop = () => {
+        fired = true;
         clearTimeout(timer);
         resolve();
       };
       window.addEventListener('popstate', onPop, { once: true });
     });
+    // Disarmed, or the timer would reject later, blamed on another test.
+    const disarm = () => {
+      clearTimeout(timer);
+      window.removeEventListener('popstate', onPop);
+    };
     try {
       go();
     } catch (err) {
-      // Disarmed, or the timer would reject later, blamed on another test.
-      clearTimeout(timer);
-      window.removeEventListener('popstate', onPop);
+      disarm();
       throw err;
     }
-    // jsdom's traversal timer, set during a tick, fires only at 1ms.
+    // jsdom's traversal timer, set during a tick, fires only at 1ms; the fake
+    // 2000ms guard would never fire, so a missing popstate fails right here.
     if (vi.isFakeTimers()) {
       await vi.advanceTimersByTimeAsync(1);
+      if (!fired) {
+        disarm();
+        throw noPopstate();
+      }
     }
     await popped;
   });

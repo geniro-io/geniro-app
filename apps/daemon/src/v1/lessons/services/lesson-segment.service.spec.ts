@@ -297,6 +297,56 @@ describe('LessonSegmentService', () => {
       expect(h.publishChanged).toHaveBeenCalledWith('src');
     });
 
+    it('queues a claude thread whose failed tool call was fixed later, found through its call rows', async () => {
+      const h = build({
+        items: {
+          src: [
+            {
+              seq: 1,
+              kind: 'tool_call',
+              role: 'assistant',
+              payload: JSON.stringify({ id: 't1', name: 'Bash', input: {} }),
+            },
+            {
+              seq: 2,
+              kind: 'tool_result',
+              role: 'tool',
+              payload: JSON.stringify({
+                id: 't1',
+                name: null,
+                isError: true,
+                result: 'boom',
+              }),
+            },
+            {
+              seq: 3,
+              kind: 'tool_call',
+              role: 'assistant',
+              payload: JSON.stringify({ id: 't2', name: 'Bash', input: {} }),
+            },
+            {
+              seq: 4,
+              kind: 'tool_result',
+              role: 'tool',
+              payload: JSON.stringify({
+                id: 't2',
+                name: null,
+                isError: false,
+                result: 'ok',
+              }),
+            },
+          ],
+        },
+      });
+
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).not.toBeNull();
+      expect(JSON.parse(h.created[0]!.signals as string) as unknown).toEqual([
+        expect.objectContaining({ kind: 'error_then_success', seq: 2 }),
+      ]);
+    });
+
     it('queues nothing for an archived thread with no learning signal in it', async () => {
       const h = build({
         items: { src: [turnComplete(1), userMessage(2, 'thanks, looks good')] },

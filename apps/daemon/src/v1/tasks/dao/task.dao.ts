@@ -323,6 +323,7 @@ export class TaskDao extends BaseDao<Task> {
       byRunId: string;
       approvedAt: Date | null;
       note?: string | null;
+      watch?: boolean;
     } | null,
     txEm?: EntityManager,
   ): Promise<void> {
@@ -333,6 +334,7 @@ export class TaskDao extends BaseDao<Task> {
         startRequestedByRunId: request?.byRunId ?? null,
         startApprovedAt: request?.approvedAt ?? null,
         startRequestNote: request?.note ?? null,
+        startRequestWatch: request?.watch ?? false,
       } as EntityData<Task>,
     );
   }

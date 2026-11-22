@@ -37,8 +37,17 @@ export class RunNoticeWriter {
   }
 
   /** A host row that opens no turn. Never throws; a deleted run gets no row. */
-  async info(runId: string, message: string): Promise<void> {
-    const payload: HostRowWire = { severity: 'info', message, woke: false };
+  async info(
+    runId: string,
+    message: string,
+    fields?: Pick<HostRowWire, 'threadDone'>,
+  ): Promise<void> {
+    const payload: HostRowWire = {
+      severity: 'info',
+      message,
+      woke: false,
+      ...fields,
+    };
     await this.write(runId, 'system', null, payload);
   }
 

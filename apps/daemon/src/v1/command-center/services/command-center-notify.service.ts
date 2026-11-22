@@ -18,6 +18,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
+import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
 import { itemToWire } from '../../agents/utils/item-wire';
 import { asRecord } from '../../agents/utils/json-util';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
@@ -85,11 +86,11 @@ function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
 
 /**
  * What the manager hears about the threads on its roster, and nothing else:
- * one wake when a thread reaches done, and each open question or approval of a
- * thread relayed into its chat as a card whose answer goes to that thread —
- * with no wake, since the user answers it. A status change alone is never
- * told. Driven by the board's own change stream, so it reads a thread only
- * when its card moved.
+ * a Done row when a thread reaches done — a wake only for a thread it watches
+ * — and each open question or approval of a thread relayed into its chat as a
+ * card whose answer goes to that thread, with no wake, since the user answers
+ * it. A status change alone is never told. Driven by the board's own change
+ * stream, so it reads a thread only when its card moved.
  *
  * A thread's first reading only records its column: a boot never wakes the
  * manager about threads that were done before it.
@@ -112,6 +113,7 @@ export class CommandCenterNotifyService
     private readonly itemDao: ItemDao,
     private readonly taskDao: TaskDao,
     private readonly wakes: HostWakeBus,
+    private readonly notices: RunNoticeWriter,
     private readonly roster: CommandCenterRosterDao,
     private readonly board: CommandCenterService,
     private readonly events: CommandCenterEventBus,
@@ -260,17 +262,24 @@ export class CommandCenterNotifyService
     const column = boardColumnOf(run, task?.status ?? null);
     const previous = this.columns.get(runId);
     this.columns.set(runId, column);
-    if (previous !== undefined && previous !== 'done' && column === 'done') {
-      this.wakes.publish(
-        managerWake(
-          managerRunId,
-          `done:${runId}`,
-          donePrompt(entry.handle, run),
-          `${entry.handle} is done`,
-          { threadDone: [doneRowOf(runId, entry.handle, run)] },
-        ),
-      );
+    if (previous === undefined || previous === 'done' || column !== 'done') {
+      return;
     }
+    const message = `${entry.handle} is done`;
+    const fields = { threadDone: [doneRowOf(runId, entry.handle, run)] };
+    if (!entry.watch) {
+      await this.notices.info(managerRunId, message, fields);
+      return;
+    }
+    this.wakes.publish(
+      managerWake(
+        managerRunId,
+        `done:${runId}`,
+        donePrompt(entry.handle, run),
+        message,
+        fields,
+      ),
+    );
   }
 
   private async runOf(runId: string): Promise<RunWire | null> {

@@ -298,6 +298,10 @@ export class Task extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   startRequestNote: string | null = null;
 
+  /** Whether the manager asked to hear when the thread this start makes finishes, put on its roster once it runs. */
+  @Property({ type: 'boolean', default: false })
+  startRequestWatch: boolean = false;
+
   /**
    * When that request was approved — the user's Start, or at once in a manager
    * chat running in `auto`. Electron main's start drain picks up exactly the

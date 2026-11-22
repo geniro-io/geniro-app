@@ -175,6 +175,70 @@ describe('CommandCenterOpsService', () => {
       });
     });
 
+    describe('watch', () => {
+      async function watchOf(): Promise<Record<string, boolean>> {
+        const rows = await new CommandCenterRosterDao(db.em).listOf(MANAGER);
+        return Object.fromEntries(
+          rows.map((row) => [row.threadRunId, row.watch]),
+        );
+      }
+
+      beforeEach(async () => {
+        await db.seedRoster(MANAGER, 'thread-1', 't1');
+        await db.seedRoster(MANAGER, 'thread-2', 't2');
+      });
+
+      it('watches every named thread when asked, and says so', async () => {
+        const answer = await service.tell(MANAGER, input({ watch: true }));
+
+        expect(await watchOf()).toEqual({
+          'thread-1': true,
+          'thread-2': true,
+        });
+        expect(answer.watch).toBe(true);
+      });
+
+      it('stops watching the named threads only, when asked', async () => {
+        await service.tell(MANAGER, input({ watch: true }));
+
+        const answer = await service.tell(
+          MANAGER,
+          input({ to: ['t1'], watch: false }),
+        );
+
+        expect(await watchOf()).toEqual({
+          'thread-1': false,
+          'thread-2': true,
+        });
+        expect(answer.watch).toBe(false);
+      });
+
+      it('leaves watching as it is when the call does not name it', async () => {
+        await service.tell(MANAGER, input({ to: ['t1'], watch: true }));
+
+        const answer = await service.tell(MANAGER, input());
+
+        expect(await watchOf()).toEqual({
+          'thread-1': true,
+          'thread-2': false,
+        });
+        expect(answer).not.toHaveProperty('watch');
+      });
+
+      it('watches nothing when one of the names is unresolved', async () => {
+        const answer = await service.tell(
+          MANAGER,
+          input({ to: ['t1', 'nowhere'], watch: true }),
+        );
+
+        expect(answer.sent).toEqual([]);
+        expect(await watchOf()).toEqual({
+          'thread-1': false,
+          'thread-2': false,
+        });
+      });
+    });
+
     it('asks for no reply credit when the manager does not expect a reply', async () => {
       await service.tell(MANAGER, input({ expect_reply: false }));
 

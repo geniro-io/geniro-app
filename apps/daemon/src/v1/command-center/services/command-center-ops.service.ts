@@ -137,6 +137,13 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     const replyCreditUntil = input.expect_reply
       ? new Date(Date.now() + REPLY_CREDIT_MS)
       : null;
+    if (input.watch !== undefined) {
+      await this.roster.setWatch(
+        managerRunId,
+        resolved.map(({ thread }) => thread.runId),
+        input.watch,
+      );
+    }
     const sent: TellThreadsAnswer['sent'] = [];
     const seen = new Set<string>();
     for (const { to, thread } of resolved) {
@@ -178,7 +185,11 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
-    return { sent, unresolved: [] };
+    return {
+      sent,
+      unresolved: [],
+      ...(input.watch === undefined ? {} : { watch: input.watch }),
+    };
   }
 
   async note(

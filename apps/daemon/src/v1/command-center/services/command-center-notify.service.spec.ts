@@ -1,15 +1,21 @@
 import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NO_CALL_INDEX } from '../../agents/__tests__/no-call-index';
 import type {
   DeferredCard,
   DeferredCardResponder,
   RunWire,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
+import { RunDao } from '../../agents/dao/run.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
+import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
+import { itemToWire } from '../../agents/utils/item-wire';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
 import { commandCenterDb } from '../__tests__/command-center-db';
@@ -98,6 +104,7 @@ describe('CommandCenterNotifyService', () => {
   beforeEach(async () => {
     changes = new Subject<CommandCenterChangedEvent>();
     db = await commandCenterDb();
+    await db.seedRun(MANAGER);
     runs = new Map();
     approvals = new ApprovalRegistry();
     roster = new CommandCenterRosterDao(db.em);
@@ -116,6 +123,7 @@ describe('CommandCenterNotifyService', () => {
     recordOwnedCardVerdict = vi.fn<RecordOwnedCardVerdict>(() =>
       Promise.resolve(),
     );
+    const itemDao = new ItemDao(db.em);
     service = new CommandCenterNotifyService(
       db.em,
       {
@@ -129,9 +137,17 @@ describe('CommandCenterNotifyService', () => {
         listRuns: vi.fn(() => Promise.resolve([])),
       } as unknown as TeamExecutorService,
       approvals,
-      new ItemDao(db.em),
+      itemDao,
       new TaskDao(db.em),
       { publish } as unknown as HostWakeBus,
+      new RunNoticeWriter(
+        db.em,
+        new RunDao(db.em),
+        itemDao,
+        new AgentEventBus(),
+        NO_CALL_INDEX,
+        new ItemSeqAllocator(db.em, itemDao),
+      ),
       roster,
       {
         managerRunId: vi.fn(() => Promise.resolve(MANAGER)),
@@ -157,6 +173,16 @@ describe('CommandCenterNotifyService', () => {
       throw new Error('no wake was published');
     }
     return call[0];
+  }
+
+  async function managerRows(): Promise<unknown[]> {
+    const rows = await new ItemDao(db.em).rowsOfKinds(MANAGER, ['system']);
+    return rows.map((row) => itemToWire(row).payload);
+  }
+
+  async function watched(threadRunId: string): Promise<void> {
+    await roster.join(MANAGER, [threadRunId], 'auto', new Date());
+    await roster.setWatch(MANAGER, [threadRunId], true);
   }
 
   function firstRelay(): {
@@ -203,10 +229,60 @@ describe('CommandCenterNotifyService', () => {
     await service.review(THREAD);
 
     expect(publish).not.toHaveBeenCalled();
+    expect(await managerRows()).toEqual([]);
   });
 
-  it('wakes the manager once when a thread reaches done with an outcome', async () => {
+  it('writes one Done row and wakes nobody when an unwatched thread reaches done', async () => {
     await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Cache cleared' },
+      pullRequests: [{ number: 42, opened: true }],
+    });
+    await service.review(THREAD);
+    await service.review(THREAD);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(await managerRows()).toEqual([
+      {
+        severity: 'info',
+        message: 't1 is done',
+        woke: false,
+        threadDone: [
+          {
+            runId: THREAD,
+            title: 'Billing cache',
+            handle: 't1',
+            summary: 'Cache cleared',
+            pullRequest: 42,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('writes a Done row instead of a wake once the manager stops watching a thread', async () => {
+    await watched(THREAD);
+    await roster.setWatch(MANAGER, [THREAD], false);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+
+    setThread({ id: THREAD, status: 'completed' });
+    await db.seedTask(THREAD, 'done');
+    await service.review(THREAD);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(await managerRows()).toEqual([
+      expect.objectContaining({ message: 't1 is done', woke: false }),
+    ]);
+  });
+
+  it('wakes the manager once, with no row of its own, when a watched thread reaches done with an outcome', async () => {
+    await watched(THREAD);
     setThread({ id: THREAD, status: 'running' });
     await service.review(THREAD);
 
@@ -241,10 +317,11 @@ describe('CommandCenterNotifyService', () => {
       },
     ]);
     expect(wake.row.message).toBe('t1 is done');
+    expect(await managerRows()).toEqual([]);
   });
 
-  it("wakes the manager once when a thread's card reaches Done", async () => {
-    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+  it("wakes the manager once when a watched thread's card reaches Done", async () => {
+    await watched(THREAD);
     setThread({ id: THREAD, status: 'running' });
     await service.review(THREAD);
 
@@ -280,6 +357,7 @@ describe('CommandCenterNotifyService', () => {
 
     expect(publish).not.toHaveBeenCalled();
     expect(raiseOwnedCard).not.toHaveBeenCalled();
+    expect(await managerRows()).toEqual([]);
   });
 
   it('tells the manager nothing when a working thread moves to in review', async () => {

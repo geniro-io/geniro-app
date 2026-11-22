@@ -11,6 +11,7 @@ export function tellThreadsInstructions(): string {
     'Name each thread by its roster handle (t3), its id, or its exact title; a word that fits two titles is ambiguous. When any name is ambiguous or matches no roster thread, NOTHING is sent: the answer lists each unresolved name with its candidates — ask the user which they meant instead of guessing. ' +
     'For each thread the answer says what happened: `joined` its running turn, `woken` as a turn of its own, `waiting` with a reason, or `refused` with a code. ' +
     "Leave `expect_reply` on when you need an answer: each thread's first reply then reaches you even past your wake budget, within 2 hours. " +
+    'A thread that finishes gets a Done card in your chat by itself, with no turn of yours. Set `watch: true` only when the user asks you to watch a thread or tell them when it finishes — then its reaching done wakes you; `watch: false` stops that. ' +
     `The threads read your text as a message from another agent, not their user's words. Record why you wrote to a thread with ${HOST_NOTE_THREAD_TOOL}. Use ${HOST_TELL_THREADS_TOOL} for every message to a thread; it is your only way to reach them.`
   );
 }

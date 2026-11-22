@@ -105,14 +105,18 @@ function listedNamesFor(
 }
 
 describe('readStartThreadArgs', () => {
-  it('reads the project, the title and the brief, and the optional agent, team and note', () => {
-    expect(readStartThreadArgs(ARGS)).toEqual({ ok: true, query: ARGS });
+  it('reads the project, the title and the brief, unwatched when watch is left out, and the optional agent, team, note and watch', () => {
+    expect(readStartThreadArgs(ARGS)).toEqual({
+      ok: true,
+      query: { ...ARGS, watch: false },
+    });
     expect(
       readStartThreadArgs({
         ...ARGS,
         agent: 'codex',
         team: 'review',
         note: 'watch billing',
+        watch: true,
       }),
     ).toEqual({
       ok: true,
@@ -121,6 +125,7 @@ describe('readStartThreadArgs', () => {
         agent: 'codex',
         team: 'review',
         note: 'watch billing',
+        watch: true,
       },
     });
   });
@@ -212,6 +217,7 @@ describe('StartThreadTool', () => {
     expect(start).toHaveBeenCalledWith('manager-1', {
       ...ARGS,
       note: 'watch billing',
+      watch: false,
     });
     expect(result.isError).toBe(false);
     expect(textOf(result)).toBe(startThreadResultText(STARTING));

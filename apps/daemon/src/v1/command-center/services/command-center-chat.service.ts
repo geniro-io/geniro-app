@@ -110,12 +110,17 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
     return this.userInstructions;
   }
 
-  /** Put threads on a manager's roster now, for a reason other than activity, with the manager's note when it gave one. */
+  /**
+   * Put threads on a manager's roster now, for a reason other than activity,
+   * with the manager's note when it gave one, watched when it asked to hear
+   * when they finish.
+   */
   async addToRoster(
     managerRunId: string,
     threadRunIds: readonly string[],
     reason: RosterReason,
     note: string | null = null,
+    watch = false,
   ): Promise<void> {
     const joined = await this.roster.join(
       managerRunId,
@@ -123,6 +128,9 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
       reason,
       new Date(),
     );
+    if (watch) {
+      await this.roster.setWatch(managerRunId, threadRunIds, true);
+    }
     if (note !== null) {
       for (const threadRunId of threadRunIds) {
         await this.roster.setNote(managerRunId, threadRunId, note);

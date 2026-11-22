@@ -40,6 +40,14 @@ export class CommandCenterRosterEntry extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   note: string | null = null;
 
+  /**
+   * The manager asked to hear when this thread finishes (`watch` on
+   * `start_thread` or `tell_threads`): its move into done wakes the manager.
+   * Unwatched, that move only writes a Done row in the manager chat.
+   */
+  @Property({ type: 'boolean', default: false })
+  watch: boolean = false;
+
   @Property({ type: DateTimeType })
   joinedAt!: Date;
 

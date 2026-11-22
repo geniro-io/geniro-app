@@ -49,6 +49,7 @@ function input(over: Partial<StartThreadInput> = {}): StartThreadInput {
     project: 'Geniro',
     title: 'Billing cache',
     brief: 'Clear the cache',
+    watch: false,
     ...over,
   };
 }
@@ -236,6 +237,28 @@ describe('CommandCenterStartsService', () => {
           [THREAD],
           'manager',
           'watch billing',
+          false,
+        ),
+      );
+    });
+
+    it('keeps the manager’s watch for the thread until the start is reported, then puts it on the roster watched', async () => {
+      rosterThreads.mockResolvedValue([]);
+      const answer = await service.start(AUTO_MANAGER, input({ watch: true }));
+      const taskId = taskIdOf(answer);
+      expect((await taskOf(taskId)).startRequestWatch).toBe(true);
+      await taskDao.settleStartRequest(taskId);
+      await taskDao.updateById(taskId, { runId: THREAD });
+
+      startedEvent(taskId);
+
+      await vi.waitFor(() =>
+        expect(addToRoster).toHaveBeenCalledWith(
+          AUTO_MANAGER,
+          [THREAD],
+          'manager',
+          null,
+          true,
         ),
       );
     });
@@ -356,8 +379,10 @@ describe('CommandCenterStartsService', () => {
       expect(announcedIds()).toEqual([taskId, taskId]);
     });
 
-    it('clears the request and the requester, and leaves the card in backlog, when declined', async () => {
-      const taskId = taskIdOf(await service.start(MANAGER, input()));
+    it('clears the request, its watch and the requester, and leaves the card in backlog, when declined', async () => {
+      const taskId = taskIdOf(
+        await service.start(MANAGER, input({ watch: true })),
+      );
       const cardId = raiseOwnedCard.mock.calls[0]![1];
 
       raiseOwnedCard.mock.calls[0]![3](false);
@@ -375,6 +400,7 @@ describe('CommandCenterStartsService', () => {
       expect(task.startRequestedAt).toBeNull();
       expect(task.startRequestedByRunId).toBeNull();
       expect(task.startApprovedAt).toBeNull();
+      expect(task.startRequestWatch).toBe(false);
       expect(task.status).toBe('backlog');
       expect(announcedIds()).toEqual([taskId, taskId]);
     });
@@ -513,6 +539,7 @@ describe('CommandCenterStartsService', () => {
         [THREAD],
         'manager',
         null,
+        false,
       );
       expect(noticeInfo).toHaveBeenCalledWith(
         MANAGER,

@@ -232,6 +232,21 @@ describe('CommandCenterChatService', () => {
       expect(events.publishChanged).toHaveBeenCalledTimes(1);
     });
 
+    it('watches the thread it adds only when the manager asked to', async () => {
+      await service.addToRoster(MANAGER, ['thread-1'], 'manager', null, true);
+      await service.addToRoster(MANAGER, ['thread-2'], 'manager');
+
+      expect(
+        (await roster.listOf(MANAGER)).map((row) => [
+          row.threadRunId,
+          row.watch,
+        ]),
+      ).toEqual([
+        ['thread-1', true],
+        ['thread-2', false],
+      ]);
+    });
+
     it('announces nothing for a thread already on the roster', async () => {
       await service.addToRoster(MANAGER, ['thread-1'], 'manager');
       await service.addToRoster(MANAGER, ['thread-1'], 'manager');

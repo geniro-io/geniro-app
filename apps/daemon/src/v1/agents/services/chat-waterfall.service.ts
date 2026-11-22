@@ -30,6 +30,10 @@ import { asBoolean, asNumber, asRecord, asString } from '../utils/json-util';
 import { splitOf } from '../utils/model-costs';
 import { delegateIdOf } from '../utils/open-delegates';
 import {
+  addPromptCacheWarmupSpend,
+  type PromptCacheWarmupSpent,
+} from '../utils/prompt-cache-warmup-spend';
+import {
   addPolledSpendToTotals,
   applyPolledSpend,
   nodePolledSpend,
@@ -355,6 +359,7 @@ export class ChatWaterfallService {
         ),
         run,
         [...polledByNode.values()],
+        nodeStates,
       ),
       // Null rather than 0 when nothing was ever asked: "the run never stopped
       // for anybody" and "every card was answered instantly" are different
@@ -442,17 +447,21 @@ function withPolledSpend(
   selfPriced: ChatTotalsWire,
   run: { teamId: string | null } & PolledSpend,
   perNode: readonly PolledSpend[],
+  warmed: readonly PromptCacheWarmupSpent[],
 ): ChatTotalsWire {
   if (run.teamId === null) {
     return applyPolledSpend(totals, run);
   }
-  return perNode.reduce(
-    (carried, polled) => addPolledSpendToTotals(carried, polled),
-    {
-      ...totals,
-      costUsd: selfPriced.costUsd,
-      costedTurns: selfPriced.costedTurns,
-    },
+  return addPromptCacheWarmupSpend(
+    perNode.reduce(
+      (carried, polled) => addPolledSpendToTotals(carried, polled),
+      {
+        ...totals,
+        costUsd: selfPriced.costUsd,
+        costedTurns: selfPriced.costedTurns,
+      },
+    ),
+    warmed,
   );
 }
 

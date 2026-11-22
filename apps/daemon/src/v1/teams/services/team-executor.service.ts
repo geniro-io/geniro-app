@@ -4233,7 +4233,11 @@ export class TeamExecutorService
       this.notifyConversationTurnEnded(runId, caller);
       const parked = parkedLeadTurns.get(caller);
       parkedLeadTurns.delete(caller);
-      if (parked !== undefined && !liveConversations.has(caller)) {
+      if (
+        parked !== undefined &&
+        !liveConversations.has(caller) &&
+        this.callBroker.owedACallOrMonitor(runId, caller)
+      ) {
         this.cacheKeepAlive?.keepWarm({
           runId,
           conversation: caller,

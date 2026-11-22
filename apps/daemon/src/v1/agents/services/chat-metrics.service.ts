@@ -42,6 +42,7 @@ import {
   PlanLimitsLedger,
   type PlanReading,
 } from '../utils/plan-limits-ledger';
+import { addPromptCacheWarmupSpend } from '../utils/prompt-cache-warmup-spend';
 import {
   addPolledSpendToTotals,
   applyPolledSpend,
@@ -819,11 +820,9 @@ export class ChatMetricsService implements OnModuleInit {
     // members' cost — replacing it showed the one polled member's price as the
     // run's whole cost. A polled member's own turn costs are left out of the sum
     // so a CLI that starts reporting cannot be counted twice.
+    const nodeStates = await this.nodeStateDao.listByRun(runId, em);
     const nodeKinds = new Map(
-      (await this.nodeStateDao.listByRun(runId, em)).map((row) => [
-        row.memberId,
-        row.agentKind,
-      ]),
+      nodeStates.map((row) => [row.memberId, row.agentKind]),
     );
     const rows = await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
@@ -842,9 +841,12 @@ export class ChatMetricsService implements OnModuleInit {
         )
         .map((row) => row.payload),
     );
-    return addPolledSpendToTotals(
-      { ...all, costUsd: priced.costUsd, costedTurns: priced.costedTurns },
-      run,
+    return addPromptCacheWarmupSpend(
+      addPolledSpendToTotals(
+        { ...all, costUsd: priced.costUsd, costedTurns: priced.costedTurns },
+        run,
+      ),
+      nodeStates,
     );
   }
 

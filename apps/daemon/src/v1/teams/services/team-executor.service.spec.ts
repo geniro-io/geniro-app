@@ -100,6 +100,8 @@ import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { AgentKind } from '../../runs/runs.types';
+import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
@@ -657,6 +659,17 @@ class FakeNodeStateDao {
    * are totals rather than levels. A fake that overwrote here would let a
    * clobbering writer pass.
    */
+  readonly warmups: { runId: string; memberId: string; costUsd: number | null }[] =
+    [];
+
+  async addPromptCacheWarmup(
+    runId: string,
+    memberId: string,
+    costUsd: number | null,
+  ): Promise<void> {
+    this.warmups.push({ runId, memberId, costUsd });
+  }
+
   async rememberWork(
     runId: string,
     memberId: string,
@@ -1231,6 +1244,10 @@ function setup(
     writeFailures?: WriteFailureNotices;
     /** Where a turn starts once the run's folder is gone, when a test drives it. */
     turnFolders?: Pick<TurnFolderService, 'folderFor' | 'oweMoveNote'>;
+    cacheKeepAlive?: Pick<
+      PromptCacheKeepAliveService,
+      'keepWarm' | 'stop' | 'stopRun'
+    >;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1746,6 +1763,7 @@ function setup(
     opts.userQuestions,
     opts.writeFailures,
     opts.turnFolders as TurnFolderService | undefined,
+    opts.cacheKeepAlive as PromptCacheKeepAliveService | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -2275,6 +2293,138 @@ describe('TeamExecutorService', () => {
       await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
         'busy',
       );
+    });
+
+    it('keeps the lead’s own conversation warm while its async call is out, and stops at its next turn', async () => {
+      const cacheKeepAlive = {
+        keepWarm: vi.fn(),
+        stop: vi.fn(),
+        stopRun: vi.fn(),
+      };
+      const { service, claude, callBroker, bus, nodeDao } = setup(undefined, {
+        cacheKeepAlive,
+      });
+      const spent: unknown[] = [];
+      bus.allPromptCacheWarmups().subscribe((event) => spent.push(event));
+      const run = await service.startRun({
+        slug: 'c',
+        team: callTeam,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const lead = claude.starts[0]!;
+      lead.emit({ type: 'session', sessionId: 'lead-session' });
+      await callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        title: 'Look',
+        mode: 'async',
+      });
+      await drain();
+      lead.emit({ type: 'text', text: 'waiting on the helper' });
+      lead.emit({
+        type: 'turn_complete',
+        usage: {
+          inputTokens: 2,
+          outputTokens: 10,
+          cacheReadTokens: 180_000,
+          cacheCreationTokens: 500,
+          thinkingTokens: null,
+          contextTokens: 180_502,
+          contextWindowTokens: 1_000_000,
+          contextModel: 'claude-opus-5-5',
+          costUsd: 0.05,
+          durationMs: 1_000,
+          apiMs: 900,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: 1,
+          promptCacheTtlMs: 3_600_000,
+        },
+        stopReason: 'end_turn',
+        finalText: 'waiting on the helper',
+      });
+      lead.finish();
+      await drain();
+
+      expect(cacheKeepAlive.keepWarm).toHaveBeenCalledTimes(1);
+      const target = cacheKeepAlive.keepWarm.mock.calls[0]![0] as Parameters<
+        PromptCacheKeepAliveService['keepWarm']
+      >[0];
+      expect(target).toMatchObject({
+        runId: run.id,
+        conversation: 'orch',
+        sessionId: 'lead-session',
+        promptCacheTtlMs: 3_600_000,
+        contextTokens: 180_502,
+      });
+      expect(target.input.prompt).toBe(lead.input.prompt);
+      expect(target.owed()).toBe(true);
+
+      const warmup = {
+        inputTokens: 2,
+        outputTokens: 5,
+        cacheReadTokens: 180_500,
+        cacheCreationTokens: 900,
+        thinkingTokens: null,
+        contextTokens: 181_400,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5-5',
+        costUsd: 0.04,
+        estimatedCostUsd: 0.04,
+        durationMs: 2_000,
+        apiMs: 1_500,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: 1,
+      };
+      target.onWarmed(warmup);
+      await drain();
+      expect(nodeDao.warmups).toEqual([
+        { runId: run.id, memberId: 'orch', costUsd: 0.04 },
+      ]);
+      expect(spent).toEqual([
+        expect.objectContaining({
+          runId: run.id,
+          memberId: 'orch',
+          agentKind: AgentKind.Claude,
+          model: 'claude-opus-5-5',
+          usage: warmup,
+        }),
+      ]);
+
+      completeTurn(claude.starts[1]!, 'helped');
+      await drain();
+
+      expect(cacheKeepAlive.stop).toHaveBeenCalledWith(run.id, 'orch');
+      expect(
+        cacheKeepAlive.keepWarm.mock.calls.every(
+          ([armed]) =>
+            (armed as { conversation: string }).conversation === 'orch',
+        ),
+      ).toBe(true);
+    });
+
+    it('never keeps a conversation warm when nothing is owed to it', async () => {
+      const cacheKeepAlive = {
+        keepWarm: vi.fn(),
+        stop: vi.fn(),
+        stopRun: vi.fn(),
+      };
+      const { service, claude } = setup(undefined, { cacheKeepAlive });
+      await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({ type: 'session', sessionId: 's-1' });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(cacheKeepAlive.keepWarm).not.toHaveBeenCalled();
     });
 
     it('releases a lead parked on its calls, so it reads the message now', async () => {

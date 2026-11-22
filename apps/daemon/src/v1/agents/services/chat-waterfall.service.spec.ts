@@ -128,6 +128,7 @@ function build(
           nodeStates.map((state) => ({
             polledCostCents: null,
             polledCostEvents: null,
+            promptCacheWarmupCostUsd: 0,
             ...state,
           })),
         ),

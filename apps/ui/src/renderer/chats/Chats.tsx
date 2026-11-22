@@ -301,8 +301,11 @@ import {
   type RunStatusKind,
 } from './run-status';
 import {
+  applyFrameGesture,
   createTouchScrollGuard,
   createUpwardScrollIntent,
+  FRAME_GESTURE_EVENT,
+  frameGestureOf,
   isScrolledToBottom,
   nextFollowState,
   shouldLoadNewer,
@@ -3017,6 +3020,12 @@ export function Chats({
     const intent = upwardIntentRef.current;
     const onWheel = (event: WheelEvent): void =>
       intent.wheel(event.deltaY, Date.now());
+    const onFrameGesture = (event: Event): void => {
+      const gesture = frameGestureOf((event as CustomEvent<unknown>).detail);
+      if (gesture !== null) {
+        applyFrameGesture(gesture, guard, intent, Date.now());
+      }
+    };
     const onPointerDown = (): void => intent.press();
     const onPointerUp = (): void => intent.release(Date.now());
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -3043,6 +3052,7 @@ export function Chats({
       capture: true,
     });
     scroller.addEventListener('wheel', onWheel, { passive: true });
+    scroller.addEventListener(FRAME_GESTURE_EVENT, onFrameGesture);
     scroller.addEventListener('pointerdown', onPointerDown, { passive: true });
     window.addEventListener('pointerup', onPointerUp, { capture: true });
     window.addEventListener('pointercancel', onPointerUp, { capture: true });
@@ -3056,6 +3066,7 @@ export function Chats({
       window.removeEventListener('touchend', onTouchEnd, { capture: true });
       window.removeEventListener('touchcancel', onTouchEnd, { capture: true });
       scroller.removeEventListener('wheel', onWheel);
+      scroller.removeEventListener(FRAME_GESTURE_EVENT, onFrameGesture);
       scroller.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointerup', onPointerUp, { capture: true });
       window.removeEventListener('pointercancel', onPointerUp, {

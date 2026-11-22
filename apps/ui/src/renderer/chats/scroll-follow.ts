@@ -257,3 +257,33 @@ export function createTouchScrollGuard(): {
  * still on the screen for this long is not scrolling anything.
  */
 export const TOUCH_MAX_SILENCE_MS = 4_000;
+
+/**
+ * A scroll gesture made inside an embedded page, whose touch and wheel events
+ * never reach this document: an artifact frame re-announces each one as this
+ * bubbling event on its `<iframe>`, so the transcript holding it hears it.
+ */
+export const FRAME_GESTURE_EVENT = 'geniro-frame-gesture';
+
+const FRAME_GESTURES = ['touch-start', 'touch-end', 'wheel-up'] as const;
+
+export type FrameGesture = (typeof FRAME_GESTURES)[number];
+
+export function frameGestureOf(value: unknown): FrameGesture | null {
+  return FRAME_GESTURES.find((gesture) => gesture === value) ?? null;
+}
+
+export function applyFrameGesture(
+  gesture: FrameGesture,
+  touch: ReturnType<typeof createTouchScrollGuard>,
+  upward: ReturnType<typeof createUpwardScrollIntent>,
+  now: number,
+): void {
+  if (gesture === 'touch-start') {
+    touch.touchStart(now);
+  } else if (gesture === 'touch-end') {
+    touch.touchEnd(now);
+  } else {
+    upward.wheel(-1, now);
+  }
+}

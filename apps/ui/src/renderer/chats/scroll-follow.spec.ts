@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyFrameGesture,
   createTouchScrollGuard,
   createUpwardScrollIntent,
+  frameGestureOf,
   isScrolledToBottom,
   nextFollowState,
   shouldLoadNewer,
@@ -237,5 +239,39 @@ describe('createTouchScrollGuard', () => {
     guard.scrolled(0);
 
     expect(guard.active(1)).toBe(false);
+  });
+});
+
+describe('frame gestures', () => {
+  it('reads only the gestures a frame relays', () => {
+    expect(frameGestureOf('touch-start')).toBe('touch-start');
+    expect(frameGestureOf('touch-end')).toBe('touch-end');
+    expect(frameGestureOf('wheel-up')).toBe('wheel-up');
+    expect(frameGestureOf('wheel-down')).toBeNull();
+    expect(frameGestureOf(undefined)).toBeNull();
+  });
+
+  it('holds a touch from inside a frame until it ends and settles', () => {
+    const touch = createTouchScrollGuard();
+    const upward = createUpwardScrollIntent();
+
+    applyFrameGesture('touch-start', touch, upward, 0);
+    expect(touch.active(TOUCH_SETTLE_MS * 4)).toBe(true);
+
+    applyFrameGesture('touch-end', touch, upward, 1000);
+    expect(touch.active(1000 + TOUCH_SETTLE_MS - 1)).toBe(true);
+    expect(touch.active(1000 + TOUCH_SETTLE_MS)).toBe(false);
+    expect(upward.active(1000)).toBe(false);
+  });
+
+  it('reads a wheel turned up inside a frame as the reader scrolling up', () => {
+    const touch = createTouchScrollGuard();
+    const upward = createUpwardScrollIntent();
+
+    applyFrameGesture('wheel-up', touch, upward, 0);
+
+    expect(upward.active(UPWARD_INTENT_MS - 1)).toBe(true);
+    expect(upward.active(UPWARD_INTENT_MS)).toBe(false);
+    expect(touch.active(0)).toBe(false);
   });
 });

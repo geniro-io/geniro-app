@@ -16,13 +16,19 @@ import {
   ArtifactUrlContext,
   type PublishedArtifact,
 } from './published-artifact';
+import {
+  FRAME_GESTURE_EVENT,
+  type FrameGesture,
+  frameGestureOf,
+} from './scroll-follow';
 
 /**
  * The message `source` tags, and the messages either side sends.
  *
  * TWIN PARSER: apps/daemon/src/v1/agents/utils/artifact-page.ts — the page half of
  * this channel. The frame sends `ready`, `height`, `link`, `picture`, `escape`,
- * `open-path` and `answer`; the host sends `theme` and `answers`. There is no
+ * `open-path`, `answer` and `gesture` (`touch-start`, `touch-end`, `wheel-up`);
+ * the host sends `theme` and `answers`. There is no
  * generated type for a `postMessage` payload, so the two files are the whole
  * contract.
  */
@@ -373,6 +379,7 @@ export function ArtifactFrame({
         name?: unknown;
         value?: unknown;
         seq?: unknown;
+        gesture?: unknown;
       };
       if (message.source !== FRAME_SOURCE) {
         return;
@@ -386,6 +393,18 @@ export function ArtifactFrame({
         const link = linkToOpen(message.href);
         if (link !== null) {
           openLink(link);
+        }
+        return;
+      }
+      if (message.type === 'gesture') {
+        const gesture = frameGestureOf(message.gesture);
+        if (gesture !== null) {
+          frame.current?.dispatchEvent(
+            new CustomEvent<FrameGesture>(FRAME_GESTURE_EVENT, {
+              bubbles: true,
+              detail: gesture,
+            }),
+          );
         }
         return;
       }

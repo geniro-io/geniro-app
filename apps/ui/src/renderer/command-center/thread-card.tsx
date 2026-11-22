@@ -28,6 +28,7 @@ import type {
   ThreadPullRequestState,
 } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
+import { PALETTE_DOT_CLASS } from '../components/ui/palette';
 import { cn } from '../components/ui/utils';
 
 export type ThreadCardStatus =
@@ -42,7 +43,7 @@ export interface ThreadCardProps {
   statusText: string;
   attention: ThreadAttention;
   project: string | null;
-  /** The project's colour on the graph, worn as a dot on its label. */
+  /** The project's colour on the graph, worn as a stripe along the card's top and a dot on its label. */
   projectColor?: ProfileColor | null;
   /** The agent's short name, or the team's name for a team run. */
   agentLabel: string | null;
@@ -165,7 +166,7 @@ export const ATTENTION_TEXT: Record<ThreadAttention, string> = {
 };
 
 const cardVariants = cva(
-  'flex flex-col overflow-hidden rounded-card border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md motion-reduce:transition-none',
+  'relative flex flex-col overflow-hidden rounded-card border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md motion-reduce:transition-none',
   {
     variants: {
       attention: {
@@ -317,12 +318,24 @@ export function ThreadCard({
       )}
       style={{
         width: THREAD_CARD_WIDTH,
-        height: Math.max(ownHeight, height ?? 0),
+        minHeight: Math.max(ownHeight, height ?? 0),
         padding: PAD_PX,
         gap: GAP_PX,
       }}>
-      <div className="h-11 shrink-0">
+      {projectColor === null ? null : (
+        <span
+          aria-hidden="true"
+          data-slot="thread-card-project-stripe"
+          data-color={projectColor}
+          className={cn(
+            'absolute inset-x-0 top-0 h-1',
+            PALETTE_DOT_CLASS[projectColor],
+          )}
+        />
+      )}
+      <div className="shrink-0">
         <ThreadHead
+          wrap
           slot="thread-card"
           identity={threadCardIdentity({
             title,

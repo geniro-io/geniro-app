@@ -351,6 +351,7 @@ import {
   deliverRelayedImages,
   threadQuestionRelayOfRow,
 } from './thread-question-card';
+import { threadContextReaderOf } from './thread-question-context';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -905,6 +906,10 @@ export function Chats({
     capabilities: capabilitiesApi,
     handoff: handoffApi,
   } = apis;
+  const threadContext = useMemo(
+    () => threadContextReaderOf(apis.chats),
+    [apis],
+  );
   const taskReader = useMemo<TaskReader>(
     () => ({
       read: (taskId) => apis.tasks.readTask({ taskId }),
@@ -9789,7 +9794,8 @@ export function Chats({
         lessonsKnowledgeApi={apis.knowledge}
         agentsApi={agentsApi}
         lessonsJump={jumpToSeq}
-        taskReader={taskReader}>
+        taskReader={taskReader}
+        threadContext={threadContext}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

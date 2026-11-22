@@ -225,6 +225,21 @@ describe('ThreadCard — project colour', () => {
     expect(label.getAttribute('title')).toBe('Project Geniro');
   });
 
+  it('wears its project’s colour as a stripe along its top, and no stripe without a coloured project', () => {
+    const stripe = render({
+      project: 'Geniro',
+      projectColor: 'teal',
+    }).querySelector<HTMLElement>('[data-slot="thread-card-project-stripe"]')!;
+    expect(stripe.dataset.color).toBe('teal');
+    expect(stripe.classList.contains('bg-group-teal')).toBe(true);
+
+    expect(
+      render({ project: 'Geniro', projectColor: null }).querySelector(
+        '[data-slot="thread-card-project-stripe"]',
+      ),
+    ).toBeNull();
+  });
+
   it('keeps the folder glyph and no dot when the project has no colour, and draws no label without a project', () => {
     const plain = render({ project: 'Geniro', projectColor: null });
     expect(
@@ -276,22 +291,39 @@ describe('ThreadCard — content', () => {
     expect(el.classList.contains(tint)).toBe(true);
   });
 
-  it('keeps a long title on one line, whole in its tooltip', () => {
+  it('folds a long title onto two lines rather than cutting it to one, whole in its tooltip', () => {
     const long = 'A long thread title '.repeat(12).trim();
     const el = render({ title: long });
 
     const title = el.querySelector<HTMLElement>(
       '[data-slot="thread-card-title"]',
     )!;
-    expect(title.classList.contains('truncate')).toBe(true);
+    expect(title.classList.contains('line-clamp-2')).toBe(true);
+    expect(title.classList.contains('truncate')).toBe(false);
     expect(title.title).toBe(long);
   });
 
-  it('is exactly as tall as the graph laid it out for what it shows, and no taller', () => {
+  it('runs its labels onto further lines rather than cutting them at the card’s edge', () => {
+    const labels = render({
+      agentLabel: 'claude',
+      boardCard: {
+        identifier: 'GEN-412',
+        title: 'Fix login',
+        status: 'in_progress',
+      },
+      project: 'Geniro',
+    }).querySelector<HTMLElement>('[data-slot="thread-card-labels"]')!;
+
+    expect(labels.classList.contains('flex-wrap')).toBe(true);
+    expect(labels.classList.contains('overflow-hidden')).toBe(false);
+  });
+
+  it('grows with what it shows, never shorter than the height the graph first lays it out at', () => {
     const view = { note: 'watch billing', lastMessage: 'running tests' };
     const el = render({ ...view, idleDays: 4 });
 
-    expect(el.style.height).toBe(`${threadCardHeight(view)}px`);
+    expect(el.style.height).toBe('');
+    expect(el.style.minHeight).toBe(`${threadCardHeight(view)}px`);
     const bare = threadCardHeight({ note: null, lastMessage: null });
     const oneLine = threadCardHeight({ note: null, lastMessage: 'short' });
     const twoLines = threadCardHeight({
@@ -394,8 +426,8 @@ describe('ThreadCard — content', () => {
   it('stands as tall as its row asks, but never shorter than its content', () => {
     const own = threadCardHeight({ note: null, lastMessage: null });
 
-    expect(render({ height: own + 40 }).style.height).toBe(`${own + 40}px`);
-    expect(render({ height: own - 40 }).style.height).toBe(`${own}px`);
+    expect(render({ height: own + 40 }).style.minHeight).toBe(`${own + 40}px`);
+    expect(render({ height: own - 40 }).style.minHeight).toBe(`${own}px`);
   });
 
   it('draws no timeline strip', () => {

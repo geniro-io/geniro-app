@@ -84,6 +84,16 @@ describe('ThreadEventCard', () => {
     ).toBe('teal');
   });
 
+  it('spans the transcript column rather than stopping short of it', () => {
+    const article = card(
+      render(
+        <ThreadEventCard kind="received" runId="r-x" title="X" text="hi" />,
+      ),
+    );
+    expect(article.classList).toContain('w-full');
+    expect(article.className).not.toMatch(/\bmax-w-|\bself-start\b/);
+  });
+
   it('draws a thread the view does not know neutrally, under the title the row recorded', () => {
     const el = render(
       <ThreadEventCard kind="received" runId="r-otter" title="Otter" />,

@@ -210,17 +210,22 @@ export interface ThreadLabelsView {
 export function ThreadLabelsRow({
   view,
   slot,
+  wrap = false,
   className,
 }: {
   view: ThreadLabelsView;
   slot: string;
+  /** Run onto further lines rather than cut the labels at the row's end. */
+  wrap?: boolean;
   className?: string;
 }): React.JSX.Element {
   return (
     <div
       data-slot={`${slot}-labels`}
+      data-wrap={wrap || undefined}
       className={cn(
-        'flex min-w-0 items-center gap-1 overflow-hidden',
+        'flex min-w-0 items-center gap-1',
+        wrap ? 'flex-wrap' : 'overflow-hidden',
         className,
       )}>
       {view.status === null ? null : (

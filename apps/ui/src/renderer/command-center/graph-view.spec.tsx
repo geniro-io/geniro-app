@@ -325,8 +325,27 @@ describe('GraphView', () => {
     await draw({ threads: graphThreadsOf(6) });
 
     expect(
-      new Set(all('thread-card').map((card) => card.style.height)).size,
+      new Set(all('thread-card').map((card) => card.style.minHeight)).size,
     ).toBeGreaterThan(1);
+  });
+
+  it('gives a node the height its card is drawn at, so a card whose labels wrap pushes the row under it down', async () => {
+    const threads = graphThreadsOf(8);
+    const first = threads[0]!.id;
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(
+      function (this: HTMLElement) {
+        return this.dataset.threadId === first ? 400 : 0;
+      },
+    );
+
+    await draw({ threads });
+
+    const top = nodeY('graph-thread', first);
+    const below = threads
+      .map((thread) => nodeY('graph-thread', thread.id))
+      .filter((y) => y > top);
+    expect(below.length).toBeGreaterThan(0);
+    expect(Math.min(...below)).toBeGreaterThanOrEqual(top + 400);
   });
 
   it('keys the colours in a legend, with how many threads stand in each band', async () => {
@@ -963,6 +982,113 @@ describe('GraphView', () => {
       x: start.x + 60 - manager.x,
       y: start.y + 40 - manager.y,
     });
+  });
+
+  it('moves a dragged thread’s wire with it at once, while every other wire keeps gliding', async () => {
+    Element.prototype.setPointerCapture = vi.fn();
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+    });
+    const head = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="thread-2"] [data-slot="thread-canvas-card-head"]',
+    )!;
+    const wire = (id: string): HTMLElement =>
+      container.querySelector<HTMLElement>(
+        `[data-slot="contact-edge"][data-edge="contact:${id}"]`,
+      )!;
+    const press = (type: string, x: number, y: number): void => {
+      act(() => {
+        head.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            button: 0,
+            clientX: x,
+            clientY: y,
+          }),
+        );
+      });
+    };
+
+    press('pointerdown', 100, 100);
+    press('pointermove', 160, 140);
+    expect(wire('thread-2').dataset.moving).toBe('true');
+    expect(
+      wire('thread-2').querySelector('path')!.getAttribute('class'),
+    ).toMatch(/(^|\s)transition-none(\s|$)/);
+    expect(wire('thread-1').dataset.moving).toBeUndefined();
+    expect(
+      wire('thread-1').querySelector('path')!.getAttribute('class'),
+    ).not.toMatch(/(^|\s)transition-none(\s|$)/);
+
+    press('pointerup', 160, 140);
+    expect(wire('thread-2').dataset.moving).toBeUndefined();
+  });
+
+  it('keeps a two-finger pan that started on the graph moving the graph over an open card, and leaves a scroll that started on the card to the card', async () => {
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-2')],
+    });
+    const pane = container.querySelector<HTMLElement>('.react-flow__pane')!;
+    const cardBody = container.querySelector<HTMLElement>(
+      '[data-slot="thread-canvas-card"][data-run-id="thread-2"]',
+    )!;
+    const wheel = (
+      target: HTMLElement,
+      at: number,
+    ): { event: WheelEvent; prevented: boolean } => {
+      const event = new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaX: 12,
+        deltaY: 8,
+      });
+      Object.defineProperty(event, 'timeStamp', { value: at });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+      return { event, prevented: event.defaultPrevented };
+    };
+
+    wheel(pane, 1_000);
+    seams.setViewport.splice(0);
+    expect(wheel(cardBody, 1_050).prevented).toBe(true);
+    expect(seams.setViewport).toHaveLength(1);
+
+    seams.setViewport.splice(0);
+    expect(wheel(cardBody, 2_000).prevented).toBe(false);
+    expect(seams.setViewport).toEqual([]);
+  });
+
+  it('offers Reset zoom only once the view leaves the zoom it opened at, and takes it back there', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('reduce'),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    const resetZoom = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[data-slot="graph-reset-zoom"]',
+      );
+    await draw({ threads: graphThreadsOf(3) });
+    expect(resetZoom()).toBeNull();
+    const opened = seams.setViewport.at(-1)![0] as { zoom: number };
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!
+        .click(),
+    );
+    await settle();
+    expect(resetZoom()).not.toBeNull();
+    expect(resetZoom()!.textContent).toContain('Reset zoom');
+
+    seams.setViewport.splice(0);
+    act(() => resetZoom()!.click());
+    await settle();
+    expect(seams.setViewport.at(-1)![0]).toMatchObject({ zoom: opened.zoom });
+    expect(resetZoom()).toBeNull();
   });
 
   it('keeps the view the viewer moved when the graph grows wider, rather than refitting over it', async () => {

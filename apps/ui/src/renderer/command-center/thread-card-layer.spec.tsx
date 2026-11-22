@@ -19,6 +19,7 @@ import {
   resizeCard,
   ThreadCardLayer,
   type ThreadCardLayerProps,
+  ZOOM_SETTLE_MS,
 } from './thread-card-layer';
 
 const { usePhoneBackEntryMock } = vi.hoisted(() => ({
@@ -465,23 +466,88 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
   });
 
   it('scales the card with the flow’s zoom, keeping its own size in card pixels so it covers its slot', () => {
-    drawLayer({ slots: new Map([['a', box(0, 0)]]) });
-    const section = container.querySelector<HTMLElement>(
-      '[data-slot="thread-canvas-card"][data-run-id="a"]',
-    )!;
+    vi.useFakeTimers();
+    try {
+      drawLayer({ slots: new Map([['a', box(0, 0)]]) });
+      const section = container.querySelector<HTMLElement>(
+        '[data-slot="thread-canvas-card"][data-run-id="a"]',
+      )!;
 
-    act(() => {
-      flowStore!.setState({ transform: [0, 0, 2] });
-    });
-    expect(scalerOf('a').style.zoom).toBe('2');
-    expect(section.style.width).toBe('400px');
-    expect(section.style.height).toBe('366px');
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 2] });
+      });
+      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      expect(scalerOf('a').style.zoom).toBe('2');
+      expect(scalerOf('a').style.transform).toBe('');
+      expect(section.style.width).toBe('400px');
+      expect(section.style.height).toBe('366px');
 
-    act(() => {
-      flowStore!.setState({ transform: [0, 0, 0.5] });
-    });
-    expect(scalerOf('a').style.zoom).toBe('0.5');
-    expect(section.style.width).toBe('400px');
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 0.5] });
+      });
+      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      expect(scalerOf('a').style.zoom).toBe('0.5');
+      expect(section.style.width).toBe('400px');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('scales a card by a transform while a zoom is moving, and lays its chat out at the new zoom only once the zoom rests', () => {
+    vi.useFakeTimers();
+    try {
+      drawLayer({ slots: new Map([['a', box(0, 0)]]) });
+      expect(scalerOf('a').style.zoom).toBe('1');
+
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 1.5] });
+      });
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 2] });
+      });
+      expect(scalerOf('a').style.zoom).toBe('1');
+      expect(scalerOf('a').style.transform).toBe('scale(2)');
+
+      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS - 1));
+      expect(scalerOf('a').style.zoom).toBe('1');
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(scalerOf('a').style.zoom).toBe('2');
+      expect(scalerOf('a').style.transform).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the scale when a moving zoom comes back to the one the card holds, and keeps deferring through a pan', () => {
+    vi.useFakeTimers();
+    try {
+      drawLayer({ slots: new Map([['a', box(0, 0)]]) });
+
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 1.5] });
+      });
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 1] });
+      });
+      expect(scalerOf('a').style.transform).toBe('');
+      expect(scalerOf('a').style.zoom).toBe('1');
+
+      act(() => {
+        flowStore!.setState({ transform: [0, 0, 2] });
+      });
+      act(() => {
+        flowStore!.setState({ transform: [40, 10, 2] });
+      });
+      expect(scalerOf('a').style.zoom).toBe('1');
+      expect(scalerOf('a').style.transform).toBe('scale(2)');
+
+      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      expect(scalerOf('a').style.zoom).toBe('2');
+      expect(scalerOf('a').style.transform).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not render the chat again for a pan or a zoom', () => {

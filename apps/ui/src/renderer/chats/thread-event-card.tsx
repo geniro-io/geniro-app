@@ -109,7 +109,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
       data-kind={kind}
       data-run={runId}
       data-color={identity.projectColor ?? undefined}
-      className="flex w-full max-w-2xl min-w-0 flex-col gap-2 self-start rounded-lg border border-border/70 bg-card px-3 py-2.5 text-sm">
+      className="flex w-full min-w-0 flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-sm">
       <p className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
         <Icon
           aria-hidden="true"

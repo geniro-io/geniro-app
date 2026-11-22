@@ -16,6 +16,7 @@ import {
 import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
+import { PALETTE_DOT_CLASS } from '../components/ui/palette';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
@@ -28,6 +29,12 @@ export const CARD_HEAD_HEIGHT = 66;
 
 /** How far, in pixels, a press must travel before it moves a node or a card rather than clicking it. */
 export const DRAG_THRESHOLD = 5;
+
+/**
+ * How long a zoom must rest before a card takes it as CSS `zoom`, which lays
+ * its whole chat out again; until then the card is scaled by a transform.
+ */
+export const ZOOM_SETTLE_MS = 160;
 
 /** The room a card leaves the graph pane's edges when it is as big as it may get. */
 const PANE_INSET = 16;
@@ -333,6 +340,17 @@ function CanvasThreadCard({
       data-attention={card.attention}
       className={cn('relative', cardVariants({ attention: card.attention }))}
       style={{ width: size.width, height: CARD_HEAD_HEIGHT + size.height }}>
+      {card.identity.projectColor === null ? null : (
+        <span
+          aria-hidden="true"
+          data-slot="thread-canvas-card-project-stripe"
+          data-color={card.identity.projectColor}
+          className={cn(
+            'pointer-events-none absolute inset-x-0 top-0 z-10 h-1',
+            PALETTE_DOT_CLASS[card.identity.projectColor],
+          )}
+        />
+      )}
       <CardHead
         card={card}
         open
@@ -418,30 +436,72 @@ export function ThreadCardLayer({
     [store],
   );
 
-  const place = useLatestCallback((): void => {
-    const [x, y, zoom] = store.getState().transform;
-    for (const [runId, wrapper] of wrappers.current) {
-      const slot = placed.current.get(runId);
-      if (slot === undefined) {
-        continue;
-      }
-      wrapper.style.left = `${slot.x * zoom + x}px`;
-      wrapper.style.top = `${slot.y * zoom + y}px`;
-      const scaler = scalers.current.get(runId);
-      if (scaler !== undefined && scaler.style.zoom !== String(zoom)) {
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commitZoom = useLatestCallback((): void => {
+    settleTimer.current = null;
+    const zoom = store.getState().transform[2];
+    for (const scaler of scalers.current.values()) {
+      scaler.style.transform = '';
+      if (scaler.style.zoom !== String(zoom)) {
         scaler.style.zoom = String(zoom);
       }
     }
   }, [store]);
-  useLayoutEffect(() => place());
+  const place = useLatestCallback(
+    (gesture: boolean): void => {
+      const [x, y, zoom] = store.getState().transform;
+      let deferred = false;
+      for (const [runId, wrapper] of wrappers.current) {
+        const slot = placed.current.get(runId);
+        if (slot === undefined) {
+          continue;
+        }
+        wrapper.style.left = `${slot.x * zoom + x}px`;
+        wrapper.style.top = `${slot.y * zoom + y}px`;
+        const scaler = scalers.current.get(runId);
+        if (scaler === undefined) {
+          continue;
+        }
+        const committed = Number(scaler.style.zoom || 1);
+        if (!gesture || scaler.style.zoom === '') {
+          scaler.style.transform = '';
+          scaler.style.zoom = String(zoom);
+        } else {
+          scaler.style.transform =
+            committed === zoom ? '' : `scale(${zoom / committed})`;
+          deferred ||= committed !== zoom;
+        }
+      }
+      if (settleTimer.current !== null) {
+        clearTimeout(settleTimer.current);
+        settleTimer.current = null;
+      }
+      if (deferred) {
+        settleTimer.current = setTimeout(commitZoom, ZOOM_SETTLE_MS);
+      }
+    },
+    [store],
+  );
+  useLayoutEffect(() => place(settleTimer.current !== null));
   useEffect(
     () =>
       store.subscribe((state, previous) => {
         if (state.transform !== previous.transform) {
-          place();
+          place(
+            state.transform[2] !== previous.transform[2] ||
+              settleTimer.current !== null,
+          );
         }
       }),
     [store, place],
+  );
+  useEffect(
+    () => () => {
+      if (settleTimer.current !== null) {
+        clearTimeout(settleTimer.current);
+      }
+    },
+    [],
   );
 
   const move = (runId: string, by: CardMove, done: boolean): void => {
@@ -489,6 +549,7 @@ export function ThreadCardLayer({
           onPointerDownCapture={() => setFront(card.runId)}>
           <div
             data-slot="thread-canvas-card-zoom"
+            className="origin-top-left"
             ref={(element) => {
               if (element === null) {
                 scalers.current.delete(card.runId);

@@ -3,8 +3,6 @@ import {
   History,
   MessageCircleQuestion,
   MessageSquare,
-  Network,
-  Rows2,
   X,
 } from 'lucide-react';
 import {
@@ -28,7 +26,11 @@ import { ActionNotice } from '../components/action-notice';
 import { useArchiveThread } from '../components/archive-thread-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
-import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import {
+  FloatingWindow,
+  type WindowBounds,
+  type WindowRect,
+} from '../components/floating-window';
 import {
   ThreadArchiveContext,
   type ThreadArchiveOf,
@@ -36,7 +38,6 @@ import {
 import { bareThreadIdentity } from '../components/thread-head';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { SegmentedControl } from '../components/ui/segmented-control';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
@@ -84,62 +85,22 @@ const ALL_PROJECTS = '__all__';
 /** How often the idle marks and the graph's lit edges move on. */
 const CLOCK_TICK_MS = 30_000;
 
-export type CommandCenterView = 'chat' | 'both' | 'graph';
-
-const VIEW_KEY = 'commandCenter.view';
-
 type SidebarTab = 'needs' | 'timeline';
 
-/** The room the chat keeps under the graph in the split: its header, a few lines and the composer. */
-const CHAT_MIN_HEIGHT = 320;
-const PAGE_CHROME_HEIGHT = 96;
+const CHAT_BUTTON_ROOM = 72;
+const WINDOW_INSET = 16;
 
-/** The tallest the graph may grow in the split, so the chat's composer never leaves the window. */
-function maxGraphHeight(): number {
-  return typeof window === 'undefined'
-    ? 1600
-    : Math.max(240, window.innerHeight - PAGE_CHROME_HEIGHT - CHAT_MIN_HEIGHT);
+/** Where the manager's chat first opens: the page's bottom-right corner, above its chat button. */
+export function managerWindowRect(bounds: WindowBounds): WindowRect {
+  const width = Math.min(480, bounds.width - WINDOW_INSET * 2);
+  const height = Math.min(680, bounds.height - WINDOW_INSET - CHAT_BUTTON_ROOM);
+  return {
+    x: bounds.width - width - WINDOW_INSET,
+    y: bounds.height - height - CHAT_BUTTON_ROOM,
+    width,
+    height,
+  };
 }
-
-/** The graph's height in the split before the viewer drags it: about half of the page under the header. */
-function defaultGraphHeight(): number {
-  return typeof window === 'undefined'
-    ? 420
-    : Math.max(240, Math.round((window.innerHeight - PAGE_CHROME_HEIGHT) / 2));
-}
-const VIEWS: readonly CommandCenterView[] = ['chat', 'both', 'graph'];
-
-/** The view the viewer last picked, or the split when they never did. */
-export function readStoredView(): CommandCenterView {
-  try {
-    const stored = localStorage.getItem(VIEW_KEY);
-    return VIEWS.find((view) => view === stored) ?? 'both';
-  } catch {
-    return 'both';
-  }
-}
-
-function storeView(view: CommandCenterView): void {
-  try {
-    localStorage.setItem(VIEW_KEY, view);
-  } catch {
-    return;
-  }
-}
-
-const VIEW_OPTIONS = [
-  {
-    id: 'chat' as const,
-    label: 'Chat',
-    icon: <MessageSquare aria-hidden="true" />,
-  },
-  { id: 'both' as const, label: 'Both', icon: <Rows2 aria-hidden="true" /> },
-  {
-    id: 'graph' as const,
-    label: 'Graph',
-    icon: <Network aria-hidden="true" />,
-  },
-];
 
 function useClock(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -151,10 +112,10 @@ function useClock(): number {
 }
 
 /**
- * The command center: the manager's chat across the whole page, and — one
- * press in the header away — the live graph with the manager on top and every
- * active thread under it as a card. The daemon folds everything; this page
- * only draws it and asks again when a card moves.
+ * The command center: the live graph with the manager on top and every active
+ * thread under it as a card, and the manager's chat in a window over it, one
+ * press of the chat button away. The daemon folds everything; this page only
+ * draws it and asks again when a card moves.
  */
 export function CommandCenter({
   handle,
@@ -174,20 +135,7 @@ export function CommandCenter({
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();
-  const [storedView, setStoredView] = useState(readStoredView);
-  const view: CommandCenterView =
-    narrow && storedView === 'both' ? 'chat' : storedView;
-  const pickView = (next: CommandCenterView): void => {
-    setStoredView(next);
-    storeView(next);
-  };
-  const graphHeight = usePanelWidth({
-    storageKey: 'commandCenter.graphHeight',
-    defaultWidth: defaultGraphHeight(),
-    minWidth: 200,
-    maxWidth: maxGraphHeight(),
-    handleEdge: 'bottom',
-  });
+  const [chatOpen, setChatOpen] = useState(false);
   const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
@@ -295,7 +243,8 @@ export function CommandCenter({
   const answeredAll = answering !== null && answeringRequests.length === 0;
   const answeringHidden =
     answering !== null &&
-    (answering.from === 'timeline' ? sidebar !== 'timeline' : view === 'chat');
+    answering.from === 'timeline' &&
+    sidebar !== 'timeline';
   useEffect(() => {
     if (answeredAll || answeringHidden) {
       setAnswering(null);
@@ -400,9 +349,7 @@ export function CommandCenter({
       return;
     }
     if (runId === managerRunId) {
-      if (view === 'graph') {
-        pickView(narrow ? 'chat' : 'both');
-      }
+      setChatOpen(true);
       return;
     }
     const card = board.cards.find((entry) => entry.run.id === runId);
@@ -413,9 +360,7 @@ export function CommandCenter({
     setOffBoard(null);
     if (narrow) {
       setSidebar(null);
-    }
-    if (view === 'chat') {
-      pickView(narrow ? 'graph' : 'both');
+      setChatOpen(false);
     }
     if (
       projectFilter !== ALL_PROJECTS &&
@@ -572,24 +517,17 @@ export function CommandCenter({
       ],
     },
   ];
-  const graphShown = view !== 'chat';
-  const chatShown = view !== 'graph';
-  const split = view === 'both';
   const needsCount = openRequests.requests.length;
 
   const graph = (
     <main
       data-slot="command-center-graph-pane"
-      className={cn(
-        'relative flex min-h-0 min-w-0 flex-col bg-sidebar/40',
-        split ? 'shrink-0 border-b border-border' : 'flex-1',
-      )}
-      style={split ? { height: graphHeight.width } : undefined}>
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar/40">
       {board.cards === null ? (
         <p className="p-6 text-sm text-muted-foreground">Loading threads…</p>
       ) : shown.length === 0 ? (
         <EmptyState className="m-auto">
-          No active threads. Ask the manager to start one.
+          No active threads. Open the manager’s chat and ask it to start one.
         </EmptyState>
       ) : (
         <Suspense
@@ -629,50 +567,26 @@ export function CommandCenter({
           />
         </Suspense>
       )}
-      {split ? (
-        <PanelResizeHandle
-          edge="bottom"
-          label="Resize the graph"
-          onMouseDown={graphHeight.startResize}
-          value={graphHeight.width}
-          min={graphHeight.minWidth}
-          max={graphHeight.maxWidth}
-          onResize={graphHeight.resizeTo}
-        />
-      ) : null}
     </main>
   );
 
   return (
     <ThreadArchiveContext.Provider value={archiveOf}>
       <div className="relative flex h-full min-h-0 flex-col">
-        <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-4 py-2">
+        <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-sm font-semibold max-sm:hidden">
               Command center
             </h1>
-            {graphShown ? (
-              <Select
-                aria-label="Project"
-                variant="ghost"
-                side="bottom"
-                groups={projectGroups}
-                value={projectFilter}
-                onValueChange={setProjectFilter}
-              />
-            ) : null}
+            <Select
+              aria-label="Project"
+              variant="ghost"
+              side="bottom"
+              groups={projectGroups}
+              value={projectFilter}
+              onValueChange={setProjectFilter}
+            />
           </div>
-          <SegmentedControl
-            ariaLabel="View"
-            size="sm"
-            options={
-              narrow
-                ? VIEW_OPTIONS.filter((option) => option.id !== 'both')
-                : VIEW_OPTIONS
-            }
-            value={view}
-            onSelect={pickView}
-          />
           <div className="flex min-w-0 items-center justify-end gap-1">
             <Button
               type="button"
@@ -727,14 +641,39 @@ export function CommandCenter({
           <div
             {...{ [WORKING_THREADS_CEILING]: '' }}
             className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {graphShown ? graph : null}
-            <div
-              hidden={!chatShown}
-              data-slot="command-center-chat"
-              className={cn(
-                'relative min-h-0 min-w-0 flex-1 flex-col',
-                chatShown && 'flex',
-              )}>
+            {graph}
+            {narrow && (chatOpen || cards.cards.length > 0) ? null : (
+              <Button
+                type="button"
+                size="icon"
+                data-slot="command-center-chat-toggle"
+                aria-label={
+                  chatOpen
+                    ? 'Close the manager’s chat'
+                    : 'Open the manager’s chat'
+                }
+                aria-pressed={chatOpen}
+                title={chatOpen ? 'Close the chat' : 'Chat with the manager'}
+                className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
+                onClick={() => setChatOpen((open) => !open)}>
+                <MessageSquare aria-hidden="true" className="size-5" />
+                {manager?.working === true ? (
+                  <span
+                    aria-hidden="true"
+                    data-slot="command-center-chat-working"
+                    className="absolute -top-0.5 -right-0.5 size-3 animate-pulse rounded-full bg-success ring-2 ring-background motion-reduce:animate-none"
+                  />
+                ) : null}
+              </Button>
+            )}
+            <FloatingWindow
+              slot="command-center-chat"
+              label="Manager chat"
+              title="Manager"
+              open={chatOpen}
+              phone={narrow}
+              initialRect={managerWindowRect}
+              onClose={() => setChatOpen(false)}>
               {managerRunId === null ? (
                 managerChoice.choice === null ? null : (
                   <ManagerStart
@@ -756,17 +695,17 @@ export function CommandCenter({
                   handle={handle}
                   client={client}
                   choice={managerChoice.choice}
-                  hidden={!chatShown}
+                  hidden={!chatOpen}
                   active={active}
                   workingThreads={workingThreads}
                   threadIdentities={threadIdentities}
                   onOpenThread={showThread}
-                  onOpenThreadHere={graphShown ? showThread : undefined}
+                  onOpenThreadHere={showThread}
                   onTurnSettled={board.reload}
                   onDiscarded={board.reload}
                 />
               )}
-            </div>
+            </FloatingWindow>
             {answering !== null && !answeringHidden ? (
               <AnswerPopover
                 anchor={answering.anchor}

@@ -18,6 +18,10 @@ import {
   type ThreadQuestionRelay,
   threadQuestionRelayOfRow,
 } from './thread-question-card';
+import {
+  type ThreadContextMessage,
+  ThreadContextReaderContext,
+} from './thread-question-context';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 
 (
@@ -98,6 +102,7 @@ describe('a thread question relayed into the manager chat', () => {
     expect(readThreadQuestionRelay(RELAYED_QUESTION)).toEqual({
       threadRunId: 'thread-1',
       threadIsTeam: false,
+      threadRequestId: 'req-1',
       handle: 't3',
       threadTitle: 'Billing cache',
       toolName: 'AskUserQuestion',
@@ -123,6 +128,131 @@ describe('a thread question relayed into the manager chat', () => {
         toolName: 'AskUserQuestion',
         input: RELAYED_QUESTION,
       }),
+    ).toBeNull();
+  });
+
+  it('spans the transcript column rather than stopping short of it', () => {
+    renderCard(RELAYED_QUESTION);
+    const card = container.querySelector<HTMLElement>(
+      '[data-slot="thread-question-card"]',
+    )!;
+    expect(card.classList).toContain('w-full');
+    expect(card.className).not.toMatch(/\bmax-w-|\bself-start\b/);
+  });
+
+  it('offers Open chat and Show a few messages above the question where the view can open the thread and read it', async () => {
+    const opened: string[] = [];
+    let release: (messages: ThreadContextMessage[]) => void = () => undefined;
+    const reader = vi.fn(
+      () =>
+        new Promise<ThreadContextMessage[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    act(() =>
+      root.render(
+        <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
+          <ThreadContextReaderContext.Provider value={reader}>
+            <ApprovalCard
+              toolName={THREAD_QUESTION_CARD}
+              input={RELAYED_QUESTION}
+              requestId="relay-1"
+              verdict={null}
+              onRespond={vi.fn()}
+            />
+          </ThreadContextReaderContext.Provider>
+        </ThreadOpenContext.Provider>,
+      ),
+    );
+    const actions = container.querySelector(
+      '[data-slot="thread-question-actions"]',
+    )!;
+    const head = container.querySelector('[data-slot="thread-question-head"]')!;
+    expect(
+      actions.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-question-open-chat"]',
+        )!
+        .click(),
+    );
+    expect(opened).toEqual(['thread-1']);
+
+    const show = container.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-question-show-context"]',
+    )!;
+    expect(show.textContent).toBe('Show a few messages');
+    act(() => show.click());
+    expect(reader).toHaveBeenCalledWith('thread-1', 'req-1');
+    expect(
+      container.querySelector<HTMLElement>(
+        '[data-slot="thread-question-context"]',
+      )?.dataset.state,
+    ).toBe('loading');
+
+    await act(async () => {
+      release([
+        { seq: 4, role: 'user', text: 'Clear the cache' },
+        { seq: 5, role: 'assistant', text: 'Two caches could be meant' },
+      ]);
+      await Promise.resolve();
+    });
+    const shown = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="thread-question-context-message"]',
+      ),
+    ];
+    expect(shown.map((message) => message.dataset.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
+    expect(shown[1]!.textContent).toContain('Two caches could be meant');
+    expect(container.textContent).toContain('Which cache should I clear?');
+
+    act(() => show.click());
+    expect(
+      container.querySelector('[data-slot="thread-question-context"]'),
+    ).toBeNull();
+    expect(show.textContent).toBe('Show a few messages');
+  });
+
+  it('says so when the thread’s messages cannot be read', async () => {
+    act(() =>
+      root.render(
+        <ThreadContextReaderContext.Provider
+          value={() => Promise.reject(new Error('daemon down'))}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={RELAYED_QUESTION}
+            requestId="relay-1"
+            verdict={null}
+            onRespond={vi.fn()}
+          />
+        </ThreadContextReaderContext.Provider>,
+      ),
+    );
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-slot="thread-question-show-context"]',
+        )!
+        .click();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector<HTMLElement>(
+        '[data-slot="thread-question-context"]',
+      )?.dataset.state,
+    ).toBe('failed');
+  });
+
+  it('draws neither button where the view can neither open the thread nor read it', () => {
+    renderCard(RELAYED_QUESTION);
+    expect(
+      container.querySelector('[data-slot="thread-question-actions"]'),
     ).toBeNull();
   });
 

@@ -191,7 +191,8 @@ function HeadButton({
  * minimised to its head, maximised to fill the page and restored, and closed.
  * It stands inside the nearest positioned ancestor, which it never leaves,
  * and is drawn again inside it when that shrinks. Closed, it stays mounted and
- * hidden, so what it holds keeps its state. On a phone it fills the page.
+ * hidden, so what it holds keeps its state. On a phone it covers the whole
+ * screen, the app's header and tab bar included, and hides with its page.
  */
 export function FloatingWindow({
   label,
@@ -306,7 +307,10 @@ export function FloatingWindow({
       ref={measure}
       hidden={!open}
       data-slot={`${slot}-bounds`}
-      className="pointer-events-none absolute inset-0 z-30 overflow-hidden">
+      className={cn(
+        'pointer-events-none inset-0 overflow-hidden',
+        phone ? 'fixed z-50' : 'absolute z-30',
+      )}>
       <section
         role="region"
         aria-label={label}
@@ -316,7 +320,7 @@ export function FloatingWindow({
         className={cn(
           'pointer-events-auto flex flex-col overflow-hidden bg-card',
           phone
-            ? 'absolute inset-0'
+            ? 'absolute inset-0 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]'
             : 'absolute rounded-card border border-border shadow-panel-lg',
           !phone && shown === null && 'invisible',
         )}

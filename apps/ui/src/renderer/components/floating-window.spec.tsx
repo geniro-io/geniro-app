@@ -209,10 +209,30 @@ describe('FloatingWindow', () => {
     expect(el.querySelector('[data-slot="window-content"]')).not.toBeNull();
   });
 
-  it('fills the page on a phone, with no way to move, resize, minimise or maximise it', () => {
+  it('stays inside its page on a desktop', () => {
+    const bounds = draw().querySelector<HTMLElement>(
+      '[data-slot="floating-window-bounds"]',
+    )!;
+    expect(bounds.classList).toContain('absolute');
+    expect(bounds.classList).not.toContain('fixed');
+  });
+
+  it('covers the whole screen on a phone, over the app header and tab bar, with no way to move, resize, minimise or maximise it', () => {
     const el = draw({ phone: true });
+    const bounds = el.querySelector<HTMLElement>(
+      '[data-slot="floating-window-bounds"]',
+    )!;
+    expect(bounds.classList).toContain('fixed');
+    expect(bounds.classList).toContain('inset-0');
+    expect(bounds.classList).toContain('z-50');
     expect(windowOf(el).dataset.phone).toBe('true');
     expect(windowOf(el).className).toContain('inset-0');
+    expect(windowOf(el).className).toContain(
+      'pb-[env(safe-area-inset-bottom)]',
+    );
+    expect(
+      el.querySelector('[data-slot="floating-window-close"]'),
+    ).not.toBeNull();
     expect(
       el.querySelectorAll('[data-slot="floating-window-resize"]'),
     ).toHaveLength(0);

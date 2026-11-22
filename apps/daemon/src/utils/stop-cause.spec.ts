@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DAEMON_STOP_CAUSE_NAME } from './handshake';
 import {
   consumeStopCause,
+  continuesUnattended,
   parseInterruptCause,
   resumesUnattended,
 } from './stop-cause';
@@ -74,5 +75,20 @@ describe('parseInterruptCause', () => {
     expect(parseInterruptCause('crash')).toBe('crash');
     expect(parseInterruptCause(undefined)).toBe('unknown');
     expect(parseInterruptCause(7)).toBe('unknown');
+  });
+});
+
+describe('continuesUnattended', () => {
+  it('continues only after an update or a deliberate restart', () => {
+    expect(continuesUnattended('self-update')).toBe(true);
+    expect(continuesUnattended('restart')).toBe(true);
+    expect(continuesUnattended('quit')).toBe(false);
+    expect(continuesUnattended('crash')).toBe(false);
+    expect(continuesUnattended('unknown')).toBe(false);
+  });
+
+  it('leaves a quit to the board, which resumes it without continuing it', () => {
+    expect(resumesUnattended('quit')).toBe(true);
+    expect(continuesUnattended('quit')).toBe(false);
   });
 });

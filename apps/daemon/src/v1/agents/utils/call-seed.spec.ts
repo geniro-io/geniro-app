@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Item } from '../../runs/entity/item.entity';
 import {
+  CALL_RECORDS,
   callConversation,
   callIdOf,
   callNumber,
@@ -372,5 +374,80 @@ describe('readCallSeed — a settled call’s prompt-cache facts', () => {
       endedAt: 7_000,
       promptCacheTtlMs: 300_000,
     });
+  });
+});
+
+describe('readCallSeed — a call continued after an update or a restart', () => {
+  const started = {
+    kind: 'call_started',
+    payload: {
+      callId: 'call-1',
+      callerNodeId: 'orch',
+      calleeNodeId: 'helper',
+      mode: 'async',
+    },
+  };
+
+  it('marks the call the daemon continued, once its record exists', () => {
+    const seed = readCallSeed([
+      started,
+      { kind: 'system', payload: { restartContinued: 'call-1' } },
+    ]);
+    expect(seed).toEqual({
+      callSeq: 1,
+      records: [
+        {
+          callId: 'call-1',
+          callerMemberId: 'orch',
+          calleeMemberId: 'helper',
+          thread: null,
+          sessionId: null,
+          continuedAfterRestart: true,
+        },
+      ],
+    });
+  });
+
+  it('marks no call the transcript does not hold, and takes no id from its marker', () => {
+    const seed = readCallSeed([
+      started,
+      { kind: 'system', payload: { restartContinued: 'call-9' } },
+    ]);
+    expect(seed.callSeq).toBe(1);
+    expect(seed.records).toEqual([
+      {
+        callId: 'call-1',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
+        thread: null,
+        sessionId: null,
+      },
+    ]);
+  });
+
+  it('reads a marker written before its call as nothing, since no record exists yet', () => {
+    const seed = readCallSeed([
+      { kind: 'system', payload: { restartContinued: 'call-1' } },
+      started,
+    ]);
+    expect(seed.records[0]).not.toHaveProperty('continuedAfterRestart');
+  });
+});
+
+describe('CALL_RECORDS', () => {
+  const row = (kind: string, payload: unknown) =>
+    ({ kind, payload: JSON.stringify(payload) }) as Item;
+
+  it('keeps every call row, and a system row only when it marks a continued call or notes a delivery', () => {
+    expect(CALL_RECORDS.keep?.(row('call_started', {}))).toBe(true);
+    expect(
+      CALL_RECORDS.keep?.(row('system', { restartContinued: 'call-1' })),
+    ).toBe(true);
+    expect(
+      CALL_RECORDS.keep?.(row('system', { messageDeliveryNotices: ['d-1'] })),
+    ).toBe(true);
+    expect(CALL_RECORDS.keep?.(row('system', { message: 'Started.' }))).toBe(
+      false,
+    );
   });
 });

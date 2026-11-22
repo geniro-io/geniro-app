@@ -1,7 +1,8 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InterruptCause } from '../../../utils/stop-cause';
+import type { Item } from '../../runs/entity/item.entity';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { monitorRowEntry, monitorRowPayload } from '../utils/monitor-text';
@@ -12,6 +13,17 @@ import type { MonitorChatDelivery } from './monitor-chat-delivery.service';
 import { MonitorOutcomeSweep } from './monitor-outcome-sweep.service';
 import type { MonitorRowWriter } from './monitor-row.writer';
 
+const STARTED_AT = new Date('2026-11-22T10:00:00.000Z');
+const FOUR_MINUTES_IN = new Date(STARTED_AT.getTime() + 4 * 60_000);
+
+interface RowFixture {
+  runId: string;
+  memberId: string;
+  seq: number;
+  createdAt: Date;
+  payload: string;
+}
+
 /** A row exactly as the writer and the deliveries persist it. */
 const row = (
   seq: number,
@@ -19,10 +31,11 @@ const row = (
   event: 'start' | 'end',
   callId: string | null = null,
   conversationId: string | null = null,
-) => ({
+): RowFixture => ({
   runId: 'run-1',
   memberId: 'agent',
   seq,
+  createdAt: STARTED_AT,
   payload: JSON.stringify(
     monitorRowPayload(
       [
@@ -45,9 +58,34 @@ const row = (
   ),
 });
 
+const monitorCall = (
+  seq: number,
+  input: { command: string; description?: string; timeout_ms?: number },
+  memberId = 'agent',
+): Pick<Item, 'memberId' | 'seq' | 'payload'> => ({
+  memberId,
+  seq,
+  payload: JSON.stringify({
+    name: 'mcp__geniro__monitor',
+    input: { description: 'CI', ...input },
+  }),
+});
+
+interface HarnessRun {
+  teamId: string | null;
+  archivedAt: Date | null;
+  status?: string;
+  restartContinuation?: string | null;
+}
+
 function harness(
-  run: { teamId: string | null; archivedAt: Date | null },
-  rows = [row(1, 'm1', 'start'), row(2, 'm1', 'end'), row(3, 'm2', 'start')],
+  run: HarnessRun,
+  rows: RowFixture[] = [
+    row(1, 'm1', 'start'),
+    row(2, 'm1', 'end'),
+    row(3, 'm2', 'start'),
+  ],
+  toolCalls: Pick<Item, 'memberId' | 'seq' | 'payload'>[] = [],
 ) {
   const em = { fork: () => em } as unknown as EntityManager;
   const write = vi.fn(async () => true);
@@ -55,22 +93,48 @@ function harness(
   const oweRunNote = vi.fn();
   const oweKeyNote = vi.fn();
   const noteUsedIds = vi.fn();
+  const setRestartContinuation = vi.fn();
   const sweep = new MonitorOutcomeSweep(
     em,
     {
       monitorRowsOfRuns: async (runIds: readonly string[]) =>
         rows.filter((r) => runIds.includes(r.runId)),
+      monitorToolCallsOfRun: async () => toolCalls,
     } as unknown as ItemDao,
-    { getById: async () => ({ id: 'run-1', ...run }) } as unknown as RunDao,
+    {
+      getById: async () => ({ id: 'run-1', ...run }),
+      setRestartContinuation,
+    } as unknown as RunDao,
     { write } as unknown as MonitorRowWriter,
     { holdInterrupted } as unknown as MonitorChatDelivery,
     { oweRunNote, oweKeyNote } as unknown as AgentSessionRegistry,
     { noteUsedIds } as unknown as MonitorRegistry,
   );
-  return { sweep, write, holdInterrupted, oweRunNote, oweKeyNote, noteUsedIds };
+  return {
+    sweep,
+    write,
+    holdInterrupted,
+    oweRunNote,
+    oweKeyNote,
+    noteUsedIds,
+    setRestartContinuation,
+  };
+}
+
+function recordWritten(h: ReturnType<typeof harness>): unknown {
+  return JSON.parse(h.setRestartContinuation.mock.calls[0]?.[1] as string);
 }
 
 describe('MonitorOutcomeSweep', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FOUR_MINUTES_IN);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('matches the rows the writer persists with the pre-filter its DAO query uses', () => {
     // `ItemDao.monitorRowsOfRuns` filters `payload LIKE '%"monitors":[%'`.
     expect(row(1, 'm1', 'start').payload).toContain('"monitors":[');
@@ -94,10 +158,11 @@ describe('MonitorOutcomeSweep', () => {
       const h = harness({ teamId: null, archivedAt: null });
       expect(await h.sweep.sweep(cause, ['run-1'])).toEqual([]);
       expect(h.holdInterrupted).not.toHaveBeenCalled();
+      expect(h.setRestartContinuation).not.toHaveBeenCalled();
       // Not woken, but told on the chat's next turn.
       expect(h.oweKeyNote).toHaveBeenCalledWith(
         'run-1',
-        expect.stringContaining('m2 (CI)'),
+        expect.stringContaining('m2 — CI — command not recorded'),
       );
       expect(h.write).toHaveBeenCalledWith(
         {
@@ -111,6 +176,7 @@ describe('MonitorOutcomeSweep', () => {
           event: 'end',
           end: { kind: 'interrupted' },
         }),
+        false,
       );
     },
   );
@@ -119,10 +185,11 @@ describe('MonitorOutcomeSweep', () => {
     const h = harness({ teamId: 'wf', archivedAt: null });
     expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
     expect(h.holdInterrupted).not.toHaveBeenCalled();
+    expect(h.setRestartContinuation).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
     expect(h.oweKeyNote).toHaveBeenCalledWith(
       nodeSessionKey('run-1', 'agent'),
-      expect.stringContaining('m2 (CI)'),
+      expect.stringContaining('m2 — CI — command not recorded'),
     );
     expect(h.oweRunNote).not.toHaveBeenCalled();
   });
@@ -140,10 +207,11 @@ describe('MonitorOutcomeSweep', () => {
         conversationId: 'call-1',
       },
       expect.objectContaining({ id: 'm1', end: { kind: 'interrupted' } }),
+      false,
     );
     expect(h.oweKeyNote).toHaveBeenCalledWith(
       callSessionKey('run-1', 'call-1'),
-      expect.stringContaining('m1 (CI)'),
+      expect.stringContaining('m1 — CI — command not recorded'),
     );
     expect(h.oweRunNote).not.toHaveBeenCalled();
   });
@@ -151,10 +219,11 @@ describe('MonitorOutcomeSweep', () => {
   it("still owes the callee's conversation once a delivered batch, which names none, is its newest row", async () => {
     // A wake inside the call is filed as `wakeHeldCallee` files it: the
     // delivery's row plus the call, no conversation.
-    const delivered = {
+    const delivered: RowFixture = {
       runId: 'run-1',
       memberId: 'agent',
       seq: 2,
+      createdAt: STARTED_AT,
       payload: JSON.stringify({
         ...monitorRowPayload(
           [
@@ -180,7 +249,7 @@ describe('MonitorOutcomeSweep', () => {
     await h.sweep.sweep('quit', ['run-1']);
     expect(h.oweKeyNote).toHaveBeenCalledWith(
       callSessionKey('run-1', 'call-1'),
-      expect.stringContaining('m1 (CI)'),
+      expect.stringContaining('m1 — CI — command not recorded'),
     );
   });
 
@@ -222,5 +291,246 @@ describe('MonitorOutcomeSweep', () => {
       'run-1',
       'run-2',
     ]);
+  });
+});
+
+describe('MonitorOutcomeSweep after an update or a restart', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FOUR_MINUTES_IN);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each(['self-update', 'restart'] as const)(
+    "keeps a team member's cut-off monitor in the run's record after a %s, marks its end as woken and owes no note",
+    async (cause) => {
+      const h = harness(
+        { teamId: 'wf', archivedAt: null, status: 'running' },
+        [row(3, 'm1', 'start')],
+        [monitorCall(2, { command: 'npm run watch', timeout_ms: 1_200_000 })],
+      );
+      expect(await h.sweep.sweep(cause, ['run-1'])).toEqual([]);
+      expect(recordWritten(h)).toEqual({
+        cause,
+        turns: [],
+        calls: [],
+        monitors: [
+          {
+            memberId: 'agent',
+            conversationId: null,
+            id: 'm1',
+            description: 'CI',
+            command: 'npm run watch',
+            remainingMs: 960_000,
+          },
+        ],
+      });
+      expect(h.write).toHaveBeenCalledWith(
+        {
+          runId: 'run-1',
+          memberId: 'agent',
+          callId: null,
+          conversationId: null,
+        },
+        expect.objectContaining({
+          id: 'm1',
+          event: 'end',
+          end: { kind: 'interrupted' },
+        }),
+        true,
+      );
+      expect(h.oweKeyNote).not.toHaveBeenCalled();
+      expect(h.holdInterrupted).not.toHaveBeenCalled();
+    },
+  );
+
+  it('writes a monitors-only record for a team run whose turn already ended', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'completed' },
+      [row(3, 'm1', 'start')],
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    await h.sweep.sweep('self-update', ['run-1']);
+    expect(recordWritten(h)).toEqual({
+      cause: 'self-update',
+      turns: [],
+      calls: [],
+      monitors: [
+        expect.objectContaining({
+          id: 'm1',
+          command: 'npm run watch',
+          remainingMs: 360_000,
+        }),
+      ],
+    });
+  });
+
+  it("gives a team member's conversation a note naming the command after a quit, with no record", async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'running' },
+      [row(3, 'm1', 'start')],
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
+    expect(h.setRestartContinuation).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).toHaveBeenCalledWith(
+      nodeSessionKey('run-1', 'agent'),
+      expect.stringContaining('m1 — CI — `npm run watch` (~6 min were left)'),
+    );
+    expect(h.write).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'm1' }),
+      false,
+    );
+  });
+
+  it("merges a chat's cut-off monitor into the record it is owed, keeping its turn and holding no turn", async () => {
+    const owed = JSON.stringify({
+      cause: 'self-update',
+      turns: [{ memberId: 'agent' }],
+      calls: [],
+      monitors: [],
+    });
+    const h = harness(
+      { teamId: null, archivedAt: null, restartContinuation: owed },
+      undefined,
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    expect(await h.sweep.sweep('restart', ['run-1'])).toEqual([]);
+    expect(h.holdInterrupted).not.toHaveBeenCalled();
+    expect(recordWritten(h)).toEqual({
+      cause: 'restart',
+      turns: [{ memberId: 'agent' }],
+      calls: [],
+      monitors: [
+        {
+          memberId: null,
+          conversationId: null,
+          id: 'm2',
+          description: 'CI',
+          command: 'npm run watch',
+          remainingMs: 360_000,
+        },
+      ],
+    });
+    expect(h.write).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'm2' }),
+      true,
+    );
+  });
+
+  it('holds a chat with no record for its next turn, naming the command its monitor had', async () => {
+    const h = harness({ teamId: null, archivedAt: null }, undefined, [
+      monitorCall(2, { command: 'npm run watch' }),
+    ]);
+    expect(await h.sweep.sweep('restart', ['run-1'])).toEqual(['run-1']);
+    expect(h.holdInterrupted).toHaveBeenCalledWith(
+      { runId: 'run-1', memberId: 'agent', callId: null, conversationId: null },
+      [
+        expect.objectContaining({
+          id: 'm2',
+          end: { kind: 'interrupted' },
+          stopped: {
+            id: 'm2',
+            description: 'CI',
+            command: 'npm run watch',
+            remainingMs: 360_000,
+          },
+        }),
+      ],
+    );
+    expect(h.setRestartContinuation).not.toHaveBeenCalled();
+    expect(h.write).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
+  });
+
+  it('records a monitor whose call is not found with no command and no time left', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'running' },
+      [row(3, 'm1', 'start')],
+      [],
+    );
+    await h.sweep.sweep('self-update', ['run-1']);
+    expect(recordWritten(h)).toEqual({
+      cause: 'self-update',
+      turns: [],
+      calls: [],
+      monitors: [
+        {
+          memberId: 'agent',
+          conversationId: null,
+          id: 'm1',
+          description: 'CI',
+          command: null,
+          remainingMs: null,
+        },
+      ],
+    });
+  });
+
+  it('takes the command only from a call of the same description made before its start', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'running' },
+      [row(3, 'm1', 'start')],
+      [
+        monitorCall(4, { command: 'made after the start' }),
+        monitorCall(2, { command: 'another monitor', description: 'Build' }),
+      ],
+    );
+    await h.sweep.sweep('self-update', ['run-1']);
+    expect(recordWritten(h)).toEqual({
+      cause: 'self-update',
+      turns: [],
+      calls: [],
+      monitors: [
+        expect.objectContaining({ id: 'm1', command: null, remainingMs: null }),
+      ],
+    });
+  });
+
+  it('counts a monitor whose call named no timeout from the default one', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'running' },
+      [row(3, 'm1', 'start')],
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    await h.sweep.sweep('self-update', ['run-1']);
+    expect(recordWritten(h)).toEqual({
+      cause: 'self-update',
+      turns: [],
+      calls: [],
+      monitors: [expect.objectContaining({ id: 'm1', remainingMs: 360_000 })],
+    });
+  });
+
+  it('owes an archived team run no record and no note after an update', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: new Date() },
+      [row(3, 'm1', 'start')],
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    expect(await h.sweep.sweep('self-update', ['run-1'])).toEqual([]);
+    expect(h.setRestartContinuation).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
+    expect(h.write).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'm1' }),
+      false,
+    );
+  });
+
+  it('owes a cancelled team run no record and no note after a restart', async () => {
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'cancelled' },
+      [row(3, 'm1', 'start')],
+      [monitorCall(2, { command: 'npm run watch' })],
+    );
+    expect(await h.sweep.sweep('restart', ['run-1'])).toEqual([]);
+    expect(h.setRestartContinuation).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
   });
 });

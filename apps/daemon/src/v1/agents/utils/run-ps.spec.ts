@@ -20,11 +20,16 @@ describe('runPs', () => {
       (_cmd: string, _args: string[], _opts: unknown, done: Callback) =>
         done(null, 'out'),
     );
+    const userLocale = process.env.LC_ALL;
     process.env.LC_ALL = 'ru_RU.UTF-8';
     try {
       expect(await runPs(['-o', 'lstart='])).toBe('out');
     } finally {
-      delete process.env.LC_ALL;
+      if (userLocale === undefined) {
+        delete process.env.LC_ALL;
+      } else {
+        process.env.LC_ALL = userLocale;
+      }
     }
     const options = execFile.mock.calls[0]?.[2] as {
       env: NodeJS.ProcessEnv;

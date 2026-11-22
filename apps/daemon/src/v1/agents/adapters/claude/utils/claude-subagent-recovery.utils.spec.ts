@@ -10,7 +10,14 @@ import { AgentKind } from '../../../../runs/runs.types';
 import type { SubagentRecoveryRef } from '../../adapter.types';
 import { recoverClaudeSubagent } from './claude-subagent-recovery.utils';
 
-vi.mock('node:fs/promises', { spy: true });
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    open: vi.fn(actual.open),
+    readdir: vi.fn(actual.readdir),
+  };
+});
 
 const roots: string[] = [];
 const ref: SubagentRecoveryRef = {

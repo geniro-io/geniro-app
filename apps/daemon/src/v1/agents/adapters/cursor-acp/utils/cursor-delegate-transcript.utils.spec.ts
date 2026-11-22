@@ -14,7 +14,10 @@ import {
   readCursorDelegateEnding,
 } from './cursor-delegate-transcript.utils';
 
-vi.mock('node:fs/promises', { spy: true });
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 /**
  * The lines below are the shapes read off real transcripts on

@@ -133,8 +133,10 @@ import {
   readAttention,
 } from '../../agents/utils/run-attention';
 import { readRestartContinuation } from '../../agents/utils/run-restart-continuation';
+import { callSessionKey } from '../../agents/utils/session-keys';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
+import { serializeMemberQuestions } from '../../agents/utils/team-member-questions';
 import { isFolderGone } from '../../agents/utils/turn-folder';
 import {
   WALL_CLOCK_ROW_KINDS,
@@ -5079,6 +5081,79 @@ describe('TeamExecutorService', () => {
       const run = ctx.runDao.runs.get(orphan.id)!;
       expect(run.status).toBe('failed');
       expect(run.restartContinuation ?? null).toBeNull();
+    });
+
+    async function soloTurnRun(
+      ctx: ReturnType<typeof setup>,
+      memberStatus: 'running' | 'completed',
+    ) {
+      const orphan = await ctx.runDao.create({
+        teamId: 'ghost',
+        status: 'running',
+        cwd: dir,
+      });
+      await ctx.nodeDao.createPending(orphan.id, 'orch');
+      await ctx.nodeDao.setStatus(orphan.id, 'orch', { status: memberStatus });
+      await ctx.itemDao.create({
+        runId: orphan.id,
+        memberId: 'orch',
+        seq: 0,
+        kind: 'status',
+        payload: JSON.stringify({ nodeId: 'orch', status: memberStatus }),
+      });
+      return orphan;
+    }
+
+    it('a member whose only open turn waits on a standing card leaves nothing to continue: the run fails with no continue row', async () => {
+      const ctx = setup();
+      const orphan = await soloTurnRun(ctx, 'running');
+      ctx.runDao.runs.get(orphan.id)!.pendingMemberQuestions =
+        serializeMemberQuestions([
+          {
+            memberId: 'orch',
+            card: {
+              kind: 'question',
+              requestId: 'q-1',
+              title: null,
+              questions: [{ question: 'Which?', options: [{ label: 'A' }] }],
+            },
+          },
+        ]);
+
+      await ctx.service.reconcileOrphanedRuns('self-update');
+
+      const run = ctx.runDao.runs.get(orphan.id)!;
+      expect(run.status).toBe('failed');
+      expect(run.restartContinuation ?? null).toBeNull();
+      const errors = ctx.itemDao.items.filter(
+        (i) => i.runId === orphan.id && i.kind === 'error',
+      );
+      expect(JSON.parse(errors.at(-1)!.payload)).toEqual({
+        message:
+          'team run interrupted — the app was updated while it was running',
+        interrupted: true,
+        interruptCause: 'self-update',
+      });
+    });
+
+    it('a run with no open turn and no open call fails on a restart, with no record and no continue row', async () => {
+      const ctx = setup();
+      const orphan = await soloTurnRun(ctx, 'completed');
+
+      await ctx.service.reconcileOrphanedRuns('restart');
+
+      const run = ctx.runDao.runs.get(orphan.id)!;
+      expect(run.status).toBe('failed');
+      expect(run.restartContinuation ?? null).toBeNull();
+      const errors = ctx.itemDao.items.filter(
+        (i) => i.runId === orphan.id && i.kind === 'error',
+      );
+      expect(JSON.parse(errors.at(-1)!.payload)).toEqual({
+        message:
+          'team run interrupted — the daemon was restarted while it was running',
+        interrupted: true,
+        interruptCause: 'restart',
+      });
     });
   });
 
@@ -16877,6 +16952,137 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       expect(fresh[0]!.input.resumeSessionId).toBe('sess-callee');
       completeTurn(fresh[0]!, 'all done');
       await drain();
+    });
+
+    it('abandons a continuation that cannot start: the interrupted row, the call failed, the run failed', async () => {
+      const ctx = await cutOffByUpdate(true);
+
+      await ctx.service.abandonRestartContinuation(ctx.run.id, 'self-update');
+
+      const rows = ctx.itemDao.items.filter((i) => i.runId === ctx.run.id);
+      expect(
+        JSON.parse(rows.filter((i) => i.kind === 'error').at(-1)!.payload),
+      ).toEqual({
+        message:
+          'team run interrupted — the app was updated while it was running, and it could not be continued',
+        interrupted: true,
+        interruptCause: 'self-update',
+      });
+      expect(
+        JSON.parse(rows.find((i) => i.kind === 'call_result')!.payload),
+      ).toMatchObject({
+        callId: 'call-1',
+        status: 'error',
+        error:
+          'CALLEE_FAILED: interrupted — the app was updated before the call finished',
+      });
+      expect(ctx.runDao.runs.get(ctx.run.id)!.status).toBe('failed');
+    });
+
+    it('writes nothing while a pass already owns the run', async () => {
+      const ctx = await cutOffByUpdate(true);
+      const starts = ctx.claude.starts.length;
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
+      await drain();
+      expect(ctx.registry.has(ctx.run.id)).toBe(true);
+      const rowsBefore = ctx.itemDao.items.filter(
+        (i) => i.runId === ctx.run.id,
+      ).length;
+
+      await ctx.service.abandonRestartContinuation(ctx.run.id, 'self-update');
+
+      expect(
+        ctx.itemDao.items.filter((i) => i.runId === ctx.run.id),
+      ).toHaveLength(rowsBefore);
+      expect(ctx.runDao.runs.get(ctx.run.id)!.status).toBe('running');
+      for (const turn of ctx.claude.starts.slice(starts)) {
+        completeTurn(turn, 'done');
+      }
+      await drain();
+    });
+
+    it('an archived run is gone: its continuation starts no turn', async () => {
+      const ctx = await cutOffByUpdate(true);
+      ctx.runDao.runs.get(ctx.run.id)!.archivedAt = new Date();
+      const starts = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('gone');
+      await drain();
+
+      expect(ctx.claude.starts).toHaveLength(starts);
+    });
+
+    it('a cancelled run is gone: its continuation starts no turn', async () => {
+      const ctx = await cutOffByUpdate(true);
+      ctx.runDao.runs.get(ctx.run.id)!.status = 'cancelled';
+      const starts = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('gone');
+      await drain();
+
+      expect(ctx.claude.starts).toHaveLength(starts);
+    });
+
+    it("resumes the cut-off call into a pass the user's message already started, with no lead note", async () => {
+      const ctx = await cutOffByUpdate(true);
+      await ctx.service.sendMessage(ctx.run.id, 'more', [], 'root-1');
+      await drain();
+      const starts = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('continued');
+      await drain();
+
+      const fresh = ctx.claude.starts.slice(starts);
+      const geniro = fresh.filter((t) => t.input.prompt.startsWith('[geniro]'));
+      expect(geniro).toHaveLength(1);
+      expect(geniro[0]!.input.prompt).toContain('on this call');
+      expect(geniro[0]!.input.resumeSessionId).toBe('sess-callee');
+      expect(fresh.some((t) => t.input.prompt.includes('collect it'))).toBe(
+        false,
+      );
+      completeTurn(geniro[0]!, 'all done');
+      await drain();
+    });
+
+    it("tells a monitor's owner that its monitor stopped when the monitor's call conversation has no recorded call", async () => {
+      const ctx = setup();
+      const run = await ctx.service.startRun({
+        slug: 'bg',
+        team: CALL_TEAM,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(ctx.claude.starts[0]!, 'done');
+      await drain();
+      const owe = vi.spyOn(ctx.sessions, 'oweKeyNote');
+
+      await ctx.service.continueAfterRestart(run.id, {
+        cause: 'self-update',
+        turns: [],
+        calls: [],
+        monitors: [
+          {
+            memberId: 'callee',
+            conversationId: 'call-9',
+            id: 'm3',
+            description: 'CI',
+            command: 'gh run watch 1',
+            remainingMs: 60000,
+          },
+        ],
+      });
+
+      expect(owe).toHaveBeenCalledWith(
+        callSessionKey(run.id, 'call-9'),
+        expect.stringContaining('m3 — CI — `gh run watch 1`'),
+      );
     });
   });
 

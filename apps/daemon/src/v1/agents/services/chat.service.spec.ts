@@ -10295,6 +10295,25 @@ describe('ChatService', () => {
     },
   );
 
+  it('abandons a restart continuation the chat cannot start: the interrupted row, the run failed', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.abandonRestartContinuation(run.id, 'restart');
+
+    const error = (await itemDao.getByRun(run.id)).find(
+      (i) => i.kind === 'error',
+    );
+    expect(JSON.parse(error!.payload)).toEqual({
+      message:
+        'run interrupted — the daemon was restarted while this turn was running, and it could not be continued',
+      interrupted: true,
+      interruptCause: 'restart',
+    });
+    expect((await runDao.getById(run.id))?.status).toBe('failed');
+  });
+
   it('does not continue a chat whose standing question waits on the user', async () => {
     const { service, runDao } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });

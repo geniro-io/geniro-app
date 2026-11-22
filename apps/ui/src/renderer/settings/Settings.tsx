@@ -1514,6 +1514,7 @@ export function Settings({
           ) : section === 'system-analysis' ? (
             <SystemAnalysisPage
               api={apis?.systemAnalyses ?? null}
+              client={client}
               agentsApi={apis?.agents ?? null}
               cliDetections={clis}
               capabilities={capabilities}

@@ -13,6 +13,7 @@ import {
   type SystemAnalysisDb,
   systemAnalysisDb,
 } from '../__tests__/system-analysis-db';
+import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 import { SystemAnalysisStartsService } from './system-analysis-starts.service';
 
 const ANALYSIS = 'analysis-1';
@@ -52,6 +53,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
   let info: ReturnType<typeof vi.fn>;
   let warn: ReturnType<typeof vi.fn>;
   let recordAnalysisRow: ReturnType<typeof vi.fn>;
+  let announced: string[];
 
   beforeEach(async () => {
     db = await systemAnalysisDb();
@@ -121,6 +123,9 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
     info = vi.fn(() => Promise.resolve());
     warn = vi.fn(() => Promise.resolve());
     recordAnalysisRow = vi.fn(() => Promise.resolve({ seq: 0 }));
+    const events = new SystemAnalysisEventBus();
+    announced = [];
+    events.allChanges().subscribe((change) => announced.push(change.runId));
 
     service = new SystemAnalysisStartsService(
       db.em,
@@ -132,6 +137,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
       {
         getById: (id: string) => Promise.resolve(projects.get(id) ?? null),
       } as unknown as ProjectDao,
+      events,
     );
   });
 
@@ -165,6 +171,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
         ],
       },
     );
+    expect(announced).toEqual([ANALYSIS, ANALYSIS]);
   });
 
   it('names the card by its task id when its project has no key', async () => {
@@ -199,7 +206,31 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
     ).toBeNull();
   });
 
-  it('marks a filed card failed and warns the analysis when its start fails', async () => {
+  it('names the failed card by its task id when its project has no key', async () => {
+    await service.reportFailed({
+      taskId: 'card-2',
+      byRunId: ANALYSIS,
+      title: 'Cap the output',
+      reason: 'folder is gone',
+    });
+
+    expect(recordAnalysisRow).toHaveBeenCalledWith(
+      ANALYSIS,
+      'recommendation_outcome',
+      {
+        cardSeq: CARD_SEQ,
+        outcomes: [
+          {
+            id: 'G-2',
+            status: 'failed',
+            note: 'could not start card-2: folder is gone',
+          },
+        ],
+      },
+    );
+  });
+
+  it('marks a filed card failed with its key and warns the analysis when its start fails', async () => {
     await service.reportFailed({
       taskId: 'card-1',
       byRunId: ANALYSIS,
@@ -216,7 +247,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
           {
             id: 'G-1',
             status: 'failed',
-            note: 'the card was filed but could not be started: no agent on the project',
+            note: 'could not start GEN-7: no agent on the project',
           },
         ],
       },
@@ -228,6 +259,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
       'Could not start "Retry the fetch": no agent on the project',
       'Start failed',
     );
+    expect(announced).toEqual([ANALYSIS]);
   });
 
   it('warns the analysis of a failed start even when no ledger item holds the card', async () => {
@@ -239,6 +271,7 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
     });
 
     expect(recordAnalysisRow).not.toHaveBeenCalled();
+    expect(announced).toEqual([]);
     expect(warn).toHaveBeenCalledWith(
       ANALYSIS,
       'Could not start "Orphan": gone',

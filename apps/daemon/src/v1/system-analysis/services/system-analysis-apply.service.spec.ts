@@ -24,6 +24,7 @@ import {
 } from '../__tests__/system-analysis-db';
 import type { SystemApply } from '../system-analysis.types';
 import { SystemAnalysisApplyService } from './system-analysis-apply.service';
+import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 
 const ANALYSIS = 'analysis-1';
 const CARD_SEQ = 2;
@@ -108,6 +109,7 @@ describe('SystemAnalysisApplyService.apply (in-memory sqlite)', () => {
   let sendMessage: ReturnType<typeof vi.fn>;
   let recordAnalysisRow: ReturnType<typeof vi.fn>;
   let nextSeq: number;
+  let announced: string[];
 
   async function persistApply(
     runId: string,
@@ -194,6 +196,7 @@ describe('SystemAnalysisApplyService.apply (in-memory sqlite)', () => {
     );
     recordAnalysisRow = vi.fn(() => Promise.resolve({ seq: 0 } as ItemWire));
 
+    const events = new SystemAnalysisEventBus();
     service = new SystemAnalysisApplyService(
       db.em,
       new RunDao(em),
@@ -207,7 +210,10 @@ describe('SystemAnalysisApplyService.apply (in-memory sqlite)', () => {
       taskDao,
       tasks,
       ledger,
+      events,
     );
+    announced = [];
+    events.allChanges().subscribe((change) => announced.push(change.runId));
   });
 
   afterEach(async () => {
@@ -254,6 +260,18 @@ describe('SystemAnalysisApplyService.apply (in-memory sqlite)', () => {
         reason: 'filed GEN-2',
       }),
     ]);
+  });
+
+  it('announces the analysis changed once the press is written', async () => {
+    await service.apply(ANALYSIS, press());
+
+    expect(announced).toEqual([ANALYSIS]);
+  });
+
+  it('announces the analysis changed when the report is kept', async () => {
+    await service.apply(ANALYSIS, press({ action: 'report', ids: [] }));
+
+    expect(announced).toEqual([ANALYSIS]);
   });
 
   it('writes a recommendation_outcome row marking each filed item applied', async () => {

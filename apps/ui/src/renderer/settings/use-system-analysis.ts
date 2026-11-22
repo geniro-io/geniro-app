@@ -16,6 +16,7 @@ import type {
 import { requestModelPrice } from '../chats/use-model-price';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 
 export const SYSTEM_ANALYSIS_PAGE_SIZE = 3;
 
@@ -23,6 +24,7 @@ export const SYSTEM_ANALYSIS_PAGE_SIZE = 3;
 export const SYSTEM_ANALYSIS_POLL_MS = 10_000;
 
 type SystemAnalysisApi = DaemonApis['systemAnalyses'];
+type SystemAnalysisClient = Pick<DaemonClient, 'onSystemAnalysesChanged'>;
 
 interface ListPage {
   rows: readonly SystemAnalysisRow[];
@@ -46,6 +48,7 @@ export interface SystemAnalysisState {
 
 export function useSystemAnalysis(
   api: SystemAnalysisApi | null,
+  client: SystemAnalysisClient | null,
   days: number,
 ): SystemAnalysisState {
   const [scope, setScope] = useState<{
@@ -107,6 +110,13 @@ export function useSystemAnalysis(
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (client === null) {
+      return undefined;
+    }
+    return client.onSystemAnalysesChanged(() => void reload());
+  }, [client, reload]);
 
   const loadMore = useLatestCallback((): void => {
     if (api === null || page === null || page.next === null || loadingMore) {

@@ -9,6 +9,7 @@ import { TasksModule } from '../tasks/tasks.module';
 import { SystemAnalysesController } from './controllers/system-analyses.controller';
 import { SystemAnalysisService } from './services/system-analysis.service';
 import { SystemAnalysisApplyService } from './services/system-analysis-apply.service';
+import { SystemAnalysisEventBus } from './services/system-analysis-events.bus';
 import { SystemAnalysisHistoryService } from './services/system-analysis-history.service';
 import { SystemAnalysisStartsService } from './services/system-analysis-starts.service';
 import { SystemDigestService } from './services/system-digest.service';
@@ -20,7 +21,7 @@ import { SystemDigestService } from './services/system-digest.service';
  *
  * It sits above Agents, Stats, Lessons and Tasks and imports them one way —
  * none of them imports it back. The MCP module imports it for the history a
- * system analysis reads.
+ * system analysis reads, and the notifications gateway for its change bus.
  */
 @Module({
   imports: [
@@ -38,7 +39,8 @@ import { SystemDigestService } from './services/system-digest.service';
     SystemAnalysisApplyService,
     SystemAnalysisStartsService,
     SystemAnalysisHistoryService,
+    SystemAnalysisEventBus,
   ],
-  exports: [SystemAnalysisHistoryService],
+  exports: [SystemAnalysisHistoryService, SystemAnalysisEventBus],
 })
 export class SystemAnalysisModule {}

@@ -229,3 +229,13 @@ export const SystemHistorySchema = z.object({
   ),
 });
 export type SystemHistory = z.infer<typeof SystemHistorySchema>;
+
+/**
+ * The `system_analyses_changed` broadcast: a system analysis was started, its
+ * report applied, or a card it filed started or failed to start.
+ *
+ * TWIN PARSER: `parseSystemAnalysesChanged` in `apps/ui/src/renderer/daemon-client.ts`.
+ */
+export interface SystemAnalysesChangedEvent {
+  runId: string;
+}

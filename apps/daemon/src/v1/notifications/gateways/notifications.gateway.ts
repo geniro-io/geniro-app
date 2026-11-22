@@ -39,6 +39,7 @@ import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
+import { SystemAnalysisEventBus } from '../../system-analysis/services/system-analysis-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 
@@ -159,6 +160,7 @@ export class NotificationsGateway
   private memorySubscription?: Subscription;
   private lessonsSubscription?: Subscription;
   private backgroundJobsSubscription?: Subscription;
+  private systemAnalysesSubscription?: Subscription;
   private knowledgeSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
   private commandCenterSubscription?: Subscription;
@@ -194,6 +196,7 @@ export class NotificationsGateway
     @Optional() private readonly lessons?: LessonsEventBus,
     @Optional() private readonly commandCenter?: CommandCenterEventBus,
     @Optional() private readonly backgroundJobs?: BackgroundJobsRegistry,
+    @Optional() private readonly systemAnalyses?: SystemAnalysisEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -405,6 +408,25 @@ export class NotificationsGateway
         error: (err: unknown) =>
           this.logger.error(`background jobs registry errored: ${String(err)}`),
       });
+    // A system analysis's change goes to every client: Settings' past analyses
+    // re-read on it. It names the analysis only.
+    this.systemAnalysesSubscription = this.systemAnalyses
+      ?.allChanges()
+      .subscribe({
+        next: (change) => {
+          try {
+            server.emit('system_analyses_changed', change);
+          } catch (err) {
+            this.logger.error(
+              `failed to broadcast system_analyses_changed (${change.runId}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
+        error: (err: unknown) =>
+          this.logger.error(
+            `system analysis event bus errored: ${String(err)}`,
+          ),
+      });
     // A knowledge write goes to EVERY client, as a memory write does; the
     // event names the document and its place, never its text.
     this.knowledgeSubscription = this.knowledge.allChanges().subscribe({
@@ -560,6 +582,7 @@ export class NotificationsGateway
     this.memorySubscription?.unsubscribe();
     this.lessonsSubscription?.unsubscribe();
     this.backgroundJobsSubscription?.unsubscribe();
+    this.systemAnalysesSubscription?.unsubscribe();
     this.knowledgeSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
     this.commandCenterSubscription?.unsubscribe();

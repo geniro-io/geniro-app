@@ -41,6 +41,7 @@ import {
   daemonErrorCode,
   describeDaemonError,
 } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { ChoiceModelSettings } from './memory-triage-settings';
 import {
@@ -133,6 +134,8 @@ function signalWords(signals: DigestSignals): string[] {
 export interface SystemAnalysisPageProps {
   /** The daemon's system-analysis routes; null until the daemon is reached. */
   api: DaemonApis['systemAnalyses'] | null;
+  /** Announces each start, Apply and card start, so the past analyses re-read. */
+  client: Pick<DaemonClient, 'onSystemAnalysesChanged'> | null;
   agentsApi: DaemonApis['agents'] | null;
   cliDetections: readonly CliDetection[] | null;
   capabilities: CapabilitiesDto | null;
@@ -145,6 +148,7 @@ export interface SystemAnalysisPageProps {
 
 export function SystemAnalysisPage({
   api,
+  client,
   agentsApi,
   cliDetections,
   capabilities,
@@ -157,7 +161,7 @@ export function SystemAnalysisPage({
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const { config, setConfig, profiles } = useAnalysisSetup();
-  const state = useSystemAnalysis(api, days);
+  const state = useSystemAnalysis(api, client, days);
   const { scope } = state;
   const canStart =
     !remote &&

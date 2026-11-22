@@ -29,6 +29,7 @@ import type {
   SystemApplyOutcome,
   SystemApplyResult,
 } from '../system-analysis.types';
+import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 
 const KEPT_AS_REPORT = 'Kept as report';
 
@@ -60,9 +61,21 @@ export class SystemAnalysisApplyService {
     private readonly taskDao: TaskDao,
     private readonly tasks: TasksService,
     private readonly ledger: TeamRecommendationDao,
+    private readonly events: SystemAnalysisEventBus,
   ) {}
 
   async apply(runId: string, input: SystemApply): Promise<SystemApplyResult> {
+    try {
+      return await this.applyOnce(runId, input);
+    } finally {
+      this.events.publishChanged(runId);
+    }
+  }
+
+  private async applyOnce(
+    runId: string,
+    input: SystemApply,
+  ): Promise<SystemApplyResult> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (run === null) {

@@ -187,22 +187,42 @@ const TICKET_KEY = /^[A-Z][A-Z0-9]*-\d+$/;
 const TASK_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FILED_NOTE = /^(?<phrase>filed to start|filed|started) (?<key>\S+)$/;
+const START_FAILED_NOTE = /^could not start (?<key>\S+): (?<reason>[\s\S]+)$/;
 
 export interface SystemOutcome {
   /** The ticket key the card was filed as, or the task id when it has none. */
   key: string;
-  state: 'filed' | 'start requested' | 'started';
+  state: 'filed' | 'start requested' | 'started' | 'start failed';
+  /** Why the filed card's start failed; null in every other state. */
+  reason: string | null;
 }
 
-/** What an applied system item's outcome note says it became, or null for any other note. */
-export function systemOutcomeOf(note: string | null): SystemOutcome | null {
-  const match = note === null ? null : FILED_NOTE.exec(note);
-  const phrase = match?.groups?.phrase;
-  const key = match?.groups?.key;
-  if (key === undefined || phrase === undefined) {
+function isCardKey(key: string): boolean {
+  return TICKET_KEY.test(key) || TASK_ID.test(key);
+}
+
+/** The board card a system item's outcome says it became, or null for any other outcome. */
+export function systemOutcomeOf(
+  outcome: Pick<RecommendationOutcomeView, 'status' | 'note'>,
+): SystemOutcome | null {
+  if (outcome.note === null) {
     return null;
   }
-  if (!TICKET_KEY.test(key) && !TASK_ID.test(key)) {
+  if (outcome.status === 'failed') {
+    const match = START_FAILED_NOTE.exec(outcome.note);
+    const key = match?.groups?.key;
+    const reason = match?.groups?.reason;
+    return key === undefined || reason === undefined || !isCardKey(key)
+      ? null
+      : { key, state: 'start failed', reason };
+  }
+  if (outcome.status !== 'applied') {
+    return null;
+  }
+  const match = FILED_NOTE.exec(outcome.note);
+  const phrase = match?.groups?.phrase;
+  const key = match?.groups?.key;
+  if (key === undefined || phrase === undefined || !isCardKey(key)) {
     return null;
   }
   const state =
@@ -211,7 +231,7 @@ export function systemOutcomeOf(note: string | null): SystemOutcome | null {
       : phrase === 'started'
         ? 'started'
         : 'filed';
-  return { key, state };
+  return { key, state, reason: null };
 }
 
 function isRecommendationAction(value: string): value is RecommendationAction {
@@ -400,17 +420,25 @@ function ItemToggles({
   );
 }
 
+const FILED_STATE_BADGE: Record<
+  Exclude<SystemOutcome['state'], 'filed'>,
+  { variant: 'success' | 'muted' | 'destructive'; label: string }
+> = {
+  'start requested': { variant: 'muted', label: 'Start requested' },
+  started: { variant: 'success', label: 'Started' },
+  'start failed': OUTCOME_BADGE.failed,
+};
+
 function FiledBadges({ filed }: { filed: SystemOutcome }): React.JSX.Element {
+  const state = filed.state === 'filed' ? null : FILED_STATE_BADGE[filed.state];
   return (
     <>
       <Badge variant="outline" data-slot="recommendation-filed">
         {filed.key}
       </Badge>
-      {filed.state === 'filed' ? null : (
-        <Badge
-          variant={filed.state === 'started' ? 'success' : 'muted'}
-          data-slot="recommendation-outcome">
-          {filed.state === 'started' ? 'Started' : 'Start requested'}
+      {state === null ? null : (
+        <Badge variant={state.variant} data-slot="recommendation-outcome">
+          {state.label}
         </Badge>
       )}
     </>
@@ -443,11 +471,17 @@ function ItemRow({
 }): React.JSX.Element {
   const risk = RISK_BADGE[item.risk];
   const territory = TERRITORY_BADGE[item.territory];
-  const filed =
-    outcome?.status === 'applied' ? systemOutcomeOf(outcome.note) : null;
+  const filed = outcome === null ? null : systemOutcomeOf(outcome);
   const result =
     outcome === null || filed !== null ? null : OUTCOME_BADGE[outcome.status];
-  const note = outcome === null || filed !== null ? null : outcome.note;
+  const note =
+    outcome === null
+      ? null
+      : filed === null
+        ? outcome.note
+        : filed.reason === null
+          ? null
+          : `Could not start: ${filed.reason}`;
   return (
     <li
       data-slot="recommendation-row"

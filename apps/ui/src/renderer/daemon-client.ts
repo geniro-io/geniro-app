@@ -1243,6 +1243,27 @@ export function parseBackgroundJobsChanged(
   return typeof kind === 'string' ? { kind } : null;
 }
 
+/** A `system_analyses_changed` broadcast: a system analysis started, applied or saw a card start. */
+export interface SystemAnalysesChangedEvent {
+  runId: string;
+}
+
+/**
+ * Read a `system_analyses_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `SystemAnalysesChangedEvent`
+ * (`apps/daemon/src/v1/system-analysis/system-analysis.types.ts`).
+ */
+export function parseSystemAnalysesChanged(
+  data: unknown,
+): SystemAnalysesChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runId } = data as Record<string, unknown>;
+  return typeof runId === 'string' && runId !== '' ? { runId } : null;
+}
+
 /** A `lessons_changed` broadcast: the thread whose lesson offers or proposals changed. */
 export interface LessonsChangedEvent {
   runId: string | null;
@@ -1484,6 +1505,9 @@ export class DaemonClient {
   private readonly backgroundJobsChangedListeners = new Set<
     (event: BackgroundJobsChangedEvent) => void
   >();
+  private readonly systemAnalysesChangedListeners = new Set<
+    (event: SystemAnalysesChangedEvent) => void
+  >();
   private readonly knowledgeChangedListeners = new Set<
     (event: KnowledgeChangedEvent) => void
   >();
@@ -1716,6 +1740,14 @@ export class DaemonClient {
         const change = parseBackgroundJobsChanged(data);
         if (change) {
           for (const listener of this.backgroundJobsChangedListeners) {
+            listener(change);
+          }
+        }
+      }
+      if (event === 'system_analyses_changed') {
+        const change = parseSystemAnalysesChanged(data);
+        if (change) {
+          for (const listener of this.systemAnalysesChangedListeners) {
             listener(change);
           }
         }
@@ -1963,6 +1995,16 @@ export class DaemonClient {
     this.backgroundJobsChangedListeners.add(listener);
     return () => {
       this.backgroundJobsChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every start, Apply and card start of a system analysis, client-wide. */
+  onSystemAnalysesChanged(
+    listener: (event: SystemAnalysesChangedEvent) => void,
+  ): () => void {
+    this.systemAnalysesChangedListeners.add(listener);
+    return () => {
+      this.systemAnalysesChangedListeners.delete(listener);
     };
   }
 

@@ -20,6 +20,7 @@ import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
+import { SystemAnalysisEventBus } from '../../system-analysis/services/system-analysis-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 import { NotificationsGateway } from './notifications.gateway';
@@ -231,6 +232,45 @@ describe('NotificationsGateway', () => {
 
     gw.onModuleDestroy();
     lessons.publishChanged('run-2');
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it('broadcasts a system analysis change to every client, naming the analysis only, and stops on destroy', () => {
+    const systemAnalyses = new SystemAnalysisEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
+      undefined,
+      undefined,
+      undefined,
+      systemAnalyses,
+    );
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    systemAnalyses.publishChanged('analysis-1');
+
+    expect(emit).toHaveBeenCalledWith('system_analyses_changed', {
+      runId: 'analysis-1',
+    });
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    systemAnalyses.publishChanged('analysis-2');
     expect(emit).toHaveBeenCalledTimes(1);
   });
 

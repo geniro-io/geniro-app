@@ -309,3 +309,27 @@ export const SystemFiled: Story = {
     </div>
   ),
 };
+
+export const SystemStartFailed: Story = {
+  render: () => (
+    <div className="w-[600px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        team={false}
+        items={SYSTEM_ITEMS}
+        applied={['G-1', 'G-2']}
+        outcomes={{
+          'G-1': { status: 'applied', note: 'started BIL-43', backup: null },
+          'G-2': {
+            status: 'failed',
+            note: 'could not start BIL-44: the project folder is gone',
+            backup: null,
+          },
+        }}
+        actions={{ projects: SYSTEM_PROJECTS, onAction: () => undefined }}
+      />
+    </div>
+  ),
+};

@@ -1285,6 +1285,39 @@ describe('RecommendationsCard with system actions', () => {
     ).toBeNull();
   });
 
+  it('shows the key of a card whose start failed beside Failed, with the reason', () => {
+    const el = systemCard(vi.fn<OnAction>(), {
+      outcomes: {
+        'G-1': {
+          status: 'failed',
+          note: 'could not start QB-3: the project folder is gone',
+          backup: null,
+        },
+        'G-2': { status: 'applied', note: 'started QB-2', backup: null },
+      },
+    });
+
+    expect(
+      systemRow(el, 'G-1').querySelector('[data-slot="recommendation-filed"]')
+        ?.textContent,
+    ).toBe('QB-3');
+    expect(
+      systemRow(el, 'G-1').querySelector('[data-slot="recommendation-outcome"]')
+        ?.textContent,
+    ).toBe('Failed');
+    expect(systemRow(el, 'G-1').textContent).toContain(
+      'Could not start: the project folder is gone',
+    );
+    expect(
+      systemRow(el, 'G-2').querySelector('[data-slot="recommendation-filed"]')
+        ?.textContent,
+    ).toBe('QB-2');
+    expect(
+      systemRow(el, 'G-2').querySelector('[data-slot="recommendation-outcome"]')
+        ?.textContent,
+    ).toBe('Started');
+  });
+
   it('names the flags an item answers in its Why detail', () => {
     const el = systemCard(vi.fn<OnAction>());
 
@@ -1301,24 +1334,49 @@ describe('RecommendationsCard with system actions', () => {
 
 describe('systemOutcomeOf', () => {
   it.each([
-    ['filed BIL-41', { key: 'BIL-41', state: 'filed' }],
-    ['filed to start BIL-42', { key: 'BIL-42', state: 'start requested' }],
-    ['started BIL-43', { key: 'BIL-43', state: 'started' }],
+    ['filed BIL-41', { key: 'BIL-41', state: 'filed', reason: null }],
+    [
+      'filed to start BIL-42',
+      { key: 'BIL-42', state: 'start requested', reason: null },
+    ],
+    ['started BIL-43', { key: 'BIL-43', state: 'started', reason: null }],
     [
       'filed 3f6b1c2e-9d4a-4b7e-8f1a-2c5d6e7f8a9b',
-      { key: '3f6b1c2e-9d4a-4b7e-8f1a-2c5d6e7f8a9b', state: 'filed' },
+      {
+        key: '3f6b1c2e-9d4a-4b7e-8f1a-2c5d6e7f8a9b',
+        state: 'filed',
+        reason: null,
+      },
     ],
-  ])('reads %s as its filing', (note, expected) => {
-    expect(systemOutcomeOf(note)).toEqual(expected);
+  ])('reads applied %s as its filing', (note, expected) => {
+    expect(systemOutcomeOf({ status: 'applied', note })).toEqual(expected);
+  });
+
+  it('reads a failed start as the card it filed, with the reason', () => {
+    expect(
+      systemOutcomeOf({
+        status: 'failed',
+        note: 'could not start QB-3: the project folder is gone',
+      }),
+    ).toEqual({
+      key: 'QB-3',
+      state: 'start failed',
+      reason: 'the project folder is gone',
+    });
   });
 
   it.each([
-    ['filed'],
-    ['filed bil-41'],
-    ['failed: no folder'],
-    ['started '],
-    [null],
-  ])('reads %s as no filing', (note) => {
-    expect(systemOutcomeOf(note)).toBeNull();
+    ['applied', 'filed'],
+    ['applied', 'filed bil-41'],
+    ['applied', 'failed: no folder'],
+    ['applied', 'started '],
+    ['applied', null],
+    ['applied', 'could not start QB-3: gone'],
+    ['failed', 'the project folder is gone'],
+    ['failed', 'filed QB-3'],
+    ['failed', 'could not start qb-3: gone'],
+    ['skipped', 'filed QB-3'],
+  ] as const)('reads %s %s as no filing', (status, note) => {
+    expect(systemOutcomeOf({ status, note })).toBeNull();
   });
 });

@@ -25,6 +25,7 @@ import {
   SystemDigestSchema,
 } from '../system-analysis.types';
 import { ensureSystemAnalysisFolder } from '../utils/system-analysis-folder';
+import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 import { SystemDigestService, systemPeriodOf } from './system-digest.service';
 
 /**
@@ -40,6 +41,7 @@ export class SystemAnalysisService {
     private readonly chats: ChatService,
     private readonly ledger: TeamRecommendationDao,
     private readonly memory: MemoryService,
+    private readonly events: SystemAnalysisEventBus,
     /** The analyses' working folder; a test seam. */
     @Optional() private readonly folder?: string,
   ) {}
@@ -81,6 +83,7 @@ export class SystemAnalysisService {
       await this.chats.delete(run.id).catch(() => undefined);
       throw error;
     }
+    this.events.publishChanged(run.id);
     return run;
   }
 

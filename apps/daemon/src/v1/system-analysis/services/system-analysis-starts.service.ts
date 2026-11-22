@@ -16,6 +16,7 @@ import { TeamRecommendationDao } from '../../stats/dao/team-recommendation.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import type { Task } from '../../tasks/entity/task.entity';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
+import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -43,6 +44,7 @@ export class SystemAnalysisStartsService
     private readonly ledger: TeamRecommendationDao,
     private readonly notices: RunNoticeWriter,
     private readonly projectDao: ProjectDao,
+    private readonly events: SystemAnalysisEventBus,
   ) {}
 
   onModuleInit(): void {
@@ -93,11 +95,7 @@ export class SystemAnalysisStartsService
     }
     const item = await this.ledger.byTaskId(task.id, em);
     if (item !== null) {
-      const project = await this.projectDao.getById(task.projectId, em);
-      const key =
-        (project === null
-          ? null
-          : taskIdentifier(project.taskKey, task.number)) ?? task.id;
+      const key = await this.keyOf(task, em);
       await this.chats.recordAnalysisRow(
         item.chatRunId,
         'recommendation_outcome',
@@ -112,6 +110,7 @@ export class SystemAnalysisStartsService
         taskId: task.id,
         applyAction: 'started',
       });
+      this.events.publishChanged(item.chatRunId);
     }
     await this.notices.info(analysisRunId, `Started "${task.title}"`);
   }
@@ -122,8 +121,11 @@ export class SystemAnalysisStartsService
     title: string;
     reason: string;
   }): Promise<void> {
-    const item = await this.ledger.byTaskId(failure.taskId, this.em.fork());
+    const em = this.em.fork();
+    const item = await this.ledger.byTaskId(failure.taskId, em);
     if (item !== null) {
+      const task = await this.taskDao.getById(failure.taskId, em);
+      const key = task === null ? failure.taskId : await this.keyOf(task, em);
       await this.chats.recordAnalysisRow(
         item.chatRunId,
         'recommendation_outcome',
@@ -133,10 +135,7 @@ export class SystemAnalysisStartsService
             {
               id: item.itemId,
               status: 'failed',
-              note: `the card was filed but could not be started: ${failure.reason}`.slice(
-                0,
-                600,
-              ),
+              note: `could not start ${key}: ${failure.reason}`.slice(0, 600),
             },
           ],
         },
@@ -145,11 +144,22 @@ export class SystemAnalysisStartsService
         taskId: failure.taskId,
         applyAction: 'filed',
       });
+      this.events.publishChanged(item.chatRunId);
     }
     await this.notices.warn(
       failure.byRunId,
       `Could not start "${failure.title}": ${failure.reason}`,
       'Start failed',
+    );
+  }
+
+  /** The card's ticket key, or its task id when its project has none. */
+  private async keyOf(task: Task, em: EntityManager): Promise<string> {
+    const project = await this.projectDao.getById(task.projectId, em);
+    return (
+      (project === null
+        ? null
+        : taskIdentifier(project.taskKey, task.number)) ?? task.id
     );
   }
 }

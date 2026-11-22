@@ -18,7 +18,7 @@ export const LIFECYCLE_PAGE = 100;
  * them: a head first seen this soon after the pull request opened is the
  * opening push, not one made since.
  */
-const OPENING_PUSH_MS = 60_000;
+export const OPENING_PUSH_MS = 60_000;
 
 const FAILED_CONCLUSIONS = new Set(['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE']);
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GhCommandRunner } from '../chat.types';
 import type { ManagedCommandResult } from '../utils/managed-command';
 import {
+  LIFECYCLE_READ_CONCURRENCY,
   OPEN_LIFECYCLE_TTL_MS,
   PullRequestLifecycleService,
 } from './pull-request-lifecycle.service';
@@ -235,5 +236,27 @@ describe('PullRequestLifecycleService', () => {
       { unavailable: 'read-budget-spent' },
     ]);
     expect(calls).toEqual([]);
+  });
+
+  it('reads up to eight pull requests at once and never more', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const run: GhCommandRunner = async (command) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return command.args[1] === 'graphql'
+        ? ok(pullRequest('MERGED'))
+        : ok({ total_count: 0, workflow_runs: [] });
+    };
+
+    const reads = await new PullRequestLifecycleService(run).readMany(
+      Array.from({ length: 20 }, (_, index) => ({ ...ref, number: index + 1 })),
+    );
+
+    expect(LIFECYCLE_READ_CONCURRENCY).toBe(8);
+    expect(most).toBe(LIFECYCLE_READ_CONCURRENCY);
+    expect([...reads.values()].every((read) => 'lifecycle' in read)).toBe(true);
   });
 });

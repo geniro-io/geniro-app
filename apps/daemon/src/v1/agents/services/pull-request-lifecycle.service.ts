@@ -29,7 +29,7 @@ const UNAVAILABLE_TTL_MS = 60_000;
 /** How long one analysis read may spend asking GitHub; what is left is read on the next one. */
 export const LIFECYCLE_READ_BUDGET_MS = 45_000;
 
-const LIFECYCLE_READ_CONCURRENCY = 4;
+export const LIFECYCLE_READ_CONCURRENCY = 8;
 
 /** A call started just before the budget ends still gets this long, rather than none. */
 const MIN_GH_TIMEOUT_MS = 5_000;

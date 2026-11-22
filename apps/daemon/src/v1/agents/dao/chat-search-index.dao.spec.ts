@@ -1,6 +1,7 @@
 import type { MikroORM } from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { recordSentStatements } from '../../../db/__tests__/sent-statements';
 import {
   CHAT_TEXT_TRIGGERS,
   CHAT_TEXT_VERSION,
@@ -390,5 +391,39 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
       [2, 'DELIVERY REPORT first'],
       [9, 'DONE CHECK late'],
     ]);
+  });
+
+  it('runs the match once as a list and joins the run’s rows to their text by rowid, never the match per row', async () => {
+    await db.run(RUN_A);
+    await db.item('said', {
+      runId: RUN_A,
+      seq: 1,
+      payload: said('DONE CHECK here'),
+    });
+    await db.ensureIndex();
+    const { sent, stop } = await recordSentStatements(orm);
+    await db
+      .dao()
+      .runRowsMatching(RUN_A, '"DONE CHECK" OR "DELIVERY REPORT"', 10, 50);
+    stop();
+    const [statement] = sent.filter(({ sql }) => sql.includes('chat_text'));
+
+    const plan = (
+      await orm.em
+        .getConnection()
+        .execute<{ detail: string }[]>(
+          `explain query plan ${statement!.sql}`,
+          statement!.params,
+        )
+    ).map((step) => step.detail);
+
+    expect(plan[0]).toMatch(
+      /^SEARCH i USING INDEX items_run_id_kind_seq_index /,
+    );
+    expect(plan).toContainEqual(expect.stringMatching(/^LIST SUBQUERY/));
+    expect(
+      plan.filter((detail) => / VIRTUAL TABLE INDEX 0:M/.test(detail)),
+    ).toEqual(['SCAN hit VIRTUAL TABLE INDEX 0:M2']);
+    expect(plan).toContain('SCAN chat_text VIRTUAL TABLE INDEX 0:=');
   });
 });

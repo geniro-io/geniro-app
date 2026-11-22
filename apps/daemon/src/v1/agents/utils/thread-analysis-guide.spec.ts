@@ -76,6 +76,9 @@ describe('threadAnalysisGuide', () => {
       expect(guide).toContain('18. Cluster by root cause');
     }
     for (const guide of [thread, team, builder]) {
+      expect(guide).toContain(
+        '`pushes` leaves out the opening push (every head GitHub first saw within 60 s of the pull request opening)',
+      );
       expect(guide).toContain('a bot reviews only outside draft');
       expect(guide).toContain('a CI job is skipped on draft');
       expect(guide).toContain(

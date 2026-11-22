@@ -9,10 +9,17 @@ import {
   writeTurnSystemPrompt,
 } from './claude-system-prompt.utils';
 
-vi.mock('node:fs', { spy: true });
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    rmSync: vi.fn(actual.rmSync),
+  };
+});
 const realFs = await vi.importActual<typeof fs>('node:fs');
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => vi.resetAllMocks());
 
 describe('Claude system prompt files', () => {
   it('writes the exact UTF-8 content in a private file and directory', () => {

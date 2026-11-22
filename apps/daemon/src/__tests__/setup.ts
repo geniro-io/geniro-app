@@ -1,10 +1,27 @@
-import { afterEach } from 'vitest';
+import { afterAll, afterEach, vi } from 'vitest';
 
-import { sleepWatch } from '../utils/sleep-watch';
+import { watchProcessState } from './process-state-guard';
 
-// The daemon's sleep watch is module-scope, and a spec's turns routinely end
-// without settling — so each test starts with no ticker inherited from the one
-// before (see `SleepWatch.reset`).
+// Files share one worker process (`isolate: false`), so each file starts on an
+// empty module registry: a spec's `vi.mock` only reaches a module evaluated
+// after it registers, never one an earlier file already loaded.
+vi.resetModules();
+const { sleepWatch } = await import('../utils/sleep-watch');
+
+const stateLeftBehind = watchProcessState();
+
 afterEach(() => {
   sleepWatch.reset();
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  const leaks = stateLeftBehind();
+  if (leaks.length > 0) {
+    throw new Error(
+      `This spec file left state behind for the next file in its worker: ${leaks.join('; ')}`,
+    );
+  }
 });

@@ -237,14 +237,13 @@ describe('CommandCenterChatService', () => {
       await service.addToRoster(MANAGER, ['thread-2'], 'manager');
 
       expect(
-        (await roster.listOf(MANAGER)).map((row) => [
-          row.threadRunId,
-          row.watch,
-        ]),
-      ).toEqual([
-        ['thread-1', true],
-        ['thread-2', false],
-      ]);
+        Object.fromEntries(
+          (await roster.listOf(MANAGER)).map((row) => [
+            row.threadRunId,
+            row.watch,
+          ]),
+        ),
+      ).toEqual({ 'thread-1': true, 'thread-2': false });
     });
 
     it('announces nothing for a thread already on the roster', async () => {

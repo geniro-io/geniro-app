@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeEntityManager } from '../__tests__/fake-entity-manager';
 import { NO_CALL_INDEX } from '../__tests__/no-call-index';
@@ -253,6 +253,9 @@ function service(
 beforeEach(() => {
   machine.processes = [];
   machine.signals = [];
+});
+
+afterEach(() => {
   vi.useRealTimers();
 });
 

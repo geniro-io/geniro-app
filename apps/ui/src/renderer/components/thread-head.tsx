@@ -50,6 +50,7 @@ export function ThreadHead({
   onOpen,
   aside,
   ringClassName,
+  wrap = false,
 }: {
   identity: ThreadIdentity;
   slot: string;
@@ -57,20 +58,31 @@ export function ThreadHead({
   /** Drawn at the end of the title line. */
   aside?: React.ReactNode;
   ringClassName?: string;
+  /** Fold the title onto a second line and run the labels onto more, rather than cut either. */
+  wrap?: boolean;
 }): React.JSX.Element {
-  const titleClass =
-    'min-w-0 truncate text-left text-[13px] leading-5 font-semibold text-foreground';
+  const titleClass = cn(
+    'min-w-0 text-left text-[13px] leading-5 font-semibold text-foreground',
+    wrap ? 'line-clamp-2 break-words' : 'truncate',
+  );
   return (
     <div
       data-slot={`${slot}-head`}
-      className="flex min-w-0 items-center gap-2.5">
+      className={cn(
+        'flex min-w-0 gap-2.5',
+        wrap ? 'items-start' : 'items-center',
+      )}>
       <ThreadFace
         look={identity.face}
         slot={`${slot}-face`}
         ringClassName={ringClassName}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div
+          className={cn(
+            'flex min-w-0 gap-1.5',
+            wrap ? 'items-start' : 'items-center',
+          )}>
           {onOpen === undefined ? (
             <span
               data-slot={`${slot}-title`}
@@ -104,7 +116,7 @@ export function ThreadHead({
           )}
         </div>
         {hasLabels(identity) ? (
-          <ThreadLabelsRow view={identity} slot={slot} />
+          <ThreadLabelsRow view={identity} slot={slot} wrap={wrap} />
         ) : null}
       </div>
     </div>

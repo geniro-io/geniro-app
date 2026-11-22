@@ -63,6 +63,10 @@ import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
 import { TeamNoteOpenContext } from './team-note-row';
+import {
+  type ThreadContextReader,
+  ThreadContextReaderContext,
+} from './thread-question-context';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
@@ -146,6 +150,7 @@ export function ChatProviders({
   agentsApi = null,
   lessonsJump = null,
   taskReader = null,
+  threadContext = null,
   children,
 }: {
   /**
@@ -241,6 +246,8 @@ export function ChatProviders({
   lessonsJump?: ((seq: number) => void) | null;
   /** A `start_thread` card's live board card — see `TaskReaderContext`. */
   taskReader?: TaskReader | null;
+  /** The messages a relayed question's thread sent before it — see `ThreadContextReaderContext`. */
+  threadContext?: ThreadContextReader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   const liveDelegates = useLiveDelegates(liveText);
@@ -280,7 +287,10 @@ export function ChatProviders({
                                                   value={lessonsJump}>
                                                   <TaskReaderContext.Provider
                                                     value={taskReader}>
-                                                    {children}
+                                                    <ThreadContextReaderContext.Provider
+                                                      value={threadContext}>
+                                                      {children}
+                                                    </ThreadContextReaderContext.Provider>
                                                   </TaskReaderContext.Provider>
                                                 </LessonsJumpContext.Provider>
                                               </AgentsApiContext.Provider>

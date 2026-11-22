@@ -287,20 +287,39 @@ describe('CommandCenter — showing a thread on the canvas', () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
-  it('turns the chat view into the split when a thread is shown from it', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
+  it('draws the graph with no view switch, and opens the manager’s chat in a window from the chat button', async () => {
     await renderPage();
-    expect(probes.graph).toBeNull();
+    expect(probes.graph).not.toBeNull();
+    expect(container.querySelector('[aria-label="View"]')).toBeNull();
+    const chat = container.querySelector<HTMLElement>(
+      '[data-slot="command-center-chat-bounds"]',
+    )!;
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-slot="command-center-chat-toggle"]',
+    )!;
+    expect(chat.hidden).toBe(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(probes.dock).not.toBeNull();
 
+    clickOn(toggle);
+    expect(chat.hidden).toBe(false);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+
+    clickOn(container.querySelector('[data-slot="command-center-chat-close"]'));
+    expect(chat.hidden).toBe(true);
+  });
+
+  it('opens the manager’s chat window when the manager’s own thread is shown', async () => {
+    await renderPage();
     act(() => {
-      probes.dock!.onOpenThread('run-b');
+      probes.dock!.onOpenThread('manager-run');
     });
-    await settle();
-
-    expect(localStorage.getItem('commandCenter.view')).toBe('both');
-    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
-      'run-b',
-    ]);
+    expect(
+      container.querySelector<HTMLElement>(
+        '[data-slot="command-center-chat-bounds"]',
+      )!.hidden,
+    ).toBe(false);
+    expect(probes.graph!.openCards).toEqual([]);
   });
 
   it('moves the project filter to the thread’s project when another project is picked', async () => {
@@ -698,9 +717,8 @@ function answerPopover(): HTMLElement | null {
   return container.querySelector<HTMLElement>('[data-slot="answer-popover"]');
 }
 
-describe('CommandCenter — answering a timeline question in the chat view', () => {
-  it('answers a question from the timeline in a popover, titled with its thread, while the view is chat', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
+describe('CommandCenter — answering a timeline question', () => {
+  it('answers a question from the timeline in a popover, titled with its thread', async () => {
     fakes.requests = {
       requests: [
         openRequestOf('run-q', 'item-7', 'How should the export retry?'),
@@ -712,7 +730,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
     await renderPage();
 
     clickOn(timelineToggle());
-    expect(probes.graph).toBeNull();
     clickOn(replyButton());
 
     expect(answerPopover()).not.toBeNull();
@@ -723,7 +740,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
   });
 
   it('offers no Reply on a question the thread no longer waits on', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = { requests: [], error: null, answer: vi.fn() };
     timelineWith([questionEventOf('run-q', 'item-7', 'Billing export')]);
     await renderPage();
@@ -734,7 +750,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
   });
 
   it('shuts the popover when its Reply is pressed again', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = {
       requests: [
         openRequestOf('run-q', 'item-7', 'How should the export retry?'),
@@ -755,7 +770,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
   });
 
   it('shuts the popover when the timeline sidebar is closed', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = {
       requests: [
         openRequestOf('run-q', 'item-7', 'How should the export retry?'),
@@ -775,7 +789,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
   });
 
   it('shuts the popover and drops the Reply once the question is answered', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = {
       requests: [
         openRequestOf('run-q', 'item-7', 'How should the export retry?'),
@@ -813,7 +826,6 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
           toJSON: () => ({}),
         } as DOMRect;
       });
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = {
       requests: [
         openRequestOf('run-q', 'item-7', 'How should the export retry?'),
@@ -845,29 +857,7 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
     rect.mockRestore();
   });
 
-  it('shuts a popover opened from the graph when the view turns to the chat', async () => {
-    fakes.requests = {
-      requests: [
-        openRequestOf('run-a', 'item-9', 'Which invoices should we export?'),
-      ],
-      error: null,
-      answer: vi.fn(),
-    };
-    await renderPage();
-    const anchor = document.createElement('button');
-    container.appendChild(anchor);
-    act(() => {
-      probes.graph!.onAnswer('run-a', anchor);
-    });
-    expect(answerPopover()).not.toBeNull();
-
-    clickOn(buttonNamed('Chat'));
-
-    expect(answerPopover()).toBeNull();
-  });
-
   it('titles the popover with the thread’s name on the board when the board has the thread', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
     fakes.requests = {
       requests: [
         openRequestOf('run-a', 'item-9', 'Which invoices should we export?'),
@@ -889,8 +879,7 @@ describe('CommandCenter — answering a timeline question in the chat view', () 
 });
 
 describe('CommandCenter — showing a timeline row on the canvas', () => {
-  it('shows a timeline row’s thread on the canvas from the chat view, switching to Both, and never goes to Chats', async () => {
-    localStorage.setItem('commandCenter.view', 'chat');
+  it('shows a timeline row’s thread on the canvas, and never goes to Chats', async () => {
     timelineWith([
       {
         id: 'pull_request:418',
@@ -913,7 +902,6 @@ describe('CommandCenter — showing a timeline row on the canvas', () => {
     );
     await settle();
 
-    expect(localStorage.getItem('commandCenter.view')).toBe('both');
     expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
       'run-b',
     ]);

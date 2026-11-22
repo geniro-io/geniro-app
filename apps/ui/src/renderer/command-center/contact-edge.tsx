@@ -1,6 +1,6 @@
 import type { Edge, EdgeProps } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 import { type Point, roundedPath } from '../components/stage-graph-layout';
 import { cn } from '../components/ui/utils';
@@ -130,6 +130,8 @@ export interface ContactEdgeLineProps {
   state: EdgeState;
   pulses: readonly ContactPulse[];
   now: number;
+  /** Its node is being dragged: the wire follows the pointer at once instead of gliding after it. */
+  moving?: boolean;
 }
 
 export function ContactEdgeLine({
@@ -138,20 +140,26 @@ export function ContactEdgeLine({
   state,
   pulses,
   now,
+  moving = false,
 }: ContactEdgeLineProps): React.JSX.Element {
   const reducedMotion = usePrefersReducedMotion();
   const travelling = reducedMotion
     ? []
     : pulses.filter((pulse) => now - Date.parse(pulse.at) < PULSE_TRAVEL_MS);
   return (
-    <g data-slot="contact-edge" data-edge={id} data-state={state}>
+    <g
+      data-slot="contact-edge"
+      data-edge={id}
+      data-state={state}
+      data-moving={moving || undefined}>
       <path
         aria-hidden="true"
         d={path}
         style={pathStyle(path)}
         className={cn(
           edgeVariants({ state }),
-          state === 'idle' && !reducedMotion && 'cc-wire-drift',
+          state === 'idle' && !reducedMotion && !moving && 'cc-wire-drift',
+          moving && 'transition-none',
         )}
         strokeWidth={state === 'idle' ? 1.25 : 2}
         strokeDasharray={state === 'idle' ? '4 4' : undefined}
@@ -163,7 +171,7 @@ export function ContactEdgeLine({
           data-slot="contact-flow"
           d={path}
           style={pathStyle(path)}
-          className={flowVariants({ state })}
+          className={cn(flowVariants({ state }), moving && 'transition-none')}
           strokeWidth={2.5}
           strokeLinecap="round"
         />
@@ -184,15 +192,43 @@ export interface ContactEdgeData extends Record<string, unknown> {
   state: EdgeState;
   pulses: readonly ContactPulse[];
   now: number;
+  moving?: boolean;
 }
 
 export type ContactFlowEdge = Edge<ContactEdgeData, 'contact'>;
 
-export function ContactEdge({
+function sameRoute(a: readonly Point[], b: readonly Point[]): boolean {
+  return (
+    a === b ||
+    (a.length === b.length &&
+      a.every(
+        (point, index) => point.x === b[index]!.x && point.y === b[index]!.y,
+      ))
+  );
+}
+
+export function sameContactEdge(
+  previous: Pick<EdgeProps<ContactFlowEdge>, 'id' | 'data'>,
+  next: Pick<EdgeProps<ContactFlowEdge>, 'id' | 'data'>,
+): boolean {
+  const a = previous.data!;
+  const b = next.data!;
+  return (
+    previous.id === next.id &&
+    a.state === b.state &&
+    a.pulses.length === b.pulses.length &&
+    a.pulses.every((pulse, index) => pulse.id === b.pulses[index]!.id) &&
+    a.now === b.now &&
+    (a.moving ?? false) === (b.moving ?? false) &&
+    sameRoute(a.route, b.route)
+  );
+}
+
+export const ContactEdge = memo(function ContactEdge({
   id,
   data,
 }: EdgeProps<ContactFlowEdge>): React.JSX.Element {
-  const { route, state, pulses, now } = data!;
+  const { route, state, pulses, now, moving } = data!;
   return (
     <ContactEdgeLine
       id={id}
@@ -200,6 +236,7 @@ export function ContactEdge({
       state={state}
       pulses={pulses}
       now={now}
+      moving={moving}
     />
   );
-}
+}, sameContactEdge);

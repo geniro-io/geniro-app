@@ -15,12 +15,21 @@ import {
   useStore,
 } from '@xyflow/react';
 import { cva } from 'class-variance-authority';
-import { Maximize, Minus, Plus, RadioTower, RotateCcw } from 'lucide-react';
+import {
+  Maximize,
+  Minus,
+  Plus,
+  RadioTower,
+  RotateCcw,
+  ZoomIn,
+} from 'lucide-react';
 import {
   createContext,
+  memo,
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -78,6 +87,7 @@ import {
   PhoneThreadCard,
   ThreadCardLayer,
 } from './thread-card-layer';
+import { useWheelLatch, wheelStep } from './wheel-latch';
 
 export const MAX_THREAD_NODES = 24;
 
@@ -218,13 +228,42 @@ interface GraphActions {
   openInChats: (threadId: string) => void;
   toggleCard: (threadId: string) => void;
   answer: (threadId: string, anchor: HTMLElement) => void;
+  /** A node's card was drawn this tall, which the layout gives it from then on. */
+  measured: (threadId: string, height: number) => void;
 }
 
 const GraphActionsContext = createContext<GraphActions>({
   openInChats: () => undefined,
   toggleCard: () => undefined,
   answer: () => undefined,
+  measured: () => undefined,
 });
+
+/** Tell the layout how tall `element` is drawn, now and whenever it changes. */
+function useReportHeight(
+  element: React.RefObject<HTMLElement | null>,
+  report: (height: number) => void,
+): void {
+  const tell = useLatestCallback(report, []);
+  useLayoutEffect(() => {
+    const target = element.current;
+    if (target === null) {
+      return;
+    }
+    const send = (): void => {
+      if (target.offsetHeight > 0) {
+        tell(target.offsetHeight);
+      }
+    };
+    send();
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(send);
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [element, tell]);
+}
 
 const HIDDEN_HANDLE = { opacity: 0, pointerEvents: 'none' } as const;
 
@@ -287,7 +326,20 @@ function Stat({
   );
 }
 
-function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
+function sameData<T extends Record<string, unknown>>(
+  previous: { data: T },
+  next: { data: T },
+): boolean {
+  const keys = Object.keys(next.data);
+  return (
+    keys.length === Object.keys(previous.data).length &&
+    keys.every((key) => Object.is(previous.data[key], next.data[key]))
+  );
+}
+
+const ManagerNode = memo(function ManagerNode({
+  data,
+}: NodeProps<ManagerFlowNode>): React.JSX.Element {
   const { manager, threads, working, awaiting, pendingStarts, now } = data;
   const started = manager !== null;
   const line = started
@@ -376,13 +428,19 @@ function ManagerNode({ data }: NodeProps<ManagerFlowNode>): React.JSX.Element {
       </section>
     </>
   );
-}
+}, sameData);
 
-function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
-  const { openInChats, toggleCard, answer } = useContext(GraphActionsContext);
+const ThreadNode = memo(function ThreadNode({
+  data,
+}: NodeProps<ThreadFlowNode>): React.JSX.Element {
+  const { openInChats, toggleCard, answer, measured } =
+    useContext(GraphActionsContext);
   const { thread, summary, asking } = data;
+  const drawn = useRef<HTMLDivElement | null>(null);
+  useReportHeight(drawn, (height) => measured(thread.id, height));
   return (
     <div
+      ref={drawn}
       data-slot="graph-thread"
       data-thread-id={thread.id}
       className="cc-node-in">
@@ -399,7 +457,7 @@ function ThreadNode({ data }: NodeProps<ThreadFlowNode>): React.JSX.Element {
       />
     </div>
   );
-}
+}, sameData);
 
 /** The place an open thread's card holds in the graph: its wire ends and an outline the card stands on. */
 function SlotNode({ data }: NodeProps<SlotFlowNode>): React.JSX.Element {
@@ -500,6 +558,7 @@ export function graphRows(
   hidden: number,
   canvasWidth = 0,
   open: ReadonlyMap<string, GraphOpenCard> = new Map(),
+  heights: ReadonlyMap<string, number> = new Map(),
 ): GraphBox[][] {
   const boxOf = (thread: GraphThread): GraphBox => {
     const card = open.get(thread.id);
@@ -508,7 +567,7 @@ export function graphRows(
       ...(card === undefined
         ? {
             width: THREAD_CARD_WIDTH,
-            height: threadCardHeight(thread.view),
+            height: heights.get(thread.id) ?? threadCardHeight(thread.view),
           }
         : cardBox(card.size)),
     };
@@ -677,61 +736,105 @@ export function GraphView(props: GraphViewProps): React.JSX.Element {
   );
 }
 
+/** How far the zoom may stray from the default before Reset zoom is offered. */
+const ZOOM_TOLERANCE = 0.01;
+
+/** Whether `zoom` is the default view's zoom, give or take float noise. */
+export function atDefaultZoom(zoom: number, defaultZoom: number): boolean {
+  return Math.abs(zoom - defaultZoom) <= ZOOM_TOLERANCE;
+}
+
+function ResetZoomButton({
+  defaultZoom,
+  onResetZoom,
+}: {
+  defaultZoom: number;
+  onResetZoom: () => void;
+}): React.JSX.Element | null {
+  const zoom = useStore((state) => state.transform[2]);
+  if (atDefaultZoom(zoom, defaultZoom)) {
+    return null;
+  }
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-slot="graph-reset-zoom"
+      className="h-7 gap-1.5 bg-card px-2 text-xs shadow-sm"
+      title="Back to the zoom the graph opens at"
+      onClick={onResetZoom}>
+      <ZoomIn aria-hidden="true" className="size-3.5" />
+      Reset zoom
+      <span className="text-muted-foreground tabular-nums">
+        {Math.round(zoom * 100)}%
+      </span>
+    </Button>
+  );
+}
+
 function ZoomControls({
   onFit,
   onReset,
+  defaultZoom,
+  onResetZoom,
 }: {
   onFit: () => void;
   onReset: (() => void) | null;
+  defaultZoom: number;
+  onResetZoom: () => void;
 }): React.JSX.Element {
   const flow = useReactFlow();
   const reduced = usePrefersReducedMotion();
   const duration = reduced ? 0 : 200;
   return (
-    <div
-      role="group"
-      aria-label="Zoom"
-      className="absolute right-3 bottom-3 z-10 flex flex-col gap-1 rounded-control border border-border bg-card p-1 shadow-sm">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Zoom in"
-        onClick={() => void flow.zoomIn({ duration })}>
-        <Plus aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Zoom out"
-        onClick={() => void flow.zoomOut({ duration })}>
-        <Minus aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Fit the graph"
-        onClick={onFit}>
-        <Maximize aria-hidden="true" />
-      </Button>
-      {onReset === null ? null : (
+    <div className="absolute right-3 bottom-20 z-10 flex flex-col items-end gap-2">
+      <ResetZoomButton defaultZoom={defaultZoom} onResetZoom={onResetZoom} />
+      <div
+        role="group"
+        aria-label="Zoom"
+        className="flex flex-col gap-1 rounded-control border border-border bg-card p-1 shadow-sm">
         <Button
           type="button"
           variant="ghost"
           size="icon"
           className="size-7"
-          data-slot="graph-reset-layout"
-          aria-label="Reset layout"
-          title="Reset layout"
-          onClick={onReset}>
-          <RotateCcw aria-hidden="true" />
+          aria-label="Zoom in"
+          onClick={() => void flow.zoomIn({ duration })}>
+          <Plus aria-hidden="true" />
         </Button>
-      )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          aria-label="Zoom out"
+          onClick={() => void flow.zoomOut({ duration })}>
+          <Minus aria-hidden="true" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          aria-label="Fit the graph"
+          onClick={onFit}>
+          <Maximize aria-hidden="true" />
+        </Button>
+        {onReset === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            data-slot="graph-reset-layout"
+            aria-label="Reset layout"
+            title="Reset layout"
+            onClick={onReset}>
+            <RotateCcw aria-hidden="true" />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -765,6 +868,7 @@ function GraphCanvas({
   const flow = useReactFlow();
   const reduced = usePrefersReducedMotion();
   const [measure, measured] = useElementSize();
+  const pane = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState(measured);
   // A hidden page measures 0×0; keeping the last real size keeps the flow and every open card's chat mounted.
   if (measured !== size && measured.width > 0 && measured.height > 0) {
@@ -780,6 +884,16 @@ function GraphCanvas({
     null,
   );
   const panZoomReady = useStore((state) => state.panZoom !== null);
+  const [heights, setHeights] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const nodeMeasured = useLatestCallback((threadId: string, height: number) => {
+    setHeights((known) =>
+      Math.abs((known.get(threadId) ?? -1) - height) < 1
+        ? known
+        : new Map(known).set(threadId, height),
+    );
+  }, []);
 
   const largest = size.width === 0 ? null : largestCard(size);
   const open = new Map(
@@ -796,7 +910,7 @@ function GraphCanvas({
   const shown = shownThreads(threads, open);
   const hidden = threads.length - shown.length;
   const canvasWidth = narrow ? 0 : size.width;
-  const rows = graphRows(shown, hidden, canvasWidth, onCanvas);
+  const rows = graphRows(shown, hidden, canvasWidth, onCanvas, heights);
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
@@ -817,7 +931,10 @@ function GraphCanvas({
   const unopened =
     onCanvas.size === 0 && pinned.size === 0
       ? null
-      : layoutRows(root, graphRows(shown, hidden, canvasWidth));
+      : layoutRows(
+          root,
+          graphRows(shown, hidden, canvasWidth, new Map(), heights),
+        );
   const drawn: GraphGeometry = narrow
     ? layoutColumn(root, rows.flat())
     : layoutRows(root, rows, pinned, unopened?.width);
@@ -904,6 +1021,10 @@ function GraphCanvas({
   const openInChats = useLatestCallback(onOpenInChats, []);
   const toggleCard = useLatestCallback(onToggleCard, []);
   const answer = useLatestCallback(onAnswer, []);
+  const actions = useMemo(
+    () => ({ openInChats, toggleCard, answer, measured: nodeMeasured }),
+    [openInChats, toggleCard, answer, nodeMeasured],
+  );
   const viewportMoved = useLatestCallback(() => {
     if (performance.now() < quietUntil.current) {
       return;
@@ -911,6 +1032,24 @@ function GraphCanvas({
     userMoved.current = true;
     onViewportMove?.();
   }, []);
+  useWheelLatch(
+    () => pane.current?.querySelector<HTMLElement>('.react-flow') ?? null,
+    active && !narrow && size.width > 0,
+    (event) => {
+      const box = pane.current?.getBoundingClientRect();
+      if (box === undefined) {
+        return;
+      }
+      void flow.setViewport(
+        wheelStep(
+          flow.getViewport(),
+          event,
+          { x: event.clientX - box.left, y: event.clientY - box.top },
+          { minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM },
+        ),
+      );
+    },
+  );
   const nodesChanged = useLatestCallback(
     (changes: NodeChange<GraphFlowNode>[]) => {
       for (const change of changes) {
@@ -1038,7 +1177,13 @@ function GraphCanvas({
         targetHandle: 'in',
         focusable: false,
         selectable: false,
-        data: { route: wire, state: entry.state, pulses: entry.pulses, now },
+        data: {
+          route: wire,
+          state: entry.state,
+          pulses: entry.pulses,
+          now,
+          moving: drag?.id === id,
+        },
       });
     }
   }
@@ -1109,7 +1254,7 @@ function GraphCanvas({
   };
 
   return (
-    <GraphActionsContext.Provider value={{ openInChats, toggleCard, answer }}>
+    <GraphActionsContext.Provider value={actions}>
       {narrow ? (
         <div
           role="group"
@@ -1159,7 +1304,12 @@ function GraphCanvas({
           data-rows={rows.length}
           className={cn('flex flex-col', className)}>
           <AttentionLegend threads={threads} />
-          <div ref={measure} className="relative min-h-0 flex-1">
+          <div
+            ref={(element) => {
+              pane.current = element;
+              measure(element);
+            }}
+            className="relative min-h-0 flex-1">
             {size.width === 0 ? null : (
               <>
                 <ReactFlow
@@ -1194,6 +1344,11 @@ function GraphCanvas({
                   onReset={
                     Object.keys(positions).length === 0 ? null : onResetLayout
                   }
+                  defaultZoom={widthFit(automatic, size).zoom}
+                  onResetZoom={() => {
+                    userMoved.current = false;
+                    fit(true);
+                  }}
                 />
                 <ThreadCardLayer
                   cards={canvasCards}

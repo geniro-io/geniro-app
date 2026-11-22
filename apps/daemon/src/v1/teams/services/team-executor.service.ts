@@ -27,6 +27,7 @@ import {
   type AgentSession,
   type AgentTurnHandle,
   type AgentTurnInput,
+  type AgentUsage,
   type ApprovalResolution,
   type InstalledApprovalSupport,
   NO_LIVE_STREAM,
@@ -102,6 +103,7 @@ import {
   PartialStreamService,
 } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
@@ -533,6 +535,15 @@ async function approvalSupportByKind(
  * What one member turn ended with, read once its events have drained — see
  * `beginAgentTurn`'s `finish`.
  */
+interface ParkedLeadTurn {
+  adapter: AgentAdapter;
+  input: AgentTurnInput;
+  sessionId: string;
+  endedAt: number;
+  promptCacheTtlMs: number | null;
+  contextTokens: number | null;
+}
+
 interface NodeTurnResult {
   outcome: NodeOutcome;
   finalText: string | null;
@@ -967,8 +978,34 @@ export class TeamExecutorService
     @Optional() private readonly writeFailures?: WriteFailureNotices,
     /** Where a turn starts once the run's folder is gone, optional on `artifacts`' terms. */
     @Optional() private readonly turnFolders?: TurnFolderService,
+    @Optional() private readonly cacheKeepAlive?: PromptCacheKeepAliveService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
+  }
+
+  private recordPromptCacheWarmup(
+    runId: string,
+    caller: string,
+    parked: ParkedLeadTurn,
+    usage: AgentUsage,
+  ): void {
+    const memberId = callerNodeOf(caller);
+    void this.nodeStateDao
+      .addPromptCacheWarmup(runId, memberId, usage.costUsd)
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId}: could not add a prompt-cache warm-up to ${memberId}'s spend: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    this.bus.publishPromptCacheWarmup({
+      runId,
+      memberId,
+      agentKind: parked.adapter.getConfig().kind,
+      model: usage.contextModel ?? parked.input.model ?? null,
+      cwd: parked.input.cwd ?? null,
+      occurredAt: new Date(),
+      usage,
+    });
   }
 
   /** The folder a turn of `runId` starts in — see {@link TurnFolderService}. */
@@ -1713,6 +1750,7 @@ export class TeamExecutorService
     this.commandEndWakes?.forgetRun(runId);
     // The run's monitors end with it, waking nobody.
     this.monitors?.stopRun(runId, 'thread-stop');
+    this.cacheKeepAlive?.stopRun(runId);
     return { cancelled: this.registry.cancel(runId) };
   }
 
@@ -4151,7 +4189,10 @@ export class TeamExecutorService
      * context.
      */
     const liveConversations = new Map<string, number>();
+    const parkedLeadTurns = new Map<string, ParkedLeadTurn>();
     const retainConversation = (caller: string): void => {
+      this.cacheKeepAlive?.stop(runId, caller);
+      parkedLeadTurns.delete(caller);
       liveConversations.set(caller, (liveConversations.get(caller) ?? 0) + 1);
       if (callerConversationOf(caller) === null) {
         this.commandEndWakes?.turnStarted(memberWakeOwner(runId, caller));
@@ -4190,6 +4231,20 @@ export class TeamExecutorService
         redeliver();
       }
       this.notifyConversationTurnEnded(runId, caller);
+      const parked = parkedLeadTurns.get(caller);
+      parkedLeadTurns.delete(caller);
+      if (parked !== undefined && !liveConversations.has(caller)) {
+        this.cacheKeepAlive?.keepWarm({
+          runId,
+          conversation: caller,
+          ...parked,
+          owed: () =>
+            !liveConversations.has(caller) &&
+            this.callBroker.owedACallOrMonitor(runId, caller),
+          onWarmed: (usage) =>
+            this.recordPromptCacheWarmup(runId, caller, parked, usage),
+        });
+      }
     };
     let cancelRequested = false;
     /**
@@ -6898,6 +6953,21 @@ export class TeamExecutorService
           finalOutcome === 'completed'
             ? (finalText ?? textChunks.join(''))
             : finalText;
+        if (
+          callContext === undefined &&
+          leadIds.has(node.id) &&
+          finalOutcome === 'completed' &&
+          capturedSessionId !== null
+        ) {
+          parkedLeadTurns.set(node.id, {
+            adapter,
+            input,
+            sessionId: capturedSessionId,
+            endedAt: Date.now(),
+            promptCacheTtlMs,
+            contextTokens: lastContextTokens,
+          });
+        }
         return {
           outcome: finalOutcome,
           finalText: text,

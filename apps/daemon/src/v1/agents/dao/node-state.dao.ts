@@ -19,6 +19,8 @@ interface NodeStateDatabase {
     member_id: NodeState['memberId'];
     worked_ms: NodeState['workedMs'];
     tool_calls: NodeState['toolCalls'];
+    prompt_cache_warmup_cost_usd: NodeState['promptCacheWarmupCostUsd'];
+    prompt_cache_warmups: NodeState['promptCacheWarmups'];
     /** Epoch milliseconds, since value conversion is off. */
     deleted_at: number | null;
   };
@@ -362,6 +364,29 @@ export class NodeStateDao extends BaseDao<NodeState> {
               ),
             }
           : {}),
+      }))
+      .where('run_id', '=', runId)
+      .where('member_id', '=', memberId)
+      .where('deleted_at', 'is', null)
+      .execute();
+  }
+
+  async addPromptCacheWarmup(
+    runId: string,
+    memberId: string,
+    costUsd: number | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork())
+      .getKysely<NodeStateDatabase>({ convertValues: false })
+      .updateTable('node_state')
+      .set((eb) => ({
+        prompt_cache_warmups: eb('prompt_cache_warmups', '+', 1),
+        prompt_cache_warmup_cost_usd: eb(
+          'prompt_cache_warmup_cost_usd',
+          '+',
+          costUsd ?? 0,
+        ),
       }))
       .where('run_id', '=', runId)
       .where('member_id', '=', memberId)

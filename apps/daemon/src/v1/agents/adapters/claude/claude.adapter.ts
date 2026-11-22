@@ -145,6 +145,7 @@ import {
   CLAUDE_PROFILE_SETTINGS_FILE,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
+  CLAUDE_PROMPT_CACHE_WARMUP_ARGS,
   CLAUDE_PROVIDER_ENV_KEYS,
   CLAUDE_QUESTION_TOOL_NAME,
   CLAUDE_READ_ONLY_TOOLS,
@@ -256,7 +257,10 @@ import {
   readClaudeResultText,
   readClaudeTitleReply,
 } from './utils/claude-title.utils';
-import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
+import {
+  ClaudeSessionCostLedger,
+  listPricedUsage,
+} from './utils/claude-usage.utils';
 
 /**
  * Drives `claude` headlessly. The prompt is sent as a stream-json user-message
@@ -526,6 +530,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // string as an ordinary user message and bill a turn for it.
       resumeOnlyUnavailableReason:
         'claude cannot reopen a conversation without sending a message — send your next message and it continues from where it left off',
+      promptCacheWarmupUnavailableReason: null,
       /**
        * True: this vocabulary belongs to the BINARY, not to a model — the same
        * words work under every `--model`. So a level outside it is one the CLI
@@ -2288,11 +2293,15 @@ export class ClaudeAdapter extends AgentAdapter {
     args.push(...this.autoCompactArgs(input));
     if (input.resumeSessionId) {
       args.push(CLAUDE_RESUME_FLAG, input.resumeSessionId);
-      // argv is built only for a process about to START, so this is the one
-      // moment the restored totals are known to apply: the process resumes the
-      // session from its transcript's last `cost-state`, and its first result
-      // is that figure plus the turn. Registered here, read at its `init`.
-      this.seedRestoredCost(input);
+      if (input.promptCacheWarmup === true) {
+        args.push(...CLAUDE_PROMPT_CACHE_WARMUP_ARGS);
+      } else {
+        // argv is built only for a process about to START, so this is the one
+        // moment the restored totals are known to apply: the process resumes the
+        // session from its transcript's last `cost-state`, and its first result
+        // is that figure plus the turn. Registered here, read at its `init`.
+        this.seedRestoredCost(input);
+      }
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
@@ -2488,6 +2497,7 @@ export class ClaudeAdapter extends AgentAdapter {
         this.switchedOffServers(input),
         input.mcpEndpoint?.serverName ?? null,
       ).sort(),
+      blockEveryTool: input.promptCacheWarmup === true,
     });
   }
 
@@ -2694,6 +2704,22 @@ export class ClaudeAdapter extends AgentAdapter {
     return mapClaudeMessage(obj, this.costLedger);
   }
 
+  private messageMapperFor(
+    input: AgentTurnInput,
+  ): (obj: unknown) => AgentEvent[] {
+    if (input.promptCacheWarmup !== true) {
+      return (obj) => this.mapMessage(obj);
+    }
+    const prices = this.costLedger.prices;
+    const ledger = new ClaudeSessionCostLedger(prices);
+    return (obj) =>
+      mapClaudeMessage(obj, ledger).map((event) =>
+        event.type === 'turn_complete' && event.usage !== null
+          ? { ...event, usage: listPricedUsage(event.usage, prices) }
+          : event,
+      );
+  }
+
   /**
    * See {@link ClaudeSessionCostLedger.expectResume}: the read runs when the
    * new process reports `init`, and the ledger owns its failure.
@@ -2748,6 +2774,7 @@ export class ClaudeAdapter extends AgentAdapter {
       };
     }
     const delegateSettler = this.delegateSettlerFor(input);
+    const mapMessage = this.messageMapperFor(input);
     if (!this.waitsForMcpServers(input)) {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with
@@ -2765,7 +2792,7 @@ export class ClaudeAdapter extends AgentAdapter {
           delegateSettler.observe(obj);
           return modelMismatch.onMessage(
             obj,
-            questionLeadIn.observe(obj, driver.onMessage(obj)),
+            questionLeadIn.observe(obj, mapMessage(obj)),
           );
         },
         buildApprovalResponse: (id, allow, updatedInput, option) =>
@@ -2779,7 +2806,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     return new ClaudeTurnDriver({
       requestedModel: input.model,
-      mapMessage: (obj) => this.mapMessage(obj),
+      mapMessage,
       buildApprovalResponse: (id, allow, updatedInput, option) =>
         this.buildApprovalResponse(id, allow, updatedInput, option),
       logger: this.options.logger,

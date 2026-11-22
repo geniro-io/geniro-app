@@ -13,6 +13,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import type { AgentUsage } from './adapters/adapter.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
 import type {
@@ -5623,6 +5624,16 @@ export interface ThreadMessageSent {
 export interface ReplyCreditSpent {
   fromRunId: string;
   toRunId: string;
+}
+
+export interface PromptCacheWarmupSpend {
+  runId: string;
+  memberId: string;
+  agentKind: AgentKind;
+  model: string | null;
+  cwd: string | null;
+  occurredAt: Date;
+  usage: AgentUsage;
 }
 
 /** One message waiting for a thread, as its chip lists it. */

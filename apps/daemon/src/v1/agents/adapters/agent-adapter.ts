@@ -3363,8 +3363,12 @@ export abstract class AgentAdapter {
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
+    runTag?: Readonly<Record<string, string>>,
   ): AgentTurnHandle {
-    const handle = this.startSession(input).startTurn(input, onEvent);
+    const handle = this.startSession(input, { runTag }).startTurn(
+      input,
+      onEvent,
+    );
     // A fresh session always accepts its first turn; a spawn failure comes
     // back as a settled handle carrying an `error` event, not as null.
     if (!handle) {

@@ -79,4 +79,21 @@ describe('claudeSettingsArgs', () => {
       'deniedMcpServers',
     );
   });
+
+  it('blocks every tool through a PreToolUse hook inside the same flag, only when asked', () => {
+    expect(
+      settingsOf(
+        claudeSettingsArgs({ replyLanguage: 'Russian', blockEveryTool: true }),
+      ),
+    ).toEqual({
+      ...REFUSE,
+      language: 'Russian',
+      hooks: {
+        PreToolUse: [
+          { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },
+        ],
+      },
+    });
+    expect(settingsOf(claudeSettingsArgs({}))).not.toHaveProperty('hooks');
+  });
 });

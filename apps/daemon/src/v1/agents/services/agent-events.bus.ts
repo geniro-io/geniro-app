@@ -2,6 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { type Observable, Subject } from 'rxjs';
 
 import type {
+  PromptCacheWarmupSpend,
   PullRequestsCapturedEvent,
   ReplyCreditSpent,
   RunCreatedEvent,
@@ -38,6 +39,7 @@ export class AgentEventBus {
   private readonly threadMessageChanges = new Subject<ThreadMessagesChange>();
   private readonly threadMessagesSent = new Subject<ThreadMessageSent>();
   private readonly replyCreditsSpent = new Subject<ReplyCreditSpent>();
+  private readonly promptCacheWarmups = new Subject<PromptCacheWarmupSpend>();
   private readonly changed = new Subject<RunWire[]>();
   private readonly groupsChanged = new Subject<void>();
   private readonly runCreated = new Subject<RunCreatedEvent>();
@@ -143,6 +145,14 @@ export class AgentEventBus {
 
   allReplyCreditsSpent(): Observable<ReplyCreditSpent> {
     return this.replyCreditsSpent.asObservable();
+  }
+
+  publishPromptCacheWarmup(spend: PromptCacheWarmupSpend): void {
+    this.promptCacheWarmups.next(spend);
+  }
+
+  allPromptCacheWarmups(): Observable<PromptCacheWarmupSpend> {
+    return this.promptCacheWarmups.asObservable();
   }
 
   /** All run-status changes, for the single fan-out subscriber. */

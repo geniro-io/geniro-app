@@ -27,6 +27,7 @@ import { parseJsonColumn } from '../../agents/utils/json-util';
 import { messageText } from '../../agents/utils/message-preview';
 import { persistItemAndEmit } from '../../agents/utils/persist-item';
 import { readPersistedResetWakes } from '../../agents/utils/run-reset-wakes';
+import { readRestartContinuation } from '../../agents/utils/run-restart-continuation';
 import {
   readRunStageProgress,
   writeRunStageProgress,
@@ -155,6 +156,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
     }
     return (
       readPersistedResetWakes(run.resetWakes).length > 0 ||
+      readRestartContinuation(run.restartContinuation) !== null ||
       this.monitors?.isRunning(runId) === true
     );
   }

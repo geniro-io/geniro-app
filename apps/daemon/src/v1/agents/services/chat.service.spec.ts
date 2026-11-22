@@ -11279,6 +11279,33 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
+  it('drops the reply a compaction abandoned from the live plane as the compaction starts', async () => {
+    const { service, claude, deltas } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'go');
+    claude.emit({
+      type: 'text_delta',
+      text: 'CI is green on 1193b54536. [CI](https://github.com/ma',
+    });
+    await drain();
+    expect(deltas.at(-1)?.text).toBe(
+      'CI is green on 1193b54536. [CI](https://github.com/ma',
+    );
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: 'auto',
+      preTokens: 380_242,
+      postTokens: null,
+    });
+    await drain();
+
+    expect(deltas.at(-1)).toMatchObject({ runId: run.id, text: '' });
+    claude.finish();
+    await drain();
+  });
+
   it('stops claiming the agent is thinking the moment a tool call lands', async () => {
     // The full path for the reported "Thinking… stays up between tool calls".
     // A model that thinks and then calls a tool with nothing to say first emits

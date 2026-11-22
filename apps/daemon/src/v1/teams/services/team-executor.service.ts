@@ -147,6 +147,7 @@ import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import { effortListed } from '../../agents/utils/effort-listed';
 import {
+  COMPACTING_ACTIVITY,
   endsOffTurnStretch,
   mapEventToItem,
   restatesRunAsWorking,
@@ -5524,6 +5525,18 @@ export class TeamExecutorService
       // This turn's compaction, until the row recording it is written — the
       // chat path's `compactions`, for a member's or a callee's own window.
       const compactions = new CompactionRows();
+      let compactingAnnounced = false;
+      const announceCompacting = (on: boolean): void => {
+        if (compactingAnnounced === on) {
+          return;
+        }
+        compactingAnnounced = on;
+        this.bus.publishRunStatus({
+          runId,
+          status: null,
+          activity: on ? COMPACTING_ACTIVITY : null,
+        });
+      };
       const onEvent = (event: AgentEvent): void => {
         const promptTaken =
           event.parentToolUseId === undefined &&
@@ -5576,6 +5589,9 @@ export class TeamExecutorService
           }
         }
         enqueue(async () => {
+          if (ended) {
+            announceCompacting(false);
+          }
           if (ended && callContext === undefined) {
             // On the chain, so a drop this turn reported ahead of its terminal
             // has been matched first. A call sub-turn of the same member holds
@@ -6128,6 +6144,17 @@ export class TeamExecutorService
               // their own card is the gate.
               handle.respondApproval(event.id, true, event.input);
               return;
+            }
+          }
+          if (
+            event.type === 'context_compacted' &&
+            event.parentToolUseId === undefined
+          ) {
+            if (event.phase === 'started') {
+              this.partials.retire(runId, ownerKey, node.id);
+            }
+            if (callContext === undefined) {
+              announceCompacting(event.phase === 'started');
             }
           }
           if (endsReasoningStretch(event)) {

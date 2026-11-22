@@ -138,6 +138,7 @@ import { BackgroundWorkCounts } from '../utils/background-work-counts';
 import { withCarriedContext } from '../utils/carried-context';
 import { CompactionRows } from '../utils/compaction-rows';
 import {
+  COMPACTING_ACTIVITY,
   endsOffTurnStretch,
   mapEventToItem,
   offTurnActivity,
@@ -316,8 +317,6 @@ import { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 import { WriteFailureNotices } from './write-failure.notices';
-
-const COMPACTING_ACTIVITY = 'compacting the conversation';
 
 /** A deferred card another module raised — one that stands across turns. */
 /** The sentence under the badge while a turn is held for `count` units. */
@@ -7795,6 +7794,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // already fixed once there.
               if (event.parentToolUseId !== undefined) {
                 return;
+              }
+              if (event.phase === 'started') {
+                this.partials.retire(runId, SINGLE_AGENT_NODE, null);
               }
               // Held for the summary line that may follow (see `compactions`);
               // what comes back is an EARLIER compaction that none followed.

@@ -453,6 +453,8 @@ export const CLAUDE_PROMPT_CACHE_WARMUP_ARGS: readonly string[] = [
 
 export const CLAUDE_HOOKS_SETTING_KEY = 'hooks';
 
+export const CLAUDE_DISABLE_ALL_HOOKS_SETTING_KEY = 'disableAllHooks';
+
 export const CLAUDE_BLOCK_EVERY_TOOL_HOOKS = {
   PreToolUse: [
     { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },

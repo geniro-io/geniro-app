@@ -653,12 +653,6 @@ class FakeNodeStateDao {
       found.contextWindowTokens = contextWindowTokens;
     }
   }
-  /**
-   * The durable per-member TOTALS, following the real DAO's own rule — it ADDS
-   * where `rememberContext` above replaces, because worked time and tool count
-   * are totals rather than levels. A fake that overwrote here would let a
-   * clobbering writer pass.
-   */
   readonly warmups: {
     runId: string;
     memberId: string;
@@ -673,6 +667,12 @@ class FakeNodeStateDao {
     this.warmups.push({ runId, memberId, costUsd });
   }
 
+  /**
+   * The durable per-member TOTALS, following the real DAO's own rule — it ADDS
+   * where `rememberContext` above replaces, because worked time and tool count
+   * are totals rather than levels. A fake that overwrote here would let a
+   * clobbering writer pass.
+   */
   async rememberWork(
     runId: string,
     memberId: string,
@@ -2397,16 +2397,67 @@ describe('TeamExecutorService', () => {
         }),
       ]);
 
+      cacheKeepAlive.stop.mockClear();
+      const startsBeforeWake = claude.starts.length;
       completeTurn(claude.starts[1]!, 'helped');
       await drain();
 
+      expect(claude.starts.length).toBeGreaterThan(startsBeforeWake);
+      expect(claude.starts.at(-1)!.input.prompt).toContain('call-1');
       expect(cacheKeepAlive.stop).toHaveBeenCalledWith(run.id, 'orch');
-      expect(
-        cacheKeepAlive.keepWarm.mock.calls.every(
-          ([armed]) =>
-            (armed as { conversation: string }).conversation === 'orch',
+
+      await service.cancel(run.id);
+      expect(cacheKeepAlive.stopRun).toHaveBeenCalledWith(run.id);
+    });
+
+    it('never keeps a callee conversation warm, even while a call of its own is out', async () => {
+      const cacheKeepAlive = {
+        keepWarm: vi.fn(),
+        stop: vi.fn(),
+        stopRun: vi.fn(),
+      };
+      const { service, claude, callBroker } = setup(undefined, {
+        cacheKeepAlive,
+      });
+      const run = await service.startRun({
+        slug: 'c3',
+        team: teamOf(
+          [
+            member('orch', { instructions: 'You orchestrate.' }),
+            member('helper', { name: 'Helper', role: 'Researches.' }),
+            member('aux', { name: 'Aux', role: 'Assists.' }),
+          ],
+          { name: 'calls3' },
         ),
-      ).toBe(true);
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      void callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        title: 'Look',
+        mode: 'async',
+      });
+      await drain();
+      const helperTurn = claude.starts[1]!;
+      helperTurn.emit({ type: 'session', sessionId: 'helper-session' });
+      await callBroker.callAgent(run.id, callerKey('helper', 'call-1'), {
+        agent: 'aux',
+        message: 'dig',
+        title: 'Dig',
+        mode: 'async',
+      });
+      await drain();
+      completeTurn(helperTurn, 'asked aux');
+      await drain();
+
+      expect(
+        cacheKeepAlive.keepWarm.mock.calls.filter(
+          ([target]) =>
+            (target as { conversation: string }).conversation !== 'orch',
+        ),
+      ).toEqual([]);
     });
 
     it('never keeps a conversation warm when nothing is owed to it', async () => {

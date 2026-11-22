@@ -393,6 +393,23 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('addPromptCacheWarmup', () => {
+    it('counts each warm-up and sums its cost onto the member', async () => {
+      await dao.createPending('run-1', 'lead');
+
+      await dao.addPromptCacheWarmup('run-1', 'lead', 0.04);
+      await dao.addPromptCacheWarmup('run-1', 'lead', 0.06);
+      await dao.addPromptCacheWarmup('run-1', 'lead', null);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'lead',
+      );
+      expect(row?.promptCacheWarmups).toBe(3);
+      expect(row?.promptCacheWarmupCostUsd).toBeCloseTo(0.1, 9);
+    });
+  });
+
   describe('rememberWork', () => {
     it('SUMS across turns rather than replacing — the whole difference from rememberContext', async () => {
       // The one assertion that separates an accumulator from the last-write-wins

@@ -4972,6 +4972,10 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
     driverLine(input: AgentTurnInput, obj: unknown): AgentEvent[] {
       return this.createTurnDriver(input).onMessage(obj);
     }
+
+    line(obj: unknown): AgentEvent[] {
+      return this.mapMessage(obj);
+    }
   }
 
   const opus: ModelPrice = {
@@ -5033,6 +5037,7 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
     );
     expect(settingsValue(warmup)).toEqual({
       ...settingsValue(turn),
+      disableAllHooks: false,
       hooks: {
         PreToolUse: [
           { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },
@@ -5086,6 +5091,20 @@ describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
     expect(usage?.costUsd).toBeCloseTo(expected, 9);
     expect(usage?.estimatedCostUsd).toBeCloseTo(expected, 9);
     expect(usage?.cacheReadTokens).toBe(250_000);
+
+    const later = adapter
+      .line({
+        type: 'result',
+        subtype: 'success',
+        session_id: 'fork-session',
+        total_cost_usd: 40.1,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        result: 'ok',
+      })
+      .find((event) => event.type === 'turn_complete');
+    expect(
+      later?.type === 'turn_complete' ? later.usage?.costUsd : null,
+    ).toBeCloseTo(40.1, 9);
   });
 
   it('leaves an ordinary turn’s spend to the session ledger', () => {

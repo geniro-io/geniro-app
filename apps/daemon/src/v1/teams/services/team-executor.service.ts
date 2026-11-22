@@ -531,10 +531,6 @@ async function approvalSupportByKind(
  * new run-scoped snapshot is the same shape, so the next one goes in here
  * instead of widening two signatures again.
  */
-/**
- * What one member turn ended with, read once its events have drained — see
- * `beginAgentTurn`'s `finish`.
- */
 interface ParkedLeadTurn {
   adapter: AgentAdapter;
   input: AgentTurnInput;
@@ -544,6 +540,10 @@ interface ParkedLeadTurn {
   contextTokens: number | null;
 }
 
+/**
+ * What one member turn ended with, read once its events have drained — see
+ * `beginAgentTurn`'s `finish`.
+ */
 interface NodeTurnResult {
   outcome: NodeOutcome;
   finalText: string | null;
@@ -6957,20 +6957,19 @@ export class TeamExecutorService
           finalOutcome === 'completed'
             ? (finalText ?? textChunks.join(''))
             : finalText;
-        if (
-          callContext === undefined &&
-          leadIds.has(node.id) &&
-          finalOutcome === 'completed' &&
-          capturedSessionId !== null
-        ) {
-          parkedLeadTurns.set(node.id, {
-            adapter,
-            input,
-            sessionId: capturedSessionId,
-            endedAt: Date.now(),
-            promptCacheTtlMs,
-            contextTokens: lastContextTokens,
-          });
+        if (callContext === undefined && leadIds.has(node.id)) {
+          if (finalOutcome === 'completed' && capturedSessionId !== null) {
+            parkedLeadTurns.set(node.id, {
+              adapter,
+              input,
+              sessionId: capturedSessionId,
+              endedAt: Date.now(),
+              promptCacheTtlMs,
+              contextTokens: lastContextTokens,
+            });
+          } else {
+            parkedLeadTurns.delete(node.id);
+          }
         }
         return {
           outcome: finalOutcome,

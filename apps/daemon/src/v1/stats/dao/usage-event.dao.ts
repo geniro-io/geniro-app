@@ -14,6 +14,8 @@ import {
   type UsagePurpose,
 } from '../stats.types';
 
+const PROMPT_CACHE_WARMUP_INSERT_ATTEMPTS = 5;
+
 function polledSeqRange(): { $gt: number; $lte: number } {
   return { $gt: PROMPT_CACHE_WARMUP_SEQ, $lte: POLLED_SPEND_SEQ };
 }
@@ -125,13 +127,18 @@ export class UsageEventDao extends BaseDao<UsageEvent> {
     row: Omit<UsageEventInput, 'seq'>,
     txEm?: EntityManager,
   ): Promise<void> {
-    try {
-      await this.insertBelowLowestWarmup(row, txEm);
-    } catch (err) {
-      if (!(err instanceof UniqueConstraintViolationException)) {
-        throw err;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.insertBelowLowestWarmup(row, txEm);
+        return;
+      } catch (err) {
+        if (
+          !(err instanceof UniqueConstraintViolationException) ||
+          attempt >= PROMPT_CACHE_WARMUP_INSERT_ATTEMPTS
+        ) {
+          throw err;
+        }
       }
-      await this.insertBelowLowestWarmup(row, txEm);
     }
   }
 

@@ -4,6 +4,7 @@ import {
   CLAUDE_CROSS_SESSION_INBOUND_REFUSE,
   CLAUDE_DENIED_MCP_SERVER_NAME_FIELD,
   CLAUDE_DENIED_MCP_SERVERS_KEY,
+  CLAUDE_DISABLE_ALL_HOOKS_SETTING_KEY,
   CLAUDE_FAST_MODE_PARAMETER_ID,
   CLAUDE_HOOKS_SETTING_KEY,
   CLAUDE_LANGUAGE_SETTING_KEY,
@@ -60,6 +61,7 @@ export function claudeSettingsArgs(settings: ClaudeTurnSettings): string[] {
     );
   }
   if (settings.blockEveryTool === true) {
+    value[CLAUDE_DISABLE_ALL_HOOKS_SETTING_KEY] = false;
     value[CLAUDE_HOOKS_SETTING_KEY] = CLAUDE_BLOCK_EVERY_TOOL_HOOKS;
   }
   return [CLAUDE_SETTINGS_FLAG, JSON.stringify(value)];

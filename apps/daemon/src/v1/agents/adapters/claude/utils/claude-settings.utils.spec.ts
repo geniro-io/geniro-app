@@ -88,6 +88,7 @@ describe('claudeSettingsArgs', () => {
     ).toEqual({
       ...REFUSE,
       language: 'Russian',
+      disableAllHooks: false,
       hooks: {
         PreToolUse: [
           { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },

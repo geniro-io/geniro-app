@@ -39,6 +39,7 @@ interface NodeStateStub {
   agentKind: string | null;
   polledCostCents?: number | null;
   polledCostEvents?: number | null;
+  promptCacheWarmupCostUsd?: number;
 }
 
 let payloadReads: string[][] = [];
@@ -1211,6 +1212,33 @@ describe('ChatWaterfallService', () => {
     expect(
       result.lanes.find((lane) => lane.memberId === 'qa')?.costUsd,
     ).toBeCloseTo(1, 5);
+  });
+
+  it('adds a team lead’s prompt-cache warm-ups to the run’s cost, as money with no turn', async () => {
+    const result = await build(
+      [
+        row(
+          0,
+          'turn_complete',
+          { usage: { durationMs: 1_000, costUsd: 2 } },
+          1,
+          'lead',
+        ),
+      ],
+      {
+        teamId: 'wf',
+        nodeStates: [
+          {
+            memberId: 'lead',
+            agentKind: 'claude',
+            promptCacheWarmupCostUsd: 0.3,
+          },
+        ],
+      },
+    ).read('run-a');
+
+    expect(result.totals.costUsd).toBeCloseTo(2.3, 5);
+    expect(result.totals.turns).toBe(1);
   });
 
   it('prices a POOLED lane per turn: the bill for its polled member, each self-pricing turn on top', async () => {

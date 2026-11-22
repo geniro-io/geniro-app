@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, type OnModuleInit } from '@nestjs/common';
-import type { Observable } from 'rxjs';
+import { filter, merge, mergeMap, type Observable } from 'rxjs';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import type {
@@ -11,6 +11,7 @@ import type {
 } from '../../background-jobs/background-jobs.types';
 import { BackgroundJobsRegistry } from '../../background-jobs/services/background-jobs.registry';
 import { MemoryService } from '../../memory/services/memory.service';
+import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import {
   LessonSegmentDao,
@@ -52,6 +53,7 @@ export class LessonBackgroundJobSource
     private readonly spending: LessonSpendService,
     private readonly memory: MemoryService,
     private readonly events: LessonsEventBus,
+    private readonly usage: UsageEventBus,
   ) {}
 
   onModuleInit(): void {
@@ -59,7 +61,13 @@ export class LessonBackgroundJobSource
   }
 
   changes(): Observable<unknown> {
-    return this.events.allChanges();
+    return merge(
+      this.events.allChanges(),
+      this.usage.all().pipe(
+        mergeMap((event) => this.isLessonsRun(event.runId)),
+        filter(Boolean),
+      ),
+    );
   }
 
   async active(): Promise<BackgroundJob[]> {
@@ -83,6 +91,16 @@ export class LessonBackgroundJobSource
         em,
       ),
       em,
+    );
+  }
+
+  private async isLessonsRun(runId: string): Promise<boolean> {
+    const run = await this.runDao
+      .getById(runId, this.em.fork())
+      .catch(() => null);
+    return (
+      run?.analysisPurpose === 'lessons' ||
+      run?.analysisPurpose === 'lessons_check'
     );
   }
 

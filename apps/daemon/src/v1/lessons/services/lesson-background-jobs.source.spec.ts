@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { BackgroundJobsRegistry } from '../../background-jobs/services/background-jobs.registry';
 import type { MemoryService } from '../../memory/services/memory.service';
+import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import type { LessonProposal } from '../entity/lesson-proposal.entity';
@@ -57,6 +58,15 @@ function build(options: {
     titlesOf: vi.fn((ids: string[]) =>
       Promise.resolve(new Map(ids.map((id) => [id, `Title of ${id}`]))),
     ),
+    getById: vi.fn((id: string) =>
+      Promise.resolve(
+        id.startsWith('refl-')
+          ? { id, analysisPurpose: 'lessons' }
+          : id.startsWith('check-')
+            ? { id, analysisPurpose: 'lessons_check' }
+            : { id, analysisPurpose: null },
+      ),
+    ),
   };
   const spending = {
     samplesOf: vi.fn(() =>
@@ -70,6 +80,7 @@ function build(options: {
   };
   const registry = new BackgroundJobsRegistry();
   const events = new LessonsEventBus();
+  const usage = new UsageEventBus();
   const source = new LessonBackgroundJobSource(
     { fork: () => ({}) } as unknown as EntityManager,
     registry,
@@ -79,9 +90,10 @@ function build(options: {
     spending as unknown as LessonSpendService,
     memory as unknown as MemoryService,
     events,
+    usage,
   );
   source.onModuleInit();
-  return { source, registry, events, segments };
+  return { source, registry, events, usage, segments };
 }
 
 describe('LessonBackgroundJobSource', () => {
@@ -195,5 +207,25 @@ describe('LessonBackgroundJobSource', () => {
     h.events.publishChanged('run-a');
 
     expect(seen).toEqual(['lessons']);
+  });
+
+  it('announces a change when a lessons run’s cost lands after it ended, and not for any other run', async () => {
+    const h = build({});
+    const seen: string[] = [];
+    h.registry.allChanges().subscribe((change) => seen.push(change.kind));
+    const recorded = (runId: string): void =>
+      h.usage.publish({
+        runId,
+        memberId: null,
+        occurredAt: '2026-11-22T10:01:02.000Z',
+        turn: true,
+      });
+
+    recorded('refl-a');
+    recorded('check-a');
+    recorded('chat-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seen).toEqual(['lessons', 'lessons']);
   });
 });

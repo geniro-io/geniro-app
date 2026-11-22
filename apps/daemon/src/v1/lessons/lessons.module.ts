@@ -7,6 +7,7 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsageEventDao } from '../stats/dao/usage-event.dao';
+import { StatsModule } from '../stats/stats.module';
 import { TeamsModule } from '../teams/teams.module';
 import { LessonSegmentsController } from './controllers/lesson-segments.controller';
 import { LessonsController } from './controllers/lessons.controller';
@@ -35,13 +36,14 @@ import { LessonsEventBus } from './services/lessons-events.bus';
  *
  * `lesson_proposals` sits outside run teardown; `lesson_segments` goes with
  * its run (`LessonReflectionService`). It provides the usage ledger's DAO it
- * reads rather than importing `StatsModule`; `McpModule` imports it for
+ * reads, which `StatsModule` does not export; `McpModule` imports it for
  * `propose_lessons`, and the notifications gateway for `lessons_changed`.
  * `TeamsModule` comes in for the team's own lessons setting, the team-run
  * delete and a lesson saved into a member's instructions; `KnowledgeModule`
  * for a lesson saved as a knowledge document. Neither imports this module.
  * `BackgroundJobsModule` comes in to register its runs as background jobs
- * (`LessonBackgroundJobSource`); it imports nothing back.
+ * (`LessonBackgroundJobSource`), and `StatsModule` for the usage bus, whose
+ * row lands after a run ends; neither imports this module.
  */
 @Module({
   imports: [
@@ -50,6 +52,7 @@ import { LessonsEventBus } from './services/lessons-events.bus';
     KnowledgeModule,
     MemoryModule,
     ProjectsModule,
+    StatsModule,
     TeamsModule,
   ],
   controllers: [

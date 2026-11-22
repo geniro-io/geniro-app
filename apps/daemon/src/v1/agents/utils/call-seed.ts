@@ -182,6 +182,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       callSeq = number;
     }
     if (row.kind === 'call_started') {
+      const folder = readString(fields.folder);
       records.set(callId, {
         callId,
         callerMemberId,
@@ -189,6 +190,7 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
         calleeMemberId,
         thread: readString(fields.thread),
         sessionId: null,
+        ...(folder !== null ? { folder } : {}),
       });
       continue;
     }

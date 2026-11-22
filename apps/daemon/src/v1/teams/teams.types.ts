@@ -2434,6 +2434,9 @@ export interface RunCallCapability {
    * `options.pool` is set for a callee with an agent pool: `callee` is then
    * that member's resolved settings, and the plan names it and the members to
    * fall through to. The outcome says which member produced it.
+   *
+   * `options.folder` is the conversation's subfolder of the run's folder,
+   * relative to it (`utils/call-folder.ts`); absent, the run's folder.
    */
   launchCalleeTurn(
     callee: TeamMember,
@@ -2441,7 +2444,7 @@ export interface RunCallCapability {
     callId: string,
     resumeSessionId: string | null,
     conversationId: string,
-    options: { pool?: CalleePoolPlan; wake: boolean },
+    options: { pool?: CalleePoolPlan; wake: boolean; folder?: string },
   ): Promise<CalleeTurnOutcome>;
   /**
    * Whether the daemon is shutting down with nobody having stopped the run:

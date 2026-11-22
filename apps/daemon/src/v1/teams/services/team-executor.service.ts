@@ -325,6 +325,7 @@ import {
   RESTART_TRANSCRIPT_LEAD,
 } from '../utils/agent-pool';
 import { probeCallEndpoint } from '../utils/call-endpoint-self-check';
+import { callFolderPath, callTurnFolder } from '../utils/call-folder';
 import {
   calleeFailedEnvelopeError,
   geniroSideFailure,
@@ -5711,6 +5712,8 @@ export class TeamExecutorService
         conversationId: string;
         /** The callee pool member this turn runs as; absent without a pool. */
         poolMember?: number;
+        /** The conversation's subfolder of the run's folder (`utils/call-folder.ts`). */
+        folder?: string;
       },
       /**
        * What a member's OWN turn carries beyond its prompt: the session to resume
@@ -5736,6 +5739,10 @@ export class TeamExecutorService
       const adapter = this.adapterFor(node.agent);
       await adapter.validateModel(node.model);
       cwd = await this.turnFolderOf(runId, cwd);
+      const turnCwd =
+        callContext?.folder === undefined
+          ? cwd
+          : callTurnFolder(cwd, callContext.folder);
       // Until this member has a reading of its own, its model's known window
       // arms the FIRST turn — see `firstTurnWindow`. Asked only of a member that
       // has a threshold, since resolving a model may probe the CLI, and ahead
@@ -6090,7 +6097,7 @@ export class TeamExecutorService
             .join('\n\n'),
         ),
         ...(extras.images?.length ? { images: extras.images } : {}),
-        cwd,
+        cwd: turnCwd,
         model: node.model ?? null,
         // Per MEMBER like the model, and already checked against this CLI's own
         // `listEfforts` at run start — a level it does not accept was dropped
@@ -6413,7 +6420,7 @@ export class TeamExecutorService
             // in the profile it is running under.
             this.skillHarvest.record(
               node.agent,
-              cwd,
+              turnCwd,
               node.configDir ?? null,
               event.commands,
             );
@@ -6428,7 +6435,7 @@ export class TeamExecutorService
             // would serve each the other's answer.
             this.mcpHarvest.record(
               node.agent,
-              cwd,
+              turnCwd,
               node.configDir ?? null,
               event.servers,
             );
@@ -6437,7 +6444,7 @@ export class TeamExecutorService
               node.id,
               callContext?.callId ?? null,
               node.agent,
-              cwd,
+              turnCwd,
               node.configDir ?? null,
               event.servers,
             );
@@ -7710,7 +7717,12 @@ export class TeamExecutorService
       node: TeamMember,
       turn: NodeTurnResult,
       callContext:
-        | { callId: string; conversationId: string; poolMember?: number }
+        | {
+            callId: string;
+            conversationId: string;
+            poolMember?: number;
+            folder?: string;
+          }
         | undefined,
       onStart: () => void,
     ): Promise<void> => {
@@ -8459,7 +8471,11 @@ export class TeamExecutorService
       callId: string,
       resumeSessionId: string | null,
       conversationId: string,
-      { pool, wake }: { pool?: CalleePoolPlan; wake: boolean },
+      {
+        pool,
+        wake,
+        folder,
+      }: { pool?: CalleePoolPlan; wake: boolean; folder?: string },
     ): Promise<CalleeTurnOutcome> => {
       /** Whether the run, or the call's own caller, has stopped this call. */
       const callStopped = (): boolean =>
@@ -8547,6 +8563,7 @@ export class TeamExecutorService
               resumeSessionId,
               conversationId,
               ...(member !== undefined ? { poolMember: member } : {}),
+              ...(folder !== undefined ? { folder } : {}),
             },
           ));
         } catch (err) {
@@ -8641,6 +8658,7 @@ export class TeamExecutorService
             callId,
             conversationId,
             ...(member !== undefined ? { poolMember: member } : {}),
+            ...(folder !== undefined ? { folder } : {}),
           },
           () => {
             compaction.started = true;
@@ -9084,7 +9102,11 @@ export class TeamExecutorService
               : (result, madeToolCalls) => {
                   const handing =
                     !callStopped() &&
-                    fallsThroughPool(result, madeToolCalls, isFolderGone(cwd));
+                    fallsThroughPool(
+                      result,
+                      madeToolCalls,
+                      isFolderGone(callFolderPath(cwd, folder ?? null)),
+                    );
                   callDidWork ||= handing && madeToolCalls;
                   return handing;
                 };

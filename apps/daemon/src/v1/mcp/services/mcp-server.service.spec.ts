@@ -6179,6 +6179,49 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
   });
 
+  it('hands call_agent’s folder to the broker trimmed, and refuses one that is not a path', async () => {
+    const callBroker = broker();
+    const spy = vi.spyOn(callBroker, 'callAgent');
+    const callWith = (folder: unknown) =>
+      post(
+        service(callBroker),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: { agent: 'helper', message: 'm', title: 'T', folder },
+        }),
+      );
+
+    const listed = (
+      (
+        await post(service(callBroker), 'run-1', 'orch', rpc('tools/list', {}))
+      ).json().result as {
+        tools: {
+          name: string;
+          inputSchema: { properties: Record<string, { type?: string }> };
+        }[];
+      }
+    ).tools.find((t) => t.name === 'call_agent')!;
+    expect(listed.inputSchema.properties.folder?.type).toBe('string');
+
+    for (const folder of ['', '   ', 7]) {
+      const { json } = await callWith(folder);
+      expect(
+        (json().result as { content: { text: string }[] }).content[0]!.text,
+      ).toContain("'folder' must be a non-empty path");
+    }
+    expect(spy).not.toHaveBeenCalled();
+
+    await callWith(' services/api ');
+    expect(spy).toHaveBeenCalledWith(
+      'run-1',
+      'orch',
+      expect.objectContaining({ folder: 'services/api' }),
+      expect.anything(),
+    );
+  });
+
   it('makes message_agent and cancel_agent name each other — a correction is not a cancellation', async () => {
     // The pair a caller holding a user's correction must choose between: cancel
     // throws away everything the callee already did right, and message_agent

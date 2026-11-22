@@ -39,6 +39,7 @@ import {
   poolSize,
   preferredAttemptOrder,
 } from '../utils/agent-pool';
+import { readCallFolder } from '../utils/call-folder';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
 import {
   PUBLISHED_ACTIONS_NOTE,
@@ -460,6 +461,11 @@ interface ThreadRecord {
    * by {@link CallBroker.listThreads} and by the cold-resume refusal.
    */
   cache: ConversationCacheFacts;
+  /**
+   * The conversation's subfolder of the run's folder, relative to it, or null
+   * for the run's folder: a CLI session belongs to the folder it was opened in.
+   */
+  folder: string | null;
 }
 
 interface RunCallState {
@@ -901,6 +907,7 @@ export class CallBroker implements OnModuleInit {
             : threads.get(record.thread)?.conversationId) ?? record.callId,
         member: record.member ?? 1,
         preferredMember: record.preferredMember ?? null,
+        folder: record.folder ?? null,
         cache: {
           endedAt: record.endedAt ?? null,
           promptCacheTtlMs: record.promptCacheTtlMs ?? null,
@@ -1294,6 +1301,12 @@ export class CallBroker implements OnModuleInit {
        * window is large — see {@link isColdAndLarge}. Absent = refused.
        */
       resumeCold?: boolean;
+      /**
+       * The subfolder of the run's folder the callee runs in, as the caller
+       * wrote it (`utils/call-folder.ts`). Absent = the run's folder, or the
+       * continued conversation's.
+       */
+      folder?: string;
     },
     /**
      * Trips when the HTTP request this sync call is answering has gone away —
@@ -1467,6 +1480,7 @@ export class CallBroker implements OnModuleInit {
       thread?: string;
       title: string;
       member?: number;
+      folder?: string;
       /**
        * Refuse a continuation whose cache has lapsed over a large window. Only
        * a caller's own `call_agent` asks for it: geniro continuing a
@@ -1535,12 +1549,24 @@ export class CallBroker implements OnModuleInit {
     let conversationId: string | null = null;
     let continuedMember: number | null = null;
     let preferredMember = args.member ?? null;
+    let folder: string | null = null;
+    if (args.folder !== undefined) {
+      const reading = readCallFolder(state.capability.cwd, args.folder);
+      if ('refused' in reading) {
+        return refuse(reading.refused);
+      }
+      folder = reading.folder;
+    }
     if (args.resume !== undefined) {
       resumeSessionId = args.resume.sessionId;
       conversationId = args.resume.conversationId;
       continuedMember = args.resume.member;
       preferredMember ??=
         state.threads.get(args.resume.conversationId)?.preferredMember ?? null;
+      folder =
+        state.threads.get(args.resume.callId)?.folder ??
+        state.threads.get(args.resume.conversationId)?.folder ??
+        null;
     }
     if (args.thread !== undefined) {
       let thread = state.threads.get(args.thread);
@@ -1587,10 +1613,16 @@ export class CallBroker implements OnModuleInit {
           return refuse(coldResumeRefusal(callee.id, args.thread, facts));
         }
       }
+      if (args.folder !== undefined && folder !== thread.folder) {
+        return refuse(
+          `FOLDER_MISMATCH: call '${args.thread}' runs in ${thread.folder === null ? "this chat's folder" : `'${thread.folder}'`} — a conversation stays in the folder it started in; omit 'folder' to continue it, or start a new conversation (no 'thread') in the other folder`,
+        );
+      }
       resumeSessionId = thread.sessionId;
       conversationId = thread.conversationId;
       continuedMember = thread.member;
       preferredMember ??= thread.preferredMember;
+      folder = thread.folder;
     }
     const selected = this.selectPoolMember(
       { cwd: state.capability.cwd ?? null, runId, memberId: callee.id },
@@ -1665,6 +1697,7 @@ export class CallBroker implements OnModuleInit {
         ...(args.thread !== undefined ? { thread: args.thread } : {}),
         title: args.title,
         ...(selected.plan !== null ? { member: selected.plan.member } : {}),
+        ...(folder !== null ? { folder } : {}),
       } satisfies CallStartedPayload);
     } else {
       state.capability.persistItem(callee.id, 'system', null, {
@@ -1694,6 +1727,7 @@ export class CallBroker implements OnModuleInit {
         {
           ...(selected.plan !== null ? { pool: selected.plan } : {}),
           wake: args.wake === true,
+          ...(folder !== null ? { folder } : {}),
         },
       )
       .then((outcome) => {
@@ -1715,6 +1749,7 @@ export class CallBroker implements OnModuleInit {
           preferredMember: selected.plan?.preferred ?? null,
           madeIn: call.madeIn,
           cache,
+          folder,
         });
         threadCache = cache;
         threadSessionId = outcome.sessionId;

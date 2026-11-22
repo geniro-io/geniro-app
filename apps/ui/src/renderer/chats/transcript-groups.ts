@@ -299,6 +299,15 @@ export interface CallBlockEntry {
    * skipped MCP validation — never treated as "no reason", just as absent.
    */
   title: string | null;
+  /**
+   * The subfolder of the chat's folder the callee runs in, relative to it;
+   * absent for the chat's folder itself.
+   *
+   * TWIN PARSER: `CallStartedPayload.folder` in
+   * `apps/daemon/src/v1/agents/chat.types.ts`, written on every call of the
+   * conversation by `CallBroker`.
+   */
+  folder?: string;
   /** The LATEST call's sub-turn lifecycle, from its callId-tagged status items. */
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   /**
@@ -3989,6 +3998,7 @@ function buildCallBlock(
       ? calleeTurnIn(shell.bucket)
       : { waiting: null, quietSinceWake: false };
   const waiting = turns.waiting;
+  const folder = payloadString(shell.started.payload, 'folder');
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -4003,6 +4013,7 @@ function buildCallBlock(
     mode: payloadString(shell.started.payload, 'mode'),
     message: payloadString(shell.started.payload, 'message'),
     title: payloadString(shell.started.payload, 'title'),
+    ...(folder !== null ? { folder } : {}),
     status,
     result,
     stalled,

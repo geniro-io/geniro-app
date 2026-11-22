@@ -8593,6 +8593,8 @@ export interface CallSeedRecord {
   member?: number;
   /** The pool member the caller last asked for by name in the conversation. */
   preferredMember?: number;
+  /** As on {@link CallStartedPayload}: the callee's subfolder of the run's folder. */
+  folder?: string;
   /**
    * What the settled call left behind about its conversation's prompt cache —
    * when its turn ended (the result row's time), the cache lifetime its CLI
@@ -8688,6 +8690,11 @@ export interface CallStartedPayload {
    * hand-on can move it — the `call_result` row's `member` is the final one.
    */
   member?: number;
+  /**
+   * The subfolder of the run's folder the callee runs in, relative to it — the
+   * conversation's, written on every call of it; absent for the run's folder.
+   */
+  folder?: string;
 }
 
 /** A `call_result` row's payload, beside the settled envelope's own keys. */

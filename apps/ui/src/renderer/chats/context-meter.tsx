@@ -267,6 +267,9 @@ function useChatMetrics(
   // One automatic refresh per OPEN, never a loop: a refresh that brings back
   // nothing newer must not keep asking for as long as the panel stays open.
   const autoRefreshed = useRef(false);
+  // The request still out, so a live tick never drops an answer on its way:
+  // codex can take longer than LIVE_REREAD_MS to answer.
+  const inFlight = useRef<object | null>(null);
   const requestRefresh = useLatestCallback((pending: PendingRefresh) => {
     refreshPending.current = pending;
     setNonce((value) => value + 1);
@@ -295,10 +298,11 @@ function useChatMetrics(
     if (!open || !live || load === null || runId === null) {
       return;
     }
-    const timer = setInterval(
-      () => setNonce((value) => value + 1),
-      LIVE_REREAD_MS,
-    );
+    const timer = setInterval(() => {
+      if (inFlight.current === null) {
+        setNonce((value) => value + 1);
+      }
+    }, LIVE_REREAD_MS);
     return () => clearInterval(timer);
   }, [open, live, load, runId]);
   useEffect(() => {
@@ -330,9 +334,17 @@ function useChatMetrics(
         ? { ...previous, loading: true, error: null }
         : { target, ...NO_READING, loading: true },
     );
+    const request = {};
+    inFlight.current = request;
+    const settle = (): void => {
+      answered = true;
+      if (inFlight.current === request) {
+        inFlight.current = null;
+      }
+    };
     void load(runId, memberId, callId, refreshing)
       .then((data) => {
-        answered = true;
+        settle();
         if (!current) {
           return;
         }
@@ -360,7 +372,7 @@ function useChatMetrics(
         }
       })
       .catch((err: unknown) => {
-        answered = true;
+        settle();
         if (current) {
           setState((previous) => ({
             ...previous,
@@ -376,8 +388,8 @@ function useChatMetrics(
     return () => {
       current = false;
       // A press this request was still answering rides on the one that
-      // replaces it — the live re-read supersedes requests every ten seconds,
-      // and an ordinary read would serve the reading the press was for.
+      // replaces it (the turn settling, another press), or an ordinary read
+      // would serve the reading the press was for.
       if (pending !== null && !answered) {
         carriedPress.current = { target, refresh: pending };
       }

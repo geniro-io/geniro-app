@@ -33,6 +33,7 @@ import type {
   AgentModelsInput,
   AgentPlanLimits,
   AgentReportedCommand,
+  AgentSession,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
@@ -603,6 +604,7 @@ export class CodexAdapter extends AgentAdapter {
       instructionSources: [],
       model: null,
       autoCompactTokens: null,
+      mcpServers: null,
     };
     this.threadFacts.delete(threadId);
     this.threadFacts.set(threadId, { ...held, ...patch });
@@ -621,6 +623,10 @@ export class CodexAdapter extends AgentAdapter {
    * reuses the thread's own connections), beside what the thread itself last
    * reported (`CodexThreadFacts`). See `codexContextUsage` for what is shown
    * and what codex has no figure for.
+   *
+   * The listing takes seconds when the profile has many remote servers, so
+   * only a thread's first read waits for it; later reads answer from the list
+   * held and refresh it in the background.
    */
   override async readContextUsage(
     input: AgentSessionReadInput,
@@ -628,17 +634,44 @@ export class CodexAdapter extends AgentAdapter {
     if (!input.live || !input.sessionId) {
       return null;
     }
-    const facts = this.threadFacts.get(input.sessionId) ?? null;
-    const requestId = `geniro-context-${randomUUID()}`;
-    const reply = await input.live.ask({
-      line: codexContextRequestLine(requestId, input.sessionId),
-      read: (obj) => readCodexContextReply(obj, requestId),
-      timeoutMs: CODEX_CONTEXT_READ_TIMEOUT_MS,
-    });
-    if (reply === null && facts === null) {
+    const threadId = input.sessionId;
+    const listing = this.refreshThreadServers(input.live, threadId);
+    const held = this.threadFacts.get(threadId)?.mcpServers ?? null;
+    if (held === null) {
+      await listing;
+    }
+    const facts = this.threadFacts.get(threadId) ?? null;
+    if (facts === null) {
       return null;
     }
-    return codexContextUsage(facts, reply?.servers ?? null);
+    return codexContextUsage(facts, facts.mcpServers);
+  }
+
+  private readonly threadServerListings = new Map<string, Promise<void>>();
+
+  private refreshThreadServers(
+    live: AgentSession,
+    threadId: string,
+  ): Promise<void> {
+    const running = this.threadServerListings.get(threadId);
+    if (running !== undefined) {
+      return running;
+    }
+    const requestId = `geniro-context-${randomUUID()}`;
+    const listing = live
+      .ask({
+        line: codexContextRequestLine(requestId, threadId),
+        read: (obj) => readCodexContextReply(obj, requestId),
+        timeoutMs: CODEX_CONTEXT_READ_TIMEOUT_MS,
+      })
+      .then((reply) => {
+        if (reply?.servers) {
+          this.noteThreadFacts(threadId, { mcpServers: reply.servers });
+        }
+      })
+      .finally(() => this.threadServerListings.delete(threadId));
+    this.threadServerListings.set(threadId, listing);
+    return listing;
   }
 
   /**

@@ -68,6 +68,7 @@ export interface CodexThreadFacts {
   instructionSources: string[];
   model: string | null;
   autoCompactTokens: number | null;
+  mcpServers: CodexMcpServerStatus[] | null;
 }
 
 /** A codex `ThreadItem`: its discriminant, its id, and the raw record. */

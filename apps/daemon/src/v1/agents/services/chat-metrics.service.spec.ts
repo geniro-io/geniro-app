@@ -140,7 +140,11 @@ function build(opts: {
   /** A TEAM run: its turns by member, its member kinds, its polled bill. */
   team?: {
     rows: { memberId: string | null; payload: string }[];
-    states: { memberId: string; agentKind: AgentKind }[];
+    states: {
+      memberId: string;
+      agentKind: AgentKind;
+      promptCacheWarmupCostUsd?: number;
+    }[];
     runPolledCents?: number;
   };
 }) {
@@ -180,7 +184,13 @@ function build(opts: {
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
     } as unknown as ItemDao,
     {
-      listByRun: () => Promise.resolve(opts.team?.states ?? []),
+      listByRun: () =>
+        Promise.resolve(
+          (opts.team?.states ?? []).map((state) => ({
+            promptCacheWarmupCostUsd: 0,
+            ...state,
+          })),
+        ),
       getByRunNode: () =>
         Promise.resolve({
           agentSessionId:
@@ -1969,6 +1979,32 @@ describe('ChatMetricsService.readTotals', () => {
     // reporting a price cannot be counted twice beside the polled bill.
     expect(totals.costUsd).toBeCloseTo(57.29, 10);
     expect(totals.turns).toBe(2);
+  });
+
+  it('adds what the lead’s prompt-cache warm-ups spent to the run’s cost, as money with no turn', async () => {
+    const { service } = build({
+      team: {
+        rows: [
+          {
+            memberId: 'manager',
+            payload: turn({ costUsd: 50, inputTokens: 1 }),
+          },
+        ],
+        states: [
+          {
+            memberId: 'manager',
+            agentKind: AgentKind.Claude,
+            promptCacheWarmupCostUsd: 0.12,
+          },
+        ],
+      },
+    });
+
+    const totals = await service.readTotals('run-1');
+
+    expect(totals.costUsd).toBeCloseTo(50.12, 10);
+    expect(totals.turns).toBe(1);
+    expect(totals.costedTurns).toBe(1);
   });
 
   it('judges a team turn by the pool member that ran it, not by its member’s stamp', async () => {

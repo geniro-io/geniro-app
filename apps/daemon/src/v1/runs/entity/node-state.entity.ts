@@ -144,6 +144,12 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   polledCostEvents: number | null = null;
 
+  @Property({ type: 'float', default: 0 })
+  promptCacheWarmupCostUsd: number = 0;
+
+  @Property({ type: 'integer', default: 0 })
+  promptCacheWarmups: number = 0;
+
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;
 

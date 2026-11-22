@@ -8460,3 +8460,67 @@ describe('CallBroker — tells the executor when a conversation is blocked', () 
     expect(h.wakes).toEqual([]);
   });
 });
+
+describe('CallBroker.owedACallOrMonitor', () => {
+  const DONE: CalleeTurnOutcome = {
+    status: 'completed',
+    finalText: 'built',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+  };
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('is owed while its own call runs, while a result waits uncollected, or while a monitor owes it output — and not otherwise', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER];
+    const h = harness({
+      launch: 'defer',
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(true);
+
+    h.deferred[0]!.resolve(DONE);
+    await flush();
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(true);
+
+    await h.broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+
+    let monitorOwed = true;
+    h.capability.monitorsOwed = (caller) => caller === 'orch' && monitorOwed;
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(true);
+    monitorOwed = false;
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+  });
+
+  it('is not owed a fire-and-forget call, whose result nobody collects', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER];
+    const h = harness({
+      launch: 'defer',
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+    await h.broker.callAgent('run-1', 'orch', {
+      title: 'note',
+      agent: 'helper',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+
+    expect(h.broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+  });
+});

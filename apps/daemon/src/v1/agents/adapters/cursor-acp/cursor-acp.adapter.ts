@@ -576,6 +576,8 @@ export class CursorAcpAdapter extends AgentAdapter {
       // The ACP driver reads `AgentTurnInput.resumeOnly`: it branches the
       // prompt away and settles the turn from the `session/load` reply.
       resumeOnlyUnavailableReason: null,
+      promptCacheWarmupUnavailableReason:
+        'cursor reports no prompt-cache lifetime, so there is no expiry to warm the cache ahead of',
       /**
        * FALSE: the list above is a union of what SOME models offer, and it
        * cannot be complete — `gpt-5.2` enumerates `extra-high` on its own

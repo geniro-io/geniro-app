@@ -988,3 +988,31 @@ function readContextWindow(root: Record<string, unknown>): {
   }
   return { window, model };
 }
+
+export function listPricedUsage(
+  usage: AgentUsage,
+  prices: ClaudeListPrices,
+): AgentUsage {
+  const costUsd =
+    usage.contextModel === null
+      ? null
+      : listCostUsd(
+          usage.contextModel,
+          {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheCreationTokens,
+          },
+          prices,
+        );
+  return {
+    ...usage,
+    costUsd,
+    estimatedCostUsd: costUsd,
+    modelCosts:
+      costUsd === null || usage.contextModel === null
+        ? null
+        : [{ model: usage.contextModel, costUsd }],
+  };
+}

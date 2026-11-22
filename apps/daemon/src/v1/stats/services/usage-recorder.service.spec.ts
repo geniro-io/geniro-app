@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { Logger } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ItemWire } from '../../agents/chat.types';
+import type { ItemWire, PromptCacheWarmupSpend } from '../../agents/chat.types';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
@@ -31,6 +31,8 @@ describe('UsageRecorderService', () => {
   let recordOnce: ReturnType<typeof vi.fn>;
   let recordPolledSpend: ReturnType<typeof vi.fn>;
   let polled: UsageEventInput[];
+  let warmups: UsageEventInput[];
+  let recordPromptCacheWarmup: ReturnType<typeof vi.fn>;
   let run: {
     id?: string;
     agentKind: string | null;
@@ -93,6 +95,7 @@ describe('UsageRecorderService', () => {
       {
         recordOnce,
         recordPolledSpend,
+        recordPromptCacheWarmup,
         latestReportedModel: async () => null,
       } as unknown as UsageEventDao,
       usageBus,
@@ -110,6 +113,10 @@ describe('UsageRecorderService', () => {
     recordOnce = vi.fn(async (row: UsageEventInput) => {
       recorded.push(row);
       return true;
+    });
+    warmups = [];
+    recordPromptCacheWarmup = vi.fn(async (row: UsageEventInput) => {
+      warmups.push(row);
     });
     polled = [];
     recordPolledSpend = vi.fn(
@@ -465,6 +472,96 @@ describe('UsageRecorderService', () => {
       announceSpend();
       await vi.waitFor(() =>
         expect(recordPolledSpend).toHaveBeenCalledTimes(2),
+      );
+      warn.mockRestore();
+    });
+  });
+
+  describe('prompt-cache warm-ups', () => {
+    function warmupSpend(
+      overrides: Partial<PromptCacheWarmupSpend> = {},
+    ): PromptCacheWarmupSpend {
+      return {
+        runId: 'run-a',
+        memberId: 'lead',
+        agentKind: 'claude',
+        model: 'claude-sonnet-5',
+        cwd: '/work/project',
+        occurredAt: new Date('2026-08-14T09:40:00.000Z'),
+        usage: {
+          inputTokens: 40,
+          outputTokens: 0,
+          cacheReadTokens: 105_195,
+          cacheCreationTokens: 1_216,
+          thinkingTokens: null,
+          contextTokens: 106_451,
+          contextWindowTokens: 200_000,
+          contextModel: 'claude-sonnet-5',
+          costUsd: 0.014,
+          estimatedCostUsd: 0.014,
+          durationMs: null,
+          apiMs: null,
+          ttftMs: null,
+          timeToRequestMs: null,
+          numTurns: null,
+        },
+        ...overrides,
+      };
+    }
+
+    it('writes a warm-up as money with no turn: its figures, its purpose, no timing', async () => {
+      start();
+
+      bus.publishPromptCacheWarmup(warmupSpend());
+
+      await vi.waitFor(() => expect(warmups).toHaveLength(1));
+      expect(warmups[0]).toMatchObject({
+        runId: 'run-a',
+        memberId: 'lead',
+        occurredAt: new Date('2026-08-14T09:40:00.000Z'),
+        agentKind: 'claude',
+        model: 'claude-sonnet-5',
+        cwd: '/work/project',
+        purpose: 'cache_warmup',
+        costUsd: 0.014,
+        estimatedCostUsd: 0.014,
+        inputTokens: 40,
+        cacheReadTokens: 105_195,
+        cacheCreationTokens: 1_216,
+        durationMs: null,
+        numTurns: null,
+      });
+    });
+
+    it('announces the warm-up as a ledger change that moved no turn', async () => {
+      start();
+
+      bus.publishPromptCacheWarmup(warmupSpend());
+
+      await vi.waitFor(() => expect(announced).toHaveLength(1));
+      expect(announced[0]).toMatchObject({
+        runId: 'run-a',
+        memberId: 'lead',
+        turn: false,
+      });
+    });
+
+    it('survives a failing write — the warm-up is lost, the turn plumbing is not', async () => {
+      recordPromptCacheWarmup = vi.fn(async () => {
+        throw new Error('disk full');
+      });
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+      start();
+
+      bus.publishPromptCacheWarmup(warmupSpend());
+
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+      expect(String(warn.mock.calls[0]![0])).toContain('disk full');
+      bus.publishPromptCacheWarmup(warmupSpend());
+      await vi.waitFor(() =>
+        expect(recordPromptCacheWarmup).toHaveBeenCalledTimes(2),
       );
       warn.mockRestore();
     });

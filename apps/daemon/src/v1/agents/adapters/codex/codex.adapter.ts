@@ -284,6 +284,8 @@ export class CodexAdapter extends AgentAdapter {
       oneShotAskUnavailableReason: null,
       options: [],
       resumeOnlyUnavailableReason: null,
+      promptCacheWarmupUnavailableReason:
+        'codex reports no prompt-cache lifetime, so there is no expiry to warm the cache ahead of',
       effortsAreExhaustive: false,
       // Unread: `listModelContextWindows` answers per model from codex's own
       // catalog, with a reason of its own for each empty case.

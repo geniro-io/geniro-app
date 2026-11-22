@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelPriceRates } from '../../agents/utils/model-prices';
-import { POLLED_SPEND_SEQ, type ThreadLedgerRow } from '../stats.types';
+import {
+  POLLED_SPEND_SEQ,
+  PROMPT_CACHE_WARMUP_SEQ,
+  type ThreadLedgerRow,
+} from '../stats.types';
 import {
   CACHE_HEAVY_WRITE_TOKENS,
   foldTeamSpend,
@@ -170,6 +174,27 @@ describe('spendFiguresOf — a turn’s bill by token class', () => {
     expect(figures.notSplitUsd).toBe(6);
     expect(figures.inputUsd).toBe(0);
     expect(figures.inputTokens).toBe(1_000);
+  });
+
+  it('counts a prompt-cache warm-up as money with no turn, its tokens kept out of the turn figures and out of the heavy writes', () => {
+    const turn = row({ runId: 'run-a', seq: 1, inputTokens: 1_000 });
+    const warmup = row({
+      runId: 'run-a',
+      seq: PROMPT_CACHE_WARMUP_SEQ,
+      costUsd: 0.05,
+      estimatedCostUsd: 0.05,
+      cacheReadTokens: 200_000,
+      cacheCreationTokens: 150_000,
+    });
+
+    const figures = spendFiguresOf([turn, warmup], ratesOf);
+
+    expect(figures.turns).toBe(1);
+    expect(figures.inputTokens).toBe(1_000);
+    expect(figures.cacheReadTokens).toBeNull();
+    expect(figures.heavyWriteTurns).toBe(0);
+    expect(figures.costUsd).toBeCloseTo(0.05, 9);
+    expect(figures.pricedRuns).toBe(1);
   });
 
   it('leaves a run with a polled bill of zero unpriced', () => {

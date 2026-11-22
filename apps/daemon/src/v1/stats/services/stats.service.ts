@@ -35,7 +35,7 @@ import type {
 import { ActivityFold, linesIncrements } from '../utils/activity-fold';
 import { folderKeyOf, lineKeyOf } from '../utils/line-keys';
 import {
-  isPolledSpend,
+  isSpendWithoutTurn,
   PolledTurnCredit,
   tallyUnpricedTurn,
 } from '../utils/polled-spend';
@@ -137,12 +137,12 @@ export class StatsService {
      * leave out the turns of a CLI nobody polls.
      */
     const unpricedTurns = new Map<string, number>();
-    /** Each run's polled-spend row in the period — folded once the turns are. */
-    const polled: UsageEvent[] = [];
+    /** Each run's spend with no turn — polled rows and warm-ups — folded once the turns are. */
+    const withoutTurn: UsageEvent[] = [];
 
     for (const event of events) {
-      if (isPolledSpend(event)) {
-        polled.push(event);
+      if (isSpendWithoutTurn(event)) {
+        withoutTurn.push(event);
         continue;
       }
       addUsage(totals, event);
@@ -189,7 +189,7 @@ export class StatsService {
       pollsSpendFor(adapters, kind),
     );
     const credit = new PolledTurnCredit(unpricedTurns, polledKinds);
-    for (const event of polled) {
+    for (const event of withoutTurn) {
       const costUsd = event.costUsd ?? 0;
       if (costUsd <= 0) {
         continue;

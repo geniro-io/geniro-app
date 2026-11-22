@@ -3466,6 +3466,7 @@ export interface AgentTurnInput {
    * probe reload the user's skills as a side effect of asking about modes.
    */
   commandListProbe?: boolean;
+  promptCacheWarmup?: boolean;
   /**
    * This turn REOPENS the conversation and sends no prompt.
    *
@@ -4743,6 +4744,7 @@ export interface AdapterConfig {
    * than only that this cannot.
    */
   readonly resumeOnlyUnavailableReason: string | null;
+  readonly promptCacheWarmupUnavailableReason: string | null;
   /**
    * Whether {@link efforts} is the WHOLE vocabulary, or only the part of it a
    * static list can hold.

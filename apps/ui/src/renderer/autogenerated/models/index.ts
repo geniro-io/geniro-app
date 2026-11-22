@@ -19423,7 +19423,7 @@ export interface UsageStatsDto {
      */
     byTeam: Array<UsageGroup>;
     /**
-     * spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections; the user's own work is in no row
+     * spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections, `cache_warmup` the prompt-cache warm-ups of waiting team leads; the user's own work is in no row
      * @type {Array<UsageGroup>}
      * @memberof UsageStatsDto
      */

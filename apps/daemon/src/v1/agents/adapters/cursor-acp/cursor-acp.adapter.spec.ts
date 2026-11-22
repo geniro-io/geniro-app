@@ -7065,3 +7065,13 @@ describe('CursorAcpAdapter — what an MCP call answered', () => {
     ).toBeUndefined();
   });
 });
+
+describe('CursorAcpAdapter — prompt-cache warm-up support', () => {
+  it('is not offered, since this CLI states no cache lifetime to warm ahead of', () => {
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().promptCacheWarmupUnavailableReason,
+    ).not.toBeNull();
+  });
+});

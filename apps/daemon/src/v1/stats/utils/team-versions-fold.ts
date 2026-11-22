@@ -16,7 +16,7 @@ import type {
   VersionFiguresWire,
 } from '../stats.types';
 import {
-  isPolledSpend,
+  isSpendWithoutTurn,
   PolledTurnCredit,
   tallyUnpricedTurn,
 } from './polled-spend';
@@ -64,17 +64,17 @@ export function totalsByRun(
     return fresh;
   };
   const unpriced = new Map<string, number>();
-  const polled: UsageLedgerRow[] = [];
+  const withoutTurn: UsageLedgerRow[] = [];
   for (const row of usage) {
-    if (isPolledSpend(row)) {
-      polled.push(row);
+    if (isSpendWithoutTurn(row)) {
+      withoutTurn.push(row);
       continue;
     }
     addUsage(of(row.runId), row);
     tallyUnpricedTurn(unpriced, row);
   }
   const credit = new PolledTurnCredit(unpriced, polledKinds);
-  for (const row of [...polled].sort((a, b) => b.seq - a.seq)) {
+  for (const row of [...withoutTurn].sort((a, b) => b.seq - a.seq)) {
     const costUsd = row.costUsd ?? 0;
     if (costUsd > 0) {
       addPolledSpend(of(row.runId), costUsd, credit.next(row).turns);

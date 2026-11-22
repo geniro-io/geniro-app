@@ -2159,3 +2159,11 @@ describe('CodexAdapter sub-agent recovery references', () => {
     );
   });
 });
+
+describe('CodexAdapter — prompt-cache warm-up support', () => {
+  it('is not offered, since this CLI states no cache lifetime to warm ahead of', () => {
+    expect(
+      new CodexAdapter().getConfig().promptCacheWarmupUnavailableReason,
+    ).not.toBeNull();
+  });
+});

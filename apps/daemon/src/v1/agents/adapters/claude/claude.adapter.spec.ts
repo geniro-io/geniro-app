@@ -4962,3 +4962,172 @@ describe('ClaudeAdapter — plan limits from a one-shot process', () => {
     ).toBeNull();
   });
 });
+
+describe('ClaudeAdapter — a prompt-cache warm-up turn', () => {
+  class WarmupAdapter extends ClaudeAdapter {
+    args(input: AgentTurnInput): string[] {
+      return this.buildArgs(input);
+    }
+
+    driverLine(input: AgentTurnInput, obj: unknown): AgentEvent[] {
+      return this.createTurnDriver(input).onMessage(obj);
+    }
+
+    line(obj: unknown): AgentEvent[] {
+      return this.mapMessage(obj);
+    }
+  }
+
+  const opus: ModelPrice = {
+    input: 4,
+    output: 20,
+    cacheRead: 0.2,
+    cacheWrite: 5,
+    tiers: [],
+    contextTokens: 1_000_000,
+  };
+
+  function warmupAdapter(): WarmupAdapter {
+    return new WarmupAdapter({
+      waitForMcpServers: false,
+      prices: {
+        priceOf: (provider, model) =>
+          provider === 'anthropic' && model === 'claude-opus-5-5' ? opus : null,
+      },
+    });
+  }
+
+  const lead: AgentTurnInput = {
+    prompt: 'carry on',
+    cwd: '/proj',
+    model: 'claude-opus-5-5',
+    effort: 'high',
+    replyLanguage: 'Russian',
+    approvalMode: 'auto',
+    resumeSessionId: 'lead-session',
+  };
+
+  function settingsValue(args: string[]): Record<string, unknown> {
+    const at = args.indexOf(CLAUDE_SETTINGS_FLAG);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(args.lastIndexOf(CLAUDE_SETTINGS_FLAG)).toBe(at);
+    return JSON.parse(args[at + 1]!) as Record<string, unknown>;
+  }
+
+  function withoutSettings(args: string[]): string[] {
+    const at = args.indexOf(CLAUDE_SETTINGS_FLAG);
+    return [...args.slice(0, at), ...args.slice(at + 2)];
+  }
+
+  it('is the turn’s own argv plus exactly the fork flags, with the tool block in the same settings object', () => {
+    const adapter = warmupAdapter();
+    const turn = adapter.args(lead);
+    const warmup = adapter.args({ ...lead, promptCacheWarmup: true });
+
+    const resumeAt = turn.indexOf('lead-session') + 1;
+    expect(withoutSettings(warmup)).toEqual(
+      withoutSettings([
+        ...turn.slice(0, resumeAt),
+        '--fork-session',
+        '--no-session-persistence',
+        '--max-turns',
+        '1',
+        ...turn.slice(resumeAt),
+      ]),
+    );
+    expect(settingsValue(warmup)).toEqual({
+      ...settingsValue(turn),
+      disableAllHooks: false,
+      hooks: {
+        PreToolUse: [
+          { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },
+        ],
+      },
+    });
+    expect(settingsValue(turn)).not.toHaveProperty('hooks');
+  });
+
+  it('prices its spend from its own tokens, never from the forked session’s running total', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'claude-warmup-cost-'));
+    mkdirSync(join(profile, 'projects', '-proj'), { recursive: true });
+    writeFileSync(
+      join(profile, 'projects', '-proj', 'lead-session.jsonl'),
+      `${JSON.stringify({ type: 'cost-state', sessionId: 'lead-session', totalCostUSD: 40 })}\n`,
+    );
+    const adapter = warmupAdapter();
+    const input: AgentTurnInput = {
+      ...lead,
+      configDir: profile,
+      promptCacheWarmup: true,
+    };
+    adapter.args(input);
+
+    const done = adapter
+      .driverLine(input, {
+        type: 'result',
+        subtype: 'error_max_turns',
+        session_id: 'fork-session',
+        total_cost_usd: 40.06,
+        usage: {
+          input_tokens: 2,
+          output_tokens: 100,
+          cache_read_input_tokens: 250_000,
+          cache_creation_input_tokens: 1_000,
+        },
+        modelUsage: {
+          'claude-opus-5-5': {
+            inputTokens: 2,
+            outputTokens: 100,
+            cacheReadInputTokens: 250_000,
+            cacheCreationInputTokens: 1_000,
+            contextWindow: 1_000_000,
+          },
+        },
+      })
+      .find((event) => event.type === 'turn_complete');
+
+    const usage = done?.type === 'turn_complete' ? done.usage : null;
+    const expected = (2 * 4 + 100 * 20 + 250_000 * 0.2 + 1_000 * 5) / 1_000_000;
+    expect(usage?.costUsd).toBeCloseTo(expected, 9);
+    expect(usage?.estimatedCostUsd).toBeCloseTo(expected, 9);
+    expect(usage?.cacheReadTokens).toBe(250_000);
+
+    const later = adapter
+      .line({
+        type: 'result',
+        subtype: 'success',
+        session_id: 'fork-session',
+        total_cost_usd: 40.1,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        result: 'ok',
+      })
+      .find((event) => event.type === 'turn_complete');
+    expect(
+      later?.type === 'turn_complete' ? later.usage?.costUsd : null,
+    ).toBeCloseTo(40.1, 9);
+  });
+
+  it('leaves an ordinary turn’s spend to the session ledger', () => {
+    const adapter = warmupAdapter();
+    const done = adapter
+      .driverLine(lead, {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'lead-ledger-session',
+        total_cost_usd: 3,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        result: 'ok',
+      })
+      .find((event) => event.type === 'turn_complete');
+
+    expect(done?.type === 'turn_complete' ? done.usage?.costUsd : null).toBe(3);
+  });
+});
+
+describe('ClaudeAdapter — prompt-cache warm-up support', () => {
+  it('is offered, since claude states its cache lifetime on every turn', () => {
+    expect(
+      new ClaudeAdapter().getConfig().promptCacheWarmupUnavailableReason,
+    ).toBeNull();
+  });
+});

@@ -133,6 +133,7 @@ import { ProcessRegistry } from './services/process-registry';
 import { ProjectChatBroker } from './services/project-chat.broker';
 import { ProjectInstructionsBroker } from './services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
+import { PromptCacheKeepAliveService } from './services/prompt-cache-keep-alive.service';
 import { PullRequestAfterDoneService } from './services/pull-request-after-done.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { PullRequestLifecycleService } from './services/pull-request-lifecycle.service';
@@ -490,6 +491,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // The live plane's durable halves — `Run.unrecordedSpend` and `Run.delegateSpend`.
     UnrecordedSpendStore,
     DelegateSpendStore,
+    PromptCacheKeepAliveService,
     ProcessRegistry,
     AgentSessionRegistry,
     AgentActivityService,
@@ -662,6 +664,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
+    PromptCacheKeepAliveService,
     // For the notifications gateway, which broadcasts each alert-list change.
     ResourceAlertEventBus,
     // For the teams module's team analysis ("Analyze & improve"), which

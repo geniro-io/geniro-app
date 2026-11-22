@@ -17,7 +17,7 @@ import {
 import type { AgentKind } from '../runs/runs.types';
 
 /** What a turn's spend was for, beside the user's own work: a lessons reflection. */
-export type UsagePurpose = 'lessons' | 'lessons_check';
+export type UsagePurpose = 'lessons' | 'lessons_check' | 'cache_warmup';
 
 /**
  * One ledger row as its writers hand it over — the shape both the live recorder
@@ -551,8 +551,11 @@ export interface LinesPeak {
  */
 export const POLLED_SPEND_SEQ = -1;
 // A run's polled bill is several rows — one per day and model — numbered
-// downward from this one (`polledSpendRows`), so every seq at or below it is
-// polled spend and every one above it is a turn.
+// downward from this one (`polledSpendRows`), so every seq in
+// (PROMPT_CACHE_WARMUP_SEQ, POLLED_SPEND_SEQ] is polled spend and every one above
+// POLLED_SPEND_SEQ is a turn.
+
+export const PROMPT_CACHE_WARMUP_SEQ = -1_000_000_000;
 
 /**
  * A ledger row that has just been written — a finished turn, or a run's polled
@@ -975,7 +978,7 @@ export const UsageStatsWireSchema = z.object({
   byPurpose: z
     .array(UsageGroupWireSchema)
     .describe(
-      "spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections; the user's own work is in no row",
+      "spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections, `cache_warmup` the prompt-cache warm-ups of waiting team leads; the user's own work is in no row",
     ),
   metrics: ThreadMetricsSchema.describe(
     'the threads started in the period: goals, outcomes, and every tool and MCP server called in it',

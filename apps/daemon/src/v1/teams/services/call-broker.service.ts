@@ -3150,6 +3150,18 @@ export class CallBroker implements OnModuleInit {
     });
   }
 
+  owedACallOrMonitor(runId: string, caller: string): boolean {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return false;
+    }
+    return (
+      openSubCalls(state, caller).length > 0 ||
+      untoldResults(state, caller).length > 0 ||
+      state.capability.monitorsOwed?.(caller) === true
+    );
+  }
+
   /**
    * A caller member's LAST live turn has settled (the executor calls this next
    * to its approval sweep): wake it ONCE with whatever it left open — the

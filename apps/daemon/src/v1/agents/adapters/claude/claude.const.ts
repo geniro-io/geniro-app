@@ -444,6 +444,23 @@ export const CLAUDE_BUILT_IN_MCP_SERVERS: readonly string[] = [
 export const CLAUDE_CROSS_SESSION_INBOUND_KEY = 'crossSessionInbound';
 export const CLAUDE_CROSS_SESSION_INBOUND_REFUSE = 'refuse';
 
+export const CLAUDE_PROMPT_CACHE_WARMUP_ARGS: readonly string[] = [
+  '--fork-session',
+  '--no-session-persistence',
+  '--max-turns',
+  '1',
+];
+
+export const CLAUDE_HOOKS_SETTING_KEY = 'hooks';
+
+export const CLAUDE_DISABLE_ALL_HOOKS_SETTING_KEY = 'disableAllHooks';
+
+export const CLAUDE_BLOCK_EVERY_TOOL_HOOKS = {
+  PreToolUse: [
+    { matcher: '*', hooks: [{ type: 'command', command: 'exit 2' }] },
+  ],
+} as const;
+
 /** The prefix the CLI names every MCP tool under: `mcp__<server>__<tool>`. */
 export const CLAUDE_MCP_TOOL_PREFIX = 'mcp__';
 

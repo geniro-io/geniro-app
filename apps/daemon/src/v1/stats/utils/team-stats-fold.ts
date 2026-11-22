@@ -20,7 +20,7 @@ import type {
   ThreadLedgerRow,
 } from '../stats.types';
 import type { MemberWork } from './member-work-fold';
-import { isPolledSpend } from './polled-spend';
+import { isSpendWithoutTurn } from './polled-spend';
 import { totalsByRun, type UsageLedgerRow } from './team-versions-fold';
 import { localDateKey } from './usage-fold';
 
@@ -58,7 +58,9 @@ export function withWallTimes<Row extends TeamStatsUsageRow>(
 ): Row[] {
   return usage.map((row) => {
     const wall = wallTurns?.get(wallTurnKey(row.runId, row.seq));
-    return wall === undefined || row.durationMs !== null || isPolledSpend(row)
+    return wall === undefined ||
+      row.durationMs !== null ||
+      isSpendWithoutTurn(row)
       ? row
       : { ...row, durationMs: wall };
   });
@@ -124,7 +126,11 @@ export function foldTeamStats(
   const measuredOf = new Map<TeamStatsUsageRow, number>();
   const usage = input.usage.map((row) => {
     const wall = input.wallTurns?.get(wallTurnKey(row.runId, row.seq));
-    if (wall === undefined || row.durationMs !== null || isPolledSpend(row)) {
+    if (
+      wall === undefined ||
+      row.durationMs !== null ||
+      isSpendWithoutTurn(row)
+    ) {
       return row;
     }
     const timed = { ...row, durationMs: wall };
@@ -175,10 +181,10 @@ export function foldTeamStats(
   };
 
   for (const row of usage) {
-    const polled = isPolledSpend(row);
+    const withoutTurn = isSpendWithoutTurn(row);
     const costUsd = row.costUsd ?? 0;
     const day = dayOf(row.occurredAt);
-    if (polled) {
+    if (withoutTurn) {
       if (costUsd > 0) {
         addPolledSpend(day.spend, costUsd, 0);
       }
@@ -190,14 +196,16 @@ export function foldTeamStats(
     }
     const member = memberOf(row.memberId);
     member.measuredMs += measuredOf.get(row) ?? 0;
-    if (polled) {
+    if (withoutTurn) {
       if (costUsd > 0) {
         addPolledSpend(member.spend, costUsd, 0);
       }
     } else {
       addUsage(member.spend, row);
     }
-    const at = polled ? Number.NEGATIVE_INFINITY : row.occurredAt.getTime();
+    const at = withoutTurn
+      ? Number.NEGATIVE_INFINITY
+      : row.occurredAt.getTime();
     if (row.agentKind !== null && at >= member.agentKindAt) {
       member.agentKind = row.agentKind;
       member.agentKindAt = at;

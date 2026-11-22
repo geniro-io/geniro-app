@@ -311,6 +311,9 @@ function summary(slug: string, name: string): TeamSummaryDto {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({
+    toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+  });
   stubResizeObserver();
   hostedThreads.clear();
   window.localStorage.clear();
@@ -418,6 +421,7 @@ afterEach(() => {
   document.body.innerHTML = '';
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function paint(
@@ -442,10 +446,10 @@ async function paint(
   });
 }
 
-/** Let real time pass — the autosave debounce is 700ms. */
+/** Let fake time pass — the autosave debounce is 700ms. */
 async function wait(ms: number): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await vi.advanceTimersByTimeAsync(ms);
   });
 }
 
@@ -3017,6 +3021,7 @@ describe('Teams — the team page', () => {
       );
     });
     expect(selectedTab()).toBe('Memory');
+    await wait(0);
     expect(container.textContent).toContain('No team memories yet.');
 
     await act(async () => {

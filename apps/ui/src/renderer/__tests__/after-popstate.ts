@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { vi } from 'vitest';
 
 /**
  * Run `go` and wait for the `popstate` it raises. jsdom delivers a history
@@ -31,6 +32,10 @@ export async function afterPopstate(
       clearTimeout(timer);
       window.removeEventListener('popstate', onPop);
       throw err;
+    }
+    // jsdom's traversal timer, set during a tick, fires only at 1ms.
+    if (vi.isFakeTimers()) {
+      await vi.advanceTimersByTimeAsync(1);
     }
     await popped;
   });

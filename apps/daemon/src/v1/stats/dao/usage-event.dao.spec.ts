@@ -1,13 +1,26 @@
 import {
   defineConfig,
+  type EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
 import { UsageEvent } from '../entity/usage-event.entity';
-import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
+import {
+  POLLED_SPEND_SEQ,
+  PROMPT_CACHE_WARMUP_SEQ,
+  type UsageEventInput,
+} from '../stats.types';
 import { UsageEventDao } from './usage-event.dao';
 
 /**
@@ -65,6 +78,34 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       thinkingTokens: 5,
       durationMs: 4_000,
       apiMs: 3_000,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+      ...overrides,
+    };
+  }
+
+  function warmupRow(
+    overrides: Partial<Omit<UsageEventInput, 'seq'>> = {},
+  ): Omit<UsageEventInput, 'seq'> {
+    return {
+      runId: 'run-a',
+      memberId: 'lead',
+      occurredAt: new Date('2026-08-10T12:00:00.000Z'),
+      agentKind: 'claude',
+      model: 'claude-sonnet-5',
+      cwd: '/work/project',
+      teamName: 'dev-team',
+      purpose: 'cache_warmup',
+      costUsd: 0.014,
+      estimatedCostUsd: 0.014,
+      inputTokens: 40,
+      outputTokens: 0,
+      cacheReadTokens: 105_195,
+      cacheCreationTokens: 1_216,
+      thinkingTokens: null,
+      durationMs: null,
+      apiMs: null,
       ttftMs: null,
       timeToRequestMs: null,
       numTurns: null,
@@ -345,6 +386,104 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       expect(
         (held.get('run-a') ?? []).map((row) => row.seq).sort((a, b) => b - a),
       ).toEqual([POLLED_SPEND_SEQ, POLLED_SPEND_SEQ - 1]);
+    });
+
+    it('leaves a run’s warm-ups in place when the poll rewrites its polled set', async () => {
+      await dao.recordPromptCacheWarmup(warmupRow());
+      expect((await dao.polledSpendRows(['run-a'])).get('run-a') ?? []).toEqual(
+        [],
+      );
+
+      await dao.recordPolledSpend('run-a', [polled()]);
+      await dao.recordPolledSpend('run-a', []);
+
+      const rows = await dao.inRange(
+        new Date('2026-08-01T00:00:00.000Z'),
+        new Date('2026-09-01T00:00:00.000Z'),
+      );
+      expect(rows.map((row) => row.purpose)).toEqual(['cache_warmup']);
+    });
+  });
+
+  describe('recordPromptCacheWarmup', () => {
+    const period = {
+      from: new Date('2026-08-01T00:00:00.000Z'),
+      to: new Date('2026-09-01T00:00:00.000Z'),
+    };
+
+    it('writes a warm-up as its own row, at the warm-up key, with its figures', async () => {
+      await dao.recordPromptCacheWarmup(warmupRow());
+
+      const rows = await dao.inRange(period.from, period.to);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        runId: 'run-a',
+        memberId: 'lead',
+        seq: PROMPT_CACHE_WARMUP_SEQ,
+        purpose: 'cache_warmup',
+        costUsd: 0.014,
+        estimatedCostUsd: 0.014,
+        inputTokens: 40,
+        cacheReadTokens: 105_195,
+        cacheCreationTokens: 1_216,
+        durationMs: null,
+      });
+    });
+
+    it('numbers each warm-up of a run below the lowest one, so two warm-ups are two rows', async () => {
+      await dao.recordPromptCacheWarmup(warmupRow({ costUsd: 0.01 }));
+      await dao.recordPromptCacheWarmup(warmupRow({ costUsd: 0.02 }));
+
+      const rows = await dao.inRange(period.from, period.to);
+      expect(rows.map((row) => row.seq).sort((a, b) => b - a)).toEqual([
+        PROMPT_CACHE_WARMUP_SEQ,
+        PROMPT_CACHE_WARMUP_SEQ - 1,
+      ]);
+    });
+
+    it('numbers another run’s warm-ups from the same key, since the key is per run', async () => {
+      await dao.recordPromptCacheWarmup(warmupRow());
+      await dao.recordPromptCacheWarmup(warmupRow({ runId: 'run-b' }));
+
+      const rows = await dao.inRange(period.from, period.to);
+      expect(rows.map((row) => row.seq)).toEqual([
+        PROMPT_CACHE_WARMUP_SEQ,
+        PROMPT_CACHE_WARMUP_SEQ,
+      ]);
+    });
+
+    it('takes the next seq down when another writer took the one it had read', async () => {
+      await dao.recordPromptCacheWarmup(warmupRow({ costUsd: 0.01 }));
+
+      const writer = dao as unknown as {
+        insertRow: (
+          row: UsageEventInput,
+          txEm?: EntityManager,
+        ) => Promise<void>;
+      };
+      const insertRow = writer.insertRow.bind(dao);
+      let raced = false;
+      const spy = vi
+        .spyOn(writer, 'insertRow')
+        .mockImplementation(async (row, txEm) => {
+          if (!raced) {
+            raced = true;
+            await insertRow({ ...row, costUsd: 9 }, txEm);
+          }
+          await insertRow(row, txEm);
+        });
+
+      await dao.recordPromptCacheWarmup(warmupRow({ costUsd: 0.014 }));
+      spy.mockRestore();
+
+      const rows = await dao.inRange(period.from, period.to);
+      expect(
+        rows.sort((a, b) => b.seq - a.seq).map((row) => [row.seq, row.costUsd]),
+      ).toEqual([
+        [PROMPT_CACHE_WARMUP_SEQ, 0.01],
+        [PROMPT_CACHE_WARMUP_SEQ - 1, 9],
+        [PROMPT_CACHE_WARMUP_SEQ - 2, 0.014],
+      ]);
     });
   });
 

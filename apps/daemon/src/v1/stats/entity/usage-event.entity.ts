@@ -33,8 +33,9 @@ import type { UsagePurpose } from '../stats.types';
  * also holds a POLLED-spend row, keyed by `POLLED_SPEND_SEQ` in place of a
  * transcript seq: the poll's running total (`Run.polledCostCents`), copied here
  * for the same lifetime reason and rewritten in place as the poll moves it.
- * That is the one row this table ever updates, and `isPolledSpend` is how a
- * reader that counts turns keeps it out of the count.
+ * That is the one row this table ever updates, and `isSpendWithoutTurn` is how a
+ * reader that counts turns keeps it out of the count. A prompt-cache warm-up is
+ * the other such row, appended below the polled range and never rewritten.
  */
 @Entity({ tableName: 'usage_events' })
 // The idempotency key, and the reason the backfill can run on every boot: a

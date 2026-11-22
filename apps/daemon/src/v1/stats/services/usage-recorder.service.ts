@@ -6,7 +6,11 @@ import {
   Optional,
 } from '@nestjs/common';
 
-import type { ItemWire, TurnMember } from '../../agents/chat.types';
+import type {
+  ItemWire,
+  PromptCacheWarmupSpend,
+  TurnMember,
+} from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
@@ -94,6 +98,15 @@ export class UsageRecorderService implements OnModuleInit {
       void this.recordPolledSpend(event.runId).catch((err) => {
         this.logger.warn(
           `failed to record polled spend for run ${event.runId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+    });
+    this.bus.allPromptCacheWarmups().subscribe((spend) => {
+      void this.recordPromptCacheWarmup(spend).catch((err) => {
+        this.logger.warn(
+          `failed to record prompt-cache warm-up for run ${spend.runId}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
@@ -188,6 +201,52 @@ export class UsageRecorderService implements OnModuleInit {
         turn: true,
       });
     }
+  }
+
+  /**
+   * Write one prompt-cache warm-up as money with no turn behind it: the figures a
+   * warm-up reports, and no timing, since it reports none.
+   */
+  private async recordPromptCacheWarmup(
+    spend: PromptCacheWarmupSpend,
+  ): Promise<void> {
+    const em = this.em.fork();
+    const { usage } = spend;
+    await this.usageDao.recordPromptCacheWarmup(
+      {
+        runId: spend.runId,
+        memberId: spend.memberId,
+        occurredAt: spend.occurredAt,
+        ...(await this.dimensions(
+          spend.runId,
+          spend.memberId,
+          spend.model,
+          { agentKind: spend.agentKind, model: spend.model },
+          em,
+        )),
+        cwd: spend.cwd,
+        purpose: 'cache_warmup',
+        costUsd: usage.costUsd,
+        estimatedCostUsd: usage.estimatedCostUsd ?? null,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheCreationTokens: usage.cacheCreationTokens,
+        thinkingTokens: usage.thinkingTokens,
+        durationMs: null,
+        apiMs: null,
+        ttftMs: null,
+        timeToRequestMs: null,
+        numTurns: null,
+      },
+      em,
+    );
+    this.usageBus.publish({
+      runId: spend.runId,
+      memberId: spend.memberId,
+      occurredAt: spend.occurredAt.toISOString(),
+      turn: false,
+    });
   }
 
   /** See {@link usageDimensions} — one reading, shared with the boot sweep. */

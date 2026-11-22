@@ -5,7 +5,11 @@ import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
 import type { UsageEvent } from '../entity/usage-event.entity';
-import { POLLED_SPEND_SEQ, type UsageEventInput } from '../stats.types';
+import {
+  POLLED_SPEND_SEQ,
+  PROMPT_CACHE_WARMUP_SEQ,
+  type UsageEventInput,
+} from '../stats.types';
 import { usageDimensions } from './usage-dimensions';
 
 /**
@@ -167,14 +171,23 @@ function localNoon(day: string): Date {
 }
 
 /**
- * Whether a ledger row is a run's polled spend rather than a finished turn.
+ * Whether a ledger row is money with no turn behind it — a run's polled spend or
+ * a prompt-cache warm-up — rather than a finished turn.
  *
- * Every reader that COUNTS turns must ask this first: the polled row is money
- * with no turn behind it, so folding it as one would add a phantom turn and
- * price it — see the polled-spend fold in `StatsService`.
+ * Every reader that COUNTS turns must ask this first: such a row folded as a
+ * turn would add a phantom turn and price it — see the polled-spend fold in
+ * `StatsService`.
  */
-export function isPolledSpend(event: Pick<UsageEvent, 'seq'>): boolean {
+export function isSpendWithoutTurn(event: Pick<UsageEvent, 'seq'>): boolean {
   return event.seq <= POLLED_SPEND_SEQ;
+}
+
+/**
+ * Whether a spend-without-turn row is the account poll's own (its polled range),
+ * as opposed to a prompt-cache warm-up below it.
+ */
+export function isPolledSpendRow(event: Pick<UsageEvent, 'seq'>): boolean {
+  return event.seq > PROMPT_CACHE_WARMUP_SEQ && isSpendWithoutTurn(event);
 }
 
 /** The unpriced-turn tally key for one run and one agent. */
@@ -231,11 +244,11 @@ export class PolledTurnCredit {
    * `turns` for the run as a whole, `agentTurns` for the one CLI the row names. Call once
    * per row.
    */
-  next(row: Pick<UsageEvent, 'runId' | 'agentKind'>): {
+  next(row: Pick<UsageEvent, 'runId' | 'agentKind' | 'seq'>): {
     turns: number;
     agentTurns: number;
   } {
-    if (this.credited.has(row.runId)) {
+    if (!isPolledSpendRow(row) || this.credited.has(row.runId)) {
       return { turns: 0, agentTurns: 0 };
     }
     this.credited.add(row.runId);

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { polledSpendRows, type PolledSpendRun } from './polled-spend';
+import { POLLED_SPEND_SEQ, PROMPT_CACHE_WARMUP_SEQ } from '../stats.types';
+import {
+  isPolledSpendRow,
+  isSpendWithoutTurn,
+  polledSpendRows,
+  type PolledSpendRun,
+  PolledTurnCredit,
+  turnKey,
+} from './polled-spend';
 
 const run = (over: Partial<PolledSpendRun> = {}): PolledSpendRun => ({
   id: 'run-1',
@@ -66,5 +74,37 @@ describe('polledSpendRows', () => {
     const rows = polledSpendRows(run(), 'cursor-agent', null, [], pollsCursor);
 
     expect(rows.map((row) => row.memberId)).toEqual([null, null]);
+  });
+});
+
+describe('spend without a turn', () => {
+  it('splits it into the account poll’s rows and the warm-ups below them', () => {
+    expect(isSpendWithoutTurn({ seq: POLLED_SPEND_SEQ })).toBe(true);
+    expect(isSpendWithoutTurn({ seq: PROMPT_CACHE_WARMUP_SEQ })).toBe(true);
+    expect(isSpendWithoutTurn({ seq: 0 })).toBe(false);
+    expect(isPolledSpendRow({ seq: POLLED_SPEND_SEQ })).toBe(true);
+    expect(isPolledSpendRow({ seq: PROMPT_CACHE_WARMUP_SEQ })).toBe(false);
+  });
+
+  it('takes no unpriced turns for a warm-up, leaving the run’s polled row its turns', () => {
+    const credit = new PolledTurnCredit(
+      new Map([[turnKey('run-a', 'cursor-agent'), 3]]),
+      ['cursor-agent'],
+    );
+
+    expect(
+      credit.next({
+        runId: 'run-a',
+        agentKind: 'claude',
+        seq: PROMPT_CACHE_WARMUP_SEQ,
+      }),
+    ).toEqual({ turns: 0, agentTurns: 0 });
+    expect(
+      credit.next({
+        runId: 'run-a',
+        agentKind: 'cursor-agent',
+        seq: POLLED_SPEND_SEQ,
+      }),
+    ).toEqual({ turns: 3, agentTurns: 3 });
   });
 });

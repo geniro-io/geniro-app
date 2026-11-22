@@ -16,7 +16,7 @@ import type {
   ThreadLedgerRow,
   ToolCallLedgerRow,
 } from '../stats.types';
-import { isPolledSpend } from './polled-spend';
+import { isSpendWithoutTurn } from './polled-spend';
 import type { TeamStatsUsageRow } from './team-stats-fold';
 
 export interface MemberRunsInput {
@@ -119,7 +119,7 @@ export function memberRunCells(input: MemberRunsInput): MemberRunCells {
       continue;
     }
     const cell = cellOf(row.memberId, row.runId);
-    if (isPolledSpend(row)) {
+    if (isSpendWithoutTurn(row)) {
       if ((row.costUsd ?? 0) > 0) {
         addPolledSpend(cell.spend, row.costUsd ?? 0, 0);
       }

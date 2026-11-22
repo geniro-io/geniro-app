@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
-import { POLLED_SPEND_SEQ } from '../stats.types';
+import { POLLED_SPEND_SEQ, PROMPT_CACHE_WARMUP_SEQ } from '../stats.types';
 import {
   foldTeamPopulation,
   foldTeamStats,
@@ -83,6 +83,36 @@ describe('foldTeamStats', () => {
         assessments: [],
       },
     ]);
+  });
+
+  it('counts a warm-up as money with no turn: a turn and a warm-up are one turn and both costs', () => {
+    const stats = foldTeamStats({
+      slug: 'dev-team',
+      threads: [
+        {
+          runId: 'run-1',
+          occurredAt: new Date('2026-10-01T08:00:00Z'),
+          slug: 'dev-team',
+          version: null,
+          inferred: null,
+        },
+      ],
+      usage: [
+        row({ seq: 1, memberId: 'lead', agentKind: 'claude', costUsd: 0.5 }),
+        row({
+          seq: PROMPT_CACHE_WARMUP_SEQ,
+          memberId: 'lead',
+          agentKind: 'claude',
+          occurredAt: new Date('2026-10-01T08:30:00Z'),
+          costUsd: 0.25,
+        }),
+      ],
+      polledKinds: ['cursor-agent'],
+      outcomes: [],
+    });
+
+    expect(stats.turns).toBe(1);
+    expect(stats.costUsd).toBe(0.75);
   });
 });
 

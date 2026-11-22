@@ -9,7 +9,7 @@ import type {
   TeamSpend,
   ThreadLedgerRow,
 } from '../stats.types';
-import { isPolledSpend } from './polled-spend';
+import { isPolledSpendRow, isSpendWithoutTurn } from './polled-spend';
 
 /** A turn writing this much to the cache is re-writing a conversation, not adding to one. */
 export const CACHE_HEAVY_WRITE_TOKENS = 100_000;
@@ -97,7 +97,7 @@ function billByClass(
     outputUsd: 0,
     notSplitUsd: bill,
   };
-  if (rates === null || isPolledSpend(row)) {
+  if (rates === null || isPolledSpendRow(row)) {
     return parts;
   }
   const none = {
@@ -169,8 +169,8 @@ export function spendFiguresOf(
   let heavyWriteTurns = 0;
   for (const row of rows) {
     runs.add(row.runId);
-    const polled = isPolledSpend(row);
-    if (!polled) {
+    const withoutTurn = isSpendWithoutTurn(row);
+    if (!withoutTurn) {
       turns += 1;
       inputTokens = plus(inputTokens, row.inputTokens);
       cacheReadTokens = plus(cacheReadTokens, row.cacheReadTokens);
@@ -183,16 +183,13 @@ export function spendFiguresOf(
         }
       }
     }
-    if (row.costUsd === null || (polled && row.costUsd <= 0)) {
+    if (row.costUsd === null || (withoutTurn && row.costUsd <= 0)) {
       continue;
     }
     pricedRuns.add(row.runId);
     costUsd = plus(costUsd, row.costUsd);
     estimatedCostUsd = plus(estimatedCostUsd, row.estimatedCostUsd);
-    const parts = billByClass(
-      row,
-      polled ? null : ratesOf(row.agentKind, row.model),
-    );
+    const parts = billByClass(row, ratesOf(row.agentKind, row.model));
     for (const part of MONEY_PARTS) {
       money[part] += parts[part];
     }
@@ -331,7 +328,7 @@ export function foldTeamSpend(input: TeamSpendInput): TeamSpend {
       (row) => ({ agent: row.agentKind, model: row.model }),
     ),
     largestCacheWrites: rows
-      .filter((row) => !isPolledSpend(row) && isHeavyWrite(row))
+      .filter((row) => !isSpendWithoutTurn(row) && isHeavyWrite(row))
       .sort(
         (a, b) => (b.cacheCreationTokens ?? 0) - (a.cacheCreationTokens ?? 0),
       )

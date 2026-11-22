@@ -8602,6 +8602,16 @@ describe('CallBroker — a callee started in a subfolder', () => {
     expect(h.launches[0]!.folder).toBe(join('services', 'api'));
   });
 
+  it('takes an absolute path written through a link to a run folder recorded in its real form', async () => {
+    const linked = join(root, '..', 'chat-link');
+    symlinkSync(root, linked);
+    const h = harness({ cwd: root });
+
+    await call(h, { folder: join(linked, 'services', 'api') });
+
+    expect(h.launches[0]!.folder).toBe(join('services', 'api'));
+  });
+
   it('runs a callee asked for the chat folder itself as one asked for no folder', async () => {
     const h = harness({ cwd: root });
 

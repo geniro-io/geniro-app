@@ -15,9 +15,10 @@ export type CallFolderReading =
 
 /**
  * Read the folder a caller asked a callee to run in, against the run's folder
- * `root`. Only an existing directory inside `root` is taken, judged twice: by
- * the path as written (a `..` or an absolute path elsewhere) and by where its
- * links really lead, so a symlink inside the folder cannot carry a callee out.
+ * `root`. Only an existing directory whose real location is inside `root` is
+ * taken, so a symlink inside the folder cannot carry a callee out, while an
+ * absolute path written through a link to the folder (`/tmp` for `/private/tmp`)
+ * still is.
  */
 export function readCallFolder(
   root: string | null | undefined,
@@ -36,23 +37,23 @@ export function readCallFolder(
     };
   }
   const written = resolve(base, requested);
-  if (
-    !isWithinDirectory(written, base) &&
-    !isWithinDirectory(written, resolve(root))
-  ) {
-    return {
-      refused: `FOLDER_OUTSIDE: '${requested}' is outside this chat's folder ${base} — pass a subfolder of it`,
-    };
-  }
+  const writtenInside =
+    isWithinDirectory(written, base) ||
+    isWithinDirectory(written, resolve(root));
+  const outside = `FOLDER_OUTSIDE: '${requested}' is outside this chat's folder ${base} — pass a subfolder of it`;
   const path = existingDirectory(written);
   if (path === null) {
     return {
-      refused: `FOLDER_NOT_FOUND: '${requested}' is not an existing, readable folder inside ${base}`,
+      refused: writtenInside
+        ? `FOLDER_NOT_FOUND: '${requested}' is not an existing, readable folder inside ${base}`
+        : outside,
     };
   }
   if (!isWithinDirectory(path, base)) {
     return {
-      refused: `FOLDER_OUTSIDE: '${requested}' leads through a link to outside this chat's folder ${base}`,
+      refused: writtenInside
+        ? `FOLDER_OUTSIDE: '${requested}' leads through a link to outside this chat's folder ${base}`
+        : outside,
     };
   }
   const folder = relative(base, path);

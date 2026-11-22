@@ -15,6 +15,7 @@ import type {
   TeamCallStatsView,
   TeamModelStatsView,
   TeamPopulationView,
+  TeamPullRequestsAfterDoneView,
   TeamRunStatsView,
   TeamStatsView,
 } from '../components/recommendations-figures';
@@ -238,6 +239,38 @@ function readCall(value: unknown): TeamCallStatsView | null {
     : { caller, callee, ...figures, workedMs: count(row?.workedMs) };
 }
 
+function readPullRequestsAfterDone(
+  value: unknown,
+): TeamPullRequestsAfterDoneView | null {
+  const row = record(value);
+  const pullRequests = count(row?.pullRequests);
+  const measured = count(row?.measured);
+  const perPullRequest =
+    row?.perPullRequest === null
+      ? null
+      : counts(record(row?.perPullRequest), [
+          'botThreads',
+          'humanThreads',
+          'pushes',
+          'failedChecks',
+        ] as const);
+  if (
+    row === null ||
+    pullRequests === null ||
+    measured === null ||
+    (perPullRequest === null && row.perPullRequest !== null)
+  ) {
+    return null;
+  }
+  return {
+    version: count(row.version),
+    current: row.current === true,
+    pullRequests,
+    measured,
+    perPullRequest,
+  };
+}
+
 function readPopulation(value: unknown): TeamPopulationView | null {
   const row = record(value);
   const runs = count(row?.runs);
@@ -297,6 +330,10 @@ function readTeamStats(value: unknown): TeamStatsView | null {
     agents: list(row.agents, readAgent),
     callEdges: count(row.callEdges) ?? calls.length,
     calls,
+    pullRequestsAfterDone: list(
+      row.pullRequestsAfterDone,
+      readPullRequestsAfterDone,
+    ),
   };
 }
 

@@ -95,6 +95,20 @@ export interface TeamCallStatsView {
   workedMs: number | null;
 }
 
+export interface TeamPullRequestsAfterDoneView {
+  version: number | null;
+  current: boolean;
+  pullRequests: number;
+  measured: number;
+  /** Averages over {@link measured}; null when none was measured. */
+  perPullRequest: {
+    botThreads: number;
+    humanThreads: number;
+    pushes: number;
+    failedChecks: number;
+  } | null;
+}
+
 /** Every run the team has, deleted ones included, beside the sampled runs. */
 export interface TeamPopulationView {
   runs: number;
@@ -136,6 +150,8 @@ export interface TeamStatsView {
   agents: TeamAgentStatsView[];
   callEdges: number;
   calls: TeamCallStatsView[];
+  /** Newest version first; empty for a card that names none. */
+  pullRequestsAfterDone: TeamPullRequestsAfterDoneView[];
 }
 
 const NOT_MEASURED = '—';
@@ -234,8 +250,12 @@ function msOrDash(look: RecommendationsLook, ms: number | null): string {
   return ms === null ? NOT_MEASURED : look.formatMs(ms);
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
 function runsWord(count: number): string {
-  return `${count} run${count === 1 ? '' : 's'}`;
+  return plural(count, 'run');
 }
 
 function populationLine(
@@ -687,6 +707,87 @@ function CallsTable({
   );
 }
 
+function PullRequestsTable({
+  rows,
+}: {
+  rows: TeamPullRequestsAfterDoneView[];
+}): React.JSX.Element {
+  return (
+    <div className="overflow-x-auto">
+      <table
+        data-slot="analysis-pull-requests"
+        className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr>
+            <th className={cn(HEAD, 'text-left')}>Version</th>
+            <th
+              className={HEAD}
+              title="Pull requests whose GitHub history was read, of all that the runs of this version recorded">
+              PRs
+            </th>
+            <th className={HEAD} title="Per pull request, averaged">
+              Bot threads
+            </th>
+            <th className={HEAD} title="Per pull request, averaged">
+              Human threads
+            </th>
+            <th className={HEAD} title="Per pull request, averaged">
+              Pushes
+            </th>
+            <th className={HEAD} title="Per pull request, averaged">
+              Failed checks
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index} className="border-t border-border/60">
+              <td className="px-1.5 py-1 whitespace-nowrap">
+                {row.version === null ? (
+                  NOT_MEASURED
+                ) : (
+                  <span
+                    className={versionTag({ current: row.current })}
+                    title={
+                      row.current
+                        ? 'Ran the team as it is now'
+                        : 'Ran an earlier version'
+                    }>
+                    v{row.version}
+                  </span>
+                )}
+              </td>
+              <td className={CELL}>
+                {row.measured}/{row.pullRequests}
+              </td>
+              {row.perPullRequest === null ? (
+                <td colSpan={4} className={cn(CELL, 'text-muted-foreground')}>
+                  not measured
+                </td>
+              ) : (
+                <>
+                  <td className={CELL}>
+                    {row.perPullRequest.botThreads.toFixed(1)}
+                  </td>
+                  <td className={CELL}>
+                    {row.perPullRequest.humanThreads.toFixed(1)}
+                  </td>
+                  <td className={CELL}>
+                    {row.perPullRequest.pushes.toFixed(1)}
+                  </td>
+                  <td className={CELL}>
+                    {row.perPullRequest.failedChecks.toFixed(1)}
+                  </td>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function TeamFigures({
   stats,
   look,
@@ -736,6 +837,14 @@ export function TeamFigures({
             open={folds.isOpen('figures:calls')}
             onToggle={() => folds.toggle('figures:calls')}>
             <CallsTable stats={stats} look={look} />
+          </Disclosure>
+        )}
+        {stats.pullRequestsAfterDone.length === 0 ? null : (
+          <Disclosure
+            label={`Pull requests after done · ${plural(stats.pullRequestsAfterDone.length, 'version')}`}
+            open={folds.isOpen('figures:pull-requests')}
+            onToggle={() => folds.toggle('figures:pull-requests')}>
+            <PullRequestsTable rows={stats.pullRequestsAfterDone} />
           </Disclosure>
         )}
       </div>

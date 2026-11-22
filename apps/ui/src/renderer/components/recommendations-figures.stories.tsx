@@ -9,7 +9,7 @@ import {
 
 function FiguresDemo(): React.JSX.Element {
   const [open, setOpen] = useState<ReadonlySet<string>>(
-    new Set(['figures:models']),
+    new Set(['figures:models', 'figures:pull-requests']),
   );
   return (
     <div className="w-[560px]">

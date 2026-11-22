@@ -634,6 +634,55 @@ describe('RecommendationsCard', () => {
     expect(el.textContent).toContain('Calls between agents · 3');
   });
 
+  it("draws each team version's pull requests after done in a fold, a version none was measured for as not measured", () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={TEAM_STATS}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    expect(el.querySelector('[data-slot="analysis-pull-requests"]')).toBeNull();
+    expect(el.textContent).toContain('Pull requests after done · 3 versions');
+
+    click(button(el, 'Pull requests after done'));
+
+    expect(
+      [
+        ...el.querySelectorAll('[data-slot="analysis-pull-requests"] tbody tr'),
+      ].map((row) =>
+        [...row.querySelectorAll('td')].map((cell) => cell.textContent),
+      ),
+    ).toEqual([
+      ['v5', '5/6', '2.4', '0.8', '3.2', '1.2'],
+      ['v4', '3/3', '4.0', '1.3', '4.7', '2.0'],
+      ['—', '0/2', 'not measured'],
+    ]);
+  });
+
+  it('draws no pull-request figures for a card that names no versions', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={{ ...TEAM_STATS, pullRequestsAfterDone: [] }}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(el.textContent).not.toContain('Pull requests after done');
+    expect(el.querySelector('[data-slot="analysis-pull-requests"]')).toBeNull();
+  });
+
   it('explains each hotspot with the figures of the agent it names, and ticks its fix from there', () => {
     const el = render(
       <RecommendationsCard

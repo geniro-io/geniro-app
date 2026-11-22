@@ -13,6 +13,7 @@ import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
 import type { LessonEstimateService } from './lesson-estimate.service';
 import { LessonSegmentService } from './lesson-segment.service';
+import type { LessonSpendService } from './lesson-spend.service';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
 
@@ -192,6 +193,16 @@ function build(
       }),
     ),
   };
+  const typical = {
+    runs: 7,
+    usd: 0.28,
+    durationMs: 34_000,
+    model: 'claude-haiku-5-5',
+    sameModel: true,
+  };
+  const spending = {
+    typical: vi.fn(() => Promise.resolve(typical)),
+  };
   const projectScope = {
     projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
@@ -220,6 +231,7 @@ function build(
     estimates as unknown as LessonEstimateService,
     config,
     events,
+    spending as unknown as LessonSpendService,
     teams as unknown as TeamStoreService,
     archiveChoices,
   );
@@ -233,6 +245,7 @@ function build(
     updated,
     runDao,
     segments,
+    spending,
     publishChanged,
   };
 }
@@ -544,5 +557,23 @@ describe('LessonSegmentService', () => {
         });
       },
     );
+
+    it('offers what finished runs on the model the reflection would use typically cost', async () => {
+      const h = build({ items: { src: correctionStretch() } });
+
+      const answer = await h.service.threadEstimate({ runId: 'src' });
+
+      expect(h.spending.typical).toHaveBeenCalledWith(
+        'claude-haiku-5-5',
+        expect.anything(),
+      );
+      expect(answer.typical).toEqual({
+        runs: 7,
+        usd: 0.28,
+        durationMs: 34_000,
+        model: 'claude-haiku-5-5',
+        sameModel: true,
+      });
+    });
   });
 });

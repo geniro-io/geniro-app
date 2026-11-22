@@ -534,6 +534,7 @@ describe('CommandCenter — the places nodes were moved to', () => {
 const NO_LESSONS = {
   signals: 0,
   lessonsOn: false,
+  typical: null,
   estimate: { agentKind: 'claude', model: null, tokens: 0, usd: 0 },
   check: null,
   fromSeq: 0,

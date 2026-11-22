@@ -121,6 +121,63 @@ describe('LessonSegmentDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('page', () => {
+    it('pages the statuses named newest closed first, no later than the cursor', async () => {
+      const a = await stretch('run-a', '2026-11-13T09:00:00.000Z', 'reflected');
+      const b = await stretch('run-b', '2026-11-13T10:00:00.000Z', 'failed');
+      const c = await stretch('run-c', '2026-11-13T11:00:00.000Z', 'empty');
+      await stretch('run-d', '2026-11-13T12:00:00.000Z', 'skipped');
+
+      const statuses = ['reflected', 'failed', 'empty'] as const;
+      expect((await dao.page(statuses, null, 2)).map((s) => s.id)).toEqual([
+        c.id,
+        b.id,
+      ]);
+      expect(
+        (await dao.page(statuses, new Date('2026-11-13T10:00:00.000Z'), 5)).map(
+          (s) => s.id,
+        ),
+      ).toEqual([b.id, a.id]);
+    });
+  });
+
+  describe('listFinished', () => {
+    it('lists the newest segments a reflection finished on, filing lessons or none', async () => {
+      const finished = (
+        runId: string,
+        closedAt: string,
+        status: LessonSegment['status'],
+      ) =>
+        dao.create({
+          runId,
+          fromSeq: -1,
+          toSeq: 4,
+          closedBy: 'archive',
+          closedAt: new Date(closedAt),
+          status,
+          reflectionRunId: `refl-${runId}`,
+        });
+      const empty = await finished(
+        'run-a',
+        '2026-11-13T12:00:00.000Z',
+        'empty',
+      );
+      const reflected = await finished(
+        'run-b',
+        '2026-11-13T11:00:00.000Z',
+        'reflected',
+      );
+      await finished('run-c', '2026-11-13T13:00:00.000Z', 'failed');
+      await stretch('run-d', '2026-11-13T14:00:00.000Z', 'reflected');
+
+      expect((await dao.listFinished(5)).map((s) => s.id)).toEqual([
+        empty.id,
+        reflected.id,
+      ]);
+      expect((await dao.listFinished(1)).map((s) => s.id)).toEqual([empty.id]);
+    });
+  });
+
   describe('deleteOfRuns', () => {
     it('drops the segments of the runs named and no other', async () => {
       await insert('run-a', 'refl-1');

@@ -61,6 +61,7 @@ export function TitleBar({
   onInstallUpdate,
   onRelaunchUpdate,
   usage,
+  background,
   waiting,
 }: {
   /** What this window is showing right now — the open chat, or the view. */
@@ -82,6 +83,8 @@ export function TitleBar({
    * how to do.
    */
   usage?: React.ReactNode;
+  /** The app's background work (`BackgroundJobsButton`), handed in already wired. */
+  background?: React.ReactNode;
   /** What is waiting on the user (`WaitingStatus`), handed in already wired. */
   waiting?: React.ReactNode;
 }): React.JSX.Element {
@@ -122,6 +125,7 @@ export function TitleBar({
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {waiting}
+        {background}
         {usage}
         <UpdateControl
           update={update}

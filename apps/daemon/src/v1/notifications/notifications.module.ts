@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { BackgroundJobsModule } from '../background-jobs/background-jobs.module';
 import { BrowserModule } from '../browser/browser.module';
 import { CommandCenterModule } from '../command-center/command-center.module';
 import { DiagnosticsModule } from '../diagnostics/diagnostics.module';
@@ -32,6 +33,7 @@ import { WsPresenceService } from './services/ws-presence.service';
   // memory bus and `KnowledgeModule` for the knowledge bus, likewise, and
   // `ProjectsModule` for the project bus. `BrowserModule` for the bridge to the
   // Mac's browser window, a leaf with no dependency on this channel.
+  // `BackgroundJobsModule` for the background jobs registry, which imports nothing.
   imports: [
     AgentsModule,
     DiagnosticsModule,
@@ -43,6 +45,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     ProjectsModule,
     BrowserModule,
     LessonsModule,
+    BackgroundJobsModule,
     CommandCenterModule,
   ],
   providers: [NotificationsGateway, WsPresenceService],

@@ -6,7 +6,19 @@ import { ArchiveThreadDialog } from './archive-thread-dialog';
 const LESSONS: ThreadLessonEstimateDto = {
   signals: 4,
   lessonsOn: true,
-  estimate: { agentKind: 'claude', model: null, tokens: 42_000, usd: 0.21 },
+  estimate: {
+    agentKind: 'claude',
+    model: 'claude-haiku-5-5',
+    tokens: 42_000,
+    usd: 0.21,
+  },
+  typical: {
+    runs: 14,
+    usd: 0.13,
+    durationMs: 134_000,
+    model: 'claude-haiku-5-5',
+    sameModel: true,
+  },
   check: null,
   fromSeq: 1,
   toSeq: 120,
@@ -64,6 +76,14 @@ export const RunningTeamRun: Story = {
 export const WithExtractLessons: Story = {
   args: {
     lessons: LESSONS,
+    extractLessons: true,
+    lessonModel: 'Claude Haiku',
+  },
+};
+
+export const WithExtractLessonsNotMeasured: Story = {
+  args: {
+    lessons: { ...LESSONS, typical: null },
     extractLessons: true,
     lessonModel: 'Claude Haiku',
   },

@@ -3281,6 +3281,26 @@ describe('MemoryService.fileLesson', () => {
     expect(entry.source.actor).toBe('lesson');
   });
 
+  it('names the lessons whose entry still waits for review, and no active one', async () => {
+    await db.service.fileLesson(
+      LESSON,
+      { title: 'Check before retrying', body: 'x', type: 'feedback' },
+      NONE,
+      SOURCE,
+    );
+    db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, agentWrites: 'pending' });
+    await db.service.fileLesson(
+      LESSON,
+      { title: 'Read the log tail first', body: 'y', type: 'feedback' },
+      NONE,
+      { sourceRunId: 'src-1', proposalId: 'lp-2' },
+    );
+
+    expect(
+      await db.service.pendingLessonProposals(['lp-1', 'lp-2', 'lp-3']),
+    ).toEqual(new Set(['lp-2']));
+  });
+
   it('writes nothing for a near duplicate of an active entry', async () => {
     await db.service.save(
       USER,

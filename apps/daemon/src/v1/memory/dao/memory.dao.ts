@@ -9,6 +9,7 @@ import {
   DROP_RETIRED_MEMORY_TEXT_TRIGGERS,
   MEMORY_TEXT_TRIGGERS,
 } from '../../../db/memory-text-index.ddl';
+import { idBatches } from '../../agents/utils/id-batches';
 import type { RunPlace } from '../../projects/projects.types';
 import { Memory } from '../entity/memory.entity';
 import {
@@ -139,6 +140,26 @@ export class MemoryDao extends BaseDao<Memory> {
       { fields: ['id', 'handle'], filters: false, disableIdentityMap: true },
     );
     return new Map(rows.map((row) => [memoryHandle(row.handle), row.id]));
+  }
+
+  /** Which of these lesson proposals own an entry that still waits for the user's review. */
+  async pendingLessonProposalIds(
+    proposalIds: readonly string[],
+    em: EntityManager = this.em,
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const batch of idBatches(proposalIds)) {
+      const rows = await this.getRepo(em).find(
+        { lessonProposalId: { $in: batch }, status: 'pending' },
+        { fields: ['lessonProposalId'], disableIdentityMap: true },
+      );
+      for (const row of rows) {
+        if (row.lessonProposalId !== null) {
+          out.add(row.lessonProposalId);
+        }
+      }
+    }
+    return out;
   }
 
   async getByIds(

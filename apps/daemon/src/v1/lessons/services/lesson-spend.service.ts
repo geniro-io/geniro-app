@@ -5,10 +5,15 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { UsageEventDao } from '../../stats/dao/usage-event.dao';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
-import type { LessonsSpend } from '../lessons.types';
+import type { LessonSegment } from '../entity/lesson-segment.entity';
+import type { LessonsSpend, LessonTypicalSpend } from '../lessons.types';
+import { runSampleOf } from '../utils/run-sample';
+import { type LessonRunSample, typicalSpendOf } from '../utils/typical-spend';
 
 /** How many failed stretches the readout names. */
 export const LESSON_FAILED_LISTED_MAX = 5;
+/** How many of the newest finished runs are read to find the typical figures, same-model ones among them. */
+export const LESSON_TYPICAL_SCAN = 100;
 
 /**
  * What lessons cost, from the usage ledger's `purpose` rows over every row of
@@ -76,5 +81,51 @@ export class LessonSpendService {
         })),
       ),
     };
+  }
+
+  /** What a lessons run typically costs and takes, from finished runs, those on `model` when there are enough. */
+  async typical(
+    model: string | null,
+    em: EntityManager = this.em.fork(),
+  ): Promise<LessonTypicalSpend | null> {
+    const finished = await this.segments.listFinished(LESSON_TYPICAL_SCAN, em);
+    const samples = await this.samplesOf(finished, em);
+    return typicalSpendOf(
+      finished.flatMap((segment) => samples.get(segment.id) ?? []),
+      model,
+    );
+  }
+
+  /** Each segment's run figures — its reflection and check together — read in one ledger pass. */
+  async samplesOf(
+    segments: readonly LessonSegment[],
+    em: EntityManager,
+  ): Promise<Map<string, LessonRunSample>> {
+    const runIds = segments.flatMap((segment) =>
+      [segment.reflectionRunId, segment.checkRunId].filter(
+        (id): id is string => id !== null,
+      ),
+    );
+    const rows = await this.usage.rowsByRuns(runIds, em);
+    const byRun = new Map<string, typeof rows>();
+    for (const row of rows) {
+      byRun.set(row.runId, [...(byRun.get(row.runId) ?? []), row]);
+    }
+    const out = new Map<string, LessonRunSample>();
+    for (const segment of segments) {
+      if (segment.reflectionRunId === null) {
+        continue;
+      }
+      out.set(
+        segment.id,
+        runSampleOf([
+          ...(byRun.get(segment.reflectionRunId) ?? []),
+          ...(segment.checkRunId === null
+            ? []
+            : (byRun.get(segment.checkRunId) ?? [])),
+        ]),
+      );
+    }
+    return out;
   }
 }

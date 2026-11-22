@@ -106,6 +106,9 @@ vi.mock('./daemon-client', () => ({
     onLessonsChanged(): () => void {
       return () => {};
     }
+    onBackgroundJobsChanged(): () => void {
+      return () => {};
+    }
     onResourceAlertsChanged(): () => void {
       return () => {};
     }
@@ -496,9 +499,11 @@ describe('App — the phone’s navigation', () => {
     expect(current()).toBe('Stats');
   });
 
-  it('leaves the usage glyph out of a phone’s title bar, whose trailing edge is the run-details opener’s', async () => {
+  it('leaves the usage and background work glyphs out of a phone’s title bar, whose trailing edge is the run-details opener’s', async () => {
     const usage = (): Element | null =>
       container.querySelector('[data-slot="app-usage-trigger"]');
+    const background = (): Element | null =>
+      container.querySelector('[data-slot="background-jobs-trigger"]');
     // The glyph needs a daemon to read; none answers here.
     const handle: DaemonHandle = {
       host: '127.0.0.1',
@@ -524,6 +529,7 @@ describe('App — the phone’s navigation', () => {
     });
     await flush();
     expect(usage()).not.toBeNull();
+    expect(background()).not.toBeNull();
 
     await act(async () => {
       root.unmount();
@@ -535,6 +541,7 @@ describe('App — the phone’s navigation', () => {
     });
     await flush();
     expect(usage()).toBeNull();
+    expect(background()).toBeNull();
   });
 });
 

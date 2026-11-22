@@ -333,10 +333,46 @@ export const LessonEstimateQuerySchema = z.object({
 });
 export type LessonEstimateQuery = z.infer<typeof LessonEstimateQuerySchema>;
 
+/** What lessons runs already finished cost and took, the median of the newest ones. */
+export const LessonTypicalSpendSchema = z
+  .object({
+    runs: z
+      .number()
+      .int()
+      .min(1)
+      .describe('How many finished runs the medians are taken over'),
+    usd: z
+      .number()
+      .nullable()
+      .describe(
+        'Median spend of a run, reflection and check together; null when no run reported a cost — never 0',
+      ),
+    durationMs: z
+      .number()
+      .nullable()
+      .describe('Median time a run took; null when no run reported one'),
+    model: z
+      .string()
+      .nullable()
+      .describe(
+        'The model every counted run was billed for; null when runs on every model were counted',
+      ),
+    sameModel: z
+      .boolean()
+      .describe(
+        'Whether only runs on the model this reflection would use were counted',
+      ),
+  })
+  .meta({ id: 'LessonTypicalSpend' });
+export type LessonTypicalSpend = z.infer<typeof LessonTypicalSpendSchema>;
+
 /** One thread's unreflected stretch priced, for the archive dialog. */
 export const ThreadLessonEstimateSchema = z
   .object({
     estimate: LessonEstimateSchema,
+    typical: LessonTypicalSpendSchema.nullable().describe(
+      'What finished lessons runs typically cost and took; null before any run finished',
+    ),
     check: LessonEstimateSchema.nullable().describe(
       'What the second-model check would cost when it runs; null while the check is off',
     ),

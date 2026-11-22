@@ -28,6 +28,7 @@ import {
   extractBooleanField,
   extractStringField,
 } from '../../agents/utils/ws-payload';
+import { BackgroundJobsRegistry } from '../../background-jobs/services/background-jobs.registry';
 import { BROWSER_REPLY_MAX_BYTES } from '../../browser/browser.types';
 import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { CommandCenterEventBus } from '../../command-center/services/command-center-events.bus';
@@ -157,6 +158,7 @@ export class NotificationsGateway
   private shareSubscription?: Subscription;
   private memorySubscription?: Subscription;
   private lessonsSubscription?: Subscription;
+  private backgroundJobsSubscription?: Subscription;
   private knowledgeSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
   private commandCenterSubscription?: Subscription;
@@ -191,6 +193,7 @@ export class NotificationsGateway
     private readonly browserBridge: BrowserBridgeService,
     @Optional() private readonly lessons?: LessonsEventBus,
     @Optional() private readonly commandCenter?: CommandCenterEventBus,
+    @Optional() private readonly backgroundJobs?: BackgroundJobsRegistry,
   ) {}
 
   afterInit(server: Server): void {
@@ -385,6 +388,23 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`lessons event bus errored: ${String(err)}`),
     });
+    // A background job's change goes to every client: the title bar's list
+    // re-reads on it. It names the kind only.
+    this.backgroundJobsSubscription = this.backgroundJobs
+      ?.allChanges()
+      .subscribe({
+        next: (change) => {
+          try {
+            server.emit('background_jobs_changed', change);
+          } catch (err) {
+            this.logger.error(
+              `failed to broadcast background_jobs_changed (${change.kind}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
+        error: (err: unknown) =>
+          this.logger.error(`background jobs registry errored: ${String(err)}`),
+      });
     // A knowledge write goes to EVERY client, as a memory write does; the
     // event names the document and its place, never its text.
     this.knowledgeSubscription = this.knowledge.allChanges().subscribe({
@@ -539,6 +559,7 @@ export class NotificationsGateway
     this.shareSubscription?.unsubscribe();
     this.memorySubscription?.unsubscribe();
     this.lessonsSubscription?.unsubscribe();
+    this.backgroundJobsSubscription?.unsubscribe();
     this.knowledgeSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
     this.commandCenterSubscription?.unsubscribe();

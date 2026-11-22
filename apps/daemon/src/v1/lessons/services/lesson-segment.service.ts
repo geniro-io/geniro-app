@@ -37,6 +37,7 @@ import { offersLessons, teamLessonsOverrideOf } from '../utils/lessons-mode';
 import { readLessonSignals } from '../utils/read-lesson-signals';
 import { isReflectable } from '../utils/reflectable';
 import { LessonEstimateService } from './lesson-estimate.service';
+import { LessonSpendService } from './lesson-spend.service';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
 
@@ -68,6 +69,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     private readonly estimates: LessonEstimateService,
     private readonly config: LessonsConfigService,
     private readonly events: LessonsEventBus,
+    private readonly spending: LessonSpendService,
     @Optional() private readonly teams?: TeamStoreService,
     @Optional() private readonly archiveChoices?: ArchiveLessonsRegistry,
   ) {}
@@ -175,13 +177,15 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       : [];
     const range = { fromSeq, toSeq: Math.max(fromSeq, toSeq) };
     const checker = this.config.checkChoice();
+    const estimate = await this.estimates.estimate(
+      run,
+      range,
+      this.config.reflectionChoice(run),
+      em,
+    );
     return {
-      estimate: await this.estimates.estimate(
-        run,
-        range,
-        this.config.reflectionChoice(run),
-        em,
-      ),
+      estimate,
+      typical: await this.spending.typical(estimate.model, em),
       check:
         checker === null
           ? null

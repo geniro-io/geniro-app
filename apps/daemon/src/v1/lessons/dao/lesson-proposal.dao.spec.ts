@@ -61,6 +61,19 @@ describe('LessonProposalDao (in-memory sqlite)', () => {
     });
   }
 
+  describe('ofSegments', () => {
+    it('answers every proposal filed on the segments named and none of another', async () => {
+      const a = await insert({ segmentId: 'seg-a' });
+      const b = await insert({ segmentId: 'seg-b', status: 'saved' });
+      await insert({ segmentId: 'seg-c' });
+
+      const rows = await dao.ofSegments(['seg-a', 'seg-b']);
+
+      expect(rows.map((row) => row.id).sort()).toEqual([a.id, b.id].sort());
+      expect(await dao.ofSegments([])).toEqual([]);
+    });
+  });
+
   describe('rejectedIn', () => {
     it('answers the rejected lessons of one team, newest decision first', async () => {
       await insert({

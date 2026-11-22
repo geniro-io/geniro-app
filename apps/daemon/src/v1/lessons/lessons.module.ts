@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { AgentsModule } from '../agents/agents.module';
+import { BackgroundJobsModule } from '../background-jobs/background-jobs.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
@@ -14,6 +15,7 @@ import { ThreadLessonsController } from './controllers/thread-lessons.controller
 import { LessonProposalDao } from './dao/lesson-proposal.dao';
 import { LessonSegmentDao } from './dao/lesson-segment.dao';
 import { LessonAutoRunner } from './services/lesson-auto-runner.service';
+import { LessonBackgroundJobSource } from './services/lesson-background-jobs.source';
 import { LessonCheckService } from './services/lesson-check.service';
 import { LessonEstimateService } from './services/lesson-estimate.service';
 import { LessonFilingService } from './services/lesson-filing.service';
@@ -38,10 +40,13 @@ import { LessonsEventBus } from './services/lessons-events.bus';
  * `TeamsModule` comes in for the team's own lessons setting, the team-run
  * delete and a lesson saved into a member's instructions; `KnowledgeModule`
  * for a lesson saved as a knowledge document. Neither imports this module.
+ * `BackgroundJobsModule` comes in to register its runs as background jobs
+ * (`LessonBackgroundJobSource`); it imports nothing back.
  */
 @Module({
   imports: [
     AgentsModule,
+    BackgroundJobsModule,
     KnowledgeModule,
     MemoryModule,
     ProjectsModule,
@@ -69,6 +74,7 @@ import { LessonsEventBus } from './services/lessons-events.bus';
     LessonAutoRunner,
     LessonSpendService,
     LessonProposalService,
+    LessonBackgroundJobSource,
   ],
   exports: [LessonFilingService, LessonCheckService, LessonsEventBus],
 })

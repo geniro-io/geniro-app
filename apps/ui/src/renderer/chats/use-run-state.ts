@@ -112,6 +112,8 @@ interface Stamped {
   /** Which run this was read from — see the guard below. */
   runId: string | null;
   state: RunStateDto;
+  /** A read of {@link runId} has answered, a failed one included. */
+  answered: boolean;
 }
 
 /** An announce that can move what the run holds, rather than what it is doing. */
@@ -150,8 +152,12 @@ export function useRunState(
   client: Pick<DaemonClient, 'onItem' | 'onRunStatus'> | null,
   runId: string | null,
   reconnectNonce: number,
-): { state: RunStateDto; refresh: () => void } {
-  const [read, setRead] = useState<Stamped>(() => ({ runId, state: EMPTY }));
+): { state: RunStateDto; refresh: () => void; loaded: boolean } {
+  const [read, setRead] = useState<Stamped>(() => ({
+    runId,
+    state: EMPTY,
+    answered: false,
+  }));
   const [nonce, setNonce] = useState(0);
   const refresh = useLatestCallback(() => setNonce((n) => n + 1), []);
   const listedRef = useRef<ReadonlySet<string>>(new Set());
@@ -170,7 +176,7 @@ export function useRunState(
 
   useEffect(() => {
     if (api === null || runId === null) {
-      setRead({ runId, state: EMPTY });
+      setRead({ runId, state: EMPTY, answered: api === null });
       return;
     }
     repliesSinceAskRef.current = new Set();
@@ -179,12 +185,20 @@ export function useRunState(
       .readRunState({ runId })
       .then((state) => {
         if (!cancelled) {
-          setRead({ runId, state });
+          setRead({ runId, state, answered: true });
         }
       })
       // A state that could not be read leaves what the window holds standing,
       // never an error over a working conversation.
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancelled) {
+          setRead((prev) =>
+            prev.runId === runId
+              ? { ...prev, answered: true }
+              : { runId, state: EMPTY, answered: true },
+          );
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -235,5 +249,10 @@ export function useRunState(
   // the effect can replace it, and the previous conversation's cards and calls
   // under the new thread's name are the one place they could not be recognised
   // as stale.
-  return { state: read.runId === runId ? read.state : EMPTY, refresh };
+  const own = read.runId === runId;
+  return {
+    state: own ? read.state : EMPTY,
+    refresh,
+    loaded: own && read.answered,
+  };
 }

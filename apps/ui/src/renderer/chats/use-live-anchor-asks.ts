@@ -42,11 +42,17 @@ export function useLiveAnchorAsks({
   anchors,
   isCurrentRun,
   onAnchors,
+  hold = false,
 }: {
   /** Null while there is no daemon to ask; live rows then ask nothing. */
   api: Pick<ChatsApi, 'listRunItems'> | null;
   items: readonly ChatItem[];
   anchors: readonly ChatItem[];
+  /**
+   * The window's first page is still in flight: rows are kept, and asked once
+   * it has landed, for whatever it and its anchors did not place.
+   */
+  hold?: boolean;
   /** Whether `runId` is still the run on screen when an answer lands. */
   isCurrentRun: (runId: string) => boolean;
   /** Merge an answer's anchors into the held ones. */
@@ -76,12 +82,16 @@ export function useLiveAnchorAsks({
   // Bumped by every reset, so an answer still in flight when the window was
   // replaced is not merged into the new one.
   const generationRef = useRef(0);
+  const heldRef = useRef<ChatItem[]>([]);
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
 
   const forget = useLatestCallback((): void => {
     if (pendingRef.current !== null) {
       clearTimeout(pendingRef.current.timer);
       pendingRef.current = null;
     }
+    heldRef.current = [];
     askedRef.current = new Set();
     generationRef.current += 1;
   }, []);
@@ -92,6 +102,10 @@ export function useLiveAnchorAsks({
   const ask = useLatestCallback(
     (item: ChatItem): void => {
       if (api === null) {
+        return;
+      }
+      if (holdRef.current) {
+        heldRef.current.push(item);
         return;
       }
       const index = structureRef.current;
@@ -157,6 +171,16 @@ export function useLiveAnchorAsks({
     },
     [api],
   );
+
+  // After the structure effect above, so the held rows meet the landed page.
+  useEffect(() => {
+    if (hold || heldRef.current.length === 0) {
+      return;
+    }
+    const held = heldRef.current;
+    heldRef.current = [];
+    held.forEach(ask);
+  }, [hold, items, anchors, ask]);
 
   return { ask, forget };
 }

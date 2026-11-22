@@ -27,6 +27,23 @@ const calleeRow = (runId: string, seq: number, callId: string): ChatItem => ({
   createdAt: 'now',
 });
 
+const callStarted = (runId: string, seq: number, callId: string): ChatItem => ({
+  id: `${runId}-c${seq}`,
+  runId,
+  memberId: 'manager',
+  seq,
+  kind: 'call_started',
+  role: null,
+  payload: { callId, calleeNodeId: 'qa' },
+  createdAt: 'now',
+});
+
+interface Props {
+  items: ChatItem[];
+  anchors: ChatItem[];
+  hold: boolean;
+}
+
 let root: Root | null = null;
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -37,17 +54,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(): Promise<{
+async function mount(initial: Partial<Props> = {}): Promise<{
   asks: () => LiveAnchorAsks;
   listRunItems: ReturnType<typeof vi.fn>;
+  rerender: (next: Partial<Props>) => Promise<void>;
 }> {
   const listRunItems = vi.fn(() => Promise.resolve({ items: [], anchors: [] }));
   let latest: LiveAnchorAsks | null = null;
+  let props: Props = { items: NONE, anchors: NONE, hold: false, ...initial };
   function Probe(): null {
     latest = useLiveAnchorAsks({
       api: { listRunItems },
-      items: NONE,
-      anchors: NONE,
+      items: props.items,
+      anchors: props.anchors,
+      hold: props.hold,
       isCurrentRun: () => true,
       onAnchors: () => undefined,
     });
@@ -55,7 +75,14 @@ async function mount(): Promise<{
   }
   root = createRoot(document.createElement('div'));
   await act(async () => root!.render(<Probe />));
-  return { asks: () => latest!, listRunItems };
+  return {
+    asks: () => latest!,
+    listRunItems,
+    rerender: async (next) => {
+      props = { ...props, ...next };
+      await act(async () => root!.render(<Probe />));
+    },
+  };
 }
 
 describe('useLiveAnchorAsks', () => {
@@ -84,6 +111,56 @@ describe('useLiveAnchorAsks', () => {
     act(() => root?.unmount());
     root = null;
     await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+
+    expect(listRunItems).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing for a live row while the hold is on, however long it waits', async () => {
+    const { asks, listRunItems } = await mount({ hold: true });
+
+    await act(async () => {
+      asks().ask(calleeRow('r1', 10, 'call-1'));
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(listRunItems).not.toHaveBeenCalled();
+  });
+
+  it('asks once, when the hold lifts, for the held rows the landed page and anchors do not place', async () => {
+    const { asks, listRunItems, rerender } = await mount({ hold: true });
+    await act(async () => {
+      asks().ask(calleeRow('r1', 10, 'call-1'));
+      asks().ask(calleeRow('r1', 20, 'call-2'));
+    });
+
+    await rerender({ hold: false, anchors: [callStarted('r1', 3, 'call-1')] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
+
+    expect(listRunItems).toHaveBeenCalledTimes(1);
+    expect(listRunItems).toHaveBeenCalledWith({
+      runId: 'r1',
+      afterSeq: 19,
+      beforeSeq: 21,
+      limit: 1,
+      take: 'oldest',
+    });
+  });
+
+  it('drops the held rows on forget, so a lifted hold asks nothing for them', async () => {
+    const { asks, listRunItems, rerender } = await mount({ hold: true });
+    await act(async () => {
+      asks().ask(calleeRow('r1', 10, 'call-1'));
+    });
+    await act(async () => {
+      asks().forget();
+    });
+
+    await rerender({ hold: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
 
     expect(listRunItems).not.toHaveBeenCalled();
   });

@@ -72,6 +72,8 @@ export interface RunStreamOptions {
   onMissed?: (runId: string, rows: readonly ChatItem[]) => void;
   /** A reconnect read failed. The stream has nothing merged for it. */
   onReplayFailed?: (runId: string, err: unknown) => void;
+  /** The window's first page is in flight — see `useLiveAnchorAsks`' `hold`. */
+  holdAnchorAsks?: boolean;
 }
 
 export interface RunStream {
@@ -90,6 +92,11 @@ export interface RunStream {
    * from them, live rows and pages of an opened card alike.
    */
   callRows: ChatItem[];
+  /**
+   * Every row of the run that arrived after it opened — live, or replayed
+   * after a reconnect — wherever the window is; never a page's rows.
+   */
+  arrivals: ChatItem[];
   /** The agent's not-yet-durable words, folded by `withLiveText`. */
   liveText: ReadonlyMap<string, LiveState>;
   setLiveText: Dispatch<SetStateAction<ReadonlyMap<string, LiveState>>>;
@@ -101,6 +108,8 @@ export interface RunStream {
   commitAnchors: (update: RowsUpdate) => void;
   /** {@link commitItems} for {@link callRows}. */
   commitCallRows: (update: RowsUpdate) => void;
+  /** {@link commitItems} for {@link arrivals}. */
+  commitArrivals: (update: RowsUpdate) => void;
   /** Forget which anchors the live rows have asked for — the thread changed. */
   forgetAnchorAsks: () => void;
   /** Mirror of {@link items}, for readers that run outside a render. */
@@ -145,6 +154,7 @@ export function useRunStream(options: RunStreamOptions): RunStream {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [anchors, setAnchors] = useState<ChatItem[]>([]);
   const [callRows, setCallRows] = useState<ChatItem[]>([]);
+  const [arrivals, setArrivals] = useState<ChatItem[]>([]);
   const [liveText, setLiveText] =
     useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
@@ -198,6 +208,30 @@ export function useRunStream(options: RunStreamOptions): RunStream {
     [runIdRef],
   );
 
+  const arrivedIdsRef = useRef(new Set<string>());
+  const commitArrivals = useLatestCallback(
+    (update: RowsUpdate): void => {
+      if (typeof update !== 'function') {
+        arrivedIdsRef.current = new Set(update.map((row) => row.id));
+      }
+      setArrivals((prev) => ownRunRows(prev, update, runIdRef.current));
+    },
+    [runIdRef],
+  );
+  const arrive = useLatestCallback(
+    (item: ChatItem): void => {
+      if (
+        item.runId !== runIdRef.current ||
+        arrivedIdsRef.current.has(item.id)
+      ) {
+        return;
+      }
+      arrivedIdsRef.current.add(item.id);
+      commitArrivals((prev) => [...prev, item]);
+    },
+    [runIdRef, commitArrivals],
+  );
+
   const structure = useMemo(
     () =>
       callRows.length === 0 ? anchors : mergeAnchorRows(anchors, callRows),
@@ -209,6 +243,7 @@ export function useRunStream(options: RunStreamOptions): RunStream {
     anchors: structure,
     isCurrentRun: (runId) => runIdRef.current === runId,
     onAnchors: (rows) => commitAnchors((prev) => mergeAnchorRows(prev, rows)),
+    hold: options.holdAnchorAsks === true,
   });
   const forgetAnchorAsks = anchorAsks.forget;
   // Read through a ref by `ingest`, which is stable and would otherwise hold
@@ -289,6 +324,7 @@ export function useRunStream(options: RunStreamOptions): RunStream {
     }
     const unsubscribeItem = client.onItem((item) => {
       ingest(item, true);
+      arrive(item);
     });
     const unsubscribeLiveText = client.onLiveText((event) => {
       // Throwaway by design: shown only for the run on screen, and dropped
@@ -348,6 +384,7 @@ export function useRunStream(options: RunStreamOptions): RunStream {
         // consumer's live decisions — `ingest` passes `live: false` through.
         for (const row of own) {
           ingest(row, false);
+          arrive(row);
         }
         // Anchors follow the rows they belong to: away from the tail `ingest`
         // refused every row, so their anchors would place cards for work the
@@ -376,19 +413,21 @@ export function useRunStream(options: RunStreamOptions): RunStream {
       unsubscribeReconnect();
       unsubscribeVerdict();
     };
-  }, [client, ingest, commitAnchors, runIdRef]);
+  }, [client, ingest, arrive, commitAnchors, runIdRef]);
 
   return {
     items,
     anchors,
     structure,
     callRows,
+    arrivals,
     liveText,
     setLiveText,
     deadRequestKeys,
     commitItems,
     commitAnchors,
     commitCallRows,
+    commitArrivals,
     forgetAnchorAsks,
     itemsRef,
     lastSeqRef,

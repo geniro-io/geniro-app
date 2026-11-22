@@ -19,12 +19,13 @@ import { payloadString } from './transcript-payload';
  * list's refresh trigger. An agent's share finishes after its page row was
  * written (the upload can take a while), and its receipt is the first row that
  * lands once it has. Results are paired to their call by id, because claude
- * writes `name: null` on a result row.
+ * writes `name: null` on a result row; only results `counts` admits are read.
  */
 export function latestShowArtifactResultSeq(
   rows: readonly ChatItem[],
   runId: string,
   floor: number,
+  counts: (result: ChatItem) => boolean = () => true,
 ): number {
   const calls = new Set<string>();
   let newest = floor;
@@ -41,7 +42,8 @@ export function latestShowArtifactResultSeq(
     } else if (
       item.kind === 'tool_result' &&
       calls.has(id) &&
-      item.seq > newest
+      item.seq > newest &&
+      counts(item)
     ) {
       newest = item.seq;
     }

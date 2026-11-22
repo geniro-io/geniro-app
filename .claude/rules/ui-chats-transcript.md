@@ -15,6 +15,12 @@ paths:
 - Worked time and tool count, which take the daemon's figure alone where it has one. A call card's clock is the daemon's `callFigures[].clock`, continued over the rows above its `throughSeq` (`chats/call-clock.ts`, twin of the daemon's `utils/call-clock.ts`): the call's open time, its waits on its own monitors and calls included and its waits on the user left out, so it runs while the card says `waiting` and is never replaced when a turn lands.
 - In each case the turn in flight is added on top (`withLiveCost`, `openTurns`).
 
+Opening a thread draws it in ONE frame:
+
+- The transcript draws only "Loading conversation…" until the first page, the run state (`useRunState`'s `loaded`) and, on a team run, the first node readings have answered (`threadOpening` in `Chats.tsx`) — once per open: a drawn thread never goes back to the placeholder. Rows and live text that arrive meanwhile are drawn with the page, and their anchor asks wait for it (`useLiveAnchorAsks`' `hold`). Nothing pages older while it waits.
+- The open lands on the tail in a layout effect, so no frame is painted at the top of the page.
+- The whole-run reads (nodes, totals, timeline, artifacts, team notes, shares) start once the room join has settled (`joinedRunId`) and re-read on rows that ARRIVE after it — live or replayed (`arrivals`, `chats/arrival-marks.ts`) — never on a fold of the window, whose first page would re-read everything the open just read.
+
 A team run's window is its OWN flow only:
 
 - Every window PAGE read passes `conversation=root` (the daemon answers a chat, whose agent calls no one, with the whole run). A root page anchors what each call's FOLDED card is drawn from. The tail catch-up and the reconnect replay read the whole run since a cursor.

@@ -429,6 +429,10 @@ export interface ChatRunState {
    * because it has not arrived, not because the thread has nothing in it.
    */
   loadingHistory: boolean;
+  /** The open run once its room's join has settled; null before then. */
+  joinedRunId: string | null;
+  /** See `RunStream.arrivals`. */
+  arrivals: ChatItem[];
   /**
    * Load the page before the oldest item on screen. Resolves true when rows
    * were prepended, so the caller can hold the reader's scroll position.
@@ -744,6 +748,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   /**
+   * The open run once its room's join has settled, answered or not — what the
+   * whole-run reads wait for, so a row written after them arrives live.
+   */
+  const [joinedRunId, setJoinedRunId] = useState<string | null>(null);
+  /**
    * The last older page `loadOlder` fetched: which oldest row it paged below,
    * and the oldest row it brought back. See the stale-ref note in `loadOlder`.
    */
@@ -1007,6 +1016,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     commitItems,
     commitAnchors,
     commitCallRows,
+    arrivals,
+    commitArrivals,
     forgetAnchorAsks,
     itemsRef,
     lastSeqRef,
@@ -1017,6 +1028,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     chatApi,
     runIdRef: activeRunIdRef,
     pageSizeRef,
+    holdAnchorAsks: loadingHistory,
     atTail: () => !awayFromTailRef.current,
     onRow: (item, live) => {
       if (live && item.kind === 'system') {
@@ -2083,6 +2095,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       commitItems([]);
       commitAnchors([]);
       commitCallRows([]);
+      commitArrivals([]);
+      if (previous !== runId) {
+        setJoinedRunId(null);
+      }
       forgetCallPages();
       forgetDelegatePages();
       forgetAnchorAsks();
@@ -2126,6 +2142,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (activeRunIdRef.current !== runId) {
           return;
         }
+        setJoinedRunId(runId);
         const pageSize = pageSizeRef.current;
         const { items: history, anchors: historyAnchors } =
           await chatApi.listRunItems({
@@ -2230,6 +2247,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     commitItems([]);
     commitAnchors([]);
     commitCallRows([]);
+    commitArrivals([]);
+    setJoinedRunId(null);
     forgetCallPages();
     forgetDelegatePages();
     forgetAnchorAsks();
@@ -3332,6 +3351,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     hasOlder,
     loadingOlder,
     loadingHistory,
+    joinedRunId,
+    arrivals,
     loadOlder,
     awayFromTail,
     loadAround,

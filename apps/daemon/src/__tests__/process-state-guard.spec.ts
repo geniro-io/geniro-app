@@ -1,6 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { text } from 'node:stream/consumers';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -85,6 +86,66 @@ describe('watchProcessState', () => {
     ]);
     expect(fs.existsSync).toBe(realExistsSync);
   });
+
+  const mocksIn = (root: object): string[] => {
+    const seen = new Set<object>();
+    const found: string[] = [];
+    const walk = (target: object, path: string): void => {
+      if (seen.has(target)) {
+        return;
+      }
+      seen.add(target);
+      for (const key of Reflect.ownKeys(target)) {
+        const { value } = Object.getOwnPropertyDescriptor(target, key) ?? {};
+        const at = `${path}.${String(key)}`;
+        if (vi.isMockFunction(value)) {
+          found.push(at);
+        }
+        if (
+          (typeof value === 'object' && value !== null) ||
+          typeof value === 'function'
+        ) {
+          walk(value as object, at);
+        }
+      }
+    };
+    walk(root, '');
+    return found;
+  };
+
+  it.each(['node:fs', 'node:fs/promises'] as const)(
+    'undoes a `{ spy: true }` mock of %s down to its classes, so the next file still reads files',
+    async (name) => {
+      const leftBehind = watchProcessState();
+      vi.doMock(name, { spy: true });
+      try {
+        await import(name);
+        expect(mocksIn(process.getBuiltinModule(name))).not.toEqual([]);
+      } finally {
+        vi.doUnmock(name);
+      }
+
+      const leaks = leftBehind();
+
+      expect(leaks).toContainEqual(
+        expect.stringMatching(new RegExp(`^${name} was left patched: `)),
+      );
+      expect(mocksIn(process.getBuiltinModule(name))).toEqual([]);
+      const fs = process.getBuiltinModule('node:fs');
+      await expect(text(fs.createReadStream(__filename))).resolves.toContain(
+        'watchProcessState',
+      );
+      const handle = await fs.promises.open(__filename);
+      try {
+        await expect(handle.readFile('utf8')).resolves.toContain(
+          'watchProcessState',
+        );
+      } finally {
+        await handle.close();
+      }
+    },
+    2000,
+  );
 
   it('reports fake timers left on and turns them off', () => {
     const leftBehind = watchProcessState();

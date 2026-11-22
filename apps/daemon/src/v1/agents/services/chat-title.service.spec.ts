@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
+import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import type { AgentTitleInput } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { ItemWire, RunItemEvent, RunStatusEvent } from '../chat.types';
@@ -55,6 +57,8 @@ function build(opts: {
    */
   firstNodeAgentKind?: AgentKind | null;
   firstNodeProfile?: { memberId: string; model: string | null };
+  /** The run's `system` rows that record a pool hand-off. */
+  poolHandOffRows?: { memberId: string; payload: string }[];
 }) {
   const items = new Subject<RunItemEvent>();
   const deleted = new Subject<string>();
@@ -133,16 +137,14 @@ function build(opts: {
     ),
   );
   // The stamp the first member left behind — a team run's only route to a CLI.
-  const firstAgentKind = vi.fn(() =>
-    Promise.resolve(
-      opts.firstNodeAgentKind === undefined
-        ? AgentKind.Claude
-        : opts.firstNodeAgentKind,
-    ),
-  );
   const firstAgentProfile = vi.fn(() =>
     Promise.resolve(
-      opts.firstNodeProfile ?? { memberId: 'agent-a', model: null },
+      opts.firstNodeAgentKind === null
+        ? null
+        : {
+            ...(opts.firstNodeProfile ?? { memberId: 'agent-a', model: null }),
+            agentKind: opts.firstNodeAgentKind ?? AgentKind.Claude,
+          },
     ),
   );
 
@@ -174,10 +176,10 @@ function build(opts: {
         Promise.resolve('so the ETA bindings are the problem'),
       lastAssistantMessageText: () =>
         Promise.resolve('Yes — I rewrote them and the suite is green.'),
+      poolHandOffRows: () => Promise.resolve(opts.poolHandOffRows ?? []),
     } as unknown as ItemDao,
     {
       getByRunNode,
-      firstAgentKind,
       firstAgentProfile,
     } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
@@ -289,7 +291,7 @@ function build(opts: {
     toolCall,
     toolResult,
     nodeToolCall,
-    firstAgentKind,
+    firstAgentProfile,
     waitOutCooldown,
     settleTwice,
     settleConcurrently,
@@ -340,6 +342,103 @@ describe('ChatTitleService', () => {
     expect(generateTitle).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'ollama/pool-model' }),
     );
+  });
+
+  describe('a pooled member whose turn fell through to another pool member', () => {
+    const pooledSnapshot = teamSnapshotOf(
+      teamOf([
+        member('manager', {
+          model: 'sonnet',
+          configDir: '/profiles/claude-lab',
+          pool: [
+            {
+              agent: 'codex',
+              model: 'gpt-pool',
+              configDir: '/profiles/codex-lab',
+            },
+            { agent: 'cursor-agent' },
+          ],
+        }),
+      ]),
+    );
+    const handOffTo = (member: number) => ({
+      memberId: 'manager',
+      payload: JSON.stringify({
+        nodePoolHandOff: true,
+        member,
+        fromMember: 1,
+        previousSessionId: null,
+      }),
+    });
+    const pooledRun = {
+      teamId: 'wf-pool',
+      agentKind: null,
+      model: null,
+      configDir: null,
+      title: 'review PR 8764',
+      teamSnapshot: pooledSnapshot,
+    };
+
+    it('asks under the profile of the pool member that ran, not member 1’s', async () => {
+      const { nodeToolCall, generateTitle, adapterFor, retitle } = build({
+        run: pooledRun,
+        firstNodeAgentKind: AgentKind.Codex,
+        firstNodeProfile: { memberId: 'manager', model: 'gpt-pool' },
+        poolHandOffRows: [handOffTo(2)],
+        firstUserMessageText: 'review PR 8764',
+        generatedTitle: 'Explain PR 8764 tradeoffs',
+      });
+
+      await nodeToolCall();
+
+      expect(adapterFor).toHaveBeenCalledWith(AgentKind.Codex);
+      expect(generateTitle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-pool',
+          configDir: '/profiles/codex-lab',
+        }),
+      );
+      expect(retitle).toHaveBeenCalledWith(
+        expect.anything(),
+        'Explain PR 8764 tradeoffs',
+        'review PR 8764',
+        expect.anything(),
+      );
+    });
+
+    it('never hands a pool member member 1’s model when it names none', async () => {
+      const { nodeToolCall, generateTitle } = build({
+        run: pooledRun,
+        firstNodeAgentKind: AgentKind.CursorAgent,
+        firstNodeProfile: { memberId: 'manager', model: null },
+        poolHandOffRows: [handOffTo(3)],
+        firstUserMessageText: 'review PR 8764',
+        generatedTitle: 'Explain PR 8764 tradeoffs',
+      });
+
+      await nodeToolCall();
+
+      expect(generateTitle).toHaveBeenCalledWith(
+        expect.objectContaining({ model: null, configDir: null }),
+      );
+    });
+
+    it('uses the CLI’s default profile when the stamp is not the recorded pool member', async () => {
+      const { nodeToolCall, generateTitle } = build({
+        run: pooledRun,
+        firstNodeAgentKind: AgentKind.Codex,
+        firstNodeProfile: { memberId: 'manager', model: 'gpt-pool' },
+        poolHandOffRows: [],
+        firstUserMessageText: 'review PR 8764',
+        generatedTitle: 'Explain PR 8764 tradeoffs',
+      });
+
+      await nodeToolCall();
+
+      expect(generateTitle).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-pool', configDir: null }),
+      );
+    });
   });
 
   it("prefers the CLI's own title over the derived one", async () => {
@@ -779,7 +878,7 @@ describe('ChatTitleService', () => {
     // No member has started, so there is no stamp to read and no CLI to ask. The
     // derived title stands rather than a model call being spent on a run that
     // has produced nothing to name it after.
-    const { settle, retitle, generateTitle, firstAgentKind } = build({
+    const { settle, retitle, generateTitle, firstAgentProfile } = build({
       run: { teamId: 'wf-1', agentKind: null, title: 'do the thing' },
       firstUserMessageText: 'do the thing',
       generatedTitle: 'Ship the thing',
@@ -788,7 +887,7 @@ describe('ChatTitleService', () => {
 
     await settle();
 
-    expect(firstAgentKind).toHaveBeenCalled();
+    expect(firstAgentProfile).toHaveBeenCalled();
     expect(generateTitle).not.toHaveBeenCalled();
     expect(retitle).not.toHaveBeenCalled();
   });

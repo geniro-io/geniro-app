@@ -10,42 +10,103 @@ import {
 } from './reading-anchor';
 
 /**
+ * A row at a CONTENT offset the spec can move, carrying the jump key every
+ * transcript row carries. jsdom computes no layout, so its rect is derived, a
+ * negative top margin on the scroller's first child lifting it as layout would.
+ */
+function placedRow(
+  scroller: HTMLElement,
+  key: string,
+  offset: number,
+  height = 100,
+): { row: HTMLElement; moveTo: (offset: number) => void } {
+  const row = document.createElement('div');
+  row.setAttribute('data-jump-key', key);
+  let at = offset;
+  row.getBoundingClientRect = () => {
+    const first = scroller.firstElementChild;
+    const lift =
+      first instanceof HTMLElement ? parseFloat(first.style.marginTop) || 0 : 0;
+    const top = at + lift - scroller.scrollTop;
+    return { top, bottom: top + height } as DOMRect;
+  };
+  return {
+    row,
+    moveTo: (next) => {
+      at = next;
+    },
+  };
+}
+
+function emptyScroller(): HTMLElement {
+  const scroller = document.createElement('div');
+  document.body.append(scroller);
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600 }) as DOMRect;
+  return scroller;
+}
+
+/**
  * A scroller whose rows sit at fixed CONTENT offsets, so the spec can move a
  * row (something above it grew) or scroll the viewport, and read back where the
- * hold put `scrollTop`. jsdom computes no layout, so both rects are derived,
- * a negative top margin on the first child lifting every row as layout would.
+ * hold put `scrollTop`.
  */
 function makeScroller(rowOffsets: number[]): {
   scroller: HTMLElement;
   rows: HTMLElement[];
   setOffset: (index: number, offset: number) => void;
 } {
-  const scroller = document.createElement('div');
-  document.body.append(scroller);
-  const offsets = [...rowOffsets];
-  const rows = offsets.map((_, index) => {
-    const row = document.createElement('div');
-    row.getBoundingClientRect = () => {
-      const first = scroller.firstElementChild;
-      const lift =
-        first instanceof HTMLElement
-          ? parseFloat(first.style.marginTop) || 0
-          : 0;
-      const top = offsets[index]! + lift - scroller.scrollTop;
-      return { top, bottom: top + 100 } as DOMRect;
-    };
+  const scroller = emptyScroller();
+  const placed = rowOffsets.map((offset, index) =>
+    placedRow(scroller, `entry:${index}`, offset),
+  );
+  for (const { row } of placed) {
     scroller.append(row);
-    return row;
-  });
-  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600 }) as DOMRect;
+  }
   return {
     scroller,
-    rows,
+    rows: placed.map(({ row }) => row),
     setOffset: (index, offset) => {
-      offsets[index] = offset;
+      placed[index]!.moveTo(offset);
     },
   };
 }
+
+/**
+ * One top-level turn block holding the given rows — the shape a long agent
+ * turn takes, whose block an older page continues.
+ */
+function makeTurnBlock(
+  scroller: HTMLElement,
+  key: string,
+  rows: readonly { key: string; offset: number; height: number }[],
+): {
+  block: HTMLElement;
+  rows: { row: HTMLElement; moveTo: (offset: number) => void }[];
+} {
+  const top = rows[0]!.offset;
+  const last = rows[rows.length - 1]!;
+  const { row: block } = placedRow(
+    scroller,
+    key,
+    top,
+    last.offset + last.height - top,
+  );
+  const placed = rows.map((row) =>
+    placedRow(scroller, row.key, row.offset, row.height),
+  );
+  for (const { row } of placed) {
+    block.append(row);
+  }
+  scroller.append(block);
+  return { block, rows: placed };
+}
+
+const TURN_ROWS = [
+  { key: 'row:500', offset: 0, height: 400 },
+  { key: 'row:510', offset: 400, height: 500 },
+  { key: 'row:520', offset: 900, height: 600 },
+  { key: 'row:530', offset: 1_500, height: 1_500 },
+];
 
 function manualClock(): ReadingAnchorClock & {
   step: (ms?: number) => void;
@@ -276,16 +337,15 @@ describe('holdReadingPlace', () => {
     expect(scroller.scrollTop).toBe(1_000);
   });
 
-  it('finds a REMOUNTED anchor by its seq and still pays the shift', () => {
+  it('finds a REMOUNTED anchor by its jump key and still pays the shift', () => {
     const { scroller, rows, setOffset } = makeScroller([0, 300, 1_000]);
-    rows[1]!.setAttribute('data-transcript-seq', '42');
     scroller.scrollTop = 350;
     const clock = manualClock();
     holdReadingPlace(scroller, clock);
-    // The entry re-keys: a new element with the same seq, 900px further down.
+    // The entry remounts: a new element with the same key, 900px further down.
     rows[1]!.remove();
     const again = document.createElement('div');
-    again.setAttribute('data-transcript-seq', '42');
+    again.setAttribute('data-jump-key', 'entry:1');
     again.getBoundingClientRect = () =>
       ({
         top: 1_200 - scroller.scrollTop,
@@ -311,6 +371,71 @@ describe('holdReadingPlace', () => {
     second.release();
     clock.step(READING_ANCHOR_SETTLE_MS);
     expect(clock.pending()).toBe(0);
+  });
+
+  it('keeps the reader on their row when an older page continues the topmost turn and re-keys its block', () => {
+    const scroller = emptyScroller();
+    const { block } = makeTurnBlock(scroller, 'entry:500', TURN_ROWS);
+    scroller.scrollTop = 1_000;
+    const clock = manualClock();
+    holdReadingPlace(scroller, clock);
+
+    block.remove();
+    makeTurnBlock(scroller, 'entry:300', [
+      { key: 'row:300', offset: 0, height: 2_000 },
+      ...TURN_ROWS.map((row) => ({ ...row, offset: row.offset + 2_000 })),
+    ]);
+    clock.step();
+    expect(scroller.scrollTop).toBe(3_000);
+  });
+
+  it('passes over the topmost turn’s FIRST row too — a tool group or reasoning run the page continues re-keys it', () => {
+    const scroller = emptyScroller();
+    const { block } = makeTurnBlock(scroller, 'entry:500', [
+      { key: 'row:500', offset: 0, height: 300 },
+      { key: 'row:510', offset: 300, height: 400 },
+    ]);
+    scroller.scrollTop = 0;
+    const clock = manualClock();
+    holdReadingPlace(scroller, clock);
+
+    block.remove();
+    makeTurnBlock(scroller, 'entry:400', [
+      { key: 'row:400', offset: 0, height: 800 },
+      { key: 'row:450', offset: 800, height: 500 },
+      { key: 'row:510', offset: 1_300, height: 400 },
+    ]);
+    clock.step();
+    expect(scroller.scrollTop).toBe(1_000);
+  });
+
+  it('pays back rows an older page adds INSIDE the topmost turn block, whose own top stays put', () => {
+    const scroller = emptyScroller();
+    const { block, rows } = makeTurnBlock(scroller, 'entry:500', TURN_ROWS);
+    scroller.scrollTop = 1_000;
+    const clock = manualClock();
+    holdReadingPlace(scroller, clock);
+
+    const { row: older } = placedRow(scroller, 'row:400', 0, 800);
+    block.prepend(older);
+    rows.forEach(({ moveTo }, index) => moveTo(TURN_ROWS[index]!.offset + 800));
+    clock.step();
+    expect(scroller.scrollTop).toBe(1_800);
+  });
+
+  it('passes over an inner row a closed fold draws no box for', () => {
+    const scroller = emptyScroller();
+    const { block, rows } = makeTurnBlock(scroller, 'entry:500', TURN_ROWS);
+    const { row: folded } = placedRow(scroller, 'row:525', 1_200, 0);
+    rows[3]!.row.before(folded);
+    scroller.scrollTop = 1_000;
+    const clock = manualClock();
+    holdReadingPlace(scroller, clock);
+
+    block.prepend(placedRow(scroller, 'row:400', 0, 800).row);
+    rows.forEach(({ moveTo }, index) => moveTo(TURN_ROWS[index]!.offset + 800));
+    clock.step();
+    expect(scroller.scrollTop).toBe(1_800);
   });
 
   it('re-anchors on what is visible when its row is regrouped away', () => {

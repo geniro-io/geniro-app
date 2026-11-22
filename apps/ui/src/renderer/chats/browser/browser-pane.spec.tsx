@@ -200,6 +200,28 @@ describe('BrowserPane', () => {
     expect(container.querySelector('[data-slot="browser-still"]')).toBeNull();
   });
 
+  it('asks for the page to take the keyboard when the user presses on its still', async () => {
+    const focus = vi.fn(() => Promise.resolve());
+    overrides.browserFocus = focus;
+    window.geniro = createPreloadStub(overrides);
+    await render(
+      <>
+        <BrowserPane runId={RUN} visible onClose={() => undefined} />
+        <Dialog open onClose={() => undefined} title="Sure?">
+          Confirm
+        </Dialog>
+      </>,
+    );
+    const still = container.querySelector('[data-slot="browser-still"]');
+    expect(focus).not.toHaveBeenCalled();
+
+    act(() => {
+      still?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+
+    expect(focus).toHaveBeenCalledWith(RUN);
+  });
+
   it('sends no bounds while the pane is hidden or unmounted', async () => {
     await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
     setBounds.mockClear();

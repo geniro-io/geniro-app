@@ -139,6 +139,7 @@ const BROWSER_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'browserContinueInsecure',
   'browserAnswerAuth',
   'browserCapture',
+  'browserFocus',
   'browserForgetRun',
   'browserStopAgent',
   'browserLabelTab',

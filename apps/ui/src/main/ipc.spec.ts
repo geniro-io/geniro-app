@@ -832,7 +832,14 @@ describe('registerIpc browser channels', () => {
   const openTab = vi.fn(async () => 't1');
   const noteUserAddress = vi.fn();
   const labelTab = vi.fn();
-  const browser = { setBounds, openTab, noteUserAddress, labelTab };
+  const focusActiveTab = vi.fn();
+  const browser = {
+    setBounds,
+    openTab,
+    noteUserAddress,
+    labelTab,
+    focusActiveTab,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -914,6 +921,14 @@ describe('registerIpc browser channels', () => {
       'run-1',
       'http://localhost:3000',
     );
+  });
+
+  it("hands the keyboard to the chat's active tab, refusing a malformed run id", () => {
+    handler(IPC.browserFocus)({}, 'run-1');
+
+    expect(focusActiveTab).toHaveBeenCalledWith('run-1');
+    expect(() => handler(IPC.browserFocus)({}, 42)).toThrow(ZodError);
+    expect(focusActiveTab).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an address over 8192 characters', () => {

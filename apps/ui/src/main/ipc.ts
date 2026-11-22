@@ -1102,6 +1102,12 @@ export function registerIpc(
       getBrowser().capture(browserRunIdSchema.parse(runId)),
   );
   handle(
+    IPC.browserFocus,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown) =>
+      getBrowser().focusActiveTab(browserRunIdSchema.parse(runId)),
+  );
+  handle(
     IPC.browserForgetRun,
     denyRemotely(browserDenial),
     (_event, runId: unknown) =>

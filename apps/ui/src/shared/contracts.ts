@@ -2384,6 +2384,8 @@ export interface GeniroApi {
   ): Promise<void>;
   /** A still of the chat's active tab as a data URL, shown while an overlay covers the pane. */
   browserCapture(runId: string): Promise<string | null>;
+  /** Give the chat's active tab the keyboard: the user clicked the still that stood in for it. */
+  browserFocus(runId: string): Promise<void>;
   /** Close a deleted or archived chat's tabs and clear its cookies. */
   browserForgetRun(runId: string): Promise<void>;
   /** Stop the agent operation running on a tab. */
@@ -2566,6 +2568,7 @@ export const IPC = {
   browserContinueInsecure: 'geniro:browserContinueInsecure',
   browserAnswerAuth: 'geniro:browserAnswerAuth',
   browserCapture: 'geniro:browserCapture',
+  browserFocus: 'geniro:browserFocus',
   browserForgetRun: 'geniro:browserForgetRun',
   browserStopAgent: 'geniro:browserStopAgent',
   browserLabelTab: 'geniro:browserLabelTab',

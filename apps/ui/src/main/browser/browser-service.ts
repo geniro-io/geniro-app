@@ -23,6 +23,7 @@ import {
   IPC,
   type ProfileColor,
 } from '../../shared/contracts';
+import { installContextMenu } from '../context-menu';
 import { type AgentOp } from './browser-agent-op';
 import {
   chatPartition,
@@ -49,6 +50,13 @@ export interface BrowserTab {
   authCallback: ((username?: string, password?: string) => void) | null;
   loading: boolean;
   attachedTo: BrowserWindow | null;
+  /**
+   * What to do with the keyboard the next time the view goes back on screen:
+   * `kept` when the page had it as the view came off (it gets it back unless
+   * the window's renderer took it meanwhile), `requested` when the user clicked
+   * the still that stood in for the page.
+   */
+  focusOnAttach: 'kept' | 'requested' | null;
   name: string | null;
   color: ProfileColor | null;
   /** The user named or coloured the tab: an agent's label leaves that field alone. */
@@ -277,6 +285,7 @@ export class BrowserService {
       authCallback: null,
       loading: false,
       attachedTo: null,
+      focusOnAttach: null,
       name: options.name ?? null,
       color: options.color ?? null,
       userNamed: false,
@@ -677,8 +686,51 @@ export class BrowserService {
       return;
     }
     tab.attachedTo = null;
-    if (!host.isDestroyed()) {
-      host.contentView.removeChildView(tab.view);
+    if (host.isDestroyed()) {
+      return;
+    }
+    const contents = tab.view.webContents;
+    if (
+      tab.focusOnAttach === null &&
+      !contents.isDestroyed() &&
+      contents.isFocused()
+    ) {
+      tab.focusOnAttach = 'kept';
+    }
+    host.contentView.removeChildView(tab.view);
+  }
+
+  private attach(tab: BrowserTab, host: BrowserWindow): void {
+    host.contentView.addChildView(tab.view);
+    tab.attachedTo = host;
+    const wanted = tab.focusOnAttach;
+    tab.focusOnAttach = null;
+    if (
+      wanted === 'requested' ||
+      (wanted === 'kept' && !host.webContents.isFocused())
+    ) {
+      this.focusIfWindowActive(tab, host);
+    }
+  }
+
+  /** `webContents.focus()` also activates the window on macOS, so only a window the user is already in. */
+  private focusIfWindowActive(tab: BrowserTab, host: BrowserWindow): void {
+    if (host.isFocused()) {
+      tab.view.webContents.focus();
+    }
+  }
+
+  focusActiveTab(runId: string): void {
+    const chat = this.chats.get(runId);
+    const tab =
+      chat?.activeTabId == null ? undefined : chat.tabs.get(chat.activeTabId);
+    if (tab === undefined) {
+      return;
+    }
+    if (tab.attachedTo === null) {
+      tab.focusOnAttach = 'requested';
+    } else {
+      this.focusIfWindowActive(tab, tab.attachedTo);
     }
   }
 
@@ -697,8 +749,7 @@ export class BrowserService {
       }
       if (tab.attachedTo !== host) {
         this.detach(tab);
-        host.contentView.addChildView(tab.view);
-        tab.attachedTo = host;
+        this.attach(tab, host);
       }
       tab.view.setBounds({
         x: Math.round(bounds.x),
@@ -752,6 +803,14 @@ export class BrowserService {
   private watch(tab: BrowserTab): void {
     const contents = tab.view.webContents;
     const refresh = (): void => this.emitRun(tab.runId);
+    installContextMenu(contents, () => {
+      const host = tab.attachedTo;
+      if (host === null || host.isDestroyed()) {
+        return null;
+      }
+      const { x, y } = tab.view.getBounds();
+      return { window: host, x, y };
+    });
     contents.on('page-title-updated', refresh);
     contents.on('did-navigate-in-page', refresh);
     contents.on('did-navigate', () => {

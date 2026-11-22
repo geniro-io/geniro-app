@@ -19,10 +19,10 @@ import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
  * чтобы копировать его. То есть оно не воспринимается как изображение." The
  * image was a perfectly ordinary `<img>`; what was missing was the menu.
  *
- * Copying the IMAGE is the one entry that cannot be a role. Chromium's editing
- * roles (`cut`/`copy`/`paste`/`selectAll`) act on the selection and would copy
- * the image's markup or nothing at all, so it goes through
- * `WebContents.copyImageAt`, which puts the decoded BITMAP on the pasteboard —
+ * Copying the IMAGE goes through `WebContents.copyImageAt`: the editing
+ * commands (`cut`/`copy`/`paste`/`selectAll`) act on the selection and would
+ * copy the image's markup or nothing at all, while `copyImageAt` puts the
+ * decoded BITMAP on the pasteboard —
  * the thing a Mac user gets from Finder or Preview, pasteable into any app.
  * The coordinates are the ones the event reported, and they must be: it copies
  * whatever image is at that point, not "the image this menu is about".
@@ -35,9 +35,10 @@ import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
  * address is Chromium's `linkURL`, already resolved against the frame's
  * document, and it goes on the pasteboard as plain text.
  *
- * Everything else IS a role, deliberately. A role is wired to Chromium's own
- * editing commands and picks up the platform's labels and accelerators for
- * free, so the menu reads as the system's rather than as a translation of it.
+ * The editing entries call the command on the WebContents that raised the
+ * menu, never a menu role. A role goes to the window's first responder, and a
+ * right-click does not move it: with a browser tab and the chat in one window,
+ * Paste on a page field would land in whichever of the two last had the keyboard.
  */
 
 /** The subset of Electron's `ContextMenuParams` the template actually reads. */
@@ -72,9 +73,25 @@ export interface ContextMenuInput {
   };
 }
 
+export type EditCommand = 'cut' | 'copy' | 'paste' | 'selectAll';
+
+const EDIT_ITEMS: Record<
+  EditCommand,
+  { label: string; accelerator: string; run: (contents: WebContents) => void }
+> = {
+  cut: { label: 'Cut', accelerator: 'CmdOrCtrl+X', run: (c) => c.cut() },
+  copy: { label: 'Copy', accelerator: 'CmdOrCtrl+C', run: (c) => c.copy() },
+  paste: { label: 'Paste', accelerator: 'CmdOrCtrl+V', run: (c) => c.paste() },
+  selectAll: {
+    label: 'Select All',
+    accelerator: 'CmdOrCtrl+A',
+    run: (c) => c.selectAll(),
+  },
+};
+
 /** One entry, named rather than built — see {@link contextMenuTemplate}. */
 export type ContextMenuEntry =
-  | { kind: 'role'; role: 'cut' | 'copy' | 'paste' | 'selectAll' }
+  | { kind: 'edit'; command: EditCommand }
   | { kind: 'copyImage' }
   | { kind: 'copyLink'; url: string }
   | { kind: 'separator' };
@@ -111,24 +128,24 @@ export function contextMenuTemplate(
     // renderer is the only thing that can know.
     const editing: ContextMenuEntry[] = [];
     if (params.editFlags.canCut) {
-      editing.push({ kind: 'role', role: 'cut' });
+      editing.push({ kind: 'edit', command: 'cut' });
     }
     if (params.editFlags.canCopy) {
-      editing.push({ kind: 'role', role: 'copy' });
+      editing.push({ kind: 'edit', command: 'copy' });
     }
     if (params.editFlags.canPaste) {
-      editing.push({ kind: 'role', role: 'paste' });
+      editing.push({ kind: 'edit', command: 'paste' });
     }
     if (editing.length > 0) {
       groups.push(editing);
     }
     if (params.editFlags.canSelectAll) {
-      groups.push([{ kind: 'role', role: 'selectAll' }]);
+      groups.push([{ kind: 'edit', command: 'selectAll' }]);
     }
   } else if (params.selectionText.trim() !== '' && params.editFlags.canCopy) {
     // Read-only content with a selection: copying it is the only thing that
     // makes sense, and it is the other half of what gets asked for here.
-    groups.push([{ kind: 'role', role: 'copy' }]);
+    groups.push([{ kind: 'edit', command: 'copy' }]);
   }
 
   // Separators BETWEEN groups only. Built by joining rather than by pushing and
@@ -169,12 +186,31 @@ function withoutHash(url: string): string {
 }
 
 /**
+ * Where a WebContents is drawn: the window its menu opens in, and the
+ * WebContents' top-left corner within that window's content area — the origin
+ * of the coordinates a `context-menu` event reports.
+ */
+export interface ContextMenuPlacement {
+  window: BrowserWindow;
+  x: number;
+  y: number;
+}
+
+/**
  * Give one WebContents the menu above.
  *
  * Installed per WebContents rather than once on `app`, because the entries act
- * on the contents that raised the event — `copyImageAt` is a method on it.
+ * on the contents that raised the event. `placement` defaults to the window the
+ * contents fills; a view drawn inside a window passes its own, and null (a view
+ * not on screen) shows no menu.
  */
-export function installContextMenu(contents: WebContents): void {
+export function installContextMenu(
+  contents: WebContents,
+  placement: () => ContextMenuPlacement | null = () => {
+    const window = BrowserWindow.fromWebContents(contents);
+    return window === null ? null : { window, x: 0, y: 0 };
+  },
+): void {
   contents.on('context-menu', (_event, params) => {
     const entries = contextMenuTemplate({
       linkURL: params.linkURL,
@@ -192,7 +228,8 @@ export function installContextMenu(contents: WebContents): void {
         canSelectAll: params.editFlags.canSelectAll,
       },
     });
-    if (entries.length === 0) {
+    const at = placement();
+    if (entries.length === 0 || at === null) {
       return;
     }
     const template: MenuItemConstructorOptions[] = entries.map((entry) => {
@@ -211,7 +248,12 @@ export function installContextMenu(contents: WebContents): void {
           click: () => contents.copyImageAt(params.x, params.y),
         };
       }
-      return { role: entry.role };
+      const item = EDIT_ITEMS[entry.command];
+      return {
+        label: item.label,
+        accelerator: item.accelerator,
+        click: () => item.run(contents),
+      };
     });
     // Popped at the CLICK, not at the pointer. With a mouse the two are the
     // same point, so this changes nothing a user can see there — it matters
@@ -221,9 +263,9 @@ export function installContextMenu(contents: WebContents): void {
     // named. It also matches what the menu ACTS on: `copyImageAt` is given
     // these same coordinates.
     Menu.buildFromTemplate(template).popup({
-      window: BrowserWindow.fromWebContents(contents) ?? undefined,
-      x: params.x,
-      y: params.y,
+      window: at.window,
+      x: at.x + params.x,
+      y: at.y + params.y,
     });
   });
 }

@@ -1,11 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
 
-import { type ContextMenuInput, contextMenuTemplate } from './context-menu';
+import type { MenuItemConstructorOptions, WebContents } from 'electron';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * The template only — `Menu`/`MenuItem` cannot be constructed outside a running
- * Electron app, which is exactly why the decisions live in a pure function.
- */
+const h = vi.hoisted(() => ({
+  templates: [] as MenuItemConstructorOptions[][],
+  popup: vi.fn(),
+  owner: null as object | null,
+}));
+
+vi.mock('electron', () => ({
+  BrowserWindow: { fromWebContents: () => h.owner },
+  clipboard: { writeText: vi.fn() },
+  Menu: {
+    buildFromTemplate: (template: MenuItemConstructorOptions[]) => {
+      h.templates.push(template);
+      return { popup: h.popup };
+    },
+  },
+}));
+
+import {
+  type ContextMenuInput,
+  contextMenuTemplate,
+  installContextMenu,
+} from './context-menu';
 
 const ALL_FLAGS = {
   canCut: true,
@@ -62,7 +81,7 @@ describe('contextMenuTemplate', () => {
     ).toEqual([
       { kind: 'copyLink', url: 'https://example.com/docs?tab=1' },
       { kind: 'separator' },
-      { kind: 'role', role: 'copy' },
+      { kind: 'edit', command: 'copy' },
     ]);
   });
 
@@ -94,7 +113,7 @@ describe('contextMenuTemplate', () => {
   it('offers Copy for a selection in read-only content', () => {
     expect(
       contextMenuTemplate(params({ selectionText: 'some transcript text' })),
-    ).toEqual([{ kind: 'role', role: 'copy' }]);
+    ).toEqual([{ kind: 'edit', command: 'copy' }]);
   });
 
   it('offers nothing for a right-click on unselected prose', () => {
@@ -106,11 +125,11 @@ describe('contextMenuTemplate', () => {
 
   it('gives an input the editing set, separated from Select All', () => {
     expect(contextMenuTemplate(params({ isEditable: true }))).toEqual([
-      { kind: 'role', role: 'cut' },
-      { kind: 'role', role: 'copy' },
-      { kind: 'role', role: 'paste' },
+      { kind: 'edit', command: 'cut' },
+      { kind: 'edit', command: 'copy' },
+      { kind: 'edit', command: 'paste' },
       { kind: 'separator' },
-      { kind: 'role', role: 'selectAll' },
+      { kind: 'edit', command: 'selectAll' },
     ]);
   });
 
@@ -129,7 +148,7 @@ describe('contextMenuTemplate', () => {
           },
         }),
       ),
-    ).toEqual([{ kind: 'role', role: 'selectAll' }]);
+    ).toEqual([{ kind: 'edit', command: 'selectAll' }]);
   });
 
   it('separates Copy Image from the editing set when both apply', () => {
@@ -145,9 +164,120 @@ describe('contextMenuTemplate', () => {
     ).toEqual([
       { kind: 'copyImage' },
       { kind: 'separator' },
-      { kind: 'role', role: 'cut' },
-      { kind: 'role', role: 'copy' },
-      { kind: 'role', role: 'paste' },
+      { kind: 'edit', command: 'cut' },
+      { kind: 'edit', command: 'copy' },
+      { kind: 'edit', command: 'paste' },
     ]);
+  });
+});
+
+describe('installContextMenu', () => {
+  class FakeContents extends EventEmitter {
+    cut = vi.fn();
+    copy = vi.fn();
+    paste = vi.fn();
+    selectAll = vi.fn();
+    copyImageAt = vi.fn();
+  }
+
+  const rightClickOnField = {
+    x: 40,
+    y: 25,
+    linkURL: '',
+    pageURL: 'https://stand.test/',
+    frame: { url: 'https://stand.test/' },
+    mediaType: 'none',
+    hasImageContents: false,
+    isEditable: true,
+    selectionText: '',
+    editFlags: { ...ALL_FLAGS },
+  };
+
+  const install = (
+    ...placement: [] | [Parameters<typeof installContextMenu>[1]]
+  ): FakeContents => {
+    const contents = new FakeContents();
+    installContextMenu(contents as unknown as WebContents, ...placement);
+    return contents;
+  };
+
+  const clickItem = (label: string): void => {
+    const item = h.templates.at(-1)?.find((entry) => entry.label === label);
+    expect(item, label).toBeDefined();
+    (item?.click as (() => void) | undefined)?.();
+  };
+
+  beforeEach(() => {
+    h.templates.length = 0;
+    h.popup.mockReset();
+    h.owner = { id: 'main-window' };
+  });
+
+  it('pops over the window the contents fills, at the click', () => {
+    const contents = install();
+
+    contents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.popup).toHaveBeenCalledWith({ window: h.owner, x: 40, y: 25 });
+  });
+
+  it('runs the editing entries on the contents that raised the menu, not as roles', () => {
+    const contents = install();
+
+    contents.emit('context-menu', {}, rightClickOnField);
+    const template = h.templates.at(-1) ?? [];
+    clickItem('Paste');
+    clickItem('Cut');
+    clickItem('Copy');
+    clickItem('Select All');
+
+    expect(template.some((item) => item.role !== undefined)).toBe(false);
+    expect(contents.paste).toHaveBeenCalledTimes(1);
+    expect(contents.cut).toHaveBeenCalledTimes(1);
+    expect(contents.copy).toHaveBeenCalledTimes(1);
+    expect(contents.selectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('offsets the menu by where a view sits inside its window', () => {
+    const host = { id: 'pop-out' };
+    const contents = install(() => ({
+      window: host as never,
+      x: 300,
+      y: 92,
+    }));
+
+    contents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.popup).toHaveBeenCalledWith({ window: host, x: 340, y: 117 });
+  });
+
+  it('shows no menu for a view that is not on screen', () => {
+    const contents = install(() => null);
+
+    contents.emit('context-menu', {}, rightClickOnField);
+
+    expect(h.popup).not.toHaveBeenCalled();
+  });
+
+  it('copies an image at the coordinates the contents reported, not the offset ones', () => {
+    const contents = install(() => ({
+      window: { id: 'main-window' } as never,
+      x: 300,
+      y: 92,
+    }));
+
+    contents.emit(
+      'context-menu',
+      {},
+      {
+        ...rightClickOnField,
+        isEditable: false,
+        mediaType: 'image',
+        hasImageContents: true,
+      },
+    );
+    clickItem('Copy Image');
+
+    expect(contents.copyImageAt).toHaveBeenCalledWith(40, 25);
   });
 });

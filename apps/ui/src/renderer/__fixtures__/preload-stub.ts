@@ -520,6 +520,10 @@ export function createPreloadStub(
       note('browserCapture');
       return Promise.resolve(null);
     },
+    browserFocus: () => {
+      note('browserFocus');
+      return Promise.resolve();
+    },
     browserForgetRun: () => {
       note('browserForgetRun');
       return Promise.resolve();

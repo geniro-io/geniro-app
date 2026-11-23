@@ -83,3 +83,25 @@ export function chatTextMatchQuery(query: string): string | null {
     )
     .join(' AND ');
 }
+
+/**
+ * What `match` finds for every word of `query`, or, when that finds nothing,
+ * for any of its words — asked again only when more than one word longer
+ * than one character is left, since a lone word was already asked alone.
+ */
+export async function matchEveryWordElseAny<T>(
+  query: string,
+  match: (matchQuery: string) => Promise<T[]>,
+): Promise<T[]> {
+  const every = chatTextMatchQuery(query);
+  if (every === null) {
+    return [];
+  }
+  const found = await match(every);
+  if (found.length > 0) {
+    return found;
+  }
+  const terms = chatTextQueryTerms(query).filter((term) => term.length > 1);
+  const any = terms.length > 1 ? chatTextMatchQuery(terms.join(' OR ')) : null;
+  return any === null ? [] : match(any);
+}

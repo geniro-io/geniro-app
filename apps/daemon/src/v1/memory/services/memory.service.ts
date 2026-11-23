@@ -11,7 +11,10 @@ import {
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isAnalysisRun } from '../../agents/utils/analysed-runs';
-import { chatTextMatchQuery } from '../../agents/utils/chat-text-query';
+import {
+  chatTextMatchQuery,
+  matchEveryWordElseAny,
+} from '../../agents/utils/chat-text-query';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -633,22 +636,23 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     );
   }
 
-  /** The best active entries a run in `place` may see, best first. */
+  /**
+   * The best active entries a run in `place` may see, best first: those
+   * matching every word, or, when none does, any word.
+   */
   async search(
     query: string,
     place: RunPlace,
     limit: number,
   ): Promise<MemoryHit[]> {
-    const match = chatTextMatchQuery(query);
-    if (match === null) {
-      return [];
-    }
     const em = this.em.fork();
-    const ids = await this.memories.matchIds(
-      match,
-      { statuses: ['active'], places: { visibleTo: place } },
-      Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
-      em,
+    const ids = await matchEveryWordElseAny(query, (match) =>
+      this.memories.matchIds(
+        match,
+        { statuses: ['active'], places: { visibleTo: place } },
+        Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
+        em,
+      ),
     );
     const rows = new Map(
       (await this.memories.getByIds(ids, em)).map((row) => [row.id, row]),

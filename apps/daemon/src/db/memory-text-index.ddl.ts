@@ -11,7 +11,9 @@
  * Rows are keyed by `memories.rowid`, with `memory_id` beside it for the join.
  * A table rebuild by the schema sync drops the triggers, which
  * `MemoryTextIndexService.ensure` detects at boot and answers by rebuilding the
- * index from `memories`.
+ * index from `memories`. {@link MEMORY_TEXT_RANK} is an INSERT stored in
+ * `memories_fts_config`, so a drop and recreate loses it: `ensure` runs it at
+ * every boot.
  *
  * CHANGING ANY STATEMENT HERE means bumping {@link MEMORY_TEXT_VERSION}, for
  * the reasons the chat index's doc block gives: every statement is
@@ -19,7 +21,7 @@
  * boot rebuild.
  */
 
-export const MEMORY_TEXT_VERSION = 1;
+export const MEMORY_TEXT_VERSION = 2;
 
 /**
  * The FTS table and its shadow tables, for the schema sync to leave out of
@@ -30,6 +32,9 @@ export const MEMORY_TEXT_TABLES = /^memories_fts(_|$)/;
 export const CREATE_MEMORY_TEXT_TABLE = `CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, title, body, tokenize = 'unicode61 remove_diacritics 2')`;
 
 export const DROP_MEMORY_TEXT_TABLE = 'DROP TABLE IF EXISTS memories_fts';
+
+/** Weights are positional and count the UNINDEXED column. */
+export const MEMORY_TEXT_RANK = `INSERT INTO memories_fts(memories_fts, rank) VALUES('rank', 'bm25(0, 8.0, 1.0)')`;
 
 /** APPEND-ONLY, like the chat index's: earlier versions' drops derive from it. */
 const TRIGGER_EVENTS = ['insert', 'update', 'delete'] as const;

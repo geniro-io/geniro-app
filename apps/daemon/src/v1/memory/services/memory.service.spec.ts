@@ -1089,6 +1089,50 @@ describe('MemoryService', () => {
     );
   });
 
+  it('falls back to any word when no entry holds every word', async () => {
+    const entry = created(
+      await db.service.save(
+        AGENT,
+        { title: 'Deploy steps', body: 'run the release script' },
+        NONE,
+      ),
+    );
+
+    const hits = await db.service.search('deploy zzqqxx', NONE, 10);
+
+    expect(hits.map((hit) => hit.handle)).toEqual([entry.handle]);
+  });
+
+  it('returns only the entries holding every word when one does', async () => {
+    const both = created(
+      await db.service.save(
+        AGENT,
+        { title: 'Fruit salad recipe', body: 'kiwi and mango' },
+        NONE,
+      ),
+    );
+    await db.service.save(
+      AGENT,
+      { title: 'Smoothie', body: 'kiwi and banana' },
+      NONE,
+    );
+
+    const hits = await db.service.search('kiwi mango', NONE, 10);
+
+    expect(hits.map((hit) => hit.handle)).toEqual([both.handle]);
+  });
+
+  it('ranks an entry naming the word in its title above one that has it only in its body', async () => {
+    const { inBody, inTitle } = await saveTitleAndBodyMatches();
+
+    const hits = await db.service.search('papaya', NONE, 10);
+
+    expect(hits.map((hit) => hit.handle)).toEqual([
+      inTitle.handle,
+      inBody.handle,
+    ]);
+  });
+
   it('reads whole entries, stamps lastUsedAt, and reports another project’s as missing', async () => {
     const own = created(
       await db.service.save(
@@ -1132,11 +1176,7 @@ describe('MemoryService', () => {
     await em.flush();
     // A table rebuild takes its triggers with it; a row written meanwhile is
     // missing from the index.
-    for (const drop of retiredMemoryTriggerDrops(MEMORY_TEXT_VERSION + 1).slice(
-      -MEMORY_TEXT_TRIGGERS.length,
-    )) {
-      await db.em.getConnection().execute(drop, [], 'run');
-    }
+    await dropIndexTriggers();
     await db.em
       .getKysely<MemoryTextDatabase>()
       .deleteFrom('memories_fts')
@@ -1148,6 +1188,66 @@ describe('MemoryService', () => {
       (await db.service.search('pomegranate', NONE, 5)).map((h) => h.handle),
     ).toEqual(['m1']);
   });
+
+  it('keeps ranking title matches first after the boot check rebuilds the index', async () => {
+    const { inBody, inTitle } = await saveTitleAndBodyMatches();
+    await dropIndexTriggers();
+
+    await db.index().ensure();
+
+    expect(
+      (await db.service.search('papaya', NONE, 10)).map((h) => h.handle),
+    ).toEqual([inTitle.handle, inBody.handle]);
+  });
+
+  it('restores the title weight at boot on an intact index whose rank setting was lost', async () => {
+    const { inBody, inTitle } = await saveTitleAndBodyMatches();
+    await db.em
+      .getConnection()
+      .execute(
+        `INSERT INTO memories_fts(memories_fts, rank) VALUES('rank', 'bm25()')`,
+        [],
+        'run',
+      );
+    expect(
+      (await db.service.search('papaya', NONE, 10)).map((h) => h.handle),
+    ).toEqual([inBody.handle, inTitle.handle]);
+
+    await db.index().ensure();
+
+    expect(
+      (await db.service.search('papaya', NONE, 10)).map((h) => h.handle),
+    ).toEqual([inTitle.handle, inBody.handle]);
+  });
+
+  async function saveTitleAndBodyMatches() {
+    const inBody = created(
+      await db.service.save(
+        AGENT,
+        { title: 'Kitchen note', body: 'papaya' },
+        NONE,
+      ),
+    );
+    const inTitle = created(
+      await db.service.save(
+        AGENT,
+        {
+          title: 'Papaya ripeness guide',
+          body: 'press the skin gently, look for a yellow colour, smell the stem end and wait two more days when it is still firm',
+        },
+        NONE,
+      ),
+    );
+    return { inBody, inTitle };
+  }
+
+  async function dropIndexTriggers(): Promise<void> {
+    for (const drop of retiredMemoryTriggerDrops(MEMORY_TEXT_VERSION + 1).slice(
+      -MEMORY_TEXT_TRIGGERS.length,
+    )) {
+      await db.em.getConnection().execute(drop, [], 'run');
+    }
+  }
 
   describe('team memory', () => {
     const TEAM_A: RunPlace = { projectId: null, teamSlug: 'a' };

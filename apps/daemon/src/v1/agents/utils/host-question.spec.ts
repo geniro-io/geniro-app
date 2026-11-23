@@ -10,10 +10,12 @@ import {
   deferredAnswerMessage,
   hostCardQuestions,
   hostMcpServerName,
+  hostQuestionTextOverflow,
   isHostQuestionCall,
   MAX_HOST_OPTION_DESCRIPTION_LENGTH,
   MAX_HOST_OPTION_LABEL_LENGTH,
   MAX_HOST_QUESTION_TEXT_LENGTH,
+  MAX_HOST_QUESTION_TITLE_LENGTH,
   readHostQuestions,
 } from './host-question';
 
@@ -161,6 +163,125 @@ describe('readHostQuestions', () => {
       ],
     });
     expect(question?.header).toBeUndefined();
+  });
+});
+
+describe('hostQuestionTextOverflow', () => {
+  const question = (text: string, options: unknown[] = [{ label: 'Yes' }]) => ({
+    question: text,
+    options,
+  });
+
+  it('names the question field, its length and the limit, and says nothing was shown', () => {
+    const reason = hostQuestionTextOverflow({
+      questions: [question('q'.repeat(MAX_HOST_QUESTION_TEXT_LENGTH + 1))],
+    });
+    expect(reason).toContain(
+      `questions[0].question is ${MAX_HOST_QUESTION_TEXT_LENGTH + 1} characters; the limit is ${MAX_HOST_QUESTION_TEXT_LENGTH}`,
+    );
+    expect(reason).toContain('Nothing was shown to the user');
+    expect(reason).toContain('reply message');
+  });
+
+  it('accepts text exactly at each cap', () => {
+    expect(
+      hostQuestionTextOverflow({
+        title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH),
+        questions: [
+          question('q'.repeat(MAX_HOST_QUESTION_TEXT_LENGTH), [
+            {
+              label: 'l'.repeat(MAX_HOST_OPTION_LABEL_LENGTH),
+              description: 'd'.repeat(MAX_HOST_OPTION_DESCRIPTION_LENGTH),
+            },
+            'b'.repeat(MAX_HOST_OPTION_LABEL_LENGTH),
+          ]),
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses an option label over its cap, a bare-string option included, naming its place', () => {
+    expect(
+      hostQuestionTextOverflow({
+        questions: [
+          question('Ship?'),
+          question('Pick?', [
+            { label: 'A' },
+            { label: 'l'.repeat(MAX_HOST_OPTION_LABEL_LENGTH + 1) },
+          ]),
+        ],
+      }),
+    ).toContain(
+      `questions[1].options[1].label is ${MAX_HOST_OPTION_LABEL_LENGTH + 1} characters; the limit is ${MAX_HOST_OPTION_LABEL_LENGTH}`,
+    );
+    expect(
+      hostQuestionTextOverflow({
+        questions: [
+          question('Pick?', ['b'.repeat(MAX_HOST_OPTION_LABEL_LENGTH + 1)]),
+        ],
+      }),
+    ).toContain('questions[0].options[0].label is');
+  });
+
+  it('refuses an option description over its cap', () => {
+    expect(
+      hostQuestionTextOverflow({
+        questions: [
+          question('Ship?'),
+          question('Pick?', [
+            { label: 'A' },
+            {
+              label: 'B',
+              description: 'd'.repeat(MAX_HOST_OPTION_DESCRIPTION_LENGTH + 1),
+            },
+          ]),
+        ],
+      }),
+    ).toContain(
+      `questions[1].options[1].description is ${MAX_HOST_OPTION_DESCRIPTION_LENGTH + 1} characters; the limit is ${MAX_HOST_OPTION_DESCRIPTION_LENGTH}`,
+    );
+  });
+
+  it('refuses a title over its cap, measured once it is trimmed', () => {
+    expect(
+      hostQuestionTextOverflow({
+        title: 't'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH + 1),
+        questions: [question('Ship?')],
+      }),
+    ).toContain(
+      `title is ${MAX_HOST_QUESTION_TITLE_LENGTH + 1} characters; the limit is ${MAX_HOST_QUESTION_TITLE_LENGTH}`,
+    );
+    expect(
+      hostQuestionTextOverflow({
+        title: `  ${'t'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH)}  `,
+        questions: [question('Ship?')],
+      }),
+    ).toBeNull();
+  });
+
+  it('reads only what readHostQuestions keeps: a question past the count cap is dropped, not refused', () => {
+    expect(
+      hostQuestionTextOverflow({
+        questions: [
+          ...Array.from({ length: MAX_HOST_QUESTIONS }, () =>
+            question('Ship?'),
+          ),
+          question('q'.repeat(MAX_HOST_QUESTION_TEXT_LENGTH + 1)),
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      hostQuestionTextOverflow({
+        questions: [
+          question('Pick?', [
+            ...Array.from({ length: MAX_HOST_QUESTION_OPTIONS }, (_, j) => ({
+              label: `O${j}`,
+            })),
+            { label: 'l'.repeat(MAX_HOST_OPTION_LABEL_LENGTH + 1) },
+          ]),
+        ],
+      }),
+    ).toBeNull();
   });
 });
 

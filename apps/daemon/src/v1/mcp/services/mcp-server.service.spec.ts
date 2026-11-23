@@ -126,7 +126,12 @@ import {
   ARTIFACT_TOKEN_NAMES,
 } from '../../agents/utils/artifact-runtime';
 import { hostEndpointPath } from '../../agents/utils/host-endpoint';
-import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
+import {
+  MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+  MAX_HOST_OPTION_LABEL_LENGTH,
+  MAX_HOST_QUESTION_TEXT_LENGTH,
+  MAX_HOST_QUESTION_TITLE_LENGTH,
+} from '../../agents/utils/host-question';
 import { RemoteImageError } from '../../agents/utils/remote-image';
 import type { BrowserOp } from '../../browser/browser.types';
 import { BROWSER_NO_WINDOW_REASON } from '../../browser/services/browser-bridge.service';
@@ -1714,6 +1719,93 @@ describe('McpServerService', () => {
     expect(result.isError).toBe(false);
   });
 
+  it('tools/call ask_user_question refuses an over-long question instead of cutting it', async () => {
+    const questions = new UserQuestionBroker();
+    const asked: string[] = [];
+    questions.register('run-1', 'agent', async (qs) => {
+      asked.push(qs[0]?.question ?? '');
+      return { status: 'answered', answer: 'Postgres' };
+    });
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          questions: [
+            {
+              question: 'q'.repeat(MAX_HOST_QUESTION_TEXT_LENGTH + 1),
+              options: [{ label: 'Postgres' }],
+            },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { type: string; text: string }[];
+      isError: boolean;
+    };
+    expect(asked).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/^INVALID_ARGS: /);
+    expect(result.content[0]!.text).toContain(
+      `questions[0].question is ${MAX_HOST_QUESTION_TEXT_LENGTH + 1} characters; the limit is ${MAX_HOST_QUESTION_TEXT_LENGTH}`,
+    );
+  });
+
+  it('states each text limit of ask_user_question in its schema, before the model calls it', async () => {
+    const questions = new UserQuestionBroker();
+    questions.register('run-1', 'agent', async () => ({ status: 'declined' }));
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const schema = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools.find((tool) => tool.name === HOST_QUESTION_TOOL)!.inputSchema;
+    expect(schema).toMatchObject({
+      properties: {
+        title: {
+          description: expect.stringContaining(
+            `${MAX_HOST_QUESTION_TITLE_LENGTH} characters`,
+          ),
+        },
+        questions: {
+          items: {
+            properties: {
+              question: {
+                description: expect.stringContaining(
+                  `${MAX_HOST_QUESTION_TEXT_LENGTH} characters`,
+                ),
+              },
+              options: {
+                items: {
+                  properties: {
+                    label: {
+                      description: expect.stringContaining(
+                        `${MAX_HOST_OPTION_LABEL_LENGTH} characters`,
+                      ),
+                    },
+                    description: {
+                      description: expect.stringContaining(
+                        `${MAX_HOST_OPTION_DESCRIPTION_LENGTH} characters`,
+                      ),
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('asks through the CONVERSATION that called, offering the tool only where its asker is registered', async () => {
     const questions = new UserQuestionBroker();
     const asked: string[] = [];
@@ -1762,16 +1854,14 @@ describe('McpServerService', () => {
     ).toContain('From the caller');
   });
 
-  it('bounds the card’s TITLE before it reaches the asker', async () => {
-    // The title went through raw while every other field of the call was
-    // read — and it is written onto the card, the row and the run.
+  it('refuses an over-long card TITLE before it reaches the asker', async () => {
     const questions = new UserQuestionBroker();
     const titles: (string | null)[] = [];
     questions.register('run-1', 'agent', async (_qs, title) => {
       titles.push(title);
       return { status: 'answered', answer: 'ok' };
     });
-    await post(
+    const { json } = await post(
       service(new CallBroker(), questions),
       'run-1',
       'agent',
@@ -1783,7 +1873,15 @@ describe('McpServerService', () => {
         },
       }),
     );
-    expect(titles).toEqual(['t'.repeat(MAX_HOST_QUESTION_TITLE_LENGTH)]);
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(titles).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain(
+      `title is ${MAX_HOST_QUESTION_TITLE_LENGTH * 10} characters; the limit is ${MAX_HOST_QUESTION_TITLE_LENGTH}`,
+    );
   });
 
   it('routes notifications/cancelled to the parked call it names', async () => {

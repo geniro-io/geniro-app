@@ -2,6 +2,12 @@ import {
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
 } from '../../../agents/chat.types';
+import {
+  MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+  MAX_HOST_OPTION_LABEL_LENGTH,
+  MAX_HOST_QUESTION_TEXT_LENGTH,
+  MAX_HOST_QUESTION_TITLE_LENGTH,
+} from '../../../agents/utils/host-question';
 
 /** `ask_user_question`'s arguments. */
 export function askUserQuestionSchema(): Record<string, unknown> {
@@ -10,8 +16,7 @@ export function askUserQuestionSchema(): Record<string, unknown> {
     properties: {
       title: {
         type: 'string',
-        description:
-          'Optional short heading for the whole card, when several questions belong to one decision.',
+        description: `Optional short heading for the whole card, when several questions belong to one decision. At most ${MAX_HOST_QUESTION_TITLE_LENGTH} characters; a longer one is refused.`,
       },
       questions: {
         type: 'array',
@@ -21,8 +26,7 @@ export function askUserQuestionSchema(): Record<string, unknown> {
           properties: {
             question: {
               type: 'string',
-              description:
-                'The question, written so it can be answered without reading your reasoning.',
+              description: `The question, written so it can be answered without reading your reasoning. At most ${MAX_HOST_QUESTION_TEXT_LENGTH} characters; a longer one is refused.`,
             },
             header: {
               type: 'string',
@@ -42,11 +46,11 @@ export function askUserQuestionSchema(): Record<string, unknown> {
                 properties: {
                   label: {
                     type: 'string',
-                    description: 'The choice, in a few words.',
+                    description: `The choice, in a few words. At most ${MAX_HOST_OPTION_LABEL_LENGTH} characters; a longer one is refused.`,
                   },
                   description: {
                     type: 'string',
-                    description: 'What picking it means or leads to. Optional.',
+                    description: `What picking it means or leads to. Optional. At most ${MAX_HOST_OPTION_DESCRIPTION_LENGTH} characters; a longer one is refused.`,
                   },
                 },
                 required: ['label'],

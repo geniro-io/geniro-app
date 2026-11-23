@@ -88,11 +88,9 @@ function readImage(value: unknown): GalleryImage | null {
 /**
  * Read one `show_gallery` row, or null when the payload names no picture.
  *
- * Null on the chart reader's rule rather than the findings reader's: an empty
- * review IS a result worth a card saying so, while a gallery with no pictures
- * has nothing to draw and no sentence to put in its place. The daemon already
- * refuses that call at the tool edge, so reaching it here means a row written by
- * an older build.
+ * Null for a gallery with no pictures: it has nothing to draw and no sentence to
+ * put in its place. The daemon already refuses that call at the tool edge, so
+ * reaching it here means a row written by an older build.
  *
  * Entries that name no file are DROPPED rather than blanked — a gallery is a
  * SET, not the chart's positional axis, so nothing downstream reads a tile by

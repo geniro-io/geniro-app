@@ -14,9 +14,9 @@ import {
  * geniro's OWN plan-proposal tool.
  *
  * TWIN: `HOST_PLAN_TOOL` in `apps/daemon/src/v1/agents/chat.types.ts`. A bare
- * literal for the reason `PROPOSE_PATCH` next door is one — nothing generated
- * spans this seam, because the name reaches the renderer inside an
- * `approval_request` payload, which is `z.unknown()` on the wire by design.
+ * literal because nothing generated spans this seam — the name reaches the
+ * renderer inside an `approval_request` payload, which is `z.unknown()` on the
+ * wire by design.
  */
 export const PROPOSE_PLAN = 'propose_plan';
 

@@ -56,8 +56,8 @@ function shellStatusOf(block: SubagentBlockEntry): BlockStatus {
 /**
  * Which cards a delegate's block must not hide.
  *
- * A render card — a findings report, a chart, a scorecard, a comparison, a
- * gallery — is the ONLY copy of what it says: the result the agent gets back
+ * A render card — a chart, a scorecard, a comparison, a gallery — is the ONLY
+ * copy of what it says: the result the agent gets back
  * from those tools is a receipt, by design. A delegate's block is shut by
  * default, which is right for a conversation and wrong for this — shut, the
  * report becomes work the reader has to go looking for, a worse answer than the
@@ -78,7 +78,6 @@ function shellStatusOf(block: SubagentBlockEntry): BlockStatus {
  */
 const OPENS_BLOCK = {
   'task-list': false,
-  findings: true,
   recommendations: true,
   lessons: true,
   chart: true,
@@ -126,7 +125,6 @@ function renderCards(entries: SubagentBlockEntry['entries']): CardEntry[] {
 /** What each card is called, where a sentence has to name one. */
 const CARD_NOUN = {
   'task-list': 'a task list',
-  findings: 'findings',
   recommendations: 'recommendations',
   lessons: 'lessons',
   chart: 'a chart',
@@ -148,9 +146,6 @@ const CARD_NOUN = {
  * again is the likeliest one to be looking for what it later reported. Without
  * this the closed header says only that some nested work exists, which is the
  * silence the whole change exists to end.
- *
- * Findings carry their COUNT because that is the figure a reader acts on; the
- * other four name themselves and a count of one chart says nothing.
  */
 function renderCardSummary(cards: CardEntry[]): string | null {
   if (cards.length > 1) {
@@ -159,10 +154,6 @@ function renderCardSummary(cards: CardEntry[]): string | null {
   const card = cards[0];
   if (card === undefined) {
     return null;
-  }
-  if (card.type === 'findings') {
-    const found = card.report.findings.length;
-    return `reported ${found === 1 ? '1 finding' : `${found} findings`}`;
   }
   return `drew ${CARD_NOUN[card.type]}`;
 }

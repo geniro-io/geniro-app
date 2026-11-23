@@ -314,31 +314,6 @@ describe('editDiffOf', () => {
     });
   });
 
-  it('reads geniro’s propose_patch over the SAME field names', () => {
-    // Why the tool advertises Edit's names: a proposal and an edit are the same
-    // diff, differing only in who writes the file and when — so the card gets
-    // its diff without a second diff renderer.
-    expect(
-      editDiffOf('propose_patch', {
-        file_path: 'src/a.ts',
-        old_string: 'const timeout = 30;',
-        new_string: 'const timeout = 60;',
-      }),
-    ).toEqual({
-      oldText: 'const timeout = 30;',
-      newText: 'const timeout = 60;',
-    });
-  });
-
-  it('reads a propose_patch with NO old_string as a whole-file write', () => {
-    expect(
-      editDiffOf('propose_patch', {
-        file_path: 'src/new.ts',
-        new_string: 'export const x = 1;\n',
-      }),
-    ).toEqual({ oldText: null, newText: 'export const x = 1;\n' });
-  });
-
   it('reads a project-instructions card, and one for a project with none yet as additions', () => {
     expect(
       editDiffOf('save_project_instructions', {
@@ -362,7 +337,6 @@ describe('editDiffOf', () => {
 
   it('answers null for a tool that is not a file edit at all', () => {
     expect(editDiffOf('Bash', { command: 'ls' })).toBeNull();
-    expect(editDiffOf('propose_patch', { file_path: 'a.ts' })).toBeNull();
     expect(editDiffOf('Edit', null)).toBeNull();
   });
 });

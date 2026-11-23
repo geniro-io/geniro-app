@@ -7,17 +7,6 @@ import { formatCount } from '../stats/stats-format';
 import { isProposedChange, SAVE_PROJECT_INSTRUCTIONS } from './geniro-tool';
 
 /**
- * geniro's OWN patch-proposal tool.
- *
- * TWIN: `HOST_PATCH_TOOL` in `apps/daemon/src/v1/agents/chat.types.ts`. A bare
- * literal because nothing generated spans this seam — the name reaches the
- * renderer inside an `approval_request` payload, which is `z.unknown()` on the
- * wire by design. `transcript-groups.ts` keeps the same literal for the same
- * reason; renaming the tool means renaming it in all three.
- */
-export const PROPOSE_PATCH = 'propose_patch';
-
-/**
  * The project card's changed lines as unified-diff hunks and the `P-` ids it
  * carries out, or null for another tool or a card with no hunks.
  *
@@ -52,11 +41,10 @@ export function projectInstructionsCardOf(
  * back to their raw-JSON body. Shared by the tool-group rows and the
  * approval card, so both surfaces render the same diff for the same call.
  *
- * geniro's `propose_patch` rides the Edit arm rather than growing a renderer of
- * its own, and that is why the tool advertises `Edit`'s field names: a proposal
- * and an edit are the same diff, differing only in who writes the file and
- * when. Its `old_string` is optional, so it falls through to the Write shape —
- * additions only — when the patch creates or rewrites a whole file.
+ * The project-instructions card rides the Edit arm rather than growing a
+ * renderer of its own, and that is why its input carries `Edit`'s field names: a
+ * proposed change and an edit are the same diff. Its `old_string` is optional,
+ * so a change with none reads as a whole-file addition.
  */
 export function editDiffOf(
   toolName: string,

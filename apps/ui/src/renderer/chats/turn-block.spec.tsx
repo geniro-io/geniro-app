@@ -509,8 +509,13 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
   it('draws a card standing on its own in the messenger flow', () => {
     const entries = groupTranscript([
       item(
-        'report_findings',
-        { findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }] },
+        'show_chart',
+        {
+          title: 'Loop bound defects',
+          kind: 'line',
+          labels: ['parse', 'index'],
+          series: [{ name: 'defects', values: [1, 0] }],
+        },
         null,
       ),
     ]);
@@ -524,7 +529,7 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
       ),
     );
 
-    expect(container.textContent).toContain('src/a.ts');
+    expect(container.textContent).toContain('Loop bound defects');
   });
 
   it('draws a card folded into a turn block', () => {
@@ -537,8 +542,13 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
           'assistant',
         ),
         item(
-          'report_findings',
-          { findings: [{ file: 'src/b.ts', summary: 'A guard was weakened' }] },
+          'show_chart',
+          {
+            title: 'Guard coverage',
+            kind: 'line',
+            labels: ['a', 'b'],
+            series: [{ name: 'guards', values: [2, 1] }],
+          },
           'writer',
         ),
       ]),
@@ -550,7 +560,7 @@ describe('a card entry reaches EntryCard from BOTH flows', () => {
       root.render(<TranscriptEntryView entry={block!} nodes={NODES} />),
     );
 
-    expect(container.textContent).toContain('src/b.ts');
+    expect(container.textContent).toContain('Guard coverage');
   });
 });
 

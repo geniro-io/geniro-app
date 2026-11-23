@@ -16,9 +16,9 @@
  * (call_started/call_result/call_question/call_answer/await_collected)
  * already tell that story in a readable form — the raw envelope JSON rows
  * are pure duplication, so they are hidden from the transcript. Every host tool
- * rides it for the same reason: each draws its own card — a findings table, a
- * chart, a scorecard, a decision table, a diff with Apply, a plan with Approve
- * — and the raw call beside it is the same row twice.
+ * rides it for the same reason: each draws its own card — a chart, a scorecard,
+ * a comparison table, a diff with Apply, a plan with Approve — and the raw call
+ * beside it is the same row twice.
  */
 
 /**
@@ -32,7 +32,6 @@
  * tiles.
  */
 export type GeniroCardKind =
-  | 'findings'
   | 'recommendations'
   | 'chart'
   | 'metrics'
@@ -120,7 +119,6 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   await_agent: null,
   answer_agent: null,
   ask_user_question: null,
-  report_findings: 'findings',
   report_recommendations: 'recommendations',
   mark_recommendations: null,
   show_chart: 'chart',
@@ -132,7 +130,6 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   [BROWSER_SCREENSHOT]: 'screenshot',
   [START_THREAD]: 'thread-start',
   show_artifact: 'artifact',
-  propose_patch: 'patch',
   [SAVE_PROJECT_INSTRUCTIONS]: 'patch',
   propose_plan: 'plan',
   // The action card is drawn from the `action` / `action_outcome` rows the

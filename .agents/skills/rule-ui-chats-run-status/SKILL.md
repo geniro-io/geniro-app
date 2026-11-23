@@ -32,7 +32,7 @@ description: "Chats page — run status vocabulary and settling, live clocks and
 - Read the live value directly, never through `agents[0]`.
 - `rememberRunContext` mirrors live readings onto the run-row copy, only when the value changed and is positive.
 - A team's composer ring is its lead's (`runLeadOf`: `RunDto.currentLead`, else the trigger's member). Otherwise it is null. A relay run also shows who leads as the shelf's `LeadChip`, and draws every member's rows with their identity (no `soloNodeId`).
-- A member's ring order is `cardContextOf`. The nodes route is fetched on run open and reconnect only (`reconnectNonce`), and its map is cleared on entry.
+- A member's ring order is `cardContextOf`. The nodes route is fetched on run open, on reconnect (`reconnectNonce`) and when a turn's end arrives (`arrivalMarks`), and its map is cleared on entry.
 - A geniro-performed compaction (cursor) invalidates earlier readings. It resets the fold (`endsContextHistory`), clears the live plane and the mirrored row, and the ring shows empty with `awaitingReading`.
 - The context panel is fetched on open and never polled. On a team run every readout branch carries `memberId`.
 - Category colours are assigned by position, never by name.

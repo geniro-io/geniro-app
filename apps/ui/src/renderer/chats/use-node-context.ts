@@ -53,6 +53,14 @@ interface NodeContextState {
   /** Which run these readings were fetched for — see the guard on the return. */
   runId: string | null;
   readings: ReadonlyMap<string, NodeDurableReading>;
+  /** A read of {@link runId} has answered, a failed one included. */
+  loaded: boolean;
+}
+
+export interface NodeDurableReadings {
+  readings: ReadonlyMap<string, NodeDurableReading>;
+  /** The open run's first read has answered — always true for a chat run. */
+  loaded: boolean;
 }
 
 /**
@@ -88,9 +96,31 @@ export function useNodeDurableReadings(
   client: Pick<DaemonClient, 'onRunStatus'> | null = null,
   refreshNonce = 0,
 ): ReadonlyMap<string, NodeDurableReading> {
+  return useNodeDurableReadingsState(
+    runId,
+    isTeamRun,
+    teamApi,
+    reconnectNonce,
+    settledTurns,
+    client,
+    refreshNonce,
+  ).readings;
+}
+
+/** {@link useNodeDurableReadings} with whether the open run's first read has answered. */
+export function useNodeDurableReadingsState(
+  runId: string | null,
+  isTeamRun: boolean,
+  teamApi: TeamsApi,
+  reconnectNonce: number,
+  settledTurns = 0,
+  client: Pick<DaemonClient, 'onRunStatus'> | null = null,
+  refreshNonce = 0,
+): NodeDurableReadings {
   const [state, setState] = useState<NodeContextState>(() => ({
     runId,
     readings: EMPTY,
+    loaded: false,
   }));
   /**
    * The newest cursor price the daemon announced for this run
@@ -130,7 +160,9 @@ export function useNodeDurableReadings(
     // A re-read of the SAME run keeps what it has until the answer lands, so a
     // turn settling does not blank every ring for the length of a round trip.
     setState((current) =>
-      current.runId === runId ? current : { runId, readings: EMPTY },
+      current.runId === runId
+        ? current
+        : { runId, readings: EMPTY, loaded: false },
     );
     if (runId === null || !isTeamRun) {
       return;
@@ -144,6 +176,7 @@ export function useNodeDurableReadings(
         }
         setState({
           runId,
+          loaded: true,
           readings: new Map(
             nodes.map((node) => [
               node.memberId,
@@ -176,7 +209,7 @@ export function useNodeDurableReadings(
         // failed re-read costs this run's rings their durable source and never
         // leaves an older reading standing in for a request that did not answer.
         if (!cancelled) {
-          setState({ runId, readings: EMPTY });
+          setState({ runId, readings: EMPTY, loaded: true });
         }
       });
     return () => {
@@ -197,8 +230,19 @@ export function useNodeDurableReadings(
   // runs of one team share node ids, that one render resolves every ring
   // against the previous run's row instead of drawing none. Same guard, and the
   // same reason, as the one on `use-chat-totals.ts`.
-  return state.runId === runId ? state.readings : EMPTY;
+  if (runId !== null && !isTeamRun) {
+    return NO_NODES_ANSWERED;
+  }
+  return state.runId === runId
+    ? { readings: state.readings, loaded: state.loaded }
+    : NOT_ANSWERED;
 }
+
+const NO_NODES_ANSWERED: NodeDurableReadings = {
+  readings: EMPTY,
+  loaded: true,
+};
+const NOT_ANSWERED: NodeDurableReadings = { readings: EMPTY, loaded: false };
 
 /** The pool facts of a member's own conversation, as `AgentDisplay` carries them. */
 export function ownPoolOf(reading: NodeDurableReading | undefined): {

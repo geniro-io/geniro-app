@@ -72,8 +72,11 @@ function harness(runId: string) {
     ),
   };
   let latest: RunStateDto | null = null;
+  const renders: boolean[] = [];
   function Probe({ id, nonce }: { id: string | null; nonce: number }): null {
-    latest = useRunState(api, client, id, nonce).state;
+    const read = useRunState(api, client, id, nonce);
+    latest = read.state;
+    renders.push(read.loaded);
     return null;
   }
   const container = document.createElement('div');
@@ -84,6 +87,8 @@ function harness(runId: string) {
       await act(async () => root!.render(<Probe id={id} nonce={nonce} />));
     },
     state: () => latest!,
+    renders,
+    loaded: () => renders.at(-1) ?? false,
     emitItem: (item: Partial<ChatItem>) =>
       items.forEach((l) => l({ runId, ...item } as ChatItem)),
     emitStatus: (event: Partial<RunStatusEvent>) =>
@@ -419,5 +424,82 @@ describe('useRunState', () => {
     await settle();
 
     expect(h.api.readRunState.mock.calls.length).toBe(before);
+  });
+
+  it('is not loaded until its read answers, and is once it has', async () => {
+    const h = harness('r1');
+    let answer: (state: RunStateDto) => void = () => undefined;
+    h.api.readRunState.mockImplementationOnce(
+      () =>
+        new Promise<RunStateDto>((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    await h.render('r1');
+    expect(h.loaded()).toBe(false);
+
+    await act(async () => {
+      answer(state(1));
+    });
+    expect(h.loaded()).toBe(true);
+  });
+
+  it('is loaded once its read fails, and holds nothing from the failed read', async () => {
+    const h = harness('r1');
+    h.api.readRunState.mockImplementationOnce(() =>
+      Promise.reject(new Error('daemon GET failed (500)')),
+    );
+
+    await h.render('r1');
+    await settle();
+
+    expect(h.loaded()).toBe(true);
+    expect(h.state().calls).toEqual([]);
+  });
+
+  it('is not loaded on the render that switches run, nor until the new run’s read answers', async () => {
+    const h = harness('r1');
+    await h.render('r1');
+    expect(h.loaded()).toBe(true);
+    let answerRunTwo: (state: RunStateDto) => void = () => undefined;
+    h.api.readRunState.mockImplementationOnce(
+      () =>
+        new Promise<RunStateDto>((resolve) => {
+          answerRunTwo = resolve;
+        }),
+    );
+    const before = h.renders.length;
+
+    await h.render('r2');
+    expect(h.renders[before]).toBe(false);
+    expect(h.loaded()).toBe(false);
+
+    await act(async () => {
+      answerRunTwo(state(2));
+    });
+    expect(h.loaded()).toBe(true);
+  });
+
+  it('is not loaded while no run is open', async () => {
+    const h = harness('r1');
+
+    await h.render(null);
+
+    expect(h.loaded()).toBe(false);
+    expect(h.api.readRunState).not.toHaveBeenCalled();
+  });
+
+  it('is loaded once there is no daemon to ask, and asks nothing', async () => {
+    const seen: boolean[] = [];
+    function Probe(): null {
+      seen.push(useRunState(null, null, 'r1', 0).loaded);
+      return null;
+    }
+    root = createRoot(document.createElement('div'));
+    await act(async () => root!.render(<Probe />));
+    await settle();
+
+    expect(seen.at(-1)).toBe(true);
   });
 });

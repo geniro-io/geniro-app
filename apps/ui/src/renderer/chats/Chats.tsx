@@ -135,6 +135,7 @@ import { AnalysisDialog } from './analysis-dialog';
 import { AnalyzeThreadDialog } from './analyze-thread-dialog';
 import { appendDraft } from './append-draft';
 import { ApprovalCard, imagesAttachedNote } from './approval-card';
+import { arrivalMarks } from './arrival-marks';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
 import { BrowserColumn } from './browser/browser-column';
@@ -393,7 +394,6 @@ import {
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
 import {
   heldSinceOf,
-  movesPausedSpans,
   parkWhileHeld,
   scanTurns,
   threadWorkedMs,
@@ -442,7 +442,7 @@ import {
 import { type GitNotice, useGitInfo } from './use-git-info';
 import type { TaskReader } from './use-live-task';
 import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
-import { ownPoolOf, useNodeDurableReadings } from './use-node-context';
+import { ownPoolOf, useNodeDurableReadingsState } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunOutcomes } from './use-run-outcomes';
 import { useRunProcesses } from './use-run-processes';
@@ -529,6 +529,7 @@ interface ComposerProject {
 const FOLDER_PROJECT: ComposerProject = { projectId: null, source: 'folder' };
 const NO_PROJECTS: ProjectTargetRef[] = [];
 const NO_NOTIFIED_RUNS: ChatRun[] = [];
+const NO_ENTRIES: TranscriptEntry[] = [];
 
 /**
  * What a new run is told about its project: nothing for the folder's own (the
@@ -1353,6 +1354,8 @@ export function Chats({
     hasOlder,
     loadingOlder,
     loadingHistory,
+    joinedRunId,
+    arrivals,
     loadOlder,
     loadAround,
     loadNewer,
@@ -2811,7 +2814,7 @@ export function Chats({
     isHosted,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Follow the tail only when the user is already AT it. Scrolling them back
     // down while they are reading something further up is the whole complaint;
     // suppression is silent by design — no "jump to latest" affordance.
@@ -2819,19 +2822,8 @@ export function Chats({
     // No extra ref: the sentinel is a direct child of the `overflow-y-auto`
     // container, so its parent IS the scroll box.
     const scroller = transcriptEndRef.current?.parentElement;
-    // A freshly opened run jumps to the tail unconditionally — see
-    // pendingScrollRef. Instant, not smooth: animating a scroll the user never
-    // asked for, through a transcript they have not seen, is just a delay.
-    if (!scroller) {
-      return;
-    }
-    if (pendingScrollRef.current) {
-      if (items.length === 0) {
-        return;
-      }
-      pendingScrollRef.current = false;
-      followingRef.current = true;
-      followTail(scroller);
+    // A freshly opened run is landed by the effect beside `transcriptEntries`.
+    if (!scroller || pendingScrollRef.current) {
       return;
     }
     if (!followingRef.current || touchGuardRef.current.active(Date.now())) {
@@ -3431,28 +3423,6 @@ export function Chats({
       runsRef,
     ],
   );
-
-  useEffect(() => {
-    if (!globalSearchTarget) {
-      return;
-    }
-    const { hit, from, arrived } = globalSearchTarget;
-    if (activeRunId !== hit.runId) {
-      if (arrived || activeRunId !== from) {
-        setGlobalSearchTarget(null);
-      }
-      return;
-    }
-    if (!arrived) {
-      setGlobalSearchTarget({ ...globalSearchTarget, arrived: true });
-      return;
-    }
-    if (loadingHistory) {
-      return;
-    }
-    jumpToSeq(hit.seq);
-    setGlobalSearchTarget(null);
-  }, [globalSearchTarget, activeRunId, loadingHistory, jumpToSeq]);
 
   const openChatSearch = useLatestCallback((): void => setSearchOpen(true), []);
   const openChatChanges = useLatestCallback(
@@ -5032,12 +5002,11 @@ export function Chats({
    * transcript's own rows reads it, with the window's own reading winning where
    * it holds the same thing (`use-run-state.ts`).
    */
-  const { state: runState, refresh: refreshRunState } = useRunState(
-    chatApi,
-    client,
-    activeRunId,
-    reconnectNonce,
-  );
+  const {
+    state: runState,
+    refresh: refreshRunState,
+    loaded: runStateLoaded,
+  } = useRunState(chatApi, client, activeRunId, reconnectNonce);
   const pressRaisedWorkingRef = useRef(false);
   const beforeHostedPress = useLatestCallback(
     async (action: LiveAction): Promise<void> => {
@@ -5283,28 +5252,59 @@ export function Chats({
    * that made `NodeState.contextTokens` reach a client at all.
    *
    * Asked on open and on reconnect; everything in between arrives as a live
-   * delta, which outranks it. See {@link useNodeDurableReadings}.
+   * delta, which outranks it. See {@link useNodeDurableReadingsState}.
    */
-  // How many turns the loaded window has seen settle — it moves once per turn,
-  // which is exactly when a node's SPEND totals change.
-  const settledTurnCount = useMemo(
-    () =>
-      transcriptRows.reduce(
-        (n, item) => (item.kind === 'turn_complete' ? n + 1 : n),
-        0,
-      ),
-    [transcriptRows],
-  );
+  // A turn's end arriving is exactly when a node's SPEND totals change.
+  const arrived = useMemo(() => arrivalMarks(arrivals), [arrivals]);
   const [nodeReadingsNonce, setNodeReadingsNonce] = useState(0);
-  const nodeReadings = useNodeDurableReadings(
-    activeRunId,
-    activeRun?.teamId != null,
-    teamApi,
-    reconnectNonce,
-    settledTurnCount,
-    client,
-    nodeReadingsNonce,
-  );
+  const { readings: nodeReadings, loaded: nodeReadingsLoaded } =
+    useNodeDurableReadingsState(
+      joinedRunId,
+      activeRun?.teamId != null,
+      teamApi,
+      reconnectNonce,
+      arrived.turnEnds,
+      client,
+      nodeReadingsNonce,
+    );
+  // The transcript's cards are drawn from the run state and, on a team run,
+  // the node readings too, so a thread's first frame waits for them with the
+  // page — once: a later re-read, or a run row that only now names its team,
+  // never takes a drawn thread back to the placeholder.
+  const [drawnRunId, setDrawnRunId] = useState<string | null>(null);
+  const awaitingFirstReads =
+    (activeRunId !== null && !runStateLoaded) ||
+    (activeRun?.teamId != null && !nodeReadingsLoaded);
+  const threadOpening =
+    loadingHistory || (activeRunId !== drawnRunId && awaitingFirstReads);
+  useEffect(() => {
+    if (loadingHistory) {
+      setDrawnRunId(null);
+    } else if (activeRunId !== null && !threadOpening) {
+      setDrawnRunId(activeRunId);
+    }
+  }, [activeRunId, loadingHistory, threadOpening]);
+  useEffect(() => {
+    if (!globalSearchTarget) {
+      return;
+    }
+    const { hit, from, arrived } = globalSearchTarget;
+    if (activeRunId !== hit.runId) {
+      if (arrived || activeRunId !== from) {
+        setGlobalSearchTarget(null);
+      }
+      return;
+    }
+    if (!arrived) {
+      setGlobalSearchTarget({ ...globalSearchTarget, arrived: true });
+      return;
+    }
+    if (threadOpening) {
+      return;
+    }
+    jumpToSeq(hit.seq);
+    setGlobalSearchTarget(null);
+  }, [globalSearchTarget, activeRunId, threadOpening, jumpToSeq]);
   const setOwnPoolMember = useLatestCallback(
     async (
       memberId: string,
@@ -6752,14 +6752,10 @@ export function Chats({
   );
   const transcriptEntries = useMemo(
     () =>
-      // No live rows over a thread whose first page has not landed. The
-      // working row is drawn from the run's STATUS, which the sidebar row
-      // already carries, so it was the only thing on an opened running thread
-      // for the length of the fetch — REPORTED as a flash of one
-      // `Tinkering… 0s` card on an empty pane — and as an entry it also hid
-      // the "Loading conversation…" placeholder, which needs an empty list.
-      loadingHistory && durableEntries.length === 0
-        ? durableEntries
+      // Nothing over a thread whose first page has not landed: rows and live
+      // text that arrive during the fetch are drawn with the page, in one frame.
+      threadOpening
+        ? NO_ENTRIES
         : withLiveText(
             durableEntries,
             liveText,
@@ -6768,7 +6764,7 @@ export function Chats({
             daemonOpenCalls,
           ),
     [
-      loadingHistory,
+      threadOpening,
       durableEntries,
       liveText,
       workingAgents,
@@ -6778,6 +6774,23 @@ export function Chats({
   );
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;
+  }, [transcriptEntries]);
+  // A freshly opened thread lands on its tail in the frame that first draws
+  // it — a layout effect, so no frame is painted at the top of the page.
+  // Instant, not smooth: animating a scroll the user never asked for, through
+  // a transcript they have not seen, is just a delay.
+  useLayoutEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (
+      !pendingScrollRef.current ||
+      transcriptEntries.length === 0 ||
+      !scroller
+    ) {
+      return;
+    }
+    pendingScrollRef.current = false;
+    followingRef.current = true;
+    followTail(scroller);
   }, [transcriptEntries]);
   /**
    * Keep paging while what is loaded does not FILL the pane.
@@ -6799,6 +6812,7 @@ export function Chats({
     const scroller = transcriptEndRef.current?.parentElement;
     if (
       !scroller ||
+      threadOpening ||
       !hasOlder ||
       loadingOlder ||
       activeRunId === null ||
@@ -6815,7 +6829,14 @@ export function Chats({
         fillStoppedRef.current = runId;
       }
     });
-  }, [transcriptEntries, hasOlder, loadingOlder, activeRunId, pageOlder]);
+  }, [
+    transcriptEntries,
+    threadOpening,
+    hasOlder,
+    loadingOlder,
+    activeRunId,
+    pageOlder,
+  ]);
   /**
    * The same, FORWARD, for a window a jump left the reader in.
    *
@@ -7033,131 +7054,55 @@ export function Chats({
     [turnDurations],
   );
   /**
-   * The team header's paused stretches are the daemon's, re-read when any
-   * row they are folded from lands (`movesPausedSpans`). The run-row flags in
-   * the clock key announce before that row is written, and only its arrival
-   * proves the daemon has it; the flags cover a transcript scrolled away from
-   * its tail. Over `transcriptRows`, because a callee's card or turn start
-   * lands among the call rows, never in a team run's window.
-   */
-  const clockRowCount = useMemo(
-    () => transcriptRows.filter(movesPausedSpans).length,
-    [transcriptRows],
-  );
-  /**
    * What this thread has SPENT, for the header beside what it worked.
    *
-   * Re-asked on `threadWorked.turns` — the count of settled turns — because
-   * that is what moves the spend, and a count changes exactly once per turn
-   * rather than on every delta the turn streams. A team also re-asks on its
-   * clock key, for the paused stretches.
+   * Re-asked when a turn's end arrives — that is what moves the spend, once
+   * per turn rather than on every delta. A team also re-asks on its clock key:
+   * the run-row flags announce before the row they are folded from is written,
+   * and only that row's arrival (`movesPausedSpans`, call rows included) proves
+   * the daemon has it.
    */
   const threadTotals = useChatTotals(
     chatApi,
-    activeRunId,
-    threadWorked.turns,
+    joinedRunId,
+    arrived.turnEnds,
     client,
     activeRun?.teamId != null
       ? [
           activeRun.awaiting ?? '',
           shellsOut.has(activeRun.id),
           delegatesOut.has(activeRun.id),
-          clockRowCount,
+          arrived.pausedSpanRows,
         ].join('|')
       : '',
-  );
-  /**
-   * The newest user message the loaded window holds — the timeline rail's
-   * second refresh trigger.
-   *
-   * It moves when a message is SENT and at no other time: the items arrive in
-   * seq order, so paging older history in prepends rows whose seqs are all
-   * lower and this figure is unchanged. That is what lets the rail follow the
-   * conversation without a fetch every time the reader scrolls up.
-   */
-  const latestUserSeq = useMemo(
-    () =>
-      transcriptRows.reduce(
-        (seq, item) =>
-          item.kind === 'message' && item.role === 'user' ? item.seq : seq,
-        0,
-      ),
-    [transcriptRows],
-  );
-  /**
-   * The newest paragraph the agent WROTE in the loaded window — a `message`
-   * that is not the user's, or a `reasoning` row — the timeline's third refresh
-   * trigger, which is what keeps the stretch being worked live. The same rows
-   * the daemon counts as a stretch's messages.
-   */
-  const latestAgentSeq = useMemo(
-    () =>
-      transcriptRows.reduce(
-        (seq, item) =>
-          (item.kind === 'message' && item.role !== 'user') ||
-          item.kind === 'reasoning'
-            ? item.seq
-            : seq,
-        0,
-      ),
-    [transcriptRows],
   );
   /**
    * Every user message in the thread, whatever the loaded window holds.
    *
    * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
    * rail built from `items` would draw the tail of the conversation and present
-   * it as the whole of it — see `use-chat-timeline.ts`.
+   * it as the whole of it — see `use-chat-timeline.ts`. Re-read when a turn's
+   * end, a user message or an agent's paragraph arrives.
    */
   const timeline = useChatTimeline(
     chatApi,
-    activeRunId,
-    threadWorked.turns,
-    latestUserSeq,
-    latestAgentSeq,
-  );
-  /**
-   * The newest page published in the loaded window — the artifact listing's
-   * one refresh trigger. Nothing about an already-published page changes until
-   * it is republished, and that writes another row, so this covers every way
-   * the list can move.
-   */
-  const latestArtifactSeq = useMemo(
-    () =>
-      transcriptRows.reduce(
-        (newest, item) =>
-          item.kind === 'show_artifact' && item.seq > newest
-            ? item.seq
-            : newest,
-        0,
-      ),
-    [transcriptRows],
+    joinedRunId,
+    arrived.turnEnds,
+    arrived.userSeq,
+    arrived.agentSeq,
   );
   /**
    * The pages this run published, read from the DAEMON — a fold over `items`
    * would drop one published earlier in a long thread, and the panel is the
    * page's only stable entry point once its card has scrolled away. See
-   * `use-run-artifacts.ts`.
+   * `use-run-artifacts.ts`. Re-read when a published page arrives: nothing
+   * about one changes until it is republished, which writes another row.
    */
   const publishedArtifacts = useRunArtifacts(
     chatApi,
-    activeRunId,
-    latestArtifactSeq,
+    joinedRunId,
+    arrived.artifactSeq,
   ).artifacts;
-  /**
-   * The newest team note in the loaded window and the open call cards — the
-   * team-notes listing's one refresh trigger: a note is append-only, so a new
-   * row is the only way the list moves.
-   */
-  const latestTeamNoteSeq = useMemo(
-    () =>
-      transcriptRows.reduce(
-        (newest, item) =>
-          item.kind === 'team_note' && item.seq > newest ? item.seq : newest,
-        0,
-      ),
-    [transcriptRows],
-  );
   /**
    * The notes popup while open — the user's own notes and the team notes —
    * with the team note it was opened on: from the agents panel's control row,
@@ -7197,22 +7142,27 @@ export function Chats({
     activeRun?.teamId != null ? activeRunId : null,
     latestOutcomeSeq,
   );
-  /** The run's team notes, read from the daemon — a team run's only. */
+  /**
+   * The run's team notes, read from the daemon — a team run's only. Re-read
+   * when a note arrives: a note is append-only, so that is the only way the
+   * list moves.
+   */
   const { notes: teamNotes } = useRunTeamNotes(
     chatApi,
-    activeRun?.teamId != null ? activeRunId : null,
-    latestTeamNoteSeq,
+    activeRun?.teamId != null ? joinedRunId : null,
+    arrived.teamNoteSeq,
   );
   const latestShowArtifactResult = useMemo(
     () =>
       activeRunId === null
-        ? latestArtifactSeq
+        ? arrived.artifactSeq
         : latestShowArtifactResultSeq(
-            transcriptRows,
+            [...transcriptRows, ...arrivals],
             activeRunId,
-            latestArtifactSeq,
+            arrived.artifactSeq,
+            (row) => arrived.ids.has(row.id),
           ),
-    [transcriptRows, activeRunId, latestArtifactSeq],
+    [transcriptRows, arrivals, activeRunId, arrived],
   );
   /**
    * The open run's shared pages and the Share control's actions. Desktop only:
@@ -7220,7 +7170,7 @@ export function Chats({
    */
   const artifactSharing = useArtifactSharing(
     isRemoteRuntime() ? null : apis.shares,
-    activeRunId,
+    joinedRunId,
     latestShowArtifactResult,
     client,
   );
@@ -10819,7 +10769,7 @@ export function Chats({
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a team whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
-                        {loadingHistory && transcriptEntries.length === 0 ? (
+                        {threadOpening ? (
                           <div
                             data-slot="thread-loading"
                             role="status"
@@ -10829,7 +10779,7 @@ export function Chats({
                           </div>
                         ) : null}
                         {hosted !== null &&
-                        !loadingHistory &&
+                        !threadOpening &&
                         transcriptEntries.length === 0 ? (
                           <p
                             data-slot="hosted-thread-empty"
@@ -10837,7 +10787,7 @@ export function Chats({
                             {hosted.emptyText}
                           </p>
                         ) : null}
-                        {hasOlder ? (
+                        {hasOlder && !threadOpening ? (
                           <OlderMessagesControl
                             slot="older-messages"
                             className="justify-center"

@@ -1343,6 +1343,100 @@ describe('useChatRun', () => {
     expect(harness.state().items.map((item) => item.id)).toEqual(['r1-i1']);
   });
 
+  it('records the live rows that arrive after the thread opened, never its page', async () => {
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.state().arrivals).toEqual([]);
+
+    await act(async () => {
+      emitItem(msg('r1', 1, 'assistant', 'live'));
+    });
+
+    expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i1']);
+  });
+
+  it('records the rows a reconnect replays, which arrived while the socket was down', async () => {
+    const { client, fireDisconnect, fireReconnect } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'assistant', 'missed'),
+    ]);
+
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i1']);
+  });
+
+  it('records a row once when it arrives live and again in a reconnect replay', async () => {
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);
+    const { client, emitItem, fireDisconnect, fireReconnect } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(msg('r1', 1, 'assistant', 'live'));
+    });
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 1, 'assistant', 'live')]);
+
+    await act(async () => {
+      fireDisconnect();
+      fireReconnect();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i1']);
+  });
+
+  it('records a live row that arrives while the reader is away from the tail, without drawing it', async () => {
+    chatApi.listRunItems.mockImplementation((args: { afterSeq?: number }) =>
+      Promise.resolve(
+        args.afterSeq !== undefined
+          ? [11, 12, 13].map((seq) => msg('r1', seq, 'user', 'x'))
+          : [msg('r1', 9, 'user', 'x'), msg('r1', 10, 'user', 'x')],
+      ),
+    );
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client, 2);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(10);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+
+    await act(async () => {
+      emitItem(msg('r1', 40, 'user', 'late'));
+    });
+
+    expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i40']);
+    expect(harness.state().items.map((item) => item.id)).not.toContain(
+      'r1-i40',
+    );
+  });
+
+  it('empties the arrivals when the reader switches thread, and drops a row of the thread left', async () => {
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitItem(msg('r1', 1, 'assistant', 'live'));
+    });
+    expect(harness.state().arrivals).toHaveLength(1);
+
+    await open(harness, 'r2');
+    await act(async () => {
+      emitItem(msg('r1', 2, 'assistant', 'late'));
+    });
+
+    expect(harness.state().arrivals).toEqual([]);
+  });
+
   it('labels the open thread’s preview as an image when the newest message is image-only', async () => {
     // REPORTED as "Thread doesnt have last message, but other have": the user
     // answered a question with a screenshot alone, the live message carried
@@ -2729,6 +2823,92 @@ describe('useChatRun', () => {
     expect(harness.swapDraft).toHaveBeenLastCalledWith('r1', null);
   });
 
+  /** A join the test answers by hand, when it chooses. */
+  function pendingJoin(): { join: () => Promise<void>; release: () => void } {
+    let release: () => void = () => undefined;
+    return {
+      join: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      release: () => release(),
+    };
+  }
+
+  it('reports the open thread as joined only once its room join has settled', async () => {
+    const { client, joinRun } = makeClient();
+    const join = pendingJoin();
+    joinRun.mockImplementationOnce(join.join);
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);
+    const harness = await mount(client);
+
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await Promise.resolve();
+    });
+    expect(harness.state().joinedRunId).toBeNull();
+
+    await act(async () => {
+      join.release();
+      await opening;
+    });
+    expect(harness.state().joinedRunId).toBe('r1');
+  });
+
+  it('reports the open thread as joined when its room join is refused too', async () => {
+    const { client, joinRun } = makeClient();
+    joinRun.mockRejectedValueOnce(new Error('timed out joining run r1'));
+    const harness = await mount(client);
+
+    await open(harness, 'r1');
+
+    expect(harness.state().joinedRunId).toBe('r1');
+  });
+
+  it('drops the joined run when the reader switches, until the next join settles', async () => {
+    const { client, joinRun } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    expect(harness.state().joinedRunId).toBe('r1');
+
+    const join = pendingJoin();
+    joinRun.mockImplementationOnce(join.join);
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r2');
+      await Promise.resolve();
+    });
+    expect(harness.state().joinedRunId).toBeNull();
+
+    await act(async () => {
+      join.release();
+      await opening;
+    });
+    expect(harness.state().joinedRunId).toBe('r2');
+  });
+
+  it('keeps the joined run while the same thread is opened again', async () => {
+    const { client, joinRun } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    const join = pendingJoin();
+    joinRun.mockImplementationOnce(join.join);
+    let opening: Promise<void> = Promise.resolve();
+    await act(async () => {
+      opening = harness.state().activateRun('r1');
+      await Promise.resolve();
+    });
+    expect(harness.state().joinedRunId).toBe('r1');
+
+    await act(async () => {
+      join.release();
+      await opening;
+    });
+    expect(harness.state().joinedRunId).toBe('r1');
+  });
+
   // Rooms are counted per join (`DaemonClient.joinRun`), so a join the screen
   // never gave back keeps the socket in a room no surface reads.
   it('holds one join of the open thread however often it is re-opened', async () => {
@@ -3685,9 +3865,9 @@ describe('useChatRun — anchors', () => {
     expect(chatApi.listRunItems.mock.calls.length).toBe(asked);
   });
 
-  it('keeps an anchor a live row was answered with while the thread’s own page was still loading', async () => {
-    // The row's key stays asked, so an answer the page overwrote would never be
-    // asked for again and its call's card would stay broken.
+  it('asks a live row’s anchors only once the thread’s own page has landed, never while it loads', async () => {
+    // The page may place the row itself, so an ask made while it loads would
+    // spend on anchors the page then brings anyway.
     const { client, emitItem } = makeClient();
     let landPage: (value: unknown) => void = () => undefined;
     chatApi.listRunItems.mockImplementation((args: { afterSeq?: number }) =>
@@ -3699,6 +3879,10 @@ describe('useChatRun — anchors', () => {
             landPage = resolve;
           }),
     );
+    const anchorAsks = () =>
+      chatApi.listRunItems.mock.calls.filter(
+        ([args]) => (args as { afterSeq?: number }).afterSeq !== undefined,
+      );
     const harness = await mount(client);
 
     let opening: Promise<void> = Promise.resolve();
@@ -3710,13 +3894,20 @@ describe('useChatRun — anchors', () => {
       emitItem(calleeStatus(20, 'call-7'));
       await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
     });
-    expect(harness.state().anchors.map((item) => item.seq)).toEqual([3]);
+    expect(anchorAsks()).toHaveLength(0);
+    expect(harness.state().anchors).toEqual([]);
 
     await act(async () => {
       landPage(page([msg('r1', 10, 'user', 'a')], [callStarted(2, 'call-1')]));
       await opening;
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ANCHOR_ASK_DELAY_MS);
+    });
 
+    expect(anchorAsks()).toEqual([
+      [expect.objectContaining({ runId: 'r1', afterSeq: 19, beforeSeq: 21 })],
+    ]);
     expect(harness.state().anchors.map((item) => item.seq)).toEqual([2, 3]);
   });
 

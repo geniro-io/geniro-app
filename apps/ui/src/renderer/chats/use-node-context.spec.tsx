@@ -10,6 +10,7 @@ import {
   type NodeDurableReading,
   ownPoolOf,
   useNodeDurableReadings,
+  useNodeDurableReadingsState,
 } from './use-node-context';
 
 const roots: Root[] = [];
@@ -521,3 +522,142 @@ describe('useNodeDurableReadings', () => {
     expect(seen.readings.size).toBe(0);
   });
 });
+
+describe('useNodeDurableReadingsState', () => {
+  it('is not loaded until the first read answers, and is loaded once it has', async () => {
+    let answer: (nodes: NodeStateDto[]) => void = () => undefined;
+    const listTeamRunNodes = vi.fn(
+      () =>
+        new Promise<NodeStateDto[]>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { renders } = driveLoaded(
+      { listTeamRunNodes } as unknown as TeamsApi,
+      {
+        runId: 'run-1',
+        isTeam: true,
+      },
+    );
+    await settle();
+    expect(renders.at(-1)).toBe(false);
+
+    await act(async () => {
+      answer([node('reviewer', 10_000, 200_000)]);
+    });
+
+    expect(renders.at(-1)).toBe(true);
+  });
+
+  it('is loaded once a read fails, the failure leaving nothing in it', async () => {
+    const listTeamRunNodes = vi.fn(async (): Promise<NodeStateDto[]> => {
+      throw new Error('daemon GET failed (500)');
+    });
+    const { renders } = driveLoaded(
+      { listTeamRunNodes } as unknown as TeamsApi,
+      {
+        runId: 'run-1',
+        isTeam: true,
+      },
+    );
+    await settle();
+
+    expect(renders.at(-1)).toBe(true);
+  });
+
+  it('is not loaded on the render that switches run, nor until the new run’s read answers', async () => {
+    let answerRunTwo: (nodes: NodeStateDto[]) => void = () => undefined;
+    const listTeamRunNodes = vi
+      .fn<() => Promise<NodeStateDto[]>>()
+      .mockResolvedValueOnce([node('reviewer', 10_000, 200_000)])
+      .mockImplementationOnce(
+        () =>
+          new Promise<NodeStateDto[]>((resolve) => {
+            answerRunTwo = resolve;
+          }),
+      );
+    const { renders, set } = driveLoaded(
+      { listTeamRunNodes } as unknown as TeamsApi,
+      {
+        runId: 'run-1',
+        isTeam: true,
+      },
+    );
+    await settle();
+    expect(renders.at(-1)).toBe(true);
+
+    const before = renders.length;
+    await set({ runId: 'run-2' });
+    await settle();
+    expect(renders[before]).toBe(false);
+    expect(renders.at(-1)).toBe(false);
+
+    await act(async () => {
+      answerRunTwo([node('reviewer', 20_000, 200_000)]);
+    });
+
+    expect(renders.at(-1)).toBe(true);
+  });
+
+  it('is loaded at once for a chat run, which has no nodes to read', async () => {
+    const listTeamRunNodes = vi.fn(async () => []);
+    const { renders } = driveLoaded(
+      { listTeamRunNodes } as unknown as TeamsApi,
+      {
+        runId: 'run-1',
+        isTeam: false,
+      },
+    );
+
+    expect(renders[0]).toBe(true);
+    expect(listTeamRunNodes).not.toHaveBeenCalled();
+  });
+
+  it('is not loaded while no run is open', async () => {
+    const listTeamRunNodes = vi.fn(async () => []);
+    const { renders } = driveLoaded(
+      { listTeamRunNodes } as unknown as TeamsApi,
+      {
+        runId: null,
+        isTeam: true,
+      },
+    );
+    await settle();
+
+    expect(renders.at(-1)).toBe(false);
+    expect(listTeamRunNodes).not.toHaveBeenCalled();
+  });
+});
+
+/** Renders {@link useNodeDurableReadingsState} and records its `loaded` on every render. */
+function driveLoaded(
+  api: TeamsApi,
+  initial: { runId: string | null; isTeam: boolean },
+): {
+  renders: boolean[];
+  set: (next: Partial<typeof initial>) => Promise<void>;
+} {
+  const renders: boolean[] = [];
+  let props = initial;
+
+  function Probe({ runId, isTeam }: typeof initial): React.JSX.Element {
+    renders.push(useNodeDurableReadingsState(runId, isTeam, api, 0).loaded);
+    return <div />;
+  }
+
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(<Probe {...props} />));
+
+  return {
+    renders,
+    set: async (next) => {
+      props = { ...props, ...next };
+      await act(async () => {
+        root.render(<Probe {...props} />);
+      });
+    },
+  };
+}

@@ -3689,11 +3689,20 @@ export function Chats({
   }, [apis, folderProjectFor, projects]);
 
   const createChatRun = useLatestCallback(
-    async (cwd: string, composer: ReturnType<typeof composerChatFields>) =>
+    async (
+      cwd: string,
+      composer: ReturnType<typeof composerChatFields>,
+      firstMessage: string,
+    ) =>
       chatApi.createChat({
         createChatDto: {
           ...composer,
           cwd,
+          // The opening words the daemon reads to pick the memory index. The wire
+          // takes up to 16000 characters; a bounded share is sent.
+          ...(firstMessage.trim()
+            ? { firstMessage: firstMessage.slice(0, 4000) }
+            : {}),
           // Read at the MOMENT of creation rather than from mount-time state:
           // the value is snapshotted onto the run, and the user may have
           // edited it in Settings since this screen mounted. Caching it would
@@ -4081,24 +4090,29 @@ export function Chats({
    * mirror a commit behind that. `null` for a run that already exists — the
    * list has held that one all along.
    */
-  const ensureRun = useLatestCallback(async (): Promise<{
-    runId: string;
-    created: ChatRun | null;
-  } | null> => {
-    if (activeRunIdRef.current) {
-      return { runId: activeRunIdRef.current, created: null };
-    }
-    const composer = composerChatFields();
-    const cwd = await ensureFolder();
-    if (!cwd) {
-      setError('Choose a folder for this chat first.');
-      return null;
-    }
-    const run = await createChatRun(cwd, composer);
-    addRun(run);
-    await activateRun(run.id);
-    return { runId: run.id, created: run };
-  }, [ensureFolder, composerChatFields, createChatRun, activateRun, addRun]);
+  const ensureRun = useLatestCallback(
+    async (
+      firstMessage: string,
+    ): Promise<{
+      runId: string;
+      created: ChatRun | null;
+    } | null> => {
+      if (activeRunIdRef.current) {
+        return { runId: activeRunIdRef.current, created: null };
+      }
+      const composer = composerChatFields();
+      const cwd = await ensureFolder();
+      if (!cwd) {
+        setError('Choose a folder for this chat first.');
+        return null;
+      }
+      const run = await createChatRun(cwd, composer, firstMessage);
+      addRun(run);
+      await activateRun(run.id);
+      return { runId: run.id, created: run };
+    },
+    [ensureFolder, composerChatFields, createChatRun, activateRun, addRun],
+  );
 
   /** The sidebar's + : back to the new-run composer. Nothing is created —
    *  the run (chat or team) is only seeded when the composer sends. */
@@ -4551,7 +4565,7 @@ export function Chats({
       // team branch above has always cleared first; this one did not.
       setInput('');
       attachments.clear(sentKeys);
-      const target = await ensureRun();
+      const target = await ensureRun(text);
       if (!target) {
         // No folder chosen — the run was never made, so the message is still
         // the user's to send. Putting it back is not optional: this path is

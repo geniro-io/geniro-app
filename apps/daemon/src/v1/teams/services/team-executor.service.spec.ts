@@ -9561,6 +9561,27 @@ describe('TeamExecutorService — agent calls', () => {
     expect(claude.starts[1]!.input.replyLanguage).toBe('Russian');
   });
 
+  it('hands the index snapshot the run’s prompt as its first message', async () => {
+    const asked: (string | null | undefined)[] = [];
+    const { service, storeGet } = setup(4870, {
+      memory: {
+        runSnapshot: async (_facts, firstMessage) => {
+          asked.push(firstMessage);
+          return { nativeMemoryOff: false, memoryIndex: null, indexIds: [] };
+        },
+        countIndexShows: async () => undefined,
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
+
+    await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'Ship the export fix',
+    });
+
+    expect(asked).toEqual(['Ship the export fix']);
+  });
+
   it('a follow-up pass on a settled run carries the memory snapshot, never a fresh one', async () => {
     let asked = 0;
     let index = 'INDEX AT START';

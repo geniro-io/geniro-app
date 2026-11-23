@@ -2380,6 +2380,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     projectId?: string | null;
     /**
+     * The message the client is about to send as this chat's first. Read once,
+     * to list the memory entries it matches first in the run's index; never
+     * stored.
+     */
+    firstMessage?: string;
+    /**
      * The run this chat analyses and the seq its reads stop at — set only by
      * `ThreadAnalysisService.start`. See `Run.analysisSourceRunId`.
      */
@@ -2452,7 +2458,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       );
     }
     const placed = placedFacts(scopeFacts, placement);
-    const { indexIds, ...memory } = await this.memory.runSnapshot(placed);
+    const { indexIds, ...memory } = await this.memory.runSnapshot(
+      placed,
+      input.firstMessage,
+    );
     const knowledge = await this.knowledge.runSnapshot(placed);
     const em = this.em.fork();
     const run = await this.runDao.create(

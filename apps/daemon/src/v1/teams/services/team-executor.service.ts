@@ -1986,7 +1986,10 @@ export class TeamExecutorService
       { ...scopeFacts, teamSlug: input.slug },
       placement,
     );
-    const { indexIds, ...memory } = await this.memory.runSnapshot(placed);
+    const { indexIds, ...memory } = await this.memory.runSnapshot(
+      placed,
+      input.prompt,
+    );
     const knowledge = await this.knowledge.runSnapshot(placed);
     const em = this.em.fork();
     const run = await this.runDao.create(

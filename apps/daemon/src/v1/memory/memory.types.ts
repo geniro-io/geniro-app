@@ -45,7 +45,13 @@ export const MEMORY_SEARCH_MAX = 10;
 export const MEMORY_SEARCH_DEFAULT = 5;
 export const MEMORY_READ_MAX = 3;
 export const MEMORY_FORGET_REASON_MAX_CHARS = 200;
-export const MEMORY_INDEX_MAX_BYTES = 2048;
+export const MEMORY_INDEX_MAX_BYTES = 4096;
+/** The share of the index a run's first message's matches may take, in bytes of lines. */
+export const MEMORY_INDEX_RELEVANT_MAX_BYTES = 2048;
+/** The most distinct words of a run's first message the index searches for; the text helpers read no more than thirty words of one. */
+export const MEMORY_INDEX_MATCH_TERMS = 30;
+/** The best full-text matches the index looks at before it drops the ones it may not list. */
+export const MEMORY_INDEX_MATCH_CANDIDATES = 50;
 
 /** What an agent may say about an entry it relied on or found wrong. */
 export const MEMORY_FEEDBACK_VERDICTS = [

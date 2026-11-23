@@ -7,13 +7,18 @@ import {
 } from '../../agents/utils/chat-text-query';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import {
+  MEMORY_INDEX_MATCH_TERMS,
   MEMORY_INDEX_MAX_BYTES,
   MEMORY_INDEX_PREFACE,
+  MEMORY_INDEX_RELEVANT_MAX_BYTES,
   type MemoryEntry,
 } from '../memory.types';
 
 /** Below this share of words in common, two titles are different notes. */
 const DUPLICATE_TITLE_OVERLAP = 0.6;
+
+/** A shorter word of a first message matches nearly every note, so it is not searched for. */
+const MATCH_TERM_MIN_CHARS = 3;
 
 const EXCERPT_CHARS = 160;
 
@@ -85,6 +90,51 @@ export function memoryIndexOf(
     lines.push(moreLine(left));
   }
   return { text: lines.join('\n'), ids };
+}
+
+/**
+ * An FTS5 query matching any one of a first message's words, or null when the
+ * message has none worth searching for. Each word goes through
+ * `chatTextMatchQuery` alone: that helper reads only thirty words of a query,
+ * so the words are joined here, not inside it.
+ */
+export function indexMatchQuery(message: string): string | null {
+  const matches = [...new Set(chatTextQueryTerms(message))]
+    .filter((term) => term.length >= MATCH_TERM_MIN_CHARS)
+    .slice(0, MEMORY_INDEX_MATCH_TERMS)
+    .map((term) => chatTextMatchQuery(term))
+    .filter((match): match is string => match !== null);
+  return matches.length === 0 ? null : matches.join(' OR ');
+}
+
+/**
+ * The eligible entries with the ones `matchedIds` names first, in that order,
+ * for as long as their index lines fit `MEMORY_INDEX_RELEVANT_MAX_BYTES`; every
+ * other eligible entry keeps its place after them.
+ */
+export function relevantFirst(
+  eligible: MemoryEntry[],
+  matchedIds: readonly string[],
+  now: Date,
+): MemoryEntry[] {
+  const byId = new Map(eligible.map((entry) => [entry.id, entry]));
+  const picked = new Set<string>();
+  const relevant: MemoryEntry[] = [];
+  let bytes = 0;
+  for (const id of matchedIds) {
+    const entry = byId.get(id);
+    if (entry === undefined || picked.has(id)) {
+      continue;
+    }
+    const size = Buffer.byteLength(`\n${indexLine(entry, now)}`);
+    if (bytes + size > MEMORY_INDEX_RELEVANT_MAX_BYTES) {
+      continue;
+    }
+    bytes += size;
+    picked.add(id);
+    relevant.push(entry);
+  }
+  return [...relevant, ...eligible.filter((entry) => !picked.has(entry.id))];
 }
 
 /** The handles a stored memory index lists, one `- m12 [type] …` line each. */

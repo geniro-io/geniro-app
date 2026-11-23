@@ -153,7 +153,7 @@ const ENTRY_TABS: readonly { id: EntryTab; label: string }[] = [
 
 const TAB_HINT: Record<EntryTab, string> = {
   index:
-    'Entries whose titles every new chat starts with, up to 2 KB, so agents know them without searching.',
+    'Entries whose titles every new chat starts with, up to 4 KB, so agents know them without searching. The ones matching a chat’s first message come first.',
   search:
     'Entries agents are not told about up front. They find one only by searching memory.',
   pending:
@@ -169,7 +169,8 @@ const TAB_REQUEST: Record<EntryTab, MemoriesApiListMemoriesRequest> = {
 };
 
 const TAB_EXPLAINED: Record<EntryTab, string> = {
-  index: 'Every new chat starts with these titles, up to 2 KB.',
+  index:
+    'Every new chat starts with these titles, up to 4 KB; the ones matching its first message come first.',
   search: 'Agents find these only by searching.',
   pending: 'No agent sees these until you approve them.',
   forgotten: 'Hidden from agents. Restore brings one back.',

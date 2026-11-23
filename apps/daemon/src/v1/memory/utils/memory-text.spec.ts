@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MEMORY_INDEX_MATCH_TERMS,
   MEMORY_INDEX_MAX_BYTES,
   MEMORY_INDEX_PREFACE,
   type MemoryEntry,
 } from '../memory.types';
-import { indexHandlesOf, memoryIndexOf } from './memory-text';
+import {
+  indexHandlesOf,
+  indexMatchQuery,
+  memoryIndexOf,
+  relevantFirst,
+} from './memory-text';
 
 const NOW = new Date('2026-10-28T12:00:00Z');
 
@@ -142,5 +148,101 @@ describe('indexHandlesOf', () => {
       memoryIndexOf([entry(10, 'see - m99 [user] note')], NOW).text ?? '';
 
     expect(indexHandlesOf(text)).toEqual(['m10']);
+  });
+});
+
+describe('the index cap', () => {
+  it('lists every entry that fits in 4 KB, where a 2 KB cap would cut it short', () => {
+    const entries = Array.from({ length: 20 }, (_, n) =>
+      entry(10 + n, `Note ${n} ${'word '.repeat(20)}end`),
+    );
+
+    const index = memoryIndexOf(entries, NOW).text ?? '';
+
+    expect(MEMORY_INDEX_MAX_BYTES).toBe(4096);
+    expect(Buffer.byteLength(index)).toBeLessThanOrEqual(4096);
+    expect(index).not.toContain('more — memory_search');
+    expect(indexHandlesOf(index)).toHaveLength(20);
+  });
+});
+
+describe('relevantFirst', () => {
+  it('lists the matched entries first, best match first, then the rest in their order', () => {
+    const eligible = [
+      entry(10, 'Alpha'),
+      entry(11, 'Beta'),
+      entry(12, 'Gamma'),
+      entry(13, 'Delta'),
+    ];
+
+    const ordered = relevantFirst(eligible, ['id-13', 'id-11'], NOW);
+
+    expect(ordered.map((e) => e.id)).toEqual([
+      'id-13',
+      'id-11',
+      'id-10',
+      'id-12',
+    ]);
+  });
+
+  it('never lists an entry twice, and ignores a matched id that is not eligible', () => {
+    const eligible = [entry(10, 'Alpha'), entry(11, 'Beta')];
+
+    const ordered = relevantFirst(eligible, ['id-11', 'id-11', 'id-99'], NOW);
+
+    expect(ordered.map((e) => e.id)).toEqual(['id-11', 'id-10']);
+  });
+
+  it('keeps a matched entry past the relevant share in its normal place', () => {
+    const long = 'x'.repeat(480);
+    const plain = [entry(10, 'Plain one'), entry(11, 'Plain two')];
+    const matched = Array.from({ length: 6 }, (_, n) =>
+      entry(20 + n, `Match ${long}`),
+    );
+
+    const ordered = relevantFirst(
+      [...plain, ...matched],
+      matched.map((e) => e.id),
+      NOW,
+    );
+
+    expect(ordered.map((e) => e.id)).toEqual([
+      'id-20',
+      'id-21',
+      'id-22',
+      'id-23',
+      'id-10',
+      'id-11',
+      'id-24',
+      'id-25',
+    ]);
+  });
+});
+
+describe('indexMatchQuery', () => {
+  it('is null for a message with no word of three characters or more', () => {
+    expect(indexMatchQuery('')).toBeNull();
+    expect(indexMatchQuery('   ')).toBeNull();
+    expect(indexMatchQuery('a b')).toBeNull();
+    expect(indexMatchQuery('?! -- ..')).toBeNull();
+  });
+
+  it('matches any one of the message’s words, each as a prefix', () => {
+    expect(indexMatchQuery('Retry backoff')).toBe('"retry"* OR "backoff"*');
+  });
+
+  it('takes each distinct word once, whatever its case', () => {
+    expect(indexMatchQuery('Retry retry RETRY')).toBe('"retry"*');
+  });
+
+  it('takes at most MEMORY_INDEX_MATCH_TERMS words of the message', () => {
+    const message = Array.from(
+      { length: MEMORY_INDEX_MATCH_TERMS + 8 },
+      (_, n) => `topic${n}`,
+    ).join(' ');
+
+    expect((indexMatchQuery(message) ?? '').split(' OR ')).toHaveLength(
+      MEMORY_INDEX_MATCH_TERMS,
+    );
   });
 });

@@ -146,6 +146,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     contextWindow: null,
     autoCompactPercent: null,
     modelParameters: {},
+    sessionStarted: false,
     contextTokens: null,
     contextEstimated: false,
     contextWindowTokens: null,

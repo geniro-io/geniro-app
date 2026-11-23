@@ -36,6 +36,25 @@ export function withModelParameter(
   return next;
 }
 
+export const SESSION_FIXED_REASON =
+  'Set when this chat started — start a new chat to change it';
+
+/**
+ * Why a parameter cannot be changed here, or null: the CLI's own reason it
+ * cannot run, else that the chat's CLI session already fixed it.
+ */
+export function parameterLockReason(
+  parameter: AgentModelParameter,
+  sessionStarted: boolean,
+): string | null {
+  if (parameter.unavailableReason) {
+    return parameter.unavailableReason;
+  }
+  return parameter.fixedPerSession === true && sessionStarted
+    ? SESSION_FIXED_REASON
+    : null;
+}
+
 /**
  * One chip for one model setting geniro has NO control of its own for — the
  * generic twin of the effort and context-window chips.
@@ -70,8 +89,11 @@ export function ModelParameterSelect({
   className,
   variant = 'ghost',
   id,
+  sessionStarted = false,
 }: {
   parameter: AgentModelParameter;
+  /** The chat already holds a CLI session, which freezes a `fixedPerSession` parameter. */
+  sessionStarted?: boolean;
   /** The chosen value, or null for whatever the model is already on. */
   value: string | null;
   /** A turn is running — this pick lands on the NEXT one. */
@@ -141,15 +163,19 @@ export function ModelParameterSelect({
   const shownLabel = showAxisName
     ? `${parameter.label} · ${valueLabel}`
     : valueLabel;
+  const lockReason = parameterLockReason(parameter, sessionStarted);
   return (
     <Select
       variant={variant}
       id={id}
       aria-label={parameter.label}
+      disabled={lockReason !== null}
       title={
-        nextTurnOnly
-          ? `${parameter.label} — applies to your next message`
-          : parameter.label
+        lockReason !== null
+          ? `${parameter.label} — ${lockReason}`
+          : nextTurnOnly
+            ? `${parameter.label} — applies to your next message`
+            : parameter.label
       }
       className={className}
       leadingIcon={<SlidersHorizontal />}

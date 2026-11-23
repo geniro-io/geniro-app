@@ -55,6 +55,28 @@ describe('claudeSettingsArgs', () => {
     expect(settingsOf(claudeSettingsArgs({ env }))).toEqual({ ...REFUSE, env });
   });
 
+  it('turns Code Mode on inside the env block, merged with the routing env', () => {
+    expect(settingsOf(claudeSettingsArgs({ codeMode: true }))).toEqual({
+      ...REFUSE,
+      env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' },
+    });
+    const env = { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' };
+    expect(
+      settingsOf(
+        claudeSettingsArgs({
+          codeMode: true,
+          env,
+          modelParameters: { fastMode: 'true' },
+        }),
+      ),
+    ).toEqual({
+      ...REFUSE,
+      fastMode: true,
+      env: { ...env, CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' },
+    });
+    expect(settingsOf(claudeSettingsArgs({ codeMode: false }))).toEqual(REFUSE);
+  });
+
   it('names each switched-off server in deniedMcpServers, in the CLI’s own shape', () => {
     expect(
       settingsOf(

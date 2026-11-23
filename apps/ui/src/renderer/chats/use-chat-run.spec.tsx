@@ -59,6 +59,7 @@ const run1: ChatRun = {
   contextWindow: null,
   autoCompactPercent: null,
   modelParameters: {},
+  sessionStarted: false,
   contextTokens: null,
   contextEstimated: false,
   contextWindowTokens: null,
@@ -1919,6 +1920,25 @@ describe('useChatRun', () => {
       emitRunStatus({ runId: 'r1', status: null, holdingFor: 0 });
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.holdingFor).toBe(0);
+  });
+
+  it('keeps the run row’s `sessionStarted` current from a bare broadcast', async () => {
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, sessionStarted: true });
+    });
+    expect(
+      harness.state().runs.find((r) => r.id === 'r1')?.sessionStarted,
+    ).toBe(true);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, sessionStarted: false });
+    });
+    expect(
+      harness.state().runs.find((r) => r.id === 'r1')?.sessionStarted,
+    ).toBe(false);
   });
 
   it('moves a background thread’s preview MID-TURN, not only when the turn ends', async () => {

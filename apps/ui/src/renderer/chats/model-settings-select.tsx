@@ -39,6 +39,7 @@ import {
   modelTitle,
   withSelectedModel,
 } from './model-options';
+import { parameterLockReason } from './model-parameter-select';
 import { PENDING_MODEL_SETTINGS_TEXT } from './model-settings-pending-row';
 
 /**
@@ -190,6 +191,7 @@ export function ModelSettingsSelect({
   parameters,
   parameterValues,
   onParameterChange,
+  sessionStarted = false,
   configDir = null,
   recentConfigDirs = EMPTY_RECENTS,
   configProfiles = EMPTY_PROFILES,
@@ -243,6 +245,8 @@ export function ModelSettingsSelect({
   /** The run's own picks, keyed by the CLI's parameter id. */
   parameterValues: Record<string, string>;
   onParameterChange: (parameterId: string, value: string | null) => void;
+  /** The chat already holds a CLI session, which freezes a `fixedPerSession` parameter. */
+  sessionStarted?: boolean;
   /** The chosen profile, or null for the CLI's own — the normal state. */
   configDir?: string | null;
   recentConfigDirs?: readonly string[];
@@ -339,6 +343,7 @@ export function ModelSettingsSelect({
        */
       valuesAreModelSpecific: boolean,
       parameterId?: string,
+      lockReason: string | null = null,
     ): MenuItem | null => {
       if (options.length === 0) {
         return null;
@@ -371,6 +376,7 @@ export function ModelSettingsSelect({
         value: `axis:${prefix}:${parameterId ?? ''}`,
         icon,
         label,
+        ...(lockReason === null ? {} : { disabled: true, title: lockReason }),
         // The first level states where each axis STANDS, which is the whole
         // reason it is worth a level of its own: five values readable at a glance
         // where five chips could only be read one hover at a time.
@@ -677,6 +683,7 @@ export function ModelSettingsSelect({
           // outside its list is refused rather than merely unlisted.
           true,
           parameter.id,
+          parameterLockReason(parameter, sessionStarted),
         ),
       ),
       // Last of the axes and above the model, which is where the rows it stands
@@ -709,6 +716,7 @@ export function ModelSettingsSelect({
     onAutoCompactChange !== undefined,
     parameters,
     parameterValues,
+    sessionStarted,
     settingsLoading,
     approvalCapability,
     approval,

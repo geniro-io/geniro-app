@@ -369,6 +369,21 @@ describe('DaemonClient', () => {
 });
 
 describe('parseRunStatus — the run_status twin', () => {
+  it('carries whether the chat holds a CLI session, and asserts nothing when absent or skewed', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, sessionStarted: true }),
+    ).toMatchObject({ sessionStarted: true });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, sessionStarted: false }),
+    ).toMatchObject({ sessionStarted: false });
+    expect(parseRunStatus({ runId: 'r1', status: null })).not.toHaveProperty(
+      'sessionStarted',
+    );
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, sessionStarted: 'yes' }),
+    ).not.toHaveProperty('sessionStarted');
+  });
+
   it('reads the unread moments, and drops one that is not an instant', () => {
     expect(
       parseRunStatus({

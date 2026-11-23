@@ -34,6 +34,7 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelParameter,
   AgentModelParameterListing,
   AgentModelsInput,
   AgentPlanLimits,
@@ -86,6 +87,7 @@ import {
   CLAUDE_AUTOCOMPACT_MAX_TOKENS,
   CLAUDE_AUTOCOMPACT_MIN_TOKENS,
   CLAUDE_BASE_ARGS,
+  CLAUDE_BASE_URL_ENV,
   CLAUDE_BROWSER_TOOLS_ENV,
   CLAUDE_BROWSER_TOOLS_OPTION,
   CLAUDE_BUILT_IN_MCP_SERVERS,
@@ -175,6 +177,13 @@ import {
   supportFromVerdict,
 } from './claude-probe.service';
 import { ClaudeTurnDriver } from './claude-turn.driver';
+import {
+  codeModeModelRefusal,
+  codeModeParameter,
+  codeModeRouteRefusal,
+  codeModeVersionRefusal,
+  wantsCodeMode,
+} from './utils/claude-code-mode.utils';
 import { reloadCommandsRequestLine } from './utils/claude-commands.utils';
 import { readClaudeConfigDirPin } from './utils/claude-config-dir.utils';
 import {
@@ -321,7 +330,7 @@ export class ClaudeAdapter extends AgentAdapter {
           CLAUDE_CODE_USE_VERTEX: '0',
           CLAUDE_CODE_USE_FOUNDRY: '0',
         },
-        baseUrlEnv: 'ANTHROPIC_BASE_URL',
+        baseUrlEnv: CLAUDE_BASE_URL_ENV,
         envSettingsFlag: CLAUDE_SETTINGS_FLAG,
         modelEnvKeys: [
           'ANTHROPIC_DEFAULT_OPUS_MODEL',
@@ -1446,43 +1455,47 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * FAST MODE, this CLI's one further model setting — see
-   * {@link claudeSettingsArgs} for the argv it turns into.
+   * FAST MODE and CODE MODE, this CLI's further model settings — see
+   * {@link claudeSettingsArgs} for the argv they turn into.
    *
-   * Support is per MODEL, not per CLI ({@link isFastModeCapable}), so an
-   * unsupported model gets no row rather than a control the CLI would
-   * silently ignore. No handshake is spawned for this answer, unlike
-   * cursor's: the fact lives in the model's NAME, measured once against the
-   * shipped binary rather than asked of it per turn.
+   * Fast mode is per MODEL ({@link isFastModeCapable}), so an unsupported
+   * model gets no row rather than a control the CLI would silently ignore. No
+   * handshake is spawned for this answer, unlike cursor's: the fact lives in
+   * the model's NAME, measured once against the shipped binary.
    *
-   * The row is offered whatever this ACCOUNT's own billing state is — see
-   * {@link CLAUDE_SETTINGS_FLAG}'s doc block — because nothing here can read
-   * that state ahead of a turn, and withholding the control over a gate
-   * nobody can check would look identical to a bug.
+   * Code mode is always listed and drawn disabled with its reason where it
+   * cannot run, because whether it can depends on the CLI build and the route
+   * as well as the model. With no model named the CLI runs its default, the
+   * latest tier, so code mode is offered on it.
+   *
+   * The fast mode row is offered whatever this ACCOUNT's own billing state is —
+   * see {@link CLAUDE_SETTINGS_FLAG}'s doc block — because nothing here can
+   * read that state ahead of a turn.
    */
   override async listModelParameters(
     model: string | null,
     _options: AgentCommandOptions = {},
   ): Promise<AgentModelParameterListing> {
-    if (model === null) {
-      return {
-        parameters: [],
-        unavailableReason: 'pick a model to see the settings it offers',
-        exact: false,
-      };
+    const parameters: AgentModelParameter[] = [];
+    if (model !== null && isFastModeCapable(model)) {
+      parameters.push(fastModeParameter());
     }
-    if (!isFastModeCapable(model)) {
-      return {
-        parameters: [],
-        unavailableReason: `${model} does not support fast mode — only Opus models do`,
-        exact: true,
-      };
-    }
-    return {
-      parameters: [fastModeParameter()],
-      unavailableReason: null,
-      exact: true,
-    };
+    parameters.push(codeModeParameter(await this.codeModeRefusal(model)));
+    return { parameters, unavailableReason: null, exact: model !== null };
+  }
+
+  private async codeModeRefusal(model: string | null): Promise<string | null> {
+    const version =
+      (await this.claudeOptions.versions?.resolve('claude')) ?? null;
+    const route = this.modelConfiguration(model);
+    return (
+      codeModeVersionRefusal(version) ??
+      (model === null ? null : codeModeModelRefusal(model)) ??
+      codeModeRouteRefusal(
+        { ...this.inheritedEnv(), ...route.env },
+        route.args.length > 0,
+      )
+    );
   }
 
   /**
@@ -2492,6 +2505,10 @@ export class ClaudeAdapter extends AgentAdapter {
       modelParameters: input.modelParameters,
       replyLanguage: input.replyLanguage,
       env: this.modelConfiguration(input.model).env,
+      // A read-only turn's `--tools` allow-list keeps Code Mode off anyway, and
+      // such a chat is read-only from its first turn, so no session it resumes
+      // was started in Code Mode.
+      codeMode: wantsCodeMode(input.modelParameters) && input.readOnly !== true,
       // Sorted, so a reordered list reads as the same settings (`sessionKey`).
       deniedMcpServers: claudeSwitchedOffServers(
         this.switchedOffServers(input),

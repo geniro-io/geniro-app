@@ -405,6 +405,8 @@ export interface RunStatusEvent {
    * readings of one English phrase can. `0` says the hold is over.
    */
   holdingFor?: number;
+  /** `RunDto.sessionStarted`, announced when a chat's first CLI session is recorded; absent asserts nothing. */
+  sessionStarted?: boolean;
   /**
    * How many of this TEAM run's agents are sitting inside a wait on their
    * own agent-to-agent calls, or `undefined` when this event says nothing
@@ -729,6 +731,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     at,
     awaiting,
     holdingFor,
+    sessionStarted,
     awaitingCalls,
     rootsWorking,
     shellsOpen,
@@ -815,6 +818,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     ...(typeof holdingFor === 'number' && Number.isFinite(holdingFor)
       ? { holdingFor: Math.max(0, Math.trunc(holdingFor)) }
       : {}),
+    ...(typeof sessionStarted === 'boolean' ? { sessionStarted } : {}),
     // The call-runtime twin of the hold, read on identical terms and absent on
     // the same silence: only the broker's own transitions say anything about
     // it, and an ordinary activity announce must leave the reading alone.

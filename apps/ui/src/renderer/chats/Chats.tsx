@@ -3737,18 +3737,11 @@ export function Chats({
         );
         void hostedRef.current?.onRunSettingsChanged?.(updated);
       } catch (err) {
-        // A RUN_BUSY here is not a fault — it is the daemon saying this turn
-        // was spawned with no permission gate, so its mode cannot be changed
-        // until it settles. It is also not rare: only claude implements
-        // `buildApprovalModePayload`, so EVERY mid-turn approval change on a
-        // cursor chat lands here, and the chip is offered on cursor.
-        //
-        // `String(err)` printed the whole
-        // `daemon PATCH /v1/chats/<id>/settings failed (409): {"code":…}`
-        // envelope. The daemon wrote a real sentence for this; show that.
-        setError(
-          (isRunBusyError(err) ? daemonErrorDetail(err) : null) ?? String(err),
-        );
+        // The daemon writes a sentence for each refusal here — a RUN_BUSY
+        // approval change mid-turn, a setting the chat's CLI session fixed, a
+        // model that cannot continue it — so that is what the user is shown,
+        // not the `daemon PATCH … failed (400): {"code":…}` envelope.
+        setError(describeDaemonError(err));
       }
     },
     [chatApi],
@@ -11413,6 +11406,7 @@ export function Chats({
                                 }
                                 parameters={agentModelParameters.parameters}
                                 parameterValues={activeRun.modelParameters}
+                                sessionStarted={activeRun.sessionStarted}
                                 onParameterChange={(id, next) =>
                                   void changeRunSettings({
                                     modelParameters: withModelParameter(

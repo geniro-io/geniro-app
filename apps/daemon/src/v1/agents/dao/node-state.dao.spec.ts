@@ -57,6 +57,20 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     dao = new NodeStateDao(orm.em.fork());
   });
 
+  it('names only the runs whose given member holds a CLI session', async () => {
+    await dao.saveSessionId('run-1', 'agent', 'session-1');
+    await dao.setStatus('run-2', 'agent', { status: 'running' });
+    await dao.saveSessionId('run-3', 'other', 'session-3');
+    await dao.saveSessionId('run-4', 'agent', 'session-4');
+
+    expect(
+      [
+        ...(await dao.runsWithSession(['run-1', 'run-2', 'run-3'], 'agent')),
+      ].sort(),
+    ).toEqual(['run-1']);
+    expect(await dao.runsWithSession([], 'agent')).toEqual(new Set());
+  });
+
   it('names each run with a member still running once', async () => {
     await dao.setStatus('run-1', 'a', { status: 'running' });
     await dao.setStatus('run-1', 'b', { status: 'running' });

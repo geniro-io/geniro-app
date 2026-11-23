@@ -41,13 +41,17 @@ const marker = (seq: number, preview: string): ChatTimelineMarker =>
 const rail = (...markers: ChatTimelineMarker[]): ChatTimelineDto => ({
   markers,
   partialReason: null,
+  events: [],
+  eventsPartialReason: null,
 });
 
 interface Props {
   runId: string | null;
+  enabled: boolean;
   settledTurns: number;
   latestUserSeq: number;
   latestAgentSeq: number;
+  latestEventSeq: number;
 }
 
 let root: Root | null = null;
@@ -63,16 +67,20 @@ function mount(
   const api = { readChatTimeline } as unknown as ChatsApi;
   function Probe({
     runId,
+    enabled,
     settledTurns,
     latestUserSeq,
     latestAgentSeq,
+    latestEventSeq,
   }: Props): null {
     seen = useChatTimeline(
       api,
       runId,
+      enabled,
       settledTurns,
       latestUserSeq,
       latestAgentSeq,
+      latestEventSeq,
     );
     return null;
   }
@@ -101,9 +109,11 @@ afterEach(() => {
 
 const BASE: Props = {
   runId: 'r1',
+  enabled: true,
   settledTurns: 0,
   latestUserSeq: 0,
   latestAgentSeq: 0,
+  latestEventSeq: 0,
 };
 
 describe('useChatTimeline', () => {
@@ -114,6 +124,60 @@ describe('useChatTimeline', () => {
 
     expect(read).toHaveBeenCalledWith({ runId: 'r1' });
     expect(previews()).toEqual(['first ask']);
+    expect(seen?.status).toBe('ready');
+  });
+
+  it('reads nothing while the timeline is not shown, and reads once it is', async () => {
+    const read = vi.fn(() => Promise.resolve(rail(marker(1, 'first ask'))));
+    const rerender = mount(read, { ...BASE, enabled: false });
+    await act(async () => {});
+
+    rerender({ ...BASE, enabled: false, settledTurns: 3, latestAgentSeq: 9 });
+    await act(async () => {});
+    expect(read).not.toHaveBeenCalled();
+    expect(seen?.status).toBe('idle');
+
+    rerender({ ...BASE, enabled: true, settledTurns: 3, latestAgentSeq: 9 });
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(previews()).toEqual(['first ask']);
+  });
+
+  it('re-reads when a row the timeline draws an event from lands', async () => {
+    const read = vi.fn(() => Promise.resolve(rail()));
+    const rerender = mount(read, BASE);
+    await act(async () => {});
+
+    rerender({ ...BASE, latestEventSeq: 12 });
+    await act(async () => {});
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the daemon's events and their partial sentence through", async () => {
+    const event = {
+      id: 'step:i-4',
+      kind: 'step',
+      seq: 4,
+      at: '2026-09-07T12:01:00.000Z',
+      memberId: 'senior',
+      text: 'Found the cause',
+      detail: 'problem',
+      url: null,
+      open: null,
+    } as const;
+    const read = vi.fn(() =>
+      Promise.resolve({
+        ...rail(),
+        events: [event],
+        eventsPartialReason: 'showing the newest 200 events',
+      }),
+    );
+    mount(read, BASE);
+    await act(async () => {});
+
+    expect(seen?.events).toEqual([event]);
+    expect(seen?.eventsPartialReason).toBe('showing the newest 200 events');
   });
 
   it('re-reads when a turn SETTLES, because the segment figures moved', async () => {
@@ -176,7 +240,7 @@ describe('useChatTimeline', () => {
     // second copy here cannot drift from it.
     const read = vi.fn(() =>
       Promise.resolve({
-        markers: [marker(1, 'an ask')],
+        ...rail(marker(1, 'an ask')),
         partialReason: 'showing the newest 200 messages',
       }),
     );
@@ -186,9 +250,7 @@ describe('useChatTimeline', () => {
     expect(seen?.partialReason).toBe('showing the newest 200 messages');
   });
 
-  it('drops the rail on a failed read rather than surfacing an error', async () => {
-    // A rail that could not be read is a chat without a rail — the transcript
-    // under it is what the user opened the thread for and is unaffected.
+  it('keeps the last reading when a refresh fails, and says so only when nothing was read', async () => {
     const read = vi
       .fn()
       .mockResolvedValueOnce(rail(marker(1, 'first ask')))
@@ -200,10 +262,17 @@ describe('useChatTimeline', () => {
     rerender({ ...BASE, settledTurns: 1 });
     await act(async () => {});
 
+    expect(previews()).toEqual(['first ask']);
+    expect(seen?.status).toBe('ready');
+  });
+
+  it('reports an error when the first read fails', async () => {
+    const read = vi.fn().mockRejectedValueOnce(new Error('daemon GET failed'));
+    mount(read, BASE);
+    await act(async () => {});
+
+    expect(seen?.status).toBe('error');
     expect(seen?.markers).toEqual([]);
-    // The partial sentence goes with them: a failed read makes no claim about
-    // how much of the conversation it was showing.
-    expect(seen?.partialReason).toBeNull();
   });
 
   it('never draws the previous run rail under the new run name', async () => {

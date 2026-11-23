@@ -144,6 +144,8 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   team_note: null,
   // The outcome is its own `run_outcome` row.
   record_outcome: null,
+  // The step is its own `milestone` row.
+  milestone: null,
   move_stage: null,
   // The card is the `lessons` row the reflection writes into the thread.
   propose_lessons: null,

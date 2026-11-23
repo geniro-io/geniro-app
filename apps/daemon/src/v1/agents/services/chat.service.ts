@@ -175,6 +175,7 @@ import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
 import { isHostKnowledgeCall } from '../utils/host-knowledge';
 import { isHostMemoryCall } from '../utils/host-memory';
 import { isHostMetricsCall } from '../utils/host-metrics';
+import { isHostMilestoneCall } from '../utils/host-milestone';
 import { isHostNotifyCall } from '../utils/host-notify';
 import {
   hostPatchResultText,
@@ -302,6 +303,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
+import { MilestoneBroker } from './milestone.broker';
 import { MonitorBroker, type MonitorSink } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
@@ -979,6 +981,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly turnFolders?: TurnFolderService,
     /** `flag_issue`'s sink, kept with the chat. Optional for the positional specs. */
     @Optional() private readonly flags?: FlagBroker,
+    /** `milestone`'s sink, kept with `record_outcome`'s. Optional for the positional specs. */
+    @Optional() private readonly milestones?: MilestoneBroker,
   ) {}
 
   /**
@@ -6458,6 +6462,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
         isHostFindingsCall(hostServerName, toolName) ||
+        // A step writes one line into this run's own history: `isHostMilestoneCall`.
+        isHostMilestoneCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
         (isHostGalleryCall(hostServerName, toolName) &&
           !hostGalleryDownloads(input)) ||
@@ -9399,6 +9405,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       rowNodeId: null,
       publisher: { nodeId: SINGLE_AGENT_NODE, conversationId: '' },
     };
+    const recording = {
+      persistItem: async (
+        _memberId: string | null,
+        kind: ItemKind,
+        role: string | null,
+        payload: unknown,
+      ) =>
+        this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          kind,
+          role,
+          payload,
+        ),
+      recorder: () => ({
+        memberId: SINGLE_AGENT_NODE,
+        conversationId: null,
+        callId: null,
+      }),
+    };
     this.keptHostTools.set(runId, [
       this.findingsReports.register(runId, SINGLE_AGENT_NODE, reportFindings),
       this.charts.register(runId, SINGLE_AGENT_NODE, drawChart),
@@ -9421,26 +9448,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         remove: (actionId) =>
           this.actionPublisher.remove(actionContext, actionId),
       }),
-      ...(this.runOutcomes === undefined
-        ? []
-        : [
-            this.runOutcomes.register(runId, SINGLE_AGENT_NODE, {
-              persistItem: async (_memberId, kind, role, payload) =>
-                this.persist(
-                  this.em.fork(),
-                  runId,
-                  await this.seqs.reserve(runId),
-                  kind,
-                  role,
-                  payload,
-                ),
-              recorder: () => ({
-                memberId: SINGLE_AGENT_NODE,
-                conversationId: null,
-                callId: null,
-              }),
-            }),
-          ]),
+      ...[this.runOutcomes, this.milestones]
+        .filter((broker) => broker !== undefined)
+        .map((broker) => broker.register(runId, SINGLE_AGENT_NODE, recording)),
       ...(this.flags === undefined
         ? []
         : [

@@ -102,6 +102,7 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
+import { MilestoneBroker } from '../../agents/services/milestone.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import {
@@ -171,6 +172,7 @@ import { hostEndpointPath } from '../../agents/utils/host-endpoint';
 import { isHostFlagIssueCall } from '../../agents/utils/host-flag-issue';
 import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
+import { isHostMilestoneCall } from '../../agents/utils/host-milestone';
 import { isHostProjectInstructionsCall } from '../../agents/utils/host-project-instructions';
 import {
   hostCardQuestions,
@@ -1035,6 +1037,8 @@ export class TeamExecutorService
     @Optional() private readonly cacheKeepAlive?: PromptCacheKeepAliveService,
     /** `flag_issue`, optional on `artifacts`' terms. */
     @Optional() private readonly flags?: FlagBroker,
+    /** `milestone`, optional on `artifacts`' terms. */
+    @Optional() private readonly milestones?: MilestoneBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -2748,6 +2752,7 @@ export class TeamExecutorService
     this.teamNotes?.forgetRun(runId);
     this.runOutcomes?.forgetRun(runId);
     this.flags?.forgetRun(runId);
+    this.milestones?.forgetRun(runId);
     this.stages?.forget(runId);
   }
 
@@ -3336,10 +3341,10 @@ export class TeamExecutorService
   }
 
   /**
-   * Give each call-capable member of this pass `record_outcome`, on
-   * {@link registerArtifactPublishers}' terms. The row goes into the recording
-   * conversation's own transcript and, when that conversation answers a call,
-   * into that call's card — a team note's filing.
+   * Give each call-capable member of this pass `record_outcome` and
+   * `milestone`, on {@link registerArtifactPublishers}' terms. Their rows go
+   * into the recording conversation's own transcript and, when that
+   * conversation answers a call, into that call's card — a team note's filing.
    */
   private registerRunOutcomeSinks(
     runId: string,
@@ -3351,24 +3356,24 @@ export class TeamExecutorService
       payload: unknown,
     ) => Promise<ItemWire>,
   ): void {
-    const broker = this.runOutcomes;
-    if (broker === undefined) {
-      return;
-    }
     for (const dispose of this.runOutcomeDisposers.get(runId) ?? []) {
       dispose();
     }
+    const sink = {
+      persistItem,
+      recorder: (caller: string) => ({
+        memberId: callerNodeOf(caller),
+        conversationId: callerConversationOf(caller),
+        callId: this.callBroker.callAnsweredBy(runId, caller),
+      }),
+    };
+    const brokers = [this.runOutcomes, this.milestones].filter(
+      (broker) => broker !== undefined,
+    );
     this.runOutcomeDisposers.set(
       runId,
-      hostToolNodes.map((node) =>
-        broker.register(runId, node.id, {
-          persistItem,
-          recorder: (caller) => ({
-            memberId: callerNodeOf(caller),
-            conversationId: callerConversationOf(caller),
-            callId: this.callBroker.callAnsweredBy(runId, caller),
-          }),
-        }),
+      hostToolNodes.flatMap((node) =>
+        brokers.map((broker) => broker.register(runId, node.id, sink)),
       ),
     );
   }
@@ -6832,6 +6837,7 @@ export class TeamExecutorService
                   event.toolName,
                 ) ||
                 isHostBrowserCall(hostMcpServerName(runId), event.toolName) ||
+                isHostMilestoneCall(hostMcpServerName(runId), event.toolName) ||
                 isHostTeamProposalCall(
                   hostMcpServerName(runId),
                   event.toolName,
@@ -6844,7 +6850,8 @@ export class TeamExecutorService
               // The shared memory and the knowledge store, at every approval
               // level, as in a chat: their limits live in their services — see
               // `isHostMemoryCall` and `isHostKnowledgeCall`; reading back the
-              // run's own page answers likewise (`isHostArtifactAnswersCall`). The lead's
+              // run's own page answers likewise (`isHostArtifactAnswersCall`), and
+              // a step writes only its own row (`isHostMilestoneCall`). The lead's
               // `propose_team` and `save_project_instructions` write nothing:
               // their own card is the gate.
               handle.respondApproval(event.id, true, event.input);
@@ -7372,6 +7379,7 @@ export class TeamExecutorService
         isHostKnowledgeCall(hostMcpServerName(runId), request.toolName) ||
         isHostArtifactAnswersCall(hostMcpServerName(runId), request.toolName) ||
         isHostBrowserCall(hostMcpServerName(runId), request.toolName) ||
+        isHostMilestoneCall(hostMcpServerName(runId), request.toolName) ||
         isHostTeamProposalCall(hostMcpServerName(runId), request.toolName) ||
         isHostProjectInstructionsCall(
           hostMcpServerName(runId),

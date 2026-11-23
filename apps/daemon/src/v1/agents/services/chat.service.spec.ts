@@ -82,6 +82,7 @@ import {
   HOST_GALLERY_TOOL,
   HOST_MEMORY_TOOLS,
   HOST_METRICS_TOOL,
+  HOST_MILESTONE_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
@@ -149,6 +150,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
+import { MilestoneBroker } from './milestone.broker';
 import { MonitorBroker } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
@@ -1329,6 +1331,11 @@ function setup(
       typeof RunOutcomeBroker
     >),
   );
+  const milestones = new MilestoneBroker(
+    ...([em, itemDao] as unknown as ConstructorParameters<
+      typeof MilestoneBroker
+    >),
+  );
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
@@ -1548,6 +1555,8 @@ function setup(
     commandCenters,
     opts.writeFailures,
     opts.turnFolders as TurnFolderService | undefined,
+    undefined,
+    milestones,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -1565,6 +1574,7 @@ function setup(
     plans,
     projectCards,
     runOutcomes,
+    milestones,
     metrics,
     comparisons,
     galleries,
@@ -2363,6 +2373,19 @@ describe('ChatService', () => {
       expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
       await settle(cursor);
       expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
+    });
+
+    it('offers milestone from a chat turn on, for what the CLI does after it too', async () => {
+      const { service, cursor, milestones } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      expect(milestones.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+      expect(milestones.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
     });
 
     it('hands a cursor turn the findings tool too — every chat can draw a card', async () => {
@@ -8053,6 +8076,43 @@ describe('ChatService', () => {
       expect(approvals.listByRun(run.id)).toHaveLength(1);
     });
   });
+
+  for (const approval of ['ask', 'acceptEdits'] as const) {
+    it(`approves a step in an ${approval} chat without a card, and still cards another server's tool of that name`, async () => {
+      const { service, claude, approvals } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval,
+      });
+      await service.sendMessage(run.id, 'hi');
+      const input = { text: 'Found the cause', kind: 'problem' };
+
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-step',
+        toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_MILESTONE_TOOL}`,
+        input,
+      });
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-other',
+        toolName: `mcp__someone-else__${HOST_MILESTONE_TOOL}`,
+        input,
+      });
+      await drain();
+
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        'p-step',
+        true,
+        input,
+      );
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledTimes(1);
+      const cards = approvals.listByRun(run.id);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.requestId).toMatch(/^p-other/);
+    });
+  }
 
   it('gives a mid-turn message a seq the running turn has not already reserved', async () => {
     // THE duplicate-seq defect, reproduced on a real transcript: a user item

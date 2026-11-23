@@ -20,6 +20,7 @@ import { GoalWritersBroker } from '../agents/services/goal-writers.broker';
 import { GoalsService } from '../agents/services/goals.service';
 import { KnowledgeItemsService } from '../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
+import { MilestoneBroker } from '../agents/services/milestone.broker';
 import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
@@ -105,6 +106,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamNotes: TeamNoteBroker,
         runOutcomes: RunOutcomeBroker,
         flags: FlagBroker,
+        milestones: MilestoneBroker,
         goals: GoalsService,
         goalWriters: GoalWritersBroker,
         stages: StageService,
@@ -155,6 +157,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamNotes,
           runOutcomes,
           flags,
+          milestones,
           goals,
           goalWriters,
           stages,
@@ -203,6 +206,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamNoteBroker,
         RunOutcomeBroker,
         FlagBroker,
+        MilestoneBroker,
         GoalsService,
         GoalWritersBroker,
         StageService,

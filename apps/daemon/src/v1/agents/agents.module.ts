@@ -112,6 +112,7 @@ import { MemoryCheckService } from './services/memory-check.service';
 import { MemoryImportService } from './services/memory-import.service';
 import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
+import { MilestoneBroker } from './services/milestone.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelPriceService } from './services/model-price.service';
 import { ModelPriceCatalog } from './services/model-price-catalog.service';
@@ -315,6 +316,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunOutcomeBroker,
     FlagBroker,
     AgentFlagDao,
+    MilestoneBroker,
     GoalsService,
     GoalDao,
     RunOutcomeHistoryService,
@@ -718,6 +720,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunOutcomeBroker,
     FlagBroker,
     AgentFlagDao,
+    MilestoneBroker,
     GoalsService,
     GoalDao,
     RunOutcomeHistoryService,

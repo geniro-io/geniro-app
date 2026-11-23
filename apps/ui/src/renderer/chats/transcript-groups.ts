@@ -3168,6 +3168,7 @@ export function groupTranscript(
         refusedCallIds.has(callId) &&
         (tool === 'team_note' ||
           tool === 'record_outcome' ||
+          tool === 'milestone' ||
           tool === 'move_stage' ||
           tool === SAVE_PROJECT_INSTRUCTIONS ||
           tool === MESSAGE_THREAD);

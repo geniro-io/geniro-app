@@ -94,6 +94,7 @@ import type { GoalsService } from '../../agents/services/goals.service';
 import { HostToolResultLedger } from '../../agents/services/host-tool-result.ledger';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { MilestoneBroker } from '../../agents/services/milestone.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { NotifyBroker } from '../../agents/services/notify.broker';
@@ -275,6 +276,8 @@ function service(
   commandCenters = new CommandCenterBroker(),
   // Off unless a case registers a sink: the tool is not listed.
   flags = flagBroker(),
+  // Never asked by the cases that pass none: no sink, so the tool is not listed.
+  milestones = milestoneBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -298,6 +301,7 @@ function service(
       teamNotes,
       runOutcomes,
       flags,
+      milestones,
       goals,
       goalWriters: new GoalWritersBroker(),
       stages,
@@ -375,6 +379,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const flags = flagBroker();
   flags.register('run-1', 'agent', noop as never);
   flags.register('run-lessons', 'agent', noop as never);
+  const milestones = milestoneBroker();
+  milestones.register('run-1', 'agent', noop as never);
   const projectCards = new ProjectInstructionsBroker();
   projectCards.register('run-1', 'agent', noop as never);
   for (const broker of [
@@ -452,6 +458,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     fakeBrowser({ status: 'done', text: '' }, true).broker,
     undefined,
     flags,
+    milestones,
   );
   const listedOn = async (runId: string): Promise<ToolListing[]> =>
     (
@@ -492,6 +499,12 @@ function flagBroker(): FlagBroker {
 }
 
 /** A `record_outcome` broker no case here records through: listing only. */
+function milestoneBroker(): MilestoneBroker {
+  return new MilestoneBroker(
+    ...([{}, {}] as unknown as ConstructorParameters<typeof MilestoneBroker>),
+  );
+}
+
 function runOutcomeBroker(): RunOutcomeBroker {
   return new RunOutcomeBroker(
     ...([{}, {}, {}, {}, {}] as unknown as ConstructorParameters<
@@ -4203,6 +4216,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       ...({} as Parameters<typeof createMcpTools>[0]),
       runOutcomes: outcomes,
       flags: flagBroker(),
+      milestones: milestoneBroker(),
       board: new TaskBoardBroker(),
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
@@ -4844,6 +4858,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       flags: flagBroker(),
+      milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -4953,6 +4968,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       flags: flagBroker(),
+      milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -5293,6 +5309,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       flags: flagBroker(),
+      milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
@@ -5417,6 +5434,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
         flags: flagBroker(),
+        milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
         stages: stageService(),
@@ -5656,6 +5674,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
         flags: flagBroker(),
+        milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
         stages: stageService(),

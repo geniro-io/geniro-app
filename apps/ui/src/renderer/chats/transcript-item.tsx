@@ -23,6 +23,8 @@ import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
 import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { readMilestonePayload } from './milestone-payload';
+import { MilestoneRow } from './milestone-row';
 import { MonitorNoticeRow } from './monitor-divider';
 import { readMonitorNotice } from './monitor-payload';
 import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
@@ -794,6 +796,16 @@ export const TranscriptItem = memo(function TranscriptItem({
           seq={item.seq}
           note={note}
           author={nodeName(item.memberId)}
+        />
+      );
+    }
+    case 'milestone': {
+      const milestone = readMilestonePayload(item.payload);
+      return milestone === null ? null : (
+        <MilestoneRow
+          milestone={milestone}
+          author={nodeName(item.memberId)}
+          time={formatClockTime(item.createdAt)}
         />
       );
     }

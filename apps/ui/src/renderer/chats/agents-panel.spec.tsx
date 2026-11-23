@@ -1319,52 +1319,23 @@ describe('AgentsPanel', () => {
     expect(onSearch).toHaveBeenCalledTimes(2);
   });
 
-  it('offers the conversation timeline from the heading and from the rail', () => {
-    const onJump = vi.fn();
+  it('opens the thread timeline from the heading and from the rail', () => {
+    const onOpen = vi.fn();
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={agents}
         onOpenThread={vi.fn()}
-        timeline={{
-          markers: [
-            {
-              seq: 7,
-              createdAt: '2026-09-07T12:00:00.000Z',
-              preview: 'the ask',
-              segment: {
-                aiMessages: 1,
-                elapsedMs: 1_000,
-                totals: {
-                  turns: 1,
-                  costedTurns: 0,
-                  costUsd: null,
-                  estimatedCostUsd: null,
-                  inputTokens: null,
-                  outputTokens: null,
-                  cacheReadTokens: null,
-                  cacheCreationTokens: null,
-                  thinkingTokens: null,
-                  workedMs: null,
-                },
-              },
-            },
-          ],
-          partialReason: null,
-          onJump,
-          inProgress: false,
-        }}
+        timeline={{ onOpen, onJump: vi.fn() }}
       />,
     );
-    const selector = 'button[aria-label="Conversation timeline"]';
-    expect(el.querySelector(selector)).not.toBeNull();
+    const selector = 'button[aria-label="Thread timeline"]';
+    click(el.querySelector(selector));
+    expect(onOpen).toHaveBeenCalledTimes(1);
 
-    // Folded, the trigger is still there — and still opens onto the same
-    // timeline, which is what a rail control is for.
     click(el.querySelector('button[aria-label="Collapse agents panel"]'));
     click(el.querySelector(selector));
-    click(document.body.querySelector('[data-slot="timeline-marker"]'));
-    expect(onJump).toHaveBeenCalledWith(7);
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
   it('draws neither navigation control when the owner supplies neither', () => {
@@ -1379,9 +1350,7 @@ describe('AgentsPanel', () => {
     expect(
       el.querySelector('button[aria-label="Search this conversation"]'),
     ).toBeNull();
-    expect(
-      el.querySelector('button[aria-label="Conversation timeline"]'),
-    ).toBeNull();
+    expect(el.querySelector('button[aria-label="Thread timeline"]')).toBeNull();
   });
 
   it('draws no terminal control for a run with no folder', () => {

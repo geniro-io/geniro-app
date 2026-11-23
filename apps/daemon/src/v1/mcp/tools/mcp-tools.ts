@@ -17,6 +17,7 @@ import type { GoalWritersBroker } from '../../agents/services/goal-writers.broke
 import type { GoalsService } from '../../agents/services/goals.service';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
+import type { MilestoneBroker } from '../../agents/services/milestone.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
@@ -74,6 +75,7 @@ import { MemorySaveTool } from './memory-save/memory-save.tool';
 import { MemorySearchTool } from './memory-search/memory-search.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
 import { MessageThreadTool } from './message-thread/message-thread.tool';
+import { MilestoneTool } from './milestone/milestone.tool';
 import { MonitorTool } from './monitor/monitor.tool';
 import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NoteThreadTool } from './note-thread/note-thread.tool';
@@ -127,6 +129,7 @@ export interface McpToolDeps {
   teamNotes: TeamNoteBroker;
   runOutcomes: RunOutcomeBroker;
   flags: FlagBroker;
+  milestones: MilestoneBroker;
   goals: GoalsService;
   goalWriters: GoalWritersBroker;
   stages: StageService;
@@ -187,6 +190,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new TeamNotesTool(deps.teamNotes),
     new RecordOutcomeTool(deps.runOutcomes),
     new MoveStageTool(deps.stages, deps.calls),
+    new MilestoneTool(deps.milestones),
     new GoalsTool(deps.goals, deps.goalWriters),
     new FlagIssueTool(deps.flags),
     new AskUserQuestionTool(deps.questions),

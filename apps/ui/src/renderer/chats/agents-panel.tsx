@@ -8,6 +8,7 @@ import {
   Cpu,
   Download,
   FileText,
+  GitCommitVertical,
   LayoutTemplate,
   Lightbulb,
   Link2,
@@ -34,7 +35,6 @@ import {
 } from '../agent-identity';
 import type {
   AgentMcpListingDto as AgentMcpListing,
-  ChatTimelineMarker,
   HandoffTargetDto,
   RunPullRequestOutcomes,
   SetPoolMemberResultDto,
@@ -88,7 +88,6 @@ import { ChatLink, ChatPanelLinkRow } from './browser/chat-link';
 import { callClockTitle, useCallClockMs } from './call-clock';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
-import { ConversationTimeline } from './conversation-timeline';
 import { GoalsSection, type RunGoals } from './goals-section';
 import { formatElapsed } from './live-row';
 import {
@@ -586,6 +585,28 @@ function RunProcessesButton({
  * navigation controls were moved here on report, which is also what freed that
  * header's right end for the figures alone.
  */
+function TimelineButton({
+  onOpen,
+  className,
+}: {
+  onOpen: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Thread timeline"
+      aria-haspopup="dialog"
+      title="Thread timeline — what happened on this thread"
+      onClick={onOpen}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <GitCommitVertical className="size-4" />
+    </Button>
+  );
+}
+
 function SearchChatButton({
   onSearch,
   className,
@@ -2173,11 +2194,10 @@ export function AgentsPanel({
    * `ExportChatButton` beside it are given a callback and draw themselves.
    */
   timeline?: {
-    markers: readonly ChatTimelineMarker[];
-    partialReason: string | null;
+    /** Open the Progress window on its Timeline. */
+    onOpen: () => void;
+    /** Take the reader to a transcript row — the waterfall's Open in chat. */
     onJump: (seq: number) => void;
-    /** The agent is still working on the newest message — see the timeline. */
-    inProgress: boolean;
   };
   onOpenFolderTerminal?: () => void;
   browserRunId?: string | null;
@@ -2516,13 +2536,10 @@ export function AgentsPanel({
     const groups: React.ReactNode[][] = [
       [
         timeline ? (
-          <ConversationTimeline
+          <TimelineButton
             key="timeline"
-            markers={timeline.markers}
-            partialReason={timeline.partialReason}
-            onJump={timeline.onJump}
-            inProgress={timeline.inProgress}
-            className={cn(size, 'text-muted-foreground')}
+            onOpen={timeline.onOpen}
+            className={size}
           />
         ) : null,
         onSearch ? (

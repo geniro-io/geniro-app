@@ -2,14 +2,27 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
-import type {
-  ChatTimelineMarker,
-  ChatTimelineSegment,
-  ChatTimelineWire,
+import {
+  type ChatTimelineMarker,
+  type ChatTimelineSegment,
+  type ChatTimelineWire,
+  TIMELINE_EVENTS_MAX,
 } from '../chat.types';
+import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
+import { CALL_RECORDS } from '../utils/call-seed';
+import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messageText } from '../utils/message-preview';
+import { readRunPullRequests } from '../utils/pull-request-capture';
+import {
+  APPROVAL_CLOSING_KINDS,
+  newestFailedCalls,
+  TIMELINE_EVENT_PICKS,
+  timelineEvents,
+  type TimelineEventSources,
+  type TimelinePullRequest,
+} from '../utils/timeline-events';
 import {
   carriesUsage,
   sumUsagePayloads,
@@ -59,6 +72,7 @@ export class ChatTimelineService {
     private readonly itemDao: ItemDao,
     private readonly runDao: RunDao,
     private readonly kindRows: RunKindRowsCache,
+    private readonly goalDao: GoalDao,
   ) {}
 
   async read(runId: string): Promise<ChatTimelineWire> {
@@ -66,18 +80,55 @@ export class ChatTimelineService {
     // Checked rather than inferred from an empty rail: "this conversation does
     // not exist" and "nobody has said anything in it" are different answers,
     // and only the first is a 4xx.
-    if ((await this.runDao.getById(runId, em)) === null) {
+    const run = await this.runDao.getById(runId, em);
+    if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    const [spine, messages, turns] = await Promise.all([
-      this.railSpine(runId, em),
-      this.itemDao.userMessagePayloadRows(runId, em),
-      this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS),
-    ]);
+    const [spine, messages, turns, picked, callRecords, goals, pullRequests] =
+      await Promise.all([
+        this.railSpine(runId, em),
+        this.itemDao.userMessagePayloadRows(runId, em),
+        this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS),
+        // One past the cap per kind, so a kind with more rows than the list
+        // shows always cuts the list, and the cut says so.
+        this.itemDao.newestRowsOfKinds(
+          runId,
+          TIMELINE_EVENT_PICKS,
+          TIMELINE_EVENTS_MAX + 1,
+          em,
+        ),
+        run.teamId === null
+          ? []
+          : this.kindRows.rowsOfView(runId, CALL_RECORDS, 'fresh'),
+        this.goalDao.listByRun(runId, em),
+        this.pullRequestsOf(runId, run.pullRequests, em),
+      ]);
+    const rows = [
+      ...picked,
+      ...newestFailedCalls(callRecords, TIMELINE_EVENTS_MAX + 1),
+    ];
+    const approvalIds = rows
+      .filter((row) => row.kind === 'approval_request')
+      .map((row) => payloadId(row.payload))
+      .filter((id): id is string => id !== null);
+    const answeredApprovals = await this.itemDao.payloadIdsAnsweredBy(
+      runId,
+      APPROVAL_CLOSING_KINDS,
+      approvalIds,
+      em,
+    );
+    const { events, partialReason: eventsPartialReason } = timelineEvents({
+      rows,
+      answeredApprovals,
+      pullRequests,
+      goals,
+      started: startedRow(spine),
+    } satisfies TimelineEventSources);
+
     const payloadRows = [...messages, ...turns].sort((a, b) => a.seq - b.seq);
     const markers = this.fold(spine, payloadRows);
     if (markers.length <= MAX_TIMELINE_MARKERS) {
-      return { markers, partialReason: null };
+      return { markers, partialReason: null, events, eventsPartialReason };
     }
     // The NEWEST are kept, and they stay in seq order: a rail reads left to
     // right through the conversation, so returning the tail reversed would put
@@ -85,7 +136,33 @@ export class ChatTimelineService {
     return {
       markers: markers.slice(-MAX_TIMELINE_MARKERS),
       partialReason: `showing the newest ${MAX_TIMELINE_MARKERS} messages — the conversation starts earlier than this rail does`,
+      events,
+      eventsPartialReason,
     };
+  }
+
+  /**
+   * The pull requests the thread opened, each dated by the transcript row
+   * that reported it — never by when the capture pass noticed it.
+   */
+  private async pullRequestsOf(
+    runId: string,
+    stored: string | null,
+    em: EntityManager,
+  ): Promise<TimelinePullRequest[]> {
+    const opened = readRunPullRequests(stored);
+    if (opened.length === 0) {
+      return [];
+    }
+    const times = await this.itemDao.earliestToolResultTimes(
+      runId,
+      opened.map((pullRequest) => pullRequest.seq),
+      em,
+    );
+    return opened.flatMap((pullRequest) => {
+      const openedAt = times.get(pullRequest.seq);
+      return openedAt === undefined ? [] : [{ ...pullRequest, openedAt }];
+    });
   }
 
   /**
@@ -245,6 +322,29 @@ function isAgentText(row: TimelineSpineRow): boolean {
   return (
     (row.kind === 'message' && row.role !== 'user') || row.kind === 'reasoning'
   );
+}
+
+/** The first row an agent wrote after the user first spoke to the thread — when work started. */
+function startedRow(
+  spine: readonly TimelineSpineRow[],
+): TimelineEventSources['started'] {
+  const firstAsk = spine.findIndex(isUserMessage);
+  if (firstAsk === -1) {
+    return null;
+  }
+  const row = spine.slice(firstAsk + 1).find(isAgentText);
+  return row === undefined
+    ? null
+    : {
+        id: row.id,
+        seq: row.seq,
+        memberId: row.memberId,
+        createdAt: row.createdAt,
+      };
+}
+
+function payloadId(payload: string): string | null {
+  return payloadString(parseJsonColumn(payload), 'id');
 }
 
 /**

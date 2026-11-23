@@ -3,6 +3,8 @@ import {
   ChevronRight,
   CircleCheck,
   CircleDot,
+  History,
+  Milestone,
   PanelRight,
   Target,
 } from 'lucide-react';
@@ -14,6 +16,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { ProgressRing } from '../components/ui/progress-ring';
+import { SegmentedControl } from '../components/ui/segmented-control';
 import { cn } from '../components/ui/utils';
 import {
   goalsFigure,
@@ -25,6 +28,7 @@ import type { RunGoals } from './goals-section';
 import { revealAgentsPanel } from './panel-flags';
 import { SHELF_STATUS_TRIGGER_CLASS } from './shelf-chip';
 import { StageEntry } from './stage-entry';
+import { ThreadTimeline, type ThreadTimelineProps } from './thread-timeline';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 function stagePhrase(progress: StageProgress): string {
@@ -338,10 +342,13 @@ function ProgressStages({
   );
 }
 
+export type ProgressTab = 'timeline' | 'goals' | 'stages';
+
 /**
- * The thread's progress popup: a summary of where its goals stand and how it
- * ended, the goals with the user's add, edit, close and reopen, and a team run's
- * stages. Opened from the shelf's progress chip and the agents panel's Goals row.
+ * The thread's overview: a summary of where its goals stand and how it ended,
+ * then its Timeline, its Goals (with the user's add, edit, close and reopen)
+ * and a team run's Stages. Opened from the shelf's progress chip and the agents
+ * panel's timeline icon on Timeline, and from the panel's Goals row on Goals.
  */
 export function ProgressDialog({
   open,
@@ -349,6 +356,9 @@ export function ProgressDialog({
   goals,
   stages,
   nameOf,
+  tab,
+  onTabChange,
+  timeline,
 }: {
   open: boolean;
   onClose: () => void;
@@ -356,16 +366,46 @@ export function ProgressDialog({
   stages: StageProgress | null | undefined;
   /** A team member's name; absent in a chat. */
   nameOf?: (memberId: string) => string;
+  tab: ProgressTab;
+  onTabChange: (tab: ProgressTab) => void;
+  timeline: Omit<ThreadTimelineProps, 'nameOf' | 'onShowGoals' | 'leading'>;
 }): React.JSX.Element {
   const runId = useContext(ThreadUiMemoryContext);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const progress = stages ?? null;
+  const shown: ProgressTab =
+    tab === 'stages' && progress === null ? 'timeline' : tab;
+  const tabs = (
+    <SegmentedControl<ProgressTab>
+      ariaLabel="Progress views"
+      size="sm"
+      options={[
+        {
+          id: 'timeline',
+          label: 'Timeline',
+          icon: <History aria-hidden="true" />,
+        },
+        { id: 'goals', label: 'Goals', icon: <Target aria-hidden="true" /> },
+        ...(progress === null
+          ? []
+          : [
+              {
+                id: 'stages' as const,
+                label: 'Stages',
+                icon: <Milestone aria-hidden="true" />,
+              },
+            ]),
+      ]}
+      value={shown}
+      onSelect={onTabChange}
+    />
+  );
   return (
     <Dialog
       open={open}
       onClose={onClose}
       initialFocus={bodyRef}
-      className="max-w-lg"
+      className="max-w-2xl"
       title={
         <span className="flex items-center gap-2">
           <Target
@@ -379,37 +419,53 @@ export function ProgressDialog({
         ref={bodyRef}
         tabIndex={-1}
         data-slot="progress-dialog"
-        className="flex flex-col gap-5 outline-none">
+        data-tab={shown}
+        className="flex flex-col gap-4 outline-none">
         <ProgressSummary goals={goals} stages={progress} />
-        {goals.goals.length === 0 && goals.actions === undefined ? null : (
-          <section
-            aria-label="Goals"
-            data-slot="progress-goals"
-            className="flex flex-col gap-2">
-            {goals.goals.length === 0 ? null : (
-              <ProgressHeading
-                title="Goals"
-                aside={
-                  <span data-slot="goals-count">{goals.goals.length}</span>
-                }
+        {shown === 'timeline' ? (
+          <ThreadTimeline
+            {...timeline}
+            nameOf={nameOf}
+            onShowGoals={() => onTabChange('goals')}
+            leading={tabs}
+          />
+        ) : (
+          <>
+            {tabs}
+            {shown === 'goals' ? (
+              goals.goals.length === 0 && goals.actions === undefined ? null : (
+                <section
+                  aria-label="Goals"
+                  data-slot="progress-goals"
+                  className="flex flex-col gap-2">
+                  {goals.goals.length === 0 ? null : (
+                    <ProgressHeading
+                      title="Goals"
+                      aside={
+                        <span data-slot="goals-count">
+                          {goals.goals.length}
+                        </span>
+                      }
+                    />
+                  )}
+                  <GoalsList
+                    goals={goals.goals}
+                    actions={goals.actions}
+                    nameOf={nameOf}
+                  />
+                </section>
+              )
+            ) : progress === null ? null : (
+              <ProgressStages
+                progress={progress}
+                nameOf={nameOf}
+                onRevealPanel={() => {
+                  onClose();
+                  revealAgentsPanel(runId);
+                }}
               />
             )}
-            <GoalsList
-              goals={goals.goals}
-              actions={goals.actions}
-              nameOf={nameOf}
-            />
-          </section>
-        )}
-        {progress === null ? null : (
-          <ProgressStages
-            progress={progress}
-            nameOf={nameOf}
-            onRevealPanel={() => {
-              onClose();
-              revealAgentsPanel(runId);
-            }}
-          />
+          </>
         )}
       </div>
     </Dialog>

@@ -19,16 +19,19 @@ import type {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
+import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { ChatTimelineService } from './chat-timeline.service';
 
 const TOOL_ROWS = 20_000;
 const ROW_BUDGET = 1_000;
+const STEP_ROWS = TOOL_ROWS / 2000;
 
 let rowsRead = 0;
 
@@ -85,7 +88,7 @@ describe('ChatTimelineService over a long run (in-memory sqlite)', () => {
         ...GENIRO_ORM_RUNTIME,
         dbName: ':memory:',
         driver: RowCountingDriver,
-        entities: [Run, Item, NodeState],
+        entities: [Run, Item, NodeState, Goal],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -131,6 +134,14 @@ describe('ChatTimelineService over a long run (in-memory sqlite)', () => {
     for (let n = 0; n < TOOL_ROWS / 2; n += 1) {
       push('tool_call', 'assistant', { id: `t${n}`, name: 'Bash', input: {} });
       push('tool_result', 'tool', { id: `t${n}`, result: 'ok' });
+      if (n % 1000 === 0) {
+        push('milestone', null, {
+          text: `step ${n}`,
+          kind: 'progress',
+          nodeId: 'a',
+          conversationId: null,
+        });
+      }
     }
     push('turn_complete', null, { usage: { inputTokens: 1, outputTokens: 1 } });
     push('message', 'user', { text: 'second question' });
@@ -140,7 +151,7 @@ describe('ChatTimelineService over a long run (in-memory sqlite)', () => {
     rowsRead = 0;
   });
 
-  it('builds the rail without reading every row of a run whose history is mostly tool calls', async () => {
+  it('builds the rail and its events without reading every row of a run whose history is mostly tool calls', async () => {
     const em = orm.em.fork();
     const items = new ItemDao(em);
     const service = new ChatTimelineService(
@@ -148,16 +159,21 @@ describe('ChatTimelineService over a long run (in-memory sqlite)', () => {
       items,
       new RunDao(em),
       kindRowsPassthrough(items),
+      new GoalDao(em),
     );
 
-    const { markers } = await service.read('run-a');
+    const { markers, events } = await service.read('run-a');
 
     expect(markers.map((m) => [m.preview, m.segment.aiMessages])).toEqual([
       ['first question', 1],
       ['second question', 1],
     ]);
-    expect(markers[0]!.segment.elapsedMs).toBe((TOOL_ROWS + 2) * 1000);
+    expect(markers[0]!.segment.elapsedMs).toBe(
+      (TOOL_ROWS + STEP_ROWS + 2) * 1000,
+    );
     expect(markers[1]!.segment.elapsedMs).toBe(2000);
+    expect(events.filter((e) => e.kind === 'step')).toHaveLength(STEP_ROWS);
+    expect(events.filter((e) => e.kind === 'started')).toHaveLength(1);
     expect(rowsRead).toBeGreaterThan(0);
     expect(rowsRead).toBeLessThan(ROW_BUDGET);
   });

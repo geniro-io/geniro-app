@@ -70,10 +70,24 @@ describe('previewCardRow', () => {
     expect(previewCardRow(row)).toBe(row);
   });
 
-  it('leaves kinds it does not preview as they are, long text and all', () => {
+  it('cuts a long call result to the preview cap', () => {
     const row = rowOf('call_result', {
       callId: 'call-1',
-      result: 'w'.repeat(CARD_ROW_PREVIEW_CHARS * 2),
+      status: 'ok',
+      result: { text: 'w'.repeat(CARD_ROW_PREVIEW_CHARS + 1) },
+    });
+
+    expect(previewCardRow(row).payload).toEqual({
+      callId: 'call-1',
+      status: 'ok',
+      result: { text: 'w'.repeat(CARD_ROW_PREVIEW_CHARS) },
+    });
+  });
+
+  it("leaves a call's start as it is, its brief long text and all", () => {
+    const row = rowOf('call_started', {
+      callId: 'call-1',
+      message: 'v'.repeat(CARD_ROW_PREVIEW_CHARS * 2),
     });
 
     expect(previewCardRow(row)).toBe(row);

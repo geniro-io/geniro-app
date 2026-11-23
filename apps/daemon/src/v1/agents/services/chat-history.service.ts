@@ -13,7 +13,7 @@ import type {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { OUTSIDE_ANY_CALL } from '../utils/call-membership';
-import { previewCardRows } from '../utils/card-row-preview';
+import { previewCardRow, previewCardRows } from '../utils/card-row-preview';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { eventLoopSlicer } from '../utils/event-loop-slices';
 import {
@@ -80,9 +80,10 @@ const BACKGROUND_ROWS_PER_CALL = 300;
 const OPEN_TURN_TOOLS_PER_CALL = 300;
 
 /**
- * A call's newest NAMED tool calls a page anchors. More than one, because the
- * card's activity line is the newest one it does not hide — a task-list tool,
- * one of geniro's own — and which those are is the renderer's to decide.
+ * A running call's newest NAMED tool calls a page anchors. More than one, because
+ * the card's activity line names the newest one it does not hide — a task-list
+ * tool, one of geniro's own — and which those are is the renderer's to decide.
+ * A settled call's card names no tool, so no page anchors one.
  */
 const NAMED_TOOLS_PER_CALL = 8;
 
@@ -229,6 +230,11 @@ export class ChatHistoryService {
         ),
       );
       add(await this.deadCardsOf(runId, kept));
+      for (const [id, row] of byId) {
+        if (row.kind === 'call_result') {
+          byId.set(id, previewCardRow(row));
+        }
+      }
     } else {
       const nested = kept.flatMap((row) => {
         const start = callStartOf(row);
@@ -417,20 +423,24 @@ export class ChatHistoryService {
         running,
       )),
       ...(await newest({ limit: 1 })),
-      // The newest words and NAMED tools: the folded card's readings walk
-      // back past a blank message and an ACP tool call naming nothing.
+      // The newest words, and a running call's NAMED tools: the folded card's
+      // readings walk back past a blank message and an ACP tool call naming
+      // nothing.
       ...(await newest({
         kinds: ['message'],
         said: 'text',
         ownThread: true,
         limit: 1,
       })),
-      ...(await newest({
-        kinds: ['tool_call'],
-        said: 'name',
-        ownThread: true,
-        limit: NAMED_TOOLS_PER_CALL,
-      })),
+      ...(await newest(
+        {
+          kinds: ['tool_call'],
+          said: 'name',
+          ownThread: true,
+          limit: NAMED_TOOLS_PER_CALL,
+        },
+        running,
+      )),
     );
     const unique = new Map(rows.map((row) => [row.id, row] as const));
     // What CLOSES the rows above: a tool call's reply (a command, a delegate's

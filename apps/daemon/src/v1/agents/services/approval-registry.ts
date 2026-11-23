@@ -218,7 +218,7 @@ export class ApprovalRegistry {
    * takes it with everything else.
    *
    * `only` narrows the sweep: a new turn retires the run's deferred questions,
-   * plans and patches, while a {@link PendingApproval.standing} card (a
+   * plans and project cards, while a {@link PendingApproval.standing} card (a
    * team proposal) stays until its owner retires it.
    */
   sweepDeferred(

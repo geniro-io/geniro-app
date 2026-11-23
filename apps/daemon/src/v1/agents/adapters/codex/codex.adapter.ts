@@ -77,7 +77,6 @@ import {
   CODEX_MCP_ADD_ARGS,
   CODEX_MCP_ADD_ENV_FLAG,
   CODEX_MCP_ADD_TIMEOUT_MS,
-  CODEX_MCP_ENABLED_FIELD,
   CODEX_MCP_HTTP_HEADERS_FIELD,
   CODEX_MCP_LIST_MAX_OUTPUT_CHARS,
   CODEX_MCP_LIST_TIMEOUT_MS,
@@ -126,7 +125,7 @@ import { codexToolCallMetric } from './utils/codex-items.utils';
 import {
   CodexMcpListing,
   codexMcpServerKey,
-  codexMcpToggleRefusal,
+  codexMcpToggleTarget,
   readCodexUserMcpLayer,
 } from './utils/codex-mcp.utils';
 import {
@@ -1102,10 +1101,10 @@ export class CodexAdapter extends AgentAdapter {
    * (`config/value/write`), so it owns the write to its `config.toml`. The
    * setting is codex's per-profile one and so covers every folder.
    *
-   * Only for a server that file DEFINES: codex's effective config is read
-   * first (`config/read`, in the folder), and anything else is refused with
-   * the reason — a plugin's server, a project's, or one codex builds in would
-   * otherwise gain a stray table in the user's config and go on loading.
+   * Only for a server that file DEFINES, or the built-in Apps server through
+   * its `features.apps` flag: codex's effective config is read first
+   * (`config/read`, in the folder), and anything else is refused with the
+   * reason (see {@link codexMcpToggleTarget}).
    */
   override async setMcpServerEnabled(
     cwd: string,
@@ -1130,14 +1129,14 @@ export class CodexAdapter extends AgentAdapter {
         }`,
       );
     }
-    const refusal = codexMcpToggleRefusal(config.result, server);
-    if (refusal !== null) {
-      throw new Error(refusal);
+    const target = codexMcpToggleTarget(config.result, server);
+    if (!target.ok) {
+      throw new Error(target.reason);
     }
     const reply = await this.oneshotReply(
       CODEX_METHODS.configValueWrite,
       {
-        keyPath: codexMcpServerKey(server, CODEX_MCP_ENABLED_FIELD),
+        keyPath: target.keyPath,
         value: enabled,
         mergeStrategy: 'upsert',
       },

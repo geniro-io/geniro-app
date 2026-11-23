@@ -457,16 +457,20 @@ export const CODEX_MCP_LIST_MAX_OUTPUT_CHARS = 32 * 1024 * 1024;
 export const CODEX_CONTEXT_READ_TIMEOUT_MS = 10_000;
 
 /**
- * Why a server outside codex's config has no switch here. The case it was
- * written for is `codex_apps`, the server codex builds in for ChatGPT Apps
- * (connectors): it is in no config file, codex loads it for a ChatGPT account
- * and authenticates it with that account's own token (`authStatus:
- * bearerToken`), and `codex mcp login codex_apps` answers `No MCP server named
- * 'codex_apps' found` (measured on 0.161.0). Rows are classified by where
- * codex's config says a server comes from, never by that name.
+ * Why a server outside codex's config has no switch here. Rows are classified
+ * by where codex's config says a server comes from; the one built-in server
+ * with a switch of its own is `codex_apps` (see {@link CODEX_APPS_SERVER_NAME}).
  */
 export const CODEX_BUILTIN_TOGGLE_REASON =
   'built into codex rather than defined in its config.toml — the switch geniro writes (`mcp_servers.<name>.enabled`) cannot reach it';
+
+/** Why `codex_apps` has no switch when a project's `.codex/config.toml` sets `features.apps`. */
+export const CODEX_APPS_PROJECT_TOGGLE_REASON =
+  "switched by `features.apps` in this project's .codex/config.toml, which outranks the codex config.toml geniro writes";
+
+/** Why `codex_apps` has no switch when a layer geniro cannot write sets `features.apps`. */
+export const CODEX_APPS_LOCKED_TOGGLE_REASON =
+  'switched by `features.apps` in a codex config layer above its own config.toml (a profile, a managed or a system setting), which geniro cannot write';
 
 /** Why a plugin's server has no switch here; `%s` is the plugin. */
 export const CODEX_PLUGIN_TOGGLE_REASON =
@@ -480,17 +484,18 @@ export const CODEX_PROJECT_TOGGLE_REASON =
 
 /**
  * The server codex builds in for ChatGPT Apps (connectors), and the feature
- * flag that is its switch. It is defined in no config file, so the thread
- * override that switches a config server off (`mcp_servers.<name>.enabled`)
- * cannot reach it — MEASURED on 0.161.0 it does worse than nothing: an
+ * flag that is its switch — for a team member's turn (a thread override) and
+ * for the panel's switch (written to codex's config.toml). It is defined in no
+ * config file, so `mcp_servers.<name>.enabled` cannot reach it, and an
  * `enabled = false` override for a name the config does not define FAILS the
- * whole `thread/start` (`-32600 failed to load configuration: invalid
- * transport in mcp_servers.codex_apps`). `features.apps = false` in the same
- * thread config removed `codex_apps` (183 tools) from `mcpServerStatus/list`
- * and nothing else.
+ * whole `thread/start` (`invalid transport in mcp_servers.codex_apps`).
+ * `features.apps = false` leaves `codex_apps` out of `mcpServerStatus/list`
+ * entirely rather than listing it disabled.
  */
 export const CODEX_APPS_SERVER_NAME = 'codex_apps';
-export const CODEX_APPS_FEATURE_KEY = 'features.apps';
+export const CODEX_FEATURES_TABLE = 'features';
+export const CODEX_APPS_FEATURE = 'apps';
+export const CODEX_APPS_FEATURE_KEY = `${CODEX_FEATURES_TABLE}.${CODEX_APPS_FEATURE}`;
 
 /**
  * Switches off the CLI's own memories feature in a thread whose run asks for

@@ -12,11 +12,11 @@ export function teamNotesInstructions(): string {
     'you change something other agents depend on (an interface, a shared file, an agreed ' +
     'decision), and whenever a reply says team notes are unread (`unread_team_notes`). Do not use ' +
     'it to wait for another agent or to pass it a message: notes reach no one by themselves — use ' +
-    'call_agent or message_agent for that. Newest first; a note another one superseded is left out ' +
+    'call_agent or message_agent for that. With no filter a reply holds only the notes you have not been shown yet and did not write — every current note the first time you read, and again after your context is compacted or your session is replaced — and says how many it left out; `since: 0` reads every note. Newest first; a note another one superseded is left out ' +
     "unless `include_superseded`. Narrow it by `kind`, by `author` (an agent's name), or by note " +
     `number with \`since\` / \`before\`. One reply holds at most \`limit\` notes (default ${TEAM_NOTES_DEFAULT_LIMIT}, ` +
     `at most ${TEAM_NOTES_MAX_LIMIT}) and about ${TEAM_NOTES_REPLY_BUDGET_CHARS.toLocaleString('en-US')} characters; when ` +
-    'more remain it says how many and the `before` value that fetches the next older ones. After ' +
+    'more remain it says how many and the `before` value that fetches the next older ones (a no-filter reply says to call again instead). After ' +
     'the app restarts, every note you did not write counts as unread again (a superseded one never does) until you read it.'
   );
 }

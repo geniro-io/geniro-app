@@ -1,3 +1,4 @@
+import type { GoalStatus } from '../../agents/chat.types';
 import type { ItemKind } from '../../runs/runs.types';
 import type { LessonSignal } from '../lessons.types';
 
@@ -9,6 +10,20 @@ export interface LessonSignalItem {
   payload: string;
 }
 
+/** A goal closed unmet, at the stretch row it is placed on. */
+export interface LessonSignalGoal {
+  number: number;
+  text: string;
+  status: GoalStatus;
+  evidence: string | null;
+  seq: number;
+}
+
+export const UNMET_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
+  'not_achieved',
+  'dropped',
+]);
+
 /** The item kinds the fold reads; a caller may page only these. */
 export const LESSON_SIGNAL_ITEM_KINDS: ItemKind[] = [
   'message',
@@ -19,6 +34,7 @@ export const LESSON_SIGNAL_ITEM_KINDS: ItemKind[] = [
   'thread_outcome',
   'stage_change',
   'report_findings',
+  'team_note',
 ];
 
 const EXCERPT_MAX_CHARS = 200;
@@ -42,12 +58,16 @@ const CORRECTION_CUES =
  * - `outcome_failed`: a recorded outcome of `failed` or `partial`.
  * - `stage_reopened`: a team stage moved back.
  * - `review_finding`: a code review's findings.
+ * - `pitfall_note`: a team note recording a trap the team hit.
+ * - `goal_unmet`: a goal closed `not_achieved` or `dropped`, at the row the
+ *   caller placed it on.
  */
 export function foldLessonSignals(
   items: readonly LessonSignalItem[],
   options: {
     /** The stretch starts after a reflected one, which ended on a finished turn. */
     afterFinishedTurn?: boolean;
+    unmetGoals?: readonly LessonSignalGoal[];
   } = {},
 ): LessonSignal[] {
   const signals: LessonSignal[] = [];
@@ -152,9 +172,27 @@ export function foldLessonSignals(
         }
         break;
       }
+      case 'team_note':
+        if (stringField(payload, 'kind') === 'pitfall') {
+          signals.push({
+            kind: 'pitfall_note',
+            seq: item.seq,
+            excerpt: excerpt(stringField(payload, 'text') ?? ''),
+          });
+        }
+        break;
       default:
         break;
     }
+  }
+  for (const goal of options.unmetGoals ?? []) {
+    signals.push({
+      kind: 'goal_unmet',
+      seq: goal.seq,
+      excerpt: excerpt(
+        `${goal.status} g${goal.number}: ${goal.text}${goal.evidence === null ? '' : ` — ${goal.evidence}`}`,
+      ),
+    });
   }
   return signals.sort((a, b) => a.seq - b.seq);
 }

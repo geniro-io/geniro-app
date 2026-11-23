@@ -77,11 +77,33 @@ describe('GoalsSection', () => {
   it('names the outcome beside the counts', () => {
     mount({
       goals: [goal({ status: 'achieved' })],
-      outcome: { kind: 'success', source: 'goals', summary: null, seq: null },
+      outcome: {
+        kind: 'success',
+        source: 'goals',
+        summary: null,
+        seq: null,
+        divergesFromGoals: false,
+      },
     });
     expect(
       container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
     ).toBe('Outcome: Success');
+  });
+
+  it('says when a recorded success diverges from the goals', () => {
+    mount({
+      goals: [goal({ status: 'not_achieved' })],
+      outcome: {
+        kind: 'success',
+        source: 'recorded',
+        summary: 'shipped',
+        seq: 4,
+        divergesFromGoals: true,
+      },
+    });
+    expect(
+      container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
+    ).toBe('Outcome: Success · diverges from goals');
   });
 
   it('still offers the popup to a thread with no goals yet', () => {

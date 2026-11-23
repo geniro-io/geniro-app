@@ -35,6 +35,8 @@ export const LESSON_SIGNAL_KINDS = [
   'outcome_failed',
   'stage_reopened',
   'review_finding',
+  'goal_unmet',
+  'pitfall_note',
 ] as const;
 export type LessonSignalKind = (typeof LESSON_SIGNAL_KINDS)[number];
 export const LessonSignalKindSchema = z

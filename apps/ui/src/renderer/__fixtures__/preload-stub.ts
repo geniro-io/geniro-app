@@ -407,8 +407,8 @@ export function createPreloadStub(
         reason: 'Storybook has no file manager to reveal in.',
       });
     },
-    openArtifactPath: () => {
-      note('openArtifactPath');
+    showInFinder: () => {
+      note('showInFinder');
       return Promise.resolve({
         shown: null,
         reason: 'Storybook has no file manager to open.',

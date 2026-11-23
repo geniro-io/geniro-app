@@ -140,6 +140,7 @@ import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
 import { BrowserColumn } from './browser/browser-column';
 import { BrowserGrid } from './browser/browser-grid';
+import { pairCallAnswers } from './call-answers';
 import { continueCallClocks } from './call-clock';
 import {
   type CalleeReading,
@@ -161,6 +162,7 @@ import {
 } from './call-context';
 import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
+import { memberCallWaits } from './call-waits';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import {
   chatContextFigures,
@@ -4964,6 +4966,10 @@ export function Chats({
     () => cardBackedRequestIds(transcriptRows),
     [transcriptRows],
   );
+  const callAnswerPairs = useMemo(
+    () => pairCallAnswers(transcriptRows),
+    [transcriptRows],
+  );
   // Which requests died with their turn. READ from the transcript, never
   // inferred from it: the renderer used to reconstruct this by scanning for a
   // later terminal item with a matching callId, which could not tell a callee
@@ -6754,6 +6760,10 @@ export function Chats({
     () => runningCallCallees(runState.calls),
     [runState.calls],
   );
+  const memberWaits = useMemo(
+    () => memberCallWaits(items, runState.calls),
+    [items, runState.calls],
+  );
   const transcriptEntries = useMemo(
     () =>
       // Nothing over a thread whose first page has not landed: rows and live
@@ -6766,6 +6776,7 @@ export function Chats({
             workingAgents,
             activeRun?.id ?? null,
             daemonOpenCalls,
+            memberWaits,
           ),
     [
       threadOpening,
@@ -6774,6 +6785,7 @@ export function Chats({
       workingAgents,
       activeRun?.id,
       daemonOpenCalls,
+      memberWaits,
     ],
   );
   useEffect(() => {
@@ -10765,6 +10777,7 @@ export function Chats({
                     overflow past the scroll origin, where it cannot be reached
                     by scrolling up. The margin has no such failure mode. */}
                     <TranscriptContexts
+                      callAnswerPairs={callAnswerPairs}
                       runOutcomes={activeRunOutcomes}
                       runStages={activeRun?.stages ?? null}
                       openTeamNote={

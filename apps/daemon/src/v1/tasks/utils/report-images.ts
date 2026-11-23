@@ -76,9 +76,8 @@ const MAX_DEPTH = 6;
  * though they were pictures of its work.
  *
  * It walks every STRING in a payload rather than reading one named field,
- * because the report arrives in two shapes — a `report_findings` payload with
- * text in each finding, and a message's `text` — and a key renamed on either
- * would otherwise silently stop the attach.
+ * because the report arrives in more than one shape, and a key renamed on any
+ * of them would otherwise silently stop the attach.
  */
 export function reportImagePaths(payloads: unknown): string[] {
   const found: string[] = [];

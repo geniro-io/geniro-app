@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GoalStatus } from '../chat.types';
-import { outcomeKindFromGoals, threadOutcomeOf } from './run-goals';
+import type { GoalStatus, ThreadOutcomeKind } from '../chat.types';
+import {
+  outcomeDivergesFromGoals,
+  outcomeKindFromGoals,
+  threadOutcomeOf,
+} from './run-goals';
 
 const goals = (...statuses: GoalStatus[]) =>
   statuses.map((status) => ({ status }));
@@ -29,21 +33,65 @@ describe('outcomeKindFromGoals', () => {
   });
 });
 
+const recordedAs = (kind: ThreadOutcomeKind) => ({
+  kind,
+  summary: 'done',
+  source: 'recorded' as const,
+  seq: 9,
+});
+
 describe('threadOutcomeOf', () => {
   it('prefers the recorded outcome over the goals', () => {
-    const recorded = {
-      kind: 'abandoned' as const,
-      summary: 'called off',
-      source: 'recorded' as const,
-      seq: 9,
-    };
-    expect(threadOutcomeOf(recorded, goals('achieved'))).toBe(recorded);
+    expect(threadOutcomeOf(recordedAs('abandoned'), goals('achieved'))).toEqual(
+      { ...recordedAs('abandoned'), divergesFromGoals: false },
+    );
     expect(threadOutcomeOf(null, goals('achieved'))).toEqual({
       kind: 'success',
       summary: null,
       source: 'goals',
       seq: null,
+      divergesFromGoals: false,
     });
     expect(threadOutcomeOf(null, [])).toBeNull();
+  });
+
+  it('marks a recorded success that a goal not achieved or still open contradicts', () => {
+    expect(
+      threadOutcomeOf(recordedAs('success'), goals('achieved', 'not_achieved'))
+        ?.divergesFromGoals,
+    ).toBe(true);
+    expect(
+      threadOutcomeOf(recordedAs('success'), goals('achieved', 'open'))
+        ?.divergesFromGoals,
+    ).toBe(true);
+  });
+
+  it('does not mark a success the goals bear out, nor any other outcome', () => {
+    expect(
+      threadOutcomeOf(recordedAs('success'), goals('achieved', 'dropped'))
+        ?.divergesFromGoals,
+    ).toBe(false);
+    expect(threadOutcomeOf(recordedAs('success'), [])?.divergesFromGoals).toBe(
+      false,
+    );
+    expect(
+      threadOutcomeOf(recordedAs('partial'), goals('not_achieved'))
+        ?.divergesFromGoals,
+    ).toBe(false);
+    expect(
+      threadOutcomeOf(null, goals('achieved', 'not_achieved'))
+        ?.divergesFromGoals,
+    ).toBe(false);
+  });
+});
+
+describe('outcomeDivergesFromGoals', () => {
+  it('never marks an outcome the goals derived', () => {
+    expect(
+      outcomeDivergesFromGoals(
+        { kind: 'success', source: 'goals' },
+        goals('not_achieved'),
+      ),
+    ).toBe(false);
   });
 });

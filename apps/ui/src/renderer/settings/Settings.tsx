@@ -114,8 +114,12 @@ import { RemoteAccess } from './remote-access';
 import { Sharing } from './sharing';
 import { Storage } from './storage';
 import { SystemAnalysisPage } from './system-analysis';
+import {
+  countCliSignInsNeeded,
+  countCliUpdatesAvailable,
+  signInsNeededText,
+} from './use-cli-attention';
 import { useCliUpdates } from './use-cli-updates';
-import { countCliUpdatesAvailable } from './use-cli-updates-available';
 
 /**
  * The value the `Keep for ever` row carries.
@@ -250,11 +254,12 @@ export type SettingsSection =
   | 'changelog';
 
 const sectionCountVariants = cva(
-  'ml-auto rounded-full px-1.5 text-xs leading-5 font-medium tabular-nums',
+  'rounded-full px-1.5 text-xs leading-5 font-medium tabular-nums',
   {
     variants: {
       tone: {
         update: 'bg-update text-update-foreground',
+        warning: 'bg-warning text-warning-foreground',
         waiting: 'bg-primary text-primary-foreground',
       },
     },
@@ -357,6 +362,7 @@ export function Settings({
   memoryFocus = null,
   onMemoryFocusDone,
   memoryWaiting = null,
+  onClisDetected,
 }: {
   handle: DaemonHandle | null;
   /** The live socket, for the panes that follow the daemon's announcements. */
@@ -381,6 +387,7 @@ export function Settings({
   sectionOpen?: boolean;
   onSectionOpenChange?: (open: boolean) => void;
   onOpenOnboarding?: () => void;
+  onClisDetected?: (detections: CliDetection[]) => void;
 }): React.JSX.Element {
   const narrowViewport = useNarrowViewport();
   const apis = useMemo(
@@ -390,11 +397,22 @@ export function Settings({
   const projects = useProjects(apis, client).projects ?? NO_PROJECTS;
   const [clis, setClis] = useState<CliDetection[] | null>(null);
   const [systemReport, setSystemReport] = useState<RunDto | null>(null);
+  const showClis = useLatestCallback(
+    (detected: CliDetection[]): void => {
+      setClis(detected);
+      onClisDetected?.(detected);
+    },
+    [onClisDetected],
+  );
   const cliUpdates = useCliUpdates(() => {
-    void window.geniro.detectClis().then(setClis);
+    void window.geniro.detectClis().then(showClis);
   });
   const cliUpdatesAvailable =
     clis === null ? 0 : countCliUpdatesAvailable(clis);
+  const cliSignInsNeeded = clis === null ? 0 : countCliSignInsNeeded(clis);
+  const sectionHasBadge = (key: SettingsSection): boolean =>
+    (key === 'general' && (cliUpdatesAvailable > 0 || cliSignInsNeeded > 0)) ||
+    (key === 'memory' && (memoryWaiting ?? 0) > 0);
   /**
    * The fast actions, read from settings.json here rather than handed down from
    * Chats, so this screen owns its own data and works whether or not a chat has
@@ -636,8 +654,8 @@ export function Settings({
       setConfigProfiles(s.configProfiles ?? []);
     });
     void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
-    void window.geniro.detectClis().then(setClis);
-  }, []);
+    void window.geniro.detectClis().then(showClis);
+  }, [showClis]);
 
   // Pre-fill each detected binary's resolved path into its (empty) field, so a
   // found agent shows exactly which binary will be used. Never clobbers a saved
@@ -885,8 +903,8 @@ export function Settings({
 
   const refreshClis = useLatestCallback(async (): Promise<void> => {
     setClis(null);
-    setClis(await window.geniro.detectClis());
-  }, []);
+    showClis(await window.geniro.detectClis());
+  }, [showClis]);
 
   /**
    * The Re-check press: a kept outcome would sit on top of the fresh reading
@@ -925,11 +943,11 @@ export function Settings({
    */
   useEffect(() => {
     const onFocus = (): void => {
-      void window.geniro.detectClis().then(setClis);
+      void window.geniro.detectClis().then(showClis);
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, []);
+  }, [showClis]);
 
   const browse = useLatestCallback(
     async (kind: CliKind): Promise<void> => {
@@ -971,7 +989,7 @@ export function Settings({
    */
   const cliInstall = useCliInstall(async (result) => {
     const detected = await window.geniro.detectClis();
-    setClis(detected);
+    showClis(detected);
     if (signInAfterInstall(result, detected, login)) {
       await login.start(result.kind, null);
     }
@@ -1417,29 +1435,39 @@ export function Settings({
               className={cn(section === key && 'text-primary')}
             />
             {SECTION_LABEL[key]}
-            {key === 'general' && cliUpdatesAvailable > 0 ? (
-              <span
-                data-slot="section-updates"
-                title={`${cliUpdatesAvailable} agent ${cliUpdatesAvailable === 1 ? 'update' : 'updates'} available`}
-                className={sectionCountVariants({ tone: 'update' })}>
-                {cliUpdatesAvailable}
-              </span>
-            ) : null}
-            {key === 'memory' && (memoryWaiting ?? 0) > 0 ? (
-              <span
-                data-slot="section-waiting"
-                title={`${memoryWaiting} waiting for your review`}
-                className={sectionCountVariants({ tone: 'waiting' })}>
-                {memoryWaiting}
+            {sectionHasBadge(key) ? (
+              <span className="ml-auto flex items-center gap-1">
+                {key === 'general' && cliUpdatesAvailable > 0 ? (
+                  <span
+                    data-slot="section-updates"
+                    title={`${cliUpdatesAvailable} agent ${cliUpdatesAvailable === 1 ? 'update' : 'updates'} available`}
+                    className={sectionCountVariants({ tone: 'update' })}>
+                    {cliUpdatesAvailable}
+                  </span>
+                ) : null}
+                {key === 'general' && cliSignInsNeeded > 0 ? (
+                  <span
+                    data-slot="section-sign-in"
+                    title={signInsNeededText(cliSignInsNeeded)}
+                    className={sectionCountVariants({ tone: 'warning' })}>
+                    {cliSignInsNeeded}
+                  </span>
+                ) : null}
+                {key === 'memory' && (memoryWaiting ?? 0) > 0 ? (
+                  <span
+                    data-slot="section-waiting"
+                    title={`${memoryWaiting} waiting for your review`}
+                    className={sectionCountVariants({ tone: 'waiting' })}>
+                    {memoryWaiting}
+                  </span>
+                ) : null}
               </span>
             ) : null}
             <ChevronRight
               aria-hidden="true"
               className={cn(
                 'size-4 text-muted-foreground sm:hidden',
-                !(key === 'general' && cliUpdatesAvailable > 0) &&
-                  !(key === 'memory' && (memoryWaiting ?? 0) > 0) &&
-                  'ml-auto',
+                !sectionHasBadge(key) && 'ml-auto',
               )}
             />
           </button>

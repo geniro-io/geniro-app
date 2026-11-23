@@ -9,9 +9,8 @@ import { isWithinDirectory } from './path-within';
  * `outside` it by its path alone, or outside it only once links are followed
  * (`through-link`). A path relative to `root` is read against it.
  *
- * The ONE answer for every write geniro lets through without the user looking —
- * a patch the user accepted (`applyHostPatch`) and a codex file change
- * `acceptEdits` takes unasked — so a hardening lands in both at once. What no
+ * The answer for every write geniro lets through without the user looking — a
+ * codex file change `acceptEdits` takes unasked. What no
  * judgement of a PATH can see is a hard link, which is {@link hasOtherHardLinks}'s
  * to answer.
  *
@@ -21,9 +20,8 @@ import { isWithinDirectory } from './path-within';
  * and RESOLVED first, where `..` is collapsed before the kernel sees the path —
  * what `path.resolve` does, and what codex's own patch applier was measured to
  * do. `inside` only when both land inside. A caller that knows its writer
- * resolves first passes the resolved path, which makes the two one reading
- * (`applyHostPatch`); a CLI's writer is not ours to know, so its raw path must
- * pass both.
+ * resolves first passes the resolved path, which makes the two one reading; a
+ * CLI's writer is not ours to know, so its raw path must pass both.
  */
 export function writeContainment(
   root: string,
@@ -61,9 +59,8 @@ export function writeContainment(
  * path that cannot be examined at all, is answered as if it were: this guards a
  * write nobody looks at, so it fails toward a card.
  *
- * Synchronous for `writeContainment`'s reason. `applyHostPatch` asks the same
- * question of the file it has open; a caller that only decides beforehand, as
- * codex's auto-accept must, can only ask it of the path.
+ * Synchronous for `writeContainment`'s reason. A caller that only decides
+ * beforehand, as codex's auto-accept must, can only ask it of the path.
  */
 export function hasOtherHardLinks(root: string, target: string): boolean {
   const { written, resolved } = readingsOf(root, target);

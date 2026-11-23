@@ -12,7 +12,7 @@ export type ProjectInstructionsProposer = (
   signal?: AbortSignal,
 ) => Promise<HostProjectInstructionsOutcome>;
 
-/** The rendezvous behind `save_project_instructions`' card; it parks like {@link PatchBroker}. */
+/** The rendezvous behind `save_project_instructions`' card; it parks like `PlanBroker`. */
 @Injectable()
 export class ProjectInstructionsBroker extends HostSinkBroker<ProjectInstructionsProposer> {
   canPropose(

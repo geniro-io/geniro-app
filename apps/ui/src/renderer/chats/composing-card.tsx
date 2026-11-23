@@ -7,7 +7,6 @@ import {
   LayoutTemplate,
   ListChecks,
   ListPlus,
-  ScrollText,
   Sparkles,
   Table2,
   UsersRound as TeamIcon,
@@ -56,7 +55,6 @@ const KIND_META: Record<
   comparison: { icon: Table2, noun: 'a comparison', label: 'Comparison' },
   gallery: { icon: Images, noun: 'a gallery', label: 'Gallery' },
   screenshot: { icon: Camera, noun: 'a screenshot', label: 'Screenshot' },
-  findings: { icon: ScrollText, noun: 'a review', label: 'Findings' },
   recommendations: {
     icon: Sparkles,
     noun: 'recommendations',
@@ -252,7 +250,6 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
         </div>
       );
     case 'plan':
-    case 'findings':
     case 'recommendations':
       // One silhouette for two cards, because they genuinely have one: an
       // ordered run of rows, each a marker and a line. Splitting them would be

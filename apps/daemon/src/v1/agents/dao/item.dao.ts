@@ -1748,6 +1748,23 @@ export class ItemDao extends BaseDao<Item> {
     }));
   }
 
+  /** The newest row of any kind after `afterSeq`, up to `maxSeq`, written at or before `at`; null when none was. */
+  async newestSeqAtOrBefore(
+    runId: string,
+    range: { afterSeq: number; maxSeq: number; at: Date },
+    txEm?: EntityManager,
+  ): Promise<number | null> {
+    const row = await this.getRepo(txEm).findOne(
+      {
+        runId,
+        seq: { $gt: range.afterSeq, $lte: range.maxSeq },
+        createdAt: { $lte: range.at },
+      },
+      { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
+    );
+    return row?.seq ?? null;
+  }
+
   /**
    * One page of a run's rows for an analysis, oldest first: after `afterSeq`
    * (or from `fromTime`), never past `maxSeq`, optionally one member's and some
@@ -2046,6 +2063,8 @@ export class ItemDao extends BaseDao<Item> {
       snapshot?: boolean;
       /** Only the callee's own rows, never a delegate's (`parentToolUseId`). */
       ownThread?: boolean;
+      /** Only a person's messages, which every other read leaves out. */
+      userMessages?: boolean;
       limit: number;
     },
     txEm?: EntityManager,
@@ -2061,11 +2080,13 @@ export class ItemDao extends BaseDao<Item> {
         .where('in_call', '=', callId)
         .where('deleted_at', 'is', null)
         .where((eb) =>
-          eb.or([
-            eb('kind', '!=', 'message'),
-            eb('role', 'is', null),
-            eb('role', '!=', 'user'),
-          ]),
+          pick.userMessages === true
+            ? eb.and([eb('kind', '=', 'message'), eb('role', '=', 'user')])
+            : eb.or([
+                eb('kind', '!=', 'message'),
+                eb('role', 'is', null),
+                eb('role', '!=', 'user'),
+              ]),
         );
       if (kind !== null) {
         heads = heads.where('kind', '=', kind);
@@ -2604,8 +2625,8 @@ export class ItemDao extends BaseDao<Item> {
       {
         orderBy: { seq: 'desc' },
         limit: 1,
-        // The id alone: `payload` is the TEXT column, and a `report_findings`
-        // row can be many KB read for a value no caller looks at.
+        // The id alone: `payload` is the TEXT column, and a card row can be
+        // many KB read for a value no caller looks at.
         fields: ['id'],
         disableIdentityMap: true,
       },

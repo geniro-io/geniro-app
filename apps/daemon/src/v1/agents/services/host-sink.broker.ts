@@ -152,7 +152,7 @@ export abstract class HostSinkBroker<TSink> {
    * error: a sink persists rows and writes files, so its message routinely
    * names an absolute path (an fs `ENOENT`, the database file), and the reason
    * is handed to a model whose provider is off this machine. The detail stays
-   * in the log, the rule `applyHostPatch` states for its own errors.
+   * in the log.
    *
    * @param absent what to say when no turn is running — phrased per tool,
    *   because "nobody could record them" and "nobody could put this on screen"

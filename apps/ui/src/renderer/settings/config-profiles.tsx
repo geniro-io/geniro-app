@@ -1,4 +1,4 @@
-import { FolderOpen, LogIn, Plus, Trash2 } from 'lucide-react';
+import { FolderOpen, LogIn, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 
 import {
@@ -332,6 +332,15 @@ export function ConfigProfileList({
                     {shortenPath(profile.dir, 2)}
                   </span>
                 </button>
+                {logins[profile.dir] === false ? (
+                  <span
+                    data-slot="config-signed-out"
+                    title="Not signed in"
+                    className="flex shrink-0 items-center text-warning">
+                    <TriangleAlert aria-hidden="true" className="size-3.5" />
+                    <span className="sr-only">Not signed in</span>
+                  </span>
+                ) : null}
                 <AccountButton
                   compact
                   account={profile.name}

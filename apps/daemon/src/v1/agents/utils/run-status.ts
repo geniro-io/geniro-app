@@ -105,7 +105,7 @@ export async function writeRunStatus(
   // have gone on claiming the user was the blocker.
   //
   // A deferred card is the exception `sweepNode` leaves standing. The null
-  // here is still right for a question, plan or patch — the status write does
+  // here is still right for a question, plan or project card — the status write does
   // not know about that card — and the chat finalizer re-announces `awaiting`
   // afterwards when one remains. A standing team proposal, which outlives
   // every turn, is said by its caller through `announce.awaiting`.

@@ -61,8 +61,8 @@ function ReportSection({
 /**
  * The agent's report on a task — the markdown it sent with `update_task`.
  *
- * It used to be read out of the transcript (the run's findings card, else its
- * last message) and was REPORTED as wrong: a thread's last message is whatever
+ * It used to be read out of the transcript (the run's last message) and was
+ * REPORTED as wrong: a thread's last message is whatever
  * the agent happened to say last. The report is now written deliberately by
  * the agent and stored on the card, so this draws that text and nothing else;
  * a card whose agent never sent one simply has no Report section.

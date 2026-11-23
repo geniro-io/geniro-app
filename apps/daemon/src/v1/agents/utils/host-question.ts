@@ -102,11 +102,12 @@ export const MAX_HOST_QUESTION_TITLE_LENGTH = 200;
  * is DROPPED rather than rendered, because the card's whole affordance is
  * picking one, and an option-less question is a card with nothing to press.
  *
- * The caps bound what one call can put on screen. They TRUNCATE rather than
- * refuse: a model that sends nine options has still asked a real question, and
- * failing the call would leave it with no way to ask at all. Text is cut but
- * never trimmed — a label is also the ANSWER sent back, and the identity a
- * re-ask is matched on.
+ * The COUNT caps truncate rather than refuse: a model that sends nine options
+ * has still asked a real question, and failing the call would leave it with no
+ * way to ask at all. The TEXT caps refuse before a call reaches this read
+ * ({@link hostQuestionTextOverflow}); the slices below are the backstop for a
+ * stored question read back at boot. Text is never trimmed — a label is also
+ * the ANSWER sent back, and the identity a re-ask is matched on.
  */
 export function readHostQuestions(
   args: Record<string, unknown>,
@@ -176,6 +177,87 @@ export function readHostQuestions(
     });
   }
   return questions;
+}
+
+/**
+ * The refusal for the first text over its cap that {@link readHostQuestions}
+ * would keep, or null. It reads exactly the fields that read keeps: the first
+ * {@link MAX_HOST_QUESTIONS} questions and the first
+ * {@link MAX_HOST_QUESTION_OPTIONS} options of each, the title as trimmed.
+ */
+export function hostQuestionTextOverflow(
+  args: Record<string, unknown>,
+): string | null {
+  const title = typeof args.title === 'string' ? args.title.trim() : undefined;
+  const titleOverflow = overflowOf(
+    'title',
+    title,
+    MAX_HOST_QUESTION_TITLE_LENGTH,
+  );
+  if (titleOverflow !== null) {
+    return titleOverflow;
+  }
+  const raw: unknown[] = Array.isArray(args.questions)
+    ? args.questions.slice(0, MAX_HOST_QUESTIONS)
+    : [];
+  for (const [i, entry] of raw.entries()) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue;
+    }
+    const q = entry as { question?: unknown; options?: unknown };
+    const questionOverflow = overflowOf(
+      `questions[${i}].question`,
+      q.question,
+      MAX_HOST_QUESTION_TEXT_LENGTH,
+    );
+    if (questionOverflow !== null) {
+      return questionOverflow;
+    }
+    const options: unknown[] = Array.isArray(q.options)
+      ? q.options.slice(0, MAX_HOST_QUESTION_OPTIONS)
+      : [];
+    for (const [j, option] of options.entries()) {
+      const { label, description } = optionFields(option);
+      const optionOverflow =
+        overflowOf(
+          `questions[${i}].options[${j}].label`,
+          label,
+          MAX_HOST_OPTION_LABEL_LENGTH,
+        ) ??
+        overflowOf(
+          `questions[${i}].options[${j}].description`,
+          description,
+          MAX_HOST_OPTION_DESCRIPTION_LENGTH,
+        );
+      if (optionOverflow !== null) {
+        return optionOverflow;
+      }
+    }
+  }
+  return null;
+}
+
+function optionFields(option: unknown): {
+  label?: unknown;
+  description?: unknown;
+} {
+  if (typeof option === 'string') {
+    return { label: option };
+  }
+  return typeof option === 'object' && option !== null
+    ? (option as { label?: unknown; description?: unknown })
+    : {};
+}
+
+function overflowOf(
+  field: string,
+  value: unknown,
+  limit: number,
+): string | null {
+  if (typeof value !== 'string' || value.length <= limit) {
+    return null;
+  }
+  return `${field} is ${value.length} characters; the limit is ${limit}. Nothing was shown to the user. Put the long text in your reply message and ask a short question that refers to it.`;
 }
 
 /** geniro's own questions as the user's question card. */

@@ -16,9 +16,9 @@ import {
   ThreadActionButton,
   ThreadHead,
 } from '../components/thread-head';
-import { cn } from '../components/ui/utils';
 import { type DaemonApis, isRunBusyError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { EventLine, type EventTone } from './agent-event-card';
 import { ClampedMarkdown } from './clamped-markdown';
 import { settleReleasesQueue } from './follow-up-delivery';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
@@ -171,24 +171,16 @@ type QuestionState = 'waiting' | 'answered' | 'declined' | 'closed';
 
 const STATE_META: Record<
   QuestionState,
-  { icon: LucideIcon; label: string; iconClass: string }
+  { icon: LucideIcon; label: string; tone: EventTone }
 > = {
   waiting: {
     icon: MessageCircleQuestion,
     label: 'Question for you',
-    iconClass: 'text-warning',
+    tone: 'warning',
   },
-  answered: { icon: CircleCheck, label: 'Answered', iconClass: 'text-success' },
-  declined: {
-    icon: CircleX,
-    label: 'Declined',
-    iconClass: 'text-muted-foreground',
-  },
-  closed: {
-    icon: CircleSlash,
-    label: 'No longer open',
-    iconClass: 'text-muted-foreground',
-  },
+  answered: { icon: CircleCheck, label: 'Answered', tone: 'success' },
+  declined: { icon: CircleX, label: 'Declined', tone: 'muted' },
+  closed: { icon: CircleSlash, label: 'No longer open', tone: 'muted' },
 };
 
 function stateOf(verdict: boolean | null, expired: boolean): QuestionState {
@@ -303,7 +295,6 @@ export function ThreadQuestionCard({
   const identity = known ?? bareThreadIdentity(relay.threadTitle);
   const state = stateOf(verdict, expired);
   const meta = STATE_META[state];
-  const Icon = meta.icon;
   const note = verdict === null ? null : deliveryNote(outcome);
   return (
     <article
@@ -311,33 +302,14 @@ export function ThreadQuestionCard({
       data-state={state}
       data-run={relay.threadRunId}
       className="flex w-full min-w-0 flex-col gap-2.5 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-sm">
-      <p className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
-        <Icon
-          aria-hidden="true"
-          className={cn('size-3.5 shrink-0', meta.iconClass)}
-        />
-        <span
-          data-slot="thread-question-label"
-          className="shrink-0 font-medium">
-          {meta.label}
-        </span>
-        <span
-          data-slot="thread-question-handle"
-          className="shrink-0 rounded-sm bg-muted px-1 font-mono text-foreground/80">
-          {relay.handle}
-        </span>
-        {state === 'waiting' ? (
-          <span
-            data-slot="thread-question-waiting"
-            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
-            <span aria-hidden="true" className="relative flex size-1.5">
-              <span className="absolute inset-0 animate-ping rounded-full bg-warning/60 motion-reduce:animate-none" />
-              <span className="relative size-1.5 rounded-full bg-warning" />
-            </span>
-            Waiting on you
-          </span>
-        ) : null}
-      </p>
+      <EventLine
+        icon={meta.icon}
+        tone={meta.tone}
+        label={meta.label}
+        slot="thread-question"
+        handle={relay.handle}
+        waiting={state === 'waiting'}
+      />
       {open === null && readContext === null ? null : (
         <div
           data-slot="thread-question-actions"

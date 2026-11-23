@@ -52,11 +52,9 @@ function readString(value: unknown): string | null {
 /**
  * Read one `show_metrics` row, or null when the payload does not read as one.
  *
- * Null where the findings reader would return an empty report, and the
- * difference is the one the daemon draws at its own edge: an empty review IS a
- * result worth a card saying so, while a scorecard with no figures has nothing
- * to draw and no sentence to put in its place. The daemon already refuses that
- * call, so reaching it here means a row written by an older build.
+ * Null for a scorecard with no figures: it has nothing to draw and no sentence
+ * to put in its place. The daemon already refuses that call, so reaching it
+ * here means a row written by an older build.
  */
 export function readMetrics(item: ChatItem): MetricsSpec | null {
   const payload: unknown = item.payload;

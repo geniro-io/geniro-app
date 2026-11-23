@@ -7892,7 +7892,9 @@ export const LessonSignalKind = {
     ErrorThenSuccess: 'error_then_success',
     OutcomeFailed: 'outcome_failed',
     StageReopened: 'stage_reopened',
-    ReviewFinding: 'review_finding'
+    ReviewFinding: 'review_finding',
+    GoalUnmet: 'goal_unmet',
+    PitfallNote: 'pitfall_note'
 } as const;
 export type LessonSignalKind = typeof LessonSignalKind[keyof typeof LessonSignalKind];
 
@@ -19108,6 +19110,12 @@ export interface ThreadOutcome {
      * @memberof ThreadOutcome
      */
     seq: number | null;
+    /**
+     * An agent recorded success while a goal not dropped is open or not achieved; false for an outcome derived from the goals
+     * @type {boolean}
+     * @memberof ThreadOutcome
+     */
+    divergesFromGoals: boolean;
 }
 
 

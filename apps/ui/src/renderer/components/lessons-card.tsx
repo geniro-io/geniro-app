@@ -132,6 +132,8 @@ const SIGNAL_LABELS: Record<LessonSignalKind, string> = {
   outcome_failed: 'Outcome failed',
   stage_reopened: 'Stage reopened',
   review_finding: 'Review finding',
+  goal_unmet: 'Goal not achieved',
+  pitfall_note: 'Pitfall noted',
 };
 
 const LESSON_SCOPES: readonly LessonScope[] = ['project', 'team', 'global'];

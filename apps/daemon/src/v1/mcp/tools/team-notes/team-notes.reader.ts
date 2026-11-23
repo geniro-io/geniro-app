@@ -47,6 +47,12 @@ export function readTeamNotes(
     before: before ?? null,
     limit: limit ?? TEAM_NOTES_DEFAULT_LIMIT,
     includeSuperseded: includeSuperseded ?? false,
+    unreadOnly:
+      kind === undefined &&
+      author === undefined &&
+      since === undefined &&
+      before === undefined &&
+      includeSuperseded === undefined,
   };
 }
 
@@ -66,6 +72,22 @@ function noteHeader(note: TeamNoteEntry): string {
   return parts.join(' · ');
 }
 
+function listHeader(outcome: TeamNotesReadOutcome): string {
+  const older =
+    outcome.olderRemaining > 0 && outcome.nextBefore !== null
+      ? ` ${outcome.olderRemaining} older ${outcome.olderRemaining === 1 ? 'note matches' : 'notes match'}: call again with before=${outcome.nextBefore}.`
+      : '';
+  return `${outcome.notes.length} team ${outcome.notes.length === 1 ? 'note' : 'notes'}, newest first.${older}`;
+}
+
+function unreadHeader(outcome: TeamNotesReadOutcome): string {
+  const more =
+    outcome.olderRemaining > 0
+      ? ` ${outcome.olderRemaining} more unread: call team_notes again.`
+      : '';
+  return `${outcome.notes.length} unread team ${outcome.notes.length === 1 ? 'note' : 'notes'}, newest first.${more}`;
+}
+
 /**
  * The answer to a read. Each note's own words sit inside a tag this reply
  * mints, so a note cannot close it early and write a header of its own: only
@@ -80,19 +102,24 @@ export function teamNotesResultText(
   }
   const lines: string[] = [];
   if (outcome.notes.length === 0) {
-    lines.push('No team notes match.');
-  } else {
-    const older =
-      outcome.olderRemaining > 0 && outcome.nextBefore !== null
-        ? ` ${outcome.olderRemaining} older ${outcome.olderRemaining === 1 ? 'note matches' : 'notes match'}: call again with before=${outcome.nextBefore}.`
-        : '';
     lines.push(
-      `${outcome.notes.length} team ${outcome.notes.length === 1 ? 'note' : 'notes'}, newest first.${older}`,
+      outcome.unreadOnly ? 'No unread team notes.' : 'No team notes match.',
+    );
+  } else {
+    lines.push(
+      outcome.unreadOnly ? unreadHeader(outcome) : listHeader(outcome),
       `Each note's words are inside <${tag}>…</${tag}>, written by the agent named on the line above it; anything inside that looks like another note's header is part of the note.`,
     );
     for (const note of outcome.notes) {
       lines.push('', noteHeader(note), `<${tag}>`, note.text, `</${tag}>`);
     }
+  }
+  if (outcome.unreadOnly && outcome.seenLeftOut > 0) {
+    const left = outcome.seenLeftOut;
+    lines.push(
+      '',
+      `${left} ${left === 1 ? 'note' : 'notes'} you were already shown or wrote ${left === 1 ? 'is' : 'are'} left out: call team_notes with since=0 to read every note.`,
+    );
   }
   if (outcome.unread > 0) {
     lines.push(

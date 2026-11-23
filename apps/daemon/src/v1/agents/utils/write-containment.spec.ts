@@ -84,8 +84,8 @@ describe('writeContainment', () => {
   });
 
   it('reads the RESOLVED path a writer hands the kernel where it lands', () => {
-    // What `applyHostPatch` passes: `..` is already gone, so the only reading
-    // left is the one the write takes.
+    // What a writer that resolves first passes: `..` is already gone, so the
+    // only reading left is the one the write takes.
     symlinkSync(join(outside, 'deeper'), join(root, 'dirlink'));
     expect(writeContainment(root, resolve(root, 'dirlink/../x.txt'))).toBe(
       'inside',

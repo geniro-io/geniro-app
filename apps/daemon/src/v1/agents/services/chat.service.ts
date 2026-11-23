@@ -63,7 +63,6 @@ import {
   type FollowUpBackgroundWork,
   type HistoryWindow,
   HOST_BROWSER_HOST_CARD,
-  HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
@@ -75,15 +74,11 @@ import {
   type HostChartOutcome,
   type HostComparison,
   type HostComparisonOutcome,
-  type HostFindingsOutcome,
-  type HostFindingsReport,
   type HostGallery,
   type HostGalleryOutcome,
   type HostMetrics,
   type HostMetricsOutcome,
   type HostNotifyOutcome,
-  type HostPatch,
-  type HostPatchOutcome,
   type HostPlan,
   type HostPlanOutcome,
   type HostProjectInstructions,
@@ -123,10 +118,6 @@ import {
   teamAnalysisTurn,
   writeAnalysedRuns,
 } from '../utils/analysed-runs';
-import {
-  applyHostPatch,
-  captureHostPatchFingerprint,
-} from '../utils/apply-patch';
 import {
   deliverApprovalAnswer,
   isUserQuestion,
@@ -169,7 +160,6 @@ import {
 } from '../utils/host-command-center';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { hostEndpointPath } from '../utils/host-endpoint';
-import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostFlagIssueCall } from '../utils/host-flag-issue';
 import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
 import { isHostKnowledgeCall } from '../utils/host-knowledge';
@@ -177,11 +167,6 @@ import { isHostMemoryCall } from '../utils/host-memory';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostMilestoneCall } from '../utils/host-milestone';
 import { isHostNotifyCall } from '../utils/host-notify';
-import {
-  hostPatchResultText,
-  hostPatchVerdict,
-  isHostPatchCall,
-} from '../utils/host-patch';
 import { hostPlanResultText, isHostPlanCall } from '../utils/host-plan';
 import {
   hostProjectInstructionsResultText,
@@ -226,8 +211,8 @@ import {
   strandedShells,
 } from '../utils/open-shells';
 import {
+  pendingCardRequestId,
   type PendingCardSnapshot,
-  type PendingPatchSnapshot,
   type PendingQuestionSnapshot,
   QUESTION_ALREADY_STANDING,
   readPendingQuestion,
@@ -295,7 +280,6 @@ import {
 import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
-import { FindingsReportBroker } from './findings-report.broker';
 import { FlagBroker } from './flag.broker';
 import { GalleryBroker } from './gallery.broker';
 import { ItemCallIndexService } from './item-call-index.service';
@@ -308,7 +292,6 @@ import { MonitorBroker, type MonitorSink } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
-import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
 import { ProjectChatBroker } from './project-chat.broker';
@@ -394,16 +377,6 @@ function deferredPlanKey(plan: HostPlan): string {
   return `plan:${JSON.stringify({ title: plan.title, steps: plan.steps })}`;
 }
 
-/** What identifies a deferred patch, so an identical re-ask adopts the card. */
-function deferredPatchKey(patch: HostPatch): string {
-  return `patch:${JSON.stringify({
-    filePath: patch.filePath,
-    oldString: patch.oldString ?? null,
-    newString: patch.newString,
-    summary: patch.summary ?? null,
-  })}`;
-}
-
 /** The registry input, spelled the way the card row is. */
 function deferredCardInput(snapshot: PendingCardSnapshot): unknown {
   switch (snapshot.kind) {
@@ -411,26 +384,9 @@ function deferredCardInput(snapshot: PendingCardSnapshot): unknown {
       return hostQuestionCardInput(snapshot.title, snapshot.questions);
     case 'plan':
       return { title: snapshot.title, steps: snapshot.steps };
-    case 'patch':
-      return patchWireInput(snapshot.patch);
     case 'project':
       return projectInstructionsCardInput(snapshot.change);
   }
-}
-
-/** A patch's arguments in `Edit`'s field names, which is what the diff reads. */
-function patchWireInput(patch: HostPatch): {
-  file_path: string;
-  old_string?: string;
-  new_string: string;
-  summary?: string;
-} {
-  return {
-    file_path: patch.filePath,
-    ...(patch.oldString === undefined ? {} : { old_string: patch.oldString }),
-    new_string: patch.newString,
-    ...(patch.summary === undefined ? {} : { summary: patch.summary }),
-  };
 }
 
 /** The host tool that raised a deferred card. */
@@ -440,8 +396,6 @@ function deferredCardTool(snapshot: PendingCardSnapshot): string {
       return HOST_QUESTION_TOOL;
     case 'plan':
       return HOST_PLAN_TOOL;
-    case 'patch':
-      return HOST_PATCH_TOOL;
     case 'project':
       return HOST_PROJECT_INSTRUCTIONS_TOOL;
   }
@@ -449,7 +403,7 @@ function deferredCardTool(snapshot: PendingCardSnapshot): string {
 
 /**
  * Whether `key` is the card already standing. A question's key is every word
- * it shows; a plan's, a patch's and a project card's are prefixed so they
+ * it shows; a plan's and a project card's are prefixed so they
  * cannot collide with it.
  */
 function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
@@ -463,8 +417,6 @@ function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
         deferredPlanKey({ title: standing.title, steps: standing.steps }) ===
         key
       );
-    case 'patch':
-      return deferredPatchKey(standing.patch) === key;
     case 'project':
       return projectInstructionsCardKey(standing.change) === key;
   }
@@ -669,10 +621,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     {
       key: string;
       outcome: Promise<
-        | HostQuestionOutcome
-        | HostPlanOutcome
-        | HostPatchOutcome
-        | HostProjectInstructionsOutcome
+        HostQuestionOutcome | HostPlanOutcome | HostProjectInstructionsOutcome
       >;
     }
   >();
@@ -928,9 +877,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly cliSessions: CliSessionsService,
     private readonly configDirPins: ConfigDirPinService,
     private readonly userQuestions: UserQuestionBroker,
-    private readonly findingsReports: FindingsReportBroker,
     private readonly charts: ChartBroker,
-    private readonly patches: PatchBroker,
     private readonly plans: PlanBroker,
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
@@ -1049,7 +996,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not a card that outlives its turn by design — the standing question,
-        // plan or patch, and the standing team proposal: each is put back
+        // plan or project card, and the standing team proposal: each is put back
         // at boot from its column, and closing it here would leave a card
         // drawn expired that the registry still holds open.
         const standing = new Set(
@@ -1307,7 +1254,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   // hold a `tools/call` open for a person (`AdapterConfig.hostQuestionDeferredReason`).
   // The tool answers `posted` at once and the agent is told to stop; the card
   // stands until the user answers it, and the answer reaches the agent as the
-  // run's NEXT message. A question, a plan, a patch and a project card share the column and
+  // run's NEXT message. A question, a plan and a project card share the column and
   // the one-card rule. So a card may be left open for an hour, which is the
   // whole point — what it costs is that these methods have to hold everything
   // the parked promise used to hold for free.
@@ -1350,15 +1297,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * What the verdict row records and what the agent is told.
    *
    * A question sends the user's words, as it always has. A plan sends the
-   * verdict sentence, note included. A patch and a project card run their
-   * write first and send what that write did.
+   * verdict sentence, note included. A project card runs its write first and
+   * sends what that write did.
    */
   private async deferredDelivery(
     runId: string,
     snapshot: PendingCardSnapshot,
     allow: boolean,
     answer: string | undefined,
-    em: EntityManager,
   ): Promise<{ message: string; answer?: string; outcome?: string }> {
     switch (snapshot.kind) {
       case 'question':
@@ -1378,18 +1324,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         return {
           message: hostPlanResultText(outcome),
           ...(note === undefined ? {} : { answer: note }),
-        };
-      }
-      case 'patch': {
-        const outcome = await this.deferredPatchOutcome(
-          runId,
-          allow,
-          snapshot,
-          em,
-        );
-        return {
-          message: hostPatchResultText(outcome),
-          ...hostPatchVerdict(outcome),
         };
       }
       case 'project': {
@@ -1422,56 +1356,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * Apply a deferred patch from the run's cwd, or say why it was not applied.
-   *
-   * The cwd is read off the run at answer time. The turn that proposed the
-   * patch is gone, and so, routinely, is the process — the snapshot is the
-   * only copy of the body left.
-   *
-   * The folder is validated the way the blocking path's turn does it
-   * (`resolveValidCwd`). A card can stand for hours with no turn running, so
-   * the folder may be gone by Apply, and `applyHostPatch` would recreate it
-   * for a whole-file write.
-   *
-   * Every failure is `stale`, never `unavailable`: the user saw the card and
-   * pressed Apply, and `unavailable` tells the agent the patch never reached
-   * them.
-   */
-  private async deferredPatchOutcome(
-    runId: string,
-    allow: boolean,
-    snapshot: PendingPatchSnapshot,
-    em: EntityManager,
-  ): Promise<HostPatchOutcome> {
-    if (!allow) {
-      return { status: 'declined' };
-    }
-    let cwd: string | null;
-    try {
-      const run = await this.runDao.getById(runId, em);
-      cwd = run?.cwd ?? null;
-    } catch (err) {
-      this.logger.error(
-        `run ${runId} could not read its folder for a deferred patch: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return { status: 'stale', reason: 'the file could not be written' };
-    }
-    if (cwd === null || cwd.length === 0) {
-      return { status: 'stale', reason: 'the chat has no working folder' };
-    }
-    let root: string;
-    try {
-      root = resolveValidCwd(cwd);
-    } catch (err) {
-      this.logger.warn(
-        `run ${runId} left a deferred patch unwritten: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return { status: 'stale', reason: 'the chat’s folder no longer exists' };
-    }
-    return applyHostPatch(root, snapshot.patch, snapshot.fingerprint);
-  }
-
-  /**
    * The user answered a deferred card: record the verdict, forget the standing
    * card, and hand the answer to the agent as the run's next message.
    *
@@ -1488,16 +1372,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     answer?: string,
   ): Promise<void> {
     const em = this.em.fork();
-    // A patch's Apply writes the file BEFORE the column is cleared. The write
-    // is `applyHostPatch` — the blocking path's own function, from the run's
-    // cwd as it stands now, not a closure over the turn that proposed it —
-    // so a restart answers the same way a live turn does.
     const delivery = await this.deferredDelivery(
       runId,
       snapshot,
       allow,
       answer,
-      em,
     );
     try {
       await this.clearOwnPendingCard(runId, snapshot.requestId, em);
@@ -1540,8 +1419,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   /**
    * Clear the run's deferred-card column if it still points at `requestId`.
    *
-   * The delivery reaches this only after awaiting the run row and, for a
-   * patch, the file write. In that window the user may have typed on and a
+   * The delivery reaches this only after awaiting its own write (a project
+   * card's Apply). In that window the user may have typed on and a
    * new turn put up a DIFFERENT card, which must keep its pointer. Read on a
    * fresh fork (the delivery's own may have the row cached from before), and
    * cleared only if the text is still what was read.
@@ -1616,7 +1495,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    *
    * A row it cannot read is CLEARED rather than left: the column is a pointer
    * into the transcript, and one nothing can be tracked from is a run reporting
-   * that it is waiting on a question nobody can answer.
+   * that it is waiting on a question nobody can answer. The card it pointed at
+   * is closed as `unanswerable` first, or its buttons stay live and do nothing.
    */
   async rehydrateDeferredQuestions(): Promise<void> {
     try {
@@ -1626,6 +1506,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       for (const run of runs) {
         const snapshot = readPendingQuestion(run.pendingQuestion);
         if (snapshot === null) {
+          await this.closeUnreadableCard(run.id, run.pendingQuestion, em);
           await this.runDao.setPendingQuestion(run.id, null, em);
           continue;
         }
@@ -1640,6 +1521,46 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `standing question rehydration failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  private async closeUnreadableCard(
+    runId: string,
+    column: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const requestId = pendingCardRequestId(column);
+    if (requestId === null) {
+      return;
+    }
+    const rows = await this.itemDao.rowsByPayloadId(
+      runId,
+      ['approval_request', 'approval_verdict', 'unanswerable'],
+      [requestId],
+      undefined,
+      em,
+    );
+    const request = rows.find((row) => row.kind === 'approval_request');
+    if (request === undefined || rows.some((row) => row !== request)) {
+      return;
+    }
+    let toolName = '';
+    try {
+      const payload: unknown = JSON.parse(request.payload);
+      if (payload !== null && typeof payload === 'object') {
+        const named = (payload as { toolName?: unknown }).toolName;
+        toolName = typeof named === 'string' ? named : '';
+      }
+    } catch {
+      toolName = '';
+    }
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'unanswerable',
+      null,
+      { id: requestId, toolName } satisfies UnanswerableWire,
+    );
   }
 
   // ── Deferred cards another module owns ──────────────────────────────────
@@ -1727,7 +1648,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * into it: the card stands across turns, so this is the ordinary case, and
    * a message delivered mid-turn interrupts an ACP agent's work (or is refused
    * `RUN_BUSY`, losing the verdict after its file was written). It is held too
-   * while a deferred question, plan or patch stands: the turn the verdict
+   * while a deferred question, plan or project card stands: the turn the verdict
    * starts would write that card off before the user answered it.
    *
    * `outcome` is what the owner did with an approval, kept on the row so the
@@ -1930,7 +1851,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   /**
    * Whether a turn geniro starts on its own (a monitor's output) must wait —
    * on the same terms as an owned card's verdict: a turn runs, or a question,
-   * plan or patch card waits for the user's answer, whose turn comes first.
+   * plan or project card waits for the user's answer, whose turn comes first.
    * `closing` when the chat is being archived or deleted.
    */
   hostTurnHold(runId: string): 'wait' | 'closing' | null {
@@ -2190,18 +2111,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     );
   }
 
-  private proposePatchDeferred(
-    em: EntityManager,
-    runId: string,
-    patch: HostPatch,
-    cwd: string,
-  ): Promise<HostPatchOutcome> {
-    const key = deferredPatchKey(patch);
-    return this.withDeferredClaim(runId, key, () =>
-      this.raiseDeferredPatch(em, runId, key, patch, cwd),
-    );
-  }
-
   /**
    * Claim the run's one deferred slot SYNCHRONOUSLY, before the first await.
    *
@@ -2212,10 +2121,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private withDeferredClaim<
     T extends
-      | HostQuestionOutcome
-      | HostPlanOutcome
-      | HostPatchOutcome
-      | HostProjectInstructionsOutcome,
+      HostQuestionOutcome | HostPlanOutcome | HostProjectInstructionsOutcome,
   >(runId: string, key: string, raise: () => Promise<T>): Promise<T> {
     const inFlight = this.deferredAsks.get(runId);
     if (inFlight !== undefined) {
@@ -2303,22 +2209,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }));
   }
 
-  /** {@link proposePatchDeferred}'s body, once the run's claim is held. */
-  private raiseDeferredPatch(
-    em: EntityManager,
-    runId: string,
-    key: string,
-    patch: HostPatch,
-    cwd: string,
-  ): Promise<HostPatchOutcome> {
-    return this.raiseDeferredCard(em, runId, key, async (requestId) => ({
-      kind: 'patch',
-      requestId,
-      patch,
-      fingerprint: await captureHostPatchFingerprint(cwd, patch),
-    }));
-  }
-
   /** {@link proposeProjectInstructionsDeferred}'s body, once the run's claim is held. */
   private raiseDeferredProjectInstructions(
     em: EntityManager,
@@ -2334,7 +2224,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * A plan, patch or project card put up deferred, unless the run already
+   * A plan or project card put up deferred, unless the run already
    * stands on one: the same card adopted, a different one refused.
    */
   private async raiseDeferredCard(
@@ -2392,8 +2282,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         em,
       );
     } catch (err) {
-      // Logged and replaced, on the findings sink's rule: a persist failure
-      // names an absolute database path, and this reason goes to a model whose
+      // Logged and replaced: a persist failure names an absolute database path, and this reason goes to a model whose
       // provider is off this machine.
       this.logger.error(
         `run ${runId} could not put a deferred card on screen: ${err instanceof Error ? err.message : String(err)}`,
@@ -6435,9 +6324,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * QUESTION tool goes only to a CLI whose own model has no way to ask
        * (`AdapterConfig.hostQuestionToolReason`) — claude has AskUserQuestion,
        * and a second question tool beside it is a second way to do one thing.
-       * The FINDINGS tool goes to every chat: a host-rendered card is a
-       * property of THIS app's transcript, so there is no CLI that already has
-       * one of its own to be duplicated.
+       * The RENDER tools go to every chat: a host-rendered card is a property
+       * of THIS app's transcript, so there is no CLI that already has one of
+       * its own to be duplicated.
        *
        * The question one is a FUNCTION because it reads `adapter`, which is
        * resolved further down while every reader of this runs later still. Both
@@ -6461,7 +6350,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         input: unknown,
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
-        isHostFindingsCall(hostServerName, toolName) ||
         // A step writes one line into this run's own history: `isHostMilestoneCall`.
         isHostMilestoneCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
@@ -6481,16 +6369,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.
         isHostNotifyCall(hostServerName, toolName) ||
-        // The patch tool auto-approves TOO, and the reason is worth stating
-        // because the opposite looks right: this tool writes to disk, so surely
-        // it should be gated? It IS — by its own card. Two different gates were
-        // being confused. Approving the CALL applies nothing; all it does is
-        // put a diff on screen with Apply and Reject, and the write happens
-        // only behind that second press. Measured on a live turn before this
-        // arm existed: the user got a meaningless "allow propose_patch?" card
-        // first and the patch card second, and answering the first decided
-        // nothing at all.
-        isHostPatchCall(hostServerName, toolName) ||
         isHostProjectInstructionsCall(hostServerName, toolName) ||
         // The plan tool, on the same reading and one step further from the
         // disk: proposing a plan does not even offer to change a file. Its card
@@ -6507,7 +6385,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // `read_teams` is NOT here, nor below: like the history tools, a read of
         // the user's data outside this chat is the user's to allow.
         isHostTeamProposalCall(hostServerName, toolName) ||
-        // A builder chat's own read, backup and check — see
+        // A builder chat's own read and check — see
         // `isHostBuilderTeamCall`.
         (run.editsTeamSlug !== null &&
           isHostBuilderTeamCall(hostServerName, toolName)) ||
@@ -6983,20 +6861,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         { questions: HostQuestion[]; title: string | null }
       >();
       /**
-       * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
-       * widening of the one above.
-       *
-       * Both hold promises parked on a card, and both are swept the same way
-       * when the turn settles — but the sentence each is swept with is what the
-       * agent reads, and "the turn ended before the question was answered" is
-       * the wrong thing to tell one that proposed a patch. One set with one
-       * generic sentence would save four lines and cost both tools the ability
-       * to say what actually happened.
+       * One set per parking tool rather than one shared set: the sentence each
+       * is swept with at turn end is what its agent reads, and "the turn ended
+       * before the question was answered" is the wrong thing to tell one that
+       * proposed a plan.
        */
-      const outstandingPatches = new Set<
-        (outcome: HostPatchOutcome) => boolean
-      >();
-      /** The same again for {@link HOST_PLAN_TOOL}, on the reason just above. */
       const outstandingPlans = new Set<(outcome: HostPlanOutcome) => boolean>();
       /** And for {@link HOST_PROJECT_INSTRUCTIONS_TOOL}. */
       const outstandingProjectChanges = new Set<
@@ -7181,8 +7050,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       /**
        * A card whose Apply runs a write: put on screen as an
        * `approval_request`, parked until the press, the write run behind
-       * Apply, and the verdict row recording what it did — the patch card and
-       * the project-instructions card. `outstanding` is the tool's own set, so
+       * Apply, and the verdict row recording what it did — the
+       * project-instructions card. `outstanding` is the tool's own set, so
        * the turn-end sweep tells each agent what actually happened.
        */
       const parkWriteCard = async <TOutcome>(card: {
@@ -7280,55 +7149,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         });
       };
       /**
-       * geniro's own patch channel: the agent proposes a change it has NOT
-       * made, the user sees the diff with Apply and Reject, and this writes the
-       * file if they accept.
+       * An analysis's change to a project's instructions: a card with the old
+       * and new text in every approval mode, and the write behind its Apply.
        *
-       * PARKS, unlike its two drawing siblings and exactly like {@link askUser}
-       * — and, like it, rides an ordinary `approval_request` row rather than a
-       * second card channel, so the card, the verdict route, the WS gateway and
-       * the settle-time sweep all serve it unchanged. The `input` is spelled in
-       * `Edit`'s own field names so the renderer's `editDiffOf` draws the diff
-       * it already knows how to draw.
-       *
-       * `question: false`: this IS a tool held at a permission gate, which is
-       * what the badge says — the agent is not asking the user something, it is
-       * asking to change their files.
-       *
-       * THIS card appears even in `auto` approval mode, and deliberately. Mode
-       * governs `autoApproves`, which is the path the CLI's request to CALL the
-       * tool takes — and that one is auto-approved, since calling it writes
-       * nothing. Nothing here goes through that path: a proposal whose whole
-       * purpose is the gate would be pointless auto-applied, and
-       * `ask_user_question` already behaves this way for the same reason.
-       */
-      const proposePatch = async (
-        patch: HostPatch,
-        signal?: AbortSignal,
-      ): Promise<HostPatchOutcome> => {
-        // A CLI that will not hold the call open is answered at once. The
-        // card stands, and Apply writes the file when the verdict message
-        // goes out — see the deferred-card block. Everything below parks.
-        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
-          return this.proposePatchDeferred(em, runId, patch, cwd);
-        }
-        const fingerprint = await captureHostPatchFingerprint(cwd, patch);
-        return parkWriteCard({
-          toolName: HOST_PATCH_TOOL,
-          input: patchWireInput(patch),
-          what: 'a patch proposal',
-          outstanding: outstandingPatches,
-          write: () => applyHostPatch(cwd, patch, fingerprint),
-          verdictOf: hostPatchVerdict,
-          declined: { status: 'declined' },
-          unavailable: (reason) => ({ status: 'unavailable', reason }),
-          signal,
-        });
-      };
-      /**
-       * An analysis's change to a project's instructions: {@link proposePatch}'s
-       * shape, a card with the old and new text in every approval mode, and
-       * the write behind its Apply.
+       * The card appears even in `auto` approval mode, deliberately: mode
+       * governs `autoApproves`, the path the CLI's request to CALL the tool
+       * takes, and calling it writes nothing. A proposal whose whole purpose is
+       * the gate would be pointless auto-applied.
        */
       const proposeProjectInstructions = async (
         change: HostProjectInstructions,
@@ -7353,7 +7180,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * geniro's own plan channel: the agent shows how it means to carry a
        * request out, and waits.
        *
-       * {@link proposePatch}'s twin structurally — an ordinary
+       * {@link proposeProjectInstructions}'s twin structurally — an ordinary
        * `approval_request` row, `question: false`, parked until the press — and
        * simpler in the one way that matters: approving performs NO action, so
        * there is nothing to run inside the responder and nothing that can fail
@@ -7370,7 +7197,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         plan: HostPlan,
         signal?: AbortSignal,
       ): Promise<HostPlanOutcome> => {
-        // Same deferral as {@link proposePatch}: the call returns `posted`
+        // Same deferral as {@link proposeProjectInstructions}: the call returns `posted`
         // and the verdict arrives as the run's next message.
         if (adapter.getConfig().hostQuestionDeferredReason !== null) {
           return this.proposePlanDeferred(em, runId, plan);
@@ -7499,11 +7326,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // from its own adapter.
       const answersAtOnce =
         adapter.getConfig().hostQuestionDeferredReason !== null;
-      const disposeProposer = mcpEndpoint
-        ? this.patches.register(runId, SINGLE_AGENT_NODE, proposePatch, {
-            answersAtOnce,
-          })
-        : null;
       const disposePlanner = mcpEndpoint
         ? this.plans.register(runId, SINGLE_AGENT_NODE, proposePlan, {
             answersAtOnce,
@@ -7608,7 +7430,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // without either having to know about the other.
       disposeHostTools = (): void => {
         disposeAsker?.();
-        disposeProposer?.();
         disposePlanner?.();
         if (monitorsDieWithTurn) {
           disposeMonitors?.();
@@ -7671,7 +7492,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
           // …and geniro's own endpoint, carrying whichever host tools this
-          // turn registered — the findings tool always, the question tool only
+          // turn registered — the render tools always, the question tool only
           // for a CLI whose own model has no way to ask. Null only where the
           // daemon has no bound port to publish.
           ...(mcpEndpoint === null ? {} : { mcpEndpoint }),
@@ -8557,12 +8378,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             status: 'unavailable',
             reason: TURN_ENDED_UNANSWERED,
           });
-          for (const settle of [...outstandingPatches]) {
-            settle({
-              status: 'unavailable',
-              reason: 'the turn ended before the patch was answered',
-            });
-          }
           for (const settle of [...outstandingPlans]) {
             settle({
               status: 'unavailable',
@@ -9147,50 +8962,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   private keepHostTools(runId: string, agentName: string): void {
     this.dropKeptHostTools(runId);
     /**
-     * geniro's own findings channel: the tool hands over an already-parsed
-     * report, this writes the one row the card is drawn from.
-     *
-     * Nothing is parked, unlike {@link askUser}: the agent is not waiting on
-     * a person, only on the row being durable. Resolving on the persist is
-     * also what keeps the receipt honest — it says the findings are on
-     * screen, and by then they are.
-     */
-    const reportFindings = async (
-      report: HostFindingsReport,
-    ): Promise<HostFindingsOutcome> => {
-      try {
-        await this.persist(
-          this.em.fork(),
-          runId,
-          await this.seqs.reserve(runId),
-          'report_findings',
-          null,
-          this.attributeCard(runId, report),
-        );
-      } catch (err) {
-        // The row IS the card, so a row that was never written is a report
-        // nobody will ever see. Said so, rather than answered with a count
-        // the agent would take as delivery — but the REASON is logged here
-        // and kept here: a persist failure names an absolute database path,
-        // and this string is handed to a model whose provider is off this
-        // machine. The MCP host's own error path refuses the same thing.
-        this.logger.error(
-          `run ${runId} could not persist a findings report: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
-      }
-      return { status: 'recorded', count: report.findings.length };
-    };
-    /**
-     * geniro's own chart channel — {@link reportFindings}'s twin, and
-     * deliberately its structural copy rather than a shared helper: what the
-     * two share is the SINK contract, which {@link HostSinkBroker} already
-     * holds, while the item kind, the payload and the receipt's counts are
-     * each tool's own. Folding them together would buy four lines and cost
-     * the ability to give either one a different failure.
+     * geniro's own chart channel: the tool hands over an already-parsed chart,
+     * this writes the one row the card is drawn from. Nothing is parked — the
+     * agent waits only on the row being durable, which is also what keeps the
+     * receipt honest. What the render tools share is the SINK contract,
+     * {@link HostSinkBroker}; the item kind, payload and receipt counts are
+     * each tool's own.
      */
     const drawChart = async (chart: HostChart): Promise<HostChartOutcome> => {
       try {
@@ -9427,7 +9204,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }),
     };
     this.keptHostTools.set(runId, [
-      this.findingsReports.register(runId, SINGLE_AGENT_NODE, reportFindings),
       this.charts.register(runId, SINGLE_AGENT_NODE, drawChart),
       this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics),
       this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison),

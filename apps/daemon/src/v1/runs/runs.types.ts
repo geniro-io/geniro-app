@@ -128,18 +128,14 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * renderer to infer staleness from a settled turn — an inference that has no
  * way to distinguish a request the CLI abandoned from one still in flight.
  *
- * `report_findings` is a list of code-review findings an agent handed the APP
- * to draw — through geniro's own MCP tool, rather than printing them as prose
- * a transcript can only show as prose. The payload IS the card: the tool call
- * answers with a receipt alone, deliberately, so the findings never re-enter
- * the model's context, which leaves this row as the only place they exist.
- * Persisted rather than streamed for `task_list`'s reason — a reopened chat
- * replays the transcript, and a card that lived only on the wire would be gone
- * from every conversation the moment it was closed.
+ * `report_findings` is written by nothing; it stays a kind so rows stored by an
+ * older build still read, and the transcript skips them.
  *
- * `show_chart` is the second row of that same RENDER family, and everything
- * said about `report_findings` above holds unchanged — the payload is the card,
- * the call answers with a receipt, the row is the only place the data exists.
+ * `show_chart` is the first row of the RENDER family: numbers an agent handed
+ * the APP to draw through geniro's own MCP tool. The payload IS the card — the
+ * call answers with a receipt alone, so the data never re-enters the model's
+ * context and this row is the only place it exists. Persisted rather than
+ * streamed for `task_list`'s reason: a reopened chat replays the transcript.
  * What is its own: the payload is POSITIONAL. Every series holds one value per
  * entry of `labels`, aligned by index, so a reader that drops or reorders
  * either list silently re-attributes measurements instead of failing.

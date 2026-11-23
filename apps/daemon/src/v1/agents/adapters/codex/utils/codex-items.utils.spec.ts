@@ -67,14 +67,14 @@ describe('itemStartedEvents', () => {
         type: 'mcpToolCall',
         id: 'call_2',
         server: 'geniro-0123abcd',
-        tool: 'report_findings',
-        arguments: { findings: [] },
+        tool: 'show_metrics',
+        arguments: { metrics: [] },
       }),
     );
     expect(event).toMatchObject({
       type: 'tool_call',
-      name: 'mcp__geniro-0123abcd__report_findings',
-      input: { findings: [] },
+      name: 'mcp__geniro-0123abcd__show_metrics',
+      input: { metrics: [] },
     });
   });
 

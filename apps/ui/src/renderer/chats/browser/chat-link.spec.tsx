@@ -3,9 +3,11 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { GeniroApi } from '../../../shared/contracts';
 import { createPreloadStub } from '../../__fixtures__/preload-stub';
 import { Popover } from '../../components/ui/popover';
 import { ThreadUiMemoryContext, writeThreadFlag } from '../thread-ui-memory';
+import { OPEN_PATH_GAP_MS } from '../use-show-in-finder';
 import { BrowserGrid } from './browser-grid';
 import {
   BrowserPaneContext,
@@ -13,7 +15,7 @@ import {
   useBrowserPane,
 } from './browser-pane-context';
 import { BROWSER_PANE_OPEN_KEY } from './browser-pane-store';
-import { ChatLink } from './chat-link';
+import { ChatLink, localPathOfHref, PATH_LINK_NOTICE_MS } from './chat-link';
 
 const clipboard = vi.hoisted(() => ({
   writeClipboard: vi.fn((_text: string) => Promise.resolve()),
@@ -284,6 +286,212 @@ describe('ChatLink — where the chat has no browser, or the link is not web', (
     expect(rightClick()).toBe(true);
     expect(optionLabels()).toEqual([]);
     expect(pane.openUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatLink — a link to a local path', () => {
+  const PATH = '/Users/me/demo videos/instructions.md';
+  const PATH_HREF = '/Users/me/demo%20videos/instructions.md';
+  let activation: { isActive: boolean };
+  let showInFinder: ReturnType<typeof vi.fn<GeniroApi['showInFinder']>>;
+
+  beforeEach(() => {
+    activation = { isActive: true };
+    Object.defineProperty(navigator, 'userActivation', {
+      configurable: true,
+      get: () => activation,
+    });
+    showInFinder = vi.fn<GeniroApi['showInFinder']>(() =>
+      Promise.resolve({ shown: 'revealed' }),
+    );
+    window.geniro = createPreloadStub({ showInFinder });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'userActivation');
+    vi.useRealTimers();
+  });
+
+  async function settle(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  function notice(): string | null {
+    return container.querySelector('[role="status"]')?.textContent ?? null;
+  }
+
+  it('shows the decoded path in Finder once on a plain click, instead of opening a window', async () => {
+    const pane = controls();
+    await render(
+      <BrowserPaneContext.Provider value={pane}>
+        <ChatLink href={PATH_HREF}>instructions</ChatLink>
+      </BrowserPaneContext.Provider>,
+    );
+
+    expect(click()).toBe(false);
+    await settle();
+
+    expect(showInFinder.mock.calls).toEqual([[PATH]]);
+    expect(pane.openUrl).not.toHaveBeenCalled();
+    expect(notice()).toBeNull();
+  });
+
+  it('works where the chat has no browser, and says where it leads on hover', async () => {
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    expect(anchor().title).toBe('Show in Finder');
+    click();
+    await settle();
+
+    expect(showInFinder).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a title the link was given', async () => {
+    await render(
+      <ChatLink href={PATH_HREF} title="Next demo">
+        instructions
+      </ChatLink>,
+    );
+
+    expect(anchor().title).toBe('Next demo');
+  });
+
+  it('shows nothing without a fresh click', async () => {
+    activation.isActive = false;
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    expect(click()).toBe(false);
+    await settle();
+
+    expect(showInFinder).not.toHaveBeenCalled();
+  });
+
+  it('shows nothing on a modified click', async () => {
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    expect(click({ button: 0, metaKey: true })).toBe(false);
+    await settle();
+
+    expect(showInFinder).not.toHaveBeenCalled();
+  });
+
+  it('shows one Finder window per click, however often it is pressed', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    click();
+    now.mockReturnValue(1_000_000 + OPEN_PATH_GAP_MS - 1);
+    click();
+    now.mockReturnValue(1_000_000 + OPEN_PATH_GAP_MS);
+    click();
+    await settle();
+
+    expect(showInFinder).toHaveBeenCalledTimes(2);
+  });
+
+  it('says beside the link why nothing is at the path, and lets the notice go', async () => {
+    vi.useFakeTimers();
+    showInFinder.mockResolvedValueOnce({
+      shown: null,
+      reason: 'nothing is at that path',
+    });
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    click();
+    await settle();
+    expect(notice()).toBe('Not shown in Finder: nothing is at that path');
+
+    act(() => {
+      vi.advanceTimersByTime(PATH_LINK_NOTICE_MS);
+    });
+    expect(notice()).toBeNull();
+  });
+
+  it('drops the notice once a later click shows the path', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    showInFinder.mockRejectedValueOnce(new Error('Finder is busy'));
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    click();
+    await settle();
+    expect(notice()).toBe('Not shown in Finder: Finder is busy');
+
+    now.mockReturnValue(1_000_000 + OPEN_PATH_GAP_MS);
+    click();
+    await settle();
+    expect(notice()).toBeNull();
+  });
+
+  it('keeps a repeated failure beside the link for the whole notice time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(1_000_000);
+    showInFinder.mockResolvedValue({
+      shown: null,
+      reason: 'nothing is at that path',
+    });
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    click();
+    await settle();
+    act(() => {
+      vi.advanceTimersByTime(OPEN_PATH_GAP_MS);
+    });
+    click();
+    await settle();
+    act(() => {
+      vi.advanceTimersByTime(PATH_LINK_NOTICE_MS - OPEN_PATH_GAP_MS);
+    });
+
+    expect(notice()).toBe('Not shown in Finder: nothing is at that path');
+  });
+
+  it('says beside the link that a paired device may not show it', async () => {
+    showInFinder.mockRejectedValueOnce(
+      new Error('opens a Finder window on the computer running geniro'),
+    );
+    await render(<ChatLink href={PATH_HREF}>instructions</ChatLink>);
+
+    click();
+    await settle();
+
+    expect(notice()).toBe(
+      'Not shown in Finder: opens a Finder window on the computer running geniro',
+    );
+  });
+
+  it('leaves a web link to its browser rules, and never asks Finder', async () => {
+    const pane = controls();
+    await render(
+      <BrowserPaneContext.Provider value={pane}>
+        <ChatLink href={HREF}>pull request</ChatLink>
+      </BrowserPaneContext.Provider>,
+    );
+
+    expect(anchor().title).toBe('');
+    expect(click()).toBe(false);
+
+    expect(pane.openUrl).toHaveBeenCalledWith(HREF);
+    expect(showInFinder).not.toHaveBeenCalled();
+  });
+});
+
+describe('localPathOfHref', () => {
+  it('reads an absolute path, decoded', () => {
+    expect(localPathOfHref('/Users/me/a%20b.md')).toBe('/Users/me/a b.md');
+  });
+
+  it('reads no path from a web, protocol-relative, relative or missing address', () => {
+    expect(localPathOfHref('https://example.com/a')).toBeNull();
+    expect(localPathOfHref('//example.com/a')).toBeNull();
+    expect(localPathOfHref('docs/a.md')).toBeNull();
+    expect(localPathOfHref('file:///Users/me/a.md')).toBeNull();
+    expect(localPathOfHref(undefined)).toBeNull();
+  });
+
+  it('reads no path past the length main accepts', () => {
+    expect(localPathOfHref(`/${'a'.repeat(1024)}`)).toBeNull();
   });
 });
 

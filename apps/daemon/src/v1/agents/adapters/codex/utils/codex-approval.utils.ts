@@ -194,8 +194,7 @@ export function codexApprovalCard(
  * `acceptEdits` takes without asking — a request that names a `grantRoot` is
  * codex asking to write somewhere its sandbox does not reach.
  *
- * Each target goes through `writeContainment`, the check `applyHostPatch` uses
- * too, on codex's RAW path: it must land inside both as written and resolved,
+ * Each target goes through `writeContainment` on codex's RAW path: it must land inside both as written and resolved,
  * since how codex's own writer reads a `link/..` is not ours to rely on — a
  * path whose two readings disagree is a card rather than a guess. A target that
  * already exists must not share its file with another name either

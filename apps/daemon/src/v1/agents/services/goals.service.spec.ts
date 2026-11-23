@@ -164,6 +164,51 @@ describe('GoalsService', () => {
     });
   });
 
+  it('marks a stored success as diverging once any goal of the run ends not achieved', async () => {
+    ok(
+      await db.service.add(
+        'run-1',
+        agent,
+        Array.from({ length: 12 }, (_, i) => ({
+          text: `goal ${i + 1}`,
+          source: 'agent' as const,
+        })),
+      ),
+    );
+    await new RunDao(db.em).updateWithoutActivity(
+      'run-1',
+      {
+        threadOutcome: JSON.stringify({
+          kind: 'success',
+          summary: 'shipped',
+          source: 'recorded',
+          seq: 9,
+        }),
+      },
+      db.em.fork(),
+    );
+    for (let n = 2; n <= 12; n += 1) {
+      ok(await db.service.close('run-1', agent, `g${n}`, 'achieved', 'done'));
+    }
+    expect(db.announced.at(-1)?.outcome).toMatchObject({
+      kind: 'success',
+      divergesFromGoals: true,
+    });
+
+    ok(await db.service.close('run-1', agent, 'g1', 'dropped', 'not needed'));
+
+    expect(db.announced.at(-1)?.outcome).toMatchObject({
+      kind: 'success',
+      divergesFromGoals: false,
+    });
+    ok(await db.service.reopen('run-1', { kind: 'user' }, 'g1'));
+    ok(await db.service.close('run-1', agent, 'g1', 'not_achieved', 'red'));
+    expect(db.announced.at(-1)?.outcome).toMatchObject({
+      kind: 'success',
+      divergesFromGoals: true,
+    });
+  });
+
   it('refuses an unknown goal, a run that is gone, and a list past the cap', async () => {
     expect(await db.service.update('run-1', agent, 'g9', 'x')).toMatchObject({
       status: 'refused',

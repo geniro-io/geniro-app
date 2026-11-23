@@ -35,7 +35,7 @@ describe('isHostChartCall', () => {
   });
 
   it('does not match geniro’s other host tools', () => {
-    expect(isHostChartCall(SERVER, `${SERVER}: report_findings`)).toBe(false);
+    expect(isHostChartCall(SERVER, `${SERVER}: show_metrics`)).toBe(false);
     expect(isHostChartCall(SERVER, `${SERVER}: ask_user_question`)).toBe(false);
   });
 });

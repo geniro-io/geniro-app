@@ -3,6 +3,11 @@ import type { ThreadIdentity } from '../components/thread-head';
 import type { DaemonApis } from '../daemon-api';
 import { AgentsApiContext } from './agents-api-context';
 import { ArtifactShareContext } from './artifact-share';
+import {
+  type CallAnswerPairs,
+  CallAnswerPairsContext,
+  NO_CALL_ANSWER_PAIRS,
+} from './call-answers';
 import { RevealCallBlockContext, RevealCallContext } from './call-block';
 import {
   type CalleeContextResolver,
@@ -85,6 +90,8 @@ import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
 export interface TranscriptValues {
+  /** Each loaded question's answer — see `CallAnswerPairsContext`. */
+  callAnswerPairs?: CallAnswerPairs;
   /** Whether a turn's tool rows start folded — see `CollapseToolStepsContext`. */
   collapseToolSteps: boolean;
   /** What the run is doing, for its live rows — see `RunActivityContext`. */
@@ -367,6 +374,7 @@ export function TranscriptContexts({
   threadIdentities = NO_THREAD_IDENTITIES,
   openMemory = null,
   openKnowledge = null,
+  callAnswerPairs = NO_CALL_ANSWER_PAIRS,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -385,7 +393,10 @@ export function TranscriptContexts({
                           <ThreadOpenContext.Provider value={openThread}>
                             <ThreadIdentityContext.Provider
                               value={threadIdentities}>
-                              {children}
+                              <CallAnswerPairsContext.Provider
+                                value={callAnswerPairs}>
+                                {children}
+                              </CallAnswerPairsContext.Provider>
                             </ThreadIdentityContext.Provider>
                           </ThreadOpenContext.Provider>
                         </KnowledgeOpenContext.Provider>

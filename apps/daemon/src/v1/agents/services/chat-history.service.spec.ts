@@ -509,12 +509,14 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       kind: ItemKind,
       memberId: string,
       payload: unknown,
+      role: string | null = null,
     ): Promise<unknown> =>
       dao.create({
         runId: 'run-a',
         seq,
         kind,
         memberId,
+        role,
         payload: JSON.stringify(payload),
       });
 
@@ -694,6 +696,58 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(statuses).toHaveLength(200);
       expect(statuses[0]).toBe(110);
       expect(await anchoredOf('call-2', ['turn_complete'])).toEqual([90]);
+    });
+
+    it("anchors what continued a held call since its newest hold — the caller's message and a person's — and nothing of a call never held", async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'call_answer', 'manager', {
+        callId: 'call-2',
+        outcome: 'message',
+      });
+      await row(
+        11,
+        'message',
+        'qa',
+        { callId: 'call-2', text: 'early' },
+        'user',
+      );
+      await row(12, 'system', 'qa', {
+        callId: 'call-2',
+        heldCall: { waitingOn: 1 },
+      });
+      await row(13, 'call_answer', 'manager', {
+        callId: 'call-2',
+        outcome: 'message',
+      });
+      await row(
+        14,
+        'message',
+        'qa',
+        { callId: 'call-2', text: 'go on' },
+        'user',
+      );
+      await row(15, 'message', 'qa', { callId: 'call-2', text: 'working' });
+      await row(16, 'call_answer', 'manager', {
+        callId: 'call-1',
+        outcome: 'message',
+      });
+      // The call's newest row, so its answer is not anchored as that.
+      await row(17, 'reasoning', 'eng', { text: 'next', callId: 'call-1' });
+
+      const { anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { root: true },
+      );
+      const seqsOf = (kind: ItemKind, role: string | null): number[] =>
+        anchors
+          .filter((item) => item.kind === kind && (item.role ?? null) === role)
+          .map((item) => item.seq);
+
+      expect(seqsOf('call_answer', null)).toEqual([13]);
+      expect(seqsOf('message', 'user')).toEqual([14]);
     });
 
     it('anchors a turn that ended in an error or was cancelled — without it the turn reads as still running', async () => {

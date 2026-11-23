@@ -17,6 +17,7 @@ import {
   RAIL_EXPANDED_WIDTH,
 } from '../../shared/contracts';
 import { Logo } from './logo';
+import { navAnnouncement, NavWarning } from './nav-warning';
 import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
@@ -66,6 +67,7 @@ function NavButton({
   active,
   collapsed,
   count,
+  warning,
   onSelect,
 }: {
   item: NavItem;
@@ -73,6 +75,7 @@ function NavButton({
   collapsed: boolean;
   /** What waits on the user there; zero draws nothing. */
   count: number;
+  warning: string | undefined;
   onSelect: (view: AppView) => void;
 }): React.JSX.Element {
   const Icon = item.icon;
@@ -83,11 +86,9 @@ function NavButton({
       // When collapsed the label is hidden — keep it reachable to assistive tech
       // and surface it as a hover tooltip.
       aria-label={
-        collapsed
-          ? `${item.label}${count > 0 ? `, ${count} waiting` : ''}`
-          : undefined
+        collapsed ? navAnnouncement(item.label, count, warning) : undefined
       }
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? navAnnouncement(item.label, 0, warning) : warning}
       onClick={() => onSelect(item.view)}
       className={cn(
         'relative flex w-full items-center rounded-md text-left text-sm font-medium outline-none transition-colors',
@@ -97,7 +98,9 @@ function NavButton({
           ? 'bg-sidebar-accent text-sidebar-primary-strong'
           : 'text-sidebar-foreground/75',
       )}>
-      <Icon aria-hidden="true" className="size-4 shrink-0" />
+      <NavWarning marked={warning !== undefined}>
+        <Icon aria-hidden="true" className="size-4 shrink-0" />
+      </NavWarning>
       {collapsed ? null : item.label}
       {count > 0 ? (
         <span
@@ -132,11 +135,13 @@ export function NavRail({
   hydrated,
   onToggleCollapsed,
   counts = {},
+  warnings = {},
 }: {
   view: AppView;
   onNavigate: (view: AppView) => void;
   /** What waits on the user, by destination. */
   counts?: Partial<Record<AppView, number>>;
+  warnings?: Partial<Record<AppView, string>>;
   /**
    * Collapsed state, OWNED by the shell (`useSidebarCollapsed`).
    *
@@ -208,6 +213,7 @@ export function NavRail({
           active={view === item.view}
           collapsed={collapsed}
           count={counts[item.view] ?? 0}
+          warning={warnings[item.view]}
           onSelect={onNavigate}
         />
       ))}
@@ -220,6 +226,7 @@ export function NavRail({
             active={view === item.view}
             collapsed={collapsed}
             count={counts[item.view] ?? 0}
+            warning={warnings[item.view]}
             onSelect={onNavigate}
           />
         ))}

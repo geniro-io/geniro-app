@@ -145,7 +145,8 @@ function sentSentence(sent: ThreadMessageSentRow): string {
   return `Message to ${to} ${sent.reason === null ? 'is waiting' : threadMessageReasonWords(sent.reason)}.`;
 }
 
-function cappedSentText(text: string): string {
+/** `text` cut to {@link THREAD_MESSAGE_SENT_TEXT_MAX} code points, ending in an ellipsis when cut. */
+export function cappedRowText(text: string): string {
   const chars = [...text];
   return chars.length > THREAD_MESSAGE_SENT_TEXT_MAX
     ? `${chars.slice(0, THREAD_MESSAGE_SENT_TEXT_MAX - 1).join('')}…`
@@ -163,7 +164,7 @@ export function threadMessageSentRow(
     threadMessageSent:
       sent.text === undefined
         ? sent
-        : { ...sent, text: cappedSentText(sent.text) },
+        : { ...sent, text: cappedRowText(sent.text) },
     woke: false,
     ...(conversationId === null ? {} : { conversationId }),
   };

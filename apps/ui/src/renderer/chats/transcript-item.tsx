@@ -7,8 +7,16 @@ import {
   formatExactUsd,
   markEstimate,
 } from './agent-activity';
+import { MemberEventCard } from './agent-event-card';
+import { readAgentCallEvents } from './agent-event-payload';
+import {
+  AgentCallEventRow,
+  MonitorEventRow,
+  noAnswerWords,
+  unansweredWords,
+} from './agent-event-rows';
 import { messageAttachments } from './attachment-payload';
-import { CallQuestionCard } from './call-question-card';
+import { CallAnswerPairsContext } from './call-answers';
 import { CliLoginContext } from './cli-login-context';
 import { compactionDetail, compactionFacts } from './compaction-payload';
 import { DisclosureRow } from './disclosure-row';
@@ -25,7 +33,6 @@ import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { readMilestonePayload } from './milestone-payload';
 import { MilestoneRow } from './milestone-row';
-import { MonitorNoticeRow } from './monitor-divider';
 import { readMonitorNotice } from './monitor-payload';
 import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
@@ -86,8 +93,6 @@ import {
   formatDuration,
   TurnDurationContext,
 } from './turn-duration';
-import { WakeDivider } from './wake-divider';
-import { readWakeNotice } from './wake-payload';
 
 /**
  * The tool call a working row says the agent is writing, or null — the pair
@@ -214,8 +219,14 @@ export const TranscriptItem = memo(function TranscriptItem({
   const nested = useContext(NestedThreadContext);
   const durations = useContext(TurnDurationContext);
   const runOutcomes = useContext(RunOutcomesContext);
+  const answerPairs = useContext(CallAnswerPairsContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
+  const memberCard = (memberId: string | null) => ({
+    name: nodeName(memberId) ?? 'agent',
+    memberId,
+    meta: memberId === null ? undefined : nodes?.get(memberId),
+  });
   // Team-run items carry the node that produced them; tag each row so
   // parallel branches stay readable in the interleaved transcript.
   const tag = (label: string): string => {
@@ -275,11 +286,21 @@ export const TranscriptItem = memo(function TranscriptItem({
       // mistaken for one.
       const live = liveRowKind(item.payload);
       if (live === 'working') {
+        const waitCallId = payloadString(item.payload, 'waitCallId');
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
             writing={writingOf(item.payload)}
+            waiting={
+              waitCallId === null
+                ? null
+                : {
+                    callee: nodeName(payloadString(item.payload, 'waitCallee')),
+                    callId: waitCallId,
+                    more: payloadNumber(item.payload, 'waitMore') ?? 0,
+                  }
+            }
           />
         );
       }
@@ -502,6 +523,19 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (status === 'skipped' && reason === 'never called') {
         return null;
       }
+      if (
+        item.memberId !== null &&
+        (status === 'failed' || status === 'cancelled' || status === 'skipped')
+      ) {
+        return (
+          <MemberEventCard
+            kind={status}
+            {...memberCard(item.memberId)}
+            callId={payloadString(item.payload, 'callId')}
+            outcome={reason === null ? null : { text: reason }}
+          />
+        );
+      }
       const line =
         status === 'failed'
           ? `✗ ${name} failed`
@@ -535,18 +569,28 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (threadRow !== null) {
         return <ThreadEventRow row={threadRow} />;
       }
-      // A caller started again by a call of its own — drawn as a divider whose
-      // calls open their cards, rather than as a sentence about the engine.
-      const wake = readWakeNotice(item.payload);
-      if (wake !== null) {
-        return <WakeDivider caller={nodeName(item.memberId)} reasons={wake} />;
+      // What became of an agent's calls — one finished, failed, asked or was
+      // left without an answer — one card per call, recorded keys or, on a row
+      // written before them, its sentence. A question left without an answer
+      // is said on that question's card when it is loaded.
+      if (answerPairs.shownOnQuestion.has(item.id)) {
+        return null;
       }
-      // A monitor's output, or its end: a divider where it started a turn of the
-      // agent's own, a quiet note where it did not.
+      const callEvents = readAgentCallEvents(item.payload);
+      if (callEvents !== null) {
+        return (
+          <AgentCallEventRow
+            events={callEvents}
+            nodes={nodes}
+            agent={nodeName(item.memberId)}
+            memoryKey={`agent-event:${item.id}`}
+          />
+        );
+      }
       const monitor = readMonitorNotice(item.payload);
       if (monitor !== null) {
         return (
-          <MonitorNoticeRow
+          <MonitorEventRow
             notice={monitor}
             agent={nodeName(item.memberId)}
             memoryKey={`monitor:${item.id}`}
@@ -708,40 +752,67 @@ export const TranscriptItem = memo(function TranscriptItem({
       // receipt right beside it says everything the user needs.
       return null;
     case 'call_question': {
-      // A call-initiated callee parked on a question — the CALLER (not the
-      // user) is expected to answer it via answer_agent. Drawn as the question
-      // card it is, inert: see {@link CallQuestionCard} for why it borrows the
-      // live card's shape and not its promise.
+      // The CALLER, not the user, answers it through answer_agent, so its
+      // options are inert; the answer, once loaded, is drawn on this card.
       const raw = (item.payload as { options?: unknown } | null)?.options;
       const options = Array.isArray(raw)
         ? raw.filter((option): option is string => typeof option === 'string')
         : [];
+      const caller =
+        nodeName(payloadString(item.payload, 'callerNodeId')) ?? 'The caller';
+      const paired = answerPairs.byQuestion.get(item.id);
       return (
-        <CallQuestionCard
-          question={payloadString(item.payload, 'question') ?? ''}
+        <MemberEventCard
+          kind={
+            paired === undefined
+              ? 'asked'
+              : paired.outcome === 'answered'
+                ? 'answered'
+                : 'no-answer'
+          }
+          {...memberCard(payloadString(item.payload, 'calleeNodeId'))}
+          callId={payloadString(item.payload, 'callId')}
+          text={payloadString(item.payload, 'question')}
           options={options}
-          caller={nodeName(payloadString(item.payload, 'callerNodeId'))}
-          callee={nodeName(payloadString(item.payload, 'calleeNodeId'))}
+          outcome={
+            paired === undefined
+              ? {
+                  text: `${caller} answers this — or passes it on to you as its own question.`,
+                }
+              : paired.outcome === 'answered'
+                ? { text: `${caller} answered: ${paired.answer ?? ''}` }
+                : {
+                    text:
+                      paired.noAnswer === null
+                        ? unansweredWords(paired.outcome)
+                        : noAnswerWords(paired.noAnswer),
+                    tone: 'destructive',
+                  }
+          }
+          memoryKey={`agent-event:${item.id}`}
         />
       );
     }
     case 'call_answer': {
-      const callee =
-        nodeName(payloadString(item.payload, 'calleeNodeId')) ?? 'agent';
+      if (answerPairs.shownOnQuestion.has(item.id)) {
+        return null;
+      }
+      const callee = memberCard(payloadString(item.payload, 'calleeNodeId'));
+      const callId = payloadString(item.payload, 'callId');
       const outcome = payloadString(item.payload, 'outcome');
+      const memoryKey = `agent-event:${item.id}`;
       if (outcome === 'answered') {
         return (
-          <MessageBubble variant="call" role={tag(`💬 answered → ${callee}`)}>
-            <div className="whitespace-pre-wrap break-words">
-              {payloadString(item.payload, 'answer') ?? ''}
-            </div>
-          </MessageBubble>
+          <MemberEventCard
+            kind="answer"
+            {...callee}
+            callId={callId}
+            text={payloadString(item.payload, 'answer')}
+            memoryKey={memoryKey}
+          />
         );
       }
       // The caller's `message_agent`: a correction sent INTO the running call.
-      // Same row kind as an answer — it is the caller speaking to its callee
-      // inside the call — and without this arm it fell through to the red
-      // "orphaned" line below, which is the opposite of what happened.
       if (outcome === 'message') {
         // Accepted, then dropped by the callee's turn: the "not delivered" row
         // the drop wrote shows these words instead.
@@ -754,39 +825,42 @@ export const TranscriptItem = memo(function TranscriptItem({
           return null;
         }
         return (
-          <MessageBubble
-            variant="call"
-            role={tag(`💬 message → ${callee} · delivered`)}>
-            <div className="whitespace-pre-wrap break-words">
-              {payloadString(item.payload, 'message') ?? ''}
-            </div>
-          </MessageBubble>
+          <MemberEventCard
+            kind="message"
+            {...callee}
+            callId={callId}
+            text={payloadString(item.payload, 'message')}
+            outcome={{ text: 'Delivered' }}
+            memoryKey={memoryKey}
+          />
         );
       }
       // A `message_agent` message the daemon held until the callee could take
-      // it, and the call ended first. It carries the words, which is what tells
-      // it apart from an undelivered ANSWER: the reader must see which
-      // correction never landed, not a line about a question.
+      // it, and the call ended first: its words tell it from an undelivered
+      // ANSWER.
       const heldMessage = payloadString(item.payload, 'message');
       if (outcome === 'undelivered' && heldMessage !== null) {
         return (
-          <MessageBubble
-            variant="error"
-            role={tag(`✗ message → ${callee} · not delivered`)}>
-            <div className="whitespace-pre-wrap break-words">{heldMessage}</div>
-          </MessageBubble>
+          <MemberEventCard
+            kind="message"
+            {...callee}
+            callId={callId}
+            text={heldMessage}
+            outcome={{
+              text: 'Not delivered — the call ended before the callee could read it.',
+              tone: 'destructive',
+            }}
+            memoryKey={memoryKey}
+          />
         );
       }
       return (
-        <MessageBubble variant="error" role={tag('✗ question')}>
-          <div className="whitespace-pre-wrap break-words">
-            {outcome === 'timeout'
-              ? 'timed out — the caller never answered'
-              : outcome === 'undelivered'
-                ? 'undelivered — the callee ended before the answer arrived'
-                : 'orphaned — the caller ended before answering'}
-          </div>
-        </MessageBubble>
+        <MemberEventCard
+          kind="no-answer"
+          {...callee}
+          callId={callId}
+          outcome={{ text: unansweredWords(outcome), tone: 'destructive' }}
+        />
       );
     }
     case 'team_note': {

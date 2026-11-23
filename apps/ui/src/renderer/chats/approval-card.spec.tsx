@@ -1995,7 +1995,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     // did not keep, found by looking at a real card.
     const el = render(
       <ApprovalCard
-        toolName="propose_patch"
+        toolName="save_project_instructions"
         input={{
           file_path: 'processor.ts',
           old_string: 'const t = 30;',
@@ -2009,7 +2009,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     expect(el.textContent).toContain('Raise the queue timeout from 30s to 60s');
     // Approving this APPLIES a change; it is not a request to run something.
     expect(el.textContent).not.toContain('asks to run a tool');
-    expect(el.textContent).toContain('processor.ts');
+    expect(el.textContent).toContain('const t = 60;');
   });
 
   it('draws an analysis’s project-instructions change as its changed lines under its own heading', () => {
@@ -2080,7 +2080,7 @@ describe('ApprovalCard — Enter moves to the next question', () => {
   it('still names a proposal when the agent wrote no summary', () => {
     const el = render(
       <ApprovalCard
-        toolName="propose_patch"
+        toolName="save_project_instructions"
         input={{ file_path: 'a.ts', new_string: 'x' }}
         verdict={null}
         onRespond={vi.fn()}
@@ -2105,6 +2105,29 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     expect(el.querySelector('span')?.textContent).toBe(
       'Agent asks to run a tool',
     );
+  });
+
+  it('shows an old propose_patch approval as a plain tool request, with no diff', () => {
+    // A row written before the tool was removed still reaches this card. It
+    // must render the generic body, not a change nobody can apply from here.
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{
+          file_path: 'a.ts',
+          old_string: 'const t = 30;',
+          new_string: 'const t = 60;',
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('span')?.textContent).toBe(
+      'Agent asks to run a tool',
+    );
+    expect(el.querySelector('[data-slot="diff"]')).toBeNull();
+    expect(el.querySelector('[data-slot="unified-diff"]')).toBeNull();
+    expect(el.textContent).toContain('const t = 60;');
   });
 });
 
@@ -2151,7 +2174,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
     // sentence twice and read as two separate hazards.
     const el = render(
       <ApprovalCard
-        toolName="propose_patch"
+        toolName="save_project_instructions"
         input={{
           file_path: '/x.ts',
           old_string: 'const a = 1;',
@@ -2193,7 +2216,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
     const ESCAPE = String.fromCodePoint(0x1b);
     const el = render(
       <ApprovalCard
-        toolName="propose_patch"
+        toolName="save_project_instructions"
         input={{
           file_path: '/x.ts',
           old_string: 'const a = 1;',
@@ -2221,7 +2244,7 @@ describe('ApprovalCard — hazardous-character warning', () => {
     // the separator invents none.
     const el = render(
       <ApprovalCard
-        toolName="propose_patch"
+        toolName="save_project_instructions"
         input={{
           file_path: '/x.ts',
           old_string: '// Проверка\nexport function foo() {}',

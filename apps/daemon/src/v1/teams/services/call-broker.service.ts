@@ -4,12 +4,14 @@ import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
 import { awakeTimeout, type AwakeTimer } from '../../../utils/sleep-watch';
 import type {
+  CallNoticeRowWire,
   CallResultPayload,
   CallStartedPayload,
   HostRowWire,
   MessageDeliveryFailure,
   PersistedResetWake,
   RunCallSeed,
+  WakeRowEntry,
 } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import {
@@ -17,6 +19,7 @@ import {
   callNumber,
   RESTART_CONTINUED_KEY,
 } from '../../agents/utils/call-seed';
+import { cappedRowText } from '../../agents/utils/thread-message-text';
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
@@ -204,6 +207,8 @@ interface AsyncCallEntry {
    * for the reason {@link ParkedQuestion.ownerTold} is once per question.
    */
   told: boolean;
+  /** How the call ended, once its callee settled — what the caller's card of it shows. */
+  outcome?: CallSettleOutcome;
 }
 
 /** Lets a wait that gave up (timed out, abandoned) stop listening for questions. */
@@ -294,6 +299,8 @@ interface ActiveCall {
    * settles; a cancel arriving after it stops nothing and says so.
    */
   turnEnded: boolean;
+  /** {@link AsyncCallEntry.outcome}, kept for an entry made after the callee settled. */
+  outcome?: CallSettleOutcome;
   /**
    * The silence watchdog — re-armed by every row the callee produces, cleared
    * when the call settles. See {@link CALL_SILENCE_DEADLINE_MS}.
@@ -604,6 +611,49 @@ interface WakeResult {
   callee: string;
 }
 
+/** A question a woken caller is told about, with the member that asked it. */
+interface WakeAsked extends WakeQuestion {
+  calleeNodeId: string;
+}
+
+/**
+ * A result a woken caller is told about, with the member that settled it and
+ * how. Never persisted with a reset wake, which keeps {@link WakeResult} only.
+ */
+interface WakeFinished extends WakeResult {
+  calleeNodeId: string;
+  outcome: CallSettleOutcome | null;
+}
+
+/** How a settled call ended, as its caller's transcript tells it. */
+interface CallSettleOutcome {
+  status: CalleeTurnOutcome['status'];
+  /** The start of the callee's answer, only when it completed. */
+  result: string | null;
+}
+
+function settleOutcomeOf(outcome: CalleeTurnOutcome): CallSettleOutcome {
+  return {
+    status: outcome.status,
+    result:
+      outcome.status === 'completed' && outcome.finalText !== null
+        ? cappedRowText(outcome.finalText)
+        : null,
+  };
+}
+
+/** A settled call's ending, as the keys of a row about it. */
+function endingKeys(
+  outcome: CallSettleOutcome | null,
+): Pick<WakeRowEntry, 'status' | 'result'> {
+  if (outcome === null) {
+    return {};
+  }
+  return outcome.result === null
+    ? { status: outcome.status }
+    : { status: outcome.status, result: outcome.result };
+}
+
 /** One caller's calls a single usage-limit reset will reopen. */
 interface ResetWake {
   timer: ReturnType<typeof setTimeout>;
@@ -778,29 +828,35 @@ function deferredQuestionPrompt(answer: string | null): string {
  * The transcript's account of a wake, filed under the caller that was woken.
  *
  * Without it the caller would start talking again unprompted. `wake` names the
- * calls so the renderer can draw a divider that opens their cards; `message` is
- * the same fact as a sentence for every reader that shows plain text.
+ * calls, their members and what each asked or answered, so the renderer can draw
+ * a card per call; `message` is the same fact as a sentence for every reader
+ * that shows plain text.
  *
  * TWIN PARSER: read by the renderer's `readWakeNotice` in
  * `apps/ui/src/renderer/chats/wake-payload.ts`.
  */
 function wakeNotice(
-  asked: readonly WakeQuestion[],
-  finished: readonly WakeResult[],
+  asked: readonly WakeAsked[],
+  finished: readonly WakeFinished[],
 ): {
   message: string;
-  wake: { callId: string; callee: string; reason: 'asked' | 'finished' }[];
+  wake: WakeRowEntry[];
 } {
-  const wake = [
+  const wake: WakeRowEntry[] = [
     ...asked.map((item) => ({
       callId: item.callId,
       callee: item.callee,
       reason: 'asked' as const,
+      calleeNodeId: item.calleeNodeId,
+      question: item.question,
+      options: [...item.options],
     })),
     ...finished.map((item) => ({
       callId: item.callId,
       callee: item.callee,
       reason: 'finished' as const,
+      calleeNodeId: item.calleeNodeId,
+      ...endingKeys(item.outcome),
     })),
   ];
   const reasons = wake.map((item) =>
@@ -3294,7 +3350,15 @@ export class CallBroker implements OnModuleInit {
       severity: 'info',
       ...inAnsweredCall(state, owner),
       message: `Passed ${asked.callee}'s question in ${callId} to this agent while it was working.`,
-    });
+      toldWorking: {
+        callId,
+        callee: asked.callee,
+        calleeNodeId: call.calleeId,
+        reason: 'asked',
+        question: asked.question,
+        options: [...asked.options],
+      },
+    } satisfies CallNoticeRowWire);
   }
 
   owedACallOrMonitor(runId: string, caller: string): boolean {
@@ -3429,10 +3493,20 @@ export class CallBroker implements OnModuleInit {
    * turn stops holding the run open, so the wake is counted before the run can
    * decide it has finished.
    */
-  noteCalleeSettling(runId: string, callId: string): void {
+  noteCalleeSettling(
+    runId: string,
+    callId: string,
+    outcome: CalleeTurnOutcome,
+  ): void {
     const state = this.runs.get(runId);
     const call = state?.activeCalls.get(callId);
+    if (call) {
+      call.outcome = settleOutcomeOf(outcome);
+    }
     const entry = state?.pendingAsync.get(callId);
+    if (entry && call) {
+      entry.outcome = call.outcome;
+    }
     if (!state || !call || !entry || entry.told) {
       return;
     }
@@ -3489,7 +3563,14 @@ export class CallBroker implements OnModuleInit {
       severity: 'info',
       ...inAnsweredCall(state, owner),
       message: `Told this agent that ${finished.callee} finished ${callId} while it was working.`,
-    });
+      toldWorking: {
+        callId,
+        callee: finished.callee,
+        calleeNodeId: call.calleeId,
+        reason: 'finished',
+        ...endingKeys(call.outcome ?? null),
+      },
+    } satisfies CallNoticeRowWire);
   }
 
   /**
@@ -3920,24 +4001,32 @@ export class CallBroker implements OnModuleInit {
     owner: string,
     questions: readonly string[],
     results: readonly string[],
-  ): { asked: WakeQuestion[]; finished: WakeResult[] } {
-    const asked = questions.flatMap((callId): WakeQuestion[] => {
+  ): { asked: WakeAsked[]; finished: WakeFinished[] } {
+    const asked = questions.flatMap((callId): WakeAsked[] => {
       const call = state.activeCalls.get(callId);
       return call?.parked
         ? [
             {
               callId,
               callee: this.calleeName(state, owner, call.calleeId),
+              calleeNodeId: call.calleeId,
               question: call.parked.question,
               options: call.parked.options,
             },
           ]
         : [];
     });
-    const finished = results.flatMap((callId): WakeResult[] => {
+    const finished = results.flatMap((callId): WakeFinished[] => {
       const entry = state.pendingAsync.get(callId);
       return entry
-        ? [{ callId, callee: this.calleeName(state, owner, entry.calleeId) }]
+        ? [
+            {
+              callId,
+              callee: this.calleeName(state, owner, entry.calleeId),
+              calleeNodeId: entry.calleeId,
+              outcome: entry.outcome ?? null,
+            },
+          ]
         : [];
     });
     return { asked, finished };
@@ -3952,8 +4041,8 @@ export class CallBroker implements OnModuleInit {
     runId: string,
     state: RunCallState,
     owner: string,
-    asked: readonly WakeQuestion[],
-    finished: readonly WakeResult[],
+    asked: readonly WakeAsked[],
+    finished: readonly WakeFinished[],
     callId: string | null,
   ): void {
     for (const item of asked) {
@@ -3975,7 +4064,7 @@ export class CallBroker implements OnModuleInit {
       severity: 'info',
       ...wakeNotice(asked, finished),
       ...(callId !== null ? { callId } : {}),
-    });
+    } satisfies CallNoticeRowWire);
   }
 
   /**
@@ -4029,7 +4118,9 @@ export class CallBroker implements OnModuleInit {
     if (open > 0) {
       const callee = this.calleeName(state, call.owner, call.calleeId);
       // TWIN PARSER: `apps/ui/src/renderer/chats/transcript-groups.ts` folds
-      // `heldCall` rows into the call block's `heldOn` reading by `callId`.
+      // `heldCall` rows into the call block's `heldOn` reading by `callId`;
+      // `newestHolds` (`v1/agents/services/chat-history.service.ts`) reads
+      // them for a root page's anchors.
       state.capability.persistItem(call.calleeId, 'system', null, {
         callId,
         severity: 'info',
@@ -4410,12 +4501,20 @@ export class CallBroker implements OnModuleInit {
       entry.told = true;
     }
     const callee = this.calleeName(state, call.owner, call.calleeId);
+    const continues = call.parked?.stopsTurn === false;
     state.capability.persistItem(callerNodeOf(call.owner), 'system', null, {
-      message:
-        call.parked?.stopsTurn === false
-          ? `${callee} asked a question in ${callId} and no turn of this agent was left to answer it, so it goes on without an answer.`
-          : `${callee} was stopped: it asked a question in ${callId} and no turn of this agent was left to answer it.`,
-    });
+      severity: 'info',
+      ...inAnsweredCall(state, call.owner),
+      message: continues
+        ? `${callee} asked a question in ${callId} and no turn of this agent was left to answer it, so it goes on without an answer.`
+        : `${callee} was stopped: it asked a question in ${callId} and no turn of this agent was left to answer it.`,
+      orphanQuestion: {
+        callId,
+        callee,
+        calleeNodeId: call.calleeId,
+        outcome: continues ? 'continues' : 'stopped',
+      },
+    } satisfies CallNoticeRowWire);
     this.failParked(state, callId, call, reason, 'orphaned');
   }
 
@@ -5605,6 +5704,7 @@ function makeCollectable(
       calleeId: call.calleeId,
       settled: call.settled,
       told: false,
+      ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
     });
   }
 }

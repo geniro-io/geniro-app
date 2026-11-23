@@ -30,7 +30,7 @@ const KIND_LABELS: Record<string, string> = {
   system: 'Note',
   error: 'Error',
   task_list: 'Task list',
-  findings: 'Findings',
+  report_findings: 'Findings',
   call_question: 'Question',
   call_answer: 'Answer',
   approval_request: 'Approval request',

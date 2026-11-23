@@ -73,7 +73,10 @@ const Teams = lazy(() =>
   import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );
 import type { SettingsSection } from './settings/Settings';
-import { useCliUpdatesAvailable } from './settings/use-cli-updates-available';
+import {
+  signInsNeededText,
+  useCliAttention,
+} from './settings/use-cli-attention';
 import { useMemoryWaitingCount } from './settings/use-memory-waiting-count';
 
 const Settings = lazy(() =>
@@ -618,7 +621,7 @@ export function App(): React.JSX.Element {
     setView('settings');
   }, []);
   const memoryWaiting = useMemoryWaitingCount(apis, clientRef.current);
-  const cliUpdatesAvailable = useCliUpdatesAvailable();
+  const cliAttention = useCliAttention();
   const agentName = useLatestCallback(
     (kind: string): string => agentShortName(agentIdentities, kind),
     [agentIdentities],
@@ -632,9 +635,16 @@ export function App(): React.JSX.Element {
     () => ({
       chats: owedCount(waiting),
       knowledge: knowledgeCounts?.waiting ?? 0,
-      settings: (memoryWaiting ?? 0) + cliUpdatesAvailable,
+      settings: (memoryWaiting ?? 0) + cliAttention.updatesAvailable,
     }),
-    [waiting, knowledgeCounts, memoryWaiting, cliUpdatesAvailable],
+    [waiting, knowledgeCounts, memoryWaiting, cliAttention.updatesAvailable],
+  );
+  const navWarnings = useMemo<Partial<Record<AppView, string>>>(
+    () =>
+      cliAttention.signInsNeeded > 0
+        ? { settings: signInsNeededText(cliAttention.signInsNeeded) }
+        : {},
+    [cliAttention.signInsNeeded],
   );
   const waitingByRun = useMemo(
     () => new Map(waiting.map((reading) => [reading.runId, reading.state])),
@@ -814,6 +824,7 @@ export function App(): React.JSX.Element {
                   hydrated={sidebar.hydrated}
                   onToggleCollapsed={sidebar.toggle}
                   counts={navCounts}
+                  warnings={navWarnings}
                 />
               </div>
               {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
@@ -1080,6 +1091,7 @@ export function App(): React.JSX.Element {
                         }
                         onMemoryFocusDone={() => setMemoryFocus(null)}
                         memoryWaiting={memoryWaiting}
+                        onClisDetected={cliAttention.adopt}
                         onOpenOnboarding={
                           isRemoteRuntime()
                             ? undefined
@@ -1130,6 +1142,7 @@ export function App(): React.JSX.Element {
             <BottomTabBar
               view={view}
               counts={navCounts}
+              warnings={navWarnings}
               onNavigate={(next) => {
                 // Pressing the tab already on show goes back to its first
                 // page, the way a phone's tab bar does.

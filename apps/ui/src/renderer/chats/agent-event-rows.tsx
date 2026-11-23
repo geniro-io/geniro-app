@@ -26,6 +26,15 @@ export function unansweredWords(
   }
 }
 
+/** What a callee did once no turn of its caller was left to answer, in words. */
+export function noAnswerWords(
+  noAnswer: NonNullable<AgentCallEvent['noAnswer']>,
+): string {
+  return noAnswer === 'continues'
+    ? 'No turn of its caller was left to answer, so it went on without an answer.'
+    : 'No turn of its caller was left to answer, so it was stopped.';
+}
+
 function eventKindOf(event: AgentCallEvent): MemberEventKind {
   if (event.kind === 'asked') {
     return 'asked';
@@ -43,10 +52,7 @@ function eventOutcomeOf(event: AgentCallEvent): EventOutcome | null {
     return null;
   }
   return {
-    text:
-      event.noAnswer === 'continues'
-        ? 'No turn of its caller was left to answer, so it went on without an answer.'
-        : 'No turn of its caller was left to answer, so it was stopped.',
+    text: noAnswerWords(event.noAnswer ?? 'stopped'),
     tone: 'destructive',
   };
 }

@@ -40,10 +40,12 @@ describe('pairCallAnswers', () => {
     expect(pairs.byQuestion.get('q1')).toEqual({
       outcome: 'answered',
       answer: 'Red',
+      noAnswer: null,
     });
     expect(pairs.byQuestion.get('q2')).toEqual({
       outcome: 'answered',
       answer: 'Blue',
+      noAnswer: null,
     });
     expect([...pairs.shownOnQuestion].sort()).toEqual(['a1', 'a2']);
   });
@@ -73,6 +75,7 @@ describe('pairCallAnswers', () => {
     expect(pairs.byQuestion.get('q1')).toEqual({
       outcome: 'timeout',
       answer: null,
+      noAnswer: null,
     });
   });
 
@@ -84,6 +87,105 @@ describe('pairCallAnswers', () => {
           outcome: 'answered',
           answer: 'Red',
         }),
+      ]),
+    ).toBe(NO_CALL_ANSWER_PAIRS);
+  });
+
+  it('puts the row saying no turn was left to answer on its question, with the answer row', () => {
+    const pairs = pairCallAnswers([
+      row('q1', 1, 'call_question', { callId: 'call-8' }),
+      row('o1', 2, 'system', {
+        severity: 'info',
+        callId: 'call-2',
+        message:
+          'Epilogue asked a question in call-8 and no turn of this agent was left to answer it, so it goes on without an answer.',
+        orphanQuestion: {
+          callId: 'call-8',
+          callee: 'Epilogue',
+          calleeNodeId: 'epilogue',
+          outcome: 'continues',
+        },
+      }),
+      row('a1', 3, 'call_answer', { callId: 'call-8', outcome: 'orphaned' }),
+    ]);
+    expect(pairs.byQuestion.get('q1')).toEqual({
+      outcome: 'orphaned',
+      answer: null,
+      noAnswer: 'continues',
+    });
+    expect([...pairs.shownOnQuestion].sort()).toEqual(['a1', 'o1']);
+  });
+
+  it('puts the row saying no turn was left to answer on its question when the answer row came first', () => {
+    const pairs = pairCallAnswers([
+      row('q1', 1, 'call_question', { callId: 'call-8' }),
+      row('a1', 2, 'call_answer', { callId: 'call-8', outcome: 'orphaned' }),
+      row('o1', 3, 'system', {
+        severity: 'info',
+        orphanQuestion: {
+          callId: 'call-8',
+          callee: 'Epilogue',
+          calleeNodeId: 'epilogue',
+          outcome: 'stopped',
+        },
+      }),
+    ]);
+    expect(pairs.byQuestion.get('q1')).toEqual({
+      outcome: 'orphaned',
+      answer: null,
+      noAnswer: 'stopped',
+    });
+    expect([...pairs.shownOnQuestion].sort()).toEqual(['a1', 'o1']);
+  });
+
+  it('never puts the row saying no turn was left to answer on a question that was answered', () => {
+    const pairs = pairCallAnswers([
+      row('q1', 1, 'call_question', { callId: 'call-8' }),
+      row('a1', 2, 'call_answer', {
+        callId: 'call-8',
+        outcome: 'answered',
+        answer: 'Red',
+      }),
+      row('o1', 3, 'system', {
+        severity: 'info',
+        orphanQuestion: {
+          callId: 'call-8',
+          callee: 'Epilogue',
+          calleeNodeId: 'epilogue',
+          outcome: 'stopped',
+        },
+      }),
+    ]);
+    expect(pairs.byQuestion.get('q1')?.outcome).toBe('answered');
+    expect(pairs.shownOnQuestion.has('o1')).toBe(false);
+  });
+
+  it('reads a stopped callee from a row written before the orphan keys', () => {
+    const pairs = pairCallAnswers([
+      row('q1', 1, 'call_question', { callId: 'call-8' }),
+      row('o1', 2, 'system', {
+        severity: 'info',
+        message:
+          'Epilogue was stopped: it asked a question in call-8 and no turn of this agent was left to answer it.',
+      }),
+    ]);
+    expect(pairs.byQuestion.get('q1')?.noAnswer).toBe('stopped');
+    expect(pairs.shownOnQuestion.has('o1')).toBe(true);
+  });
+
+  it('leaves the row saying no turn was left to answer on its own when its question is not loaded', () => {
+    expect(
+      pairCallAnswers([
+        row('o1', 2, 'system', {
+          severity: 'info',
+          orphanQuestion: {
+            callId: 'call-8',
+            callee: 'Epilogue',
+            calleeNodeId: 'epilogue',
+            outcome: 'continues',
+          },
+        }),
+        row('a1', 3, 'call_answer', { callId: 'call-8', outcome: 'orphaned' }),
       ]),
     ).toBe(NO_CALL_ANSWER_PAIRS);
   });

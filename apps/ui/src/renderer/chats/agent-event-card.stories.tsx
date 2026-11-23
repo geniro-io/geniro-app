@@ -98,7 +98,7 @@ export const NoAnswer: Story = {
     kind: 'no-answer',
     text: 'Which fixture set should the seed use?',
     outcome: {
-      text: 'The call carried on without an answer',
+      text: 'No turn of its caller was left to answer, so it went on without an answer.',
       tone: 'destructive',
     },
   },

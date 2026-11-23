@@ -282,6 +282,56 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(slot('outcome')?.className).toContain('text-destructive');
   });
 
+  it('draws a question no turn was left to answer as one card, saying what the callee did', () => {
+    const question = item('call_question', {
+      callId: 'call-8',
+      callerNodeId: 'orch',
+      calleeNodeId: 'epilogue',
+      question: 'Which color?',
+      options: [],
+    });
+    const orphan = {
+      ...item('system', {
+        severity: 'info',
+        callId: 'call-2',
+        message:
+          'Epilogue asked a question in call-8 and no turn of this agent was left to answer it, so it goes on without an answer.',
+        orphanQuestion: {
+          callId: 'call-8',
+          callee: 'Epilogue',
+          calleeNodeId: 'epilogue',
+          outcome: 'continues',
+        },
+      }),
+      seq: 2,
+    };
+    const orphaned = {
+      ...item('call_answer', {
+        callId: 'call-8',
+        calleeNodeId: 'epilogue',
+        outcome: 'orphaned',
+      }),
+      seq: 3,
+    };
+    const pairs = pairCallAnswers([question, orphan, orphaned]);
+    render(
+      <CallAnswerPairsContext.Provider value={pairs}>
+        <TranscriptItem item={question} nodes={NODES} />
+        <TranscriptItem item={orphan} nodes={NODES} />
+        <TranscriptItem item={orphaned} nodes={NODES} />
+      </CallAnswerPairsContext.Provider>,
+    );
+    expect(
+      [...container.querySelectorAll('[data-slot="agent-event-card"]')].map(
+        (card) => card.getAttribute('data-kind'),
+      ),
+    ).toEqual(['no-answer']);
+    expect(slot('outcome')?.textContent).toBe(
+      'No turn of its caller was left to answer, so it went on without an answer.',
+    );
+    expect(container.textContent).not.toContain('Orphaned');
+  });
+
   it('draws an answer whose question is not loaded as its own card, with the answer text', () => {
     render(
       <TranscriptItem

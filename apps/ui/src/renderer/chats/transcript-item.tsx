@@ -12,6 +12,7 @@ import { readAgentCallEvents } from './agent-event-payload';
 import {
   AgentCallEventRow,
   MonitorEventRow,
+  noAnswerWords,
   unansweredWords,
 } from './agent-event-rows';
 import { messageAttachments } from './attachment-payload';
@@ -570,7 +571,11 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       // What became of an agent's calls — one finished, failed, asked or was
       // left without an answer — one card per call, recorded keys or, on a row
-      // written before them, its sentence.
+      // written before them, its sentence. A question left without an answer
+      // is said on that question's card when it is loaded.
+      if (answerPairs.shownOnQuestion.has(item.id)) {
+        return null;
+      }
       const callEvents = readAgentCallEvents(item.payload);
       if (callEvents !== null) {
         return (
@@ -776,7 +781,13 @@ export const TranscriptItem = memo(function TranscriptItem({
                 }
               : paired.outcome === 'answered'
                 ? { text: `${caller} answered: ${paired.answer ?? ''}` }
-                : { text: unansweredWords(paired.outcome), tone: 'destructive' }
+                : {
+                    text:
+                      paired.noAnswer === null
+                        ? unansweredWords(paired.outcome)
+                        : noAnswerWords(paired.noAnswer),
+                    tone: 'destructive',
+                  }
           }
           memoryKey={`agent-event:${item.id}`}
         />

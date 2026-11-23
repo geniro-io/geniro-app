@@ -117,7 +117,7 @@ describe('MemberEventCard', () => {
     ['skipped', 'Skipped'],
     ['asked', 'Question from'],
     ['answered', 'Answered question from'],
-    ['no-answer', 'Question from · no answer'],
+    ['no-answer', 'Question from'],
     ['message', 'Message to'],
     ['answer', 'Answer to'],
   ] as const)('draws a %s event under the label "%s"', (kind, label) => {

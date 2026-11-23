@@ -130,7 +130,7 @@ const KIND_META: Record<
   },
   'no-answer': {
     icon: Ban,
-    label: 'Question from · no answer',
+    label: 'Question from',
     tone: 'destructive',
     rail: 'muted',
   },

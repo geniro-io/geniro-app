@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { constants, createWriteStream } from 'node:fs';
+import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
+import {
+  type DownloadProgress,
+  downloadTo,
+  fetchText,
+  parseChecksums,
+} from './download';
 import type { LatestRelease } from './updater';
 
 /**
@@ -139,19 +142,6 @@ const BACKUP_SUFFIX = '.old-';
 const STAGED_SUFFIX = '.new-';
 
 /**
- * The caller's abandon signal and this step's own budget, as one signal.
- *
- * Both are real: a download has 15 minutes whatever the caller does, and the
- * caller can give up sooner (the service's watchdog, when nothing has moved for
- * long enough). `AbortSignal.any` is what makes the pair a single thing every
- * `fetch` and `execFile` below can take.
- */
-function withDeadline(ms: number, signal?: AbortSignal): AbortSignal {
-  const budget = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, budget]) : budget;
-}
-
-/**
  * Delete a tree we own, and never let the deletion be the thing that fails.
  *
  * Every caller here is removing scratch AFTER the outcome is already decided:
@@ -174,12 +164,7 @@ async function discard(path: string): Promise<boolean> {
 }
 
 /** How the caller is told about a running download. */
-export interface InstallProgress {
-  /** 0–1, or null while the server has not declared a length. */
-  fraction: number | null;
-  receivedBytes: number;
-  totalBytes: number | null;
-}
+export type InstallProgress = DownloadProgress;
 
 /**
  * Which half of the install is running.
@@ -248,82 +233,6 @@ export async function canWriteBundle(bundlePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/**
- * Parse `shasum -a 256` output into name → digest.
- *
- * The format is `<64 hex>  <name>` per line (two spaces, or ` *` in binary
- * mode). Anything that does not match that is skipped rather than throwing —
- * the file is allowed to carry entries for assets this app never downloads.
- */
-export function parseChecksums(text: string): Map<string, string> {
-  const digests = new Map<string, string>();
-  for (const line of text.split('\n')) {
-    const m = /^([0-9a-fA-F]{64})\s+\*?(\S.*)$/.exec(line.trim());
-    if (m) {
-      digests.set(m[2]!.trim(), m[1]!.toLowerCase());
-    }
-  }
-  return digests;
-}
-
-/** Fetch a text asset (the checksum file). */
-async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'geniro-app' },
-    signal: withDeadline(60_000, signal),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} fetching ${basename(url)}`);
-  }
-  return res.text();
-}
-
-/**
- * Stream a URL to disk, reporting progress, and return the sha256 of what was
- * actually written.
- *
- * Hashed on the way through rather than by re-reading the file: the bytes that
- * were written are exactly the bytes that were hashed, so nothing can be
- * swapped underneath between the two.
- */
-async function downloadTo(
-  url: string,
-  dest: string,
-  onProgress?: (progress: InstallProgress) => void,
-  signal?: AbortSignal,
-): Promise<string> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'geniro-app' },
-    signal: withDeadline(DOWNLOAD_TIMEOUT_MS, signal),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} downloading ${basename(url)}`);
-  }
-  if (!res.body) {
-    throw new Error('the download returned no body');
-  }
-  const declared = Number(res.headers.get('content-length'));
-  const totalBytes =
-    Number.isFinite(declared) && declared > 0 ? declared : null;
-
-  const hash = createHash('sha256');
-  let receivedBytes = 0;
-  const source = Readable.fromWeb(
-    res.body as Parameters<typeof Readable.fromWeb>[0],
-  );
-  source.on('data', (chunk: Buffer) => {
-    hash.update(chunk);
-    receivedBytes += chunk.length;
-    onProgress?.({
-      fraction: totalBytes ? Math.min(receivedBytes / totalBytes, 1) : null,
-      receivedBytes,
-      totalBytes,
-    });
-  });
-  await pipeline(source, createWriteStream(dest));
-  return hash.digest('hex');
 }
 
 /**
@@ -468,12 +377,11 @@ export async function stageUpdate({
 
     const archive = join(scratch, release.zip.name);
     onStage?.('downloading');
-    const actual = await downloadTo(
-      release.zip.url,
-      archive,
+    const actual = await downloadTo(release.zip.url, archive, {
       onProgress,
       signal,
-    );
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    });
     if (actual !== expected) {
       throw new Error(
         `checksum mismatch for ${release.zip.name} — the download does not match the published release`,

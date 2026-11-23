@@ -3542,8 +3542,83 @@ export const ChatTimelineMarkerSchema = z
   .meta({ id: 'ChatTimelineMarker' });
 export type ChatTimelineMarker = z.infer<typeof ChatTimelineMarkerSchema>;
 
+/** How many events one timeline read carries, newest kept. */
+export const TIMELINE_EVENTS_MAX = 200;
+
+/** A kind for `ItemDao.newestRowsOfKinds`, optionally narrowed by one payload field. */
+export type NewestKindPick =
+  ItemKind | { kind: ItemKind; field: string; values: readonly string[] };
+
 /**
- * The whole conversation as a rail of user messages.
+ * What happened on a thread, beside the user's own messages. The renderer owns
+ * how each one looks and which are shown by default; the wire carries facts.
+ */
+export const ChatTimelineEventKindSchema = z
+  .enum([
+    'started',
+    'stage',
+    'pull_request',
+    'review',
+    'failure',
+    'problems',
+    'asked',
+    'approval',
+    'finished',
+    'step',
+    'call',
+    'note',
+    'page',
+    'goal',
+  ])
+  .meta({ id: 'ChatTimelineEventKind' });
+export type ChatTimelineEventKind = z.infer<typeof ChatTimelineEventKindSchema>;
+
+export const ChatTimelineEventSchema = z
+  .object({
+    id: z
+      .string()
+      .describe('`<kind>:<source id>` — stable across reads, a list key'),
+    kind: ChatTimelineEventKindSchema,
+    seq: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'the transcript row to jump to — null for an event no row carries (an achieved goal)',
+      ),
+    at: z.string().describe('when it happened, ISO-8601'),
+    memberId: z
+      .string()
+      .nullable()
+      .describe('the team member it is about; null for a chat or the run'),
+    text: z
+      .string()
+      .nullable()
+      .describe(
+        "one line in the event's own words: a step, a stage, a pull request's number, an error's first line",
+      ),
+    detail: z
+      .string()
+      .nullable()
+      .describe(
+        "a qualifier the renderer words: a stage move's action, an outcome's kind, a step's kind, a review's acceptance, a findings count",
+      ),
+    url: z
+      .string()
+      .nullable()
+      .describe("the pull request's address, for a pull request event"),
+    open: z
+      .boolean()
+      .nullable()
+      .describe(
+        'for a question or approval: whether it still waits on the user; null for every other kind',
+      ),
+  })
+  .meta({ id: 'ChatTimelineEvent' });
+export type ChatTimelineEvent = z.infer<typeof ChatTimelineEventSchema>;
+
+/**
+ * The whole conversation as a rail of user messages, and what happened on it.
  *
  * No `.meta({ id })` on this root: nestjs-zod would register the component
  * under that id while the response still points at the DTO class name, and
@@ -3557,6 +3632,13 @@ export const ChatTimelineWireSchema = z.object({
     .describe(
       'why the rail is real but incomplete — a capped list has to be able to SAY so, since a shorter rail is otherwise indistinguishable from a shorter conversation',
     ),
+  events: z
+    .array(ChatTimelineEventSchema)
+    .describe(`newest first, at most ${TIMELINE_EVENTS_MAX}`),
+  eventsPartialReason: z
+    .string()
+    .nullable()
+    .describe('why the events are real but incomplete; null when all are here'),
 });
 export type ChatTimelineWire = z.infer<typeof ChatTimelineWireSchema>;
 
@@ -4969,6 +5051,50 @@ export const RunOutcomePayloadSchema = z.object({
   callId: z.string().optional(),
 });
 export type RunOutcomePayload = z.infer<typeof RunOutcomePayloadSchema>;
+
+/** geniro's own tool an agent records one important step of its work with. */
+export const HOST_MILESTONE_TOOL = 'milestone';
+
+/** A step is one line on the thread's timeline, never a paragraph. */
+export const MILESTONE_TEXT_MAX_CHARS = 120;
+
+/** Far past any honest use; refused past it, never trimmed. */
+export const MILESTONE_RUN_CAP = 500;
+
+/** What a step says about the work: it moved on, it hit a problem, or it is done. */
+export const MilestoneKindSchema = z
+  .enum(['progress', 'problem', 'done'])
+  .meta({ id: 'MilestoneKind' });
+export type MilestoneKind = z.infer<typeof MilestoneKindSchema>;
+
+/**
+ * The payload of a `milestone` row: one step an agent recorded, drawn on the
+ * thread's timeline and as a compact transcript row. `nodeId` /
+ * `conversationId` / `callId` name the recording conversation as on a team
+ * note, so a callee's step is filed in its call's card.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/milestone-payload.ts
+ * (`readMilestonePayload`), which draws the transcript row from these rows.
+ */
+export const MilestonePayloadSchema = z.object({
+  text: z.string(),
+  kind: MilestoneKindSchema,
+  nodeId: z.string(),
+  conversationId: z.string().nullable(),
+  callId: z.string().optional(),
+});
+export type MilestonePayload = z.infer<typeof MilestonePayloadSchema>;
+
+/** A `milestone` call as the broker receives it, already read and cut. */
+export interface MilestoneInput {
+  text: string;
+  kind: MilestoneKind;
+}
+
+export type MilestoneWriteOutcome =
+  | { status: 'recorded'; seq: number }
+  | { status: 'unchanged'; seq: number }
+  | { status: 'refused'; reason: string };
 
 export const HOST_MOVE_STAGE_TOOL = 'move_stage';
 

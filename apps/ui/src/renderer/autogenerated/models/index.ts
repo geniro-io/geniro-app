@@ -3091,7 +3091,105 @@ export interface ChatTimelineDto {
      * @memberof ChatTimelineDto
      */
     partialReason: string | null;
+    /**
+     * newest first, at most 200
+     * @type {Array<ChatTimelineEvent>}
+     * @memberof ChatTimelineDto
+     */
+    events: Array<ChatTimelineEvent>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineDto
+     */
+    eventsPartialReason: string | null;
 }
+/**
+ * 
+ * @export
+ * @interface ChatTimelineEvent
+ */
+export interface ChatTimelineEvent {
+    /**
+     * `<kind>:<source id>` — stable across reads, a list key
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    id: string;
+    /**
+     * 
+     * @type {ChatTimelineEventKind}
+     * @memberof ChatTimelineEvent
+     */
+    kind: ChatTimelineEventKind;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTimelineEvent
+     */
+    seq: number | null;
+    /**
+     * when it happened, ISO-8601
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    at: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    memberId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    text: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    detail: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineEvent
+     */
+    url: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ChatTimelineEvent
+     */
+    open: boolean | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ChatTimelineEventKind = {
+    Started: 'started',
+    Stage: 'stage',
+    PullRequest: 'pull_request',
+    Review: 'review',
+    Failure: 'failure',
+    Problems: 'problems',
+    Asked: 'asked',
+    Approval: 'approval',
+    Finished: 'finished',
+    Step: 'step',
+    Call: 'call',
+    Note: 'note',
+    Page: 'page',
+    Goal: 'goal'
+} as const;
+export type ChatTimelineEventKind = typeof ChatTimelineEventKind[keyof typeof ChatTimelineEventKind];
+
 /**
  * 
  * @export
@@ -6184,7 +6282,8 @@ export const ItemKind = {
     StageChange: 'stage_change',
     ThreadOutcome: 'thread_outcome',
     Lessons: 'lessons',
-    LessonOutcome: 'lesson_outcome'
+    LessonOutcome: 'lesson_outcome',
+    Milestone: 'milestone'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -19599,6 +19698,18 @@ export interface ThreadOverviewDtoTimeline {
      * @memberof ThreadOverviewDtoTimeline
      */
     partialReason: string | null;
+    /**
+     * newest first, at most 200
+     * @type {Array<ChatTimelineEvent>}
+     * @memberof ThreadOverviewDtoTimeline
+     */
+    events: Array<ChatTimelineEvent>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoTimeline
+     */
+    eventsPartialReason: string | null;
 }
 /**
  * 

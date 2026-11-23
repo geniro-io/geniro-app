@@ -1402,6 +1402,42 @@ describe('TranscriptItem — team notes', () => {
   });
 });
 
+describe('TranscriptItem — milestones', () => {
+  it('draws a step with its member, its kind and its clock time', () => {
+    render(
+      <TranscriptItem
+        item={item(
+          'milestone',
+          {
+            text: 'Wrote the parser.',
+            kind: 'done',
+            nodeId: 'orch',
+            conversationId: null,
+          },
+          'orch',
+        )}
+        nodes={
+          new Map([
+            ['orch', { name: 'Engineer', kind: 'agent', agent: 'claude' }],
+          ])
+        }
+      />,
+    );
+    const row = container.querySelector('[data-slot="milestone"]');
+    expect(row?.getAttribute('data-kind')).toBe('done');
+    expect(row?.textContent).toContain('Engineer');
+    expect(row?.textContent).toContain('Wrote the parser.');
+    expect(row?.querySelector('time')?.textContent).toBe(
+      formatClockTime(item('milestone', {}).createdAt),
+    );
+  });
+
+  it('draws nothing for a milestone row whose payload is not a step', () => {
+    render(<TranscriptItem item={item('milestone', { kind: 'progress' })} />);
+    expect(container.textContent).toBe('');
+  });
+});
+
 describe('TranscriptItem — run outcomes', () => {
   const outcome = {
     prOwner: 'acme',

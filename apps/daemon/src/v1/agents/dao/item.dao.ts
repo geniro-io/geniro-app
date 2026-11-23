@@ -19,6 +19,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type {
   ChatTextDatabase,
   HistoryWindow,
+  NewestKindPick,
   OwnToolCallCount,
   RunPreview,
   SeqRange,
@@ -1921,6 +1922,104 @@ export class ItemDao extends BaseDao<Item> {
       },
     );
     return row ?? null;
+  }
+
+  /**
+   * The newest `limit` rows of EACH of `kinds` in one run, in seq order — of a
+   * kind given with `field` / `values`, only rows whose payload field holds one
+   * of the values, so rows of the kind that are not wanted never use the limit.
+   *
+   * One `UNION ALL` arm per kind, each walking the `(runId, kind, seq)` index
+   * newest first by ids alone; payloads are read only for the rows kept. One
+   * `kind IN (…)` ordered by seq would be planned on `(run_id, seq)` and visit
+   * every row of the run.
+   */
+  async newestRowsOfKinds(
+    runId: string,
+    kinds: readonly NewestKindPick[],
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<WireRow[]> {
+    const picks = [
+      ...new Map(
+        kinds.map(
+          (
+            pick,
+          ): [
+            ItemKind,
+            (
+              | Exclude<NewestKindPick, ItemKind>
+              | { kind: ItemKind; field?: undefined }
+            ),
+          ] =>
+            typeof pick === 'string'
+              ? [pick, { kind: pick }]
+              : [pick.kind, pick],
+        ),
+      ).values(),
+    ];
+    if (picks.length === 0 || limit <= 0) {
+      return [];
+    }
+    const em = txEm ?? this.em.fork();
+    const db = em.getKysely<ChatTextDatabase>({ convertValues: false });
+    const [first, ...rest] = picks.map((pick) => {
+      let heads = db
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('kind', '=', pick.kind)
+        .where('deleted_at', 'is', null);
+      if (pick.field !== undefined) {
+        const path = `$.${pick.field}`;
+        heads = heads.where((eb) => payloadField<string>(eb, path), 'in', [
+          ...pick.values,
+        ]);
+      }
+      return db
+        .selectFrom(heads.orderBy('seq', 'desc').limit(limit).as('arm'))
+        .select('arm.id');
+    });
+    const ids = rest.reduce((union, arm) => union.unionAll(arm), first!);
+    const rows = await db
+      .selectFrom('items')
+      .select([...WIRE_COLUMNS])
+      .where('id', 'in', ids)
+      .execute();
+    return rows.map(wireRowOf).sort((a, b) => a.seq - b.seq);
+  }
+
+  /**
+   * The payload ids among `ids` that a row of `kinds` in this run names — which
+   * of a run's approval requests an `approval_verdict` or `unanswerable` row
+   * closed, looked up through the promoted `payload_id` column rather than by
+   * reading every closing row of the run.
+   */
+  async payloadIdsAnsweredBy(
+    runId: string,
+    kinds: readonly ItemKind[],
+    ids: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Set<string>> {
+    if (ids.length === 0 || kinds.length === 0) {
+      return new Set();
+    }
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const rows = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => payloadRef(eb, 'payload_id', stamped).as('answered'))
+      .where('run_id', '=', runId)
+      .where('kind', 'in', [...kinds])
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadRef(eb, 'payload_id', stamped), 'in', [...ids])
+      .execute();
+    return new Set(
+      rows
+        .map((row) => row.answered)
+        .filter((id): id is string => typeof id === 'string'),
+    );
   }
 
   /**

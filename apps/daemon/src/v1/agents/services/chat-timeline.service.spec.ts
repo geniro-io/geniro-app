@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { NotFoundException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
+import type { GoalDao } from '../dao/goal.dao';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { ChatTimelineService } from './chat-timeline.service';
@@ -79,9 +80,15 @@ function build(rows: StoredRow[], runExists = true) {
             .filter((r) => r.kind === 'message' && r.role === 'user')
             .map(({ seq, kind, payload }) => ({ seq, kind, payload })),
         ),
+      newestRowsOfKinds: () => Promise.resolve([]),
+      payloadIdsAnsweredBy: () => Promise.resolve(new Set<string>()),
+      earliestToolResultTimes: () => Promise.resolve(new Map()),
     } as unknown as ItemDao,
     {
-      getById: () => Promise.resolve(runExists ? { id: 'run-1' } : null),
+      getById: () =>
+        Promise.resolve(
+          runExists ? { id: 'run-1', pullRequests: null, teamId: null } : null,
+        ),
     } as unknown as RunDao,
     {
       rowsOf: () =>
@@ -91,6 +98,7 @@ function build(rows: StoredRow[], runExists = true) {
             .map(({ seq, kind, payload }) => ({ seq, kind, payload })),
         ),
     } as unknown as RunKindRowsCache,
+    { listByRun: () => Promise.resolve([]) } as unknown as GoalDao,
   );
   return service;
 }
@@ -276,6 +284,8 @@ describe('ChatTimelineService', () => {
     await expect(service.read('run-1')).resolves.toEqual({
       markers: [],
       partialReason: null,
+      events: [],
+      eventsPartialReason: null,
     });
   });
 

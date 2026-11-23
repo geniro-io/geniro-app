@@ -14,7 +14,8 @@ export function teamNoteInstructions(): string {
     'of the result itself. Do not use it for progress reports, "I am stuck" or questions — your ' +
     'caller hears those from your reply, ask or message_agent — nor for whole outputs, nor for what ' +
     'the code, AGENTS.md or the task already says. A run with stages records finishing one with ' +
-    'move_stage, not a note. Nobody is woken by a note; it waits to be read. ' +
+    "move_stage, not a note; a step the user should see on the thread's timeline is milestone. " +
+    'Nobody is woken by a note; it waits to be read. ' +
     'Write each note so it stands alone: the reader has none of your context. When something you ' +
     "wrote stops being true, write the correct note with `supersedes` set to the old note's number " +
     'instead of contradicting it; the old one stays, marked superseded. The reply names your note ' +

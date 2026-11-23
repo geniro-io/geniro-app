@@ -801,6 +801,27 @@ describe('groupTranscript', () => {
     expect(pairs[0]?.result).not.toBeNull();
   });
 
+  it('hides a milestone call its step row stands for, and SHOWS one that was refused', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__milestone', 'm1', { text: 'Found it' }),
+      result('m1', 'Step recorded (12).'),
+      call('mcp__geniro-run-1__milestone', 'm2', { text: 'One more' }),
+      item('tool_result', {
+        id: 'm2',
+        name: null,
+        result: 'this run already holds 500 steps, the limit',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['m2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('hides a move_stage call its stage_change row stands for, and SHOWS one that was refused', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__move_stage', 's1', { action: 'complete' }),

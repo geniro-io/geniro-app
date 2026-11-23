@@ -1022,10 +1022,15 @@ beforeEach(() => {
     },
   });
   api.sweepArchivedChats.mockReset().mockResolvedValue({ deleted: 0 });
-  // The timeline rail's own read. An empty rail is the resting answer for every
-  // test here; the rail itself is pinned in `conversation-timeline.spec.tsx`.
+  // The timeline's own read. An empty timeline is the resting answer for every
+  // test here; its drawing is pinned in `thread-timeline.spec.tsx`.
   api.readRunState.mockReset().mockResolvedValue(emptyRunState());
-  api.readChatTimeline.mockReset().mockResolvedValue({ markers: [] });
+  api.readChatTimeline.mockReset().mockResolvedValue({
+    markers: [],
+    partialReason: null,
+    events: [],
+    eventsPartialReason: null,
+  });
   // The run panel's waterfall read. A run that did nothing is the resting
   // answer here; the card itself is pinned in `run-waterfall.spec.tsx`.
   api.readRunWaterfall.mockReset().mockResolvedValue({
@@ -1606,12 +1611,11 @@ describe('Chats — searching one conversation', () => {
     expect(marked()).toHaveLength(0);
   });
 
-  it('draws the conversation timeline and jumps the transcript from it', async () => {
-    // The rail's own drawing is pinned in `conversation-timeline.spec.tsx`,
-    // which supplies its props directly. What only THIS spec can reach is the
-    // wiring: that `Chats` hands the daemon's markers to the rail and the rail's
-    // click to `jumpToSeq`. Swapping `onJump` for a no-op leaves both specs
-    // green without it.
+  it('reads the timeline only once the Progress window shows it, and jumps the transcript from a row', async () => {
+    // The timeline's drawing is pinned in `thread-timeline.spec.tsx`. What only
+    // this spec reaches is the wiring: the read is gated on the window, the
+    // panel's icon opens it on Timeline, and a row's press closes the window
+    // and reaches `jumpToSeq` with its seq.
     api.listRunItems.mockResolvedValue([
       msg(900, 'user', 'the first ask'),
       msg(901, 'assistant', 'a reply'),
@@ -1623,50 +1627,87 @@ describe('Chats — searching one conversation', () => {
         timelineMarker(902, 'the second ask'),
       ],
       partialReason: null,
+      events: [],
+      eventsPartialReason: null,
     });
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
+    expect(api.readChatTimeline).not.toHaveBeenCalled();
 
-    // Behind the header icon, so the panel has to be opened first — and the
-    // panel is portalled, which is why the reads below are against the document
-    // rather than the mounted container.
     const openTimeline = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Conversation timeline"]',
+      '[aria-label="Thread timeline"]',
     );
     expect(openTimeline).not.toBe(null);
     await act(async () => {
       openTimeline!.click();
     });
+    expect(api.readChatTimeline).toHaveBeenCalled();
+    expect(
+      document.body.querySelector<HTMLElement>('[data-slot="progress-dialog"]')
+        ?.dataset.tab,
+    ).toBe('timeline');
 
-    const markers = Array.from(
+    const rows = Array.from(
       document.body.querySelectorAll<HTMLButtonElement>(
-        '[data-slot="timeline-marker"]',
+        '[data-slot="timeline-row"][data-kind="message"] > button',
       ),
     );
-    // Newest first — the rail's own order, pinned in
-    // `conversation-timeline.spec.tsx`; restated here only so the click below
-    // is addressing the row this spec means.
-    expect(markers.map((b) => b.textContent)).toEqual([
-      'the second ask',
-      'the first ask',
+    expect(rows.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Go to your message: the second ask',
+      'Go to your message: the first ask',
     ]);
 
     await act(async () => {
-      // The OLDER message, addressed by its words: this spec is about the
-      // wiring reaching `jumpToSeq` with the right seq, so it must not depend
-      // on which row that message occupies.
-      markers.find((b) => b.textContent === 'the first ask')!.click();
+      rows
+        .find((b) => b.getAttribute('aria-label')?.endsWith('the first ask'))!
+        .click();
     });
 
-    // The same wash a search hit lands on — the jump is one mechanism, so this
-    // is the observable it already produces.
+    expect(document.body.querySelector('[data-slot="progress-dialog"]')).toBe(
+      null,
+    );
     expect(
       classesOf(container.querySelector('[data-transcript-seq="900"]')!),
     ).toContain('bg-accent/60');
     expect(
       classesOf(container.querySelector('[data-transcript-seq="902"]')!),
     ).not.toContain('bg-accent/60');
+  });
+
+  it('opens the Progress window on Timeline from the shelf chip and on Goals from the panel’s Goals row', async () => {
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'the first ask')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const shownTab = (): string | undefined =>
+      document.body.querySelector<HTMLElement>('[data-slot="progress-dialog"]')
+        ?.dataset.tab;
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="progress-chip"]',
+    );
+    expect(chip).not.toBe(null);
+    await act(async () => {
+      chip!.click();
+    });
+    expect(shownTab()).toBe('timeline');
+
+    await act(async () => {
+      document.body
+        .querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+        ?.click();
+    });
+    expect(shownTab()).toBeUndefined();
+
+    const goalsRow = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.title === "Open the thread's progress");
+    expect(goalsRow).not.toBe(undefined);
+    await act(async () => {
+      goalsRow!.click();
+    });
+    expect(shownTab()).toBe('goals');
   });
 
   it('keeps the seq anchor a FLEX parent, so a bubble stays where it belongs', async () => {
@@ -7123,7 +7164,7 @@ describe('Chats — opening a team run reads its whole-run lists once', () => {
     nodes: 1,
     notes: 1,
     artifacts: 1,
-    timeline: 1,
+    timeline: 0,
     totals: 1,
     shares: 1,
   };
@@ -7208,7 +7249,7 @@ describe('Chats — opening a team run reads its whole-run lists once', () => {
     expect(reads()).toEqual({ ...before, notes: before.notes + 1 });
   });
 
-  it('re-reads the nodes, the totals and the timeline once when a turn ends live', async () => {
+  it('re-reads the nodes and the totals once when a turn ends live, and not the timeline while no window shows it', async () => {
     api.listRunItems.mockResolvedValue(FIRST_PAGE);
     const { client, emitItem } = makeClient();
     await openDevTeam(client);
@@ -7224,7 +7265,6 @@ describe('Chats — opening a team run reads its whole-run lists once', () => {
       ...before,
       nodes: before.nodes + 1,
       totals: before.totals + 1,
-      timeline: before.timeline + 1,
     });
   });
 
@@ -7523,6 +7563,18 @@ describe('Chats — the whole-run reads a thread’s own rows move', () => {
     createdAt: 'now',
   };
 
+  /** Opens the Progress window on its Timeline tab, from the agents panel's icon. */
+  async function openTimeline(container: HTMLElement): Promise<void> {
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Thread timeline"]',
+    );
+    expect(button).not.toBeNull();
+    await act(async () => {
+      button!.click();
+    });
+    await flushChats();
+  }
+
   /** Opens `My chat` on `items`, and hands back its screen and the live row emitter. */
   async function openChat(items: ChatItem[]): Promise<{
     container: HTMLElement;
@@ -7587,8 +7639,11 @@ describe('Chats — the whole-run reads a thread’s own rows move', () => {
     });
   });
 
-  it('re-reads the timeline, and nothing else, when a user message arrives live', async () => {
-    const { emitItem } = await openChat([msg(1, 'assistant', 'hello')]);
+  it('re-reads the open timeline, and nothing else, when a user message arrives live', async () => {
+    const { container, emitItem } = await openChat([
+      msg(1, 'assistant', 'hello'),
+    ]);
+    await openTimeline(container);
     const before = wholeRunReads();
 
     await act(async () => {
@@ -7602,8 +7657,9 @@ describe('Chats — the whole-run reads a thread’s own rows move', () => {
     });
   });
 
-  it('re-reads the timeline, and nothing else, when an agent message arrives live', async () => {
-    const { emitItem } = await openChat([msg(1, 'user', 'hello')]);
+  it('re-reads the open timeline, and nothing else, when an agent message arrives live', async () => {
+    const { container, emitItem } = await openChat([msg(1, 'user', 'hello')]);
+    await openTimeline(container);
     const before = wholeRunReads();
 
     await act(async () => {
@@ -7615,6 +7671,49 @@ describe('Chats — the whole-run reads a thread’s own rows move', () => {
       ...before,
       timeline: before.timeline + 1,
     });
+  });
+
+  const milestoneRow: ChatItem = {
+    id: 'r1-step',
+    runId: 'r1',
+    memberId: null,
+    seq: 2,
+    kind: 'milestone',
+    role: null,
+    payload: { text: 'Found the cause', kind: 'progress', nodeId: 'main' },
+    createdAt: 'now',
+  };
+
+  it('re-reads the open timeline, and nothing else, when an event row arrives live', async () => {
+    const { container, emitItem } = await openChat([msg(1, 'user', 'hello')]);
+    await openTimeline(container);
+    const before = wholeRunReads();
+
+    await act(async () => {
+      emitItem(milestoneRow);
+    });
+    await flushChats();
+
+    expect(wholeRunReads()).toEqual({
+      ...before,
+      timeline: before.timeline + 1,
+    });
+  });
+
+  it('reads no timeline for a live row while no window shows it', async () => {
+    const { emitItem } = await openChat([msg(1, 'assistant', 'hello')]);
+    const before = wholeRunReads();
+
+    await act(async () => {
+      emitItem(msg(2, 'user', 'and then?'));
+    });
+    await act(async () => {
+      emitItem({ ...milestoneRow, seq: 3 });
+    });
+    await flushChats();
+
+    expect(wholeRunReads()).toEqual(before);
+    expect(before.timeline).toBe(0);
   });
 });
 

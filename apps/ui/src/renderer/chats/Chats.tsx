@@ -258,7 +258,11 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
-import { ProgressChip, ProgressDialog } from './progress-dialog';
+import {
+  ProgressChip,
+  ProgressDialog,
+  type ProgressTab,
+} from './progress-dialog';
 import { ProjectSelect } from './project-select';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
@@ -7077,19 +7081,28 @@ export function Chats({
       : '',
   );
   /**
-   * Every user message in the thread, whatever the loaded window holds.
-   *
-   * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
-   * rail built from `items` would draw the tail of the conversation and present
-   * it as the whole of it — see `use-chat-timeline.ts`. Re-read when a turn's
-   * end, a user message or an agent's paragraph arrives.
+   * The Progress window and the tab it shows. Kept here rather than in the
+   * shelf, which renders under two parents and would reset it on a remount.
+   */
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [progressTab, setProgressTab] = useState<ProgressTab>('timeline');
+  useEffect(() => {
+    setProgressOpen(false);
+  }, [activeRunId]);
+  /**
+   * Every user message and key event in the thread, whatever the loaded window
+   * holds — the daemon's own fold (see `use-chat-timeline.ts`), read only while
+   * the Progress window shows its Timeline tab, and re-read when a turn's end,
+   * a user message, an agent's paragraph or an event row arrives.
    */
   const timeline = useChatTimeline(
     chatApi,
     joinedRunId,
+    progressOpen && progressTab === 'timeline',
     arrived.turnEnds,
     arrived.userSeq,
     arrived.agentSeq,
+    arrived.eventSeq,
   );
   /**
    * The pages this run published, read from the DAEMON — a fold over `items`
@@ -7118,12 +7131,25 @@ export function Chats({
   const openTeamNote = useLatestCallback((seq: number) => {
     setNotesView({ selected: seq });
   }, []);
-  /** The progress popup — stages, goals and outcome — from the shelf chip or the panel's Goals row. */
-  const [progressOpen, setProgressOpen] = useState(false);
-  useEffect(() => {
-    setProgressOpen(false);
-  }, [activeRunId]);
-  const openProgress = useLatestCallback(() => setProgressOpen(true), []);
+  const openProgress = useLatestCallback((tab: ProgressTab) => {
+    setProgressTab(tab);
+    setProgressOpen(true);
+  }, []);
+  const openProgressTimeline = useLatestCallback(
+    () => openProgress('timeline'),
+    [openProgress],
+  );
+  const openProgressGoals = useLatestCallback(
+    () => openProgress('goals'),
+    [openProgress],
+  );
+  const jumpFromProgress = useLatestCallback(
+    (seq: number) => {
+      setProgressOpen(false);
+      void jumpToSeq(seq);
+    },
+    [jumpToSeq],
+  );
   /**
    * The newest outcome the open run's pull-request list carries — the outcome
    * history's one refresh trigger, moved by every announce of a written outcome.
@@ -7255,15 +7281,8 @@ export function Chats({
    * would churn both on every streamed token.
    */
   const timelinePanel = useMemo(
-    () => ({
-      markers: timeline.markers,
-      partialReason: timeline.partialReason,
-      onJump: jumpToSeq,
-      // The reading the header's own `live` controls take, so the timeline's
-      // live dot and the rest of the screen cannot disagree about the run.
-      inProgress: isWorkingRunStatus(activeRunStatus),
-    }),
-    [timeline.markers, timeline.partialReason, jumpToSeq, activeRunStatus],
+    () => ({ onOpen: openProgressTimeline, onJump: jumpToSeq }),
+    [openProgressTimeline, jumpToSeq],
   );
   /**
    * What the header states about the thread as a WHOLE — the daemon's answer
@@ -9651,7 +9670,7 @@ export function Chats({
             <ProgressChip
               goals={runGoals}
               stages={activeRun?.stages}
-              onOpen={openProgress}
+              onOpen={openProgressTimeline}
             />
           )}
         </>
@@ -9736,6 +9755,15 @@ export function Chats({
           goals={runGoals}
           stages={activeRun?.stages}
           nameOf={activeRun?.teamId ? shelfAgentName : undefined}
+          tab={progressTab}
+          onTabChange={setProgressTab}
+          timeline={{
+            timeline,
+            // The reading the header's own `live` controls take, so the
+            // timeline's live dot and the rest of the screen agree.
+            inProgress: isWorkingRunStatus(activeRunStatus),
+            onJump: jumpFromProgress,
+          }}
         />
       ) : null}
       {/* An agent's buttons outlive the turn that made them,
@@ -11588,7 +11616,7 @@ export function Chats({
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
                       goals={runGoals}
-                      onOpenProgress={openProgress}
+                      onOpenProgress={openProgressGoals}
                       stages={
                         activeRun?.stages
                           ? {

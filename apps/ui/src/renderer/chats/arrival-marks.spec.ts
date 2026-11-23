@@ -32,6 +32,7 @@ describe('arrivalMarks', () => {
       agentSeq: 0,
       artifactSeq: 0,
       teamNoteSeq: 0,
+      eventSeq: 0,
     });
   });
 
@@ -70,6 +71,18 @@ describe('arrivalMarks', () => {
     expect(marks.agentSeq).toBe(11);
     expect(marks.artifactSeq).toBe(6);
     expect(marks.teamNoteSeq).toBe(5);
+  });
+
+  it('takes the newest row the thread timeline draws an event from, and no other', () => {
+    const marks = arrivalMarks([
+      row(3, 'milestone'),
+      row(8, 'stage_change'),
+      row(9, 'message', { role: 'assistant' }),
+      row(10, 'tool_result'),
+      row(6, 'error'),
+    ]);
+
+    expect(marks.eventSeq).toBe(8);
   });
 
   it('holds the id of every row that arrived, whatever its kind', () => {

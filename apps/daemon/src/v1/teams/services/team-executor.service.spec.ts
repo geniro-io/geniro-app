@@ -58,6 +58,7 @@ import {
   HOST_ARTIFACT_ANSWERS_TOOL,
   HOST_BROWSER_OPEN_TOOL,
   HOST_MEMORY_SAVE_TOOL,
+  HOST_MILESTONE_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_QUESTION_TOOL,
@@ -99,6 +100,7 @@ import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
+import { MilestoneBroker } from '../../agents/services/milestone.broker';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
@@ -1343,6 +1345,8 @@ function setup(
   teamNotes: TeamNoteBroker;
   /** `record_outcome`'s broker, over the fake `items` and `runs` tables. */
   runOutcomes: RunOutcomeBroker;
+  /** `milestone`'s broker, over the fake `items` table. */
+  milestones: MilestoneBroker;
   stages: StageService;
   chatActions: ChatActionsService;
   /** The page store's answer, switchable per test: a refusal names its reason. */
@@ -1584,6 +1588,12 @@ function setup(
   const artifacts = new ArtifactBroker();
   const actions = new ActionBroker();
   const teamNotes = new TeamNoteBroker(em, itemDao as unknown as ItemDao);
+  const milestones = new MilestoneBroker(em, {
+    newestRowsOfKinds: async (runId: string) =>
+      itemDao.items.filter(
+        (item) => item.runId === runId && item.kind === 'milestone',
+      ),
+  } as unknown as ItemDao);
   const runOutcomes = new RunOutcomeBroker(
     em,
     {
@@ -1794,6 +1804,8 @@ function setup(
     opts.writeFailures,
     opts.turnFolders as TurnFolderService | undefined,
     opts.cacheKeepAlive as PromptCacheKeepAliveService | undefined,
+    undefined,
+    milestones,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1836,6 +1848,7 @@ function setup(
     actions,
     teamNotes,
     runOutcomes,
+    milestones,
     stages,
     chatActions,
     pageStore,
@@ -4350,6 +4363,49 @@ describe('TeamExecutorService', () => {
     await drain();
     expect(node.betweenTurnApproval({ toolName: browserCall })).toBe(true);
   });
+
+  for (const approval of ['ask', 'acceptEdits'] as const) {
+    it(`approves an ${approval} member’s milestone call, in a turn and between turns, without a card`, async () => {
+      const { service, claude, approvals } = setup();
+      const run = await service.startRun({
+        slug: approval,
+        team: teamOf([member('a', { approval })], { name: approval }),
+        cwd: dir,
+        prompt: 'task',
+      });
+      await drain();
+      const node = claude.starts[0]!;
+      const input = { text: 'Found the cause' };
+      const stepCall = `mcp__${hostMcpServerName(run.id)}__${HOST_MILESTONE_TOOL}`;
+
+      node.emit({
+        type: 'approval_request',
+        id: 'req-step',
+        toolName: stepCall,
+        input,
+      });
+      node.emit({
+        type: 'approval_request',
+        id: 'req-other',
+        toolName: `mcp__someone-else__${HOST_MILESTONE_TOOL}`,
+        input,
+      });
+      await drain();
+
+      expect(node.respondApproval).toHaveBeenCalledWith(
+        'req-step',
+        true,
+        input,
+      );
+      expect(node.respondApproval).toHaveBeenCalledTimes(1);
+      expect(() => cardIdFor(approvals, run.id, 'req-other')).not.toThrow();
+
+      completeTurn(node, 'done');
+      await drain();
+      expect(node.betweenTurnApproval({ toolName: stepCall })).toBe(true);
+      expect(node.betweenTurnApproval({ toolName: 'Bash' })).toBeNull();
+    });
+  }
 
   it("approves an ask lead's propose_team and save_project_instructions calls, in a turn and between turns, without a permission card", async () => {
     const { service, claude, approvals } = setup();
@@ -8260,6 +8316,45 @@ describe('TeamExecutorService — agent calls', () => {
     await service.deleteRun(run.id);
     expect(runOutcomes.canUse(run.id, 'orch')).toBe(false);
     expect(runOutcomes.canUse(run.id, 'helper')).toBe(false);
+  });
+
+  it('files a callee’s milestone step in the call it answers, and offers it no more once the run is deleted', async () => {
+    const { service, callBroker, milestones, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'ship it',
+      agent: 'helper',
+      message: 'open the PR',
+    });
+    await drain();
+
+    const outcome = await milestones.record(
+      run.id,
+      'helper',
+      callerKey('helper', 'call-1'),
+      { text: 'Opened the pull request', kind: 'done' },
+    );
+
+    expect(outcome.status).toBe('recorded');
+    const row = itemDao.items.find((item) => item.kind === 'milestone');
+    expect(row?.memberId).toBe('helper');
+    expect(JSON.parse(row!.payload)).toMatchObject({
+      text: 'Opened the pull request',
+      kind: 'done',
+      nodeId: 'helper',
+      conversationId: 'call-1',
+      callId: 'call-1',
+    });
+
+    await service.deleteRun(run.id);
+    expect(milestones.canUse(run.id, 'orch')).toBe(false);
+    expect(milestones.canUse(run.id, 'helper')).toBe(false);
   });
 
   it('a live fire-and-forget callee holds the run open until it settles', async () => {

@@ -352,7 +352,9 @@ export interface CallBlockEntry {
    * `heldCall: { waitingOn }` and this call's id — see
    * `apps/daemon/src/v1/teams/services/call-broker.service.ts`. Ended by the
    * callee being continued (`endsHeldWait`), a status row, or the call's
-   * result — never by an unrelated row its process writes meanwhile.
+   * result — never by an unrelated row its process writes meanwhile. A root
+   * page anchors the rows that continue it since its newest hold
+   * (`newestHolds` in `apps/daemon/src/v1/agents/services/chat-history.service.ts`).
    */
   heldOn?: number;
   /**

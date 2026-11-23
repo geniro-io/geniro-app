@@ -48,6 +48,7 @@ const h = vi.hoisted(() => ({
     popup: ReturnType<typeof vi.fn>;
   }[],
   configure: vi.fn((): Promise<void> => Promise.resolve()),
+  showMessageBoxSync: vi.fn(),
 }));
 
 vi.mock('electron', async () => {
@@ -144,6 +145,7 @@ vi.mock('electron', async () => {
     BrowserWindow: Window,
     WebContentsView: View,
     clipboard: { writeText: vi.fn() },
+    dialog: { showMessageBoxSync: h.showMessageBoxSync },
     Menu: {
       buildFromTemplate: (template: (typeof h.menus)[number]['template']) => {
         const menu = { template, popup: vi.fn() };
@@ -215,6 +217,7 @@ beforeEach(() => {
   h.menus.length = 0;
   h.configure.mockReset();
   h.configure.mockImplementation(() => Promise.resolve());
+  h.showMessageBoxSync.mockReset();
 });
 
 describe('BrowserService', () => {
@@ -710,6 +713,108 @@ describe('BrowserService', () => {
 
     expect(service.state('run-1').activeTabId).toBe('t1');
     expect(h.views[1]?.webContents.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BrowserService page that asks to stay', () => {
+  const LEAVE = 'Leave page';
+  const STAY = 'Stay';
+
+  const leaveAttempt = (
+    contents: FakeContents,
+  ): { preventDefault: ReturnType<typeof vi.fn> } => {
+    const event = { preventDefault: vi.fn() };
+    contents.emit('will-prevent-unload', event);
+    return event;
+  };
+
+  const answer = (button: string): void => {
+    h.showMessageBoxSync.mockImplementation((...args: unknown[]) => {
+      const options = args.at(-1) as { buttons: string[] };
+      const index = options.buttons.indexOf(button);
+      if (index === -1) {
+        throw new Error(`no ${button} button in ${options.buttons.join(', ')}`);
+      }
+      return index;
+    });
+  };
+
+  const openDockedTab = async (): Promise<{
+    service: BrowserService;
+    main: FakeWindow;
+    contents: FakeContents;
+  }> => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'http://localhost:3020/', {
+      openedBy: 'Peter Parker',
+    });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    return { service, main, contents: h.views[0]?.webContents as FakeContents };
+  };
+
+  it('lets the page unload once the user chooses to leave, asking over its window', async () => {
+    const { main, contents } = await openDockedTab();
+    answer(LEAVE);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(h.showMessageBoxSync).toHaveBeenCalledOnce();
+    expect(h.showMessageBoxSync.mock.calls[0]?.[0]).toBe(main);
+    expect(attempt.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the page when the user chooses to stay', async () => {
+    const { contents } = await openDockedTab();
+    answer(STAY);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(h.showMessageBoxSync).toHaveBeenCalledOnce();
+    expect(attempt.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('asks without a parent window for a tab that is off screen', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'http://localhost:3020/', {
+      openedBy: null,
+    });
+    answer(LEAVE);
+
+    const attempt = leaveAttempt(h.views[0]?.webContents as FakeContents);
+
+    expect(h.showMessageBoxSync.mock.calls[0]).toHaveLength(1);
+    expect(attempt.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('asks without a parent window once the window holding the tab is gone', async () => {
+    const { main, contents } = await openDockedTab();
+    (main as FakeWindow & { destroyed: boolean }).destroyed = true;
+    answer(LEAVE);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(h.showMessageBoxSync.mock.calls[0]).toHaveLength(1);
+    expect(attempt.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('stops asking while an agent operation drives the tab', async () => {
+    const { service, contents } = await openDockedTab();
+    answer(STAY);
+    leaveAttempt(contents);
+    expect(h.showMessageBoxSync).toHaveBeenCalledOnce();
+
+    service.attachAgentOp(
+      service.getTab('run-1', 't1') as NonNullable<
+        ReturnType<BrowserService['getTab']>
+      >,
+      new AgentOp({ memberName: 'Dev', allowedHosts: null }),
+    );
+    answer(LEAVE);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(h.showMessageBoxSync).toHaveBeenCalledOnce();
+    expect(attempt.preventDefault).not.toHaveBeenCalled();
   });
 });
 

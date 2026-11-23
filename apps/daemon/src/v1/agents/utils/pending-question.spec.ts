@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  pendingCardRequestId,
   readPendingQuestion,
   serializePendingQuestion,
 } from './pending-question';
@@ -51,6 +52,19 @@ describe('pending question snapshots', () => {
     const read = readPendingQuestion(stored);
     const questions = read?.kind === 'question' ? read.questions : [];
     expect(questions[0]?.options).toEqual([{ label: 'Postgres' }]);
+  });
+
+  it.each([
+    [
+      'a card no reader accepts',
+      '{"kind":"patch","requestId":"old-patch"}',
+      'old-patch',
+    ],
+    ['a row with no id', '{"kind":"patch"}', null],
+    ['text that is not JSON', '{not json', null],
+    ['an empty column', null, null],
+  ])('reads the card id of %s', (_name, stored, id) => {
+    expect(pendingCardRequestId(stored)).toBe(id);
   });
 
   it('round-trips a plan', () => {

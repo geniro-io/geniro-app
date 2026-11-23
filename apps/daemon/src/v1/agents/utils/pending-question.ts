@@ -85,6 +85,25 @@ export function serializePendingQuestion(
   }
 }
 
+/** The card id a stored column points at, read even from a row no reader accepts. */
+export function pendingCardRequestId(value: string | null): string | null {
+  if (value === null || value.length === 0) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== 'object') {
+      return null;
+    }
+    const { requestId } = parsed as { requestId?: unknown };
+    return typeof requestId === 'string' && requestId.length > 0
+      ? requestId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read `Run.pendingQuestion` back, or null when there is nothing usable there.
  *

@@ -4070,10 +4070,20 @@ describe('ChatService', () => {
         expect(cursor.start.mock.calls.length).toBe(turnsBefore + 1);
       });
 
-      it('clears a patch card stored by an older build at boot, and writes nothing', async () => {
-        const { service, approvals, runDao } = setup();
+      it('clears a patch card stored by an older build at boot, closes its row, and writes nothing', async () => {
+        const { service, approvals, runDao, itemDao } = setup();
         const run = await asking(service);
         writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
+        await itemDao.create({
+          runId: run.id,
+          seq: 9000,
+          kind: 'approval_request',
+          payload: JSON.stringify({
+            id: 'old-patch',
+            toolName: 'propose_patch',
+            input: { file_path: 'a.ts', new_string: 'const timeout = 60;' },
+          }),
+        } as never);
         runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
           kind: 'patch',
           requestId: 'old-patch',
@@ -4088,9 +4098,49 @@ describe('ChatService', () => {
 
         expect(runDao.runs.get(run.id)!.pendingQuestion).toBeNull();
         expect(approvals.listByRun(run.id)).toEqual([]);
+        expect(
+          itemDao.items
+            .filter(
+              (item) => item.runId === run.id && item.kind === 'unanswerable',
+            )
+            .map((item) => JSON.parse(item.payload)),
+        ).toEqual([{ id: 'old-patch', toolName: 'propose_patch' }]);
         expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
           'const timeout = 30;\n',
         );
+      });
+
+      it('leaves an unreadable card alone at boot when its row is already closed', async () => {
+        const { service, runDao, itemDao } = setup();
+        const run = await asking(service);
+        for (const [seq, kind, payload] of [
+          [
+            9000,
+            'approval_request',
+            { id: 'old-patch', toolName: 'propose_patch', input: {} },
+          ],
+          [9001, 'approval_verdict', { id: 'old-patch', allow: false }],
+        ] as const) {
+          await itemDao.create({
+            runId: run.id,
+            seq,
+            kind,
+            payload: JSON.stringify(payload),
+          } as never);
+        }
+        runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
+          kind: 'patch',
+          requestId: 'old-patch',
+        });
+
+        await service.rehydrateDeferredQuestions();
+
+        expect(runDao.runs.get(run.id)!.pendingQuestion).toBeNull();
+        expect(
+          itemDao.items.some(
+            (item) => item.runId === run.id && item.kind === 'unanswerable',
+          ),
+        ).toBe(false);
       });
 
       /** A deferred plan, posted, with its turn settled. */

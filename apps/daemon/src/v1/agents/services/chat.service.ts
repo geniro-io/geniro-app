@@ -211,6 +211,7 @@ import {
   strandedShells,
 } from '../utils/open-shells';
 import {
+  pendingCardRequestId,
   type PendingCardSnapshot,
   type PendingQuestionSnapshot,
   QUESTION_ALREADY_STANDING,
@@ -1494,7 +1495,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    *
    * A row it cannot read is CLEARED rather than left: the column is a pointer
    * into the transcript, and one nothing can be tracked from is a run reporting
-   * that it is waiting on a question nobody can answer.
+   * that it is waiting on a question nobody can answer. The card it pointed at
+   * is closed as `unanswerable` first, or its buttons stay live and do nothing.
    */
   async rehydrateDeferredQuestions(): Promise<void> {
     try {
@@ -1504,6 +1506,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       for (const run of runs) {
         const snapshot = readPendingQuestion(run.pendingQuestion);
         if (snapshot === null) {
+          await this.closeUnreadableCard(run.id, run.pendingQuestion, em);
           await this.runDao.setPendingQuestion(run.id, null, em);
           continue;
         }
@@ -1518,6 +1521,46 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         `standing question rehydration failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  private async closeUnreadableCard(
+    runId: string,
+    column: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const requestId = pendingCardRequestId(column);
+    if (requestId === null) {
+      return;
+    }
+    const rows = await this.itemDao.rowsByPayloadId(
+      runId,
+      ['approval_request', 'approval_verdict', 'unanswerable'],
+      [requestId],
+      undefined,
+      em,
+    );
+    const request = rows.find((row) => row.kind === 'approval_request');
+    if (request === undefined || rows.some((row) => row !== request)) {
+      return;
+    }
+    let toolName = '';
+    try {
+      const payload: unknown = JSON.parse(request.payload);
+      if (payload !== null && typeof payload === 'object') {
+        const named = (payload as { toolName?: unknown }).toolName;
+        toolName = typeof named === 'string' ? named : '';
+      }
+    } catch {
+      toolName = '';
+    }
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'unanswerable',
+      null,
+      { id: requestId, toolName } satisfies UnanswerableWire,
+    );
   }
 
   // ── Deferred cards another module owns ──────────────────────────────────

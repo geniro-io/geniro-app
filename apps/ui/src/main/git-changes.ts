@@ -661,10 +661,12 @@ async function baseSharedWith(
  * an answer presented as a whole one is worse than none.
  *
  * `workFolder` reads a worktree one of the thread's agents made rather than the
- * thread's own folder: its own commits are the work, so when it does not descend
- * from `sha` (cut from `origin/main` while the chat sat on unpushed commits) it
- * is measured from where the two histories meet, not reduced to what is
- * uncommitted. `pullRequests` are the thread's open ones; see `upstreamBaseSince`.
+ * thread's own folder: its commits and its edits to tracked files are the work,
+ * and a file it never added (a log, a build output) is not, so none is listed.
+ * When it does not descend from `sha` (cut from `origin/main` while the chat sat
+ * on unpushed commits) it is measured from where the two histories meet, not
+ * reduced to what is uncommitted. `pullRequests` are the thread's open ones; see
+ * `upstreamBaseSince`.
  */
 export async function readChangesSince(
   dir: string,
@@ -731,20 +733,16 @@ export async function readChangesSince(
   // elsewhere in the repo vanished entirely, which is the exact loss pairing
   // `ls-files` with the diff exists to prevent. `--full-name` fixes the
   // language and the `:/` pathspec fixes the scope.
-  const [names, diff, others] = await Promise.all([
+  const [names, diff, untracked] = await Promise.all([
     git(
       dir,
       ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--name-status', base],
       config,
     ),
     git(dir, ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, base], config),
-    git(
-      dir,
-      ['ls-files', '--others', '--exclude-standard', '--full-name', ':/'],
-      config,
-    ),
+    workFolder ? Promise.resolve([]) : listUntracked(dir, config),
   ]);
-  if (names === null || others === null) {
+  if (names === null || untracked === null) {
     return {
       changes: [],
       truncated: false,
@@ -778,45 +776,41 @@ export async function readChangesSince(
     });
   }
 
-  const untracked = others.split('\n').filter((path) => path.trim() !== '');
   // Every path is repo-root-relative now, so the bodies must be read FROM the
-  // repo root — `dir` may be a subdirectory of it. A root that cannot be
-  // resolved costs the bodies and never the listing.
-  const root =
-    (await git(dir, ['rev-parse', '--show-toplevel'], config))?.trim() ?? '';
+  // repo root — `dir` may be a subdirectory of it.
+  const { root } = repository;
   // In PARALLEL: each is an independent process spawn, and serialised they add a
   // fixed stall to every open of this view — the same reason the three reads
   // above share one `Promise.all`, and the one `splitDiff` gives for taking the
   // tracked diff in a single call.
-  const bodyList = await Promise.all(
-    untracked
-      .slice(0, MAX_UNTRACKED_BODIES)
-      .map((path): Promise<string | null> =>
-        root === ''
-          ? Promise.resolve(null)
-          : // `--no-index` against the empty device is the read-only way to
-            // render a new file as an addition; `git add -N` would do it by
-            // writing to the user's index, which this view may not do.
-            // Under the same config: a new file matching a `.gitattributes`
-            // filter line runs that filter here too — measured.
-            git(
-              root,
-              ['diff', ...SAFE_DIFF, '--no-index', '--', '/dev/null', path],
-              config,
-              true,
-            ),
-      ),
-  );
+  const [bodyList, lineCounts] = await Promise.all([
+    Promise.all(
+      untracked
+        .slice(0, MAX_UNTRACKED_BODIES)
+        .map((path): Promise<string | null> =>
+          // `--no-index` against the empty device is the read-only way to
+          // render a new file as an addition; `git add -N` would do it by
+          // writing to the user's index, which this view may not do.
+          // Under the same config: a new file matching a `.gitattributes`
+          // filter line runs that filter here too — measured.
+          git(
+            root,
+            ['diff', ...SAFE_DIFF, '--no-index', '--', '/dev/null', path],
+            config,
+            true,
+          ),
+        ),
+    ),
+    countUntrackedLines(root, untracked, UNTRACKED_COUNT_LIMITS),
+  ]);
   for (const [index, path] of untracked.entries()) {
-    const body = bodyList[index] ?? null;
+    const added = lineCounts[index] ?? null;
     changes.push({
       path,
       status: 'untracked',
-      diff: boundedDiff(body),
-      // Null past `MAX_UNTRACKED_BODIES`, which is the honest answer: no body
-      // was read, so nothing counted it. A new file's count is its whole length,
-      // and guessing one would be the only fabricated figure on the screen.
-      ...countDiffLines(body),
+      diff: boundedDiff(bodyList[index] ?? null),
+      added,
+      removed: added === null ? null : 0,
     });
   }
 
@@ -831,8 +825,8 @@ export async function readChangesSince(
 }
 
 /**
- * How many untracked files a total reads to count their lines. A tree with more is a build
- * output directory rather than work, and the total says it is a floor.
+ * How many untracked files are read to count their lines. A tree with more is a build
+ * output directory rather than work, and a total says it is a floor.
  */
 const MAX_UNTRACKED_COUNTED = 2_000;
 
@@ -944,6 +938,60 @@ async function untrackedLineCount(
   }
 }
 
+/** What bounds the line count of a folder's untracked files, for both readers here. */
+export interface UntrackedCountLimits {
+  maxUntrackedFiles: number;
+  maxUntrackedFileBytes: number;
+  untrackedBudgetMs: number;
+  /** The clock the budget is read against — injectable so a spec can pass the deadline mid-read. */
+  now?: () => number;
+}
+
+const UNTRACKED_COUNT_LIMITS: UntrackedCountLimits = {
+  maxUntrackedFiles: MAX_UNTRACKED_COUNTED,
+  maxUntrackedFileBytes: MAX_UNTRACKED_FILE_BYTES,
+  untrackedBudgetMs: UNTRACKED_READ_BUDGET_MS,
+};
+
+/**
+ * The files git does not track and does not ignore, repo-root-relative and over the whole
+ * repository. NUL-separated: a newline-separated listing C-quotes a name holding a tab, a
+ * newline or a quote, and the quoted name then names no file.
+ */
+async function listUntracked(
+  dir: string,
+  config: readonly string[],
+): Promise<string[] | null> {
+  const out = await git(
+    dir,
+    ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', ':/'],
+    config,
+  );
+  return out === null ? null : out.split('\0').filter((path) => path !== '');
+}
+
+/** Each path's line count by {@link untrackedLineCount}, null past `limits`. */
+async function countUntrackedLines(
+  root: string,
+  paths: readonly string[],
+  limits: UntrackedCountLimits,
+): Promise<(number | null)[]> {
+  const now = limits.now ?? Date.now;
+  const deadline = now() + limits.untrackedBudgetMs;
+  const counted = await mapLimited(
+    paths.slice(0, limits.maxUntrackedFiles),
+    UNTRACKED_READ_CONCURRENCY,
+    (path) =>
+      untrackedLineCount(
+        join(root, path),
+        deadline,
+        limits.maxUntrackedFileBytes,
+        now,
+      ),
+  );
+  return paths.map((_, index) => counted[index] ?? null);
+}
+
 /** Runs `work` over every item, at most `limit` at a time, keeping the input order. */
 async function mapLimited<T, R>(
   items: readonly T[],
@@ -989,17 +1037,7 @@ async function mapLimited<T, R>(
 export async function readChangesTotals(
   dir: string,
   sha: string,
-  limits: {
-    maxUntrackedFiles: number;
-    maxUntrackedFileBytes: number;
-    untrackedBudgetMs: number;
-    /** The clock the budget is read against — injectable so a spec can pass the deadline mid-read. */
-    now?: () => number;
-  } = {
-    maxUntrackedFiles: MAX_UNTRACKED_COUNTED,
-    maxUntrackedFileBytes: MAX_UNTRACKED_FILE_BYTES,
-    untrackedBudgetMs: UNTRACKED_READ_BUDGET_MS,
-  },
+  limits: UntrackedCountLimits = UNTRACKED_COUNT_LIMITS,
 ): Promise<ChangesTotals | ChangesBaseUnreachable | null> {
   const repository = await openRepository(dir);
   if (typeof repository === 'string') {
@@ -1016,21 +1054,15 @@ export async function readChangesTotals(
   if (relation !== 'descends') {
     return { baseUnreachable: true };
   }
-  const [numstat, others] = await Promise.all([
+  const [numstat, untracked] = await Promise.all([
     git(
       dir,
       ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--numstat', sha],
       config,
     ),
-    git(
-      dir,
-      // NUL-separated: a newline-separated listing C-quotes a name holding a tab, a
-      // newline or a quote, and the quoted name then names no file.
-      ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', ':/'],
-      config,
-    ),
+    listUntracked(dir, config),
   ]);
-  if (numstat === null || others === null) {
+  if (numstat === null || untracked === null) {
     return null;
   }
 
@@ -1053,22 +1085,8 @@ export async function readChangesTotals(
     counted += 1;
   }
 
-  const untracked = others.split('\0').filter((path) => path !== '');
   files += untracked.length;
-  const now = limits.now ?? Date.now;
-  const deadline = now() + limits.untrackedBudgetMs;
-  const lineCounts = await mapLimited(
-    untracked.slice(0, limits.maxUntrackedFiles),
-    UNTRACKED_READ_CONCURRENCY,
-    (path) =>
-      untrackedLineCount(
-        join(root, path),
-        deadline,
-        limits.maxUntrackedFileBytes,
-        now,
-      ),
-  );
-  for (const count of lineCounts) {
+  for (const count of await countUntrackedLines(root, untracked, limits)) {
     if (count !== null) {
       added += count;
       counted += 1;

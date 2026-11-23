@@ -45,6 +45,14 @@ export const Collapsed: Story = {
   args: { collapsed: true },
 };
 
+export const CollapsedCountAndSignInWarning: Story = {
+  args: {
+    collapsed: true,
+    counts: { settings: 2 },
+    warnings: { settings: '1 account needs sign-in' },
+  },
+};
+
 export const OnTeamsView: Story = {
   args: { view: 'teams' },
 };

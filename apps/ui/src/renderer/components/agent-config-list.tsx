@@ -42,8 +42,8 @@ export type AgentStatus = {
  * not say signed-out.
  *
  * `loggedIn === false`, or `false` for one of its named configurations, is what
- * renders warn: a CLI that said so itself. `null` — no status command to ask
- * (claude today) or a probe that failed — reads as ready, same as `true`.
+ * renders warn: a CLI that said so itself. `null` — a probe that could not
+ * answer — reads as ready, same as `true`.
  * Treating it as signed-out would tell an already-signed-in user to sign in
  * again, for a fix that would not even address a probe failure.
  */

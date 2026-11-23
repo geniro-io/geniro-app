@@ -16,7 +16,7 @@ export function NavWarning({
       <span
         data-slot="nav-warning"
         aria-hidden="true"
-        className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-warning ring-2 ring-sidebar"
+        className="absolute -bottom-0.5 -left-0.5 size-2 rounded-full bg-warning ring-2 ring-sidebar"
       />
     </span>
   );

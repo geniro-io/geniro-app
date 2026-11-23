@@ -1305,8 +1305,8 @@ describe('CallBlock', () => {
         },
         'poet',
       );
-    // A command the callee left running closes, and the user writes to it:
-    // neither is the callee being continued, so the wait stands.
+    // A command the callee left running closes: that is not the callee being
+    // continued, so the wait stands.
     const rows = [
       item(
         'call_started',
@@ -1320,10 +1320,6 @@ describe('CallBlock', () => {
       ),
       heldRow('call-1'),
       item('shell_info', { callId: 'call-1', toolCallId: 'sh-1' }, 'poet'),
-      {
-        ...item('message', { text: 'any news?', callId: 'call-1' }, 'poet'),
-        role: 'user',
-      },
     ];
     expect(blockOf(rows).heldOn).toBe(1);
 
@@ -1358,6 +1354,163 @@ describe('CallBlock', () => {
       heldRow('call-2'),
     ];
     expect(blockOf(continued).heldOn).toBe(1);
+  });
+
+  describe('a held call continued by what was said to it, or by its monitor', () => {
+    const held = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item('turn_complete', { callId: 'call-1', usage: {} }, 'poet'),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          heldCall: { waitingOn: 1 },
+          message:
+            'poet ended its turn with 1 call(s) it started still running.',
+        },
+        'poet',
+      ),
+    ];
+    const working = item(
+      'message',
+      { text: 'Rebasing onto main now.', callId: 'call-1' },
+      'poet',
+    );
+
+    it('stops waiting once its caller’s message continues the callee', () => {
+      const block = blockOf([
+        ...held,
+        item(
+          'call_answer',
+          {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'poet',
+            message: 'Resolve the conflicts first.',
+            outcome: 'message',
+          },
+          'orch',
+        ),
+        working,
+      ]);
+
+      expect(block.heldOn).toBeUndefined();
+      act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]'),
+      ).toBeNull();
+    });
+
+    it('keeps waiting through a caller’s message that was never delivered', () => {
+      const block = blockOf([
+        ...held,
+        item(
+          'call_answer',
+          {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'poet',
+            message: 'Resolve the conflicts first.',
+            outcome: 'undelivered',
+          },
+          'orch',
+        ),
+      ]);
+
+      expect(block.heldOn).toBe(1);
+    });
+
+    it('stops waiting once the answer to its deferred question continues the callee', () => {
+      const block = blockOf([
+        ...held,
+        item(
+          'call_answer',
+          {
+            callId: 'call-1',
+            callerNodeId: 'orch',
+            calleeNodeId: 'poet',
+            answer: 'Use the staging stand.',
+            outcome: 'answered',
+          },
+          'orch',
+        ),
+        working,
+      ]);
+
+      expect(block.heldOn).toBeUndefined();
+    });
+
+    it('stops waiting once a usage-limit reset is told to the callee', () => {
+      const block = blockOf([
+        ...held,
+        item(
+          'system',
+          {
+            callId: 'call-1',
+            severity: 'info',
+            message:
+              'The usage limit reset (14:00) — told this agent to continue call-2.',
+            resetWake: { phase: 'fired', instant: 1, callIds: ['call-2'] },
+          },
+          'orch',
+        ),
+        working,
+      ]);
+
+      expect(block.heldOn).toBeUndefined();
+    });
+
+    it('stops waiting once the user’s message continues the callee', () => {
+      const block = blockOf([
+        ...held,
+        {
+          ...item('message', { text: 'any news?', callId: 'call-1' }, 'poet'),
+          role: 'user',
+        },
+        working,
+      ]);
+
+      expect(block.heldOn).toBeUndefined();
+    });
+
+    it('stops waiting once its monitor wakes the callee', () => {
+      const block = blockOf([
+        ...held,
+        item(
+          'system',
+          {
+            callId: 'call-1',
+            severity: 'info',
+            message: 'pnpm test · monitor m1 ended: exit code 0.',
+            monitors: [
+              {
+                id: 'm1',
+                description: 'pnpm test',
+                event: 'end',
+                end: { kind: 'exit', code: 0 },
+                lines: [],
+                omitted: 0,
+              },
+            ],
+            woke: true,
+          },
+          'poet',
+        ),
+        working,
+      ]);
+
+      expect(block.heldOn).toBeUndefined();
+    });
   });
 
   it('marks a call WAITING, not running, while its callee has ended its turn on a monitor, until the monitor wakes it', () => {

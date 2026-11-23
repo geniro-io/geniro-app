@@ -8,11 +8,11 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ArchiveLessonsRegistry } from '../../agents/services/archive-lessons.registry';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
+import type { Goal } from '../../runs/entity/goal.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
-import type { LessonSignalGoal } from '../utils/lesson-signals.fold';
 import type { LessonEstimateService } from './lesson-estimate.service';
 import { LessonSegmentService } from './lesson-segment.service';
 import type { LessonSpendService } from './lesson-spend.service';
@@ -118,7 +118,10 @@ function build(
     project?: { lessons: 'on' | 'off' | null } | null;
     teamLessons?: 'on' | 'off' | null;
     teamsFail?: boolean;
-    goals?: Record<string, LessonSignalGoal[]>;
+    goals?: Record<
+      string,
+      Pick<Goal, 'number' | 'text' | 'status' | 'evidence' | 'closedAt'>[]
+    >;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -162,6 +165,20 @@ function build(
                 (page.kinds === undefined || page.kinds.includes(item.kind)),
             )
             .slice(0, page.limit),
+        ),
+    ),
+    newestSeqAtOrBefore: vi.fn(
+      (runId: string, range: { afterSeq: number; maxSeq: number; at: Date }) =>
+        Promise.resolve(
+          itemsOf(runId)
+            .filter(
+              (item) =>
+                item.seq > range.afterSeq &&
+                item.seq <= range.maxSeq &&
+                item.createdAt !== undefined &&
+                item.createdAt <= range.at,
+            )
+            .at(-1)?.seq ?? null,
         ),
     ),
   };

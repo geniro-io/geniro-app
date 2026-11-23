@@ -1748,6 +1748,23 @@ export class ItemDao extends BaseDao<Item> {
     }));
   }
 
+  /** The newest row of any kind after `afterSeq`, up to `maxSeq`, written at or before `at`; null when none was. */
+  async newestSeqAtOrBefore(
+    runId: string,
+    range: { afterSeq: number; maxSeq: number; at: Date },
+    txEm?: EntityManager,
+  ): Promise<number | null> {
+    const row = await this.getRepo(txEm).findOne(
+      {
+        runId,
+        seq: { $gt: range.afterSeq, $lte: range.maxSeq },
+        createdAt: { $lte: range.at },
+      },
+      { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
+    );
+    return row?.seq ?? null;
+  }
+
   /**
    * One page of a run's rows for an analysis, oldest first: after `afterSeq`
    * (or from `fromTime`), never past `maxSeq`, optionally one member's and some

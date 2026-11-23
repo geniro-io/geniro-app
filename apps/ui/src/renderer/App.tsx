@@ -1146,6 +1146,7 @@ export function App(): React.JSX.Element {
           <WhatsNewDialog
             open={whatsNew.releases.length > 0}
             releases={whatsNew.releases}
+            since={whatsNew.since}
             current={update.state?.currentVersion ?? ''}
             onClose={whatsNew.dismiss}
             onOpenFullChangelog={() => {

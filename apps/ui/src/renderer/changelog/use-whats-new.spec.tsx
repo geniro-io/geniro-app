@@ -97,11 +97,13 @@ describe('useWhatsNew', () => {
     await mount({ current: '1.3.0', lastSeen: '1.1.0' });
 
     expect(latest?.releases.map((r) => r.version)).toEqual(['1.3.0']);
+    expect(latest?.since).toBe('1.1.0');
     expect(writes).toEqual([]);
 
     await act(async () => latest?.dismiss());
 
     expect(latest?.releases).toEqual([]);
+    expect(latest?.since).toBeNull();
     expect(writes).toEqual([{ lastSeenChangelogVersion: '1.3.0' }]);
   });
 

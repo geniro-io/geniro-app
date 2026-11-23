@@ -297,6 +297,40 @@ export interface WhatsNewPlan {
   show: ChangelogRelease[];
   /** The version to record as seen — at once when `show` is empty, else on close. */
   record: string | null;
+  /** The version this profile last saw, which `show` starts after; null when it had none. */
+  since: string | null;
+}
+
+export interface ChangelogDigestEntry {
+  text: string;
+  version: string | null;
+}
+
+export interface ChangelogDigestSection {
+  kind: ChangelogKind;
+  entries: ChangelogDigestEntry[];
+}
+
+/**
+ * Every user-facing change of these releases in one list per kind, kinds in
+ * their fixed order, each entry tagged with its release and kept in the
+ * releases' order.
+ */
+export function digestReleases(
+  releases: readonly ChangelogRelease[],
+): ChangelogDigestSection[] {
+  return CHANGELOG_KINDS.filter((kind) => kind !== 'internal')
+    .map((kind) => ({
+      kind,
+      entries: releases.flatMap((release) =>
+        release.sections
+          .filter((section) => section.kind === kind)
+          .flatMap((section) =>
+            section.entries.map((text) => ({ text, version: release.version })),
+          ),
+      ),
+    }))
+    .filter((section) => section.entries.length > 0);
 }
 
 /**
@@ -307,7 +341,7 @@ export interface WhatsNewPlan {
  */
 export function planWhatsNew(input: WhatsNewInput): WhatsNewPlan {
   const { current, lastSeen } = input;
-  const nothing: WhatsNewPlan = { show: [], record: null };
+  const nothing: WhatsNewPlan = { show: [], record: null, since: null };
   if (!input.isPackaged || parseVersion(current) === null) {
     return nothing;
   }
@@ -320,7 +354,7 @@ export function planWhatsNew(input: WhatsNewInput): WhatsNewPlan {
     (seen === null && !input.onboardingComplete) ||
     (seen !== null && compareVersions(seen, current) > 0)
   ) {
-    return { show: [], record: current };
+    return { show: [], record: current, since: seen };
   }
   const show = userFacingReleases(
     input.releases.filter(
@@ -332,5 +366,5 @@ export function planWhatsNew(input: WhatsNewInput): WhatsNewPlan {
           : compareVersions(release.version, seen) > 0),
     ),
   );
-  return { show: sortReleases(show), record: current };
+  return { show: sortReleases(show), record: current, since: seen };
 }

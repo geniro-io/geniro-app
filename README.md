@@ -184,7 +184,7 @@ In-app terminal tabs. Or reopen a conversation in your own terminal with its mod
 <td valign="top">
 
 <b>🆕 What's new</b><br>
-After an update, Geniro shows what changed in every version since the one you last saw. The full changelog, with search and a jump to any version, is in Settings → What's new, and works offline.
+After an update, Geniro shows the versions you moved between and every change since the one you last saw, as one list. The full changelog, with search and a jump to any version, is in Settings → What's new, and works offline.
 
 </td>
 </tr>

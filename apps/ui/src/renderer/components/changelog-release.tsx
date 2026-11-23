@@ -42,6 +42,8 @@ const markerVariants = cva('mt-2 size-1.5 shrink-0 rounded-full', {
   },
 });
 
+export const ENTRY_LIST_CLASS = 'm-0 flex list-none flex-col gap-1.5 p-0';
+
 const INLINE = /(\*\*[^*]+\*\*|`[^`]+`)/g;
 
 /** An entry's `**bold**` and `` `code` `` spans; everything else is plain text. */
@@ -86,6 +88,42 @@ export function formatReleaseDate(date: string): string {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+/** A kind's heading over its entries: its icon and name in the kind's colour. */
+export function ChangelogKindHeading({
+  kind,
+}: {
+  kind: ChangelogKind;
+}): React.JSX.Element {
+  const Icon = KIND_ICON[kind];
+  return (
+    <h4 className={kindVariants({ kind })}>
+      <Icon aria-hidden="true" />
+      {CHANGELOG_KIND_HEADING[kind]}
+    </h4>
+  );
+}
+
+/** One entry of a kind's list, with an optional trailing note such as its release. */
+export function ChangelogEntryLine({
+  kind,
+  text,
+  children,
+}: {
+  kind: ChangelogKind;
+  text: string;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <li className="flex gap-2.5 text-sm leading-relaxed text-foreground/90">
+      <span aria-hidden="true" className={markerVariants({ kind })} />
+      <span className="min-w-0">
+        <ChangelogEntryText text={text} />
+        {children}
+      </span>
+    </li>
+  );
 }
 
 /** The DOM id a release's card carries, so a version can be jumped to. */
@@ -134,35 +172,23 @@ export function ChangelogReleaseCard({
           </time>
         )}
       </header>
-      {release.sections.map((section) => {
-        const Icon = KIND_ICON[section.kind];
-        return (
-          <section
-            key={section.kind}
-            data-kind={section.kind}
-            className="flex flex-col gap-2">
-            <h4 className={kindVariants({ kind: section.kind })}>
-              <Icon aria-hidden="true" />
-              {CHANGELOG_KIND_HEADING[section.kind]}
-            </h4>
-            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-              {section.entries.map((entry, index) => (
-                <li
-                  key={index}
-                  className="flex gap-2.5 text-sm leading-relaxed text-foreground/90">
-                  <span
-                    aria-hidden="true"
-                    className={markerVariants({ kind: section.kind })}
-                  />
-                  <span className="min-w-0">
-                    <ChangelogEntryText text={entry} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        );
-      })}
+      {release.sections.map((section) => (
+        <section
+          key={section.kind}
+          data-kind={section.kind}
+          className="flex flex-col gap-2">
+          <ChangelogKindHeading kind={section.kind} />
+          <ul className={ENTRY_LIST_CLASS}>
+            {section.entries.map((entry, index) => (
+              <ChangelogEntryLine
+                key={index}
+                kind={section.kind}
+                text={entry}
+              />
+            ))}
+          </ul>
+        </section>
+      ))}
     </article>
   );
 }

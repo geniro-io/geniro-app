@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addToReleases,
   type ChangelogRelease,
+  digestReleases,
   parseChangelog,
   parseFragment,
   planWhatsNew,
@@ -210,12 +211,13 @@ describe('planWhatsNew', () => {
 
     expect(plan.show.map((r) => r.version)).toEqual(['1.4.0', '1.2.0']);
     expect(plan.record).toBe('1.4.0');
+    expect(plan.since).toBe('1.1.0');
   });
 
   it('records silently when the skipped releases hold only Internal entries', () => {
     const plan = planWhatsNew({ ...base, lastSeen: '1.2.0', current: '1.3.0' });
 
-    expect(plan).toEqual({ show: [], record: '1.3.0' });
+    expect(plan).toEqual({ show: [], record: '1.3.0', since: '1.2.0' });
   });
 
   it('opens nothing and records nothing once the running version was seen', () => {
@@ -224,6 +226,7 @@ describe('planWhatsNew', () => {
     ).toEqual({
       show: [],
       record: null,
+      since: null,
     });
   });
 
@@ -235,13 +238,14 @@ describe('planWhatsNew', () => {
       current: '1.4.0',
     });
 
-    expect(plan).toEqual({ show: [], record: '1.4.0' });
+    expect(plan).toEqual({ show: [], record: '1.4.0', since: null });
   });
 
   it('shows only the running release to a profile that never recorded one', () => {
     const plan = planWhatsNew({ ...base, lastSeen: null, current: '1.4.0' });
 
     expect(plan.show.map((r) => r.version)).toEqual(['1.4.0']);
+    expect(plan.since).toBeNull();
   });
 
   it('records without showing after a downgrade', () => {
@@ -250,6 +254,7 @@ describe('planWhatsNew', () => {
     ).toEqual({
       show: [],
       record: '1.2.0',
+      since: '1.4.0',
     });
   });
 
@@ -264,6 +269,7 @@ describe('planWhatsNew', () => {
     ).toEqual({
       show: [],
       record: null,
+      since: null,
     });
   });
 
@@ -275,5 +281,47 @@ describe('planWhatsNew', () => {
     });
 
     expect(plan.show.map((r) => r.version)).toEqual(['1.4.0']);
+    expect(plan.since).toBeNull();
+  });
+});
+
+describe('digestReleases', () => {
+  it('lists each kind once, in kind order, with every release’s entries tagged and Internal left out', () => {
+    expect(
+      digestReleases([
+        {
+          version: '1.3.0',
+          date: '2026-03-01',
+          sections: [
+            { kind: 'new', entries: ['n3'] },
+            { kind: 'fixed', entries: ['f3a', 'f3b'] },
+            { kind: 'internal', entries: ['i3'] },
+          ],
+        },
+        {
+          version: '1.2.0',
+          date: '2026-02-01',
+          sections: [
+            { kind: 'improved', entries: ['m2'] },
+            { kind: 'fixed', entries: ['f2'] },
+          ],
+        },
+      ]),
+    ).toEqual([
+      { kind: 'new', entries: [{ text: 'n3', version: '1.3.0' }] },
+      { kind: 'improved', entries: [{ text: 'm2', version: '1.2.0' }] },
+      {
+        kind: 'fixed',
+        entries: [
+          { text: 'f3a', version: '1.3.0' },
+          { text: 'f3b', version: '1.3.0' },
+          { text: 'f2', version: '1.2.0' },
+        ],
+      },
+    ]);
+  });
+
+  it('is empty when the releases hold only Internal entries', () => {
+    expect(digestReleases([release('1.1.0', 'internal')])).toEqual([]);
   });
 });

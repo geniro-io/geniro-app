@@ -6,6 +6,8 @@ import { useLatestCallback } from '../components/use-latest-callback';
 export interface WhatsNewController {
   /** The releases to show; empty while the dialog is shut. */
   releases: readonly ChangelogRelease[];
+  /** The version the profile last saw, which the shown releases start after. */
+  since: string | null;
   /** Close the dialog and record the running version as seen. */
   dismiss: () => void;
 }
@@ -22,6 +24,7 @@ export function useWhatsNew(
   const [shown, setShown] = useState<{
     releases: ChangelogRelease[];
     record: string;
+    since: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -45,7 +48,11 @@ export function useWhatsNew(
           return;
         }
         if (plan.show.length > 0) {
-          setShown({ releases: plan.show, record: plan.record });
+          setShown({
+            releases: plan.show,
+            record: plan.record,
+            since: plan.since,
+          });
         } else {
           void window.geniro
             .updateSettings({ lastSeenChangelogVersion: plan.record })
@@ -68,5 +75,9 @@ export function useWhatsNew(
       .catch(() => undefined);
   }, [shown]);
 
-  return { releases: shown?.releases ?? [], dismiss };
+  return {
+    releases: shown?.releases ?? [],
+    since: shown?.since ?? null,
+    dismiss,
+  };
 }

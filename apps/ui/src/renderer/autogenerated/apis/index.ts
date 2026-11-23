@@ -7,6 +7,7 @@ export * from './ChatsApi';
 export * from './CliAuthApi';
 export * from './CommandCenterApi';
 export * from './DiagnosticsApi';
+export * from './EmbeddingsApi';
 export * from './GroupsApi';
 export * from './HandoffApi';
 export * from './KnowledgeApi';

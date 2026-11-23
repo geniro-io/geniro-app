@@ -71,6 +71,11 @@ const GROUP_TEXT: Record<StorageGroupIdEnum, { title: string; about: string }> =
       about:
         'Every chat transcript, archived ones included, in one file. Deleting chats leaves empty room inside the file rather than shrinking it; Compact gives that room back to the disk.',
     },
+    [StorageGroupIdEnum.SearchIndex]: {
+      title: 'Search index',
+      about:
+        'What search by meaning knows about your memory, knowledge and chats. Rebuilt from them when deleted; delete it from Settings → Search.',
+    },
     [StorageGroupIdEnum.ChatFiles]: {
       title: 'Chat files',
       about:

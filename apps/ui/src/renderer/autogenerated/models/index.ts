@@ -5544,6 +5544,279 @@ export interface EditRunGoalDto {
 /**
  * 
  * @export
+ * @interface EmbeddingConfigAckDto
+ */
+export interface EmbeddingConfigAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingConfigAckDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {EmbeddingModelRef}
+     * @memberof EmbeddingConfigAckDto
+     */
+    model: EmbeddingModelRef | null;
+    /**
+     * 
+     * @type {EmbeddingModelRef}
+     * @memberof EmbeddingConfigAckDto
+     */
+    pendingModel: EmbeddingModelRef | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingConfigAckDto
+     */
+    onBattery: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingConfigDto
+ */
+export interface EmbeddingConfigDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingConfigDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {EmbeddingModelRef}
+     * @memberof EmbeddingConfigDto
+     */
+    model: EmbeddingModelRef | null;
+    /**
+     * 
+     * @type {EmbeddingModelRef}
+     * @memberof EmbeddingConfigDto
+     */
+    pendingModel: EmbeddingModelRef | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingConfigDto
+     */
+    onBattery: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingModelRef
+ */
+export interface EmbeddingModelRef {
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingModelRef
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingModelRef
+     */
+    revision: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingModelRef
+     */
+    dir: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingModelRef
+     */
+    dim: number;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDto
+ */
+export interface EmbeddingStatusDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDto
+     */
+    state: EmbeddingStatusDtoStateEnum;
+    /**
+     * 
+     * @type {EmbeddingStatusDtoModel}
+     * @memberof EmbeddingStatusDto
+     */
+    model: EmbeddingStatusDtoModel | null;
+    /**
+     * 
+     * @type {EmbeddingStatusDtoPendingModel}
+     * @memberof EmbeddingStatusDto
+     */
+    pendingModel: EmbeddingStatusDtoPendingModel | null;
+    /**
+     * 
+     * @type {EmbeddingStatusDtoCounts}
+     * @memberof EmbeddingStatusDto
+     */
+    counts: EmbeddingStatusDtoCounts;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingStatusDto
+     */
+    indexBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDto
+     */
+    failure: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const EmbeddingStatusDtoStateEnum = {
+    Off: 'off',
+    Loading: 'loading',
+    Indexing: 'indexing',
+    Ready: 'ready',
+    Failed: 'failed'
+} as const;
+export type EmbeddingStatusDtoStateEnum = typeof EmbeddingStatusDtoStateEnum[keyof typeof EmbeddingStatusDtoStateEnum];
+
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDtoCounts
+ */
+export interface EmbeddingStatusDtoCounts {
+    /**
+     * 
+     * @type {EmbeddingStatusDtoCountsMemory}
+     * @memberof EmbeddingStatusDtoCounts
+     */
+    memory: EmbeddingStatusDtoCountsMemory;
+    /**
+     * 
+     * @type {EmbeddingStatusDtoCountsMemory}
+     * @memberof EmbeddingStatusDtoCounts
+     */
+    knowledge: EmbeddingStatusDtoCountsMemory;
+    /**
+     * 
+     * @type {EmbeddingStatusDtoCountsChats}
+     * @memberof EmbeddingStatusDtoCounts
+     */
+    chats: EmbeddingStatusDtoCountsChats;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDtoCountsChats
+ */
+export interface EmbeddingStatusDtoCountsChats {
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingStatusDtoCountsChats
+     */
+    indexed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingStatusDtoCountsChats
+     */
+    total: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDtoCountsChats
+     */
+    paused: EmbeddingStatusDtoCountsChatsPausedEnum | null;
+}
+
+
+/**
+ * @export
+ */
+export const EmbeddingStatusDtoCountsChatsPausedEnum = {
+    Battery: 'battery'
+} as const;
+export type EmbeddingStatusDtoCountsChatsPausedEnum = typeof EmbeddingStatusDtoCountsChatsPausedEnum[keyof typeof EmbeddingStatusDtoCountsChatsPausedEnum];
+
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDtoCountsMemory
+ */
+export interface EmbeddingStatusDtoCountsMemory {
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingStatusDtoCountsMemory
+     */
+    indexed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingStatusDtoCountsMemory
+     */
+    total: number;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDtoModel
+ */
+export interface EmbeddingStatusDtoModel {
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDtoModel
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDtoModel
+     */
+    revision: string;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingStatusDtoPendingModel
+ */
+export interface EmbeddingStatusDtoPendingModel {
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDtoPendingModel
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof EmbeddingStatusDtoPendingModel
+     */
+    revision: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingStatusDtoPendingModel
+     */
+    complete: boolean;
+}
+/**
+ * 
+ * @export
  * @interface ExportTeamDto
  */
 export interface ExportTeamDto {
@@ -16738,6 +17011,7 @@ export interface StorageGroup {
  */
 export const StorageGroupIdEnum = {
     Database: 'database',
+    SearchIndex: 'searchIndex',
     ChatFiles: 'chatFiles',
     AgentSessions: 'agentSessions',
     TaskFiles: 'taskFiles',

@@ -8554,7 +8554,7 @@ export class TeamExecutorService
               `team run ${runId} held call ${callId} bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           } finally {
-            this.callBroker.noteCalleeSettling(runId, callId);
+            this.callBroker.noteCalleeSettling(runId, callId, outcome);
             resolve(outcome);
           }
         });
@@ -8911,7 +8911,7 @@ export class TeamExecutorService
               // attempt the pool hands on — the call has no result yet — nor
               // for a HELD call, whose result is not this turn's.
               if (!handedOn && hold === null) {
-                this.callBroker.noteCalleeSettling(runId, callId);
+                this.callBroker.noteCalleeSettling(runId, callId, result);
               }
               resolve({ outcome: result, handedOn, hold });
             }

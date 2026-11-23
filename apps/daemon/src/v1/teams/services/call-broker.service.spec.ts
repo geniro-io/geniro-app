@@ -15,6 +15,7 @@ import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import type { RunCallSeed } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { readCallSeed } from '../../agents/utils/call-seed';
+import { THREAD_MESSAGE_SENT_TEXT_MAX } from '../../agents/utils/thread-message-text';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
@@ -41,6 +42,20 @@ const HELPER: TeamMember = member('helper', {
 });
 
 const WRITER: TeamMember = member('writer');
+
+function settledWith(
+  overrides: Partial<CalleeTurnOutcome> = {},
+): CalleeTurnOutcome {
+  return {
+    status: 'completed',
+    finalText: 'done',
+    error: null,
+    failureClass: null,
+    resetsAt: null,
+    sessionId: null,
+    ...overrides,
+  };
+}
 
 interface RecordedItem {
   memberId: string | null;
@@ -1777,7 +1792,16 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(notice?.payload).toMatchObject({
       severity: 'info',
       message: 'Picked back up — Helper asked a question in call-1.',
-      wake: [{ callId: 'call-1', callee: 'Helper', reason: 'asked' }],
+      wake: [
+        {
+          callId: 'call-1',
+          callee: 'Helper',
+          reason: 'asked',
+          calleeNodeId: 'helper',
+          question: 'Which color?',
+          options: ['Red', 'Blue'],
+        },
+      ],
     });
     // The woken caller answers exactly as a live one would have.
     const answered = broker.answerAgent('run-1', 'orch', {
@@ -1828,6 +1852,16 @@ describe('CallBroker — parked questions (M4)', () => {
     // A stop with no error anywhere is the reported defect, so it is said.
     const said = items.filter((i) => i.kind === 'system').at(-1)!.payload;
     expect(String(said.message)).toContain('Helper was stopped');
+    expect(said).toMatchObject({
+      severity: 'info',
+      orphanQuestion: {
+        callId: 'call-1',
+        callee: 'Helper',
+        calleeNodeId: 'helper',
+        outcome: 'stopped',
+      },
+    });
+    expect(said).not.toHaveProperty('callId');
     deferred[0]!.resolve({
       status: 'cancelled',
       finalText: null,
@@ -1841,7 +1875,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('wakes a caller whose async result landed after its turn ended — once', async () => {
     const wakes: { memberId: string; prompt: string }[] = [];
     let live = true;
-    const { broker, deferred } = harness({
+    const { broker, deferred, items } = harness({
       launch: 'defer',
       isNodeLive: () => live,
       wakeNode: (memberId, prompt) => {
@@ -1861,11 +1895,29 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(wakes).toHaveLength(0);
 
     // The callee lands: THAT is when the caller is owed a turn.
-    broker.noteCalleeSettling('run-1', 'call-1');
+    broker.noteCalleeSettling(
+      'run-1',
+      'call-1',
+      settledWith({ finalText: 'the build passed' }),
+    );
     expect(wakes).toHaveLength(1);
     expect(wakes[0]!.memberId).toBe('orch');
     expect(wakes[0]!.prompt).toContain('await_agent(call_id: "call-1")');
-    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(items.find((item) => item.kind === 'system')?.payload).toMatchObject(
+      {
+        wake: [
+          {
+            callId: 'call-1',
+            callee: 'Helper',
+            reason: 'finished',
+            calleeNodeId: 'helper',
+            status: 'completed',
+            result: 'the build passed',
+          },
+        ],
+      },
+    );
+    broker.noteCalleeSettling('run-1', 'call-1', settledWith());
     expect(wakes).toHaveLength(1);
 
     deferred[0]!.resolve({
@@ -1902,7 +1954,7 @@ describe('CallBroker — parked questions (M4)', () => {
       message: 'm',
       mode: 'async',
     });
-    broker.noteCalleeSettling('run-1', 'call-1');
+    broker.noteCalleeSettling('run-1', 'call-1', settledWith());
 
     expect(wakeNode).not.toHaveBeenCalled();
     expect(told).toHaveLength(1);
@@ -1910,7 +1962,18 @@ describe('CallBroker — parked questions (M4)', () => {
     expect(told[0]!.prompt).toContain('has finished call-1');
     expect(told[0]!.prompt).toContain('await_agent(call_id: "call-1")');
     expect(items.find((item) => item.kind === 'system')?.payload).toMatchObject(
-      { severity: 'info', message: expect.stringContaining('call-1') },
+      {
+        severity: 'info',
+        message: expect.stringContaining('call-1'),
+        toldWorking: {
+          callId: 'call-1',
+          callee: 'Helper',
+          calleeNodeId: 'helper',
+          reason: 'finished',
+          status: 'completed',
+          result: 'done',
+        },
+      },
     );
 
     // Told is not collected: a caller that ends without collecting is still
@@ -1938,7 +2001,7 @@ describe('CallBroker — parked questions (M4)', () => {
       mode: 'async',
     });
     const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    broker.noteCalleeSettling('run-1', 'call-1');
+    broker.noteCalleeSettling('run-1', 'call-1', settledWith());
     expect(tellLiveNode).not.toHaveBeenCalled();
 
     deferred[0]!.resolve({
@@ -3551,7 +3614,7 @@ describe('CallBroker — a caller waiting on its own calls', () => {
     await first;
     expect(broker.awaitingCalls('run-1')).toBe(1);
 
-    broker.noteCalleeSettling('run-1', 'call-2');
+    broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     expect(told.some((prompt) => prompt.includes('has finished call-2'))).toBe(
       true,
     );
@@ -4314,7 +4377,7 @@ describe('CallBroker — every conversation of a member is a caller of its own',
     await new Promise((resolve) => setImmediate(resolve));
 
     // The research lands for a conversation with no turn to take it.
-    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     expect(h.launches).toHaveLength(4);
     expect(h.launches[3]).toMatchObject({
       conversationId: 'call-1',
@@ -4409,7 +4472,7 @@ describe('CallBroker — every conversation of a member is a caller of its own',
       fail: () => {},
     });
     // The result twin: call-2 settles while the Engineer works.
-    broker.noteCalleeSettling('run-1', 'call-2');
+    broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     deferred[1]!.resolve(DONE('found'));
 
     const notes = items.filter(
@@ -4420,6 +4483,24 @@ describe('CallBroker — every conversation of a member is a caller of its own',
     expect(notes.map((note) => note.payload.message)).toEqual([
       expect.stringContaining('question in call-3'),
       expect.stringContaining('finished call-2'),
+    ]);
+    expect(notes.map((note) => note.payload.toldWorking)).toEqual([
+      {
+        callId: 'call-3',
+        callee: RESEARCHER.name,
+        calleeNodeId: 'res',
+        reason: 'asked',
+        question: 'Which source?',
+        options: [],
+      },
+      {
+        callId: 'call-2',
+        callee: RESEARCHER.name,
+        calleeNodeId: 'res',
+        reason: 'finished',
+        status: 'completed',
+        result: 'done',
+      },
     ]);
     for (const note of notes) {
       expect(note.memberId).toBe('helper');
@@ -4438,10 +4519,101 @@ describe('CallBroker — every conversation of a member is a caller of its own',
       message: 'm',
       mode: 'async',
     });
-    broker.noteCalleeSettling('run-1', 'call-1');
+    broker.noteCalleeSettling('run-1', 'call-1', settledWith());
     const note = items.find((item) => item.kind === 'system');
     expect(note?.payload.message).toContain('finished call-1');
     expect(note?.payload).not.toHaveProperty('callId');
+  });
+
+  it('tells a working caller a failed call failed, without the text the failed turn left', async () => {
+    const { broker, items } = harness({
+      launch: 'defer',
+      tellLiveNode: () => true,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    broker.noteCalleeSettling(
+      'run-1',
+      'call-1',
+      settledWith({ status: 'failed', finalText: 'half an answer' }),
+    );
+    expect(
+      items.find((item) => item.kind === 'system')?.payload.toldWorking,
+    ).toEqual({
+      callId: 'call-1',
+      callee: 'Helper',
+      calleeNodeId: 'helper',
+      reason: 'finished',
+      status: 'failed',
+    });
+  });
+
+  it('caps the answer a finished-call note carries', async () => {
+    const { broker, items } = harness({
+      launch: 'defer',
+      tellLiveNode: () => true,
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    broker.noteCalleeSettling(
+      'run-1',
+      'call-1',
+      settledWith({ finalText: 'a'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX + 10) }),
+    );
+    const told = items.find((item) => item.kind === 'system')?.payload
+      .toldWorking as { result: string };
+    expect([...told.result]).toHaveLength(THREAD_MESSAGE_SENT_TEXT_MAX);
+    expect(told.result.endsWith('…')).toBe(true);
+  });
+
+  it('files an orphaned question’s note inside the call its caller’s conversation answers', async () => {
+    const { broker, items } = harness({
+      launch: 'defer',
+      calleesOf: new Map([
+        ['orch', [HELPER]],
+        ['helper', [RESEARCHER]],
+      ]),
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'feature A',
+      mode: 'async',
+    });
+    await broker.callAgent('run-1', engineerIn('call-1'), {
+      title: 'research',
+      agent: 'res',
+      message: 'sources',
+      mode: 'fire_and_forget',
+    });
+    broker.parkQuestion('run-1', 'call-2', {
+      question: 'Which source?',
+      options: [],
+      payload: {},
+      deliver: () => true,
+      fail: () => {},
+    });
+    const note = items.find(
+      (item) => item.payload.orphanQuestion !== undefined,
+    );
+    expect(note?.memberId).toBe('helper');
+    expect(note?.payload).toMatchObject({
+      severity: 'info',
+      callId: 'call-1',
+      orphanQuestion: {
+        callId: 'call-2',
+        calleeNodeId: 'res',
+        outcome: 'stopped',
+      },
+    });
   });
 });
 
@@ -6048,7 +6220,11 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     index: number,
     text: string,
   ) {
-    h.broker.noteCalleeSettling('run-1', h.launches[index]!.callId);
+    h.broker.noteCalleeSettling(
+      'run-1',
+      h.launches[index]!.callId,
+      settledWith(),
+    );
     h.deferred[index]!.resolve(DONE(text));
     await flush();
   }
@@ -6528,7 +6704,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     try {
       const h = await engineerDelegated();
       const first = released(h.broker.holdCall('run-1', 'call-1')!);
-      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
       h.deferred[1]!.resolve(RATE_LIMITED);
       await settle();
       expect(first()).toMatchObject({ kind: 'wake' });
@@ -6571,7 +6747,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     h.broker.holdCall('run-1', 'call-3');
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
     // The stopped call settles the way the executor reports it.
-    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     h.broker.drainCaller('run-1', ENGINEER);
     await flush();
     await flush();
@@ -6709,7 +6885,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     try {
       const h = await engineerDelegated();
       const first = released(h.broker.holdCall('run-1', 'call-1')!);
-      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
       h.deferred[1]!.resolve(RATE_LIMITED);
       await settle();
       expect(first()).toMatchObject({ kind: 'wake' });
@@ -6748,7 +6924,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
    */
   async function resetWaitingForCall1() {
     const h = await engineerDelegated();
-    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     h.deferred[1]!.resolve(RATE_LIMITED);
     await settle();
     await vi.advanceTimersByTimeAsync(72 * 60_000);
@@ -6762,7 +6938,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
       const h = await resetWaitingForCall1();
       // A follow-up registers the run's next pass before call-1 settles.
       h.broker.registerRun('run-1', h.capability, null);
-      h.broker.noteCalleeSettling('run-1', 'call-1');
+      h.broker.noteCalleeSettling('run-1', 'call-1', settledWith());
       h.deferred[0]!.resolve({ ...DONE('done'), sessionId: 'sess-1' });
       await settle();
 
@@ -6804,7 +6980,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
         message: 'look it up',
         mode: 'async',
       });
-      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
       h.deferred[1]!.resolve(RATE_LIMITED);
       await settle();
       await vi.advanceTimersByTimeAsync(72 * 60_000);
@@ -6850,7 +7026,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
       const h = await resetWaitingForCall1();
       expect(h.broker.cancelResetWakes('run-1')).toEqual(['call-2']);
       // When call-1 settles, the continue that was called off does not go out.
-      h.broker.noteCalleeSettling('run-1', 'call-1');
+      h.broker.noteCalleeSettling('run-1', 'call-1', settledWith());
       h.deferred[0]!.resolve({ ...DONE('done'), sessionId: 'sess-1' });
       await settle();
       expect(resetRows(h).map((row) => row.phase)).toEqual([
@@ -6868,7 +7044,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     h.broker.cancelAgent('run-1', ENGINEER, { call_id: 'call-2', reason: 'y' });
     // …then the Manager cancels the conversation's call.
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
-    h.broker.noteCalleeSettling('run-1', 'call-2');
+    h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
     await flush();
     h.broker.drainCaller('run-1', ENGINEER);
     await flush();
@@ -6912,7 +7088,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     try {
       const h = await engineerDelegated();
       h.broker.noteCalleeTurnEnded('run-1', 'call-1');
-      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
       h.deferred[1]!.resolve(RATE_LIMITED);
       await settle();
       h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason: 'x' });
@@ -6943,7 +7119,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     try {
       const h = await engineerDelegated();
       released(h.broker.holdCall('run-1', 'call-1')!);
-      h.broker.noteCalleeSettling('run-1', 'call-2');
+      h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
       h.deferred[1]!.resolve(RATE_LIMITED);
       await settle();
       const held = released(h.broker.holdCall('run-1', 'call-1')!);
@@ -7115,6 +7291,15 @@ describe('CallBroker — a callee question asked through a tool call that alread
       said.some((line) => line.includes('goes on without an answer')),
     ).toBe(true);
     expect(said.some((line) => line.includes('was stopped'))).toBe(false);
+    expect(
+      h.items.find((item) => item.payload.orphanQuestion !== undefined)?.payload
+        .orphanQuestion,
+    ).toEqual({
+      callId: 'call-1',
+      callee: 'Helper',
+      calleeNodeId: 'helper',
+      outcome: 'continues',
+    });
   });
 });
 

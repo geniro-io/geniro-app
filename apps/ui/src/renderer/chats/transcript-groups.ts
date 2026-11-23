@@ -4221,7 +4221,7 @@ function isHeldCountUpdate(item: ChatItem): boolean {
   );
 }
 
-/** A monitor notice `MonitorNoticeRow` draws nothing for: only starts. */
+/** A monitor notice `MonitorEventRow` draws nothing for: only starts. */
 function isUndrawnMonitorNotice(item: ChatItem): boolean {
   if (item.kind !== 'system') {
     return false;

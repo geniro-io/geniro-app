@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ThreadMessageRowEntry } from '../chat.types';
 import {
+  cappedRowText,
   THREAD_MESSAGE_SENT_TEXT_MAX,
   threadMessageExcerpt,
   threadMessageNotDeliveredNote,
@@ -250,5 +251,19 @@ describe('threadMessageSentRow', () => {
 
   it('has no text field when the caller gave none', () => {
     expect(threadMessageSentRow(sent, null).threadMessageSent).toEqual(sent);
+  });
+});
+
+describe('cappedRowText', () => {
+  it('keeps a text at the cap whole', () => {
+    const text = 'y'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX);
+
+    expect(cappedRowText(text)).toBe(text);
+  });
+
+  it('cuts a text one code point past the cap, ending in an ellipsis', () => {
+    expect(cappedRowText('y'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX + 1))).toBe(
+      `${'y'.repeat(THREAD_MESSAGE_SENT_TEXT_MAX - 1)}…`,
+    );
   });
 });

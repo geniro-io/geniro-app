@@ -521,4 +521,52 @@ describe('sameThreadIdentities', () => {
       ),
     ).toBe(false);
   });
+
+  it('holds two member faces the same when their name, colour and avatar match', () => {
+    const member = (
+      face: Partial<Extract<ThreadIdentity['face'], { kind: 'member' }>> = {},
+    ): ThreadIdentity =>
+      identity('A', {
+        kind: 'member',
+        name: 'Lead',
+        avatar: { kind: 'initials', value: 'LD' },
+        colorKey: 'lead',
+        ...face,
+      });
+    const same = (a: ThreadIdentity, b: ThreadIdentity) =>
+      sameThreadIdentities(new Map([['a', a]]), new Map([['a', b]]));
+
+    expect(same(member(), member())).toBe(true);
+    expect(same(member(), member({ name: 'QA' }))).toBe(false);
+    expect(same(member(), member({ colorKey: 'qa' }))).toBe(false);
+    expect(same(member(), member({ avatar: null }))).toBe(false);
+    expect(
+      same(member(), member({ avatar: { kind: 'emoji', value: 'LD' } })),
+    ).toBe(false);
+    expect(
+      same(member(), member({ avatar: { kind: 'initials', value: 'LE' } })),
+    ).toBe(false);
+    expect(
+      same(
+        member(),
+        member({ avatar: { kind: 'initials', value: 'LD', tone: 'avatar-2' } }),
+      ),
+    ).toBe(false);
+  });
+
+  it('holds two monitor faces the same, and tells one apart from a plain thread', () => {
+    const monitor = () => identity('A', { kind: 'monitor' });
+    expect(
+      sameThreadIdentities(
+        new Map([['a', monitor()]]),
+        new Map([['a', monitor()]]),
+      ),
+    ).toBe(true);
+    expect(
+      sameThreadIdentities(
+        new Map([['a', monitor()]]),
+        new Map([['a', identity('A', { kind: 'unknown' })]]),
+      ),
+    ).toBe(false);
+  });
 });

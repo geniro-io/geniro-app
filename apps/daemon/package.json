@@ -13,6 +13,7 @@
     "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "seed": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/db/seed.ts",
     "migrate:down": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/db/migrate-down.ts",
+    "embeddings:spike": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/v1/embeddings/__tests__/embedding-spike.ts",
     "start": "node dist/main.js",
     "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",

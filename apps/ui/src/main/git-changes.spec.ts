@@ -351,9 +351,7 @@ describe('readChangesSince', () => {
     );
   });
 
-  it('leaves the counts null for an untracked file past the body budget', async () => {
-    // No body was read, so nothing counted it. Guessing a length would be the
-    // only fabricated figure on the screen.
+  it('counts every untracked file, past the few whose bodies it reads', async () => {
     const sha = initRepo();
     for (let i = 0; i < 30; i += 1) {
       writeFileSync(join(dir, `n${String(i).padStart(2, '0')}.txt`), 'new\n');
@@ -361,7 +359,26 @@ describe('readChangesSince', () => {
 
     const { changes } = await readChangesSince(dir, sha);
 
-    expect(changes.filter((change) => change.added !== null)).toHaveLength(25);
+    expect(changes.filter((change) => change.diff !== null)).toHaveLength(25);
+    expect(changes.every((change) => change.added === 1)).toBe(true);
+    expect(changes.every((change) => change.removed === 0)).toBe(true);
+  });
+
+  it('leaves an untracked file past the size cap uncounted, as the totals do', async () => {
+    const sha = initRepo();
+    writeFileSync(join(dir, 'small.txt'), 'a\nb\n');
+    writeFileSync(join(dir, 'dump.log'), 'x\n'.repeat(2 * 1024 * 1024 + 1));
+
+    const { changes } = await readChangesSince(dir, sha);
+    const totals = await readChangesTotals(dir, sha);
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: 'small.txt', added: 2, removed: 0 }),
+    );
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: 'dump.log', added: null, removed: null }),
+    );
+    expect(totals).toEqual({ linesAdded: 2, linesRemoved: 0, partial: true });
   });
 
   it('names a RENAME by where the file ended up', async () => {
@@ -575,6 +592,44 @@ describe('readChangesSince', () => {
     const asOwnFolder = await readChangesSince(linked, start);
     expect(asOwnFolder.changes).toEqual([]);
     expect(asOwnFolder.movedOffStart).toBe(true);
+  });
+
+  it('leaves out the files an agent’s worktree never added, keeping its commits and its edits to tracked files', async () => {
+    const start = initRepo();
+    const linked = join(dir, 'wt');
+    run(['worktree', 'add', '-q', '-b', 'agent', linked, start]);
+    writeFileSync(join(linked, 'card.tsx'), 'padded\n');
+    execFileSync('git', ['-C', linked, 'add', '.']);
+    execFileSync('git', ['-C', linked, 'commit', '-q', '-m', 'work']);
+    writeFileSync(join(linked, 'README.md'), 'edited in the worktree\n');
+    mkdirSync(join(linked, '.debug-logs'));
+    writeFileSync(
+      join(linked, '.debug-logs', 'bake.log'),
+      `${Array.from({ length: 5_000 }, (_, i) => `log ${i}`).join('\n')}\n`,
+    );
+
+    const { changes } = await readChangesSince(linked, start, true);
+
+    expect(changes).toEqual([
+      expect.objectContaining({ path: 'card.tsx', added: 1, removed: 0 }),
+      expect.objectContaining({ path: 'README.md', added: 1, removed: 1 }),
+    ]);
+  });
+
+  it('still lists a file the thread’s own folder never added', async () => {
+    const start = initRepo();
+    mkdirSync(join(dir, '.debug-logs'));
+    writeFileSync(join(dir, '.debug-logs', 'bake.log'), 'one\ntwo\n');
+
+    const { changes } = await readChangesSince(dir, start, false);
+
+    expect(changes).toEqual([
+      expect.objectContaining({
+        path: '.debug-logs/bake.log',
+        status: 'untracked',
+        added: 2,
+      }),
+    ]);
   });
 
   it('leaves out what upstream gained past the fork point of a worktree cut from the fetched remote', async () => {

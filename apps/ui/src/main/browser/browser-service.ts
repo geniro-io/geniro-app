@@ -4,6 +4,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   type Session,
   session as electronSession,
   shell,
@@ -800,6 +801,24 @@ export class BrowserService {
     }
   }
 
+  /** Electron cancels the unload unless the listener prevents the event, and it decides synchronously. */
+  private userLeavesPage(tab: BrowserTab): boolean {
+    const options = {
+      type: 'question' as const,
+      buttons: ['Leave page', 'Stay'],
+      defaultId: 0,
+      cancelId: 1,
+      message: 'Leave this page?',
+      detail: 'The page says changes you made may not be saved.',
+    };
+    const host = tab.attachedTo;
+    const choice =
+      host === null || host.isDestroyed()
+        ? dialog.showMessageBoxSync(options)
+        : dialog.showMessageBoxSync(host, options);
+    return choice === 0;
+  }
+
   private watch(tab: BrowserTab): void {
     const contents = tab.view.webContents;
     const refresh = (): void => this.emitRun(tab.runId);
@@ -875,6 +894,11 @@ export class BrowserService {
     contents.on('will-navigate', guard);
     contents.on('will-redirect', guard);
     contents.on('will-frame-navigate', guard);
+    contents.on('will-prevent-unload', (event) => {
+      if (tab.op === null && this.userLeavesPage(tab)) {
+        event.preventDefault();
+      }
+    });
     contents.on('login', (event, _details, authInfo, callback) => {
       event.preventDefault();
       if (tab.op !== null) {

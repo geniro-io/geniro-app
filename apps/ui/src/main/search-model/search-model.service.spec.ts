@@ -182,6 +182,27 @@ describe('SearchModelService', () => {
     expect(h.switchOn()).toBe(false);
   });
 
+  it('a failed update keeps the switch on and the model in use serving, and offers the update again with its reason', async () => {
+    writeReadyModel(join(root, 'models'), 'oldrev0123456789');
+    const h = harness(root, { switchOn: true });
+    await h.service.start();
+    await h.service.update();
+
+    h.failDownload(new DownloadHttpError(500, 'HTTP 500'));
+    await h.service.waitForRun();
+
+    expect(h.service.getState()).toMatchObject({
+      phase: 'update-available',
+      reason: 'network',
+    });
+    expect(h.switchOn()).toBe(true);
+    expect(h.writes).toEqual([]);
+    expect(h.service.daemonModels()).toMatchObject({
+      model: { revision: 'oldrev0123456789' },
+      pendingModel: null,
+    });
+  });
+
   it('a Try again after a failure switches the feature back on and resumes the download', async () => {
     const h = harness(root);
     await h.service.setEnabled(true);

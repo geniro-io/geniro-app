@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../agents/__tests__/temp-dir';
 import {
+  configureChildJournal,
+  readChildJournal,
+  resetChildJournal,
+} from '../../agents/utils/child-journal';
+import {
   type EmbeddingProcessEvent,
   EmbeddingProcessService,
   EmbeddingUnavailableError,
@@ -35,6 +40,16 @@ function processGroupOf(pid: number): string {
   return execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)])
     .toString()
     .trim();
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function crash(service: EmbeddingProcessService): Promise<void> {
+  await service
+    .request({ op: 'getMeta', key: 'crash' }, 60_000)
+    .catch(() => undefined);
 }
 
 describe('EmbeddingProcessService', () => {
@@ -255,5 +270,69 @@ describe('EmbeddingProcessService', () => {
     await expect(
       service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS),
     ).rejects.toThrow('the daemon is shutting down');
+  });
+
+  it('waits 5 s after a second crash of a child that did no work, where the first waited 1 s', async () => {
+    const service = start();
+    await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS);
+    await crash(service);
+    await pause(RESTART_WAIT_MS);
+    await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS);
+    await crash(service);
+
+    await pause(RESTART_WAIT_MS);
+    await expect(
+      service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS),
+    ).rejects.toBeInstanceOf(EmbeddingUnavailableError);
+
+    await vi.waitFor(
+      async () => {
+        expect(
+          await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS),
+        ).toBe('echo');
+      },
+      { timeout: 6_000, interval: 100 },
+    );
+  }, 20_000);
+
+  it('clears the escalation when a work request is answered, so the next crash waits 1 s again', async () => {
+    const service = start();
+    await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS);
+    await crash(service);
+    await pause(RESTART_WAIT_MS);
+    await service.request(
+      { op: 'score', source: 'memory', query: 'q', sourceIds: null, limit: 1 },
+      ANSWER_MS,
+    );
+    await crash(service);
+
+    await pause(RESTART_WAIT_MS);
+    expect(
+      await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS),
+    ).toBe('echo');
+  }, 20_000);
+
+  it('journals the child while it runs and forgets it once it stops', async () => {
+    const journalPath = join(dir, 'children.json');
+    configureChildJournal(journalPath);
+    try {
+      const service = start();
+      await service.request({ op: 'getMeta', key: 'echo' }, ANSWER_MS);
+      const pid = service.pid ?? Number.NaN;
+      expect(
+        readChildJournal(journalPath)?.children.map((child) => child.pid),
+      ).toEqual([pid]);
+
+      service.stop();
+
+      await vi.waitFor(
+        () => {
+          expect(readChildJournal(journalPath)?.children ?? []).toEqual([]);
+        },
+        { timeout: 3_000 },
+      );
+    } finally {
+      resetChildJournal();
+    }
   });
 });

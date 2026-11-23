@@ -314,6 +314,22 @@ describe('SearchSettings', () => {
     expect(h.geniro.updateSearchModel).toHaveBeenCalledTimes(1);
   });
 
+  it('an update that did not finish says why, and Search keeps using the current model', async () => {
+    const h = harness(
+      state({
+        phase: 'update-available',
+        modelBytes: TOTAL,
+        reason: 'network',
+      }),
+    );
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    expect(textOf()).toContain(
+      'The update did not finish: The network connection failed. Search keeps using the current model.',
+    );
+    expect(textOf()).not.toContain('the old model is deleted');
+  });
+
   it('the daemon’s failure reason shows when the index stopped', async () => {
     const h = harness(
       state({ phase: 'ready', modelBytes: TOTAL }),

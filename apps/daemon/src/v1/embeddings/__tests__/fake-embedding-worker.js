@@ -2,7 +2,7 @@
 // spec starts it under Electron's Node (ELECTRON_RUN_AS_NODE=1), like the real
 // child. Its `getMeta` keys choose what it does: `slow` never answers, `crash`
 // exits, `env` and `pid` report the process, `models` reports what it was sent,
-// anything else is echoed back.
+// anything else is echoed back. Its one work op, `score`, answers no matches.
 let models = { active: null, pending: null };
 
 function reply(id, result) {
@@ -18,6 +18,10 @@ process.on('message', (message) => {
   if (op === 'models') {
     models = { active: message.active, pending: message.pending };
     reply(id, null);
+    return;
+  }
+  if (op === 'score') {
+    reply(id, []);
     return;
   }
   if (op === 'getMeta') {

@@ -12,6 +12,7 @@ import {
   DEFAULT_EMBEDDING_CONFIG,
   type DocumentSource,
   type DocumentSourceProvider,
+  EMBEDDING_SWEEP_INTERVAL_MS,
   type EmbeddingConfig,
   type EmbeddingModelRef,
   type EmbedDocument,
@@ -488,6 +489,106 @@ describe('EmbeddingIndexService', () => {
       expect(process.requests.some((request) => request.op === 'promote')).toBe(
         false,
       );
+    });
+
+    it('turns the index off and on again by backfilling from scratch, so a change made while it was off is indexed', async () => {
+      memory.set('m1', 'one');
+      await index.setConfig(ON);
+      await waitReady();
+      await index.setConfig({ ...ON, enabled: false });
+
+      memory.set('m1', 'one-edited');
+      memory.set('m2', 'two');
+      const before = process.requests.length;
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(process.requests.slice(before)).toContainEqual({
+        op: 'missing',
+        source: 'memory',
+        slot: 'active',
+        items: [
+          { sourceId: 'm1', textHash: 'hash-one-edited' },
+          { sourceId: 'm2', textHash: 'hash-two' },
+        ],
+      });
+      expect(process.stored.memory.get('m1')).toBe('hash-one-edited');
+      expect(process.stored.memory.get('m2')).toBe('hash-two');
+    });
+
+    it('indexes a memory again when it is enqueued while its batch is in flight and its text has changed', async () => {
+      memory.set('m1', 'one');
+      let reachIndex!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        reachIndex = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let batches = 0;
+      process.handlers.index = async (request) => {
+        batches += 1;
+        if (batches === 1) {
+          reachIndex();
+          await gate;
+        }
+        for (const document of request.documents) {
+          process.stored.memory.set(document.sourceId, document.textHash);
+        }
+        return { stored: request.documents.length };
+      };
+
+      await index.setConfig(ON);
+      await reached;
+      memory.set('m1', 'one-edited');
+      index.enqueue('memory', ['m1']);
+      release();
+      await waitReady();
+
+      expect(indexedIds('memory')).toEqual(['m1', 'm1']);
+      expect(process.stored.memory.get('m1')).toBe('hash-one-edited');
+    });
+
+    it('puts a batch back in the queue when the provider fails, so the next kick indexes it', async () => {
+      memory.set('m1', 'one');
+      memory.set('m2', 'two');
+      const documents = vi
+        .spyOn(memory, 'documents')
+        .mockRejectedValueOnce(new Error('database is locked'));
+
+      await index.setConfig(ON);
+      await vi.waitFor(() => expect(documents).toHaveBeenCalledOnce());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(indexedIds('memory')).toEqual([]);
+
+      memory.set('m3', 'three');
+      index.enqueue('memory', ['m3']);
+      await waitReady();
+
+      expect(indexedIds('memory').sort()).toEqual(['m1', 'm2', 'm3']);
+      expect(process.stored.memory.size).toBe(3);
+    });
+
+    it('sweeps the vectors of deleted chats once a day, keeping the runs its chat provider still lists', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      try {
+        chats.add(1, 'run-a');
+        chats.add(2, 'run-b');
+        chats.add(3, 'run-a');
+        index.registerChats(chats);
+        await index.setConfig(ON);
+
+        await vi.advanceTimersByTimeAsync(EMBEDDING_SWEEP_INTERVAL_MS);
+
+        expect(process.requests).toContainEqual({
+          op: 'keepRuns',
+          runIds: ['run-a', 'run-b'],
+        });
+      } finally {
+        index.onApplicationShutdown();
+        vi.useRealTimers();
+      }
     });
   });
 

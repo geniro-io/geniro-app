@@ -70,6 +70,14 @@ async function storeCorpus(store: EmbeddingStore): Promise<void> {
   }
 }
 
+function manyDocuments(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    sourceId: `doc-${i}`,
+    textHash: `hash-${i}`,
+    vectors: [unit(i + 1)],
+  }));
+}
+
 /** The file's bytes on disk after its WAL is folded in, so a size comparison is fair. */
 function checkpointedSize(path: string): number {
   const raw = new DatabaseSync(path);
@@ -442,6 +450,30 @@ describe('EmbeddingStore', () => {
       });
       expect(await store.getMeta('chats:x:fwd')).toBeNull();
       expect(await store.getMeta('schema_version')).toBe('1');
+    });
+
+    it('vacuums nothing when no deletion asked for it', async () => {
+      await store.storeDocuments('memory', MODEL, manyDocuments(300));
+      await store.deleteDocuments(
+        'memory',
+        manyDocuments(300).map((doc) => doc.sourceId),
+      );
+      expect(freelistPages(path)).toBeGreaterThan(0);
+      const freeBefore = freelistPages(path);
+
+      store.vacuumIfDue();
+
+      expect(freelistPages(path)).toBe(freeBefore);
+    });
+
+    it('marks the file due for a vacuum when it clears the index', async () => {
+      await store.storeDocuments('memory', MODEL, manyDocuments(300));
+      await store.clear();
+      expect(freelistPages(path)).toBeGreaterThan(0);
+
+      store.vacuumIfDue();
+
+      expect(freelistPages(path)).toBe(0);
     });
 
     it('stores a meta value, overwrites it and deletes it when set to null', async () => {

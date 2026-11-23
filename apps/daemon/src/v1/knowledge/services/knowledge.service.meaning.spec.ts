@@ -4,12 +4,14 @@ import {
   asEmbeddingIndex,
   FakeEmbeddingIndex,
 } from '../../embeddings/__tests__/fake-embedding-index';
+import { make } from '../../memory/__tests__/memory-db';
 import { ProjectDao } from '../../projects/dao/project.dao';
+import { Project } from '../../projects/entity/project.entity';
 import type { RunPlace } from '../../projects/projects.types';
 import { knowledgeDb } from '../__tests__/knowledge-db';
 import { KnowledgeDocumentDao } from '../dao/knowledge-document.dao';
 import { KnowledgeRevisionDao } from '../dao/knowledge-revision.dao';
-import type { KnowledgeSaveOutcome } from '../knowledge.types';
+import type { KnowledgeActor, KnowledgeSaveOutcome } from '../knowledge.types';
 import { KnowledgeService } from './knowledge.service';
 
 type Db = Awaited<ReturnType<typeof knowledgeDb>>;
@@ -35,6 +37,14 @@ function appliedDocument(outcome: KnowledgeSaveOutcome) {
   }
   return outcome.document;
 }
+
+const AGENT: KnowledgeActor = {
+  kind: 'agent',
+  runId: 'run-1',
+  memberId: 'senior',
+  agentKind: 'claude',
+  model: 'opus',
+};
 
 describe('KnowledgeService search by meaning', () => {
   let db: Db;
@@ -115,5 +125,60 @@ describe('KnowledgeService search by meaning', () => {
       source: 'knowledge',
       sourceIds: [created.id],
     });
+  });
+
+  it('deletes an archived document from search by meaning when it is removed for good', async () => {
+    const release = appliedDocument(await service.create(RELEASE));
+    await service.setStatus(release.id, 'archived');
+
+    expect(await service.remove(release.id)).toBeNull();
+
+    expect(fake.deleted).toEqual([
+      { source: 'knowledge', sourceIds: [release.id] },
+    ]);
+  });
+
+  it('deletes a rejected proposal from search by meaning', async () => {
+    const outcome = await service.save(
+      AGENT,
+      {
+        title: 'Release notes',
+        whenToRead: 'Writing release notes.',
+        body: 'Lead with the user-visible change.',
+        reason: 'Agreed in the release thread.',
+      },
+      NOWHERE,
+    );
+    if (outcome.kind !== 'proposed') {
+      throw new Error(`expected proposed, got ${JSON.stringify(outcome)}`);
+    }
+    const { revisions } = await service.revisions(outcome.document.id);
+    const pending = revisions.find((row) => row.status === 'pending');
+    expect(pending).toBeDefined();
+
+    await service.reject(pending!.id);
+
+    expect(fake.deleted).toEqual([
+      { source: 'knowledge', sourceIds: [outcome.document.id] },
+    ]);
+  });
+
+  it('deletes a removed project’s documents from search by meaning on the delete fate, and only those', async () => {
+    const em = db.em.fork();
+    em.persist(make(Project, { id: 'p1', name: 'Atlas', folder: '/atlas' }));
+    await em.flush();
+    const inProject = appliedDocument(
+      await service.create({ ...RELEASE, place: 'project:p1' }),
+    );
+    const global = appliedDocument(await service.create(DEPLOY));
+
+    await db.em
+      .fork()
+      .transactional((tx) => service.settleRemovedProject('p1', 'delete', tx));
+
+    expect(fake.deleted).toEqual([
+      { source: 'knowledge', sourceIds: [inProject.id] },
+    ]);
+    expect(await service.get(global.id)).not.toBeNull();
   });
 });

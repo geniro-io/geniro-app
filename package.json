@@ -27,6 +27,8 @@
     "test:e2e": "turbo run test:e2e --concurrency=1",
     "test:e2e:local": "turbo run test:e2e:local",
     "generate:api": "pnpm --filter @geniro/ui generate:api",
+    "changelog:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON apps/ui/scripts/changelog-cli.ts check",
+    "changelog:fold": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON apps/ui/scripts/changelog-cli.ts fold",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "./scripts/postinstall.sh",
     "commit": "pnpm cz",

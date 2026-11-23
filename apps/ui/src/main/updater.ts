@@ -27,6 +27,8 @@
  * know about here (a translocated or read-only install → `brew upgrade`).
  */
 
+import { isNewerVersion, parseVersion } from '../shared/version';
+
 /**
  * The release LIST, not `/releases/latest`.
  *
@@ -99,36 +101,6 @@ export type ReleaseLookup =
       published: string | null;
     }
   | { ok: false; error: string };
-
-/** Parse `1.2.3` / `v1.2.3` into a `[major, minor, patch]` tuple, or null. */
-export function parseVersion(value: string): [number, number, number] | null {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim());
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-
-/**
- * Is `candidate` a newer release than `current`?
- *
- * Numeric per component, so `1.10.0` beats `1.9.0` — the comparison a string
- * sort gets backwards. An unparseable version on either side answers `false`:
- * refusing to update is the safe reading of "we cannot tell".
- */
-export function isNewerVersion(candidate: string, current: string): boolean {
-  const latest = parseVersion(candidate);
-  const running = parseVersion(current);
-  if (!latest || !running) {
-    return false;
-  }
-  const [lMaj, lMin, lPatch] = latest;
-  const [cMaj, cMin, cPatch] = running;
-  if (lMaj !== cMaj) {
-    return lMaj > cMaj;
-  }
-  if (lMin !== cMin) {
-    return lMin > cMin;
-  }
-  return lPatch > cPatch;
-}
 
 /** One entry of the GitHub release feed's `assets` array, as far as we read it. */
 function readAsset(value: unknown): ReleaseAsset | null {

@@ -108,6 +108,19 @@ describe('readSettings', () => {
     expect(settings.onboardingComplete).toBe(true);
   });
 
+  it('a recorded changelog version survives a read, and a malformed one costs only that key', () => {
+    writeRaw({ lastSeenChangelogVersion: '1.317.0' });
+    expect(readSettings().lastSeenChangelogVersion).toBe('1.317.0');
+
+    writeRaw({ lastSeenChangelogVersion: '1.0.1234567890' });
+    expect(readSettings().lastSeenChangelogVersion).toBeNull();
+
+    writeRaw({ lastSeenChangelogVersion: 'latest', onboardingComplete: true });
+    const settings = readSettings();
+    expect(settings.lastSeenChangelogVersion).toBeNull();
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it('a stored page size survives a read', () => {
     writeRaw({ historyPageSize: 250 });
 

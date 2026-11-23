@@ -37,10 +37,13 @@ import type {
 } from '../teams.types';
 import {
   conversationStartMember,
+  poolAttemptOrder,
   poolAttempts,
   poolMemberNode,
   poolSize,
   preferredAttemptOrder,
+  preferredMemberSkipNote,
+  standingsForRequest,
 } from '../utils/agent-pool';
 import { readCallFolder } from '../utils/call-folder';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
@@ -1812,7 +1815,10 @@ export class CallBroker implements OnModuleInit {
         if (selected.plan !== null) {
           threadMember = member;
         }
-        const envelope = toEnvelope(callId, callee.id, outcome, call);
+        const envelope = toEnvelope(callId, callee.id, outcome, call, {
+          member: selected.plan?.preferred ?? null,
+          skipNote: selected.preferredSkipNote,
+        });
         if (
           envelope.status === 'error' &&
           outcome.failureClass === 'rate_limited' &&
@@ -4427,7 +4433,11 @@ export class CallBroker implements OnModuleInit {
     holdsWork: () => boolean,
   ):
     | { refused: CallEnvelope }
-    | { node: TeamMember; plan: CalleePoolPlan | null } {
+    | {
+        node: TeamMember;
+        plan: CalleePoolPlan | null;
+        preferredSkipNote: string | null;
+      } {
     const size = poolSize(callee);
     const refuse = (error: string): { refused: CallEnvelope } => ({
       refused: { status: 'error', error },
@@ -4450,27 +4460,48 @@ export class CallBroker implements OnModuleInit {
       );
     }
     if (size === 1) {
-      return { node: callee, plan: null };
+      return { node: callee, plan: null, preferredSkipNote: null };
     }
     const pool = this.poolCooldowns.order(callee, site);
     const wanted =
       preferred !== null && poolMemberNode(callee, preferred) !== null
         ? preferred
         : null;
-    const order = preferredAttemptOrder(pool.order, pool.standings, wanted);
+    const standings = standingsForRequest(
+      pool.standings,
+      requested,
+      requested !== null &&
+        this.poolCooldowns.spend(poolMemberNode(callee, requested)!, site)
+          ?.signedOut === true,
+    );
+    const order = preferredAttemptOrder(
+      poolAttemptOrder(standings),
+      standings,
+      wanted,
+    );
+    const busy = threadMember !== null && holdsWork();
     const first =
       threadMember === null
         ? order[0]!
         : conversationStartMember({
-            standings: pool.standings,
+            standings,
             proven: pool.proven,
             order,
             held: threadMember,
             hasSession: true,
-            holdsWork: holdsWork(),
+            holdsWork: busy,
             preferred: wanted,
+            requested,
           });
     return {
+      preferredSkipNote:
+        wanted === null || first === wanted
+          ? null
+          : preferredMemberSkipNote(
+              wanted,
+              this.poolCooldowns.spend(poolMemberNode(callee, wanted)!, site),
+              busy,
+            ),
       node: poolMemberNode(callee, first)!,
       plan: {
         member: first,
@@ -5742,15 +5773,34 @@ function questionEnvelope(
  * What a pooled call's envelope adds: which member answered, and which were
  * passed over and why — so a caller can name a member itself next time.
  */
-function poolEnvelopeFields(outcome: CalleeTurnOutcome): {
+function poolEnvelopeFields(
+  outcome: CalleeTurnOutcome,
+  preferred: PreferredMember,
+): {
   member?: number;
   pool_skipped?: PoolSkipWire[];
+  preferred_member?: number;
+  preferred_member_note?: string;
 } {
   if (outcome.member === undefined) {
     return {};
   }
+  const passedOver =
+    preferred.member !== null && preferred.member !== outcome.member;
+  const triedPreferred =
+    outcome.poolSkipped?.some((skip) => skip.member === preferred.member) ===
+    true;
   return {
     member: outcome.member,
+    ...(passedOver
+      ? {
+          preferred_member: preferred.member!,
+          preferred_member_note:
+            triedPreferred || preferred.skipNote === null
+              ? `member ${preferred.member} was tried and failed — see pool_skipped.`
+              : preferred.skipNote,
+        }
+      : {}),
     ...(outcome.poolSkipped !== undefined && outcome.poolSkipped.length > 0
       ? {
           pool_skipped: outcome.poolSkipped.map((skip) => ({
@@ -5809,11 +5859,18 @@ function noteOnCalls<T>(
 /** What a call published while it ran, as its envelope names it. */
 type CallPublished = Pick<ActiveCall, 'published' | 'publishedActions'>;
 
+/** The member a caller asked for, and why the call did not start on it. */
+interface PreferredMember {
+  member: number | null;
+  skipNote: string | null;
+}
+
 function toEnvelope(
   callId: string,
   calleeId: string,
   outcome: CalleeTurnOutcome,
   { published, publishedActions }: CallPublished,
+  preferred: PreferredMember,
 ): CallEnvelope {
   if (outcome.status === 'completed') {
     const stillOut = outcome.delegatesStillOut ?? 0;
@@ -5856,7 +5913,7 @@ function toEnvelope(
     const result: CallSettledResult = {
       call_id: callId,
       agent: calleeId,
-      ...poolEnvelopeFields(outcome),
+      ...poolEnvelopeFields(outcome, preferred),
       text: outcome.finalText ?? '',
       ...(stillOut > 0 ? { delegates_still_running: stillOut } : {}),
       ...(callsOut > 0 ? { calls_still_running: callsOut } : {}),
@@ -5879,7 +5936,7 @@ function toEnvelope(
   return {
     status: 'error',
     error: calleeFailedEnvelopeError(outcome, callId),
-    ...poolEnvelopeFields(outcome),
+    ...poolEnvelopeFields(outcome, preferred),
   };
 }
 

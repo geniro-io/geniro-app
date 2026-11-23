@@ -7,6 +7,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   CalleePoolAttempt,
   CalleeTurnOutcome,
+  PoolSpend,
   PoolStanding,
   TeamAgentPoolMember,
   TeamMember,
@@ -192,7 +193,9 @@ function ranksBefore(
  * the member it is on still runs work of its own, which leaving would stop. A
  * member spent on an ordinary failure keeps the conversation it has.
  * "Earlier" is pool order, with the member a caller asked for (`preferred`,
- * whose `order` is {@link preferredAttemptOrder}'s) ahead of every other.
+ * whose `order` is {@link preferredAttemptOrder}'s) ahead of every other. A
+ * member named for this very turn (`requested`) needs no proof, only to be
+ * unspent: the caller asking for it is the attempt that proves it.
  */
 export function conversationStartMember(input: {
   standings: readonly (PoolStanding | null)[];
@@ -202,6 +205,7 @@ export function conversationStartMember(input: {
   hasSession: boolean;
   holdsWork: boolean;
   preferred?: number | null;
+  requested?: number | null;
 }): number {
   const { standings, proven, order, held, hasSession, holdsWork } = input;
   const first = order[0]!;
@@ -211,11 +215,52 @@ export function conversationStartMember(input: {
   if (standings[held - 1] === 'limit') {
     return standings[first - 1] === 'limit' ? held : first;
   }
+  const provenOrAsked =
+    proven[first - 1] === true ||
+    (first === input.requested && standings[first - 1] === null);
   return ranksBefore(first, held, input.preferred ?? null) &&
-    proven[first - 1] === true &&
+    provenOrAsked &&
     !holdsWork
     ? first
     : held;
+}
+
+/**
+ * The standings a call reads when its caller names `requested`: a member spent
+ * only for being signed out counts as unspent for it, since a sign-in outside
+ * geniro is invisible and the call is the attempt that proves it.
+ */
+export function standingsForRequest(
+  standings: readonly (PoolStanding | null)[],
+  requested: number | null,
+  requestedSignedOut: boolean,
+): (PoolStanding | null)[] {
+  return standings.map((standing, i) =>
+    requestedSignedOut && i + 1 === requested ? null : standing,
+  );
+}
+
+/**
+ * Why the member a caller asked for did not run its call, when it was never
+ * tried — said in the caller's envelope beside the member that did.
+ */
+export function preferredMemberSkipNote(
+  preferred: number,
+  spend: PoolSpend | null,
+  busy: boolean,
+): string {
+  if (spend !== null) {
+    const until = new Date(spend.until).toISOString();
+    if (spend.signedOut) {
+      return `member ${preferred} is signed out — name member: ${preferred} on the call to try it now, or sign its profile in again in Geniro; otherwise it is tried again from ${until}.`;
+    }
+    return spend.standing === 'limit'
+      ? `member ${preferred} hit a usage limit; it is tried again from ${until}.`
+      : `member ${preferred} failed before doing any work in this run; it is tried again from ${until}.`;
+  }
+  return busy
+    ? `the conversation's process is still running work of its own; it moves to member ${preferred} once that work ends.`
+    : `member ${preferred} is not yet known to work again — name member: ${preferred} on the call to try it now.`;
 }
 
 /**

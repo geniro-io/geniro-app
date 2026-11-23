@@ -1639,6 +1639,13 @@ export interface PoolSkipWire {
  */
 export type PoolStanding = 'limit' | 'unavailable';
 
+/** Why a pool member is spent, and until when (epoch ms). */
+export interface PoolSpend {
+  standing: PoolStanding;
+  until: number;
+  signedOut: boolean;
+}
+
 /** A pool member a call was handed past. */
 export interface PoolSkip {
   member: number;
@@ -1677,6 +1684,10 @@ export interface CallSettledResult {
   /** The callee pool member that ran it; absent without a pool. */
   member?: number;
   pool_skipped?: PoolSkipWire[];
+  /** The member the caller asked for, when another one ran the call. */
+  preferred_member?: number;
+  /** Why the member asked for did not run it. */
+  preferred_member_note?: string;
   text: string;
   delegates_still_running?: number;
   calls_still_running?: number;
@@ -1726,6 +1737,10 @@ export type CallEnvelope =
       member?: number;
       /** Pool members the call was handed past before failing. */
       pool_skipped?: PoolSkipWire[];
+      /** The member the caller asked for, when another one ran the call. */
+      preferred_member?: number;
+      /** Why the member asked for did not run it. */
+      preferred_member_note?: string;
     }
   | {
       status: 'question';

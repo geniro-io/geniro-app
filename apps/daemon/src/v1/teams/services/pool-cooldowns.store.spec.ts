@@ -4,7 +4,9 @@ import { join } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
+import { AccountSignIns } from '../../agents/services/account-sign-ins.service';
 import {
+  daemonPoolCooldowns,
   POOL_COOLDOWN_FALLBACK_MS,
   type PoolAttemptResult,
   PoolCooldowns,
@@ -249,5 +251,107 @@ describe('PoolCooldowns', () => {
     expect(cooldowns.standing({ ...OPUS, configDir: real }, FOLDER)).toBe(
       'limit',
     );
+  });
+
+  describe('a sign-in geniro ran', () => {
+    const PROFILE = '/profiles/senior';
+    const SENIOR = { ...OPUS, configDir: PROFILE };
+
+    it('reopens a member spent for being signed out on that profile, as proven', () => {
+      const { cooldowns } = clocked(0);
+      cooldowns.record(
+        SENIOR,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBe('limit');
+
+      cooldowns.signedIn('claude', PROFILE);
+
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBeNull();
+      expect(cooldowns.proven(SENIOR, FOLDER)).toBe(true);
+    });
+
+    it('reaches the daemon’s record through the account sign-ins it listens to', () => {
+      const signIns = new AccountSignIns();
+      const cooldowns = daemonPoolCooldowns({ forRun: () => null }, signIns);
+      cooldowns.record(
+        SENIOR,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+
+      signIns.signedIn('claude', PROFILE);
+
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBeNull();
+    });
+
+    it('leaves a usage limit, another profile and another CLI spent', () => {
+      const { cooldowns } = clocked(0);
+      const other = { ...OPUS, configDir: '/profiles/other' };
+      const codex = { agent: 'codex' as const, configDir: PROFILE };
+      cooldowns.record(SENIOR, FOLDER, failed(), true);
+      cooldowns.record(
+        other,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+      cooldowns.record(
+        codex,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+
+      cooldowns.signedIn('claude', PROFILE);
+
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBe('limit');
+      expect(cooldowns.standing(other, FOLDER)).toBe('limit');
+      expect(cooldowns.standing(codex, FOLDER)).toBe('limit');
+    });
+
+    it('clears the doubt a lapsed guess left on the member it reopens', () => {
+      const { cooldowns, advance } = clocked(0);
+      cooldowns.record(SENIOR, FOLDER, failed({ failureClass: null }), true);
+      advance(POOL_COOLDOWN_FALLBACK_MS + 1);
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBeNull();
+      cooldowns.record(
+        SENIOR,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+
+      cooldowns.signedIn('claude', PROFILE);
+
+      expect(cooldowns.proven(SENIOR, FOLDER)).toBe(true);
+    });
+  });
+
+  it('says why a member is spent and until when', () => {
+    const { cooldowns } = clocked(0);
+    cooldowns.record(
+      OPUS,
+      FOLDER,
+      failed({ failureClass: 'auth_expired' }),
+      true,
+    );
+    const sonnet = { ...OPUS, model: 'sonnet' };
+    cooldowns.record(sonnet, FOLDER, failed({ failureClass: null }), true);
+
+    expect(cooldowns.spend(OPUS, FOLDER)).toEqual({
+      standing: 'limit',
+      until: POOL_COOLDOWN_FALLBACK_MS,
+      signedOut: true,
+    });
+    expect(cooldowns.spend(sonnet, FOLDER)).toEqual({
+      standing: 'unavailable',
+      until: POOL_COOLDOWN_FALLBACK_MS,
+      signedOut: false,
+    });
+    expect(cooldowns.spend({ ...OPUS, model: 'haiku' }, FOLDER)).toBeNull();
   });
 });

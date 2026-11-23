@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import { AccountSignIns } from '../../agents/services/account-sign-ins.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -78,7 +79,7 @@ interface LoginRun {
    * reaches the config and not the processes already holding it.
    */
   cwd: string | null;
-  /** The profile a server sign-in ran under — where its re-checks run too. */
+  /** The profile the sign-in ran under — where a server's re-checks run too. */
   configDir: string | null;
 }
 
@@ -116,6 +117,7 @@ export class CliAuthService {
     private readonly sessions: AgentSessionRegistry,
     private readonly caches: CacheResetService,
     private readonly mcp: AgentMcpService,
+    private readonly signIns: AccountSignIns,
   ) {}
 
   /**
@@ -227,6 +229,7 @@ export class CliAuthService {
       );
     }
     const id = randomUUID();
+    const configDir = this.resolveConfigDir(input.configDir);
     const run: LoginRun = {
       session: {
         id,
@@ -241,7 +244,7 @@ export class CliAuthService {
       evictTimer: null,
       server: null,
       cwd: null,
-      configDir: null,
+      configDir,
     };
     this.runs.set(id, run);
 
@@ -249,7 +252,7 @@ export class CliAuthService {
     // what carries its exit into the session state.
     void adapter
       .runLogin({
-        configDir: this.resolveConfigDir(input.configDir),
+        configDir,
         timeoutMs: LOGIN_TIMEOUT_MS,
         onSpawn: (child, spawnInfo) => {
           run.child = child;
@@ -540,6 +543,7 @@ export class CliAuthService {
     };
     if (completed && run.server === null) {
       this.accountChanged(run.session.agent, 'signed in to a new account');
+      this.signIns.signedIn(run.session.agent, run.configDir);
     }
     if (!completed) {
       // Logged without the output, for the reason `lastProgressLine` exists: a

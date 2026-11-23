@@ -40,6 +40,7 @@ import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
 import { ThreadMessageDao } from './dao/thread-message.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
+import { AccountSignIns } from './services/account-sign-ins.service';
 import { ActionBroker } from './services/action.broker';
 import { ActionCommandRegistry } from './services/action-command.registry';
 import { ActionCommandService } from './services/action-command.service';
@@ -340,6 +341,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     PlanBroker,
     NotifyBroker,
     CacheResetService,
+    AccountSignIns,
     AgentAdapterRegistry,
     AgentVersionService,
     ChatExportService,
@@ -778,6 +780,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // reset service rather than the store alone, because every in-memory mirror
     // of the store is consulted before it (`CacheResetService.forgetAgent`).
     CacheResetService,
+    AccountSignIns,
     // Exported for the team executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,

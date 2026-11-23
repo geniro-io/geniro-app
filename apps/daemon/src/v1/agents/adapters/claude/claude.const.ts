@@ -1570,6 +1570,8 @@ export const CLAUDE_AUTH_EXPIRED_MARKERS: readonly string[] = [
    * CLI's own label for the model endpoint and nothing else.
    */
   'Failed to authenticate. API Error',
+  // Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again
+  'Run `claude auth login`',
 ];
 
 /** Separates `Failed to connect` from the reason (U+2014 EM DASH). */

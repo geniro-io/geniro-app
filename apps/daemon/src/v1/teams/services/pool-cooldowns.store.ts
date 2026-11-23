@@ -1,7 +1,10 @@
 import type { AgentFailureClass } from '../../agents/adapters/adapter.types';
+import type { AccountSignIns } from '../../agents/services/account-sign-ins.service';
+import type { ConfigDirPinService } from '../../agents/services/config-dir-pin.service';
 import { effectiveAccountKey } from '../../agents/utils/plan-limits-ledger';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
+  PoolSpend,
   PoolStanding,
   TeamAgentPoolMember,
   TeamMember,
@@ -89,6 +92,47 @@ export class PoolCooldowns {
     return this.liveFailure(siteKey(site, account)) ? 'unavailable' : null;
   }
 
+  /** Why `member` is spent now, as seen from `site`, and until when; null when it is not. */
+  spend(member: PoolCooldownMember, site: PoolSite): PoolSpend | null {
+    const account = this.accountOf(member, site.cwd);
+    if (this.liveLimit(account)) {
+      const record = this.limits.get(account)!;
+      return {
+        standing: 'limit',
+        until: record.until,
+        signedOut: record.signedOut,
+      };
+    }
+    const key = siteKey(site, account);
+    return this.liveFailure(key)
+      ? {
+          standing: 'unavailable',
+          until: this.failures.get(key)!,
+          signedOut: false,
+        }
+      : null;
+  }
+
+  /**
+   * A sign-in geniro ran for `agent` under `configDir` landed: every account it
+   * signed in that was spent only for being signed out works again.
+   */
+  signedIn(agent: AgentKind, configDir: string | null): void {
+    const profile = effectiveAccountKey(agent, configDir, null, null);
+    for (const [account, record] of this.limits) {
+      if (!record.signedOut || record.profile !== profile) {
+        continue;
+      }
+      this.limits.delete(account);
+      this.reopened.add(account);
+      for (const key of this.doubted) {
+        if (key.endsWith(`\u0000${account}`)) {
+          this.doubted.delete(key);
+        }
+      }
+    }
+  }
+
   /** Whether `member` is known to work again, as seen from `site`. */
   proven(member: PoolCooldownMember, site: PoolSite): boolean {
     const account = this.accountOf(member, site.cwd);
@@ -154,12 +198,13 @@ export class PoolCooldowns {
         result.resetsAt !== null
           ? resetInstantFrom(result.resetsAt, new Date(now))
           : null;
-      this.limits.set(
-        account,
-        reopens !== null && reopens > now
+      this.limits.set(account, {
+        ...(reopens !== null && reopens > now
           ? { until: reopens, exact: true }
-          : { until: now + POOL_COOLDOWN_FALLBACK_MS, exact: false },
-      );
+          : { until: now + POOL_COOLDOWN_FALLBACK_MS, exact: false }),
+        profile: this.profileOf(member, site.cwd),
+        signedOut: result.failureClass === 'auth_expired',
+      });
       this.reopened.delete(account);
     } else if (handedPast) {
       this.failures.set(
@@ -199,19 +244,50 @@ export class PoolCooldowns {
   }
 
   private accountOf(member: PoolCooldownMember, cwd: string | null): string {
+    return [this.profileOf(member, cwd), member.model ?? ''].join('\u0000');
+  }
+
+  private profileOf(
+    member: PoolCooldownMember,
+    cwd: string | null,
+  ): string | null {
     const pinned =
       cwd === null ? null : this.pinnedConfigDir(member.agent, cwd);
-    return [
-      effectiveAccountKey(member.agent, member.configDir ?? null, pinned, cwd),
-      member.model ?? '',
-    ].join('\u0000');
+    return effectiveAccountKey(
+      member.agent,
+      member.configDir ?? null,
+      pinned,
+      cwd,
+    );
   }
 }
 
-/** A `limit` record: until when, and whether the CLI named that instant. */
+/**
+ * The daemon's one record: reading each run folder's account pin, and told of
+ * every account sign-in geniro runs.
+ */
+export function daemonPoolCooldowns(
+  pins: Pick<ConfigDirPinService, 'forRun'>,
+  signIns: Pick<AccountSignIns, 'onSignedIn'>,
+): PoolCooldowns {
+  const cooldowns = new PoolCooldowns(
+    (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
+  );
+  signIns.onSignedIn((agent, configDir) =>
+    cooldowns.signedIn(agent, configDir),
+  );
+  return cooldowns;
+}
+
+/**
+ * A `limit` record: until when, whether the CLI named that instant, the login
+ * it belongs to, and whether that login was signed out rather than spent.
+ */
 interface LimitRecord {
   until: number;
   exact: boolean;
+  profile: string | null;
+  signedOut: boolean;
 }
 
 /** Where an attempt ran: the run's folder (for its account pin) and the team member. */

@@ -936,7 +936,7 @@ export class KnowledgeService implements OnModuleInit {
       const ids = rows.map((row) => row.id);
       await this.revisionRows.deleteForDocuments(ids, tx);
       await this.documents.deleteIds(ids, tx);
-      this.embeddings?.enqueue('knowledge', ids);
+      await this.embeddings?.deleteDocuments('knowledge', ids);
       return { moved: 0, deleted: rows.length, renamed: [] };
     }
     const taken = await this.documents.handlesIn(GLOBAL_PLACE_KEY, tx);
@@ -1223,6 +1223,7 @@ export class KnowledgeService implements OnModuleInit {
       await this.revisionRows.deleteForDocuments([id], tx);
       await this.documents.hardDeleteById(id, tx);
     });
+    await this.embeddings?.deleteDocuments('knowledge', [id]);
   }
 
   /** Word matches fused with meaning matches when search by meaning answers, else the word matches alone. */
@@ -1236,12 +1237,14 @@ export class KnowledgeService implements OnModuleInit {
     const meaning =
       every === null || !this.embeddings?.enabled
         ? null
-        : await this.embeddings.scoreDocuments(
-            'knowledge',
-            text,
-            ids,
-            EMBEDDING_MEANING_CANDIDATES,
-          );
+        : await this.embeddings
+            .scoreDocuments(
+              'knowledge',
+              text,
+              ids,
+              EMBEDDING_MEANING_CANDIDATES,
+            )
+            .catch(() => null);
     if (every === null || meaning === null) {
       return this.wordIds(text, ids, em);
     }

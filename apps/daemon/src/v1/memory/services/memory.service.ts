@@ -781,12 +781,9 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
       places: { visibleTo: place },
     };
     const visible = await this.memories.idsInScope(scope, em);
-    const meaning = await this.embeddings.scoreDocuments(
-      'memory',
-      query,
-      visible,
-      EMBEDDING_MEANING_CANDIDATES,
-    );
+    const meaning = await this.embeddings
+      .scoreDocuments('memory', query, visible, EMBEDDING_MEANING_CANDIDATES)
+      .catch(() => null);
     if (meaning === null) {
       return null;
     }

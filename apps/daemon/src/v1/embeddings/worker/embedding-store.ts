@@ -581,7 +581,7 @@ export class EmbeddingStore {
       .selectFrom('chat_chunks')
       .select((eb) => eb.fn.countAll<number>().as('n'))
       .executeTakeFirst();
-    if (since > EMBEDDING_VACUUM_SHARE * (Number(left?.n ?? 0) + since)) {
+    if (since >= EMBEDDING_VACUUM_SHARE * (Number(left?.n ?? 0) + since)) {
       await this.setMeta(DELETED_SINCE_VACUUM, null);
       this.vacuum();
       return;

@@ -98,11 +98,13 @@ export class GlobalChatSearchService {
       EMBEDDING_CHAT_KNN_PER_HIT * options.limit,
     );
     const scoped = Boolean(options.runId) || Boolean(options.cwd);
-    const meaning = await this.embeddings.searchChats(
-      options.query,
-      k,
-      scoped ? await this.index.reachableRunIds(options) : null,
-    );
+    const meaning = await this.embeddings
+      .searchChats(
+        options.query,
+        k,
+        scoped ? await this.index.reachableRunIds(options) : null,
+      )
+      .catch(() => null);
     if (meaning === null) {
       return null;
     }

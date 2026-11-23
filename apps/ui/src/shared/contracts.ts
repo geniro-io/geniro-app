@@ -708,6 +708,12 @@ export interface Settings {
    */
   historyPageSize: HistoryPageSize;
   /**
+   * The release whose "What's new" this profile last saw, or `null` before the
+   * first launch that recorded one. Written by the renderer when it closes the
+   * dialog, or at once when there is nothing to show (`planWhatsNew`).
+   */
+  lastSeenChangelogVersion: string | null;
+  /**
    * How long a run's CLI process is kept after its last turn, in minutes,
    * the same for a chat and a card's run. Main pushes it to every daemon
    * (`kept-session-config-push.ts`); the daemon holds it in memory only.
@@ -952,6 +958,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memoryAutoForgetAfterDays: null,
   memoryRemoveNotUseful: true,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
+  lastSeenChangelogVersion: null,
   keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   keptSessionLimit: null,
   preventSleepWhileWorking: true,

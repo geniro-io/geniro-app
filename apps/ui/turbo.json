@@ -6,11 +6,25 @@
   // The daemon files below are read from disk by UI specs, so they are
   // inputs of every UI test task.
   "tasks": {
-    "check-types": { "dependsOn": [] },
+    "build": {
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "scripts/changelog.ts",
+        "$TURBO_ROOT$/CHANGELOG.md",
+        "$TURBO_ROOT$/changelog/**"
+      ]
+    },
+    "check-types": {
+      "dependsOn": [],
+      "inputs": ["$TURBO_EXTENDS$", "scripts/**"]
+    },
     "test": {
       "dependsOn": [],
       "inputs": [
         "$TURBO_EXTENDS$",
+        "scripts/**",
+        "$TURBO_ROOT$/CHANGELOG.md",
+        "$TURBO_ROOT$/changelog/**",
         "$TURBO_ROOT$/apps/daemon/src/utils/handshake.ts",
         "$TURBO_ROOT$/apps/daemon/src/utils/stop-cause.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/chat.types.ts",
@@ -24,6 +38,9 @@
       "dependsOn": [],
       "inputs": [
         "$TURBO_EXTENDS$",
+        "scripts/**",
+        "$TURBO_ROOT$/CHANGELOG.md",
+        "$TURBO_ROOT$/changelog/**",
         "$TURBO_ROOT$/apps/daemon/src/utils/handshake.ts",
         "$TURBO_ROOT$/apps/daemon/src/utils/stop-cause.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/chat.types.ts",
@@ -37,6 +54,9 @@
       "dependsOn": [],
       "inputs": [
         "$TURBO_EXTENDS$",
+        "scripts/**",
+        "$TURBO_ROOT$/CHANGELOG.md",
+        "$TURBO_ROOT$/changelog/**",
         "$TURBO_ROOT$/apps/daemon/src/utils/handshake.ts",
         "$TURBO_ROOT$/apps/daemon/src/utils/stop-cause.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/chat.types.ts",

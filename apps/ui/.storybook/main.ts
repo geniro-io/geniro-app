@@ -1,5 +1,9 @@
+import { resolve } from 'node:path';
+
 import type { StorybookConfig } from '@storybook/react-vite';
 import tailwindcss from '@tailwindcss/vite';
+
+import { changelogPlugin } from '../scripts/changelog.ts';
 
 /**
  * The component catalog, dev-only.
@@ -26,7 +30,11 @@ const config: StorybookConfig = {
     // without it every token resolves to nothing and the catalog renders
     // unstyled. The renderer declares no path aliases, so there are none to
     // restate here.
-    viteConfig.plugins = [...(viteConfig.plugins ?? []), tailwindcss()];
+    viteConfig.plugins = [
+      ...(viteConfig.plugins ?? []),
+      tailwindcss(),
+      changelogPlugin(resolve(import.meta.dirname, '..', '..', '..')),
+    ];
     return viteConfig;
   },
 };

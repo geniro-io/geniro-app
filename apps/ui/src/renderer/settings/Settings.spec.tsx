@@ -1691,6 +1691,7 @@ describe('Settings — sections', () => {
       'Knowledge',
       'System analysis',
       'Storage',
+      'What’s new',
     ]);
   });
 
@@ -1702,6 +1703,16 @@ describe('Settings — sections', () => {
     expect(
       container.querySelector('#settings-knowledge-agent-writes'),
     ).not.toBeNull();
+  });
+
+  it('opens What’s new on the changelog compiled into the build', async () => {
+    await mount('changelog');
+    expect(
+      container.querySelector('input[aria-label="Search the changelog"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll('[data-slot="changelog-release"]').length,
+    ).toBeGreaterThan(0);
   });
 
   it('keeps run configurations off Settings — they belong to their projects', async () => {
@@ -2332,7 +2343,7 @@ describe('Settings explains itself', () => {
         'nav[aria-label="Settings sections"] button',
       ),
     ];
-    expect(items).toHaveLength(8);
+    expect(items).toHaveLength(9);
     for (const item of items) {
       // The section's own icon, beside the phone-only chevron.
       expect(item.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(2);

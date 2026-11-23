@@ -519,6 +519,11 @@ export const settingsPatchSchema = z.strictObject({
   // ENUMERATED, like `theme`: a size outside the list is one the screen never
   // offered, and a file written by another build falls back to the default.
   historyPageSize: z.literal(HISTORY_PAGE_SIZES).optional(),
+  lastSeenChangelogVersion: z
+    .string()
+    .regex(/^\d{1,9}\.\d{1,9}\.\d{1,9}$/)
+    .nullable()
+    .optional(),
   // Bounded to exactly what the daemon's `KeptSessionConfigSchema` accepts, so
   // a value this side lets through is never one the push is refused for.
   keptSessionIdleMinutes: z

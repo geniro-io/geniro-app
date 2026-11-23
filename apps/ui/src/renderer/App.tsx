@@ -3,6 +3,9 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle, DaemonMigration } from '../shared/contracts';
 import { AgentIdentityContext, agentShortName } from './agent-identity';
+import { CHANGELOG } from './changelog/changelog-data';
+import { useWhatsNew } from './changelog/use-whats-new';
+import { WhatsNewDialog } from './changelog/whats-new-dialog';
 import { Chats } from './chats/Chats';
 import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
@@ -325,6 +328,7 @@ export function App(): React.JSX.Element {
   /** The open thread's folder, reported up by `Chats` — where a new terminal starts. */
   const [chatFolder, setChatFolder] = useState<string | null>(null);
   const update = useUpdateState();
+  const whatsNew = useWhatsNew(CHANGELOG, update.state?.currentVersion ?? null);
   const clientRef = useRef<DaemonClient | null>(null);
   // One set of clients per launch handle. Built here rather than inside the
   // panel so a toggle does not construct five API objects, and so the UI error
@@ -1139,6 +1143,18 @@ export function App(): React.JSX.Element {
               }}
             />
           </div>
+          <WhatsNewDialog
+            open={whatsNew.releases.length > 0}
+            releases={whatsNew.releases}
+            current={update.state?.currentVersion ?? ''}
+            onClose={whatsNew.dismiss}
+            onOpenFullChangelog={() => {
+              whatsNew.dismiss();
+              setSettingsSection('changelog');
+              setSettingsSectionOpen(true);
+              setView('settings');
+            }}
+          />
           {guideOpen ? (
             <div className="fixed inset-0 z-50 bg-background">
               <WindowDragStrip />

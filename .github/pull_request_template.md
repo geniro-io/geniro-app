@@ -37,5 +37,6 @@ Closes #
 
 - [ ] `pnpm full-check` passes locally
 - [ ] Tests cover the new or changed behaviour
+- [ ] A changelog fragment is added in `changelog/unreleased/`
 - [ ] I've read the whole diff and can explain every change in it
 - [ ] Docs (`README.md`, `docs/`, `AGENTS.md`) are updated if behaviour changed

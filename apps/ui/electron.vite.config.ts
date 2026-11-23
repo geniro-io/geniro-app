@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 
+import { changelogPlugin } from './scripts/changelog.ts';
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
@@ -23,7 +25,11 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
-    plugins: [tailwindcss(), react()],
+    plugins: [
+      tailwindcss(),
+      react(),
+      changelogPlugin(resolve(__dirname, '..', '..')),
+    ],
     server: {
       // In DEVELOPMENT the LAN gateway has no `out/renderer` to serve from,
       // so it proxies the page to this dev server — and vite runs a host

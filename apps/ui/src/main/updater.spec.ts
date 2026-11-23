@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchLatestRelease, isNewerVersion, parseVersion } from './updater';
+import { fetchLatestRelease } from './updater';
 
 function feedResponse(
   body: unknown,
@@ -44,30 +44,6 @@ function mockFetch(impl: () => Promise<Response> | Response): void {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe('isNewerVersion', () => {
-  it('compares numerically, not lexically (1.10.0 > 1.9.0)', () => {
-    expect(isNewerVersion('1.10.0', '1.9.0')).toBe(true);
-    expect(isNewerVersion('1.9.0', '1.10.0')).toBe(false);
-  });
-
-  it('never offers a downgrade or a re-install of the running version', () => {
-    expect(isNewerVersion('0.9.0', '1.0.0')).toBe(false);
-    expect(isNewerVersion('1.0.0', '1.0.0')).toBe(false);
-  });
-
-  it('refuses to update when either version is unparseable', () => {
-    // "We cannot tell" must read as "do not replace the app", not as an
-    // update: this is the only guard between a malformed tag and a swap.
-    expect(isNewerVersion('not-a-version', '1.0.0')).toBe(false);
-    expect(isNewerVersion('2.0.0', 'nightly')).toBe(false);
-  });
-
-  it('tolerates the tag feed’s leading v', () => {
-    expect(parseVersion('v1.2.3')).toEqual([1, 2, 3]);
-    expect(isNewerVersion('v1.2.3', '1.2.2')).toBe(true);
-  });
 });
 
 describe('fetchLatestRelease', () => {

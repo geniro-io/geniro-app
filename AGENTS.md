@@ -31,7 +31,8 @@ Agents may file issues and open pull requests. The human version is [`CONTRIBUTI
 3. Every PR body follows `.github/pull_request_template.md`. `gh pr create --body` replaces the template, so write its headings yourself, in order: `## Why` (with `Closes #N` when there is an issue), `## What changed`, `## How it was verified`, `## Not in this PR` ("nothing" when empty), `## AI assistance` (name the agent), `## Checklist` (tick only what was actually done).
 4. Before pushing, `pnpm full-check` passes and any fixes its `lint:fix` made are committed (CI runs `lint` without fixing). A changed daemon route or wire schema also needs `pnpm generate:api` with the regenerated client committed.
 5. A change that adds a user-facing feature or changes how one behaves also updates `README.md` in the same PR: the matching section of *What's inside* (or a new one), its wording, and any figure or screenshot it cites. A removed feature leaves the README with it. Internal refactors, fixes that change nothing a user sees, and docs-only changes need no README edit.
-6. One concern per PR; open it with `--draft` while unfinished.
+6. Every PR adds one changelog fragment, `changelog/unreleased/<short-slug>.md`: what changed, in a user's words, under `### New`, `### Improved`, `### Fixed` or `### Internal` (nothing user-visible). Never edit `CHANGELOG.md` or write a version in a feature PR; the release that carries the fragment is read from git at build time. Format and rules: `.claude/rules/changelog.md`.
+7. One concern per PR; open it with `--draft` while unfinished.
 
 The issue-heading and PR-heading lists above are twins of the forms and the template: change one, change the other in the same commit.
 
@@ -145,6 +146,13 @@ pnpm --filter @geniro/ui build:mac       # DMG + zip into release/dist/
 ```
 
 - `build:mac` signs with the certificate named by `GENIRO_SIGN_IDENTITY`, ad-hoc without it. An ad-hoc build looks like a new app to macOS and loses every privacy grant, so the release workflow fails rather than ship one. Details: `.claude/rules/packaging-config.md` → _macOS packaging_.
+
+### Changelog
+
+```bash
+pnpm changelog:check    # parse CHANGELOG.md and every changelog/unreleased/ fragment
+pnpm changelog:fold     # move released fragments into CHANGELOG.md (its own PR, never a feature PR)
+```
 
 ### Regenerating the renderer's daemon client
 
@@ -288,6 +296,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`agent-adapters.md`](.claude/rules/agent-adapters.md) | `apps/daemon/src/v1/agents/**` | Every fact about a CLI lives in its own adapter; ACP first |
 | [`codex-adapter.md`](.claude/rules/codex-adapter.md) | `apps/daemon/src/v1/agents/adapters/codex/**` | The codex CLI adapter: app-server per conversation, steering, stop grace, turn fencing |
 | [`mcp-tools.md`](.claude/rules/mcp-tools.md) | `apps/daemon/src/v1/mcp/**`, `apps/daemon/src/v1/agents/utils/host-*.ts` | geniro's own MCP tools: one directory per tool, shared base class and interface |
+| [`changelog.md`](.claude/rules/changelog.md) | `CHANGELOG.md`, `changelog/**`, `apps/ui/scripts/changelog*`, `apps/ui/src/shared/changelog*`, `apps/ui/src/renderer/changelog/**`, `apps/ui/src/renderer/settings/changelog*`, `apps/ui/src/renderer/components/changelog-*` | The changelog: one fragment per PR, the strict format, versions resolved from git tags, folding, the What's new dialog and Settings page |
 | [`shares.md`](.claude/rules/shares.md) | `apps/daemon/src/v1/shares/**` | Encrypted share links: destinations, sign-in waits, revoke and auto-revoke |
 | [`renderer-components.md`](.claude/rules/renderer-components.md) | `apps/ui/src/renderer/**` | Reuse layers (token → primitive → shared component), no duplicates, the component catalog |
 | [`renderer-design-system.md`](.claude/rules/renderer-design-system.md) | `apps/ui/src/renderer/**`, `apps/ui/.storybook/**` | Styling from design tokens only, never a hardcoded colour; one file per theme |

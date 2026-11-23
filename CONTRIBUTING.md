@@ -34,7 +34,9 @@ request from your fork.
 
 3. Make your change. Keep the pull request focused on one thing. If it adds a
    feature or changes how one behaves for users, update `README.md` in the
-   same pull request.
+   same pull request. Every pull request also adds one changelog note,
+   `changelog/unreleased/<short-name>.md`, saying what changed in a user's
+   words — see `.claude/rules/changelog.md` for the format.
 4. Run the full check before pushing — CI runs the same gates:
 
    ```bash

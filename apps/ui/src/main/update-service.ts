@@ -8,6 +8,7 @@ import {
   type UpdatePhase,
   type UpdateState,
 } from '../shared/contracts';
+import { isNewerVersion } from '../shared/version';
 import {
   applyStagedUpdate,
   canWriteBundle,
@@ -18,7 +19,6 @@ import {
 } from './update-installer';
 import {
   fetchLatestRelease,
-  isNewerVersion,
   type LatestRelease,
   type ReleaseLookup,
 } from './updater';

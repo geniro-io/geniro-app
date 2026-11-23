@@ -10,7 +10,8 @@ import {
 /**
  * Several releases read as one document: each kind of change once, with every
  * release's entries under it and, when more than one release is in it, the
- * release each entry shipped in. Internal changes are left out.
+ * release each entry shipped in, and each entry's description under it.
+ * Internal changes are left out.
  */
 export function ChangelogDigest({
   releases,
@@ -28,10 +29,7 @@ export function ChangelogDigest({
           <ChangelogKindHeading kind={section.kind} />
           <ul className={ENTRY_LIST_CLASS}>
             {section.entries.map((entry, index) => (
-              <ChangelogEntryLine
-                key={index}
-                kind={section.kind}
-                text={entry.text}>
+              <ChangelogEntryLine key={index} kind={section.kind} entry={entry}>
                 {showVersions && entry.version !== null ? (
                   <span
                     data-slot="changelog-digest-version"

@@ -15,14 +15,23 @@ const RELEASES: ChangelogRelease[] = [
     version: '1.2.0',
     date: '2026-03-02',
     sections: [
-      { kind: 'new', entries: ['Search the changelog', 'Dark sidebar'] },
-      { kind: 'fixed', entries: ['Keep the dialog open'] },
+      {
+        kind: 'new',
+        entries: [
+          {
+            text: 'Search the changelog',
+            description: 'Find any change by its words.',
+          },
+          { text: 'Dark sidebar', description: 'Easier on the eyes at night.' },
+        ],
+      },
+      { kind: 'fixed', entries: [{ text: 'Keep the dialog open' }] },
     ],
   },
   {
     version: '1.1.0',
     date: '2026-02-01',
-    sections: [{ kind: 'fixed', entries: ['Faster search results'] }],
+    sections: [{ kind: 'fixed', entries: [{ text: 'Faster search results' }] }],
   },
 ];
 
@@ -30,7 +39,9 @@ function manyReleases(count: number): ChangelogRelease[] {
   return Array.from({ length: count }, (_, index) => ({
     version: `1.${count - index}.0`,
     date: '2026-01-01',
-    sections: [{ kind: 'fixed' as const, entries: [`Fix ${count - index}`] }],
+    sections: [
+      { kind: 'fixed' as const, entries: [{ text: `Fix ${count - index}` }] },
+    ],
   }));
 }
 
@@ -39,9 +50,38 @@ describe('filterReleases', () => {
     expect(filterReleases(RELEASES, 'SEARCH', null)).toEqual([
       {
         ...RELEASES[0],
-        sections: [{ kind: 'new', entries: ['Search the changelog'] }],
+        sections: [
+          {
+            kind: 'new',
+            entries: [
+              {
+                text: 'Search the changelog',
+                description: 'Find any change by its words.',
+              },
+            ],
+          },
+        ],
       },
       RELEASES[1],
+    ]);
+  });
+
+  it('matches an entry by the words of its description', () => {
+    expect(filterReleases(RELEASES, 'at night', null)).toEqual([
+      {
+        ...RELEASES[0],
+        sections: [
+          {
+            kind: 'new',
+            entries: [
+              {
+                text: 'Dark sidebar',
+                description: 'Easier on the eyes at night.',
+              },
+            ],
+          },
+        ],
+      },
     ]);
   });
 
@@ -98,6 +138,40 @@ describe('ChangelogPage', () => {
 
     expect(versions()).toEqual(['Version 1.2.0']);
     expect(container.textContent).toContain('1 matching change in 1 version');
+  });
+
+  it('draws a feature’s description under its line', () => {
+    act(() =>
+      root.render(<ChangelogPage releases={RELEASES} current="1.2.0" />),
+    );
+
+    expect(
+      [
+        ...container.querySelectorAll(
+          '[data-slot="changelog-entry-description"]',
+        ),
+      ].map((node) => node.textContent),
+    ).toEqual([
+      'Find any change by its words.',
+      'Easier on the eyes at night.',
+    ]);
+  });
+
+  it('puts the kind filter and the version jump in one row of their own', () => {
+    act(() =>
+      root.render(<ChangelogPage releases={RELEASES} current="1.2.0" />),
+    );
+
+    const row = container.querySelector('[data-slot="changelog-selects"]')!;
+    expect(row.querySelector('[aria-label="Kind of change"]')).not.toBeNull();
+    expect(row.querySelector('[aria-label="Jump to version"]')).not.toBeNull();
+    expect(row.className.split(' ')).toContain('flex');
+    expect(row.className).not.toContain('flex-col');
+    expect(
+      row.contains(
+        container.querySelector('input[aria-label="Search the changelog"]'),
+      ),
+    ).toBe(false);
   });
 
   it('shows the newest releases first and the rest behind Show all', () => {

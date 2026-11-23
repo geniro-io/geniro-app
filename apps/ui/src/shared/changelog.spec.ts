@@ -38,7 +38,7 @@ function release(
   return {
     version,
     date: '2026-01-01',
-    sections: [{ kind, entries: [`entry ${version}`] }],
+    sections: [{ kind, entries: [{ text: `entry ${version}` }] }],
   };
 }
 
@@ -51,14 +51,16 @@ describe('parseChangelog', () => {
           version: '1.2.0',
           date: '2026-03-02',
           sections: [
-            { kind: 'new', entries: ['Search the **changelog**'] },
-            { kind: 'internal', entries: ['Rename a helper'] },
+            { kind: 'new', entries: [{ text: 'Search the **changelog**' }] },
+            { kind: 'internal', entries: [{ text: 'Rename a helper' }] },
           ],
         },
         {
           version: '1.1.0',
           date: '2026-02-01',
-          sections: [{ kind: 'fixed', entries: ['Keep the `dialog` open'] }],
+          sections: [
+            { kind: 'fixed', entries: [{ text: 'Keep the `dialog` open' }] },
+          ],
         },
       ],
     });
@@ -66,6 +68,40 @@ describe('parseChangelog', () => {
 
   it('round-trips through renderChangelog', () => {
     expect(renderChangelog(parseChangelog(DOC))).toBe(DOC);
+  });
+
+  it('takes a released New entry with no description, as the seeded history has', () => {
+    expect(
+      parseChangelog('## 1.0.0 — 2026-01-01\n\n### New\n\n- Bare\n').releases[0]
+        ?.sections,
+    ).toEqual([{ kind: 'new', entries: [{ text: 'Bare' }] }]);
+  });
+
+  it('reads a description under an entry and writes it back unchanged', () => {
+    const doc = [
+      '# Changelog',
+      '',
+      '## 1.0.0 — 2026-01-01',
+      '',
+      '### New',
+      '',
+      '- Search',
+      '',
+      '  Find any change by its words.',
+      '',
+      '- Filter',
+      '',
+      '### Fixed',
+      '',
+      '- Works',
+      '',
+    ].join('\n');
+
+    expect(parseChangelog(doc).releases[0]?.sections[0]?.entries).toEqual([
+      { text: 'Search', description: 'Find any change by its words.' },
+      { text: 'Filter' },
+    ]);
+    expect(renderChangelog(parseChangelog(doc))).toBe(doc);
   });
 
   it.each([
@@ -102,7 +138,7 @@ describe('parseChangelog', () => {
     [
       'a stray paragraph',
       '## 1.0.0 — 2026-01-01\n\n### New\n\nsome prose\n',
-      /expected "### <Section>" or "- <entry>"/,
+      /expected "### <Section>", "- <entry>" or a description indented two spaces/,
     ],
   ])('refuses %s, naming the line', (_name, text, message) => {
     expect(() => parseChangelog(text)).toThrow(message);
@@ -111,16 +147,57 @@ describe('parseChangelog', () => {
 });
 
 describe('parseFragment', () => {
-  it('reads the sections of one change', () => {
+  it('reads the sections of one change, each New entry with its description', () => {
     expect(
       parseFragment(
-        '### New\n\n- One\n- Two\n\n### Fixed\n\n- Three\n',
+        [
+          '### New',
+          '',
+          '- One',
+          '',
+          '  What one is',
+          '  and why.',
+          '- Two',
+          '  Two in short.',
+          '',
+          '### Fixed',
+          '',
+          '- Three',
+          '',
+        ].join('\n'),
         'f.md',
       ),
     ).toEqual([
-      { kind: 'new', entries: ['One', 'Two'] },
-      { kind: 'fixed', entries: ['Three'] },
+      {
+        kind: 'new',
+        entries: [
+          { text: 'One', description: 'What one is and why.' },
+          { text: 'Two', description: 'Two in short.' },
+        ],
+      },
+      { kind: 'fixed', entries: [{ text: 'Three' }] },
     ]);
+  });
+
+  it('refuses a New entry with no description, naming its line', () => {
+    expect(() =>
+      parseFragment('### New\n\n- Described\n\n  Why.\n- Bare\n', 'f.md'),
+    ).toThrow(/^f\.md:6: "Bare" is a New entry with no description/);
+  });
+
+  it('takes a one-line Fixed, Improved or Internal entry with no description', () => {
+    expect(
+      parseFragment(
+        '### Improved\n\n- Faster\n\n### Fixed\n\n- Works\n\n### Internal\n\n- Tidy\n',
+        'f.md',
+      ).map((section) => section.entries),
+    ).toEqual([[{ text: 'Faster' }], [{ text: 'Works' }], [{ text: 'Tidy' }]]);
+  });
+
+  it('refuses a description before any entry', () => {
+    expect(() => parseFragment('### Fixed\n\n  Stray\n', 'f.md')).toThrow(
+      /^f\.md:3: description before any entry/,
+    );
   });
 
   it('refuses a release heading inside a fragment', () => {
@@ -143,7 +220,7 @@ describe('addToReleases', () => {
         {
           version: '1.0.0',
           date: '2026-01-01',
-          sections: [{ kind: 'fixed', entries: ['a'] }],
+          sections: [{ kind: 'fixed', entries: [{ text: 'a' }] }],
         },
       ],
       [
@@ -151,8 +228,8 @@ describe('addToReleases', () => {
           version: '1.0.0',
           date: '2026-09-09',
           sections: [
-            { kind: 'new', entries: ['b'] },
-            { kind: 'fixed', entries: ['c'] },
+            { kind: 'new', entries: [{ text: 'b' }] },
+            { kind: 'fixed', entries: [{ text: 'c' }] },
           ],
         },
       ],
@@ -163,8 +240,8 @@ describe('addToReleases', () => {
         version: '1.0.0',
         date: '2026-01-01',
         sections: [
-          { kind: 'new', entries: ['b'] },
-          { kind: 'fixed', entries: ['a', 'c'] },
+          { kind: 'new', entries: [{ text: 'b' }] },
+          { kind: 'fixed', entries: [{ text: 'a' }, { text: 'c' }] },
         ],
       },
     ]);
@@ -177,7 +254,7 @@ describe('addToReleases', () => {
         {
           version: null,
           date: null,
-          sections: [{ kind: 'new', entries: ['x'] }],
+          sections: [{ kind: 'new', entries: [{ text: 'x' }] }],
         },
         release('1.2.0'),
       ],
@@ -197,7 +274,7 @@ describe('planWhatsNew', () => {
     {
       version: null,
       date: null,
-      sections: [{ kind: 'new' as const, entries: ['unreleased'] }],
+      sections: [{ kind: 'new' as const, entries: [{ text: 'unreleased' }] }],
     },
     release('1.4.0'),
     release('1.3.0', 'internal'),
@@ -293,17 +370,17 @@ describe('digestReleases', () => {
           version: '1.3.0',
           date: '2026-03-01',
           sections: [
-            { kind: 'new', entries: ['n3'] },
-            { kind: 'fixed', entries: ['f3a', 'f3b'] },
-            { kind: 'internal', entries: ['i3'] },
+            { kind: 'new', entries: [{ text: 'n3' }] },
+            { kind: 'fixed', entries: [{ text: 'f3a' }, { text: 'f3b' }] },
+            { kind: 'internal', entries: [{ text: 'i3' }] },
           ],
         },
         {
           version: '1.2.0',
           date: '2026-02-01',
           sections: [
-            { kind: 'improved', entries: ['m2'] },
-            { kind: 'fixed', entries: ['f2'] },
+            { kind: 'improved', entries: [{ text: 'm2' }] },
+            { kind: 'fixed', entries: [{ text: 'f2' }] },
           ],
         },
       ]),

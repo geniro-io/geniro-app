@@ -13,18 +13,27 @@ const meta = {
         {
           kind: 'new',
           entries: [
-            '**What’s new:** after an update, Geniro shows what changed since the version you last saw',
-            'Search the changelog from Settings',
+            {
+              text: '**What’s new:** after an update, Geniro shows what changed since the version you last saw',
+              description:
+                'The first launch after an update opens a short note with every new feature, improvement and fix since the version you had before.',
+            },
+            { text: 'Search the changelog from Settings' },
           ],
         },
-        { kind: 'improved', entries: ['Faster start of a team run'] },
+        { kind: 'improved', entries: [{ text: 'Faster start of a team run' }] },
         {
           kind: 'fixed',
           entries: [
-            'Keep the `context` readout answering while an agent works',
+            {
+              text: 'Keep the `context` readout answering while an agent works',
+            },
           ],
         },
-        { kind: 'internal', entries: ['Move version parsing to one module'] },
+        {
+          kind: 'internal',
+          entries: [{ text: 'Move version parsing to one module' }],
+        },
       ],
     },
     current: false,
@@ -48,7 +57,10 @@ export const Unreleased: Story = {
       version: null,
       date: null,
       sections: [
-        { kind: 'fixed', entries: ['A fix waiting for the next release'] },
+        {
+          kind: 'fixed',
+          entries: [{ text: 'A fix waiting for the next release' }],
+        },
       ],
     },
   },

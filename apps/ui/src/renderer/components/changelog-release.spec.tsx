@@ -32,8 +32,11 @@ describe('ChangelogReleaseCard', () => {
             version: '1.2.0',
             date: '2026-03-02',
             sections: [
-              { kind: 'new', entries: ['**Search:** find `any` entry'] },
-              { kind: 'fixed', entries: ['Plain fix'] },
+              {
+                kind: 'new',
+                entries: [{ text: '**Search:** find `any` entry' }],
+              },
+              { kind: 'fixed', entries: [{ text: 'Plain fix' }] },
             ],
           }}
         />,
@@ -61,7 +64,7 @@ describe('ChangelogReleaseCard', () => {
           release={{
             version: null,
             date: null,
-            sections: [{ kind: 'fixed', entries: ['Soon'] }],
+            sections: [{ kind: 'fixed', entries: [{ text: 'Soon' }] }],
           }}
         />,
       ),

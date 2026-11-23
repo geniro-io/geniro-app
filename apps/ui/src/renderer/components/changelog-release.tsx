@@ -4,6 +4,7 @@ import type React from 'react';
 
 import {
   CHANGELOG_KIND_HEADING,
+  type ChangelogEntry,
   type ChangelogKind,
   type ChangelogRelease,
 } from '../../shared/changelog';
@@ -105,22 +106,32 @@ export function ChangelogKindHeading({
   );
 }
 
-/** One entry of a kind's list, with an optional trailing note such as its release. */
+/**
+ * One entry of a kind's list: its line, an optional trailing note such as its
+ * release, and its description under it when it has one.
+ */
 export function ChangelogEntryLine({
   kind,
-  text,
+  entry,
   children,
 }: {
   kind: ChangelogKind;
-  text: string;
+  entry: ChangelogEntry;
   children?: React.ReactNode;
 }): React.JSX.Element {
   return (
     <li className="flex gap-2.5 text-sm leading-relaxed text-foreground/90">
       <span aria-hidden="true" className={markerVariants({ kind })} />
       <span className="min-w-0">
-        <ChangelogEntryText text={text} />
+        <ChangelogEntryText text={entry.text} />
         {children}
+        {entry.description === undefined ? null : (
+          <span
+            data-slot="changelog-entry-description"
+            className="mt-1 block text-muted-foreground">
+            <ChangelogEntryText text={entry.description} />
+          </span>
+        )}
       </span>
     </li>
   );
@@ -183,7 +194,7 @@ export function ChangelogReleaseCard({
               <ChangelogEntryLine
                 key={index}
                 kind={section.kind}
-                text={entry}
+                entry={entry}
               />
             ))}
           </ul>

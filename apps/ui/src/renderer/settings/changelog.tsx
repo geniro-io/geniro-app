@@ -35,8 +35,8 @@ const KIND_OPTIONS: SelectGroup[] = [
 ];
 
 /**
- * The releases holding a change of `kind` (or any, for null) whose text, or
- * whose version, contains `query`; each keeps only its matching entries.
+ * The releases holding a change of `kind` (or any, for null) whose text,
+ * description or version contains `query`; each keeps only its matching entries.
  */
 export function filterReleases(
   releases: readonly ChangelogRelease[],
@@ -55,7 +55,9 @@ export function filterReleases(
           needle === '' || versionMatches
             ? section.entries
             : section.entries.filter((entry) =>
-                entry.toLowerCase().includes(needle),
+                `${entry.text} ${entry.description ?? ''}`
+                  .toLowerCase()
+                  .includes(needle),
               ),
       }))
       .filter((section) => section.entries.length > 0);
@@ -160,7 +162,9 @@ export function ChangelogPage({
   const releasedCount = releases.filter((r) => r.version !== null).length;
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-2">
+      <div
+        data-slot="changelog-filters"
+        className="flex flex-wrap items-center gap-2">
         <SearchField
           className="min-w-56 flex-1"
           value={query}
@@ -168,27 +172,31 @@ export function ChangelogPage({
           label="Search the changelog"
           placeholder="Search changes or a version"
         />
-        <Select
-          className="w-40"
-          groups={KIND_OPTIONS}
-          value={kind ?? ALL_KINDS}
-          onValueChange={(value) =>
-            setKind(value === ALL_KINDS ? null : (value as ChangelogKind))
-          }
-          aria-label="Kind of change"
-          title="Show only one kind of change"
-        />
-        <Select
-          className="w-44"
-          groups={versionGroups(filtered)}
-          value={null}
-          placeholder="Jump to version"
-          searchPlaceholder="Find a version"
-          onValueChange={jump}
-          disabled={filtered.length === 0}
-          aria-label="Jump to version"
-          title="Scroll to one version’s changes"
-        />
+        <div data-slot="changelog-selects" className="flex gap-2">
+          <div className="w-40">
+            <Select
+              groups={KIND_OPTIONS}
+              value={kind ?? ALL_KINDS}
+              onValueChange={(value) =>
+                setKind(value === ALL_KINDS ? null : (value as ChangelogKind))
+              }
+              aria-label="Kind of change"
+              title="Show only one kind of change"
+            />
+          </div>
+          <div className="w-44">
+            <Select
+              groups={versionGroups(filtered)}
+              value={null}
+              placeholder="Jump to version"
+              searchPlaceholder="Find a version"
+              onValueChange={jump}
+              disabled={filtered.length === 0}
+              aria-label="Jump to version"
+              title="Scroll to one version’s changes"
+            />
+          </div>
+        </div>
       </div>
       <p
         className="text-xs text-muted-foreground"

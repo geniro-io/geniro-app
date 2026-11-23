@@ -14,28 +14,45 @@ const meta = {
           {
             kind: 'new',
             entries: [
-              '**What’s new:** after an update, Geniro shows what changed since the version you last saw',
+              {
+                text: '**What’s new:** after an update, Geniro shows what changed since the version you last saw',
+                description:
+                  'The first launch after an update opens a short note with every new feature, improvement and fix since the version you had before.',
+              },
             ],
           },
-          { kind: 'fixed', entries: ['Keep the `context` readout answering'] },
-          { kind: 'internal', entries: ['Move version parsing to one module'] },
+          {
+            kind: 'fixed',
+            entries: [{ text: 'Keep the `context` readout answering' }],
+          },
+          {
+            kind: 'internal',
+            entries: [{ text: 'Move version parsing to one module' }],
+          },
         ],
       },
       {
         version: '1.317.1',
         date: '2026-11-23',
         sections: [
-          { kind: 'improved', entries: ['Open large threads in one frame'] },
+          {
+            kind: 'improved',
+            entries: [{ text: 'Open large threads in one frame' }],
+          },
           {
             kind: 'fixed',
-            entries: ['Let codex’s built-in Apps server be switched off'],
+            entries: [
+              { text: 'Let codex’s built-in Apps server be switched off' },
+            ],
           },
         ],
       },
       {
         version: '1.317.0',
         date: '2026-11-23',
-        sections: [{ kind: 'new', entries: ['System analysis in Settings'] }],
+        sections: [
+          { kind: 'new', entries: [{ text: 'System analysis in Settings' }] },
+        ],
       },
     ],
   },
@@ -56,7 +73,10 @@ export const SingleRelease: Story = {
         version: '1.317.1',
         date: '2026-11-23',
         sections: [
-          { kind: 'improved', entries: ['Open large threads in one frame'] },
+          {
+            kind: 'improved',
+            entries: [{ text: 'Open large threads in one frame' }],
+          },
         ],
       },
     ],

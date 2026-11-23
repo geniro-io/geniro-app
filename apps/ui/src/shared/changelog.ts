@@ -16,9 +16,15 @@ export const CHANGELOG_KIND_HEADING: Record<ChangelogKind, string> = {
   internal: 'Internal',
 };
 
+/** One change: its line, and for a feature the short description under it. */
+export interface ChangelogEntry {
+  text: string;
+  description?: string;
+}
+
 export interface ChangelogSection {
   kind: ChangelogKind;
-  entries: string[];
+  entries: ChangelogEntry[];
 }
 
 /** One release; `version` null is the group of changes no release carries yet. */
@@ -37,6 +43,7 @@ export interface ChangelogDocument {
 const RELEASE_HEADING = /^## (\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2})$/;
 const SECTION_HEADING = /^### (.+)$/;
 const ENTRY = /^- (\S.*)$/;
+const DESCRIPTION = /^ {2}(\S.*)$/;
 
 const KIND_OF_HEADING = new Map<string, ChangelogKind>(
   CHANGELOG_KINDS.map((kind) => [CHANGELOG_KIND_HEADING[kind], kind]),
@@ -49,9 +56,16 @@ function formatError(source: string, line: number, message: string): Error {
 class SectionReader {
   readonly sections: ChangelogSection[] = [];
   readonly source: string;
+  private readonly requireNewDescriptions: boolean;
+  private lastEntry: {
+    entry: ChangelogEntry;
+    kind: ChangelogKind;
+    line: number;
+  } | null = null;
 
-  constructor(source: string) {
+  constructor(source: string, requireNewDescriptions = false) {
     this.source = source;
+    this.requireNewDescriptions = requireNewDescriptions;
   }
 
   heading(text: string, line: number): void {
@@ -63,6 +77,7 @@ class SectionReader {
         `unknown section "${text}" (expected ${CHANGELOG_KINDS.map((k) => CHANGELOG_KIND_HEADING[k]).join(', ')})`,
       );
     }
+    this.closeEntry();
     this.closeSection(line);
     const previous = this.sections.at(-1);
     if (
@@ -83,7 +98,38 @@ class SectionReader {
     if (section === undefined) {
       throw formatError(this.source, line, 'entry before any section heading');
     }
-    section.entries.push(text.trim());
+    this.closeEntry();
+    const entry: ChangelogEntry = { text: text.trim() };
+    section.entries.push(entry);
+    this.lastEntry = { entry, kind: section.kind, line };
+  }
+
+  description(text: string, line: number): void {
+    if (this.lastEntry === null) {
+      throw formatError(this.source, line, 'description before any entry');
+    }
+    const { entry } = this.lastEntry;
+    entry.description =
+      entry.description === undefined
+        ? text.trim()
+        : `${entry.description} ${text.trim()}`;
+  }
+
+  closeEntry(): void {
+    const last = this.lastEntry;
+    if (
+      this.requireNewDescriptions &&
+      last !== null &&
+      last.kind === 'new' &&
+      last.entry.description === undefined
+    ) {
+      throw formatError(
+        this.source,
+        last.line,
+        `"${last.entry.text}" is a New entry with no description: add one or more lines under it, indented two spaces, saying what it is and why a user wants it`,
+      );
+    }
+    this.lastEntry = null;
   }
 
   closeSection(line: number): void {
@@ -98,6 +144,7 @@ class SectionReader {
   }
 
   finish(line: number, owner: string): ChangelogSection[] {
+    this.closeEntry();
     this.closeSection(line);
     if (this.sections.length === 0) {
       throw formatError(this.source, line, `${owner} has no sections`);
@@ -117,10 +164,15 @@ function readBodyLine(reader: SectionReader, text: string, line: number): void {
     reader.entry(entry[1]!, line);
     return;
   }
+  const description = DESCRIPTION.exec(text);
+  if (description) {
+    reader.description(description[1]!, line);
+    return;
+  }
   throw formatError(
     reader.source,
     line,
-    `expected "### <Section>" or "- <entry>", got "${text}"`,
+    `expected "### <Section>", "- <entry>" or a description indented two spaces, got "${text}"`,
   );
 }
 
@@ -189,12 +241,15 @@ export function parseChangelog(
   return { preamble: preamble.join('\n').trimEnd(), releases };
 }
 
-/** Parse one `changelog/unreleased/*.md` fragment: section headings and entries only. */
+/**
+ * Parse one `changelog/unreleased/*.md` fragment: section headings and entries,
+ * every New entry with its description.
+ */
 export function parseFragment(
   text: string,
   source: string,
 ): ChangelogSection[] {
-  const reader = new SectionReader(source);
+  const reader = new SectionReader(source, true);
   const lines = text.split(/\r?\n/);
   lines.forEach((raw, index) => {
     const text = raw.trimEnd();
@@ -264,7 +319,15 @@ export function renderChangelog(document: ChangelogDocument): string {
     out.push(`## ${release.version} — ${release.date ?? ''}`, '');
     for (const section of release.sections) {
       out.push(`### ${CHANGELOG_KIND_HEADING[section.kind]}`, '');
-      out.push(...section.entries.map((entry) => `- ${entry}`), '');
+      const lines = section.entries.flatMap((entry) =>
+        entry.description === undefined
+          ? [`- ${entry.text}`]
+          : [`- ${entry.text}`, '', `  ${entry.description}`, ''],
+      );
+      if (lines.at(-1) === '') {
+        lines.pop();
+      }
+      out.push(...lines, '');
     }
   }
   return `${out.join('\n').trimEnd()}\n`;
@@ -301,8 +364,7 @@ export interface WhatsNewPlan {
   since: string | null;
 }
 
-export interface ChangelogDigestEntry {
-  text: string;
+export interface ChangelogDigestEntry extends ChangelogEntry {
   version: string | null;
 }
 
@@ -326,7 +388,10 @@ export function digestReleases(
         release.sections
           .filter((section) => section.kind === kind)
           .flatMap((section) =>
-            section.entries.map((text) => ({ text, version: release.version })),
+            section.entries.map((entry) => ({
+              ...entry,
+              version: release.version,
+            })),
           ),
       ),
     }))

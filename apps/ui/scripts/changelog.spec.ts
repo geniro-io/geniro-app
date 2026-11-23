@@ -75,7 +75,10 @@ afterEach(() => {
 
 describe('resolveFragmentReleases', () => {
   it('files a fragment under the lowest release tag containing the commit that added it', () => {
-    writeFragment('search.md', '### New\n\n- Search the changelog\n');
+    writeFragment(
+      'search.md',
+      '### New\n\n- Search the changelog\n\n  Find any change by its words.\n',
+    );
     commit('feat: search', '2026-02-03');
     run('tag', 'v1.2.0-rc1');
     run('tag', 'v1.2.0');
@@ -106,7 +109,10 @@ describe('resolveFragmentReleases', () => {
   });
 
   it('ignores a pre-release tag, so a fragment only an rc carries stays unreleased', () => {
-    writeFragment('rc-only.md', '### New\n\n- On the rc\n');
+    writeFragment(
+      'rc-only.md',
+      '### New\n\n- On the rc\n\n  Only an rc carries it.\n',
+    );
     commit('feat: rc', '2026-02-05');
     run('tag', 'v1.3.0-rc1');
 
@@ -151,31 +157,47 @@ describe('loadChangelog', () => {
     writeFragment('a.md', '### Fixed\n\n- Second fix\n');
     commit('fix: second', '2026-03-01');
     run('tag', 'v1.0.1');
-    writeFragment('b.md', '### New\n\n- Not shipped yet\n');
+    writeFragment(
+      'b.md',
+      '### New\n\n- Not shipped yet\n\n  Waiting for a release.\n',
+    );
 
     expect(loadChangelog(root)).toEqual([
       {
         version: null,
         date: null,
-        sections: [{ kind: 'new', entries: ['Not shipped yet'] }],
+        sections: [
+          {
+            kind: 'new',
+            entries: [
+              {
+                text: 'Not shipped yet',
+                description: 'Waiting for a release.',
+              },
+            ],
+          },
+        ],
       },
       {
         version: '1.0.1',
         date: '2026-03-01',
-        sections: [{ kind: 'fixed', entries: ['Second fix'] }],
+        sections: [{ kind: 'fixed', entries: [{ text: 'Second fix' }] }],
       },
       {
         version: '1.0.0',
         date: '2026-01-01',
-        sections: [{ kind: 'fixed', entries: ['First fix'] }],
+        sections: [{ kind: 'fixed', entries: [{ text: 'First fix' }] }],
       },
     ]);
   });
 });
 
 describe('foldChangelog', () => {
-  it('moves released fragments into CHANGELOG.md, deletes them and keeps unreleased ones', () => {
-    writeFragment('shipped.md', '### New\n\n- Shipped feature\n');
+  it('moves released fragments into CHANGELOG.md with their descriptions, deletes them and keeps unreleased ones', () => {
+    writeFragment(
+      'shipped.md',
+      '### New\n\n- Shipped feature\n\n  What it does and why\n  it helps.\n',
+    );
     writeFragment('faster-start.md', '### Improved\n\n- Faster start\n');
     commit('feat: shipped', '2026-04-01');
     run('tag', 'v1.1.0');
@@ -198,6 +220,8 @@ Released history.
 
 - Shipped feature
 
+  What it does and why it helps.
+
 ### Improved
 
 - Faster start
@@ -218,7 +242,10 @@ Released history.
   });
 
   it('changes nothing when run again', () => {
-    writeFragment('shipped.md', '### New\n\n- Shipped feature\n');
+    writeFragment(
+      'shipped.md',
+      '### New\n\n- Shipped feature\n\n  What it does and why\n  it helps.\n',
+    );
     commit('feat: shipped', '2026-04-01');
     run('tag', 'v1.1.0');
     foldChangelog(root);

@@ -14,12 +14,17 @@ const RELEASES: ChangelogRelease[] = [
   {
     version: '1.3.0',
     date: '2026-03-01',
-    sections: [{ kind: 'new', entries: ['Third'] }],
+    sections: [
+      {
+        kind: 'new',
+        entries: [{ text: 'Third', description: 'Why it helps.' }],
+      },
+    ],
   },
   {
     version: '1.2.0',
     date: '2026-02-01',
-    sections: [{ kind: 'fixed', entries: ['Second'] }],
+    sections: [{ kind: 'fixed', entries: [{ text: 'Second' }] }],
   },
 ];
 
@@ -70,7 +75,7 @@ describe('WhatsNewDialog', () => {
     expect(range?.textContent).toContain('You updated from 1.1.0 to 1.3.0');
   });
 
-  it('shows every release’s changes as one list, each tagged with its release, no cards', () => {
+  it('shows every release’s changes as one list, each tagged with its release and described, no cards', () => {
     act(() =>
       root.render(
         <WhatsNewDialog
@@ -90,7 +95,11 @@ describe('WhatsNewDialog', () => {
     expect(
       container.querySelector('[data-slot="changelog-release"]'),
     ).toBeNull();
-    expect(entryLines()).toEqual(['Third1.3.0', 'Second1.2.0']);
+    expect(entryLines()).toEqual(['Third1.3.0Why it helps.', 'Second1.2.0']);
+    expect(
+      container.querySelector('[data-slot="changelog-entry-description"]')
+        ?.textContent,
+    ).toBe('Why it helps.');
   });
 
   it('names only the running version when the profile had none recorded', () => {
@@ -109,7 +118,7 @@ describe('WhatsNewDialog', () => {
 
     const range = container.querySelector('[data-slot="whats-new-range"]');
     expect(range?.textContent).toBe('1.3.0What changed in this version.');
-    expect(entryLines()).toEqual(['Third']);
+    expect(entryLines()).toEqual(['ThirdWhy it helps.']);
   });
 
   it('closes on Got it and opens the full changelog on its button', () => {

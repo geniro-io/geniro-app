@@ -20,17 +20,17 @@ const CHANGELOG: ChangelogRelease[] = [
   {
     version: '1.3.0',
     date: '2026-03-01',
-    sections: [{ kind: 'new', entries: ['Third'] }],
+    sections: [{ kind: 'new', entries: [{ text: 'Third' }] }],
   },
   {
     version: '1.2.0',
     date: '2026-02-01',
-    sections: [{ kind: 'internal', entries: ['Only internal'] }],
+    sections: [{ kind: 'internal', entries: [{ text: 'Only internal' }] }],
   },
   {
     version: '1.1.0',
     date: '2026-01-01',
-    sections: [{ kind: 'fixed', entries: ['First'] }],
+    sections: [{ kind: 'fixed', entries: [{ text: 'First' }] }],
   },
 ];
 

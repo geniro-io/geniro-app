@@ -36,7 +36,8 @@ request from your fork.
    feature or changes how one behaves for users, update `README.md` in the
    same pull request. Every pull request also adds one changelog note,
    `changelog/unreleased/<short-name>.md`, saying what changed in a user's
-   words — see `.claude/rules/changelog.md` for the format.
+   words, with a short description under each new feature — see
+   `.claude/rules/changelog.md` for the format.
 4. Run the full check before pushing — CI runs the same gates:
 
    ```bash

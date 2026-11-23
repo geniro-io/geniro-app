@@ -1,0 +1,39 @@
+{
+  "id": "embeddinggemma-2",
+  "repo": "onnx-community/embeddinggemma-2-ONNX",
+  "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+  "tag": "model-embeddinggemma-2-daa72c5",
+  "dim": 768,
+  "files": [
+    {
+      "name": "model_quantized.onnx",
+      "source": "onnx/model_quantized.onnx",
+      "bytes": 495165,
+      "sha256": "d06edd601f851c633a2519304cbeb8dc6170d7ceb61b436625c17fb9b6e74953"
+    },
+    {
+      "name": "model_quantized.onnx_data",
+      "source": "onnx/model_quantized.onnx_data",
+      "bytes": 313724928,
+      "sha256": "278a7ff1248c3618e4bd11a607fc54f7bdc7778854230f3956d3f86bd9db4f3b"
+    },
+    {
+      "name": "tokenizer.json",
+      "source": "tokenizer.json",
+      "bytes": 32170510,
+      "sha256": "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "source": "tokenizer_config.json",
+      "bytes": 1599,
+      "sha256": "17bd5d6e9364ca49a534e1502076593317c298d4a663623091ed45388f004874"
+    },
+    {
+      "name": "config.json",
+      "source": "config.json",
+      "bytes": 5031,
+      "sha256": "8d011bfe08b5e345bbe0b81e5c6fd02c381920b345b986047bc2a33ce7b90d1d"
+    }
+  ]
+}

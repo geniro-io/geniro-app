@@ -1,0 +1,74 @@
+name: Model assets
+
+# Publishes the search model's files to their pre-release tag. Run by hand from
+# main; the app downloads the model from that tag.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-assets
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Download the files and check them against the manifest
+        env:
+          MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
+        run: |
+          set -euo pipefail
+          repo="$(jq -r '.repo' "$MANIFEST")"
+          revision="$(jq -r '.revision' "$MANIFEST")"
+          jq -r '.files[] | [.name, .source, (.bytes | tostring), .sha256] | @tsv' "$MANIFEST" > "$RUNNER_TEMP/files.tsv"
+          mkdir dist
+          while IFS=$'\t' read -r name source bytes sha256; do
+            curl -fL --retry 3 -o "dist/$name" "https://huggingface.co/$repo/resolve/$revision/$source"
+            size="$(stat -c %s "dist/$name")"
+            if [[ "$size" != "$bytes" ]]; then
+              echo "error: $name is $size bytes, the manifest says $bytes" >&2
+              exit 1
+            fi
+            digest="$(shasum -a 256 "dist/$name" | cut -d' ' -f1)"
+            if [[ "$digest" != "$sha256" ]]; then
+              echo "error: $name has sha256 $digest, the manifest says $sha256" >&2
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/files.tsv"
+          mapfile -t names < <(cut -f1 "$RUNNER_TEMP/files.tsv")
+          (cd dist && shasum -a 256 "${names[@]}" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_SLUG: ${{ github.repository }}
+          MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
+          TITLE: 'Search model: EmbeddingGemma 2 (daa72c5)'
+        run: |
+          set -euo pipefail
+          tag="$(jq -r '.tag' "$MANIFEST")"
+          revision="$(jq -r '.revision' "$MANIFEST")"
+          mapfile -t names < <(jq -r '.files[].name' "$MANIFEST")
+          assets=()
+          for name in "${names[@]}"; do
+            assets+=("dist/$name")
+          done
+          assets+=("dist/SHA256SUMS.txt")
+          notes="EmbeddingGemma 2 (text part) for Geniro's \"Search by meaning\", ONNX export by onnx-community from google/embeddinggemma-2 at revision ${revision}.
+          Model card: https://huggingface.co/google/embeddinggemma-2
+          Licence: Apache-2.0
+          Deployments must adhere to the Gemma Prohibited Use Policy: https://ai.google.dev/gemma/prohibited_use_policy
+          The app checks each file against SHA256SUMS.txt before it uses it."
+          if gh release view "$tag" -R "$REPO_SLUG" > /dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" -R "$REPO_SLUG" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" -R "$REPO_SLUG" --target "$GITHUB_SHA" --prerelease --title "$TITLE" --notes "$notes"
+          fi

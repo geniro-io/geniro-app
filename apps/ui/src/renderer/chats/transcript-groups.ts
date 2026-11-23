@@ -11,6 +11,7 @@ import {
   readActionOutcome,
   readActionPayload,
 } from './action-payload';
+import type { MemberCallWait } from './call-waits';
 // The PURE payload module, deliberately not `transcript-item.tsx` (which
 // re-exports these): reaching into the component module from here is what
 // closed the `agent-activity → transcript-groups → transcript-item →
@@ -5017,6 +5018,23 @@ export function runningCallCallees(
   return out;
 }
 
+function waitPayload(wait: MemberCallWait | undefined): {
+  waitCallId?: string;
+  waitCallee?: string;
+  waitMore?: number;
+} {
+  if (wait === undefined) {
+    return {};
+  }
+  return {
+    waitCallId: wait.callId,
+    ...(wait.calleeMemberId === null
+      ? {}
+      : { waitCallee: wait.calleeMemberId }),
+    ...(wait.more === 0 ? {} : { waitMore: wait.more }),
+  };
+}
+
 export function withLiveText(
   blocks: readonly TranscriptEntry[],
   liveText: ReadonlyMap<string, LiveState>,
@@ -5036,6 +5054,7 @@ export function withLiveText(
    * missing from a folded caller card.
    */
   daemonOpenCalls: ReadonlyMap<string, string> = new Map(),
+  memberWaits: ReadonlyMap<string, MemberCallWait> = new Map(),
 ): TranscriptEntry[] {
   if (liveText.size === 0 && workingAgents.size === 0) {
     return blocks as TranscriptEntry[];
@@ -5216,6 +5235,9 @@ export function withLiveText(
           // than an empty figure.
           ...spendPayload(liveText.get(key) ?? null),
           ...writingPayload(liveText.get(key) ?? null),
+          ...waitPayload(
+            workingNode === null ? undefined : memberWaits.get(workingNode),
+          ),
         },
       }),
       enclosingCallees,

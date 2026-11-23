@@ -263,6 +263,7 @@ export function WorkingRow({
   since = null,
   spend = null,
   writing = null,
+  waiting = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
   since?: number | null;
@@ -273,6 +274,7 @@ export function WorkingRow({
    * have arrived, or null when it is not writing one worth naming.
    */
   writing?: { tool: string; bytes: number } | null;
+  waiting?: AwaitedCall | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const runActivity = useContext(RunActivityContext);
@@ -293,7 +295,12 @@ export function WorkingRow({
   // A call being written outranks the daemon's activity: that phrase names a
   // tool that already RAN, while this is the work happening now, and its byte
   // count is the one figure on the row that shows the model still producing.
-  const phrase = writing === null ? activity : `Writing ${writing.tool}`;
+  const phrase =
+    writing !== null
+      ? `Writing ${writing.tool}`
+      : waiting !== null
+        ? awaitingPhrase(waiting)
+        : activity;
   return (
     <LiveRow
       text={phrase ?? `${word}…`}
@@ -305,6 +312,21 @@ export function WorkingRow({
       spend={spend}
     />
   );
+}
+
+interface AwaitedCall {
+  callee: string | null;
+  callId: string;
+  more: number;
+}
+
+function awaitingPhrase(waiting: AwaitedCall): string {
+  const target =
+    waiting.callee === null
+      ? waiting.callId
+      : `${waiting.callee} · ${waiting.callId}`;
+  const more = waiting.more > 0 ? ` +${waiting.more}` : '';
+  return `Waiting for ${target}${more}`;
 }
 
 /**

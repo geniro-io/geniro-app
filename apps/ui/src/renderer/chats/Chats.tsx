@@ -161,6 +161,7 @@ import {
 } from './call-context';
 import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
+import { memberCallWaits } from './call-waits';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import {
   chatContextFigures,
@@ -6754,6 +6755,10 @@ export function Chats({
     () => runningCallCallees(runState.calls),
     [runState.calls],
   );
+  const memberWaits = useMemo(
+    () => memberCallWaits(items, runState.calls),
+    [items, runState.calls],
+  );
   const transcriptEntries = useMemo(
     () =>
       // Nothing over a thread whose first page has not landed: rows and live
@@ -6766,6 +6771,7 @@ export function Chats({
             workingAgents,
             activeRun?.id ?? null,
             daemonOpenCalls,
+            memberWaits,
           ),
     [
       threadOpening,
@@ -6774,6 +6780,7 @@ export function Chats({
       workingAgents,
       activeRun?.id,
       daemonOpenCalls,
+      memberWaits,
     ],
   );
   useEffect(() => {

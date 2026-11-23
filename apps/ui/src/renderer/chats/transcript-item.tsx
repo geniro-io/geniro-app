@@ -275,11 +275,21 @@ export const TranscriptItem = memo(function TranscriptItem({
       // mistaken for one.
       const live = liveRowKind(item.payload);
       if (live === 'working') {
+        const waitCallId = payloadString(item.payload, 'waitCallId');
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
             writing={writingOf(item.payload)}
+            waiting={
+              waitCallId === null
+                ? null
+                : {
+                    callee: nodeName(payloadString(item.payload, 'waitCallee')),
+                    callId: waitCallId,
+                    more: payloadNumber(item.payload, 'waitMore') ?? 0,
+                  }
+            }
           />
         );
       }

@@ -132,7 +132,10 @@ export function showArtifactInstructions(
     'and background colours explicitly. Follow the actual host appearance using geniro.theme().dark ' +
     'and update on the window event geniro:theme; system prefers-color-scheme alone can disagree with ' +
     "the app's selected theme. Keep both appearances legible unless the user explicitly requested a " +
-    'fixed theme. The kit is a starting point; your own CSS can change its type, geometry and surfaces. ' +
+    'fixed theme. A look the brief names ("Journal", "editorial", "paper") is a style, not a fixed ' +
+    'theme: draw its colours from the theme tokens, or give its own palette a dark variant that follows ' +
+    'geniro.theme().dark and geniro:theme. ' +
+    'The kit is a starting point; your own CSS can change its type, geometry and surfaces. ' +
     'To REVISE a page you already published, call this again with the SAME artifact_id — it replaces ' +
     'the page in place as a new version rather than adding a second one, which is how a plan stays ' +
     'current while you work. A different id, or none, makes a new page. ' +

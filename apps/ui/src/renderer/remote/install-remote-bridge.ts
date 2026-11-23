@@ -249,6 +249,35 @@ export function installRemoteBridge(): void {
         GeniroApi['relaunchForUpdate']
       >,
     onUpdateState: () => noSubscription(),
+    getSearchModelState: () =>
+      invoke(IPC.getSearchModelState) as ReturnType<
+        GeniroApi['getSearchModelState']
+      >,
+    onSearchModelState: () => noSubscription(),
+    setSearchByMeaning: (enabled) =>
+      invoke(IPC.setSearchByMeaning, [enabled]) as ReturnType<
+        GeniroApi['setSearchByMeaning']
+      >,
+    cancelSearchModelDownload: () =>
+      invoke(IPC.cancelSearchModelDownload) as ReturnType<
+        GeniroApi['cancelSearchModelDownload']
+      >,
+    retrySearchModelDownload: () =>
+      invoke(IPC.retrySearchModelDownload) as ReturnType<
+        GeniroApi['retrySearchModelDownload']
+      >,
+    updateSearchModel: () =>
+      invoke(IPC.updateSearchModel) as ReturnType<
+        GeniroApi['updateSearchModel']
+      >,
+    deleteSearchModel: () =>
+      invoke(IPC.deleteSearchModel) as ReturnType<
+        GeniroApi['deleteSearchModel']
+      >,
+    notifySearchModelFailed: (reason) =>
+      invoke(IPC.notifySearchModelFailed, [reason]) as ReturnType<
+        GeniroApi['notifySearchModelFailed']
+      >,
     getGitInfo: (dir) =>
       invoke(IPC.getGitInfo, [dir]) as ReturnType<GeniroApi['getGitInfo']>,
     getGitStamp: (dir) =>

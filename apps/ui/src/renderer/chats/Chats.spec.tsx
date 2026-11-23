@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type GeniroApi,
   HISTORY_PAGE_SIZES,
+  type NotificationActivation,
   type PullRequestRef,
   type PullRequestRefResult,
 } from '../../shared/contracts';
@@ -3708,11 +3709,11 @@ describe('Chats — the system notifications a thread earns', () => {
 
   it('opens the chat a clicked notification was about', async () => {
     twoChats();
-    let activate!: (runId: string) => void;
+    let activate!: (activation: NotificationActivation) => void;
     (
       window as unknown as { geniro: Partial<GeniroApi> }
     ).geniro!.onNotificationActivated = vi.fn(
-      (listener: (runId: string) => void) => {
+      (listener: (activation: NotificationActivation) => void) => {
         activate = listener;
         return () => {};
       },
@@ -3722,7 +3723,7 @@ describe('Chats — the system notifications a thread earns', () => {
     await clickRun(container, 'My chat');
 
     await act(async () => {
-      activate('r2');
+      activate({ kind: 'run', runId: 'r2' });
     });
 
     // The banner named `r2`, so clicking it must land on `r2` — a notification

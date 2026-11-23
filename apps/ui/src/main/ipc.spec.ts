@@ -70,6 +70,7 @@ const mocks = vi.hoisted(() => {
       checker: null,
     },
     knowledge: { enabled: true, agentWrites: 'review' },
+    semanticSearch: { enabled: false },
     resourceAlerts: {
       enabled: true,
       threadMemoryBytes: 8 * 1024 ** 3,
@@ -143,6 +144,7 @@ vi.mock('./worktree-service', async (importOriginal) => ({
 }));
 
 import { registerIpc } from './ipc';
+import type { SearchModelService } from './search-model/search-model.service';
 import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
 
@@ -200,7 +202,7 @@ describe('registerIpc daemon configuration refresh', () => {
         });
       }
     });
-    registerIpc(supervisor, updates, noTerminals);
+    registerIpc(supervisor, updates, {} as SearchModelService, noTerminals);
   });
 
   it('asks every window to post its line measurements before it restarts the daemon', async () => {
@@ -244,7 +246,14 @@ describe('registerIpc daemon configuration refresh', () => {
     // them must hear about this restart too.
     const afterRestart = vi.fn();
     mocks.handlers.clear();
-    registerIpc(supervisor, updates, noTerminals, undefined, afterRestart);
+    registerIpc(
+      supervisor,
+      updates,
+      {} as SearchModelService,
+      noTerminals,
+      undefined,
+      afterRestart,
+    );
 
     await handler(IPC.updateSettings)(event, {
       cliPaths: { claude: '/opt/claude' },
@@ -409,6 +418,7 @@ describe('registerIpc terminal channels', () => {
     registerIpc(
       {} as DaemonSupervisor,
       {} as UpdateService,
+      {} as SearchModelService,
       terminals as unknown as TerminalSessions,
     );
   });
@@ -501,7 +511,12 @@ describe('registerIpc terminal channels', () => {
 describe('registerIpc line-measurement flush', () => {
   beforeEach(() => {
     mocks.handlers.clear();
-    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+    registerIpc(
+      {} as DaemonSupervisor,
+      {} as UpdateService,
+      {} as SearchModelService,
+      noTerminals,
+    );
   });
 
   it('takes the answer of the window that was asked, and no other answer for that request', async () => {
@@ -592,6 +607,7 @@ describe('registerIpc remote-access channels', () => {
     registry = registerIpc(
       {} as DaemonSupervisor,
       {} as UpdateService,
+      {} as SearchModelService,
       noTerminals,
       () => remoteAccess as unknown as RemoteAccess,
     );
@@ -756,7 +772,12 @@ describe('registerIpc getChangesSince', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
-    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+    registerIpc(
+      {} as DaemonSupervisor,
+      {} as UpdateService,
+      {} as SearchModelService,
+      noTerminals,
+    );
   });
 
   it('hands the read only the pull requests git may be told about', async () => {
@@ -782,7 +803,12 @@ describe('registerIpc listWorktrees', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.handlers.clear();
-    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+    registerIpc(
+      {} as DaemonSupervisor,
+      {} as UpdateService,
+      {} as SearchModelService,
+      noTerminals,
+    );
   });
 
   it('narrows the listing to worktrees made since the thread started, never geniro’s task worktrees', async () => {
@@ -848,6 +874,7 @@ describe('registerIpc browser channels', () => {
     registerIpc(
       {} as unknown as DaemonSupervisor,
       {} as UpdateService,
+      {} as SearchModelService,
       noTerminals,
       undefined,
       undefined,

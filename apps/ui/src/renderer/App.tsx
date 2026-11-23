@@ -537,13 +537,15 @@ export function App(): React.JSX.Element {
     return reportUiErrors(apis);
   }, [apis]);
 
-  // A clicked notification is always about a CHAT, so it brings the chat view
-  // with it — main has already raised the window, and landing the user on
-  // Settings with a raised window would be a banner that went nowhere. Which
-  // thread it opens is `Chats`' own listener on the same channel; it is split
-  // that way because the view is app state and the active run is not.
+  // A run's banner brings the chat view with it — main has already raised the
+  // window. Which thread it opens is `Chats`' own listener on the same channel;
+  // it is split that way because the view is app state and the active run is
+  // not. A search-model banner opens Settings.
   useEffect(
-    () => window.geniro.onNotificationActivated(() => setView('chats')),
+    () =>
+      window.geniro.onNotificationActivated((activation) => {
+        setView(activation.kind === 'run' ? 'chats' : 'settings');
+      }),
     [],
   );
 

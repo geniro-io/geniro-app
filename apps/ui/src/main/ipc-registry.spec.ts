@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC, type Settings } from '../shared/contracts';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import type { SearchModelService } from './search-model/search-model.service';
 import type { UpdateService } from './update-service';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
@@ -66,6 +67,7 @@ const mocks = vi.hoisted(() => {
       checker: null,
     },
     knowledge: { enabled: true, agentWrites: 'review' },
+    semanticSearch: { enabled: false },
     resourceAlerts: {
       enabled: true,
       threadMemoryBytes: 8 * 1024 ** 3,
@@ -171,6 +173,12 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'toggleDevTools',
   'installUpdate',
   'relaunchForUpdate',
+  'setSearchByMeaning',
+  'cancelSearchModelDownload',
+  'retrySearchModelDownload',
+  'updateSearchModel',
+  'deleteSearchModel',
+  'notifySearchModelFailed',
   'terminalCreate',
   'terminalWrite',
   'terminalResize',
@@ -217,7 +225,12 @@ describe('the registry registerIpc builds', () => {
       install: vi.fn(),
       relaunch: vi.fn(),
     } as unknown as UpdateService;
-    registry = registerIpc(supervisor, updates, noTerminals);
+    registry = registerIpc(
+      supervisor,
+      updates,
+      {} as SearchModelService,
+      noTerminals,
+    );
   });
 
   it('registers every invoke channel from IPC exactly once', () => {
@@ -283,6 +296,7 @@ describe('ensureDaemon — the connection banner’s Retry', () => {
     registry = registerIpc(
       { start } as unknown as DaemonSupervisor,
       {} as UpdateService,
+      {} as SearchModelService,
       noTerminals,
     );
   });

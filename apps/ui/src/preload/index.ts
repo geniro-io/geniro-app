@@ -5,7 +5,12 @@ import {
   webUtils,
 } from 'electron';
 
-import { type GeniroApi, IPC } from '../shared/contracts';
+import {
+  type GeniroApi,
+  IPC,
+  type NotificationActivation,
+  type SearchModelState,
+} from '../shared/contracts';
 
 /**
  * The only bridge between the sandboxed renderer and the privileged main
@@ -139,6 +144,41 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onUpdateState, handler);
     return () => ipcRenderer.removeListener(IPC.onUpdateState, handler);
   },
+  getSearchModelState: () =>
+    ipcRenderer.invoke(IPC.getSearchModelState) as ReturnType<
+      GeniroApi['getSearchModelState']
+    >,
+  onSearchModelState: (listener) => {
+    const handler = (_event: IpcRendererEvent, state: unknown): void => {
+      listener(state as SearchModelState);
+    };
+    ipcRenderer.on(IPC.onSearchModelState, handler);
+    return () => ipcRenderer.removeListener(IPC.onSearchModelState, handler);
+  },
+  setSearchByMeaning: (enabled) =>
+    ipcRenderer.invoke(IPC.setSearchByMeaning, enabled) as ReturnType<
+      GeniroApi['setSearchByMeaning']
+    >,
+  cancelSearchModelDownload: () =>
+    ipcRenderer.invoke(IPC.cancelSearchModelDownload) as ReturnType<
+      GeniroApi['cancelSearchModelDownload']
+    >,
+  retrySearchModelDownload: () =>
+    ipcRenderer.invoke(IPC.retrySearchModelDownload) as ReturnType<
+      GeniroApi['retrySearchModelDownload']
+    >,
+  updateSearchModel: () =>
+    ipcRenderer.invoke(IPC.updateSearchModel) as ReturnType<
+      GeniroApi['updateSearchModel']
+    >,
+  deleteSearchModel: () =>
+    ipcRenderer.invoke(IPC.deleteSearchModel) as ReturnType<
+      GeniroApi['deleteSearchModel']
+    >,
+  notifySearchModelFailed: (reason) =>
+    ipcRenderer.invoke(IPC.notifySearchModelFailed, reason) as ReturnType<
+      GeniroApi['notifySearchModelFailed']
+    >,
   getGitInfo: (dir) =>
     ipcRenderer.invoke(IPC.getGitInfo, dir) as ReturnType<
       GeniroApi['getGitInfo']
@@ -298,8 +338,8 @@ const api: GeniroApi = {
       GeniroApi['openNotificationSettings']
     >,
   onNotificationActivated: (listener) => {
-    const handler = (_event: IpcRendererEvent, runId: unknown): void => {
-      listener(runId as string);
+    const handler = (_event: IpcRendererEvent, activation: unknown): void => {
+      listener(activation as NotificationActivation);
     };
     ipcRenderer.on(IPC.onNotificationActivated, handler);
     return () =>

@@ -32,8 +32,8 @@ export class DaemonConfigPush<T> {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  /** Push unconditionally — a daemon that just came up holds nothing. */
-  async push(handle: DaemonHandle, value: T): Promise<void> {
+  /** Push unconditionally — a daemon that just came up holds nothing. Resolves true once the daemon accepted it. */
+  async push(handle: DaemonHandle, value: T): Promise<boolean> {
     const body = JSON.stringify(value);
     try {
       const response = await this.fetchImpl(
@@ -53,22 +53,27 @@ export class DaemonConfigPush<T> {
         this.report(
           `the daemon refused ${this.labels.what} (${response.status}); ${this.labels.untilSaved}`,
         );
-        return;
+        return false;
       }
       this.lastPushed = body;
+      return true;
     } catch (error) {
       this.lastPushed = null;
       this.report(
         `${this.labels.what} could not reach the daemon: ${error instanceof Error ? error.message : String(error)}`,
       );
+      return false;
     }
   }
 
-  /** Push only when the value differs from what the daemon last accepted. */
-  async pushIfChanged(handle: DaemonHandle | null, value: T): Promise<void> {
-    if (handle === null || JSON.stringify(value) === this.lastPushed) {
-      return;
+  /** Push only when the value differs from what the daemon last accepted. Resolves true when the daemon holds the value. */
+  async pushIfChanged(handle: DaemonHandle | null, value: T): Promise<boolean> {
+    if (handle === null) {
+      return false;
     }
-    await this.push(handle, value);
+    if (JSON.stringify(value) === this.lastPushed) {
+      return true;
+    }
+    return this.push(handle, value);
   }
 }

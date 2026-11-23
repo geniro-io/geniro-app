@@ -1822,7 +1822,41 @@ describe('MemoryService', () => {
       ]);
     });
 
-    it('keeps a title match above a body match of two-thirds its relevance or less, even with helped marks, reads and a team scope', async () => {
+    it('lets a close body match with helped marks, reads and a team scope pass a title match it trails without them', async () => {
+      const titled = created(
+        await db.service.save(
+          USER,
+          {
+            title: 'Guava ripeness guide',
+            body: 'press the skin gently, look for a yellow colour, smell the stem end and wait two more days when it is still firm',
+          },
+          NONE,
+        ),
+      );
+      const close = created(
+        await db.service.save(
+          USER,
+          { title: 'Kitchen note', body: 'guava', scope: 'team' },
+          TEAM_A,
+        ),
+      );
+
+      const before = await db.service.search('guava', RUN_IN_A, 10);
+      await markEntry(close.id, 'helped', 3);
+      await readToday(close.id, 3);
+      const after = await db.service.search('guava', RUN_IN_A, 10);
+
+      expect(before.map((hit) => hit.handle)).toEqual([
+        titled.handle,
+        close.handle,
+      ]);
+      expect(after.map((hit) => hit.handle)).toEqual([
+        close.handle,
+        titled.handle,
+      ]);
+    });
+
+    it('keeps a title match above a far weaker body match over real text search, even with helped marks, reads and a team scope', async () => {
       const strong = created(
         await db.service.save(
           USER,

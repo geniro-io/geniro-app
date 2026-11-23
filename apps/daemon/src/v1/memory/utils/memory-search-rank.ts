@@ -34,7 +34,7 @@ export function relevanceOfRanks(
   if (best >= 0) {
     return matches.map(() => 1);
   }
-  return matches.map((match) => match.rank / best);
+  return matches.map((match) => Math.max(Number.MIN_VALUE, match.rank / best));
 }
 
 export function decayedReads(

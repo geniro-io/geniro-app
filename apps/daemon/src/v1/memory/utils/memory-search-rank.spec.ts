@@ -61,6 +61,20 @@ describe('relevanceOfRanks', () => {
     expect(relevanceOfRanks([{ rank: 0 }, { rank: 3 }])).toEqual([1, 1]);
   });
 
+  it('keeps every relevance above 0 and at most 1 when some ranks are not negative', () => {
+    const relevance = relevanceOfRanks([
+      { rank: -4 },
+      { rank: 0 },
+      { rank: 2 },
+    ]);
+
+    expect(relevance[0]).toBe(1);
+    for (const value of relevance.slice(1)) {
+      expect(value).toBeGreaterThan(0);
+      expect(value).toBeLessThan(1);
+    }
+  });
+
   it('is empty when nothing matched', () => {
     expect(relevanceOfRanks([])).toEqual([]);
   });
@@ -206,6 +220,17 @@ describe('rankSearchCandidates', () => {
 
     expect(orderOf(forward)).toEqual(['three', 'five', 'seven']);
     expect(orderOf(backward)).toEqual(['three', 'five', 'seven']);
+  });
+
+  it('breaks equal scores by the better text match before the handle', () => {
+    const team = candidate('team', 1, 0.5, 'team');
+    const global = candidate(
+      'global',
+      2,
+      team.relevance * (1 + rankBoost(team, undefined)),
+    );
+
+    expect(orderOf([team, global])).toEqual(['global', 'team']);
   });
 
   it('returns at most the limit, best first', () => {

@@ -440,8 +440,8 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * The CLI that ran this run's FIRST member, or null when no member has taken a
-   * turn yet.
+   * The member that started FIRST in this run, with the CLI and model its turn
+   * stamped, or null when no member has taken a turn yet.
    *
    * A team run's own `agentKind` is null — it is N conversations, not one —
    * which is why nothing could ask a CLI to name one. Each member stamps the CLI
@@ -450,31 +450,29 @@ export class NodeStateDao extends BaseDao<NodeState> {
    * trigger member is the one handed the user's own task, so its CLI is the one
    * that has read the thing the title is supposed to describe.
    *
+   * One row answers all three fields, so the CLI asked and the profile it is
+   * asked under always describe the same member.
+   *
    * Ordered by `startedAt` and never by member id, which would be alphabetical
    * order dressed up as execution order. Rows that never started are excluded
    * rather than sorted last: SQLite sorts nulls FIRST on `ASC`, so a pending
    * member would otherwise outrank every member that actually ran.
    */
-  async firstAgentKind(
-    runId: string,
-    txEm?: EntityManager,
-  ): Promise<AgentKind | null> {
-    const row = await this.getRepo(txEm).findOne(
-      { runId, agentKind: { $ne: null }, startedAt: { $ne: null } },
-      { orderBy: { startedAt: 'ASC' }, disableIdentityMap: true },
-    );
-    return row?.agentKind ?? null;
-  }
-
   async firstAgentProfile(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<{ memberId: string; model: string | null } | null> {
+  ): Promise<{
+    memberId: string;
+    agentKind: AgentKind;
+    model: string | null;
+  } | null> {
     const row = await this.getRepo(txEm).findOne(
       { runId, agentKind: { $ne: null }, startedAt: { $ne: null } },
       { orderBy: { startedAt: 'ASC' }, disableIdentityMap: true },
     );
-    return row ? { memberId: row.memberId, model: row.model } : null;
+    return row?.agentKind
+      ? { memberId: row.memberId, agentKind: row.agentKind, model: row.model }
+      : null;
   }
 
   /**

@@ -18,6 +18,8 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { titleFromText } from '../utils/derive-title';
+import { pooledOwnProfile } from '../utils/node-pool-members';
+import { snapshotNodePoolProfiles } from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
@@ -62,6 +64,13 @@ function agentHasStarted(item: { kind: string; role: string | null }): boolean {
  * run can ever make.
  */
 const EARLY_NAMING_COOLDOWN_MS = 2 * 60_000;
+
+/** The member a team run's title is asked of, as its turn stamped it. */
+interface TitleMember {
+  memberId: string;
+  agentKind: AgentKind;
+  model: string | null;
+}
 
 /** Which naming a caller is asking for — see {@link ChatTitleService.name}. */
 interface NameOptions {
@@ -433,13 +442,19 @@ export class ChatTitleService implements OnModuleInit {
         if (unnamedOnly) {
           return;
         }
-        const nodeAgent = await this.nodeStateDao.firstAgentKind(run.id, em);
+        const first = await this.nodeStateDao.firstAgentProfile(run.id, em);
         // No member has taken a turn yet, so there is no CLI to ask and nothing
         // for one to read — the derived title stands until a member starts.
-        if (nodeAgent === null) {
+        if (first === null) {
           return;
         }
-        const upgraded = await this.upgrade(run, nodeAgent, em, mayAsk, false);
+        const upgraded = await this.upgrade(
+          run,
+          first.agentKind,
+          em,
+          mayAsk,
+          first,
+        );
         if (upgraded === null) {
           return;
         }
@@ -509,15 +524,16 @@ export class ChatTitleService implements OnModuleInit {
     em: EntityManager,
     mayAsk: boolean,
     /**
-     * Whether the CLI's own session title may be read first.
+     * The member a team run's title is asked of; absent for a chat.
      *
-     * True for a chat, whose one session IS the conversation. False for a
-     * team run, where the session belongs to one NODE and its title
-     * describes that member's thread rather than the run — see the team
-     * branch in {@link name}.
+     * A chat reads the CLI's own session title first, its one session being
+     * the conversation. A team run never does: the session belongs to one
+     * member and its title describes that member's thread rather than the
+     * run — see the team branch in {@link name}.
      */
-    readNative = true,
+    teamMember?: TitleMember,
   ): Promise<string | null> {
+    const readNative = teamMember === undefined;
     const tried = this.upgradesTried.get(run.id) ?? 0;
     if (tried >= CHAT_TITLE_UPGRADE_TURNS) {
       return null;
@@ -535,7 +551,9 @@ export class ChatTitleService implements OnModuleInit {
     }
     const better =
       (readNative ? await this.readNativeTitle(run, agentKind, em) : null) ??
-      (mayAsk ? await this.askForTitle(run, agentKind, em, opening) : null);
+      (mayAsk
+        ? await this.askForTitle(run, agentKind, em, opening, teamMember)
+        : null);
     if (better === null) {
       return null;
     }
@@ -564,6 +582,7 @@ export class ChatTitleService implements OnModuleInit {
     agentKind: AgentKind,
     em: EntityManager,
     opening: string,
+    teamMember?: TitleMember,
   ): Promise<string | null> {
     const asked = this.generationTried.get(run.id) ?? 0;
     if (asked >= CHAT_TITLE_UPGRADE_TURNS) {
@@ -585,21 +604,10 @@ export class ChatTitleService implements OnModuleInit {
       // nothing later than the opening, and repeating it would spend prompt on
       // the same two messages under a second heading.
       const latest = asked === 0 ? null : await this.latestExchange(run.id, em);
-      let model = run.model;
-      let configDir = run.configDir;
-      if (run.teamId !== null) {
-        const profile = await this.nodeStateDao.firstAgentProfile(run.id, em);
-        const snapshot = readTeamSnapshot(run.teamSnapshot);
-        const node = snapshot?.members.find(
-          (entry) => entry.id === profile?.memberId,
-        );
-        if (!profile) {
-          return null;
-        }
-        model = profile.model ?? node?.model ?? null;
-        configDir =
-          node === undefined ? run.configDir : (node.configDir ?? null);
-      }
+      const { model, configDir } =
+        teamMember === undefined
+          ? { model: run.model, configDir: run.configDir }
+          : await this.memberProfile(run, teamMember, em);
       const title = await this.adapters.for(agentKind).generateTitle({
         opening,
         reply: await this.itemDao.firstAssistantMessageText(run.id, em),
@@ -637,6 +645,35 @@ export class ChatTitleService implements OnModuleInit {
         titlePending: false,
       });
     }
+  }
+
+  /**
+   * The model and profile a team member's title is asked under: those of the
+   * configuration its conversation runs on now. A pooled member that fell
+   * through to another pool member runs under that member's CLI, model and
+   * account, and member 1's profile is another CLI's directory.
+   */
+  private async memberProfile(
+    run: Run,
+    member: TitleMember,
+    em: EntityManager,
+  ): Promise<{ model: string | null; configDir: string | null }> {
+    if (snapshotNodePoolProfiles(run.teamSnapshot).has(member.memberId)) {
+      const own = await pooledOwnProfile(
+        run.teamSnapshot,
+        member.memberId,
+        member,
+        () => this.itemDao.poolHandOffRows(run.id, em),
+      );
+      return { model: member.model, configDir: own?.configDir ?? null };
+    }
+    const node = readTeamSnapshot(run.teamSnapshot)?.members.find(
+      (entry) => entry.id === member.memberId,
+    );
+    return {
+      model: member.model ?? node?.model ?? null,
+      configDir: node === undefined ? run.configDir : (node.configDir ?? null),
+    };
   }
 
   /**

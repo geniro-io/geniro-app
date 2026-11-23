@@ -18,7 +18,7 @@ import {
 } from '../../agents/utils/call-seed';
 import {
   nodePoolSessionMember,
-  readNodePoolMembers,
+  pooledOwnProfile,
 } from '../../agents/utils/node-pool-members';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertTeamRun } from '../../agents/utils/run-kind';
@@ -302,24 +302,15 @@ export class HandoffService {
     const state = await this.nodeStateDao.getByRunNode(run.id, memberId, em);
     const stamped = state?.agentKind;
     if (stamped) {
-      let configDir: string | null = null;
-      if (snapshotNodePoolProfiles(run.teamSnapshot).has(memberId)) {
-        const member =
-          readNodePoolMembers(
-            await this.itemDao.poolHandOffRows(run.id, em),
-          ).get(memberId) ?? 1;
-        const profile = snapshotMemberProfile(
-          run.teamSnapshot,
-          memberId,
-          member,
-        );
-        if (
-          profile?.agentKind === stamped &&
-          profile.model === (state.model ?? null)
-        ) {
-          configDir = profile.configDir;
-        }
-      }
+      const configDir =
+        (
+          await pooledOwnProfile(
+            run.teamSnapshot,
+            memberId,
+            { agentKind: stamped, model: state.model ?? null },
+            () => this.itemDao.poolHandOffRows(run.id, em),
+          )
+        )?.configDir ?? null;
       // Both read from the STAMP, never from the current YAML: an edited
       // team must not re-write what a finished run actually ran as.
       return {

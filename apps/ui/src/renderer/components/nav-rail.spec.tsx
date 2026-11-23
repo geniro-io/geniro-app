@@ -109,6 +109,51 @@ describe('NavRail', () => {
     expect(rail('chats').querySelector('[data-slot="nav-count"]')).toBeNull();
   });
 
+  it('marks Settings with a warning dot, expanded and collapsed, and leaves its count alone', () => {
+    const expanded = render(
+      <NavRail
+        view="chats"
+        onNavigate={() => undefined}
+        collapsed={false}
+        hydrated
+        onToggleCollapsed={() => undefined}
+        counts={{ settings: 2 }}
+        warnings={{ settings: '1 account needs sign-in' }}
+      />,
+    );
+    const flagged = [...expanded.querySelectorAll('button')].filter((button) =>
+      button.querySelector('[data-slot="nav-warning"]'),
+    );
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.getAttribute('title')).toBe('1 account needs sign-in');
+    expect(
+      flagged[0]?.querySelector('[data-slot="nav-count"]')?.textContent,
+    ).toBe('2');
+
+    const collapsed = render(
+      <NavRail
+        view="chats"
+        onNavigate={() => undefined}
+        collapsed
+        hydrated
+        onToggleCollapsed={() => undefined}
+        counts={{ settings: 2 }}
+        warnings={{ settings: '1 account needs sign-in' }}
+      />,
+    );
+    const named = collapsed.querySelector(
+      '[aria-label="Settings, 2 waiting, 1 account needs sign-in"]',
+    );
+    expect(named?.querySelector('[data-slot="nav-warning"]')).not.toBeNull();
+    expect(named?.querySelector('[data-slot="nav-count"]')?.textContent).toBe(
+      '2',
+    );
+  });
+
+  it('draws no warning dot where no warning is given', () => {
+    expect(rail('chats').querySelector('[data-slot="nav-warning"]')).toBeNull();
+  });
+
   it('navigates to each destination it offers', () => {
     // Pairs with the test above: presence alone would pass for a button wired
     // to nothing, which is the same unreachable view seen one step later.

@@ -27,3 +27,7 @@ export const OnChats: Story = {};
 export const OnSettings: Story = {
   args: { view: 'settings' },
 };
+
+export const SettingsNeedsSignIn: Story = {
+  args: { view: 'chats', warnings: { settings: '1 account needs sign-in' } },
+};

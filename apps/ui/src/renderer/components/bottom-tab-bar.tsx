@@ -1,4 +1,5 @@
 import { type AppView, NAV_ITEMS } from './nav-rail';
+import { navAnnouncement, NavWarning } from './nav-warning';
 import { cn } from './ui/utils';
 
 /**
@@ -19,12 +20,14 @@ export function BottomTabBar({
   onNavigate,
   className,
   counts = {},
+  warnings = {},
 }: {
   view: AppView;
   onNavigate: (view: AppView) => void;
   className?: string;
   /** What waits on the user, by destination. */
   counts?: Partial<Record<AppView, number>>;
+  warnings?: Partial<Record<AppView, string>>;
 }): React.JSX.Element {
   return (
     <nav
@@ -38,14 +41,13 @@ export function BottomTabBar({
         const Icon = item.icon;
         const active = view === item.view;
         const count = counts[item.view] ?? 0;
+        const warning = warnings[item.view];
         return (
           <button
             key={item.view}
             type="button"
-            aria-label={
-              count > 0 ? `${item.label}, ${count} waiting` : item.label
-            }
-            title={item.label}
+            aria-label={navAnnouncement(item.label, count, warning)}
+            title={navAnnouncement(item.label, 0, warning)}
             aria-current={active ? 'page' : undefined}
             onClick={() => onNavigate(item.view)}
             className={cn(
@@ -54,11 +56,13 @@ export function BottomTabBar({
                 ? 'text-sidebar-primary-strong'
                 : 'text-sidebar-foreground/60 hover:text-sidebar-foreground',
             )}>
-            <Icon
-              aria-hidden="true"
-              className="size-6 max-[340px]:size-5"
-              strokeWidth={active ? 2.25 : 1.75}
-            />
+            <NavWarning marked={warning !== undefined}>
+              <Icon
+                aria-hidden="true"
+                className="size-6 max-[340px]:size-5"
+                strokeWidth={active ? 2.25 : 1.75}
+              />
+            </NavWarning>
             {count > 0 ? (
               <span
                 data-slot="nav-count"

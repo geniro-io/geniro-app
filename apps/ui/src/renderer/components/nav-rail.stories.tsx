@@ -37,6 +37,10 @@ type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
 
+export const SettingsNeedsSignIn: Story = {
+  args: { warnings: { settings: '1 account needs sign-in' } },
+};
+
 export const Collapsed: Story = {
   args: { collapsed: true },
 };

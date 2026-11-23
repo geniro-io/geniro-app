@@ -474,6 +474,30 @@ describe('ConfigProfileList — signing a configuration in and out', () => {
     expect(labels).not.toContain('Sign out of Work');
   });
 
+  it('marks a configuration the CLI said is signed out, beside its Sign in button', () => {
+    const { el } = renderAuth(two(), {
+      logins: {
+        '/Users/x/.claude-home': false,
+        '/Users/x/.claude-work': true,
+      },
+    });
+    const marked = el.querySelectorAll('[data-slot="config-signed-out"]');
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.textContent).toContain('Not signed in');
+    expect(
+      marked[0]?.parentElement?.querySelector(
+        'button[aria-label="Sign in to Personal"]',
+      ),
+    ).not.toBeNull();
+  });
+
+  it('marks no configuration whose sign-in is unknown', () => {
+    const { el } = renderAuth(two(), {
+      logins: { '/Users/x/.claude-home': null },
+    });
+    expect(el.querySelector('[data-slot="config-signed-out"]')).toBeNull();
+  });
+
   it('offers neither verb when the caller has no daemon to ask', () => {
     // An absent handler renders nothing rather than a control that could only
     // report its own inability — the rule the card's own footer follows.

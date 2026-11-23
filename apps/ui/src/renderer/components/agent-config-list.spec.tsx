@@ -120,6 +120,50 @@ describe('statusFor', () => {
       version: null,
     });
   });
+
+  it.each([
+    {
+      profileLogins: { '/a': true, '/b': false },
+      label: 'Configuration not signed in',
+    },
+    {
+      profileLogins: { '/a': false, '/b': false },
+      label: '2 configurations not signed in',
+    },
+  ])(
+    'warns about a signed-out configuration when the default profile is fine: $label',
+    ({ profileLogins, label }) => {
+      const clis = [
+        det('claude', { loggedIn: true, profileLogins }),
+        det('cursor-agent'),
+      ];
+      expect(statusFor(clis, 'claude')).toEqual({
+        label,
+        tone: 'warn',
+        version: '1.2.3',
+      });
+    },
+  );
+
+  it('keeps the default profile’s own sign-in warning ahead of a configuration’s', () => {
+    const clis = [
+      det('claude', { loggedIn: false, profileLogins: { '/b': false } }),
+      det('cursor-agent'),
+    ];
+    expect(statusFor(clis, 'claude')).toEqual({
+      label: 'Not signed in',
+      tone: 'warn',
+      version: '1.2.3',
+    });
+  });
+
+  it('reads a configuration whose sign-in is unknown as ready', () => {
+    const clis = [
+      det('claude', { loggedIn: true, profileLogins: { '/b': null } }),
+      det('cursor-agent'),
+    ];
+    expect(statusFor(clis, 'claude').tone).toBe('ok');
+  });
 });
 
 let root: Root | null = null;

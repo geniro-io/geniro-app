@@ -5923,6 +5923,23 @@ describe('McpServerService — what the descriptions tell a model', () => {
     }
   });
 
+  it('says a look the brief names is a style that still follows the dark theme', async () => {
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    const start = description.indexOf('is a style, not a fixed theme');
+    expect(start).toBeGreaterThan(-1);
+    const sentence = description.slice(
+      description.lastIndexOf('. ', start),
+      description.indexOf('. ', start),
+    );
+    for (const named of ['"Journal"', '"editorial"', '"paper"']) {
+      expect(sentence).toContain(named);
+    }
+    expect(sentence).toContain('theme tokens');
+    expect(sentence).toMatch(
+      /dark variant that follows geniro\.theme\(\)\.dark and geniro:theme/,
+    );
+  });
+
   it('names only library URLs the page’s own policy admits', async () => {
     // A URL the CSP refuses fails silently inside the page, so a description
     // naming one would send every model to a blank chart.

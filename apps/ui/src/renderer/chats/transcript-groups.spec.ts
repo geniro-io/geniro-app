@@ -4302,6 +4302,54 @@ describe('withLiveText', () => {
     expect(liveRowKind(liveRowPayload(entries))).toBe('working');
   });
 
+  it('carries the call a member waits on onto that member’s working row only', () => {
+    const waits = new Map([
+      ['orch', { callId: 'call-3', calleeMemberId: 'poet', more: 1 }],
+    ]);
+    const mine = withLiveText(
+      [],
+      new Map(),
+      new Set(['orch']),
+      null,
+      new Map(),
+      waits,
+    );
+    expect(liveRowPayload(mine)).toMatchObject({
+      live: 'working',
+      waitCallId: 'call-3',
+      waitCallee: 'poet',
+      waitMore: 1,
+    });
+
+    const theirs = withLiveText(
+      [],
+      new Map(),
+      new Set(['poet']),
+      null,
+      new Map(),
+      waits,
+    );
+    expect(liveRowPayload(theirs)).not.toHaveProperty('waitCallId');
+  });
+
+  it('leaves the callee and the count off the row when the wait names neither', () => {
+    const waits = new Map([
+      ['orch', { callId: 'call-3', calleeMemberId: null, more: 0 }],
+    ]);
+    const entries = withLiveText(
+      [],
+      new Map(),
+      new Set(['orch']),
+      null,
+      new Map(),
+      waits,
+    );
+    const payload = liveRowPayload(entries);
+    expect(payload).toMatchObject({ waitCallId: 'call-3' });
+    expect(payload).not.toHaveProperty('waitCallee');
+    expect(payload).not.toHaveProperty('waitMore');
+  });
+
   /** One durable row, timestamped — the anchor the working row is measured from. */
   const at = (row: ChatItem, createdAt: string): ChatItem => ({
     ...row,

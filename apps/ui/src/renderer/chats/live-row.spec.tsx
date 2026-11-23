@@ -278,6 +278,82 @@ describe('WorkingRow', () => {
     expect(container.textContent).not.toContain('running Bash');
   });
 
+  it('names the call the agent waits on, with its callee and id', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow
+        waiting={{ callee: 'Tony Stark', callId: 'call-3', more: 0 }}
+      />,
+    );
+
+    expect(container.textContent).toContain('Waiting for Tony Stark · call-3');
+    expect(container.textContent).toContain('0s');
+    expect(container.textContent).not.toContain('Working…');
+  });
+
+  it('names the awaited call by its id alone when its callee is unknown', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow waiting={{ callee: null, callId: 'call-3', more: 0 }} />,
+    );
+
+    expect(container.textContent).toContain('Waiting for call-3');
+    expect(container.textContent).not.toContain('Waiting for call-3 +');
+  });
+
+  it('counts the other calls the wait is still out for', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow
+        waiting={{ callee: 'Tony Stark', callId: 'call-3', more: 1 }}
+      />,
+    );
+
+    expect(container.textContent).toContain(
+      'Waiting for Tony Stark · call-3 +1',
+    );
+  });
+
+  it('names the call being WRITTEN over the wait', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow
+        writing={{ tool: 'Geniro: Save team change', bytes: 86_016 }}
+        waiting={{ callee: 'Tony Stark', callId: 'call-3', more: 0 }}
+      />,
+    );
+
+    expect(container.textContent).toContain('Writing Geniro: Save team change');
+    expect(container.textContent).not.toContain('Waiting for');
+  });
+
+  it('names the wait over the daemon’s activity', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value="running Bash">
+        <WorkingRow
+          waiting={{ callee: 'Tony Stark', callId: 'call-3', more: 0 }}
+        />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain('Waiting for Tony Stark · call-3');
+    expect(container.textContent).not.toContain('running Bash');
+  });
+
+  it('holds the waiting phrase still while the rotating words change', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow
+        waiting={{ callee: 'Tony Stark', callId: 'call-3', more: 0 }}
+      />,
+    );
+
+    advance(2_800 * 3);
+    expect(container.textContent).toContain('Waiting for Tony Stark · call-3');
+    expect(container.querySelector('.live-word')).toBeNull();
+  });
+
   it('falls back to the bare state when the daemon has said nothing', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(

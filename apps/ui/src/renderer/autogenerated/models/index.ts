@@ -702,6 +702,25 @@ export interface AgentEffortListing {
      */
     unavailableReason: string | null;
 }
+
+/**
+ * 
+ * @export
+ */
+export const AgentFlagRunKind = {
+    Chat: 'chat',
+    Team: 'team',
+    ThreadAnalysis: 'thread_analysis',
+    TeamAnalysis: 'team_analysis',
+    Lessons: 'lessons',
+    LessonsCheck: 'lessons_check',
+    SystemAnalysis: 'system_analysis',
+    Builder: 'builder',
+    Project: 'project',
+    CommandCenter: 'command_center'
+} as const;
+export type AgentFlagRunKind = typeof AgentFlagRunKind[keyof typeof AgentFlagRunKind];
+
 /**
  * 
  * @export
@@ -3605,6 +3624,12 @@ export interface CommandCenterCardRun {
     analysisTeamSlug: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof CommandCenterCardRun
+     */
+    analysisPurpose: CommandCenterCardRunAnalysisPurposeEnum | null;
+    /**
+     * 
      * @type {number}
      * @memberof CommandCenterCardRun
      */
@@ -3739,6 +3764,17 @@ export interface CommandCenterCardRun {
 
 
 /**
+ * @export
+ */
+export const CommandCenterCardRunAnalysisPurposeEnum = {
+    Review: 'review',
+    Lessons: 'lessons',
+    LessonsCheck: 'lessons_check',
+    System: 'system'
+} as const;
+export type CommandCenterCardRunAnalysisPurposeEnum = typeof CommandCenterCardRunAnalysisPurposeEnum[keyof typeof CommandCenterCardRunAnalysisPurposeEnum];
+
+/**
  * 
  * @export
  * @interface CommandCenterChatsDiscardedDto
@@ -3814,8 +3850,23 @@ export interface CommandCenterStart {
      * @memberof CommandCenterStart
      */
     folder: string;
+    /**
+     * Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away
+     * @type {string}
+     * @memberof CommandCenterStart
+     */
+    startedBy: CommandCenterStartStartedByEnum;
 }
 
+
+/**
+ * @export
+ */
+export const CommandCenterStartStartedByEnum = {
+    Manager: 'manager',
+    User: 'user'
+} as const;
+export type CommandCenterStartStartedByEnum = typeof CommandCenterStartStartedByEnum[keyof typeof CommandCenterStartStartedByEnum];
 
 /**
  * 
@@ -5120,6 +5171,172 @@ export interface DiagnosticsReportDtoRuns {
      * @memberof DiagnosticsReportDtoRuns
      */
     liveSessions: number;
+}
+/**
+ * 
+ * @export
+ * @interface DigestSignals
+ */
+export interface DigestSignals {
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    workFlags: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    disagreementFlags: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestSignals
+     */
+    outcome: DigestSignalsOutcomeEnum | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    unmetGoals: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    refusedApprovals: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    corrections: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    analysisRefusals: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestSignals
+     */
+    failedToolCalls: number;
+}
+
+
+/**
+ * @export
+ */
+export const DigestSignalsOutcomeEnum = {
+    Failed: 'failed',
+    Partial: 'partial'
+} as const;
+export type DigestSignalsOutcomeEnum = typeof DigestSignalsOutcomeEnum[keyof typeof DigestSignalsOutcomeEnum];
+
+/**
+ * 
+ * @export
+ * @interface DigestThread
+ */
+export interface DigestThread {
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThread
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThread
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {AgentFlagRunKind}
+     * @memberof DigestThread
+     */
+    kind: AgentFlagRunKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThread
+     */
+    teamSlug: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThread
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof DigestThread
+     */
+    archived: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThread
+     */
+    lastActivityAt: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestThread
+     */
+    score: number;
+    /**
+     * 
+     * @type {DigestSignals}
+     * @memberof DigestThread
+     */
+    signals: DigestSignals;
+    /**
+     * 
+     * @type {Array<DigestThreadFailedToolsInner>}
+     * @memberof DigestThread
+     */
+    failedTools: Array<DigestThreadFailedToolsInner>;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestThread
+     */
+    snapshotSeq: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface DigestThreadFailedToolsInner
+ */
+export interface DigestThreadFailedToolsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThreadFailedToolsInner
+     */
+    tool: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestThreadFailedToolsInner
+     */
+    mcpServer: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestThreadFailedToolsInner
+     */
+    failures: number;
 }
 /**
  * 
@@ -12942,6 +13159,12 @@ export interface RunDto {
     analysisTeamSlug: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    analysisPurpose: RunDtoAnalysisPurposeEnum | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunDto
      */
@@ -13074,6 +13297,17 @@ export interface RunDto {
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
+
+/**
+ * @export
+ */
+export const RunDtoAnalysisPurposeEnum = {
+    Review: 'review',
+    Lessons: 'lessons',
+    LessonsCheck: 'lessons_check',
+    System: 'system'
+} as const;
+export type RunDtoAnalysisPurposeEnum = typeof RunDtoAnalysisPurposeEnum[keyof typeof RunDtoAnalysisPurposeEnum];
 
 /**
  * 
@@ -15901,6 +16135,93 @@ export interface StartShareSignInDto {
 /**
  * 
  * @export
+ * @interface StartSystemAnalysisDto
+ */
+export interface StartSystemAnalysisDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof StartSystemAnalysisDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof StartSystemAnalysisDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof StartSystemAnalysisDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof StartSystemAnalysisDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    configDir?: string;
+    /**
+     * The user's focus or extra instructions for this analysis
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    focus?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartSystemAnalysisDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof StartSystemAnalysisDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * 
+     * @type {number}
+     * @memberof StartSystemAnalysisDto
+     */
+    days: number;
+}
+
+
+/**
+ * 
+ * @export
  * @interface StartTaskRunDto
  */
 export interface StartTaskRunDto {
@@ -16471,6 +16792,360 @@ export interface SweptArchivedDto {
 /**
  * 
  * @export
+ * @interface SystemAnalysisListDto
+ */
+export interface SystemAnalysisListDto {
+    /**
+     * 
+     * @type {Array<SystemAnalysisRow>}
+     * @memberof SystemAnalysisListDto
+     */
+    analyses: Array<SystemAnalysisRow>;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemAnalysisListDto
+     */
+    next: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface SystemAnalysisRow
+ */
+export interface SystemAnalysisRow {
+    /**
+     * 
+     * @type {CommandCenterCardRun}
+     * @memberof SystemAnalysisRow
+     */
+    run: CommandCenterCardRun;
+    /**
+     * 
+     * @type {SystemPeriod}
+     * @memberof SystemAnalysisRow
+     */
+    period: SystemPeriod | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemAnalysisRow
+     */
+    threadsRead: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemAnalysisRow
+     */
+    proposals: number;
+    /**
+     * 
+     * @type {SystemAnalysisStatus}
+     * @memberof SystemAnalysisRow
+     */
+    status: SystemAnalysisStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemAnalysisRow
+     */
+    filed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemAnalysisRow
+     */
+    started: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemAnalysisRow
+     */
+    failed: number;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface SystemAnalysisScopeDto
+ */
+export interface SystemAnalysisScopeDto {
+    /**
+     * 
+     * @type {SystemPeriod}
+     * @memberof SystemAnalysisScopeDto
+     */
+    period: SystemPeriod;
+    /**
+     * 
+     * @type {SystemDigestTotals}
+     * @memberof SystemAnalysisScopeDto
+     */
+    totals: SystemDigestTotals;
+    /**
+     * 
+     * @type {Array<DigestThread>}
+     * @memberof SystemAnalysisScopeDto
+     */
+    threads: Array<DigestThread>;
+}
+
+/**
+ * 
+ * @export
+ */
+export const SystemAnalysisStatus = {
+    Running: 'running',
+    Waiting: 'waiting',
+    Filed: 'filed',
+    Started: 'started',
+    Kept: 'kept',
+    Failed: 'failed'
+} as const;
+export type SystemAnalysisStatus = typeof SystemAnalysisStatus[keyof typeof SystemAnalysisStatus];
+
+/**
+ * 
+ * @export
+ * @interface SystemApplyDto
+ */
+export interface SystemApplyDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemApplyDto
+     */
+    cardSeq: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SystemApplyDto
+     */
+    ids: Array<string>;
+    /**
+     * 
+     * @type {SystemApplyDtoSystemApplyAction}
+     * @memberof SystemApplyDto
+     */
+    action: SystemApplyDtoSystemApplyAction;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyDto
+     */
+    projectId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyDto
+     */
+    clientMessageId: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const SystemApplyDtoSystemApplyAction = {
+    Cards: 'cards',
+    Implement: 'implement',
+    Report: 'report'
+} as const;
+export type SystemApplyDtoSystemApplyAction = typeof SystemApplyDtoSystemApplyAction[keyof typeof SystemApplyDtoSystemApplyAction];
+
+/**
+ * 
+ * @export
+ * @interface SystemApplyOutcome
+ */
+export interface SystemApplyOutcome {
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyOutcome
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyOutcome
+     */
+    status: SystemApplyOutcomeStatusEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyOutcome
+     */
+    taskId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyOutcome
+     */
+    identifier?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyOutcome
+     */
+    reason?: string;
+}
+
+
+/**
+ * @export
+ */
+export const SystemApplyOutcomeStatusEnum = {
+    Applied: 'applied',
+    Skipped: 'skipped',
+    Failed: 'failed'
+} as const;
+export type SystemApplyOutcomeStatusEnum = typeof SystemApplyOutcomeStatusEnum[keyof typeof SystemApplyOutcomeStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface SystemApplyResultDto
+ */
+export interface SystemApplyResultDto {
+    /**
+     * 
+     * @type {SystemApplyResultDtoApply}
+     * @memberof SystemApplyResultDto
+     */
+    apply: SystemApplyResultDtoApply | null;
+    /**
+     * 
+     * @type {Array<SystemApplyOutcome>}
+     * @memberof SystemApplyResultDto
+     */
+    outcomes: Array<SystemApplyOutcome>;
+}
+/**
+ * 
+ * @export
+ * @interface SystemApplyResultDtoApply
+ */
+export interface SystemApplyResultDtoApply {
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    memberId: string | null;
+    /**
+     * Monotonic per-run sequence — the replay cursor
+     * @type {number}
+     * @memberof SystemApplyResultDtoApply
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof SystemApplyResultDtoApply
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {any}
+     * @memberof SystemApplyResultDtoApply
+     */
+    payload: any | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemApplyResultDtoApply
+     */
+    inCall?: string | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface SystemDigestTotals
+ */
+export interface SystemDigestTotals {
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotals
+     */
+    threadsWithSignals: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotals
+     */
+    flags: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotals
+     */
+    failedToolCalls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotals
+     */
+    systemThreads: number;
+}
+/**
+ * 
+ * @export
+ * @interface SystemPeriod
+ */
+export interface SystemPeriod {
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemPeriod
+     */
+    from: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SystemPeriod
+     */
+    to: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemPeriod
+     */
+    days: number;
+}
+/**
+ * 
+ * @export
  * @interface TaskAttachment
  */
 export interface TaskAttachment {
@@ -16802,7 +17477,8 @@ export type TaskPriority = typeof TaskPriority[keyof typeof TaskPriority];
  * @export
  */
 export const TaskSource = {
-    Geniro: 'geniro'
+    Geniro: 'geniro',
+    SystemAnalysis: 'system_analysis'
 } as const;
 export type TaskSource = typeof TaskSource[keyof typeof TaskSource];
 
@@ -18657,6 +19333,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     analysisTeamSlug: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    analysisPurpose: ThreadOverviewDtoAnalysisAnalysisAnalysisPurposeEnum | null;
+    /**
+     * 
      * @type {number}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
@@ -18789,6 +19471,17 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
+
+/**
+ * @export
+ */
+export const ThreadOverviewDtoAnalysisAnalysisAnalysisPurposeEnum = {
+    Review: 'review',
+    Lessons: 'lessons',
+    LessonsCheck: 'lessons_check',
+    System: 'system'
+} as const;
+export type ThreadOverviewDtoAnalysisAnalysisAnalysisPurposeEnum = typeof ThreadOverviewDtoAnalysisAnalysisAnalysisPurposeEnum[keyof typeof ThreadOverviewDtoAnalysisAnalysisAnalysisPurposeEnum];
 
 /**
  * 

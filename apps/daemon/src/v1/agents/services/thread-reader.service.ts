@@ -37,6 +37,7 @@ import {
   type TeamVersionIndexReader,
   ThreadOutcomePayloadSchema,
 } from '../chat.types';
+import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -286,7 +287,34 @@ export class ThreadReaderService {
     private readonly projectChanges: ProjectInstructionChangeDao,
     @Optional() private readonly goalDao?: GoalDao,
     @Optional() private readonly pullRequestLives?: PullRequestAfterDoneService,
+    @Optional() private readonly flagDao?: AgentFlagDao,
   ) {}
+
+  /**
+   * What the run's agents flagged at or before the snapshot, oldest first —
+   * what every analysis reads before anything else. Never cut by a budget.
+   */
+  private async flagsOf(source: AnalysisSource): Promise<Answer[]> {
+    if (this.flagDao === undefined) {
+      return [];
+    }
+    const flags = await this.flagDao.forRun(
+      source.sourceRunId,
+      source.snapshotSeq,
+    );
+    return flags.map((flag) => ({
+      handle: flag.handle,
+      seq: flag.seq,
+      at: flag.occurredAt.toISOString(),
+      node: laneOf(flag.memberId),
+      ...(flag.callId === null ? {} : { callId: flag.callId }),
+      cost: flag.cost,
+      category: flag.category,
+      ...(flag.minutesLost === null ? {} : { minutesLost: flag.minutesLost }),
+      summary: flag.summary,
+      ...(flag.detail === null ? {} : { detail: flag.detail }),
+    }));
+  }
 
   /**
    * How long each callee worked inside each call of a run, by the seq of the
@@ -320,6 +348,18 @@ export class ThreadReaderService {
       return {
         error: 'UNSUPPORTED',
         message: `The ${args.view} view is answered by the tool, not the reader.`,
+      };
+    }
+    if (args.view === 'digest') {
+      return this.digest(turn, args.offset ?? 0);
+    }
+    if (
+      turn.system &&
+      (args.view === 'runs' || args.view === 'team' || args.view === 'project')
+    ) {
+      return {
+        error: 'UNSUPPORTED',
+        message: `view=${args.view} reads a team or a project; a system analysis reads the digest's threads — view=digest, then view=overview runId=….`,
       };
     }
     if (args.view === 'project') {
@@ -399,6 +439,50 @@ export class ThreadReaderService {
   }
 
   /**
+   * view=digest: what a system analysis was started on, frozen on its run —
+   * the period's flags first, then its totals and ranked threads. Masked
+   * whole, then paged.
+   */
+  private async digest(
+    turn: AnalysisReadScope,
+    offset: number,
+  ): Promise<Answer> {
+    if (!turn.system || turn.analysisRunId === undefined) {
+      return {
+        error: 'UNSUPPORTED',
+        message:
+          'view=digest is a system analysis’s; this one reads its own thread or team — start with view=overview.',
+      };
+    }
+    const run = await this.runDao.getById(turn.analysisRunId, this.em.fork());
+    let digest: Record<string, unknown> | null;
+    try {
+      digest =
+        run?.analysisDigest == null
+          ? null
+          : (JSON.parse(run.analysisDigest) as Record<string, unknown>);
+    } catch {
+      digest = null;
+    }
+    if (digest === null) {
+      return {
+        error: 'DIGEST_GONE',
+        message: 'This analysis’s digest cannot be read.',
+      };
+    }
+    const { flags, goneFlags, ...rest } = digest;
+    return pagedAnswer(
+      maskedAnswer({
+        flags,
+        goneFlags,
+        ...rest,
+        next: 'Read view=history next for what earlier system analyses proposed. Then open the threads that explain a pattern with view=overview runId=… — only these threads can be read.',
+      }),
+      offset,
+    );
+  }
+
+  /**
    * The run a read names. A team analysis also opens any other run of its team
    * by name, so it pays only for what it reads; never a thread analysis, which
    * reads its one thread. The turn pins each at its first read, so its pages
@@ -410,6 +494,18 @@ export class ThreadReaderService {
     runId: string | undefined,
   ): Promise<AnalysisSource | { error: string; message: string }> {
     const named = analysedSourceOf(turn, runId);
+    if (turn.system) {
+      if ('error' in named) {
+        return named;
+      }
+      return (await this.runDao.getById(named.sourceRunId, this.em.fork())) ===
+        null
+        ? {
+            error: 'RUN_GONE',
+            message: `${named.sourceRunId} has been deleted since the digest was built: its rows are gone. Its flags are still in view=digest.`,
+          }
+        : named;
+    }
     if (!('error' in named) || !turn.team || runId === undefined) {
       return named;
     }
@@ -756,9 +852,15 @@ export class ThreadReaderService {
     const runs: Answer[] = [];
     const sampled = await this.foldRuns(analysedRuns);
     const { recorded, lives } = await this.outcomesAndLives(sampled, em);
+    const flagCounts =
+      (await this.flagDao?.countsByRun(
+        analysedRuns.map((analysed) => analysed.runId),
+        em,
+      )) ?? new Map<string, number>();
     for (const { analysed, run, folded: entry } of sampled) {
+      const flags = flagCounts.get(analysed.runId) ?? 0;
       if (run === null) {
-        runs.push({ runId: analysed.runId, gone: true });
+        runs.push({ runId: analysed.runId, gone: true, flags });
         continue;
       }
       const outcomes = recorded.get(analysed.runId)!;
@@ -780,6 +882,7 @@ export class ThreadReaderService {
         snapshotSeq: analysed.snapshotSeq,
         workingAtSnapshot: analysed.working,
         questionsAsked: outcomes.questionsAsked,
+        flags,
       };
       if (entry === null) {
         runs.push({ ...header, note: 'The run has no rows yet.' });
@@ -805,7 +908,7 @@ export class ThreadReaderService {
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
+      next: "Runs with flags first: each flag is a problem the run's own agents recorded, and view=overview runId=… leads with them. Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
     });
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });
@@ -893,6 +996,7 @@ export class ThreadReaderService {
   }
 
   private async overview(source: AnalysisSource, run: Run): Promise<Answer> {
+    const flags = await this.flagsOf(source);
     const reading = await this.timelines.read(
       source.sourceRunId,
       source.snapshotSeq,
@@ -905,6 +1009,7 @@ export class ThreadReaderService {
     );
     const kind = analysedThreadKindOf(run);
     const header = {
+      flags,
       source: {
         runId: run.id,
         title: run.title,
@@ -1006,7 +1111,7 @@ export class ThreadReaderService {
       teamNotes,
       ...(await this.measured(source, run, timeline.tools, fold.calls)),
       ...lists,
-      next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
+      next: `${flags.length > 0 ? "Start from the flags above: each is a problem an agent of the thread recorded itself; view=items afterSeq around a flag's seq shows what led to it. " : ''}Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       withClippedGoalEvidence(answer, OVERVIEW_BYTES),

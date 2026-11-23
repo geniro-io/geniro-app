@@ -16,7 +16,7 @@ import type {
 /** The team a chat files recommendations about, or null for a chat that files none. */
 export function recommendationSourceOf(
   run: Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>,
-): TeamRecommendationSource | null {
+): (TeamRecommendationSource & { chatKind: 'analysis' | 'builder' }) | null {
   if (run.analysisTeamSlug !== null) {
     return {
       chatRunId: run.id,

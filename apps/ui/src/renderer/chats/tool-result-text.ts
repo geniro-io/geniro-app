@@ -43,3 +43,16 @@ export function refusalReason(text: string): string {
   const match = /^[A-Z][A-Z_]+: (.+)$/.exec(line);
   return match?.[1] ?? line;
 }
+
+/** A call's string argument, trimmed; null when absent, not a string or blank. */
+export function textArg(
+  args: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = args[key];
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}

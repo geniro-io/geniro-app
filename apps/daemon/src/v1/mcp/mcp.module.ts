@@ -12,6 +12,7 @@ import { CommandCenterBroker } from '../agents/services/command-center.broker';
 import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
+import { FlagBroker } from '../agents/services/flag.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
 import { GalleryImageService } from '../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
@@ -43,6 +44,8 @@ import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
 import { TeamHistoryService } from '../stats/services/team-history.service';
 import { StatsModule } from '../stats/stats.module';
+import { SystemAnalysisHistoryService } from '../system-analysis/services/system-analysis-history.service';
+import { SystemAnalysisModule } from '../system-analysis/system-analysis.module';
 import { CallBroker } from '../teams/services/call-broker.service';
 import { StageService } from '../teams/services/stage.service';
 import { TaskBoardBroker } from '../teams/services/task-board.broker';
@@ -79,6 +82,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
     KnowledgeModule,
     StatsModule,
     LessonsModule,
+    SystemAnalysisModule,
   ],
   controllers: [McpController],
   providers: [
@@ -100,6 +104,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         monitors: MonitorBroker,
         teamNotes: TeamNoteBroker,
         runOutcomes: RunOutcomeBroker,
+        flags: FlagBroker,
         goals: GoalsService,
         goalWriters: GoalWritersBroker,
         stages: StageService,
@@ -116,6 +121,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         projectInstructions: ProjectInstructionsChangeService,
         projectInstructionCards: ProjectInstructionsBroker,
         teamHistory: TeamHistoryService,
+        systemHistory: SystemAnalysisHistoryService,
         teamGate: TeamProposalBroker,
         teamBuilders: TeamBuilderBroker,
         projectChats: ProjectChatBroker,
@@ -148,6 +154,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           monitors,
           teamNotes,
           runOutcomes,
+          flags,
           goals,
           goalWriters,
           stages,
@@ -164,6 +171,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           projectInstructions,
           projectInstructionCards,
           teamHistory,
+          systemHistory,
           teamGate,
           teamBuilders,
           projectChats,
@@ -194,6 +202,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         MonitorBroker,
         TeamNoteBroker,
         RunOutcomeBroker,
+        FlagBroker,
         GoalsService,
         GoalWritersBroker,
         StageService,
@@ -210,6 +219,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ProjectInstructionsChangeService,
         ProjectInstructionsBroker,
         TeamHistoryService,
+        SystemAnalysisHistoryService,
         TeamProposalBroker,
         TeamBuilderBroker,
         ProjectChatBroker,

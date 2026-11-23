@@ -1689,6 +1689,7 @@ describe('Settings — sections', () => {
       'Sharing',
       'Memory',
       'Knowledge',
+      'System analysis',
       'Storage',
     ]);
   });
@@ -2331,7 +2332,7 @@ describe('Settings explains itself', () => {
         'nav[aria-label="Settings sections"] button',
       ),
     ];
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(8);
     for (const item of items) {
       // The section's own icon, beside the phone-only chevron.
       expect(item.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(2);

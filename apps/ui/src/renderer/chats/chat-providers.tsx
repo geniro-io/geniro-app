@@ -57,6 +57,8 @@ import {
 import {
   type RecommendationsApplier,
   RecommendationsApplyContext,
+  type SystemRecommendationsApplier,
+  SystemRecommendationsApplyContext,
 } from './recommendations-apply-context';
 import { RetryContext } from './retry-context';
 import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
@@ -141,6 +143,7 @@ export function ChatProviders({
   liveText = null,
   jumpMark = null,
   applyRecommendations = null,
+  applySystemRecommendations = null,
   notSent = null,
   chatActions = null,
   loadMemory = null,
@@ -222,6 +225,11 @@ export function ChatProviders({
    */
   applyRecommendations?: RecommendationsApplier | null;
   /**
+   * A system analysis report's button — see `SystemRecommendationsApplyContext`.
+   * Absent draws a system card read-only.
+   */
+  applySystemRecommendations?: SystemRecommendationsApplier | null;
+  /**
    * The user messages a turn dropped, and how to resend one — see
    * `NotSentMessagesContext`. Absent marks no message.
    */
@@ -269,57 +277,61 @@ export function ChatProviders({
                               <RunSettledContext.Provider value={runSettledAt}>
                                 <RecommendationsApplyContext.Provider
                                   value={applyRecommendations}>
-                                  <NotSentMessagesContext.Provider
-                                    value={notSent}>
-                                    <ChatActionsContext.Provider
-                                      value={chatActions}>
-                                      <MemoryLoaderContext.Provider
-                                        value={loadMemory}>
-                                        <KnowledgeLoaderContext.Provider
-                                          value={loadKnowledge}>
-                                          <LessonsApiContext.Provider
-                                            value={lessonsApi}>
-                                            <LessonsKnowledgeApiContext.Provider
-                                              value={lessonsKnowledgeApi}>
-                                              <AgentsApiContext.Provider
-                                                value={agentsApi}>
-                                                <LessonsJumpContext.Provider
-                                                  value={lessonsJump}>
-                                                  <TaskReaderContext.Provider
-                                                    value={taskReader}>
-                                                    <ThreadContextReaderContext.Provider
-                                                      value={threadContext}>
-                                                      {children}
-                                                    </ThreadContextReaderContext.Provider>
-                                                  </TaskReaderContext.Provider>
-                                                </LessonsJumpContext.Provider>
-                                              </AgentsApiContext.Provider>
-                                            </LessonsKnowledgeApiContext.Provider>
-                                          </LessonsApiContext.Provider>
-                                          {chatActions === null ? null : (
-                                            <CommandConfirmDialog
-                                              action={chatActions.confirming}
-                                              changed={
-                                                chatActions.confirming !==
-                                                  null &&
-                                                !chatActions.actions.some(
-                                                  (a) =>
-                                                    a.seq ===
-                                                    chatActions.confirming?.seq,
-                                                )
-                                              }
-                                              onCancel={
-                                                chatActions.cancelCommand
-                                              }
-                                              onConfirm={
-                                                chatActions.confirmCommand
-                                              }
-                                            />
-                                          )}
-                                        </KnowledgeLoaderContext.Provider>
-                                      </MemoryLoaderContext.Provider>
-                                    </ChatActionsContext.Provider>
-                                  </NotSentMessagesContext.Provider>
+                                  <SystemRecommendationsApplyContext.Provider
+                                    value={applySystemRecommendations}>
+                                    <NotSentMessagesContext.Provider
+                                      value={notSent}>
+                                      <ChatActionsContext.Provider
+                                        value={chatActions}>
+                                        <MemoryLoaderContext.Provider
+                                          value={loadMemory}>
+                                          <KnowledgeLoaderContext.Provider
+                                            value={loadKnowledge}>
+                                            <LessonsApiContext.Provider
+                                              value={lessonsApi}>
+                                              <LessonsKnowledgeApiContext.Provider
+                                                value={lessonsKnowledgeApi}>
+                                                <AgentsApiContext.Provider
+                                                  value={agentsApi}>
+                                                  <LessonsJumpContext.Provider
+                                                    value={lessonsJump}>
+                                                    <TaskReaderContext.Provider
+                                                      value={taskReader}>
+                                                      <ThreadContextReaderContext.Provider
+                                                        value={threadContext}>
+                                                        {children}
+                                                      </ThreadContextReaderContext.Provider>
+                                                    </TaskReaderContext.Provider>
+                                                  </LessonsJumpContext.Provider>
+                                                </AgentsApiContext.Provider>
+                                              </LessonsKnowledgeApiContext.Provider>
+                                            </LessonsApiContext.Provider>
+                                            {chatActions === null ? null : (
+                                              <CommandConfirmDialog
+                                                action={chatActions.confirming}
+                                                changed={
+                                                  chatActions.confirming !==
+                                                    null &&
+                                                  !chatActions.actions.some(
+                                                    (a) =>
+                                                      a.seq ===
+                                                      chatActions.confirming
+                                                        ?.seq,
+                                                  )
+                                                }
+                                                onCancel={
+                                                  chatActions.cancelCommand
+                                                }
+                                                onConfirm={
+                                                  chatActions.confirmCommand
+                                                }
+                                              />
+                                            )}
+                                          </KnowledgeLoaderContext.Provider>
+                                        </MemoryLoaderContext.Provider>
+                                      </ChatActionsContext.Provider>
+                                    </NotSentMessagesContext.Provider>
+                                  </SystemRecommendationsApplyContext.Provider>
                                 </RecommendationsApplyContext.Provider>
                               </RunSettledContext.Provider>
                             </AttachmentLoaderContext.Provider>

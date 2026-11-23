@@ -30,6 +30,7 @@ import { ResourceAlertsController } from './controllers/resource-alerts.controll
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ThreadMessagesController } from './controllers/thread-messages.controller';
+import { AgentFlagDao } from './dao/agent-flag.dao';
 import { CallContextDao } from './dao/call-context.dao';
 import { ChatSearchIndexDao } from './dao/chat-search-index.dao';
 import { GoalDao } from './dao/goal.dao';
@@ -93,6 +94,7 @@ import { ContextWindowsService } from './services/context-windows.service';
 import { DelegateSpendStore } from './services/delegate-spend.store';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
+import { FlagBroker } from './services/flag.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
@@ -311,6 +313,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorBroker,
     TeamNoteBroker,
     RunOutcomeBroker,
+    FlagBroker,
+    AgentFlagDao,
     GoalsService,
     GoalDao,
     RunOutcomeHistoryService,
@@ -712,6 +716,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // each member's sink and reads the unread figure into call replies and wakes.
     TeamNoteBroker,
     RunOutcomeBroker,
+    FlagBroker,
+    AgentFlagDao,
     GoalsService,
     GoalDao,
     RunOutcomeHistoryService,

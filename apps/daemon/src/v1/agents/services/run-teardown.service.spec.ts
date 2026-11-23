@@ -26,6 +26,7 @@ import { MemoryReviewFinding } from '../../memory/entity/memory-review-finding.e
 import { MemoryUsageBackfill } from '../../memory/entity/memory-usage-backfill.entity';
 import { MemoryUsageDay } from '../../memory/entity/memory-usage-day.entity';
 import { pairKey } from '../../memory/utils/memory-pairs';
+import { AgentFlag } from '../../runs/entity/agent-flag.entity';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
@@ -42,6 +43,7 @@ import type {
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
 } from '../adapters/adapter.types';
+import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { CallContextDao } from '../dao/call-context.dao';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
@@ -113,6 +115,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           WallTurn,
           ArtifactShare,
           Goal,
+          AgentFlag,
           ToolCallEvent,
           UsageActivity,
           MemoryMark,
@@ -707,6 +710,33 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     expect(await ledger.toolCalls({})).toHaveLength(1);
     expect(await ledger.calls({})).toHaveLength(1);
     expect(await ledger.stages({})).toHaveLength(1);
+  });
+
+  it('keeps the run’s flags, which every later analysis of its period reads', async () => {
+    await seedRun('run-a');
+    const em = orm.em.fork();
+    em.persist(
+      Object.assign(new AgentFlag(), {
+        handle: 'F-a1b2c3',
+        runId: 'run-a',
+        seq: 4,
+        occurredAt: new Date(),
+        runKind: 'chat',
+        cost: 'work',
+        category: 'geniro_tool',
+        minutesLost: 20,
+        summary: 'read_analyzed_thread refused a pinned run',
+      }),
+    );
+    await em.flush();
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(
+      (await new AgentFlagDao(orm.em).forRun('run-a', 10)).map(
+        (flag) => flag.handle,
+      ),
+    ).toEqual(['F-a1b2c3']);
   });
 
   it('hands the run’s own user messages to the upload store, and nothing else', async () => {

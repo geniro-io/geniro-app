@@ -7,6 +7,7 @@ export function isReflectable(
     Run,
     | 'analysisSourceRunId'
     | 'analysisTeamSlug'
+    | 'analysisPurpose'
     | 'editsTeamSlug'
     | 'editsProjectId'
   >,

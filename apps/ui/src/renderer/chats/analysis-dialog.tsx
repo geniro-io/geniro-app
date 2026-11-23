@@ -42,13 +42,14 @@ export function AnalysisDialog({
   subject:
     | { kind: 'thread'; run: RunDto }
     | ({ kind: 'team' } & AnalysedTeamSubject)
+    | { kind: 'system'; run: RunDto }
     | null;
   sourceLabel: string;
   apis: DaemonApis;
   /** Draws the conversation; null until the daemon is reached. */
   renderThread: ((thread: HostedThread) => React.ReactNode) | null;
-  /** Open the setup dialog to start a new analysis, which replaces this one. */
-  onNewAnalysis: () => void;
+  /** Open the setup dialog to start a new analysis, which replaces this one; absent offers none. */
+  onNewAnalysis?: () => void;
   /** A turn of the analysis ended — it may have changed the team. */
   onTurnSettled?: () => void | Promise<void>;
   onClose: () => void;
@@ -59,10 +60,16 @@ export function AnalysisDialog({
       ? null
       : subject.kind === 'thread'
         ? subject.run.id
-        : `team-analysis:${subject.slug}`;
+        : subject.kind === 'system'
+          ? `system-analysis:${subject.run.id}`
+          : `team-analysis:${subject.slug}`;
+  const systemRun = subject?.kind === 'system' ? subject.run : null;
   const open = useLatestCallback(async (): Promise<RunDto> => {
     if (sourceId === null) {
       throw new Error('This analysis is closed.');
+    }
+    if (systemRun !== null) {
+      return systemRun;
     }
     const { analysis } =
       slug === null
@@ -76,21 +83,22 @@ export function AnalysisDialog({
       );
     }
     return analysis;
-  }, [apis, sourceId, slug]);
+  }, [apis, sourceId, slug, systemRun]);
   const subjectWord = slug === null ? 'thread' : 'team';
   const headerActions = useLatestCallback(
-    () => (
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="shrink-0"
-        title={`Set up a new analysis of this ${subjectWord} — starting it replaces this one`}
-        onClick={onNewAnalysis}>
-        <RotateCcw className="size-3.5" />
-        New analysis
-      </Button>
-    ),
+    () =>
+      onNewAnalysis === undefined ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          title={`Set up a new analysis of this ${subjectWord} — starting it replaces this one`}
+          onClick={onNewAnalysis}>
+          <RotateCcw className="size-3.5" />
+          New analysis
+        </Button>
+      ),
     [subjectWord, onNewAnalysis],
   );
 
@@ -115,9 +123,11 @@ export function AnalysisDialog({
               open,
               queueScope: `analysis:${sourceId}`,
               emptyText:
-                slug === null
-                  ? 'The analysis is starting — it reads the thread, then posts what it found and a card of changes to pick from.'
-                  : 'The analysis is starting — it reads the team’s latest runs, then posts what it found and a card of changes to pick from.',
+                systemRun !== null
+                  ? 'The analysis is starting — it reads the period’s troubled threads and flags, then posts what it found and a card of changes to pick from.'
+                  : slug === null
+                    ? 'The analysis is starting — it reads the thread, then posts what it found and a card of changes to pick from.'
+                    : 'The analysis is starting — it reads the team’s latest runs, then posts what it found and a card of changes to pick from.',
               composerLabel: 'Message the analysis',
               composerPlaceholder:
                 'Ask about a finding, or what to change instead…',

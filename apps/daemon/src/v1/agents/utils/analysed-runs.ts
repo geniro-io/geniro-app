@@ -71,6 +71,12 @@ export function analysisTurnOf(
     | 'analysisPurpose'
   >,
 ): AnalysisTurn | null {
+  if (run.analysisPurpose === 'system') {
+    return systemAnalysisTurn(
+      analysisRunId,
+      readAnalysedRuns(run.analysisRuns),
+    );
+  }
   if (run.analysisSourceRunId !== null && run.analysisSourceSeq !== null) {
     return {
       analysisRunId,
@@ -122,8 +128,39 @@ export function teamAnalysisTurn(
   };
 }
 
-/** Every run an analysis reads: a team analysis's runs, else its one source. */
+/**
+ * A system analysis's turn over the threads its digest ranks; its source is
+ * the top-ranked one. Null with no thread to read.
+ */
+export function systemAnalysisTurn(
+  analysisRunId: string,
+  runs: readonly AnalysedRun[],
+): AnalysisTurn | null {
+  const top = runs[0];
+  if (top === undefined) {
+    return null;
+  }
+  return {
+    analysisRunId,
+    sourceRunId: top.runId,
+    snapshotSeq: top.snapshotSeq,
+    sourceWorking: top.working,
+    purpose: 'system',
+    system: {
+      runs: runs.map(({ runId, snapshotSeq, working }) => ({
+        runId,
+        snapshotSeq,
+        working,
+      })),
+    },
+  };
+}
+
+/** Every run an analysis reads: a team's or a system analysis's runs, else its one source. */
 export function analysedRunIdsOf(turn: AnalysisReadScope): string[] {
+  if (turn.system) {
+    return turn.system.runs.map((run) => run.runId);
+  }
   return turn.team
     ? turn.team.runs.map((run) => run.runId)
     : [turn.sourceRunId];
@@ -186,6 +223,19 @@ export function analysedSourceOf(
   if (runId === undefined || runId === turn.sourceRunId) {
     return turn;
   }
+  if (turn.system) {
+    const pinned = turn.system.runs.find((entry) => entry.runId === runId);
+    return pinned === undefined
+      ? {
+          error: 'NOT_IN_DIGEST',
+          message: `${runId} is not one of the threads this system analysis reads: view=digest lists them.`,
+        }
+      : {
+          sourceRunId: pinned.runId,
+          snapshotSeq: pinned.snapshotSeq,
+          sourceWorking: pinned.working,
+        };
+  }
   const run =
     turn.team?.runs.find((entry) => entry.runId === runId) ??
     turn.team?.opened?.get(runId);
@@ -205,13 +255,20 @@ export function analysedSourceOf(
 }
 
 /**
- * Whether a run is itself an analysis — of a thread, or of a team across
- * its runs. Every check of it reads both columns.
+ * Whether a run is itself an analysis — of a thread, of a team across its
+ * runs, or the system analysis, which names neither source.
  */
 export function isAnalysisRun(
-  run: Pick<Run, 'analysisSourceRunId' | 'analysisTeamSlug'>,
+  run: Pick<
+    Run,
+    'analysisSourceRunId' | 'analysisTeamSlug' | 'analysisPurpose'
+  >,
 ): boolean {
-  return run.analysisSourceRunId !== null || run.analysisTeamSlug !== null;
+  return (
+    run.analysisSourceRunId !== null ||
+    run.analysisTeamSlug !== null ||
+    run.analysisPurpose === 'system'
+  );
 }
 
 /**

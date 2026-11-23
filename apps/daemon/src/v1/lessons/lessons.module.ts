@@ -79,6 +79,11 @@ import { LessonsEventBus } from './services/lessons-events.bus';
     LessonProposalService,
     LessonBackgroundJobSource,
   ],
-  exports: [LessonFilingService, LessonCheckService, LessonsEventBus],
+  exports: [
+    LessonFilingService,
+    LessonCheckService,
+    LessonsEventBus,
+    LessonProposalDao,
+  ],
 })
 export class LessonsModule {}

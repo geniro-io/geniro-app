@@ -14,6 +14,7 @@ import {
   parseMemoryChanged,
   parseProjectsChanged,
   parseRunStatus,
+  parseSystemAnalysesChanged,
   parseTaskChanged,
   parseThreadMessagesChanged,
   parseUsageRecorded,
@@ -1164,6 +1165,21 @@ describe('parseBackgroundJobsChanged — the background_jobs_changed twin', () =
     expect(parseBackgroundJobsChanged(null)).toBeNull();
     expect(parseBackgroundJobsChanged({})).toBeNull();
     expect(parseBackgroundJobsChanged({ kind: 3 })).toBeNull();
+  });
+});
+
+describe('parseSystemAnalysesChanged — the system_analyses_changed twin', () => {
+  it('reads the analysis that changed', () => {
+    expect(parseSystemAnalysesChanged({ runId: 'analysis-1' })).toEqual({
+      runId: 'analysis-1',
+    });
+  });
+
+  it('refuses anything else', () => {
+    expect(parseSystemAnalysesChanged(null)).toBeNull();
+    expect(parseSystemAnalysesChanged({})).toBeNull();
+    expect(parseSystemAnalysesChanged({ runId: '' })).toBeNull();
+    expect(parseSystemAnalysesChanged({ runId: 3 })).toBeNull();
   });
 });
 

@@ -28,6 +28,7 @@ import { RunsModule } from './v1/runs/runs.module';
 import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
 import { StorageModule } from './v1/storage/storage.module';
+import { SystemAnalysisModule } from './v1/system-analysis/system-analysis.module';
 import { TasksModule } from './v1/tasks/tasks.module';
 import { TeamsModule } from './v1/teams/teams.module';
 
@@ -68,6 +69,7 @@ export class AppModule {
         KnowledgeModule,
         StorageModule,
         MigrationsModule,
+        SystemAnalysisModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

@@ -17,5 +17,6 @@ export * from './ProjectsApi';
 export * from './SharesApi';
 export * from './StatsApi';
 export * from './StorageApi';
+export * from './SystemAnalysesApi';
 export * from './TasksApi';
 export * from './TeamsApi';

@@ -16,6 +16,7 @@ apis/ProjectsApi.ts
 apis/SharesApi.ts
 apis/StatsApi.ts
 apis/StorageApi.ts
+apis/SystemAnalysesApi.ts
 apis/TasksApi.ts
 apis/TeamsApi.ts
 apis/index.ts

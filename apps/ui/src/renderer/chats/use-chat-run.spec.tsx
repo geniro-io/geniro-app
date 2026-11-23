@@ -39,6 +39,7 @@ const run1: ChatRun = {
   analysisSourceRunId: null,
   analysisSourceSeq: null,
   analysisTeamSlug: null,
+  analysisPurpose: null,
   awaiting: null,
   holdingFor: 0,
   awaitingCalls: 0,

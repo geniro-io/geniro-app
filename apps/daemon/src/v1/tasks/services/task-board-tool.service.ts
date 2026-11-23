@@ -43,6 +43,7 @@ import {
   TaskStatusSchema,
   type TaskWire,
 } from '../tasks.types';
+import { landsInArmedIntake, quietColumn } from '../utils/armed-intake';
 import { BOARD_TOOLS, boardToolArgs } from '../utils/board-tools';
 import { reportImagePaths, rewriteReportImages } from '../utils/report-images';
 import { resolveRunTarget } from '../utils/run-target';
@@ -1047,16 +1048,6 @@ function runTargetNote(card: TaskWire, project: Project): string {
         : `${field}=${target[field]}${from(field)}`,
   );
   return `It runs on ${target.agentKind}${from('agentKind')}, in folder ${folder}, with ${trims.join(', ')}.`;
-}
-
-/** Whether a card in `status` is one an armed autopilot starts by itself. */
-function landsInArmedIntake(project: Project, status: TaskStatus): boolean {
-  return project.autopilotEnabled && project.autopilotIntakeStatus === status;
-}
-
-/** Where a card waits with nothing starting it — `backlog`, unless that is the armed intake. */
-function quietColumn(project: Project): TaskStatus {
-  return landsInArmedIntake(project, 'backlog') ? 'todo' : 'backlog';
 }
 
 /**

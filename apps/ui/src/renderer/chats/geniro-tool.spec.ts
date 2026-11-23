@@ -8,6 +8,7 @@ import {
   geniroKnowledgeToolOf,
   geniroMemoryToolOf,
   isGeniroCardKind,
+  isGeniroFlagToolCall,
   isGeniroToolName,
   isTeamProposalTool,
   standsAcrossTurns,
@@ -180,6 +181,33 @@ describe('shared-knowledge tools', () => {
       expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
     },
   );
+});
+
+describe('the flag tool', () => {
+  it.each([
+    `mcp__${SERVER}__flag_issue`,
+    `${SERVER}-flag_issue: flag_issue`,
+    `Geniro ${SERVER}: flag_issue`,
+  ])('recognises flag_issue in the spelling %s', (name) => {
+    expect(isGeniroFlagToolCall(name, RUN)).toBe(true);
+  });
+
+  it('refuses another server, another run and a longer name', () => {
+    expect(isGeniroFlagToolCall('mcp__geniro-mine__flag_issue', RUN)).toBe(
+      false,
+    );
+    expect(
+      isGeniroFlagToolCall(`mcp__${SERVER}__flag_issue`, 'ffffffff-0000'),
+    ).toBe(false);
+    expect(isGeniroFlagToolCall(`mcp__${SERVER}__flag_issued`, RUN)).toBe(
+      false,
+    );
+  });
+
+  it('keeps the raw flag_issue call visible, since its row is drawn from that pair', () => {
+    expect(isGeniroToolName(`mcp__${SERVER}__flag_issue`, RUN)).toBe(false);
+    expect(geniroCardKindOf(`mcp__${SERVER}__flag_issue`, RUN)).toBeNull();
+  });
 });
 
 describe('in-app browser tools', () => {

@@ -19,6 +19,7 @@ import type {
   GlobalChatSearchQuery,
 } from '../chat.types';
 import { activityWindowOf, runIdsActiveIn } from '../utils/run-activity';
+import { notSystemAnalysis } from '../utils/system-analysis-filter';
 
 @Injectable()
 export class ChatSearchIndexDao extends BaseDao<Item> {
@@ -58,7 +59,8 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       // own surface.
       .where('r.edits_team_slug', 'is', null)
       .where('r.analysis_source_run_id', 'is', null)
-      .where('r.analysis_team_slug', 'is', null);
+      .where('r.analysis_team_slug', 'is', null)
+      .where((eb) => notSystemAnalysis(eb, eb.ref('r.analysis_purpose')));
     if (!options.includeArchived) {
       query = query.where('r.archived_at', 'is', null);
     }
@@ -95,6 +97,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
         .where('edits_team_slug', 'is', null)
         .where('analysis_source_run_id', 'is', null)
         .where('analysis_team_slug', 'is', null)
+        .where((eb) => notSystemAnalysis(eb, eb.ref('analysis_purpose')))
         .executeTakeFirst()
     );
   }

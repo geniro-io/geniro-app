@@ -187,6 +187,8 @@ export class CommandCenterStartsService
               title: task.title,
               status: task.status,
               folder: task.folder ?? project.folder,
+              startedBy:
+                task.startRequestKind === 'analysis' ? 'user' : 'manager',
             },
           ];
     });
@@ -204,6 +206,15 @@ export class CommandCenterStartsService
     await this.taskDao.clearStartRequester(taskId, em);
     this.tasks.announceInPlace(task);
     const said = reason.slice(0, START_FAILURE_MAX_CHARS);
+    if (task.startRequestKind === 'analysis') {
+      this.taskEvents.publishStartFailed({
+        taskId,
+        byRunId: managerRunId,
+        title: task.title,
+        reason: said,
+      });
+      return;
+    }
     this.wakes.publish(
       managerWake(
         managerRunId,
@@ -336,7 +347,11 @@ export class CommandCenterStartsService
       for (const task of await this.taskDao.listPendingStartRequests(em)) {
         const managerRunId = task.startRequestedByRunId;
         const requestedAt = task.startRequestedAt;
-        if (managerRunId === null || requestedAt === null) {
+        if (
+          managerRunId === null ||
+          requestedAt === null ||
+          task.startRequestKind === 'analysis'
+        ) {
           continue;
         }
         const cardId = startCardId(task.id, requestedAt);

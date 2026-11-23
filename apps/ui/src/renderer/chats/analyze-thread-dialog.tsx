@@ -94,7 +94,7 @@ const DEFAULT_ANALYSED_DAYS = 7;
 /** The periods a team analysis can read, in days, shortest first. */
 const ANALYSED_PERIODS = [1, 3, 7, 14, 30, 90];
 
-function periodLabel(days: number): string {
+export function periodLabel(days: number): string {
   return days === 1 ? 'Last day' : `Last ${days} days`;
 }
 

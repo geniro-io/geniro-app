@@ -168,6 +168,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
                 chat.analysisSourceRunId !== null,
             ),
           ),
+        systemAnalysisIds: () => Promise.resolve([]),
       } as unknown as RunDao,
       {
         rowsOfKinds: (runId: string) =>

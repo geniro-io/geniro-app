@@ -10,6 +10,7 @@ import {
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { isAnalysisRun } from '../../agents/utils/analysed-runs';
 import { chatTextMatchQuery } from '../../agents/utils/chat-text-query';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
@@ -611,8 +612,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     const em = this.em.fork();
     const run = await this.runs.getById(runId, em);
     const state = await this.nodeStates.getByRunNode(runId, memberId, em);
-    const kind =
-      run?.analysisSourceRunId || run?.analysisTeamSlug ? 'analysis' : 'agent';
+    const kind = run !== null && isAnalysisRun(run) ? 'analysis' : 'agent';
     return {
       kind,
       runId,

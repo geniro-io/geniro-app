@@ -22,6 +22,7 @@ import { Project } from '../../projects/entity/project.entity';
 import { ProjectInstructionChange } from '../../projects/entity/project-instruction-change.entity';
 import type { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { AgentFlag } from '../../runs/entity/agent-flag.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -41,11 +42,13 @@ import type {
   PullRequestLifecycle,
   RecommendationsTeamPopulation,
 } from '../chat.types';
+import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
+import { systemAnalysisTurn } from '../utils/analysed-runs';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
@@ -115,6 +118,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           NodeState,
           WallTurn,
           Goal,
+          AgentFlag,
           Project,
           ProjectInstructionChange,
           Task,
@@ -185,6 +189,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       new ProjectInstructionChangeDao(em),
       new GoalDao(em),
       lives,
+      new AgentFlagDao(em),
     );
   }
 
@@ -429,6 +434,119 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
       OVERVIEW_BYTES,
     );
+  });
+
+  async function flag(
+    runId: string,
+    seq: number,
+    summary: string,
+    extra: Partial<AgentFlag> = {},
+  ): Promise<void> {
+    const fork = orm.em.fork();
+    fork.persist(
+      Object.assign(new AgentFlag(), {
+        handle: `F-${String(seq).padStart(6, '0')}`,
+        runId,
+        seq,
+        occurredAt: new Date(T0 + seq * 1000),
+        memberId: null,
+        runKind: 'chat',
+        cost: 'work',
+        category: 'geniro_tool',
+        minutesLost: 10,
+        summary,
+        ...extra,
+      }),
+    );
+    await fork.flush();
+  }
+
+  it('leads the overview with the flags raised up to the snapshot', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);
+    await insert(2, 'turn_complete', { usage: { durationMs: 2_000 } }, 2);
+    await flag('source', 1, 'The board tool lost my card', {
+      memberId: 'dev',
+      callId: 'call-1',
+      detail: 'Filed it twice.',
+    });
+    await flag('source', 2, 'User rejected the plan', {
+      cost: 'disagreement',
+      category: 'user_instructions',
+      minutesLost: null,
+    });
+    // Raised after the analysis began: outside its snapshot.
+    await flag('source', 5, 'Later problem');
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 2, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(Object.keys(answer)[0]).toBe('flags');
+    expect(answer.flags).toEqual([
+      {
+        handle: 'F-000001',
+        seq: 1,
+        at: new Date(T0 + 1000).toISOString(),
+        node: 'dev',
+        callId: 'call-1',
+        cost: 'work',
+        category: 'geniro_tool',
+        minutesLost: 10,
+        summary: 'The board tool lost my card',
+        detail: 'Filed it twice.',
+      },
+      {
+        handle: 'F-000002',
+        seq: 2,
+        at: new Date(T0 + 2000).toISOString(),
+        node: 'agent',
+        cost: 'disagreement',
+        category: 'user_instructions',
+        summary: 'User rejected the plan',
+      },
+    ]);
+    expect(answer.next).toMatch(/^Start from the flags above/);
+  });
+
+  it('never cuts the flags to fit the overview’s budget', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    for (let i = 0; i < 60; i += 1) {
+      await insert(
+        1 + i * 2,
+        'tool_call',
+        { id: `t${i}`, name: `Tool${i}` },
+        i,
+      );
+      await insert(2 + i * 2, 'tool_result', { id: `t${i}` }, i + 1);
+    }
+    for (let seq = 1; seq <= 10; seq += 1) {
+      await flag('source', seq, `Problem ${seq}`, {
+        detail: 'd'.repeat(1_500),
+      });
+    }
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 120, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.shortened).toBeDefined();
+    expect(answer.flags).toHaveLength(10);
+    expect((answer.flags as { detail: string }[])[9]?.detail).toHaveLength(
+      1_500,
+    );
+  });
+
+  it('reads no flags in a thread whose agents raised none', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+      { view: 'overview' },
+    );
+    expect(answer.flags).toEqual([]);
+    expect(answer.next).not.toContain('flags above');
   });
 
   it('counts the team notes up to the snapshot and points at them only when there are some', async () => {
@@ -1475,7 +1593,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             runId: 'wf-old',
             version: { version: V1, number: 1, current: false },
           }),
-          { runId: 'wf-gone', gone: true },
+          { runId: 'wf-gone', gone: true, flags: 0 },
         ]);
         expect(answer.versions).toEqual([
           expect.objectContaining({
@@ -1866,7 +1984,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             }),
           ],
         }),
-        { runId: 'wf-gone', gone: true },
+        { runId: 'wf-gone', gone: true, flags: 0 },
       ]);
       expect(answer.calls).toEqual([]);
       expect(answer.models).toEqual([
@@ -2282,6 +2400,171 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         (await reader.read(thread, { view: 'overview', runId: 'wf-new' }))
           .error,
       ).toBe('NOT_ANALYSED');
+    });
+  });
+
+  describe('a system analysis turn', () => {
+    const FROZEN_FLAG = {
+      handle: 'F-busy1',
+      runId: 'source',
+      seq: 1,
+      occurredAt: '2026-11-05T10:00:00.000Z',
+      memberId: null,
+      callId: null,
+      agentKind: null,
+      model: null,
+      teamSlug: null,
+      projectId: null,
+      runKind: 'chat',
+      runTitle: 'Slow thread',
+      cost: 'work',
+      category: 'other',
+      minutesLost: null,
+      summary: 'the fetch retried',
+      detail: null,
+    };
+    const FROZEN_DIGEST = {
+      period: {
+        from: '2026-11-01T00:00:00.000Z',
+        to: '2026-11-08T00:00:00.000Z',
+        days: 7,
+      },
+      totals: {
+        threadsWithSignals: 2,
+        flags: 1,
+        failedToolCalls: 0,
+        systemThreads: 1,
+      },
+      flags: [FROZEN_FLAG],
+      goneFlags: [],
+      threads: [
+        {
+          runId: 'source',
+          title: 'Slow thread',
+          kind: 'chat',
+          teamSlug: null,
+          projectId: null,
+          archived: false,
+          lastActivityAt: '2026-11-05T10:00:00.000Z',
+          score: 5,
+          signals: {
+            workFlags: 1,
+            disagreementFlags: 0,
+            outcome: null,
+            unmetGoals: 0,
+            refusedApprovals: 0,
+            corrections: 0,
+            analysisRefusals: 0,
+            failedToolCalls: 0,
+          },
+          failedTools: [],
+          snapshotSeq: 0,
+        },
+      ],
+    };
+    const TURN = () =>
+      systemAnalysisTurn('analysis-1', [
+        { runId: 'source', snapshotSeq: 0, working: false },
+        { runId: 'pinned-lesson', snapshotSeq: 1, working: false },
+      ])!;
+
+    async function insertInto(
+      runId: string,
+      seq: number,
+      text: string,
+    ): Promise<void> {
+      const fork = orm.em.fork();
+      fork.create(Item, {
+        runId,
+        seq,
+        kind: 'message',
+        role: 'assistant',
+        payload: JSON.stringify({ text }),
+        createdAt: new Date(T0 + seq * 1000),
+        updatedAt: new Date(T0 + seq * 1000),
+      });
+      await fork.flush();
+    }
+
+    beforeEach(async () => {
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'pinned-lesson',
+          status: 'completed',
+          title: 'Lessons reflection',
+          analysisPurpose: 'lessons',
+        } as Run),
+      );
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'analysis-1',
+          status: 'completed',
+          title: 'System analysis',
+          analysisPurpose: 'system',
+          analysisDigest: JSON.stringify(FROZEN_DIGEST),
+        } as Run),
+      );
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'outside',
+          status: 'completed',
+          title: 'Not in the digest',
+        } as Run),
+      );
+      await fork.flush();
+      for (const seq of [0, 1, 2, 3]) {
+        await insertInto('pinned-lesson', seq, `lesson row ${seq}`);
+      }
+    });
+
+    it('answers view=digest with the frozen digest, its flags first', async () => {
+      const answer = await reader.read(TURN(), { view: 'digest' });
+
+      expect(Object.keys(answer)[0]).toBe('flags');
+      expect(answer).toMatchObject({
+        flags: [FROZEN_FLAG],
+        totals: FROZEN_DIGEST.totals,
+        threads: FROZEN_DIGEST.threads,
+      });
+      expect(answer.error).toBeUndefined();
+    });
+
+    it('reads a pinned hidden lessons run only up to the snapshot its digest pinned', async () => {
+      const answer = await reader.read(TURN(), {
+        view: 'items',
+        runId: 'pinned-lesson',
+      });
+
+      expect(answer.error).toBeUndefined();
+      expect(
+        (answer.items as { seq: number }[]).map((item) => item.seq),
+      ).toEqual([0, 1]);
+    });
+
+    it('reads a pinned run with view=overview', async () => {
+      const answer = await reader.read(TURN(), {
+        view: 'overview',
+        runId: 'pinned-lesson',
+      });
+
+      expect(answer.error).toBeUndefined();
+    });
+
+    it('refuses a run the digest does not hold with NOT_IN_DIGEST', async () => {
+      expect(
+        (await reader.read(TURN(), { view: 'overview', runId: 'outside' }))
+          .error,
+      ).toBe('NOT_IN_DIGEST');
+      expect(
+        (await reader.read(TURN(), { view: 'items', runId: 'outside' })).error,
+      ).toBe('NOT_IN_DIGEST');
+    });
+
+    it('answers view=team, view=runs and view=project with UNSUPPORTED', async () => {
+      for (const view of ['team', 'runs', 'project'] as const) {
+        expect((await reader.read(TURN(), { view })).error).toBe('UNSUPPORTED');
+      }
     });
   });
 });

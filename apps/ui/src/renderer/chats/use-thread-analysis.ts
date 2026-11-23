@@ -15,13 +15,21 @@ export type ThreadAnalysisMark = 'none' | 'idle' | 'working' | 'waiting';
 type Reading = Pick<RunDto, 'id' | 'status' | 'awaiting'> | null;
 
 /**
- * Whether a run is itself an analysis — of a thread, or of a team across
- * its runs. An analysis is never analysed in turn.
+ * Whether a run is itself an analysis — of a thread, of a team across its
+ * runs, or a system analysis of a period. An analysis is never analysed in
+ * turn.
  */
 export function isAnalysisRun(
-  run: Pick<RunDto, 'analysisSourceRunId' | 'analysisTeamSlug'>,
+  run: Pick<
+    RunDto,
+    'analysisSourceRunId' | 'analysisTeamSlug' | 'analysisPurpose'
+  >,
 ): boolean {
-  return run.analysisSourceRunId != null || run.analysisTeamSlug != null;
+  return (
+    run.analysisSourceRunId != null ||
+    run.analysisTeamSlug != null ||
+    run.analysisPurpose === 'system'
+  );
 }
 
 /** The mark one reading of the analysis row makes. */

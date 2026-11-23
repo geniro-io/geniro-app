@@ -12,6 +12,7 @@ import {
   registerSecret,
 } from '../../../diagnostics/utils/redact';
 import type { TeamHistoryService } from '../../../stats/services/team-history.service';
+import type { SystemAnalysisHistoryService } from '../../../system-analysis/services/system-analysis-history.service';
 import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type { McpCallContext } from '../../mcp.types';
 import {
@@ -44,6 +45,8 @@ function tool(
   installed = true,
   history: Partial<TeamHistoryService> = {},
   teamRuns: string[] | null = null,
+  systemHistory: Partial<SystemAnalysisHistoryService> = {},
+  systemRuns: string[] | null = null,
 ) {
   const analysis = new AnalysisBroker();
   if (installed) {
@@ -53,6 +56,18 @@ function tool(
         sourceRunId: 'source',
         snapshotSeq: 9,
         sourceWorking: true,
+        ...(systemRuns === null
+          ? {}
+          : {
+              purpose: 'system' as const,
+              system: {
+                runs: systemRuns.map((runId) => ({
+                  runId,
+                  snapshotSeq: 9,
+                  working: false,
+                })),
+              },
+            }),
         ...(teamRuns === null
           ? {}
           : {
@@ -79,6 +94,7 @@ function tool(
     } as ThreadReaderService,
     teams as TeamChangeService,
     history as TeamHistoryService,
+    systemHistory as SystemAnalysisHistoryService,
   );
 }
 
@@ -293,6 +309,57 @@ describe('ReadAnalyzedThreadTool', () => {
 
     expect(textOf(result)).toContain('NOT_ANALYSED');
     expect(analysedTeamOf).not.toHaveBeenCalled();
+  });
+
+  it("answers a system analysis's history with every earlier system item, masked, never the team history", async () => {
+    registerSecret(SECRET, 'github token');
+    const teamRead = vi.fn<TeamHistoryService['read']>();
+    const systemRead = vi.fn<SystemAnalysisHistoryService['read']>(() =>
+      Promise.resolve({
+        analyses: 1,
+        items: [
+          {
+            chatRunId: 'earlier',
+            cardSeq: 4,
+            filedAt: '2026-11-01T00:00:00.000Z',
+            id: 'G-1',
+            target: 'geniro',
+            location: 'flag_issue',
+            title: 'Fix the flag tool',
+            rootCause: `leaked ${SECRET}`,
+            status: 'applied',
+            note: null,
+            applyAction: 'filed',
+            card: { taskId: 'task-1', column: 'todo', deleted: false },
+          },
+        ],
+      }),
+    );
+
+    const page = textOf(
+      await tool(
+        { analysedTeamOf: () => Promise.resolve(null) },
+        {},
+        true,
+        { read: teamRead },
+        null,
+        { read: systemRead },
+        ['a', 'b'],
+      ).call('read_analyzed_thread', { view: 'history' }, CONTEXT),
+    );
+
+    expect(systemRead).toHaveBeenCalledWith('analysis');
+    expect(teamRead).not.toHaveBeenCalled();
+    expect(page).not.toContain(SECRET);
+    expect(pageOf(page)).toMatchObject({
+      items: [
+        {
+          id: 'G-1',
+          applyAction: 'filed',
+          card: { taskId: 'task-1', column: 'todo' },
+        },
+      ],
+    });
   });
 
   it("answers a bare history view with the summary, not the records, scoped to the analysis's runs and naming its own chat", async () => {

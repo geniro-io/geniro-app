@@ -27,10 +27,12 @@ import {
   RecommendationsReportSchema,
   type RecommendationsTeamStats,
   type RecommendationsTiming,
+  SYSTEM_RECOMMENDATION_TARGETS,
   type TeamPopulationReader,
   type TeamVersionIndexReader,
   type ThreadTimeline,
 } from '../chat.types';
+import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import {
@@ -102,6 +104,7 @@ export class AnalysisReportsService {
     private readonly threads: ThreadReaderService,
     private readonly projectScope: ProjectScopeService,
     @Optional() private readonly knowledge?: KnowledgeService,
+    @Optional() private readonly flags?: AgentFlagDao,
   ) {}
 
   /**
@@ -173,8 +176,8 @@ export class AnalysisReportsService {
     }
     const report = parsed.data;
     const em = this.em.fork();
-    let sourceKind: AnalysedThreadKind = 'team';
-    if (!turn.team) {
+    let sourceKind: AnalysedThreadKind = turn.system ? 'system' : 'team';
+    if (!turn.team && !turn.system) {
       const source = await this.runDao.getById(turn.sourceRunId, em);
       if (source === null) {
         return refused('SOURCE_GONE — the analysed thread has been deleted');
@@ -198,6 +201,7 @@ export class AnalysisReportsService {
       isRepositoryRoot,
     );
     problems.push(...(await this.documentProblems(report)));
+    problems.push(...(await this.flagProblems(report)));
     // Each cited row is checked against the run it names, at that run's own
     // snapshot — a team analysis cites several.
     const cited = new Map<string, { snapshotSeq: number; seqs: Set<number> }>();
@@ -220,7 +224,7 @@ export class AnalysisReportsService {
     }
     for (const runId of unknownRuns) {
       problems.push(
-        turn.team
+        turn.team || turn.system
           ? `evidence runId ${runId} has not been read in this turn: a run is cited against the snapshot its read pinned, so read it first with runId`
           : `evidence runId ${runId} is not the thread this analysis reads: leave runId out`,
       );
@@ -236,20 +240,21 @@ export class AnalysisReportsService {
       const missing = wanted.filter((seq) => !existing.has(seq));
       if (missing.length > 0) {
         problems.push(
-          `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed ${turn.team ? `run ${runId}` : 'thread'} (snapshot ends at ${snapshotSeq}) — re-read and cite real rows`,
+          `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed ${turn.team || turn.system ? `run ${runId}` : 'thread'} (snapshot ends at ${snapshotSeq}) — re-read and cite real rows`,
         );
       }
     }
     const teamStats = await this.teamStats(turn, versionIndex, population);
     problems.push(...checkHotspots(report, teamStats));
     // One run's timing would pass for the team's.
-    const reading = turn.team
-      ? null
-      : await this.timelines.read(
-          turn.sourceRunId,
-          turn.snapshotSeq,
-          turn.sourceWorking,
-        );
+    const reading =
+      turn.team || turn.system
+        ? null
+        : await this.timelines.read(
+            turn.sourceRunId,
+            turn.snapshotSeq,
+            turn.sourceWorking,
+          );
     problems.push(
       ...checkMembers(
         report,
@@ -280,6 +285,25 @@ export class AnalysisReportsService {
         ? {}
         : { members: report.members.length }),
     };
+  }
+
+  /** Each flag an item says it answers must be one agents raised. */
+  private async flagProblems(report: RecommendationsReport): Promise<string[]> {
+    const named = [
+      ...new Set(report.items.flatMap((item) => item.addressesFlags ?? [])),
+    ];
+    if (named.length === 0) {
+      return [];
+    }
+    const known = new Set(
+      ((await this.flags?.byHandles(named)) ?? []).map((flag) => flag.handle),
+    );
+    const unknown = named.filter((handle) => !known.has(handle));
+    return unknown.length === 0
+      ? []
+      : [
+          `addressesFlags names ${unknown.join(', ')}, which no agent raised — cite the handles the reads list`,
+        ];
   }
 
   /** What the store's own write would refuse of a knowledge item, ahead of any Apply. */
@@ -413,6 +437,13 @@ export function checkMembers(
   members: ReadonlySet<string>,
 ): string[] {
   const assessed = report.members ?? [];
+  if (sourceKind === 'system') {
+    return assessed.length === 0
+      ? []
+      : [
+          'a system analysis judges geniro, not a team, so it has no members to assess — leave members out',
+        ];
+  }
   if (sourceKind === 'chat') {
     return assessed.length === 0
       ? []
@@ -613,6 +644,19 @@ export function checkItems(
       );
     }
     problems.push(...knowledgeItemProblems(item, byId, knowledgeWritable));
+    if (
+      sourceKind === 'system' &&
+      !SYSTEM_RECOMMENDATION_TARGETS.includes(item.target)
+    ) {
+      problems.push(
+        `TARGET_NOT_FOR_SYSTEM — ${item.id}: a system analysis proposes only ${SYSTEM_RECOMMENDATION_TARGETS.join(', ')} items`,
+      );
+    }
+    if (item.target === 'geniro' && sourceKind !== 'system') {
+      problems.push(
+        `${item.id}: only a system analysis proposes changes to geniro itself`,
+      );
+    }
     if (item.target === 'team' && sourceKind === 'chat') {
       problems.push(
         `${item.id}: the analysed thread is a plain chat, so only repo, user, memory, project and external recommendations apply`,

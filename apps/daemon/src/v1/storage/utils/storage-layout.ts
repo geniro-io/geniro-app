@@ -21,6 +21,7 @@ import {
   MIGRATION_ERROR_FILE,
 } from '../../migrations/migrations.types';
 import { LEGACY_LIBRARY_DIR } from '../../migrations/utils/m0003-team-library-files';
+import { SYSTEM_ANALYSIS_DIR_NAME } from '../../system-analysis/utils/system-analysis-folder';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
 import { AVATARS_DIR_NAME } from '../../teams/services/avatar-store.service';
 import { TEAMS_DIR_NAME } from '../../teams/services/team-store.service';
@@ -76,6 +77,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [MEMORY_USAGE_MARKER_FILE]: 'appState',
   [COMPACTION_MARKER_FILE]: 'appState',
   [MANAGER_DIR_NAME]: 'appState',
+  [SYSTEM_ANALYSIS_DIR_NAME]: 'appState',
   [MIGRATION_ERROR_FILE]: 'appState',
   [MIGRATION_BACKUPS_DIR]: 'appState',
   [LEGACY_LIBRARY_DIR]: 'appState',

@@ -9,6 +9,7 @@ import {
 } from '../../../agents/services/thread-reader.service';
 import { analysedRunIdsOf } from '../../../agents/utils/analysed-runs';
 import type { TeamHistoryService } from '../../../stats/services/team-history.service';
+import type { SystemAnalysisHistoryService } from '../../../system-analysis/services/system-analysis-history.service';
 import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type {
   McpCallContext,
@@ -47,6 +48,7 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
     private readonly threads: ThreadReaderService,
     private readonly teams: TeamChangeService,
     private readonly history: TeamHistoryService,
+    private readonly systemHistory: SystemAnalysisHistoryService,
   ) {
     super();
   }
@@ -76,6 +78,16 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       return this.text(`Nothing to read: ${turn.reason}.`, true);
     }
     try {
+      if (turn.system && read.query.view === 'history') {
+        return this.text(
+          analyzedThreadResultText(
+            pagedAnswer(
+              maskedAnswer({ ...(await this.systemHistory.read(runId)) }),
+              read.query.offset ?? 0,
+            ),
+          ),
+        );
+      }
       if (read.query.view === 'history' || read.query.view === 'spend') {
         const team = await this.threads.analysedTeamOf(turn);
         if (team === null) {

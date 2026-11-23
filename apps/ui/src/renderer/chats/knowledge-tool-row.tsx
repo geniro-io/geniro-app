@@ -20,6 +20,7 @@ import {
   recordOf,
   refusalReason,
   resultTextOf,
+  textArg,
   toolCallArgsOf,
 } from './tool-result-text';
 import { Dot, plural } from './tool-row-parts';
@@ -160,15 +161,6 @@ const PROPOSED = /^Proposed (a new document|a change to) `([^`]+)`:/;
 const SAVE_STALE = /^Not saved: `([^`]+)` is at rev \d+ now\./;
 
 /** A string argument, trimmed; null when it is absent or blank. */
-function textArg(args: Record<string, unknown>, key: string): string | null {
-  const value = args[key];
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
-}
-
 /** The text before its first blank line: a read's header, never its body. */
 function headerOf(text: string): string {
   return text.split('\n\n', 1)[0] ?? '';

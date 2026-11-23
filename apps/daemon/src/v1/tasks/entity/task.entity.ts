@@ -12,7 +12,12 @@ import { TimestampsEntity } from '@packages/mikroorm';
 import type { InterruptCause } from '../../../utils/stop-cause';
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import type { AgentKind } from '../../runs/runs.types';
-import type { TaskPriority, TaskSource, TaskStatus } from '../tasks.types';
+import type {
+  TaskPriority,
+  TaskSource,
+  TaskStartRequestKind,
+  TaskStatus,
+} from '../tasks.types';
 
 /**
  * One card on a project's board.
@@ -309,4 +314,12 @@ export class Task extends TimestampsEntity {
    */
   @Property({ type: DateTimeType, nullable: true })
   startApprovedAt: Date | null = null;
+
+  /**
+   * Who asked for the start: the command center's manager, or a system
+   * analysis's Implement right away. Null reads as the manager (requests made
+   * before the column).
+   */
+  @Property({ type: 'string', nullable: true })
+  startRequestKind: TaskStartRequestKind | null = null;
 }

@@ -9,7 +9,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import type { InterruptCause } from '../../../utils/stop-cause';
 import { Task } from '../entity/task.entity';
-import type { TaskStatus } from '../tasks.types';
+import type { TaskStartRequestKind, TaskStatus } from '../tasks.types';
 
 /** The order a board's columns render in: by status, then position within one. */
 const BOARD_ORDER: QueryOrderMap<Task> = {
@@ -175,6 +175,18 @@ export class TaskDao extends BaseDao<Task> {
     );
   }
 
+  /** The live card a source filed under this reference, or null. */
+  async findBySourceRef(
+    source: Task['source'],
+    sourceRef: string,
+    txEm?: EntityManager,
+  ): Promise<Task | null> {
+    return this.getRepo(txEm ?? this.em.fork()).findOne(
+      { source, sourceRef, deletedAt: null } as FilterQuery<Task>,
+      { disableIdentityMap: true },
+    );
+  }
+
   /**
    * The card holding one run, if any still does.
    *
@@ -324,6 +336,8 @@ export class TaskDao extends BaseDao<Task> {
       approvedAt: Date | null;
       note?: string | null;
       watch?: boolean;
+      /** Omitted is the manager's. */
+      kind?: TaskStartRequestKind;
     } | null,
     txEm?: EntityManager,
   ): Promise<void> {
@@ -335,6 +349,7 @@ export class TaskDao extends BaseDao<Task> {
         startApprovedAt: request?.approvedAt ?? null,
         startRequestNote: request?.note ?? null,
         startRequestWatch: request?.watch ?? false,
+        startRequestKind: request === null ? null : (request.kind ?? 'manager'),
       } as EntityData<Task>,
     );
   }
@@ -378,12 +393,28 @@ export class TaskDao extends BaseDao<Task> {
 
   /** Cards a manager asked to start that have started and not been reported. */
   async listStartedForManager(txEm?: EntityManager): Promise<Task[]> {
+    return this.listStarted(
+      { $or: [{ startRequestKind: null }, { startRequestKind: 'manager' }] },
+      txEm,
+    );
+  }
+
+  /** Cards a system analysis asked to start that have started and not been reported. */
+  async listStartedForAnalysis(txEm?: EntityManager): Promise<Task[]> {
+    return this.listStarted({ startRequestKind: 'analysis' }, txEm);
+  }
+
+  private async listStarted(
+    kind: Record<string, unknown>,
+    txEm?: EntityManager,
+  ): Promise<Task[]> {
     return this.getRepo(txEm).find(
       {
         startRequestedByRunId: { $ne: null },
         startRequestedAt: null,
         runId: { $ne: null },
         deletedAt: null,
+        ...kind,
       } as FilterQuery<Task>,
       { disableIdentityMap: true },
     );

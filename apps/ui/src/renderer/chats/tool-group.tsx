@@ -9,6 +9,7 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
 import { browserToolEntryOf, BrowserToolRow } from './browser-tool-row';
+import { flagToolEntryOf, FlagToolRow } from './flag-tool-row';
 import { jumpAnchorProps } from './jump-target';
 import { knowledgeToolEntryOf, KnowledgeToolRow } from './knowledge-tool-row';
 import { RunSettledContext } from './live-row';
@@ -427,11 +428,15 @@ export const ToolGroup = memo(function ToolGroup({
     action: agentActionOf(pair),
     memory: memoryToolEntryOf(pair),
     knowledge: knowledgeToolEntryOf(pair),
+    flag: flagToolEntryOf(pair),
   }));
   if (
     lifted.every(
-      ({ action, memory, knowledge }) =>
-        action === null && memory === null && knowledge === null,
+      ({ action, memory, knowledge, flag }) =>
+        action === null &&
+        memory === null &&
+        knowledge === null &&
+        flag === null,
     )
   ) {
     return <GroupedTools group={group} />;
@@ -447,7 +452,7 @@ export const ToolGroup = memo(function ToolGroup({
     run = [];
   };
   group.pairs.forEach((pair, index) => {
-    const { action, memory, knowledge } = lifted[index]!;
+    const { action, memory, knowledge, flag } = lifted[index]!;
     const status = toolPairStatus(pair, group.closed || runSettled);
     if (action !== null) {
       flush();
@@ -473,6 +478,11 @@ export const ToolGroup = memo(function ToolGroup({
           entry={knowledge}
           status={status}
         />,
+      );
+    } else if (flag !== null) {
+      flush();
+      rows.push(
+        <FlagToolRow key={pair.call.id} entry={flag} status={status} />,
       );
     } else {
       run.push(pair);

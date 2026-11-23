@@ -256,6 +256,7 @@ export function runToWire(
     analysisSourceRunId: run.analysisSourceRunId,
     analysisSourceSeq: run.analysisSourceSeq,
     analysisTeamSlug: run.analysisTeamSlug,
+    analysisPurpose: run.analysisPurpose,
     pinnedPosition: run.pinnedPosition,
     color: readRunColor(run.color),
     createdAt: run.createdAt.toISOString(),

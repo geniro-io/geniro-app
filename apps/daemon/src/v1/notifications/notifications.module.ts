@@ -11,6 +11,7 @@ import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SharesModule } from '../shares/shares.module';
 import { StatsModule } from '../stats/stats.module';
+import { SystemAnalysisModule } from '../system-analysis/system-analysis.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { NotificationsGateway } from './gateways/notifications.gateway';
 import { WsPresenceService } from './services/ws-presence.service';
@@ -34,6 +35,7 @@ import { WsPresenceService } from './services/ws-presence.service';
   // `ProjectsModule` for the project bus. `BrowserModule` for the bridge to the
   // Mac's browser window, a leaf with no dependency on this channel.
   // `BackgroundJobsModule` for the background jobs registry, which imports nothing.
+  // `SystemAnalysisModule` for its change bus; nothing it imports imports this.
   imports: [
     AgentsModule,
     DiagnosticsModule,
@@ -46,6 +48,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     BrowserModule,
     LessonsModule,
     BackgroundJobsModule,
+    SystemAnalysisModule,
     CommandCenterModule,
   ],
   providers: [NotificationsGateway, WsPresenceService],

@@ -8,7 +8,10 @@ import { describeDaemonError } from '../daemon-api';
 import { categoryToken } from '../stats/charts/chart-theme';
 import { formatDuration, formatPercent } from '../stats/stats-format';
 import { formatUsd } from './agent-activity';
-import { RecommendationsApplyContext } from './recommendations-apply-context';
+import {
+  RecommendationsApplyContext,
+  SystemRecommendationsApplyContext,
+} from './recommendations-apply-context';
 import { useThreadFlags } from './thread-ui-memory';
 import type { RecommendationsEntry } from './transcript-groups';
 
@@ -32,6 +35,8 @@ export function RecommendationsBlock({
   entry: RecommendationsEntry;
 }): React.JSX.Element {
   const apply = useContext(RecommendationsApplyContext);
+  const systemApply = useContext(SystemRecommendationsApplyContext);
+  const system = entry.card.sourceKind === 'system';
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,8 +72,32 @@ export function RecommendationsBlock({
       sending={sending}
       error={error}
       onDismissError={() => setError(null)}
+      actions={
+        !system || systemApply === null
+          ? undefined
+          : {
+              projects: systemApply.projects,
+              onAction: (action, ids, projectId) => {
+                const sentIds =
+                  action === 'report'
+                    ? entry.card.items.map((item) => item.id)
+                    : ids;
+                setSending(true);
+                setError(null);
+                systemApply
+                  .apply(entry.runId, entry.seq, action, ids, projectId)
+                  .then(({ recorded }) => {
+                    if (recorded) {
+                      setSent(sentIds);
+                    }
+                  })
+                  .catch((err: unknown) => setError(describeDaemonError(err)))
+                  .finally(() => setSending(false));
+              },
+            }
+      }
       onApply={
-        apply === null
+        apply === null || system
           ? undefined
           : (ids) => {
               setSending(true);

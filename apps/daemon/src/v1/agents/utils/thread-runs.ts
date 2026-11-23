@@ -1,4 +1,5 @@
 import type { Run } from '../../runs/entity/run.entity';
+import { isAnalysisRun } from './analysed-runs';
 
 type ThreadFacts = Pick<
   Run,
@@ -6,6 +7,7 @@ type ThreadFacts = Pick<
   | 'editsProjectId'
   | 'analysisSourceRunId'
   | 'analysisTeamSlug'
+  | 'analysisPurpose'
 >;
 
 /**
@@ -17,7 +19,6 @@ export function isMessageableThread(run: ThreadFacts): boolean {
   return (
     run.editsTeamSlug === null &&
     run.editsProjectId === null &&
-    run.analysisSourceRunId === null &&
-    run.analysisTeamSlug === null
+    !isAnalysisRun(run)
   );
 }

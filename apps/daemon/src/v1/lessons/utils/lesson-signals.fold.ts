@@ -1,3 +1,4 @@
+import type { GoalStatus } from '../../agents/chat.types';
 import type { ItemKind } from '../../runs/runs.types';
 import type { LessonSignal } from '../lessons.types';
 
@@ -7,7 +8,22 @@ export interface LessonSignalItem {
   kind: ItemKind;
   role: string | null;
   payload: string;
+  createdAt: Date;
 }
+
+/** One `run_goals` row as the fold reads it. */
+export interface LessonSignalGoal {
+  number: number;
+  text: string;
+  status: GoalStatus;
+  evidence: string | null;
+  closedAt: Date | null;
+}
+
+const UNMET_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
+  'not_achieved',
+  'dropped',
+]);
 
 /** The item kinds the fold reads; a caller may page only these. */
 export const LESSON_SIGNAL_ITEM_KINDS: ItemKind[] = [
@@ -19,6 +35,7 @@ export const LESSON_SIGNAL_ITEM_KINDS: ItemKind[] = [
   'thread_outcome',
   'stage_change',
   'report_findings',
+  'team_note',
 ];
 
 const EXCERPT_MAX_CHARS = 200;
@@ -42,12 +59,20 @@ const CORRECTION_CUES =
  * - `outcome_failed`: a recorded outcome of `failed` or `partial`.
  * - `stage_reopened`: a team stage moved back.
  * - `review_finding`: a code review's findings.
+ * - `pitfall_note`: a team note recording a trap the team hit.
+ * - `goal_unmet`: a goal closed `not_achieved` or `dropped`, placed at the
+ *   newest item written by the time it closed.
  */
 export function foldLessonSignals(
   items: readonly LessonSignalItem[],
   options: {
     /** The stretch starts after a reflected one, which ended on a finished turn. */
     afterFinishedTurn?: boolean;
+    goals?: readonly LessonSignalGoal[];
+    /** A goal closed before the stretch's first item belongs to an earlier stretch. */
+    afterEarlierStretch?: boolean;
+    /** When the row after the stretch was written: a goal closed from then on belongs to a later stretch. */
+    nextRowAt?: Date | null;
   } = {},
 ): LessonSignal[] {
   const signals: LessonSignal[] = [];
@@ -152,11 +177,58 @@ export function foldLessonSignals(
         }
         break;
       }
+      case 'team_note':
+        if (stringField(payload, 'kind') === 'pitfall') {
+          signals.push({
+            kind: 'pitfall_note',
+            seq: item.seq,
+            excerpt: excerpt(stringField(payload, 'text') ?? ''),
+          });
+        }
+        break;
       default:
         break;
     }
   }
+  for (const goal of options.goals ?? []) {
+    if (
+      !UNMET_GOAL_STATUSES.has(goal.status) ||
+      goal.closedAt === null ||
+      (options.nextRowAt != null &&
+        goal.closedAt.getTime() >= options.nextRowAt.getTime())
+    ) {
+      continue;
+    }
+    const seq = seqAt(items, goal.closedAt, options.afterEarlierStretch);
+    if (seq !== null) {
+      signals.push({
+        kind: 'goal_unmet',
+        seq,
+        excerpt: excerpt(
+          `${goal.status} g${goal.number}: ${goal.text}${goal.evidence === null ? '' : ` — ${goal.evidence}`}`,
+        ),
+      });
+    }
+  }
   return signals.sort((a, b) => a.seq - b.seq);
+}
+
+function seqAt(
+  items: readonly LessonSignalItem[],
+  at: Date,
+  afterEarlierStretch = false,
+): number | null {
+  let seq: number | null = null;
+  for (const item of items) {
+    if (item.createdAt.getTime() > at.getTime()) {
+      break;
+    }
+    seq = item.seq;
+  }
+  if (seq !== null || afterEarlierStretch) {
+    return seq;
+  }
+  return items[0]?.seq ?? null;
 }
 
 function parsePayload(text: string): Record<string, unknown> | null {

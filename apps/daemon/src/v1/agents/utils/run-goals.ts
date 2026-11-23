@@ -3,9 +3,10 @@ import { z } from 'zod';
 import {
   type RunGoal,
   RunGoalSchema,
+  type StoredThreadOutcome,
+  StoredThreadOutcomeSchema,
   type ThreadOutcome,
   type ThreadOutcomeKind,
-  ThreadOutcomeSchema,
 } from '../chat.types';
 import { parseJsonColumn } from './json-util';
 
@@ -24,15 +25,17 @@ export function readRunGoals(column: string | null): RunGoal[] {
   return parsed.success ? parsed.data : [];
 }
 
-export function writeThreadOutcome(outcome: ThreadOutcome): string {
+export function writeThreadOutcome(outcome: StoredThreadOutcome): string {
   return JSON.stringify(outcome);
 }
 
-export function readThreadOutcome(column: string | null): ThreadOutcome | null {
+export function readThreadOutcome(
+  column: string | null,
+): StoredThreadOutcome | null {
   if (column === null) {
     return null;
   }
-  const parsed = ThreadOutcomeSchema.safeParse(parseJsonColumn(column));
+  const parsed = StoredThreadOutcomeSchema.safeParse(parseJsonColumn(column));
   return parsed.success ? parsed.data : null;
 }
 
@@ -55,16 +58,42 @@ export function outcomeKindFromGoals(
   return achieved > 0 ? 'partial' : 'failed';
 }
 
+/**
+ * Whether a recorded success contradicts the goals: a goal not dropped is
+ * still open or was closed not achieved. Only a recorded outcome can diverge.
+ */
+export function outcomeDivergesFromGoals(
+  outcome: Pick<StoredThreadOutcome, 'kind' | 'source'>,
+  goals: readonly Pick<RunGoal, 'status'>[],
+): boolean {
+  return (
+    outcome.source === 'recorded' &&
+    outcome.kind === 'success' &&
+    goals.some(
+      (goal) => goal.status !== 'dropped' && goal.status !== 'achieved',
+    )
+  );
+}
+
 /** A thread's served outcome: the recorded one, else the one its goals derive. */
 export function threadOutcomeOf(
-  recorded: ThreadOutcome | null,
+  recorded: StoredThreadOutcome | null,
   goals: readonly Pick<RunGoal, 'status'>[],
 ): ThreadOutcome | null {
   if (recorded !== null) {
-    return recorded;
+    return {
+      ...recorded,
+      divergesFromGoals: outcomeDivergesFromGoals(recorded, goals),
+    };
   }
   const kind = outcomeKindFromGoals(goals);
   return kind === null
     ? null
-    : { kind, summary: null, source: 'goals', seq: null };
+    : {
+        kind,
+        summary: null,
+        source: 'goals',
+        seq: null,
+        divergesFromGoals: false,
+      };
 }

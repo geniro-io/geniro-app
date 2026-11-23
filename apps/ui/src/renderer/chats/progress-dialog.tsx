@@ -7,6 +7,7 @@ import {
   Milestone,
   PanelRight,
   Target,
+  TriangleAlert,
 } from 'lucide-react';
 import { type ReactNode, useContext, useRef, useState } from 'react';
 
@@ -225,6 +226,16 @@ function ProgressSummary({
                 {outcome.source === 'goals' ? ' · from the goals' : ''}
               </Badge>
             )}
+            {outcome?.divergesFromGoals === true ? (
+              <Badge
+                data-slot="thread-outcome-diverges"
+                variant="muted"
+                title="The agent recorded success, but some goals are open or not achieved"
+                className="bg-warning/10 text-warning">
+                <TriangleAlert />
+                Diverges from goals
+              </Badge>
+            ) : null}
             {stages === null ? null : (
               <Badge
                 data-slot="progress-stage-badge"

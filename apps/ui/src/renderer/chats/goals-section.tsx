@@ -55,7 +55,7 @@ export function GoalsSection({
         meta={
           goals.outcome === null
             ? undefined
-            : `Outcome: ${OUTCOME_LABEL[goals.outcome.kind]}`
+            : `Outcome: ${OUTCOME_LABEL[goals.outcome.kind]}${goals.outcome.divergesFromGoals ? ' · diverges from goals' : ''}`
         }
       />
     </PanelSection>

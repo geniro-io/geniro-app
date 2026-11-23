@@ -221,6 +221,23 @@ export const FinishedWithOutcome: Story = {
         source: 'recorded',
         summary: 'Export ships behind the new button; the spec is green.',
         seq: 40,
+        divergesFromGoals: false,
+      },
+    },
+  },
+};
+
+export const SuccessThatDivergesFromGoals: Story = {
+  args: {
+    stages: null,
+    goals: {
+      ...SOME_GOALS,
+      outcome: {
+        kind: 'success',
+        source: 'recorded',
+        summary: 'Export ships behind the new button.',
+        seq: 40,
+        divergesFromGoals: true,
       },
     },
   },

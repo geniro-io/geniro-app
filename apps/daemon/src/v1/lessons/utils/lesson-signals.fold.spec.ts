@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   foldLessonSignals,
+  type LessonSignalGoal,
   type LessonSignalItem,
 } from './lesson-signals.fold';
+
+const at = (minute: number) => new Date(Date.UTC(2026, 10, 1, 12, minute));
 
 function item(
   seq: number,
@@ -11,7 +14,28 @@ function item(
   payload: Record<string, unknown>,
   role: string | null = null,
 ): LessonSignalItem {
-  return { seq, kind, role, payload: JSON.stringify(payload) };
+  return {
+    seq,
+    kind,
+    role,
+    payload: JSON.stringify(payload),
+    createdAt: at(seq),
+  };
+}
+
+function goal(
+  number: number,
+  status: LessonSignalGoal['status'],
+  closedMinute: number | null,
+  evidence: string | null = 'checked',
+): LessonSignalGoal {
+  return {
+    number,
+    text: `goal ${number}`,
+    status,
+    evidence,
+    closedAt: closedMinute === null ? null : at(closedMinute),
+  };
 }
 
 describe('foldLessonSignals', () => {
@@ -223,11 +247,97 @@ describe('foldLessonSignals', () => {
   it('returns nothing for a clean segment and survives a payload that is not JSON', () => {
     const signals = foldLessonSignals([
       item(1, 'message', { text: 'add a button' }, 'user'),
-      { seq: 2, kind: 'tool_result', role: null, payload: 'not json' },
+      {
+        seq: 2,
+        kind: 'tool_result',
+        role: null,
+        payload: 'not json',
+        createdAt: at(2),
+      },
       item(3, 'turn_complete', {}),
     ]);
 
     expect(signals).toEqual([]);
+  });
+
+  it('finds a pitfall team note and passes over notes of other kinds', () => {
+    const signals = foldLessonSignals([
+      item(1, 'team_note', {
+        kind: 'pitfall',
+        text: 'pnpm install alone leaves better-sqlite3 on the wrong ABI; run rebuild:native',
+        nodeId: 'dev',
+        conversationId: null,
+      }),
+      item(2, 'team_note', {
+        kind: 'decision',
+        text: 'keep one shared helper',
+        nodeId: 'dev',
+        conversationId: null,
+      }),
+    ]);
+
+    expect(signals).toEqual([
+      {
+        kind: 'pitfall_note',
+        seq: 1,
+        excerpt:
+          'pnpm install alone leaves better-sqlite3 on the wrong ABI; run rebuild:native',
+      },
+    ]);
+  });
+
+  it('places each goal closed not achieved or dropped at the newest item written by then', () => {
+    const items = [
+      item(1, 'message', { text: 'ship it' }, 'user'),
+      item(3, 'tool_call', { id: 't1', name: 'goals', input: {} }),
+      item(5, 'turn_complete', {}),
+    ];
+
+    const signals = foldLessonSignals(items, {
+      goals: [
+        goal(1, 'not_achieved', 4, 'tests still red'),
+        goal(2, 'dropped', 9, null),
+        goal(3, 'achieved', 4),
+        goal(4, 'open', null),
+      ],
+    });
+
+    expect(signals).toEqual([
+      {
+        kind: 'goal_unmet',
+        seq: 3,
+        excerpt: 'not_achieved g1: goal 1 — tests still red',
+      },
+      { kind: 'goal_unmet', seq: 5, excerpt: 'dropped g2: goal 2' },
+    ]);
+  });
+
+  it('leaves a goal closed once the row after the stretch was written to the stretch after it', () => {
+    const items = [item(1, 'turn_complete', {})];
+    const goals = [goal(1, 'not_achieved', 6), goal(2, 'dropped', 4)];
+
+    expect(
+      foldLessonSignals(items, { goals, nextRowAt: at(6) }).map(
+        (signal) => signal.excerpt,
+      ),
+    ).toEqual(['dropped g2: goal 2 — checked']);
+  });
+
+  it('leaves a goal closed before the stretch to the stretch before it', () => {
+    const items = [item(10, 'turn_complete', {})];
+    const goals = [goal(1, 'not_achieved', 2)];
+
+    expect(
+      foldLessonSignals(items, { goals, afterEarlierStretch: true }),
+    ).toEqual([]);
+    expect(foldLessonSignals(items, { goals })).toEqual([
+      {
+        kind: 'goal_unmet',
+        seq: 10,
+        excerpt: 'not_achieved g1: goal 1 — checked',
+      },
+    ]);
+    expect(foldLessonSignals([], { goals })).toEqual([]);
   });
 
   it('cuts a long excerpt to 200 characters', () => {

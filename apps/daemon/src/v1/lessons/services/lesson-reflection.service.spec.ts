@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../environments';
 import type { RunStatusEvent } from '../../agents/chat.types';
+import type { GoalDao } from '../../agents/dao/goal.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -211,6 +212,7 @@ function build(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
+    { listByRun: vi.fn(() => Promise.resolve([])) } as unknown as GoalDao,
     chats as unknown as ChatService,
     {
       allDeleted: () => deleted.asObservable(),

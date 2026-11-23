@@ -218,7 +218,7 @@ export class SystemDigestService {
       const em = this.em.fork();
       const maxSeq = await this.itemDao.maxSeq(candidate.runId, em);
       const signals = await readLessonSignals(
-        this.itemDao,
+        { itemDao: this.itemDao, goalDao: this.goalDao },
         candidate.runId,
         -1,
         maxSeq,

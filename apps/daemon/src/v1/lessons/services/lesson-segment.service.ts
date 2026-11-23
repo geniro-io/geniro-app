@@ -9,6 +9,7 @@ import {
 import { NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -34,7 +35,10 @@ import {
   type ThreadLessonEstimate,
 } from '../lessons.types';
 import { offersLessons, teamLessonsOverrideOf } from '../utils/lessons-mode';
-import { readLessonSignals } from '../utils/read-lesson-signals';
+import {
+  type LessonSignalSources,
+  readLessonSignals,
+} from '../utils/read-lesson-signals';
 import { isReflectable } from '../utils/reflectable';
 import { LessonEstimateService } from './lesson-estimate.service';
 import { LessonSpendService } from './lesson-spend.service';
@@ -63,6 +67,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
+    private readonly goalDao: GoalDao,
     private readonly bus: AgentEventBus,
     private readonly projectScope: ProjectScopeService,
     private readonly segments: LessonSegmentDao,
@@ -173,7 +178,13 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       isReflectable(run) &&
       !(await this.reflecting(run.id, em));
     const signals = reflectable
-      ? await readLessonSignals(this.itemDao, run.id, fromSeq, toSeq, em)
+      ? await readLessonSignals(
+          this.signalSources(),
+          run.id,
+          fromSeq,
+          toSeq,
+          em,
+        )
       : [];
     const range = { fromSeq, toSeq: Math.max(fromSeq, toSeq) };
     const checker = this.config.checkChoice();
@@ -195,6 +206,10 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       fromSeq,
       toSeq,
     };
+  }
+
+  private signalSources(): LessonSignalSources {
+    return { itemDao: this.itemDao, goalDao: this.goalDao };
   }
 
   private async closeNow(
@@ -229,7 +244,7 @@ export class LessonSegmentService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
     const signals = await readLessonSignals(
-      this.itemDao,
+      this.signalSources(),
       run.id,
       fromSeq,
       toSeq,

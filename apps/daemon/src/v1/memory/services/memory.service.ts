@@ -37,6 +37,7 @@ import {
   MEMORY_MARKS_BATCH_PREFIX,
   MEMORY_READ_MAX,
   MEMORY_RULE_PURGE_AFTER_DAYS,
+  MEMORY_SEARCH_CANDIDATES,
   MEMORY_SEARCH_MAX,
   MEMORY_STATUSES,
   MEMORY_TITLE_MAX_CHARS,
@@ -96,6 +97,10 @@ import {
   statesRule,
   storedPaths,
 } from '../utils/memory-references';
+import {
+  rankSearchCandidates,
+  relevanceOfRanks,
+} from '../utils/memory-search-rank';
 import {
   excerptOf,
   importedText,
@@ -691,7 +696,8 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
 
   /**
    * The best active entries a run in `place` may see, best first: those
-   * matching every word, or, when none does, any word.
+   * matching every word, or, when none does, any word, ranked by how well
+   * they match and then by their marks, their recent reads and their scope.
    */
   async search(
     query: string,
@@ -699,13 +705,30 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     limit: number,
   ): Promise<MemoryHit[]> {
     const em = this.em.fork();
-    const ids = await matchEveryWordElseAny(query, (match) =>
-      this.memories.matchIds(
+    const matches = await matchEveryWordElseAny(query, (match) =>
+      this.memories.matchRanked(
         match,
         { statuses: ['active'], places: { visibleTo: place } },
-        Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
+        MEMORY_SEARCH_CANDIDATES,
         em,
       ),
+    );
+    const relevance = relevanceOfRanks(matches);
+    const signals = await this.marks.searchSignals(
+      matches.map((match) => match.id),
+      new Date(),
+      em,
+    );
+    const ids = rankSearchCandidates(
+      matches.map((match, index) => ({
+        id: match.id,
+        handle: match.handle,
+        relevance: relevance[index] ?? 0,
+        projectId: match.projectId,
+        teamSlug: match.teamSlug,
+      })),
+      signals,
+      Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
     );
     const rows = new Map(
       (await this.memories.getByIds(ids, em)).map((row) => [row.id, row]),

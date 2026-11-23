@@ -15,6 +15,10 @@ import {
   tallyMarks,
   tallyOf,
 } from '../utils/memory-marks-fold';
+import {
+  decayedReads,
+  type MemoryRankSignals,
+} from '../utils/memory-search-rank';
 import { indexHandlesOf } from '../utils/memory-text';
 import { DAY_MS } from '../utils/memory-usage-day';
 import { runMemoryUsage } from '../utils/memory-usage-history';
@@ -114,6 +118,31 @@ export class MemoryMarksService {
   ): Promise<Map<string, MemoryMarkTally>> {
     const since = new Date(now.getTime() - MEMORY_MARKS_WINDOW_DAYS * DAY_MS);
     return tallyMarks(await this.marks.counted(memoryIds, since, em));
+  }
+
+  /** The net helped threads and the decayed reads of these entries, as a search ranks them. */
+  async searchSignals(
+    memoryIds: readonly string[],
+    now: Date,
+    em: EntityManager,
+  ): Promise<Map<string, MemoryRankSignals>> {
+    if (memoryIds.length === 0) {
+      return new Map();
+    }
+    const tallies = await this.tallies(memoryIds, now, em);
+    const reads = decayedReads(await this.usage.daysOf(memoryIds, em), now);
+    return new Map(
+      memoryIds.map((memoryId): [string, MemoryRankSignals] => {
+        const tally = tallyOf(tallies, memoryId);
+        return [
+          memoryId,
+          {
+            net: tally.helped - tally.notUseful,
+            recentReads: reads.get(memoryId) ?? 0,
+          },
+        ];
+      }),
+    );
   }
 
   /** The titles of these threads; a deleted thread is missing from the map. */

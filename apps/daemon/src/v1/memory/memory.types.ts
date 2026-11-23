@@ -42,6 +42,20 @@ export const MEMORY_HANDLE_PATTERN = /^m?(\d{1,9})$/i;
 export const MEMORY_BODY_MAX_BYTES = 8192;
 export const MEMORY_TITLE_MAX_CHARS = 120;
 export const MEMORY_SEARCH_MAX = 10;
+/** Text matches a search reranks by its marks, use and scope before its limit cuts the list. */
+export const MEMORY_SEARCH_CANDIDATES = 50;
+/** Score change per net helped thread, which counts up to the forget threshold either way. */
+export const MEMORY_RANK_MARK_STEP = 0.04;
+/** The largest score boost recent use can give an entry. */
+export const MEMORY_RANK_USAGE_MAX = 0.08;
+/** Days for a read's weight in search ranking to halve. */
+export const MEMORY_RANK_USAGE_HALF_LIFE_DAYS = 30;
+/** Decayed reads at which the usage boost reaches its maximum. */
+export const MEMORY_RANK_USAGE_SATURATION_READS = 10;
+/** Score boost for an entry filed under the run's team. */
+export const MEMORY_RANK_TEAM_BOOST = 0.05;
+/** Score boost for an entry filed under the run's project. */
+export const MEMORY_RANK_PROJECT_BOOST = 0.025;
 export const MEMORY_SEARCH_DEFAULT = 5;
 export const MEMORY_READ_MAX = 3;
 export const MEMORY_FORGET_REASON_MAX_CHARS = 200;

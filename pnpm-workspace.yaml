@@ -29,6 +29,7 @@ allowBuilds:
   electron-winstaller: false # Windows Squirrel installer — macOS-only targets here
   esbuild: true # postinstall installs the platform binary (used by vite)
   node-pty: true # native addon; ships an N-API prebuild, ABI-stable — deliberately NOT in rebuild:native (postinstall only restores spawn-helper's exec bit)
+  onnxruntime-node: false # ships its N-API prebuilds in the package; the postinstall only fetches GPU/CUDA extras
 
 # Force a single fastify so NestJS (platform-fastify) and our direct dep share
 # one copy — otherwise the @fastify/websocket type augmentation doesn't unify.

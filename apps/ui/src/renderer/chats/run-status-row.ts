@@ -36,6 +36,9 @@ export function runStatusRowFields(event: RunStatusEvent): Partial<RunDto> {
   if (event.holdingFor !== undefined) {
     fields.holdingFor = event.holdingFor;
   }
+  if (event.sessionStarted !== undefined) {
+    fields.sessionStarted = event.sessionStarted;
+  }
   // BOTH clocks: an announce carrying `at` wrote the row because the run did
   // something, which is exactly what `lastActivityAt` answers — and the sidebar
   // reads that one.

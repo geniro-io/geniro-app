@@ -57,6 +57,22 @@ export class NodeStateDao extends BaseDao<NodeState> {
     );
   }
 
+  /** Which of these runs' given member holds a CLI session it resumes by. */
+  async runsWithSession(
+    runIds: readonly string[],
+    memberId: string,
+    txEm?: EntityManager,
+  ): Promise<Set<string>> {
+    if (runIds.length === 0) {
+      return new Set();
+    }
+    const rows = await this.getRepo(txEm).find(
+      { runId: { $in: [...runIds] }, memberId, agentSessionId: { $ne: null } },
+      { fields: ['runId'], disableIdentityMap: true },
+    );
+    return new Set(rows.map((row) => row.runId));
+  }
+
   async listByRun(runId: string, txEm?: EntityManager): Promise<NodeState[]> {
     // Read-only snapshot path — no identity-map tracking needed (see item.dao).
     return this.getRepo(txEm).find({ runId }, { disableIdentityMap: true });

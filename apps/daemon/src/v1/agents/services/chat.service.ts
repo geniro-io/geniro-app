@@ -39,6 +39,7 @@ import {
 import {
   type AgentEvent,
   type AgentMcpServer,
+  type AgentModelParameter,
   type AgentSession,
   type AgentUsage,
   type ApprovalOption,
@@ -194,6 +195,7 @@ import { asArray, asRecord, asString } from '../utils/json-util';
 import { endsReasoningStretch, isLiveWordsEvent } from '../utils/live-words';
 import {
   readModelParameters,
+  sanitizeModelParameters,
   writeModelParameters,
 } from '../utils/model-parameters';
 import { offersMonitorTools } from '../utils/monitor-offer';
@@ -288,6 +290,7 @@ import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
 import { MilestoneBroker } from './milestone.broker';
+import { ModelParametersService } from './model-parameters.service';
 import { MonitorBroker, type MonitorSink } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
@@ -370,6 +373,8 @@ interface RunWireRead {
   wallMs: number | null;
   /** The name of the run's project while it exists. */
   projectName: string | null;
+  /** Whether the chat holds a CLI session its next turn resumes. */
+  sessionStarted: boolean;
 }
 
 /** What identifies a deferred plan, so an identical re-ask adopts the card. */
@@ -930,6 +935,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly flags?: FlagBroker,
     /** `milestone`'s sink, kept with `record_outcome`'s. Optional for the positional specs. */
     @Optional() private readonly milestones?: MilestoneBroker,
+    /** Which model settings a CLI session fixes, for `updateSettings`. Optional for the positional specs. */
+    @Optional()
+    private readonly modelParameterListings?: ModelParametersService,
   ) {}
 
   /**
@@ -2615,6 +2623,106 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
+   * The model settings this chat's CLI session fixed (`fixedPerSession`) that
+   * hold a non-default value — what a model switch must carry across — after
+   * refusing a patch that would change one or move to a model that cannot run
+   * it. A resumed session cannot change them, so accepting either would fail
+   * the next turn or silently run without them.
+   *
+   * A chat with no session and no turn in flight has nothing fixed. Read before the profile move,
+   * so a refused patch changes nothing.
+   */
+  private async sessionFixedParameters(
+    run: Run,
+    patch: {
+      model?: string | null;
+      modelParameters?: Record<string, string> | null;
+      configDir?: string | null;
+    },
+    em: EntityManager,
+  ): Promise<Record<string, string>> {
+    const listings = this.modelParameterListings;
+    if (
+      listings === undefined ||
+      run.agentKind === null ||
+      (patch.model === undefined && patch.modelParameters === undefined)
+    ) {
+      return {};
+    }
+    const node = await this.nodeStateDao.getByRunNode(
+      run.id,
+      SINGLE_AGENT_NODE,
+      em,
+    );
+    // A first turn in flight has already spawned with today's values, though
+    // its session id arrives only with the CLI's first line.
+    if (!node?.agentSessionId && !this.registry.has(run.id)) {
+      return {};
+    }
+    const fixed = (
+      await listings.list(run.agentKind, run.model, run.configDir)
+    ).parameters.filter((parameter) => parameter.fixedPerSession === true);
+    if (fixed.length === 0) {
+      return {};
+    }
+    const current = readModelParameters(run.modelParameters);
+    const valueOf = (
+      parameter: AgentModelParameter,
+      parameters: Record<string, string>,
+    ): string | null => parameters[parameter.id] ?? parameter.current;
+    if (patch.modelParameters !== undefined) {
+      const next = sanitizeModelParameters(patch.modelParameters);
+      const changed = fixed.find(
+        (parameter) => valueOf(parameter, next) !== valueOf(parameter, current),
+      );
+      if (changed) {
+        throw new BadRequestException(
+          'MODEL_PARAMETER_FIXED',
+          `${changed.label} was set when this chat started and stays as it is for this conversation — start a new chat to change it`,
+        );
+      }
+    }
+    const carried = fixed.filter(
+      (parameter) =>
+        current[parameter.id] !== undefined &&
+        current[parameter.id] !== parameter.current,
+    );
+    if (
+      patch.model !== undefined &&
+      patch.model !== run.model &&
+      carried.length > 0
+    ) {
+      const offered = (
+        await listings.list(
+          run.agentKind,
+          patch.model,
+          patch.configDir !== undefined ? patch.configDir : run.configDir,
+        )
+      ).parameters;
+      for (const parameter of carried) {
+        const value = current[parameter.id]!;
+        const there = offered.find((option) => option.id === parameter.id);
+        if (
+          there === undefined ||
+          there.unavailableReason !== undefined ||
+          !there.values.some((option) => option.id === value)
+        ) {
+          const valueLabel =
+            parameter.values.find((option) => option.id === value)?.label ??
+            value;
+          throw new BadRequestException(
+            'MODEL_SWITCH_REFUSED',
+            `This chat started with ${parameter.label} ${valueLabel}, which ${patch.model ?? 'the default model'} cannot continue: ${there?.unavailableReason ?? 'it does not offer that setting'}. Start a new chat to use that model.`,
+          );
+        }
+      }
+    }
+    return Object.fromEntries(
+      carried.map((parameter) => [parameter.id, current[parameter.id]!]),
+    );
+  }
+
+  /**
    * PATCH /v1/chats/:runId/settings — change what the NEXT turn runs as: the
    * approval mode, the model, the reasoning effort, or any combination. 400
    * for a non-auto mode on a cursor chat or an effort level the run's CLI does
@@ -2669,6 +2777,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (patch.approval !== undefined) {
       this.assertApprovalSupported(run.agentKind, patch.approval);
     }
+    const sessionFixed = await this.sessionFixedParameters(run, patch, em);
     const profileMove =
       patch.configDir === undefined
         ? null
@@ -2720,10 +2829,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // one of them (`optimize_for`) exists on a single model of thirty-four —
       // so carrying a pick across a model switch sends a config option the new
       // model does not have, which is `-32602 Unknown model config option`.
+      // The settings the chat's CLI session fixed are the exception: the guard
+      // above has checked the new model offers them, and the session cannot
+      // be resumed without them.
       ...(patch.modelParameters !== undefined
         ? { modelParameters: writeModelParameters(patch.modelParameters) }
         : patch.model !== undefined
-          ? { modelParameters: null }
+          ? { modelParameters: writeModelParameters(sessionFixed) }
           : {}),
       // A prompt cache is per ACCOUNT, so the expiry and lifetime the old
       // profile's turns reported go with it: the new account starts cold, and
@@ -3409,6 +3521,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, { cwd }, em);
     await this.nodeStateDao.clearConversation(runId, SINGLE_AGENT_NODE, em);
+    this.bus.publishRunStatus({ runId, status: null, sessionStarted: false });
     return true;
   }
 
@@ -6620,6 +6733,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         resumeSessionId,
         em,
       );
+      let sessionAnnounced = resumeSessionId !== null;
       // A real turn takes the run over, so whatever an off-turn continuation
       // was still holding is no longer this method's to settle — including a
       // delegate lease, whose expiry would otherwise fire mid-turn and try to
@@ -7511,6 +7625,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           enqueue(async () => {
             if (event.type === 'session') {
               await saveSessionId(event.sessionId);
+              if (!sessionAnnounced) {
+                sessionAnnounced = true;
+                this.bus.publishRunStatus({
+                  runId,
+                  status: null,
+                  sessionStarted: true,
+                });
+              }
               return;
             }
             if (isLiveWordsEvent(event)) {
@@ -8789,6 +8911,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.setPendingContext(runId, carried, em);
     await this.nodeStateDao.clearSessionId(runId, SINGLE_AGENT_NODE, em);
+    this.bus.publishRunStatus({ runId, status: null, sessionStarted: false });
     // Clearing the id is not enough on a KEPT process: a later turn is opened
     // on the session it already holds, so the summary would be sent into the
     // very conversation it replaced and the window would never shrink.
@@ -9411,14 +9534,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       reads.wallMs,
       this.monitors?.list(run.id).length ?? 0,
       reads.projectName,
+      reads.sessionStarted,
     );
   }
 
   /**
    * What {@link toRunWire} needs read for these runs beyond the row: each
-   * one's newest transcript rows, and its wall-measured worked time — the
-   * turns its CLI did not time (`WallWorkService`), served on top of the
-   * CLI-reported `Run.workedMs`. Two queries however many runs.
+   * one's newest transcript rows, its wall-measured worked time — the turns
+   * its CLI did not time (`WallWorkService`), served on top of the
+   * CLI-reported `Run.workedMs` — and whether it holds a CLI session. Three
+   * queries however many runs.
    */
   private async wireReads(
     runs: readonly Pick<Run, 'id' | 'projectId'>[],
@@ -9426,16 +9551,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   ): Promise<{ of: (runId: string) => RunWireRead }> {
     const runIds = runs.map((run) => run.id);
     const projectOfRun = new Map(runs.map((run) => [run.id, run.projectId]));
-    const [previews, wall, projectNames] = await Promise.all([
+    const [previews, wall, projectNames, withSession] = await Promise.all([
       this.itemDao.runPreviews(runIds, em),
       this.wallTurns.chatSums(runIds, em),
       this.projectScope.liveNamesOf(runs.map((run) => run.projectId)),
+      this.nodeStateDao.runsWithSession(runIds, SINGLE_AGENT_NODE, em),
     ]);
     return {
       of: (runId) => ({
         preview: previews.get(runId) ?? null,
         wallMs: wall.get(runId) ?? null,
         projectName: projectNames.get(projectOfRun.get(runId) ?? '') ?? null,
+        sessionStarted: withSession.has(runId),
       }),
     };
   }

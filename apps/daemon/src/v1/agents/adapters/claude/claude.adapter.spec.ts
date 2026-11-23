@@ -43,7 +43,7 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
-import type { AgentSkillsInput } from '../adapter.types';
+import type { AgentModelParameter, AgentSkillsInput } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
@@ -52,6 +52,7 @@ import {
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
   CLAUDE_BROWSER_TOOLS_OPTION,
+  CLAUDE_CODE_MODE_PARAMETER_ID,
   CLAUDE_COMMANDS_CHANGED_SUBTYPE,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_CONTROL_PROBE_ARGS,
@@ -77,6 +78,7 @@ import {
   backgroundDelegateLines,
   taskNotification,
 } from './utils/__tests__/claude-subagent-stream';
+import { claudeProjectDirName } from './utils/claude-sessions.utils';
 
 /**
  * A child that DIES when signalled, the way a real CLI does: `close` follows
@@ -3058,29 +3060,201 @@ describe('ClaudeAdapter — models', () => {
   });
 });
 
+describe('ClaudeAdapter — code mode', () => {
+  const versions = (version: string | null): AgentVersionService =>
+    ({
+      resolve: () => Promise.resolve(version),
+    }) as unknown as AgentVersionService;
+  const codeMode = async (
+    adapter: ClaudeAdapter,
+    model: string | null,
+  ): Promise<AgentModelParameter | undefined> =>
+    (await adapter.listModelParameters(model)).parameters.find(
+      (parameter) => parameter.id === CLAUDE_CODE_MODE_PARAMETER_ID,
+    );
+
+  beforeEach(() => {
+    vi.stubEnv('ANTHROPIC_BASE_URL', undefined);
+    vi.stubEnv('CLAUDE_CODE_USE_BEDROCK', undefined);
+    vi.stubEnv('CLAUDE_CODE_USE_VERTEX', undefined);
+    vi.stubEnv('CLAUDE_CODE_USE_FOUNDRY', undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('offers it enabled and fixed per session on a 5.5 model of a 2.1.330 CLI', async () => {
+    const adapter = new ClaudeAdapter({
+      versions: versions('2.1.330 (Claude Code)'),
+    });
+    const parameter = await codeMode(adapter, 'claude-sonnet-5-5');
+    expect(parameter).toMatchObject({
+      current: 'false',
+      fixedPerSession: true,
+    });
+    expect(parameter).not.toHaveProperty('unavailableReason');
+  });
+
+  it('draws it disabled with the reason on an older CLI, an older model, a local model and a custom endpoint', async () => {
+    const old = new ClaudeAdapter({ versions: versions('2.1.327') });
+    expect(
+      (await codeMode(old, 'claude-sonnet-5-5'))?.unavailableReason,
+    ).toMatch(/2\.1\.330/);
+
+    const current = new ClaudeAdapter({ versions: versions('2.1.330') });
+    expect(
+      (await codeMode(current, 'claude-opus-4-8'))?.unavailableReason,
+    ).toMatch(/claude-opus-4-8/);
+    expect(
+      (await codeMode(current, 'ollama/qwen3'))?.unavailableReason,
+    ).toMatch(/local models/);
+
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://proxy.example');
+    expect(
+      (await codeMode(current, 'claude-sonnet-5-5'))?.unavailableReason,
+    ).toMatch(/ANTHROPIC_BASE_URL/);
+  });
+
+  it('puts the switch into the turn’s one --settings env, beside fast mode', () => {
+    const on = fakeSpawn();
+    new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: {
+          [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true',
+          [CLAUDE_FAST_MODE_PARAMETER_ID]: 'true',
+        },
+      },
+      () => {},
+    );
+    const args = on.captured.args!;
+    expect(args.filter((arg) => arg === CLAUDE_SETTINGS_FLAG)).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!)).toEqual({
+      crossSessionInbound: 'refuse',
+      fastMode: true,
+      env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' },
+    });
+
+    const off = fakeSpawn();
+    new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        modelParameters: { [CLAUDE_CODE_MODE_PARAMETER_ID]: 'false' },
+      },
+      () => {},
+    );
+    const offArgs = off.captured.args!;
+    expect(
+      JSON.parse(offArgs[offArgs.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!),
+    ).toEqual({ crossSessionInbound: 'refuse' });
+  });
+
+  it('follows the session it resumes, whatever the stored setting says now', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'geniro-code-mode-resume-'));
+    const session = '0b6f2f4e-1111-4222-8333-944455556666';
+    const filed = join(profile, 'projects', claudeProjectDirName('/proj'));
+    mkdirSync(filed, { recursive: true });
+    const settingsEnv = (
+      modelParameters: Record<string, string>,
+      resumeSessionId: string,
+    ): unknown => {
+      const spawned = fakeSpawn();
+      new ClaudeAdapter({
+        spawn: spawned.spawn,
+        waitForMcpServers: false,
+      }).start(
+        {
+          prompt: 'go',
+          cwd: '/proj',
+          model: 'claude-opus-5-5',
+          configDir: profile,
+          resumeSessionId,
+          modelParameters,
+        },
+        () => {},
+      );
+      const args = spawned.captured.args!;
+      return (
+        JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!) as {
+          env?: unknown;
+        }
+      ).env;
+    };
+    try {
+      writeFileSync(
+        join(filed, `${session}.jsonl`),
+        `{"type":"repl-mode","replMode":true,"sessionId":"${session}"}\n`,
+      );
+      expect(
+        settingsEnv({ [CLAUDE_CODE_MODE_PARAMETER_ID]: 'false' }, session),
+      ).toEqual({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' });
+
+      writeFileSync(
+        join(filed, `${session}.jsonl`),
+        '{"type":"permission-mode","permissionMode":"default"}\n',
+      );
+      expect(
+        settingsEnv({ [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true' }, session),
+      ).toBeUndefined();
+
+      expect(
+        settingsEnv(
+          { [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true' },
+          '0b6f2f4e-1111-4222-8333-000000000000',
+        ),
+      ).toEqual({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' });
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves it off on a read-only turn, whose tool allow-list keeps it off anyway', () => {
+    const readOnly = fakeSpawn();
+    new ClaudeAdapter({
+      spawn: readOnly.spawn,
+      waitForMcpServers: false,
+    }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        model: 'claude-opus-5-5',
+        readOnly: true,
+        modelParameters: { [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true' },
+      },
+      () => {},
+    );
+    const args = readOnly.captured.args!;
+    expect(
+      JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!),
+    ).not.toHaveProperty('env');
+  });
+});
+
 describe('ClaudeAdapter — fast mode', () => {
   it('offers the row only for an Opus model', async () => {
     const adapter = new ClaudeAdapter();
+    const ids = async (model: string | null): Promise<string[]> =>
+      (await adapter.listModelParameters(model)).parameters.map((p) => p.id);
 
-    const opus = await adapter.listModelParameters('claude-opus-5-5');
-    expect(opus.parameters).toEqual([
-      expect.objectContaining({ id: CLAUDE_FAST_MODE_PARAMETER_ID }),
+    expect(await ids('claude-sonnet-5')).toEqual([
+      CLAUDE_CODE_MODE_PARAMETER_ID,
     ]);
-    expect(opus.unavailableReason).toBeNull();
+    const named = await adapter.listModelParameters('claude-opus-5-5');
+    expect(named).toMatchObject({ unavailableReason: null, exact: true });
+    expect((await adapter.listModelParameters(null)).exact).toBe(false);
 
-    const sonnet = await adapter.listModelParameters('claude-sonnet-5');
-    expect(sonnet.parameters).toEqual([]);
-    // The real observable: WHICH model was refused and WHY, not merely that
-    // the list came back empty — an assertion on emptiness alone would still
-    // pass if this fell through to "pick a model" for every named model.
-    expect(sonnet.unavailableReason).toContain('claude-sonnet-5');
-    expect(sonnet.unavailableReason).toContain('Opus');
-
-    const none = await adapter.listModelParameters(null);
-    expect(none.parameters).toEqual([]);
-    expect(none.unavailableReason).toBe(
-      'pick a model to see the settings it offers',
-    );
+    expect(await ids('claude-opus-5-5')).toEqual([
+      CLAUDE_FAST_MODE_PARAMETER_ID,
+      CLAUDE_CODE_MODE_PARAMETER_ID,
+    ]);
+    expect(await ids('claude-sonnet-5-5')).toEqual([
+      CLAUDE_CODE_MODE_PARAMETER_ID,
+    ]);
+    expect(await ids(null)).toEqual([CLAUDE_CODE_MODE_PARAMETER_ID]);
   });
 
   it('sets fast mode only when the turn asked for it, and refuses other sessions on every turn', () => {

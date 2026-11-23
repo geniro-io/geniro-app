@@ -699,6 +699,38 @@ describe('a turn parked on a question nobody has answered yet', () => {
     expect(events.at(-1)).toEqual(COMPLETE);
   });
 
+  it('writes each of two concurrent requests its own verdict, answered in reverse order', async () => {
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = startAnswerableTurn(session, events);
+
+    line(child, { ask: 'card-1' });
+    line(child, { ask: 'card-2' });
+    expect(events.filter((event) => event.type === 'approval_request')).toEqual(
+      [
+        expect.objectContaining({ id: 'card-1' }),
+        expect.objectContaining({ id: 'card-2' }),
+      ],
+    );
+
+    const before = child.stdin.written.length;
+    expect(handle?.respondApproval('card-2', false, undefined)).toBe(true);
+    expect(handle?.respondApproval('card-1', true, undefined)).toBe(true);
+
+    const verdicts = child.stdin.written
+      .slice(before)
+      .trim()
+      .split('\n')
+      .map((written) => JSON.parse(written) as unknown);
+    expect(verdicts).toEqual([
+      { verdict: 'card-2', allow: false },
+      { verdict: 'card-1', allow: true },
+    ]);
+
+    line(child, { done: true });
+    await handle?.done;
+  });
+
   it('can still be stopped by the user while it waits', async () => {
     // With no deadline behind it, Stop is the ONLY way out of a parked turn —
     // so the escape hatch the suspension leans on is pinned here rather than

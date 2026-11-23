@@ -2239,6 +2239,13 @@ export interface AgentModelParameter {
    * reads as what will actually happen. Null when the reply named none.
    */
   current: string | null;
+  /** A sentence saying why it cannot be used here; the control is drawn disabled. */
+  unavailableReason?: string;
+  /**
+   * The CLI fixes this value when a conversation's session starts, so a resumed
+   * turn cannot change it: once a chat holds a session, the value stays.
+   */
+  fixedPerSession?: boolean;
 }
 
 /** One accepted value of an {@link AgentModelParameter}. */

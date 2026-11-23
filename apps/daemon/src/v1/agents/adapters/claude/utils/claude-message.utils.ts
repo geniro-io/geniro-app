@@ -22,6 +22,7 @@ import {
   CLAUDE_COMPACTING_STATUS,
   CLAUDE_CONTINUATION_ORIGIN_KIND,
   CLAUDE_CONTROL_CANCEL_REQUEST_TYPE,
+  CLAUDE_NOTIFICATION_SUBTYPE,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_QUESTION_TOOL_NAME,
@@ -30,6 +31,7 @@ import {
   CLAUDE_SESSION_IDLE_STATE,
   CLAUDE_SESSION_STATE_SUBTYPE,
   CLAUDE_STATUS_SUBTYPE,
+  CLAUDE_SURFACED_NOTIFICATION_KEYS,
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
   CLAUDE_TASK_PROGRESS_SUBTYPE,
   CLAUDE_TASK_STARTED_SUBTYPE,
@@ -594,6 +596,17 @@ function mapClaudeLine(
             postTokens: meta ? asNumber(meta.post_tokens) : null,
           },
         ];
+      }
+      if (asString(root.subtype) === CLAUDE_NOTIFICATION_SUBTYPE) {
+        const key = asString(root.key);
+        const text = asString(root.text)?.trim();
+        const surfaced = (
+          CLAUDE_SURFACED_NOTIFICATION_KEYS as readonly string[]
+        ).includes(key ?? '');
+        if (!surfaced || !text) {
+          return [];
+        }
+        return [{ type: 'notice', message: text, severity: 'warning' }];
       }
       if (asString(root.subtype) === CLAUDE_STATUS_SUBTYPE) {
         // Two lines share this subtype and they are told apart by `status`: a

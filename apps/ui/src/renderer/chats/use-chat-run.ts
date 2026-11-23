@@ -2522,6 +2522,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         toolCalls !== undefined ||
         previewLine !== undefined ||
         event.holdingFor !== undefined ||
+        event.sessionStarted !== undefined ||
         // The unread mark's two moments, announced on their own by the
         // daemon (`RunAttentionService`, `ChatService.markSeen`).
         event.attentionAt !== undefined ||

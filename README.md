@@ -84,7 +84,7 @@ bash /tmp/geniro-install.sh
 <td width="33%" valign="top">
 
 <b>💬 Chats</b><br>
-Pick the agent, model, effort, context window, Fast mode (where the CLI offers it for that model) and approval mode. Watch the reply and the agent's thinking stream in as they are written. Queue follow-ups, import sessions from the CLIs, search every chat, and export to Markdown.
+Pick the agent, model, effort, context window, Fast mode (where the CLI offers it for that model), Claude Code's experimental Code mode (one script that calls many tools; set per chat, team member, project, task or run configuration, and kept for the life of each conversation) and approval mode. Watch the reply and the agent's thinking stream in as they are written. Queue follow-ups, import sessions from the CLIs, search every chat, and export to Markdown.
 
 </td>
 <td width="33%" valign="top">

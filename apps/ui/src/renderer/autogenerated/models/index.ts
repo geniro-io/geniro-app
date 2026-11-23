@@ -1304,6 +1304,18 @@ export interface AgentModelParameter {
      * @memberof AgentModelParameter
      */
     current: string | null;
+    /**
+     * Why this setting cannot be used here; absent when it can. The control is drawn disabled.
+     * @type {string}
+     * @memberof AgentModelParameter
+     */
+    unavailableReason?: string;
+    /**
+     * True when the CLI fixes this value as a conversation's session starts, so it cannot change once a chat holds one
+     * @type {boolean}
+     * @memberof AgentModelParameter
+     */
+    fixedPerSession?: boolean;
 }
 /**
  * 
@@ -3648,6 +3660,12 @@ export interface CommandCenterCardRun {
      * @memberof CommandCenterCardRun
      */
     modelParameters: { [key: string]: string; };
+    /**
+     * Whether this chat already holds a CLI session its next turn resumes, which freezes every model setting marked fixedPerSession; false for a team run
+     * @type {boolean}
+     * @memberof CommandCenterCardRun
+     */
+    sessionStarted: boolean;
     /**
      * 
      * @type {number}
@@ -13187,6 +13205,12 @@ export interface RunDto {
      */
     modelParameters: { [key: string]: string; };
     /**
+     * Whether this chat already holds a CLI session its next turn resumes, which freezes every model setting marked fixedPerSession; false for a team run
+     * @type {boolean}
+     * @memberof RunDto
+     */
+    sessionStarted: boolean;
+    /**
      * 
      * @type {number}
      * @memberof RunDto
@@ -19366,6 +19390,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     modelParameters: { [key: string]: string; };
+    /**
+     * Whether this chat already holds a CLI session its next turn resumes, which freezes every model setting marked fixedPerSession; false for a team run
+     * @type {boolean}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    sessionStarted: boolean;
     /**
      * 
      * @type {number}

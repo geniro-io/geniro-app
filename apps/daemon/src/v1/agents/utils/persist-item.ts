@@ -213,6 +213,8 @@ export function runToWire(
    * once (`ProjectScopeService.liveNamesOf`); null draws no project.
    */
   projectName: string | null = null,
+  /** Whether the chat holds a CLI session to resume (`node_state.agentSessionId`); false for a team run. */
+  sessionStarted = false,
 ): RunWire {
   return {
     id: run.id,
@@ -236,6 +238,7 @@ export function runToWire(
     contextWindow: run.contextWindow,
     autoCompactPercent: run.autoCompactPercent,
     modelParameters: readModelParameters(run.modelParameters),
+    sessionStarted,
     contextTokens: run.contextTokens,
     contextEstimated: run.contextEstimated === true,
     contextWindowTokens: run.contextWindowTokens,

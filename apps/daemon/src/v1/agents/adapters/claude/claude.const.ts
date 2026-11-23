@@ -139,6 +139,38 @@ export const CLAUDE_SETTINGS_FLAG = '--settings';
 export const CLAUDE_FAST_MODE_PARAMETER_ID = 'fastMode';
 export const CLAUDE_FAST_MODE_ON_VALUE = 'true';
 export const CLAUDE_FAST_MODE_OFF_VALUE = 'false';
+
+/**
+ * Code Mode (experimental): the model writes one script that calls many tools.
+ * Measured on 2.1.330, `claude -p` turns it on ONLY from the `env` block of
+ * `--settings`; the same variable in the process env or `~/.claude/settings.json`
+ * leaves it off. The CLI fixes it when a session starts: a resume with it off
+ * exits 1, and turning it on in a resume of a session started without it is
+ * silently ignored.
+ */
+export const CLAUDE_CODE_MODE_PARAMETER_ID = 'codeMode';
+export const CLAUDE_CODE_MODE_ON_VALUE = 'true';
+export const CLAUDE_CODE_MODE_OFF_VALUE = 'false';
+export const CLAUDE_CODE_MODE_ENV_KEY = 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE';
+export const CLAUDE_CODE_MODE_ENV_VALUE = '1';
+/** 2.1.325 and 2.1.327 have no headless path at all. */
+export const CLAUDE_CODE_MODE_MIN_VERSION = [2, 1, 330] as const;
+/** The CLI's own refusal names Opus 5.5, Sonnet 5.5 and later. */
+export const CLAUDE_CODE_MODE_MIN_MODEL = [5, 5] as const;
+/**
+ * The line the CLI writes FIRST into a session started in Code Mode's
+ * transcript (`{"type":"repl-mode","replMode":true,…}`), measured on 2.1.330. A
+ * session started without it has no such line.
+ */
+export const CLAUDE_CODE_MODE_SESSION_LINE_TYPE = 'repl-mode';
+/** How much of a transcript's head is read for that line; it is the first one. */
+export const CLAUDE_CODE_MODE_SESSION_HEAD_BYTES = 4096;
+export const CLAUDE_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
+export const CLAUDE_THIRD_PARTY_PROVIDER_ENV_KEYS = [
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+] as const;
 /**
  * The CLI's own reply-language setting. Set, it adds a `# Language` section to
  * the system prompt ("Always respond in <value>…"); probed on 2.1.295, an
@@ -514,15 +546,13 @@ export const CLAUDE_CREDENTIAL_ENV_KEYS = [
 ] as const;
 
 export const CLAUDE_PROVIDER_ENV_KEYS = [
-  'ANTHROPIC_BASE_URL',
+  CLAUDE_BASE_URL_ENV,
   'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL',
   'CLAUDE_CODE_SUBAGENT_MODEL',
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
+  ...CLAUDE_THIRD_PARTY_PROVIDER_ENV_KEYS,
 ] as const;
 
 /**
@@ -1647,6 +1677,11 @@ export const CLAUDE_COMPACTING_STATUS = 'compacting';
 
 /** The terminating status line's `compact_result` value meaning it did not happen. */
 export const CLAUDE_COMPACT_RESULT_FAILED = 'failed';
+
+export const CLAUDE_NOTIFICATION_SUBTYPE = 'notification';
+
+/** The `key`s of `system/notification` lines whose text is worth showing the user. */
+export const CLAUDE_SURFACED_NOTIFICATION_KEYS = ['code-mode-opt-in'] as const;
 
 /**
  * Said out loud when a compaction the user asked for did not happen. The CLI

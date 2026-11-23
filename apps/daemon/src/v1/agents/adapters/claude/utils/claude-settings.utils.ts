@@ -10,6 +10,7 @@ import {
   CLAUDE_LANGUAGE_SETTING_KEY,
   CLAUDE_SETTINGS_FLAG,
 } from '../claude.const';
+import { codeModeEnv } from './claude-code-mode.utils';
 import { wantsFastMode } from './claude-fast-mode.utils';
 
 /** What one turn hands the CLI's settings layer. */
@@ -22,6 +23,8 @@ export interface ClaudeTurnSettings {
    * `--settings {"env"}` the base puts ahead of it.
    */
   env?: Readonly<Record<string, string>>;
+  /** Code Mode, which the CLI reads only from this object's `env` block. */
+  codeMode?: boolean;
   /**
    * The config names of the servers this turn switches off
    * (`claudeSwitchedOffServers`), which the CLI is told never to start
@@ -52,8 +55,12 @@ export function claudeSettingsArgs(settings: ClaudeTurnSettings): string[] {
   if (language) {
     value[CLAUDE_LANGUAGE_SETTING_KEY] = language;
   }
-  if (settings.env && Object.keys(settings.env).length > 0) {
-    value.env = settings.env;
+  const env = {
+    ...settings.env,
+    ...(settings.codeMode === true ? codeModeEnv() : {}),
+  };
+  if (Object.keys(env).length > 0) {
+    value.env = env;
   }
   if (settings.deniedMcpServers && settings.deniedMcpServers.length > 0) {
     value[CLAUDE_DENIED_MCP_SERVERS_KEY] = settings.deniedMcpServers.map(

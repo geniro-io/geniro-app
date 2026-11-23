@@ -6966,6 +6966,18 @@ export const AgentModelParameterWireSchema = z
       .describe(
         'The value the CLI reports the model is on; null when it named none.',
       ),
+    unavailableReason: z
+      .string()
+      .optional()
+      .describe(
+        'Why this setting cannot be used here; absent when it can. The control is drawn disabled.',
+      ),
+    fixedPerSession: z
+      .boolean()
+      .optional()
+      .describe(
+        "True when the CLI fixes this value as a conversation's session starts, so it cannot change once a chat holds one",
+      ),
   })
   .meta({ id: 'AgentModelParameter' });
 export type AgentModelParameterWire = z.infer<
@@ -7144,6 +7156,8 @@ export interface RunStatusEvent {
    * client's reading alone.
    */
   holdingFor?: number;
+  /** `RunWire.sessionStarted`, announced when a chat's first CLI session is recorded; absent asserts nothing. */
+  sessionStarted?: boolean;
   /**
    * How many of this TEAM run's agents are sitting inside a wait on their
    * OWN agent-to-agent calls, or `undefined` when this event says nothing
@@ -8253,6 +8267,11 @@ export const RunWireSchema = z.object({
     .record(z.string(), z.string())
     .describe(
       "Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these",
+    ),
+  sessionStarted: z
+    .boolean()
+    .describe(
+      'Whether this chat already holds a CLI session its next turn resumes, which freezes every model setting marked fixedPerSession; false for a team run',
     ),
   contextTokens: z
     .number()

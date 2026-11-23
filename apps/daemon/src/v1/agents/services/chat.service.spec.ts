@@ -149,6 +149,7 @@ import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
 import { MilestoneBroker } from './milestone.broker';
+import type { ModelParametersService } from './model-parameters.service';
 import { MonitorBroker } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
@@ -809,6 +810,9 @@ class FakeNodeStateDao {
   async getByRunNode(): Promise<NodeState | null> {
     return this.state;
   }
+  async runsWithSession(runIds: readonly string[]): Promise<Set<string>> {
+    return new Set(this.state?.agentSessionId ? runIds : []);
+  }
   /**
    * The full call, for the assertions that care WHERE the id landed rather
    * than only that one did — `saved` above keeps its bare-id shape so the
@@ -1228,6 +1232,8 @@ function setup(
     hostWakes?: HostWakeBus;
     /** Where the chat reports the rows it could not write, when a test watches. */
     writeFailures?: WriteFailureNotices;
+    /** Which model settings a CLI session fixes, when a test drives it. */
+    modelParameterListings?: Pick<ModelParametersService, 'list'>;
     /** Where a turn starts once the run's folder is gone, when a test drives it. */
     turnFolders?: Pick<
       TurnFolderService,
@@ -1546,6 +1552,7 @@ function setup(
     opts.turnFolders as TurnFolderService | undefined,
     undefined,
     milestones,
+    opts.modelParameterListings as ModelParametersService | undefined,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -10642,6 +10649,154 @@ describe('ChatService — approval modes (parity M1)', () => {
         approval: 'plan',
       }),
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
+  });
+
+  describe('updateSettings — settings a CLI session fixes', () => {
+    const fixedListing: Pick<ModelParametersService, 'list'> = {
+      list: (_kind, model) =>
+        Promise.resolve({
+          parameters: [
+            {
+              id: 'codeMode',
+              label: 'Code mode',
+              values: [
+                { id: 'true', label: 'On' },
+                { id: 'false', label: 'Off' },
+              ],
+              current: 'false',
+              fixedPerSession: true,
+              ...(model === 'claude-opus-4-8'
+                ? { unavailableReason: 'claude-opus-4-8 is older' }
+                : {}),
+            },
+            {
+              id: 'fastMode',
+              label: 'Fast mode',
+              values: [{ id: 'true', label: 'On' }],
+              current: null,
+            },
+          ],
+          unavailableReason: null,
+          exact: true,
+        }),
+    };
+
+    it('changes it freely while the chat holds no session', async () => {
+      const { service } = setup({ modelParameterListings: fixedListing });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const updated = await service.updateSettings(run.id, {
+        modelParameters: { codeMode: 'true' },
+      });
+      expect(updated.modelParameters).toEqual({ codeMode: 'true' });
+      expect(updated.sessionStarted).toBe(false);
+    });
+
+    it('refuses to change it once the chat holds a session, and lets the other settings move', async () => {
+      const { service, nodeDao, runDao } = setup({
+        modelParameterListings: fixedListing,
+      });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      nodeDao.preset('session-1');
+
+      await expect(
+        service.updateSettings(run.id, {
+          modelParameters: { codeMode: 'true' },
+        }),
+      ).rejects.toThrow(/Code mode was set when this chat started/);
+      expect(runDao.runs.get(run.id)?.modelParameters).toBeNull();
+
+      const same = await service.updateSettings(run.id, {
+        modelParameters: { codeMode: 'false', fastMode: 'true' },
+      });
+      expect(same.modelParameters).toEqual({
+        codeMode: 'false',
+        fastMode: 'true',
+      });
+      expect(same.sessionStarted).toBe(true);
+    });
+
+    it('treats a first turn in flight as holding the session it is about to report', async () => {
+      const { service, registry } = setup({
+        modelParameterListings: fixedListing,
+      });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      expect(registry.tryClaim(run.id)).toBe(true);
+
+      await expect(
+        service.updateSettings(run.id, {
+          modelParameters: { codeMode: 'true' },
+        }),
+      ).rejects.toThrow(/Code mode was set when this chat started/);
+      registry.release(run.id);
+    });
+
+    it('announces the session live: once when the first turn records it, and its end when it is cleared', async () => {
+      const { service, claude, statuses } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const settle = async (): Promise<void> => {
+        claude.emit({
+          type: 'turn_complete',
+          usage: null,
+          stopReason: 'end_turn',
+          finalText: null,
+        });
+        claude.finish();
+        await drain();
+        await drain();
+      };
+      const announced = (): (boolean | undefined)[] =>
+        statuses
+          .filter(
+            (event) =>
+              event.runId === run.id && event.sessionStarted !== undefined,
+          )
+          .map((event) => event.sessionStarted);
+
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({ type: 'session', sessionId: 'session-1' });
+      claude.emit({ type: 'session', sessionId: 'session-1' });
+      await settle();
+      expect(announced()).toEqual([true]);
+
+      await service.sendMessage(run.id, 'again');
+      claude.emit({ type: 'session', sessionId: 'session-1' });
+      await settle();
+      expect(announced()).toEqual([true]);
+
+      const elsewhere = mkdtempSync(join(tmpdir(), 'geniro-session-move-'));
+      try {
+        expect(await service.moveChatFolder(run.id, elsewhere)).toBe(true);
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+      expect(announced()).toEqual([true, false]);
+    });
+
+    it('refuses a switch to a model that cannot continue it, and carries it to one that can', async () => {
+      const { service, nodeDao, runDao } = setup({
+        modelParameterListings: fixedListing,
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        model: 'claude-sonnet-5-5',
+        modelParameters: { codeMode: 'true', fastMode: 'true' },
+      });
+      nodeDao.preset('session-1');
+
+      await expect(
+        service.updateSettings(run.id, { model: 'claude-opus-4-8' }),
+      ).rejects.toThrow(
+        /started with Code mode On, which claude-opus-4-8 cannot continue: claude-opus-4-8 is older/,
+      );
+      expect(runDao.runs.get(run.id)?.model).toBe('claude-sonnet-5-5');
+
+      const moved = await service.updateSettings(run.id, {
+        model: 'claude-opus-5-5',
+      });
+      expect(moved.model).toBe('claude-opus-5-5');
+      expect(moved.modelParameters).toEqual({ codeMode: 'true' });
+    });
   });
 
   it('updateSettings drops the measured window when the model changes, and keeps it otherwise', async () => {

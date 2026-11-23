@@ -1767,6 +1767,53 @@ describe('mapClaudeStreamEvent', () => {
   });
 });
 
+describe('mapClaudeMessage — system notifications', () => {
+  const notification = (
+    key: string,
+    text: string,
+  ): Record<string, unknown> => ({
+    type: 'system',
+    subtype: 'notification',
+    key,
+    text,
+    priority: 'high',
+    color: 'warning',
+    uuid: 'ff84f404-10e2-4f8a-a530-43e4dc9ae1a6',
+    session_id: 'c3b70566-37d0-47c2-bc32-a377a30f32ee',
+  });
+  const CODE_MODE_TEXT =
+    "Code Mode (experimental) isn't available: for now it only works with Opus 5.5, Sonnet 5.5 and later models. Starting with the ordinary tools.";
+
+  it('shows the CLI text of a code-mode-opt-in notification as a warning', () => {
+    expect(
+      mapClaudeMessage(
+        notification('code-mode-opt-in', CODE_MODE_TEXT),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      { type: 'notice', message: CODE_MODE_TEXT, severity: 'warning' },
+    ]);
+  });
+
+  it('drops a notification whose key is not on the allow-list', () => {
+    expect(
+      mapClaudeMessage(
+        notification('some-other-key', 'something else'),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
+  });
+
+  it('drops an allowed notification that carries no text', () => {
+    expect(
+      mapClaudeMessage(
+        notification('code-mode-opt-in', '   '),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe('mapClaudeMessage — context compaction', () => {
   it('reads the boundary the CLI emits after compacting', () => {
     // The metadata shape is the CLI's own schema (2.1.226):

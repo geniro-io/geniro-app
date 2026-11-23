@@ -2,11 +2,13 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
+import type { GoalDao } from '../../agents/dao/goal.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ArchiveLessonsRegistry } from '../../agents/services/archive-lessons.registry';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
+import type { Goal } from '../../runs/entity/goal.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
@@ -22,7 +24,10 @@ type Item = {
   kind: string;
   role: string | null;
   payload: string;
+  createdAt?: Date;
 };
+
+const minute = (n: number) => new Date(Date.UTC(2026, 10, 1, 12, n));
 
 type StoredSegment = Record<string, unknown> & {
   id: string;
@@ -36,11 +41,18 @@ function userMessage(seq: number, text: string): Item {
     kind: 'message',
     role: 'user',
     payload: JSON.stringify({ text }),
+    createdAt: minute(seq),
   };
 }
 
 function turnComplete(seq: number): Item {
-  return { seq, kind: 'turn_complete', role: null, payload: '{}' };
+  return {
+    seq,
+    kind: 'turn_complete',
+    role: null,
+    payload: '{}',
+    createdAt: minute(seq),
+  };
 }
 
 function correctionStretch(): Item[] {
@@ -106,6 +118,10 @@ function build(
     project?: { lessons: 'on' | 'off' | null } | null;
     teamLessons?: 'on' | 'off' | null;
     teamsFail?: boolean;
+    goals?: Record<
+      string,
+      Pick<Goal, 'number' | 'text' | 'status' | 'evidence' | 'closedAt'>[]
+    >;
   } = {},
 ) {
   const runs = new Map((options.runs ?? [runOf()]).map((run) => [run.id, run]));
@@ -150,6 +166,25 @@ function build(
             )
             .slice(0, page.limit),
         ),
+    ),
+    newestSeqAtOrBefore: vi.fn(
+      (runId: string, range: { afterSeq: number; maxSeq: number; at: Date }) =>
+        Promise.resolve(
+          itemsOf(runId)
+            .filter(
+              (item) =>
+                item.seq > range.afterSeq &&
+                item.seq <= range.maxSeq &&
+                item.createdAt !== undefined &&
+                item.createdAt <= range.at,
+            )
+            .at(-1)?.seq ?? null,
+        ),
+    ),
+  };
+  const goalDao = {
+    listByRun: vi.fn((runId: string) =>
+      Promise.resolve(options.goals?.[runId] ?? []),
     ),
   };
 
@@ -225,6 +260,7 @@ function build(
     em as unknown as EntityManager,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
+    goalDao as unknown as GoalDao,
     bus,
     projectScope as unknown as ProjectScopeService,
     segments as unknown as LessonSegmentDao,
@@ -344,6 +380,35 @@ describe('LessonSegmentService', () => {
       expect(queued).not.toBeNull();
       expect(JSON.parse(h.created[0]!.signals as string) as unknown).toEqual([
         expect.objectContaining({ kind: 'error_then_success', seq: 2 }),
+      ]);
+    });
+
+    it('queues a stretch whose only signal is a goal of the run closed not achieved', async () => {
+      const h = build({
+        items: { src: [turnComplete(1), userMessage(2, 'thanks, looks good')] },
+        goals: {
+          src: [
+            {
+              number: 1,
+              text: 'the export saves a csv',
+              status: 'not_achieved',
+              evidence: 'the button still does nothing',
+              closedAt: minute(1),
+            },
+          ],
+        },
+      });
+
+      const queued = await h.service.close('src', 'archive');
+
+      expect(queued).not.toBeNull();
+      expect(JSON.parse(h.created[0]!.signals as string) as unknown).toEqual([
+        {
+          kind: 'goal_unmet',
+          seq: 1,
+          excerpt:
+            'not_achieved g1: the export saves a csv — the button still does nothing',
+        },
       ]);
     });
 

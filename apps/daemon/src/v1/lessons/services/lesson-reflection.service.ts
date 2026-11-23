@@ -10,6 +10,7 @@ import type { Subscription } from 'rxjs';
 
 import { environment } from '../../../environments';
 import { HOST_LESSONS_TOOL } from '../../agents/chat.types';
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -82,6 +83,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
+    private readonly goalDao: GoalDao,
     private readonly chats: ChatService,
     private readonly bus: AgentEventBus,
     private readonly memory: MemoryService,
@@ -204,7 +206,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const signals = await readLessonSignals(
-      this.itemDao,
+      { itemDao: this.itemDao, goalDao: this.goalDao },
       source.id,
       fromSeq,
       snapshotSeq,

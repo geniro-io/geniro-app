@@ -580,6 +580,7 @@ describe('RunOutcomeBroker — how the thread ended', () => {
           summary: 'Export works; the README is still open.',
           source: 'recorded',
           seq: 101,
+          divergesFromGoals: false,
         },
       },
     ]);

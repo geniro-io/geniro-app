@@ -54,6 +54,7 @@ import {
 } from '../utils/pull-request-lifecycle';
 import { threadOutcomeOf } from '../utils/run-goals';
 import { runSnapshotOf } from '../utils/run-snapshots';
+import { foldTeamNotes } from '../utils/team-note-fold';
 import {
   callFigures,
   configuredModels,
@@ -88,6 +89,10 @@ export const OVERVIEW_BYTES = 12_000;
 
 /** A goal's evidence as an overview past its budget quotes it. */
 const OVERVIEW_GOAL_EVIDENCE_CHARS = 300;
+
+/** How many of the newest pitfall notes the overview quotes, and how much of each. */
+const OVERVIEW_PITFALLS = 10;
+const OVERVIEW_PITFALL_CHARS = 400;
 
 /**
  * A page's byte budget. Under the ~10k-token cut codex applies to one tool
@@ -1109,16 +1114,37 @@ export class ThreadReaderService {
         working: fold.working,
       },
       teamNotes,
+      ...(teamNotes > 0 ? await this.pitfallsOf(source) : {}),
       ...(await this.measured(source, run, timeline.tools, fold.calls)),
       ...lists,
       next: `${flags.length > 0 ? "Start from the flags above: each is a problem an agent of the thread recorded itself; view=items afterSeq around a flag's seq shows what led to it. " : ''}Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       withClippedGoalEvidence(answer, OVERVIEW_BYTES),
-      ['goals', 'slowestTools', 'toolTotals', 'criticalPath'],
+      ['goals', 'pitfalls', 'slowestTools', 'toolTotals', 'criticalPath'],
       OVERVIEW_BYTES,
       ['nodes', 'stages', 'calls'],
     );
+  }
+
+  /** The thread's current pitfall notes up to the snapshot, newest first. */
+  private async pitfallsOf(source: AnalysisSource): Promise<Answer> {
+    const pitfalls = foldTeamNotes(
+      (
+        await this.itemDao.teamNoteRows(source.sourceRunId, this.em.fork())
+      ).filter((row) => row.seq <= source.snapshotSeq),
+    )
+      .filter((note) => note.kind === 'pitfall' && note.supersededBy === null)
+      .reverse();
+    return {
+      pitfallNotes: pitfalls.length,
+      pitfalls: pitfalls.slice(0, OVERVIEW_PITFALLS).map((note) => ({
+        seq: note.seq,
+        at: note.createdAt,
+        by: laneOf(note.memberId),
+        text: clip(note.text, OVERVIEW_PITFALL_CHARS, note.seq),
+      })),
+    };
   }
 
   /**
@@ -1154,7 +1180,7 @@ export class ThreadReaderService {
         : ThreadOutcomePayloadSchema.safeParse(
             parseJsonColumn(outcomeRow.payload),
           );
-    const outcome =
+    const outcome = threadOutcomeOf(
       recorded?.success === true
         ? {
             kind: recorded.data.kind,
@@ -1162,7 +1188,9 @@ export class ThreadReaderService {
             source: 'recorded',
             seq: outcomeRow!.seq,
           }
-        : threadOutcomeOf(null, goals);
+        : null,
+      goals,
+    );
     const servers = new Map<
       string,
       { calls: number; failed: number; tools: Set<string> }

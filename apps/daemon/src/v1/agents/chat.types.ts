@@ -5341,27 +5341,35 @@ export const ThreadOutcomePayloadSchema = z.object({
 });
 export type ThreadOutcomePayload = z.infer<typeof ThreadOutcomePayloadSchema>;
 
+/** A thread's outcome as `Run.threadOutcome` stores it, before the goals are read against it. */
+export const StoredThreadOutcomeSchema = z.object({
+  kind: ThreadOutcomeKindSchema,
+  summary: z.string().nullable(),
+  source: z
+    .enum(['recorded', 'goals'])
+    .describe(
+      'recorded: an agent called record_outcome; goals: derived from how its goals closed',
+    ),
+  seq: z
+    .number()
+    .int()
+    .nullable()
+    .describe('The thread_outcome row it was read from; null when derived'),
+});
+export type StoredThreadOutcome = z.infer<typeof StoredThreadOutcomeSchema>;
+
 /**
  * A thread's outcome as it is served: the newest one an agent recorded, else
  * one derived from its goals (all achieved → success, some → partial, none →
  * failed). Null on the wire when it has neither.
  */
-export const ThreadOutcomeSchema = z
-  .object({
-    kind: ThreadOutcomeKindSchema,
-    summary: z.string().nullable(),
-    source: z
-      .enum(['recorded', 'goals'])
-      .describe(
-        'recorded: an agent called record_outcome; goals: derived from how its goals closed',
-      ),
-    seq: z
-      .number()
-      .int()
-      .nullable()
-      .describe('The thread_outcome row it was read from; null when derived'),
-  })
-  .meta({ id: 'ThreadOutcome' });
+export const ThreadOutcomeSchema = StoredThreadOutcomeSchema.extend({
+  divergesFromGoals: z
+    .boolean()
+    .describe(
+      'An agent recorded success while a goal not dropped is open or not achieved; false for an outcome derived from the goals',
+    ),
+}).meta({ id: 'ThreadOutcome' });
 export type ThreadOutcome = z.infer<typeof ThreadOutcomeSchema>;
 
 /** A general `record_outcome` call as its reader hands it over. */

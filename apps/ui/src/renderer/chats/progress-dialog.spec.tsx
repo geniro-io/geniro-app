@@ -549,6 +549,7 @@ describe('ProgressDialog', () => {
           source: 'recorded',
           summary: 'one goal left',
           seq: 9,
+          divergesFromGoals: false,
         },
       }),
     );
@@ -576,18 +577,50 @@ describe('ProgressDialog', () => {
     open(
       progress(),
       someGoals({
-        outcome: { kind: 'success', source: 'goals', summary: null, seq: null },
+        outcome: {
+          kind: 'success',
+          source: 'goals',
+          summary: null,
+          seq: null,
+          divergesFromGoals: false,
+        },
       }),
     );
     expect(
       document.querySelector('[data-slot="thread-outcome"]')?.textContent,
     ).toBe('Success · from the goals');
     expect(
+      document.querySelector('[data-slot="thread-outcome-diverges"]'),
+    ).toBeNull();
+    expect(
       document.querySelector('[data-slot="thread-outcome-summary"]'),
     ).toBeNull();
     expect(
       document.querySelector('[data-slot="progress-stage-badge"]')?.textContent,
     ).toBe('Stage 2 of 4: Review');
+  });
+
+  it('flags a recorded success that the goals contradict', () => {
+    open(
+      null,
+      someGoals({
+        outcome: {
+          kind: 'success',
+          source: 'recorded',
+          summary: 'shipped',
+          seq: 9,
+          divergesFromGoals: true,
+        },
+      }),
+    );
+    expect(
+      document.querySelector('[data-slot="thread-outcome"]')?.textContent,
+    ).toBe('Success');
+    const diverges = document.querySelector<HTMLElement>(
+      '[data-slot="thread-outcome-diverges"]',
+    );
+    expect(diverges?.textContent).toBe('Diverges from goals');
+    expect(diverges?.title).toContain('some goals are open or not achieved');
   });
 
   it('greets a thread with no goals by offering the first one', () => {

@@ -230,6 +230,70 @@ describe('foldLessonSignals', () => {
     expect(signals).toEqual([]);
   });
 
+  it('finds a pitfall team note and passes over notes of other kinds', () => {
+    const signals = foldLessonSignals([
+      item(1, 'team_note', {
+        kind: 'pitfall',
+        text: 'pnpm install alone leaves better-sqlite3 on the wrong ABI; run rebuild:native',
+        nodeId: 'dev',
+        conversationId: null,
+      }),
+      item(2, 'team_note', {
+        kind: 'decision',
+        text: 'keep one shared helper',
+        nodeId: 'dev',
+        conversationId: null,
+      }),
+    ]);
+
+    expect(signals).toEqual([
+      {
+        kind: 'pitfall_note',
+        seq: 1,
+        excerpt:
+          'pnpm install alone leaves better-sqlite3 on the wrong ABI; run rebuild:native',
+      },
+    ]);
+  });
+
+  it('names each unmet goal with its evidence at the row it was placed on, in seq order with the rest', () => {
+    const signals = foldLessonSignals(
+      [
+        item(2, 'stage_change', {
+          action: 'reopen',
+          stageTitle: 'Build',
+          text: 'red',
+        }),
+      ],
+      {
+        unmetGoals: [
+          {
+            number: 1,
+            text: 'goal 1',
+            status: 'not_achieved',
+            evidence: 'tests still red',
+            seq: 4,
+          },
+          {
+            number: 2,
+            text: 'goal 2',
+            status: 'dropped',
+            evidence: null,
+            seq: 1,
+          },
+        ],
+      },
+    );
+
+    expect(
+      signals.map(({ kind, seq, excerpt }) => [kind, seq, excerpt]),
+    ).toEqual([
+      ['goal_unmet', 1, 'dropped g2: goal 2'],
+      ['stage_reopened', 2, 'Build: red'],
+      ['goal_unmet', 4, 'not_achieved g1: goal 1 — tests still red'],
+    ]);
+  });
+
   it('cuts a long excerpt to 200 characters', () => {
     const [signal] = foldLessonSignals([
       item(1, 'turn_complete', {}),

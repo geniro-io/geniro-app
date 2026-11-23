@@ -86,7 +86,8 @@ export function readThreadOutcome(
     !KINDS.has(bag.kind) ||
     (bag.summary !== null && typeof bag.summary !== 'string') ||
     (bag.source !== 'recorded' && bag.source !== 'goals') ||
-    (bag.seq !== null && typeof bag.seq !== 'number')
+    (bag.seq !== null && typeof bag.seq !== 'number') ||
+    typeof bag.divergesFromGoals !== 'boolean'
   ) {
     return undefined;
   }
@@ -95,5 +96,6 @@ export function readThreadOutcome(
     summary: bag.summary,
     source: bag.source,
     seq: bag.seq,
+    divergesFromGoals: bag.divergesFromGoals,
   };
 }

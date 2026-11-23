@@ -578,6 +578,117 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(before.next).not.toContain('team_note');
   });
 
+  it('quotes the current pitfall notes up to the snapshot, newest first and clipped', async () => {
+    const note = (kind: string, text: string, supersedes?: number) => ({
+      kind,
+      text,
+      nodeId: 'dev',
+      conversationId: null,
+      ...(supersedes === undefined ? {} : { supersedes }),
+    });
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'team_note', note('pitfall', 'old way round'), 1);
+    await insert(2, 'team_note', note('fact', 'CI is ubuntu'), 2);
+    await insert(3, 'team_note', note('pitfall', 'the right way round', 1), 3);
+    await insert(4, 'team_note', note('pitfall', `long ${'x'.repeat(900)}`), 4);
+    await insert(5, 'turn_complete', { usage: { durationMs: 3_000 } }, 5);
+    await insert(6, 'team_note', note('pitfall', 'after the snapshot'), 6);
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 5, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.pitfallNotes).toBe(2);
+    const pitfalls = answer.pitfalls as {
+      seq: number;
+      by: string;
+      text: string;
+    }[];
+    expect(pitfalls.map(({ seq, by }) => ({ seq, by }))).toEqual([
+      { seq: 4, by: 'dev' },
+      { seq: 3, by: 'dev' },
+    ]);
+    expect(pitfalls[1]!.text).toBe('the right way round');
+    expect(pitfalls[0]!.text).toMatch(
+      /^long x+… \[\+505 chars — view=item seq=4\]$/,
+    );
+    expect(JSON.stringify(answer)).not.toContain('old way round');
+    expect(JSON.stringify(answer)).not.toContain('after the snapshot');
+  });
+
+  it('caps the pitfall notes it quotes and keeps the overview inside its budget', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    for (let seq = 1; seq <= 30; seq += 1) {
+      await insert(
+        seq,
+        'team_note',
+        {
+          kind: 'pitfall',
+          text: `trap ${seq} ${'y'.repeat(1_500)}`,
+          nodeId: 'dev',
+          conversationId: null,
+        },
+        seq,
+      );
+    }
+    await insert(31, 'turn_complete', { usage: { durationMs: 1_000 } }, 31);
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 31, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.pitfallNotes).toBe(30);
+    const seqs = (answer.pitfalls as { seq: number }[]).map(({ seq }) => seq);
+    expect(seqs).toEqual([30, 29, 28, 27, 26, 25, 24, 23, 22, 21]);
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      OVERVIEW_BYTES,
+    );
+  });
+
+  it('marks a recorded success the goals contradict', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(
+      1,
+      'thread_outcome',
+      {
+        kind: 'success',
+        summary: 'shipped',
+        teamSlug: null,
+        nodeId: 'agent',
+        conversationId: null,
+      },
+      1,
+    );
+    await insert(2, 'turn_complete', { usage: { durationMs: 1_000 } }, 2);
+    const em = orm.em.fork();
+    em.persist(
+      Object.assign(new Goal(), {
+        runId: 'source',
+        number: 1,
+        text: 'goal 1',
+        source: 'agent',
+        status: 'not_achieved',
+        evidence: 'still red',
+      }),
+    );
+    await em.flush();
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 2, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.outcome).toEqual({
+      kind: 'success',
+      summary: 'shipped',
+      source: 'recorded',
+      seq: 1,
+      divergesFromGoals: true,
+    });
+  });
+
   it("names the chat agent's own instructions file, failed tool calls and the tokens it spent", async () => {
     await insert(0, 'message', { text: 'go' }, 0);
     await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);
@@ -726,6 +837,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       summary: 'after the snapshot',
       source: 'recorded',
       seq: 7,
+      divergesFromGoals: false,
     });
     expect(answer.mcpServers).toEqual([
       {

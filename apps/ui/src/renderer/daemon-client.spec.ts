@@ -510,6 +510,7 @@ describe('parseRunStatus — the run_status twin', () => {
       summary: null,
       source: 'goals',
       seq: null,
+      divergesFromGoals: false,
     };
 
     it('reads the goal list whole and the outcome', () => {
@@ -521,6 +522,24 @@ describe('parseRunStatus — the run_status twin', () => {
       });
       expect(event?.goals).toEqual([goal]);
       expect(event?.outcome).toEqual(outcome);
+    });
+
+    it('reads whether a recorded outcome diverges from the goals, and drops one that does not say', () => {
+      const diverging = {
+        ...outcome,
+        source: 'recorded',
+        summary: 'shipped',
+        seq: 7,
+        divergesFromGoals: true,
+      };
+      expect(
+        parseRunStatus({ runId: 'r1', status: null, outcome: diverging })
+          ?.outcome,
+      ).toEqual(diverging);
+      const { divergesFromGoals: _omitted, ...silent } = diverging;
+      expect(
+        parseRunStatus({ runId: 'r1', status: null, outcome: silent }),
+      ).not.toHaveProperty('outcome');
     });
 
     it('drops a list with an unreadable goal, keeps an empty one and a null outcome', () => {

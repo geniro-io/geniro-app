@@ -2063,6 +2063,8 @@ export class ItemDao extends BaseDao<Item> {
       snapshot?: boolean;
       /** Only the callee's own rows, never a delegate's (`parentToolUseId`). */
       ownThread?: boolean;
+      /** Only a person's messages, which every other read leaves out. */
+      userMessages?: boolean;
       limit: number;
     },
     txEm?: EntityManager,
@@ -2078,11 +2080,13 @@ export class ItemDao extends BaseDao<Item> {
         .where('in_call', '=', callId)
         .where('deleted_at', 'is', null)
         .where((eb) =>
-          eb.or([
-            eb('kind', '!=', 'message'),
-            eb('role', 'is', null),
-            eb('role', '!=', 'user'),
-          ]),
+          pick.userMessages === true
+            ? eb.and([eb('kind', '=', 'message'), eb('role', '=', 'user')])
+            : eb.or([
+                eb('kind', '!=', 'message'),
+                eb('role', 'is', null),
+                eb('role', '!=', 'user'),
+              ]),
         );
       if (kind !== null) {
         heads = heads.where('kind', '=', kind);

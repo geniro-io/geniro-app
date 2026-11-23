@@ -29,7 +29,7 @@ import {
   workflowEdgeRows,
 } from '../utils/history-anchors';
 import { itemToWire } from '../utils/item-wire';
-import { parseJsonColumn, payloadString } from '../utils/json-util';
+import { asRecord, parseJsonColumn, payloadString } from '../utils/json-util';
 import { ChatService } from './chat.service';
 import { ItemCallIndexService } from './item-call-index.service';
 import { RunKindRowsCache } from './run-kind-rows.cache';
@@ -58,6 +58,38 @@ const CARD_READS: readonly { kinds: readonly ItemKind[]; limit: number }[] = [
   { kinds: ['error', 'turn_cancelled'], limit: 200 },
   { kinds: ['system'], limit: 50 },
 ];
+
+/**
+ * Rows read per held call since its newest hold, of each kind that can continue
+ * it there — the caller's message or a question's answer (`call_answer`) and a
+ * person's message — so the card does not read "waiting" after it was continued.
+ * The rest of what ends a hold is already among {@link CARD_READS}.
+ */
+const WAKES_PER_HELD_CALL = 20;
+
+/**
+ * Each call's newest `heldCall` row among `rows`, by call — where a read of what
+ * continued it starts.
+ *
+ * TWIN PARSER: written by `CallBroker.holdCall`
+ * (apps/daemon/src/v1/teams/services/call-broker.service.ts); folded into
+ * `CallBlockEntry.heldOn` by `heldCalls` in
+ * apps/ui/src/renderer/chats/transcript-groups.ts.
+ */
+function newestHolds(rows: readonly WireRow[]): Map<string, number> {
+  const holds = new Map<string, number>();
+  for (const row of rows) {
+    if (
+      row.kind !== 'system' ||
+      row.inCall === null ||
+      asRecord(asRecord(parseJsonColumn(row.payload))?.heldCall) === null
+    ) {
+      continue;
+    }
+    holds.set(row.inCall, Math.max(holds.get(row.inCall) ?? 0, row.seq));
+  }
+  return holds;
+}
 
 /**
  * The task lists a call's card folds: every one of the callee's own since its
@@ -375,6 +407,27 @@ export class ChatHistoryService {
     for (const read of CARD_READS) {
       rows.push(...(await newest(read)));
     }
+    const holds = newestHolds(rows);
+    const held = [...holds.keys()];
+    rows.push(
+      ...(await newest(
+        {
+          kinds: ['call_answer'],
+          fromSeq: holds,
+          limit: WAKES_PER_HELD_CALL,
+        },
+        held,
+      )),
+      ...(await newest(
+        {
+          kinds: ['message'],
+          userMessages: true,
+          fromSeq: holds,
+          limit: WAKES_PER_HELD_CALL,
+        },
+        held,
+      )),
+    );
     const wholeLists = new Map(
       (
         await newest({

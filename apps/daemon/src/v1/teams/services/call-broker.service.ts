@@ -4118,7 +4118,9 @@ export class CallBroker implements OnModuleInit {
     if (open > 0) {
       const callee = this.calleeName(state, call.owner, call.calleeId);
       // TWIN PARSER: `apps/ui/src/renderer/chats/transcript-groups.ts` folds
-      // `heldCall` rows into the call block's `heldOn` reading by `callId`.
+      // `heldCall` rows into the call block's `heldOn` reading by `callId`;
+      // `newestHolds` (`v1/agents/services/chat-history.service.ts`) reads
+      // them for a root page's anchors.
       state.capability.persistItem(call.calleeId, 'system', null, {
         callId,
         severity: 'info',

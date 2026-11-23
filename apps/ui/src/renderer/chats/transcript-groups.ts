@@ -349,8 +349,10 @@ export interface CallBlockEntry {
    * TWIN PARSER: written by `CallBroker.holdCall` as a `system` row carrying
    * `heldCall: { waitingOn }` and this call's id — see
    * `apps/daemon/src/v1/teams/services/call-broker.service.ts`. Ended by the
-   * callee being continued (its wake notice), a status row, or the call's
-   * result — never by an unrelated row its process writes meanwhile.
+   * callee being continued (`endsHeldWait`), a status row, or the call's
+   * result — never by an unrelated row its process writes meanwhile. A root
+   * page anchors the rows that continue it since its newest hold
+   * (`newestHolds` in `apps/daemon/src/v1/agents/services/chat-history.service.ts`).
    */
   heldOn?: number;
   /**
@@ -4272,7 +4274,7 @@ function calleeTurnIn(rows: readonly ChatItem[]): {
           monitors.set(monitor.id, monitor.description);
         }
       }
-      if (notice?.woke === true || endsHeldWait(item)) {
+      if (endsHeldWait(item)) {
         resume();
       }
       if (isPoolHandOff(item)) {
@@ -4306,16 +4308,50 @@ function calleeTurnIn(rows: readonly ChatItem[]): {
   };
 }
 
-/** Whether `item` ends a call's wait — see the `heldCalls` fold. */
+/**
+ * The `call_answer` outcomes that continue a held callee: the caller's message
+ * it took, and a deferred question's answer or expiry, which `continueAsked`
+ * hands to the hold. An undelivered message or a cancel continues nothing.
+ */
+const CONTINUING_CALL_ANSWERS: ReadonlySet<string> = new Set([
+  'message',
+  'answered',
+  'timeout',
+  'orphaned',
+]);
+
+/**
+ * Whether `item` ends a call's wait — see the `heldCalls` fold: every row the
+ * daemon writes as it continues a held callee (`CallBroker.releaseHold`'s
+ * callers) — a wake notice, a monitor waking it, a usage-limit reset told to
+ * it, an answer it takes, the user's message — plus a status row or the call's
+ * result.
+ */
 function endsHeldWait(item: ChatItem): boolean {
-  if (item.kind === 'status' || item.kind === 'call_result') {
-    return true;
+  switch (item.kind) {
+    case 'status':
+    case 'call_result':
+      return true;
+    case 'call_answer':
+      return CONTINUING_CALL_ANSWERS.has(
+        payloadString(item.payload, 'outcome') ?? '',
+      );
+    case 'message':
+      return item.role === 'user';
+    case 'system': {
+      const payload = item.payload as {
+        wake?: unknown;
+        resetWake?: { phase?: unknown };
+      } | null;
+      return (
+        Array.isArray(payload?.wake) ||
+        payload?.resetWake?.phase === 'fired' ||
+        readMonitorNotice(item.payload)?.woke === true
+      );
+    }
+    default:
+      return false;
   }
-  if (item.kind !== 'system') {
-    return false;
-  }
-  const wake = (item.payload as { wake?: unknown } | null)?.wake;
-  return Array.isArray(wake);
 }
 
 /**

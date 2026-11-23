@@ -231,6 +231,16 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
     },
   );
 
+  it('names the trigger for show_chart and show_comparison before a table', () => {
+    const line = lineStartingWith(`- \`${HOST_CHART_TOOL}\``);
+
+    expect(line).toContain('over time');
+    expect(line).toContain('split across categories');
+    expect(line).toContain('markdown table');
+    expect(line).toContain('verdict');
+    expect(line).toContain('by name only');
+  });
+
   it('sends a wait on slow output to monitor rather than a sleep loop', () => {
     const line = lineStartingWith(`- \`${HOST_MONITOR_TOOL}\``);
 

@@ -3788,6 +3788,18 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
+  it('names the concrete triggers of show_chart and show_comparison, where a table would otherwise be written', async () => {
+    const tools = await everyHostTool();
+    const chart = find(tools, HOST_CHART_TOOL);
+    expect(chart).toContain('over time');
+    expect(chart).toContain('across categories');
+    expect(chart).toContain('markdown');
+    const comparison = find(tools, HOST_COMPARISON_TOOL);
+    expect(comparison).toContain('asked to choose');
+    expect(comparison).toContain('show_chart');
+    expect(comparison).toContain('markdown table');
+  });
+
   it('makes memory_feedback and memory_forget name each other, for the entries that do not help', async () => {
     const tools = await everyHostTool();
     expect(find(tools, HOST_MEMORY_FEEDBACK_TOOL)).toContain(

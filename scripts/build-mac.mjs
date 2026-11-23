@@ -124,6 +124,33 @@ function machOWithoutArm64(dir) {
   return found;
 }
 
+/**
+ * The search model's runtime ships every platform's binaries, a second copy of
+ * its library under its versioned name, and two packages only its installer
+ * reads; the app runs on darwin-arm64 and loads `@rpath/libonnxruntime.1.dylib`.
+ */
+function pruneSearchRuntime(modules) {
+  const onnx = join(modules, 'onnxruntime-node', 'bin', 'napi-v6');
+  if (!existsSync(join(onnx, 'darwin', 'arm64', 'libonnxruntime.1.dylib'))) {
+    throw new Error(`onnxruntime-node's darwin-arm64 library is missing from ${onnx}`);
+  }
+  for (const platform of ['linux', 'win32']) {
+    rmSync(join(onnx, platform), { recursive: true, force: true });
+  }
+  rmSync(join(onnx, 'darwin', 'arm64', 'libonnxruntime.1.30.0.dylib'), { force: true });
+  for (const name of ['adm-zip', 'global-agent']) {
+    rmSync(join(modules, name), { recursive: true, force: true });
+  }
+  for (const name of readdirSync(modules)) {
+    if (name.startsWith('sqlite-vec-') && name !== 'sqlite-vec-darwin-arm64') {
+      rmSync(join(modules, name), { recursive: true, force: true });
+    }
+  }
+  if (!existsSync(join(modules, 'sqlite-vec-darwin-arm64', 'vec0.dylib'))) {
+    throw new Error(`sqlite-vec's darwin-arm64 extension is missing from ${modules}`);
+  }
+}
+
 function assertEveryMachOHasArm64(app) {
   const intelOnly = machOWithoutArm64(app);
   if (intelOnly.length > 0) {
@@ -258,6 +285,7 @@ try {
     recursive: true,
     force: true,
   });
+  pruneSearchRuntime(join(daemonDir, 'node_modules'));
   for (const modules of [
     join(daemonDir, 'node_modules'),
     join(appDir, 'node_modules'),

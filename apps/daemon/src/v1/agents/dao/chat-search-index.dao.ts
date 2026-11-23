@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
+import type { ExpressionBuilder } from 'kysely';
 
 import {
   CHAT_TEXT_KINDS,
@@ -9,6 +10,7 @@ import {
   DROP_CHAT_TEXT_TABLE,
   DROP_RETIRED_CHAT_TEXT_TRIGGERS,
 } from '../../../db/chat-text-index.ddl';
+import { EMBEDDING_CHAT_MIN_CHARS } from '../../embeddings/embeddings.types';
 import { Item } from '../../runs/entity/item.entity';
 import type {
   ChatContextRow,
@@ -50,6 +52,16 @@ const HIT_COLUMNS = [
 import { activityWindowOf, runIdsActiveIn } from '../utils/run-activity';
 import { notSystemAnalysis } from '../utils/system-analysis-filter';
 
+function longEnoughToEmbed(
+  eb: ExpressionBuilder<ChatTextDatabase, 'chat_text'>,
+) {
+  return eb(
+    eb.fn<number>('length', [eb.fn<string>('trim', ['chat_text.text'])]),
+    '>=',
+    EMBEDDING_CHAT_MIN_CHARS,
+  );
+}
+
 @Injectable()
 export class ChatSearchIndexDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
@@ -72,8 +84,12 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .execute();
   }
 
-  /** Those of `itemIds` a search with `options` may return, as hits without a rank. */
-  async hitsAmong(
+  /**
+   * Those of `itemIds` a search by meaning with `options` may return, as hits
+   * without a rank: a message too short to embed is left out even when an
+   * older index still holds its vector.
+   */
+  async meaningHitsAmong(
     options: ChatSearchReach,
     itemIds: readonly string[],
   ): Promise<Omit<ChatTextMatch, 'rank'>[]> {
@@ -83,6 +99,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
     return this.reachable(options)
       .select(HIT_COLUMNS)
       .where('i.id', 'in', [...itemIds])
+      .where(longEnoughToEmbed)
       .execute();
   }
 
@@ -95,7 +112,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
     return rows.map((row) => row.id);
   }
 
-  /** How many messages search by meaning embeds: every user and assistant message with text. */
+  /** How many messages search by meaning embeds: user and assistant messages long enough to mean something. */
   async embeddableCount(): Promise<number> {
     const row = await this.embeddable()
       .select((eb) => eb.fn.countAll<number>().as('n'))
@@ -174,7 +191,8 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
   private embeddable() {
     return this.reachable({ includeArchived: true })
       .where('i.kind', '=', 'message')
-      .where('i.role', 'in', ['user', 'assistant']);
+      .where('i.role', 'in', ['user', 'assistant'])
+      .where(longEnoughToEmbed);
   }
 
   /** The run a context read is about, or undefined when it is gone. */

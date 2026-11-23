@@ -12020,6 +12020,7 @@ export function Chats({
                 <GlobalChatSearchDialog
                   open={globalSearchOpen}
                   chatApi={chatApi}
+                  embeddingsApi={apis.embeddings}
                   onClose={() => setGlobalSearchOpen(false)}
                   onJump={openGlobalSearchHit}
                 />

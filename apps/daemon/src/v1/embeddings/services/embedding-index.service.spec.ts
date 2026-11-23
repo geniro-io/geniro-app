@@ -508,6 +508,41 @@ describe('EmbeddingIndexService', () => {
       expect((await index.status()).counts.chats.paused).toBeNull();
     });
 
+    it('tells readers a stored chat message moved the totals only while chats wait for power', async () => {
+      chats.add(1, 'r1');
+      index.registerChats(chats);
+      const reasons: string[] = [];
+      index.changes().subscribe((event) => reasons.push(event.reason));
+
+      await index.setConfig(ON);
+      await waitReady();
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      reasons.length = 0;
+      index.chatAdded();
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(reasons).toEqual([]);
+
+      await index.setConfig({ ...ON, onBattery: true });
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      reasons.length = 0;
+      chats.add(2, 'r1');
+      index.chatAdded();
+      await vi.waitFor(() => expect(reasons).toEqual(['progress']), {
+        timeout: 3_000,
+      });
+      expect((await index.status()).counts.chats).toMatchObject({
+        indexed: 1,
+        total: 2,
+        paused: 'battery',
+      });
+
+      await index.setConfig({ ...ON, enabled: false, onBattery: true });
+      reasons.length = 0;
+      index.chatAdded();
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(reasons).toEqual([]);
+    }, 15_000);
+
     it('reports the pending model complete only once its backfill has run', async () => {
       memory.set('m1', 'one');
       let release: () => void = () => undefined;

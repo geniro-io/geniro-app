@@ -7,6 +7,7 @@ import { getLoadablePath } from 'sqlite-vec';
 import {
   type ChatScore,
   type DocumentSource,
+  EMBEDDING_CHAT_MIN_SIMILARITY,
   EMBEDDING_DIM,
   EMBEDDING_MIN_SIMILARITY,
   EMBEDDING_VACUUM_SHARE,
@@ -89,6 +90,7 @@ function chunked<T>(values: readonly T[], size = MAX_BOUND_IDS): T[][] {
 function bestPerKey<T extends { similarity: number }>(
   rows: readonly T[],
   keyOf: (row: T) => string,
+  minSimilarity: number,
 ): T[] {
   const best = new Map<string, T>();
   for (const row of rows) {
@@ -99,7 +101,7 @@ function bestPerKey<T extends { similarity: number }>(
     }
   }
   return [...best.values()]
-    .filter((row) => row.similarity >= EMBEDDING_MIN_SIMILARITY)
+    .filter((row) => row.similarity >= minSimilarity)
     .sort((a, b) => b.similarity - a.similarity);
 }
 
@@ -250,7 +252,11 @@ export class EmbeddingStore {
         await scan(ids);
       }
     }
-    return bestPerKey(scored, (row) => row.sourceId).slice(0, limit);
+    return bestPerKey(
+      scored,
+      (row) => row.sourceId,
+      EMBEDDING_MIN_SIMILARITY,
+    ).slice(0, limit);
   }
 
   async deleteDocuments(
@@ -385,7 +391,11 @@ export class EmbeddingStore {
         }
       }
     }
-    return bestPerKey(hits, (row) => row.itemId).slice(0, k);
+    return bestPerKey(
+      hits,
+      (row) => row.itemId,
+      EMBEDDING_CHAT_MIN_SIMILARITY,
+    ).slice(0, k);
   }
 
   async deleteRuns(runIds: readonly string[]): Promise<number> {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
+import { filter } from 'rxjs/operators';
 
 import type {
   ChatSourceProvider,
@@ -58,5 +59,15 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
     this.bus.allDeleted().subscribe((runId) => {
       void embeddings.deleteRuns([runId]);
     });
+    this.bus
+      .all()
+      .pipe(
+        filter(
+          ({ item }) =>
+            item.kind === 'message' &&
+            (item.role === 'user' || item.role === 'assistant'),
+        ),
+      )
+      .subscribe(() => embeddings.chatAdded());
   }
 }

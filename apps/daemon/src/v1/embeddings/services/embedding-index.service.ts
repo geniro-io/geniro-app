@@ -185,6 +185,14 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     return this.config;
   }
 
+  /** A chat message was stored. While chats wait for power nothing indexes it, so readers are told the total moved. */
+  chatAdded(): void {
+    this.totalsReadAt = 0;
+    if (this.enabled && this.config.onBattery) {
+      this.emit('progress');
+    }
+  }
+
   enqueue(source: DocumentSource, sourceIds: readonly string[]): void {
     if (!this.enabled || sourceIds.length === 0) {
       return;

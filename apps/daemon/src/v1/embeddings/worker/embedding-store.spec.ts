@@ -311,6 +311,37 @@ describe('EmbeddingStore', () => {
       });
     });
 
+    it('drops a chat message a document would still match, below the stricter chat floor', async () => {
+      const target = unit(1);
+      const weak = near(target, unit(2), 1.08);
+      await store.storeChatItems(MODEL, [
+        { ...chatItem('weak', 'r1', 1), vectors: [weak] },
+        {
+          ...chatItem('close', 'r1', 3),
+          vectors: [near(target, unit(4), 0.6)],
+        },
+      ]);
+      await store.storeDocuments('memory', MODEL, [
+        { sourceId: 'm1', textHash: 'h', vectors: [weak] },
+      ]);
+
+      const chats = await store.searchChats(MODEL, target, 10, null);
+      const scoped = await store.searchChats(MODEL, target, 10, ['r1']);
+      const documents = await store.scoreDocuments(
+        'memory',
+        MODEL,
+        target,
+        null,
+        10,
+      );
+
+      expect(chats.map((hit) => hit.itemId)).toEqual(['close']);
+      expect(scoped.map((hit) => hit.itemId)).toEqual(['close']);
+      expect(documents.map((hit) => hit.sourceId)).toEqual(['m1']);
+      expect(documents[0]?.similarity).toBeGreaterThan(0.65);
+      expect(documents[0]?.similarity).toBeLessThan(0.7);
+    });
+
     it('compares chat messages of the same model only', async () => {
       await store.storeChatItems(OTHER, [chatItem('i1', 'r1', 7)]);
 

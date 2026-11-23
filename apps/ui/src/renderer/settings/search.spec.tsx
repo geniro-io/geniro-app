@@ -345,6 +345,31 @@ describe('SearchSettings', () => {
 
     expect(textOf()).toContain('The index stopped');
     expect(textOf()).toContain('The index file is locked by another process.');
+    expect(textOf()).not.toContain('The download did not finish');
+  });
+
+  it('a failed download with an index left names only the index and never a model of 0 MB', async () => {
+    const h = harness(
+      state({ phase: 'failed', reason: 'network', modelBytes: 0 }),
+      status({ state: 'off', indexBytes: 1_200_000 }),
+    );
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    expect(textOf()).toContain('The download did not finish');
+    expect(textOf()).toContain('EmbeddingGemma 2 · index 1 MB');
+    expect(textOf()).not.toContain('model 0 MB');
+  });
+
+  it('an index smaller than a megabyte reads as under 1 MB, not 0 MB', async () => {
+    const h = harness(
+      state({ phase: 'ready', modelBytes: TOTAL }),
+      status({ indexBytes: 400_000 }),
+    );
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    expect(textOf()).toContain(
+      'EmbeddingGemma 2 · model 346 MB · index under 1 MB',
+    );
   });
 
   it('off keeps the files on disk and says turning it on again is instant', async () => {

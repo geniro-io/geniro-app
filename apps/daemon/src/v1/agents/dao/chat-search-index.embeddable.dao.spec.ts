@@ -11,6 +11,11 @@ const RUN_BUILDER = '00000000-0000-4000-8000-00000000000e';
 const RUN_ANALYSIS = '00000000-0000-4000-8000-00000000000f';
 const RUN_SYSTEM = '00000000-0000-4000-8000-0000000000a0';
 const NOW = new Date('2026-01-01T00:00:00Z');
+const ABOUT = ' about the monthly invoice export';
+
+function long(text: string) {
+  return said(text + ABOUT);
+}
 
 describe('ChatSearchIndexDao embeddings reads', () => {
   let db: Awaited<ReturnType<typeof chatSearchDb>>;
@@ -34,56 +39,67 @@ describe('ChatSearchIndexDao embeddings reads', () => {
     await db.item('user-a', {
       runId: RUN_A,
       seq: 1,
-      payload: said('Billing question'),
+      payload: long('Billing question'),
     });
     await db.item('assistant-a', {
       runId: RUN_A,
       seq: 2,
       role: 'assistant',
-      payload: said('Billing answer'),
+      payload: long('Billing answer'),
     });
     await db.item('reason-a', {
       runId: RUN_A,
       seq: 3,
       kind: 'reasoning',
       role: 'assistant',
-      payload: said('Billing reasoning'),
+      payload: long('Billing reasoning'),
     });
     await db.item('deleted-a', {
       runId: RUN_A,
       seq: 4,
-      payload: said('Billing deleted'),
+      payload: long('Billing deleted'),
       deletedAt: NOW,
     });
     await db.item('archived-a', {
       runId: RUN_ARCHIVED,
       seq: 1,
-      payload: said('Billing archived'),
+      payload: long('Billing archived'),
     });
     await db.item('gone-a', {
       runId: RUN_DELETED,
       seq: 1,
-      payload: said('Billing gone'),
+      payload: long('Billing gone'),
     });
     await db.item('builder-a', {
       runId: RUN_BUILDER,
       seq: 1,
-      payload: said('Billing builder'),
+      payload: long('Billing builder'),
     });
     await db.item('analysis-a', {
       runId: RUN_ANALYSIS,
       seq: 1,
-      payload: said('Billing analysis'),
+      payload: long('Billing analysis'),
     });
     await db.item('system-a', {
       runId: RUN_SYSTEM,
       seq: 1,
-      payload: said('Billing system'),
+      payload: long('Billing system'),
     });
     await db.item('user-b', {
       runId: RUN_B,
       seq: 1,
-      payload: said('Billing elsewhere'),
+      payload: long('Billing elsewhere'),
+    });
+    await db.item('short-user', {
+      runId: RUN_A,
+      seq: 5,
+      payload: said('OK'),
+    });
+    await db.item('short-assistant', {
+      runId: RUN_A,
+      seq: 6,
+      role: 'assistant',
+      payload: said('   Done, merged and shipped it.   '),
     });
     await db.ensureIndex();
   });
@@ -101,8 +117,29 @@ describe('ChatSearchIndexDao embeddings reads', () => {
       'archived-a',
       'user-b',
     ]);
-    expect(rows[0]).toMatchObject({ run_id: RUN_A, text: 'Billing question' });
+    expect(rows[0]).toMatchObject({
+      run_id: RUN_A,
+      text: `Billing question${ABOUT}`,
+    });
     expect(await db.dao().embeddableCount()).toBe(4);
+  });
+
+  it('leaves out messages too short to mean anything by meaning, counted or listed', async () => {
+    const dao = db.dao();
+
+    const ids = (await dao.embeddableRows(0, 'after', 100)).map(
+      (row) => row.id,
+    );
+    const hits = await dao.meaningHitsAmong({ includeArchived: true }, [
+      'short-user',
+      'short-assistant',
+      'user-a',
+    ]);
+
+    expect(ids).not.toContain('short-user');
+    expect(ids).not.toContain('short-assistant');
+    expect(await dao.embeddableCount()).toBe(4);
+    expect(hits.map((row) => row.id)).toEqual(['user-a']);
   });
 
   it('walks back from a rowid newest first, and honours the limit', async () => {
@@ -118,9 +155,12 @@ describe('ChatSearchIndexDao embeddings reads', () => {
     const ids = ['user-a', 'user-b', 'archived-a', 'builder-a', 'gone-a'];
     const dao = db.dao();
 
-    const live = await dao.hitsAmong({ includeArchived: false }, ids);
-    const everything = await dao.hitsAmong({ includeArchived: true }, ids);
-    const inRunA = await dao.hitsAmong(
+    const live = await dao.meaningHitsAmong({ includeArchived: false }, ids);
+    const everything = await dao.meaningHitsAmong(
+      { includeArchived: true },
+      ids,
+    );
+    const inRunA = await dao.meaningHitsAmong(
       { includeArchived: true, runId: RUN_A },
       ids,
     );
@@ -132,7 +172,9 @@ describe('ChatSearchIndexDao embeddings reads', () => {
       'user-b',
     ]);
     expect(inRunA.map((row) => row.id)).toEqual(['user-a']);
-    expect(await dao.hitsAmong({ includeArchived: true }, [])).toEqual([]);
+    expect(await dao.meaningHitsAmong({ includeArchived: true }, [])).toEqual(
+      [],
+    );
   });
 
   it('reaches only the runs a search may return, archived ones with includeArchived', async () => {

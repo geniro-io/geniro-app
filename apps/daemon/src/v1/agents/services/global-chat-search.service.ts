@@ -111,7 +111,7 @@ export class GlobalChatSearchService {
     const known = new Map<string, Omit<ChatTextMatch, 'rank'>>(
       rows.map((row) => [row.id, row]),
     );
-    const reachable = await this.index.hitsAmong(
+    const reachable = await this.index.meaningHitsAmong(
       options,
       meaning.map((hit) => hit.itemId).filter((id) => !known.has(id)),
     );

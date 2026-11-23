@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ChatSourceProvider } from '../../embeddings/embeddings.types';
 import type { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
+import type { ItemWire } from '../chat.types';
 import type {
   ChatEmbeddableRow,
   ChatSearchIndexDao,
@@ -43,6 +44,7 @@ function setup() {
     deleteRuns: vi.fn<(runIds: readonly string[]) => Promise<void>>(
       async () => undefined,
     ),
+    chatAdded: vi.fn<() => void>(),
   };
   const service = new ChatEmbeddingSourceService(
     dao as unknown as ChatSearchIndexDao,
@@ -63,7 +65,31 @@ function registeredProvider(
   return provider;
 }
 
+function stored(kind: ItemWire['kind'], role: ItemWire['role']): ItemWire {
+  return {
+    id: `i-${kind}-${role}`,
+    runId: 'r1',
+    memberId: null,
+    seq: 1,
+    kind,
+    role,
+    payload: { text: 'The nightly backup lands in the wrong bucket.' },
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 describe('ChatEmbeddingSourceService', () => {
+  it('tells the index each time a user or assistant message is stored, and only then', () => {
+    const { bus, embeddings } = setup();
+
+    bus.publish({ runId: 'r1', item: stored('message', 'user') });
+    bus.publish({ runId: 'r1', item: stored('message', 'assistant') });
+    bus.publish({ runId: 'r1', item: stored('reasoning', 'assistant') });
+    bus.publish({ runId: 'r1', item: stored('tool_call', 'assistant') });
+
+    expect(embeddings.chatAdded).toHaveBeenCalledTimes(2);
+  });
+
   it('asks the index to drop the vectors of a deleted run', () => {
     const { bus, embeddings } = setup();
 

@@ -33,6 +33,20 @@ export function megabytes(bytes: number): number {
   return Math.round(bytes / 1_000_000);
 }
 
+/** A size on disk as the copy says it: never "0 MB" for something that is there. */
+function sizeOnDisk(bytes: number): string {
+  return bytes < 1_000_000 ? 'under 1 MB' : `${megabytes(bytes)} MB`;
+}
+
+/** What the "Model and index" row names: only the parts that are on this Mac. */
+function onDiskParts(modelBytes: number, indexBytes: number): string {
+  return [
+    'EmbeddingGemma 2',
+    ...(modelBytes > 0 ? [`model ${sizeOnDisk(modelBytes)}`] : []),
+    ...(indexBytes > 0 ? [`index ${sizeOnDisk(indexBytes)}`] : []),
+  ].join(' · ');
+}
+
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -429,8 +443,8 @@ export function SearchSettings({
     state === null
       ? ''
       : phase === 'off'
-        ? `The model and index are kept on this Mac (${megabytes(state.modelBytes + indexBytes)} MB). Turn this on again to use them at once.`
-        : `EmbeddingGemma 2 · model ${megabytes(state.modelBytes)} MB · index ${megabytes(indexBytes)} MB`;
+        ? `The model and index are kept on this Mac (${sizeOnDisk(state.modelBytes + indexBytes)}). Turn this on again to use them at once.`
+        : onDiskParts(state.modelBytes, indexBytes);
 
   return (
     <SettingsGroups>

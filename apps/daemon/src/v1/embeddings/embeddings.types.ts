@@ -17,6 +17,17 @@ export const EMBEDDING_MEANING_CANDIDATES = 50;
  * 0.45–0.62 with this model, related text 0.7 and up.
  */
 export const EMBEDDING_MIN_SIMILARITY = 0.65;
+/**
+ * The chat floor, stricter than {@link EMBEDDING_MIN_SIMILARITY}: a history
+ * holds thousands of messages, and at 0.65 a third of unrelated queries still
+ * reached long messages. Real paraphrases measured 0.709–0.958.
+ */
+export const EMBEDDING_CHAT_MIN_SIMILARITY = 0.7;
+/**
+ * Shorter chat messages are not searched by meaning ("OK", "Done.", "давай"):
+ * they scored 0.67–0.75 against nearly any query. Word search still finds them.
+ */
+export const EMBEDDING_CHAT_MIN_CHARS = 32;
 export const EMBEDDING_CHAT_KNN_MAX = 500;
 export const EMBEDDING_CHAT_KNN_PER_HIT = 10;
 /** Chat items embedded per indexing step, so a step never holds the child for long. */

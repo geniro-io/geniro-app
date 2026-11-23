@@ -41,7 +41,13 @@ describe('GlobalChatSearchService search by meaning', () => {
     await db.item('old', {
       runId: RUN_ARCHIVED,
       seq: 1,
-      payload: said('Old screenshots note.'),
+      payload: said('Old screenshots note about the pasted images folder.'),
+    });
+    await db.item('filler', {
+      runId: RUN_A,
+      seq: 3,
+      role: 'assistant',
+      payload: said('Done.'),
     });
     await db.ensureIndex();
     fake = new FakeEmbeddingIndex();
@@ -92,6 +98,28 @@ describe('GlobalChatSearchService search by meaning', () => {
         'title',
       ].sort(),
     );
+  });
+
+  it('never answers a short filler message by meaning, while a real paraphrase still comes back and words still find the filler', async () => {
+    fake.answerChats = () => [
+      { itemId: 'filler', runId: RUN_A, similarity: 0.93 },
+      { itemId: 'pic', runId: RUN_A, similarity: 0.76 },
+    ];
+
+    const byMeaning = await service.search({
+      query: RUSSIAN_IMAGES,
+      limit: 30,
+      includeArchived: true,
+    });
+    fake.answerChats = () => [];
+    const byWords = await service.search({
+      query: 'done',
+      limit: 30,
+      includeArchived: true,
+    });
+
+    expect(byMeaning.hits.map((hit) => hit.itemId)).toEqual(['pic']);
+    expect(byWords.hits.map((hit) => hit.itemId)).toEqual(['filler']);
   });
 
   it('puts the best fused hit first with score 1 and keeps the others below it', async () => {

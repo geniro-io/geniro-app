@@ -6342,7 +6342,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // `read_teams` is NOT here, nor below: like the history tools, a read of
         // the user's data outside this chat is the user's to allow.
         isHostTeamProposalCall(hostServerName, toolName) ||
-        // A builder chat's own read, backup and check — see
+        // A builder chat's own read and check — see
         // `isHostBuilderTeamCall`.
         (run.editsTeamSlug !== null &&
           isHostBuilderTeamCall(hostServerName, toolName)) ||

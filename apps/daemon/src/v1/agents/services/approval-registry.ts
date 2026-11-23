@@ -46,7 +46,7 @@ export interface PendingApproval {
    * Whether this deferred card stands ACROSS turns — a card another module owns
    * (`ChatService.raiseOwnedCard`, a team proposal), which a new turn does
    * not retire and which counts as `awaiting` only while no turn runs. Absent
-   * means false: a question, plan or patch is retired by the next turn.
+   * means false: a question, plan or project card is retired by the next turn.
    *
    * TWIN PARSER: the renderer's `standsAcrossTurns`
    * (`apps/ui/src/renderer/chats/geniro-tool.ts`) names the tools whose card is

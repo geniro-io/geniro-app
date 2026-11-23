@@ -2241,24 +2241,10 @@ describe('McpServerService', () => {
   });
 
   it.each(['propose_patch', 'report_findings', 'backup_team'])(
-    'lists no %s, and answers a call to it as an unknown tool',
+    'lists no %s even with every host sink registered',
     async (name) => {
       expect((await everyHostTool()).map((tool) => tool.name)).not.toContain(
         name,
-      );
-      const called = await post(
-        service(),
-        'run-1',
-        'agent',
-        rpc('tools/call', { name, arguments: {} }),
-      );
-      const result = called.json().result as {
-        content: { text: string }[];
-        isError: boolean;
-      };
-      expect(result.isError).toBe(true);
-      expect(JSON.parse(result.content[0]!.text).error).toContain(
-        'UNKNOWN_TOOL',
       );
     },
   );

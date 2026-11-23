@@ -393,7 +393,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * The DEFERRED card this run is parked on, as JSON
-   * (`PendingCardSnapshot` — a question, a plan or a patch), or null when it
+   * (`PendingCardSnapshot` — a question, a plan or a project card), or null when it
    * is parked on none. Every row names its `kind`; one that does not is
    * cleared at boot.
    *

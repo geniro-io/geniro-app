@@ -4138,10 +4138,15 @@ describe('ChatService', () => {
         const ctx = setup();
         const { runId, requestId } = await deferredPlan(ctx);
         const send = ctx.service.sendMessage.bind(ctx.service);
-        const seenAtSend: { column: unknown; verdict: boolean }[] = [];
+        const seenAtSend: {
+          text: string;
+          column: unknown;
+          verdict: boolean;
+        }[] = [];
         vi.spyOn(ctx.service, 'sendMessage').mockImplementation(
           async (id, text, ...rest) => {
             seenAtSend.push({
+              text,
               column: ctx.runDao.runs.get(id)?.pendingQuestion,
               verdict: ctx.itemDao.items.some(
                 (item) => item.kind === 'approval_verdict',
@@ -4156,13 +4161,41 @@ describe('ChatService', () => {
           expect(seenAtSend).toHaveLength(1);
         });
 
-        expect(seenAtSend[0]).toEqual({ column: null, verdict: true });
+        expect(seenAtSend[0]).toEqual({
+          text: 'The user approved the plan. Carry it out.',
+          column: null,
+          verdict: true,
+        });
         const verdict = ctx.itemDao.items.find(
           (item) => item.kind === 'approval_verdict',
         );
         expect(JSON.parse(verdict!.payload)).toEqual({
           id: requestId,
           allow: true,
+        });
+      });
+
+      it('sends a Reject of a deferred plan as the rejection, and records it', async () => {
+        const ctx = setup();
+        const { runId, requestId } = await deferredPlan(ctx);
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockResolvedValueOnce(undefined as never);
+
+        expect(ctx.approvals.resolve(runId, requestId, false)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+
+        expect(sent.mock.calls[0]?.[1]).toBe(
+          'The user rejected the plan. Do not carry it out — ask what they would prefer before doing anything else.',
+        );
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: requestId,
+          allow: false,
         });
       });
 

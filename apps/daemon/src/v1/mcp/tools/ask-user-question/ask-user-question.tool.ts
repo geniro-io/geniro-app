@@ -1,6 +1,9 @@
 import { HOST_QUESTION_TOOL } from '../../../agents/chat.types';
 import type { UserQuestionBroker } from '../../../agents/services/user-question.broker';
-import { readHostQuestions } from '../../../agents/utils/host-question';
+import {
+  hostQuestionTextOverflow,
+  readHostQuestions,
+} from '../../../agents/utils/host-question';
 import { callerKey } from '../../../teams/utils/caller-key';
 import type {
   McpCallContext,
@@ -50,6 +53,10 @@ export class AskUserQuestionTool extends BaseMcpTool {
     context: McpCallContext,
   ): Promise<McpToolResult> {
     const { runId, caller } = context;
+    const overflow = hostQuestionTextOverflow(args);
+    if (overflow !== null) {
+      return this.invalidArgs(overflow);
+    }
     // Answered ahead of the call tools and in its OWN shape: the call
     // envelope is a contract between two AGENTS, and a question put to a
     // person has no status, no call_id and nothing to collect later. The

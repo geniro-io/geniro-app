@@ -1,5 +1,4 @@
 import {
-  HOST_BACKUP_TEAM_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
@@ -27,8 +26,8 @@ export function isHostTeamProposalCall(
  * Whether a team builder chat's call to its own team tools goes
  * without a card — asked only on a builder turn.
  *
- * Its read is a library read the user opened this chat to have done, its
- * backup only copies the file aside, and its `save_team_change` is a check
+ * Its read is a library read the user opened this chat to have done, and its
+ * `save_team_change` is a check
  * that writes nothing: the change itself is written behind
  * `propose_team`'s card ({@link isHostTeamProposalCall}).
  */
@@ -38,7 +37,6 @@ export function isHostBuilderTeamCall(
 ): boolean {
   return (
     isHostToolCall(serverName, toolName, HOST_READ_TEAMS_TOOL) ||
-    isHostToolCall(serverName, toolName, HOST_BACKUP_TEAM_TOOL) ||
     isHostToolCall(serverName, toolName, HOST_TEAM_CHANGE_TOOL)
   );
 }

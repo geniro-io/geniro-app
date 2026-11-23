@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 
 describe('HostSinkBroker answersAtOnce', () => {
   const RUN = 'run-1';
   const NODE = 'agent';
 
-  it.each([
-    ['PlanBroker', () => new PlanBroker()],
-    ['PatchBroker', () => new PatchBroker()],
-  ])(
+  it.each([['PlanBroker', () => new PlanBroker()]])(
     '%s keeps the flag with the sink and drops it on dispose',
     (_name, make) => {
       const broker = make();
@@ -37,7 +33,7 @@ describe('HostSinkBroker answersAtOnce', () => {
   it('never lends one turn’s flag to the next, whatever order the disposers run in', () => {
     // A late settle of the deferring turn must neither clear the next turn's
     // own flag nor leave its own behind for that turn to inherit.
-    const broker = new PatchBroker();
+    const broker = new PlanBroker();
     const sink = async (): Promise<{ status: 'posted' }> => ({
       status: 'posted',
     });

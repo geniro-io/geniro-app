@@ -39,9 +39,7 @@ describe('readHostPlan', () => {
 
   it('refuses a plan whose steps hold nothing readable', () => {
     // A card with no rows is not a plan anybody can answer, so this is a
-    // malformed call rather than an empty plan — the same split the findings
-    // tool draws, decided the other way because an empty findings report is a
-    // real review outcome and an empty plan never is.
+    // malformed call rather than an empty plan.
     for (const steps of [[], [{}], ['step one'], [{ title: '   ' }]]) {
       const read = readHostPlan({ title: 'Something', steps });
       expect(read.ok).toBe(false);

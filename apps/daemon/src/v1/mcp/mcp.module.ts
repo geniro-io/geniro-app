@@ -11,7 +11,6 @@ import { ChatArtifactsService } from '../agents/services/chat-artifacts.service'
 import { CommandCenterBroker } from '../agents/services/command-center.broker';
 import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
-import { FindingsReportBroker } from '../agents/services/findings-report.broker';
 import { FlagBroker } from '../agents/services/flag.broker';
 import { GalleryBroker } from '../agents/services/gallery.broker';
 import { GalleryImageService } from '../agents/services/gallery-image.service';
@@ -23,7 +22,6 @@ import { MetricsBroker } from '../agents/services/metrics.broker';
 import { MilestoneBroker } from '../agents/services/milestone.broker';
 import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
-import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
@@ -92,7 +90,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
       useFactory: (
         calls: CallBroker,
         questions: UserQuestionBroker,
-        findings: FindingsReportBroker,
         charts: ChartBroker,
         metrics: MetricsBroker,
         comparisons: ComparisonBroker,
@@ -110,7 +107,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         goals: GoalsService,
         goalWriters: GoalWritersBroker,
         stages: StageService,
-        patches: PatchBroker,
         plans: PlanBroker,
         notices: NotifyBroker,
         board: TaskBoardBroker,
@@ -142,7 +138,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         createMcpTools({
           calls,
           questions,
-          findings,
           charts,
           metrics,
           comparisons,
@@ -161,7 +156,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           goals,
           goalWriters,
           stages,
-          patches,
           plans,
           notices,
           board,
@@ -192,7 +186,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
       inject: [
         CallBroker,
         UserQuestionBroker,
-        FindingsReportBroker,
         ChartBroker,
         MetricsBroker,
         ComparisonBroker,
@@ -210,7 +203,6 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         GoalsService,
         GoalWritersBroker,
         StageService,
-        PatchBroker,
         PlanBroker,
         NotifyBroker,
         TaskBoardBroker,

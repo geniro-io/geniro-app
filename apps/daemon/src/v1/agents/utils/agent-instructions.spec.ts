@@ -19,7 +19,6 @@ import {
   HOST_BROWSER_TYPE_TOOL,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
-  HOST_FINDINGS_TOOL,
   HOST_FLAG_ISSUE_TOOL,
   HOST_GALLERY_TOOL,
   HOST_GOALS_TOOL,
@@ -35,7 +34,6 @@ import {
   HOST_MILESTONE_TOOL,
   HOST_MONITOR_TOOL,
   HOST_NOTIFY_TOOL,
-  HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
@@ -202,9 +200,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       HOST_BROWSER_TYPE_TOOL,
       HOST_BROWSER_SCREENSHOT_TOOL,
       HOST_BROWSER_SET_COOKIES_TOOL,
-      HOST_FINDINGS_TOOL,
       HOST_PLAN_TOOL,
-      HOST_PATCH_TOOL,
       HOST_GOALS_TOOL,
       HOST_RECORD_OUTCOME_TOOL,
       HOST_FLAG_ISSUE_TOOL,
@@ -227,6 +223,13 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       expect(section).toContain(`\`${name}\``);
     }
   });
+
+  it.each(['report_findings', 'propose_patch', 'backup_team'])(
+    'points to no %s, a tool geniro does not serve',
+    (name) => {
+      expect(toolsSection()).not.toContain(name);
+    },
+  );
 
   it('sends a wait on slow output to monitor rather than a sleep loop', () => {
     const line = lineStartingWith(`- \`${HOST_MONITOR_TOOL}\``);

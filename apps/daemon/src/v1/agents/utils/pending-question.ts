@@ -1,11 +1,8 @@
 import type {
-  HostPatch,
-  HostPatchFingerprint,
   HostPlanStep,
   HostProjectInstructions,
   HostQuestion,
 } from '../chat.types';
-import { readHostPatch } from './host-patch';
 import { readHostPlan } from './host-plan';
 import { readHostProjectInstructions } from './host-project-instructions';
 import { readHostQuestions } from './host-question';
@@ -20,7 +17,7 @@ import { readHostQuestions } from './host-question';
  * registry entry itself carries, since `PendingApproval.input` is what the
  * verdict path and the badge read.
  *
- * One column, four cards, each naming its `kind`.
+ * One column, three cards, each naming its `kind`.
  */
 export interface PendingQuestionSnapshot {
   kind: 'question';
@@ -40,17 +37,6 @@ export interface PendingPlanSnapshot {
   steps: HostPlanStep[];
 }
 
-/**
- * A deferred patch. The body is what Apply writes after a restart, so it is
- * the patch `readHostPatch` already capped — never a second, looser copy.
- */
-export interface PendingPatchSnapshot {
-  kind: 'patch';
-  requestId: string;
-  patch: HostPatch;
-  fingerprint: HostPatchFingerprint | null;
-}
-
 /** A deferred change to a project's instructions; Apply writes `change`. */
 export interface PendingProjectInstructionsSnapshot {
   kind: 'project';
@@ -61,13 +47,12 @@ export interface PendingProjectInstructionsSnapshot {
 export type PendingCardSnapshot =
   | PendingQuestionSnapshot
   | PendingPlanSnapshot
-  | PendingPatchSnapshot
   | PendingProjectInstructionsSnapshot;
 
 /**
  * What an agent is told when it raises a DIFFERENT card while one is already
  * standing — or is still being put up. One per run: a chat's durable half is a
- * single column, shared by a question, a plan, a patch and a project card.
+ * single column, shared by a question, a plan and a project card.
  */
 export const QUESTION_ALREADY_STANDING =
   'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
@@ -91,20 +76,6 @@ export function serializePendingQuestion(
         title: snapshot.title,
         steps: snapshot.steps,
       });
-    case 'patch': {
-      const { patch } = snapshot;
-      return JSON.stringify({
-        kind: 'patch',
-        requestId: snapshot.requestId,
-        file_path: patch.filePath,
-        fingerprint: snapshot.fingerprint,
-        ...(patch.oldString === undefined
-          ? {}
-          : { old_string: patch.oldString }),
-        new_string: patch.newString,
-        ...(patch.summary === undefined ? {} : { summary: patch.summary }),
-      });
-    }
     case 'project':
       return JSON.stringify({
         kind: 'project',
@@ -119,12 +90,12 @@ export function serializePendingQuestion(
  *
  * Defensive on every field, because this is a TEXT column that outlives the
  * process that wrote it: a row written by an older build, or one hand-edited in
- * a database browser, must cost the card rather than the boot. Questions,
- * plans and patches each go back through the reader the live call uses, so a
- * snapshot can never carry a shape that call would have refused.
+ * a database browser, must cost the card rather than the boot. Each card goes
+ * back through the reader the live call uses, so a snapshot can never carry a
+ * shape that call would have refused.
  *
- * A row must name its `kind`. One written before the column held plans and
- * patches names none, reads as null, and is cleared at boot like any other
+ * A row must name a `kind` this build still raises. One that names none, or a
+ * kind no longer raised, reads as null and is cleared at boot like any other
  * unreadable row: there is no compatibility reader for it.
  */
 export function readPendingQuestion(
@@ -148,11 +119,6 @@ export function readPendingQuestion(
     title?: unknown;
     questions?: unknown;
     steps?: unknown;
-    file_path?: unknown;
-    old_string?: unknown;
-    new_string?: unknown;
-    summary?: unknown;
-    fingerprint?: unknown;
     change?: unknown;
   };
   if (typeof record.requestId !== 'string' || record.requestId.length === 0) {
@@ -168,37 +134,6 @@ export function readPendingQuestion(
       requestId: record.requestId,
       title: read.plan.title,
       steps: read.plan.steps,
-    };
-  }
-  if (record.kind === 'patch') {
-    const stored = record.fingerprint;
-    let fingerprint: HostPatchFingerprint | null;
-    if (stored === null || stored === 'absent') {
-      fingerprint = stored;
-    } else if (
-      typeof stored === 'object' &&
-      'sha256' in stored &&
-      typeof stored.sha256 === 'string' &&
-      /^[a-f0-9]{64}$/.test(stored.sha256)
-    ) {
-      fingerprint = { sha256: stored.sha256 };
-    } else {
-      return null;
-    }
-    const read = readHostPatch({
-      file_path: record.file_path,
-      old_string: record.old_string,
-      new_string: record.new_string,
-      summary: record.summary,
-    });
-    if (!read.ok) {
-      return null;
-    }
-    return {
-      kind: 'patch',
-      requestId: record.requestId,
-      patch: read.patch,
-      fingerprint,
     };
   }
   if (record.kind === 'project') {

@@ -2604,8 +2604,8 @@ export class ItemDao extends BaseDao<Item> {
       {
         orderBy: { seq: 'desc' },
         limit: 1,
-        // The id alone: `payload` is the TEXT column, and a `report_findings`
-        // row can be many KB read for a value no caller looks at.
+        // The id alone: `payload` is the TEXT column, and a card row can be
+        // many KB read for a value no caller looks at.
         fields: ['id'],
         disableIdentityMap: true,
       },

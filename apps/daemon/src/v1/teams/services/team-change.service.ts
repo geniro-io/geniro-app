@@ -25,7 +25,7 @@ import {
 } from '../teams.types';
 import { firstLineOf } from '../utils/config-dir-redaction';
 import { editTeam, TEAM_FILE_EDIT_COPY } from '../utils/edit-team';
-import { backUpTeam, readTeamSource, sameBackupOf } from '../utils/team-backup';
+import { backUpTeam, readTeamSource } from '../utils/team-backup';
 import { diffTeams } from '../utils/team-diff';
 import type { TeamEdit } from '../utils/team-edits';
 import { parseTeamSnapshot } from '../utils/team-snapshot';
@@ -136,8 +136,8 @@ function runnersOf(
  * every change is checked against its authority, against the file it was read
  * from, and against the team rules. For an analysis the file as it stood is
  * copied to a timed backup before `TeamStoreService.save` replaces it; a
- * builder chat backs up through {@link backUp}, when its agent calls
- * `backup_team`.
+ * builder chat's change is written behind `propose_team`'s card, which backs
+ * the file up there.
  *
  * In `v1/teams` because the store is, and called from `v1/mcp`, which imports
  * both modules; `v1/agents` may not import this one.
@@ -480,9 +480,8 @@ export class TeamChangeService {
     if (diff.identical) {
       return { saved: false, diff, message: 'nothing to change', ...version };
     }
-    // A builder chat backs its file up when its agent decides
-    // (`backup_team`, through `backUp`); an analysis's save and a saved
-    // lesson always do.
+    // An analysis's save and a saved lesson back the file up here; a builder
+    // chat's change is backed up behind `propose_team`'s card instead.
     const backup =
       authority.kind === 'apply' || authority.kind === 'lesson'
         ? await backUpTeam(
@@ -595,32 +594,6 @@ export class TeamChangeService {
         summary: input.summary,
       },
     });
-  }
-
-  /**
-   * Copy the team file as it stands to a timed backup — a builder chat's
-   * `backup_team`, taken when its agent decides. Answers the backup's
-   * path under the library, or `TEAM_GONE`.
-   */
-  async backUp(slug: string): Promise<Answer> {
-    const current = await readTeamSource(this.store.locate(slug).path).catch(
-      () => null,
-    );
-    if (current === null) {
-      return refuse(
-        'TEAM_GONE',
-        `the team '${slug}' is no longer in the library`,
-      );
-    }
-    const { directory } = this.store.locate(slug);
-    const kept = await sameBackupOf(directory, slug, current.source);
-    if (kept !== null) {
-      return { backedUp: true, backup: kept, unchangedSinceThatBackup: true };
-    }
-    return {
-      backedUp: true,
-      backup: await backUpTeam(directory, slug, current.source),
-    };
   }
 
   /**

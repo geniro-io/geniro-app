@@ -3626,7 +3626,7 @@ export interface AgentTurnInput {
    * of them the turn registered. The listing is composed per request at the
    * endpoint, so holding this grants nothing by itself: a member with callees
    * sees the agent-call tools, a turn that can put a card on screen sees
-   * `ask_user_question`, a chat sees `report_findings`. Delivery is
+   * `ask_user_question`, a chat sees `show_chart`. Delivery is
    * adapter-specific — claude gets a per-turn config file referenced by
    * `--mcp-config` (the token travels IN the 0600 file, never argv); the ACP
    * adapter sends it as an HTTP header inside a `session/new` stdin frame.
@@ -4061,7 +4061,7 @@ export interface AgentTurnHandle {
   /**
    * The delegate a render card drawn RIGHT NOW can be credited to, or null.
    *
-   * A host render tool (`report_findings`, `show_chart`, …) arrives over the
+   * A host render tool (`show_chart`, `show_metrics`, …) arrives over the
    * MCP endpoint, which is addressed `(runId, nodeId)` alone — a delegate runs
    * inside the same CLI process and calls the same endpoint, so the request
    * names nobody. Only the live turn can answer, and it answers by INFERENCE.
@@ -4516,9 +4516,10 @@ export interface AdapterConfig {
    * Why this CLI's MCP client will NOT hold ONE `tools/call` open for as long
    * as a PERSON takes to answer it — or null when it will.
    *
-   * Non-null means `ask_user_question`, `propose_plan` and `propose_patch` must
-   * answer IMMEDIATELY and let the user's answer arrive as the run's next
-   * message instead (see `ChatService`'s deferred cards), because the
+   * Non-null means `ask_user_question`, `propose_plan` and
+   * `save_project_instructions` must answer IMMEDIATELY and let the user's
+   * answer arrive as the run's next message instead (see `ChatService`'s
+   * deferred cards), because the
    * alternative is not a slow answer but a LOST one: the client gives up, the
    * model is handed a tool error, and the person is still reading the card.
    * The deadline is on `tools/call`, not on one tool, which is why the same

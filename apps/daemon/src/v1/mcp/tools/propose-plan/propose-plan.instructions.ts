@@ -33,7 +33,7 @@ const PROPOSE_PLAN_DESCRIPTION_TAIL =
  * What a model reads about `propose_plan`.
  *
  * `answersAtOnce` is true when the CLI will not hold the call open for the
- * user's verdict (`PlanBroker.answersAtOnce`) — see `proposePatchInstructions`.
+ * user's verdict (`PlanBroker.answersAtOnce`).
  */
 export function proposePlanInstructions(answersAtOnce: boolean): string {
   const wait = answersAtOnce ? 'wait' : 'WAIT';

@@ -230,15 +230,15 @@ export class SearchModelService {
       this.startPoll();
       this.set({
         phase: 'updating',
-        receivedBytes: 0,
-        totalBytes: 0,
+        receivedBytes: totalBytesOf(manifest),
+        totalBytes: totalBytesOf(manifest),
         reason: null,
       });
     } else if (this.active?.revision === manifest.revision) {
       this.set({
         phase: 'ready',
         receivedBytes: 0,
-        totalBytes: 0,
+        totalBytes: totalBytesOf(manifest),
         reason: null,
       });
     } else if (this.active !== null) {
@@ -315,7 +315,12 @@ export class SearchModelService {
         return;
       }
       this.deps.writeSwitch(false);
-      this.set({ phase: 'failed', receivedBytes: 0, totalBytes: 0, reason });
+      this.set({
+        phase: 'failed',
+        receivedBytes: 0,
+        totalBytes: total,
+        reason,
+      });
       await this.deps.pushConfig();
       return;
     }
@@ -325,7 +330,7 @@ export class SearchModelService {
 
     if (kind === 'install') {
       this.active = ready;
-      this.set({ phase: 'ready', receivedBytes: 0, totalBytes: 0 });
+      this.set({ phase: 'ready', receivedBytes: 0, totalBytes: total });
     } else {
       this.pending = ready;
       this.set({ phase: 'updating', receivedBytes: total, totalBytes: total });
@@ -369,7 +374,12 @@ export class SearchModelService {
     this.stopPoll();
     this.active = next;
     this.pending = null;
-    this.set({ phase: 'ready', receivedBytes: 0, totalBytes: 0, reason: null });
+    this.set({
+      phase: 'ready',
+      receivedBytes: 0,
+      totalBytes: totalBytesOf(this.deps.manifest),
+      reason: null,
+    });
     const accepted = await this.deps.pushConfig();
     if (accepted && old !== null) {
       await rm(old.dir, { recursive: true, force: true });

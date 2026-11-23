@@ -19,6 +19,9 @@ vi.mock('../remote/remote-session', () => ({
   isRemoteRuntime: vi.fn(() => false),
 }));
 
+const storage = vi.hoisted(() => ({ forgetStorageReading: vi.fn() }));
+vi.mock('./storage', () => storage);
+
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -365,6 +368,7 @@ describe('SearchSettings', () => {
 
     expect(h.geniro.deleteSearchModel).toHaveBeenCalledTimes(1);
     expect(h.api.deleteEmbeddingIndex).toHaveBeenCalledTimes(1);
+    expect(storage.forgetStorageReading).toHaveBeenCalled();
   });
 
   it('re-reads the index status at most once a second while its changes keep arriving', async () => {

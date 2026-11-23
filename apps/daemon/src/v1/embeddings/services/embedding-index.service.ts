@@ -2,6 +2,7 @@ import { existsSync, rmSync, statSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { type Kysely, sql } from 'kysely';
 import { firstValueFrom, type Observable, Subject } from 'rxjs';
 import { filter, timeout } from 'rxjs/operators';
 
@@ -34,6 +35,12 @@ const DOCUMENT_BATCH = 16;
 const DOCUMENT_SOURCES: readonly DocumentSource[] = ['memory', 'knowledge'];
 const SLOTS: readonly ModelSlot[] = ['active', 'pending'];
 const TOTALS_FRESH_MS = 5_000;
+const RESUME_MARGIN_MS = 100;
+
+/** Where the forward cursors step back to once the newest rowid is `newest`: a step's worth below it. */
+function rewoundFloor(newest: number): number {
+  return Math.max(0, newest - EMBEDDING_CHAT_STEP_ITEMS);
+}
 
 function keyOf(model: Pick<EmbeddingModelRef, 'id' | 'revision'>): string {
   return `${model.id}@${model.revision}`;
@@ -46,17 +53,26 @@ interface SlotProgress {
   forward: number | null;
   back: number | null;
   counts: EmbeddingCounts;
+  countsRead: boolean;
 }
 
-function emptyProgress(key: string): SlotProgress {
+function emptyProgress(
+  key: string,
+  counts: EmbeddingCounts = { memory: 0, knowledge: 0, chats: 0 },
+): SlotProgress {
   return {
     key,
     backfilled: new Set(),
     chatsDone: false,
     forward: null,
     back: null,
-    counts: { memory: 0, knowledge: 0, chats: 0 },
+    counts,
+    countsRead: false,
   };
+}
+
+function forwardCursorKey(model: EmbeddingModelRef): string {
+  return `chats:${keyOf(model)}:fwd`;
 }
 
 /**
@@ -92,11 +108,13 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   private lastChanged = 0;
   private totalsReadAt = 0;
   private changedTimer: NodeJS.Timeout | null = null;
+  private resumeTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly process: EmbeddingProcessService) {
     this.process.changes().subscribe((event) => {
       if (event.kind === 'crashed') {
         this.emit('state');
+        this.resumeAfter(event.restartInMs);
       }
     });
   }
@@ -136,7 +154,10 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       next.pendingModel === null &&
       keyOf(before.pendingModel) === keyOf(next.model);
     if (!wasEnabled) {
-      this.progress = { active: null, pending: null };
+      this.progress = {
+        active: this.restarted(this.progress.active),
+        pending: this.restarted(this.progress.pending),
+      };
     }
     this.progress = {
       active: this.carried(next.model),
@@ -203,6 +224,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     if (runIds.length === 0) {
       return;
     }
+    await this.rewindChatCursors();
     await this.deleteOrQueue(
       () =>
         this.process.request(
@@ -374,6 +396,25 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     return emptyProgress(key);
   }
 
+  /** Switched on again: every check runs anew, but the counts it last read stay on screen meanwhile. */
+  private restarted(progress: SlotProgress | null): SlotProgress | null {
+    return progress === null
+      ? null
+      : emptyProgress(progress.key, progress.counts);
+  }
+
+  /** A crash can cut a batch short; once the child may start again, the work left over carries on. */
+  private resumeAfter(delayMs: number): void {
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer);
+    }
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      this.kick();
+    }, delayMs + RESUME_MARGIN_MS);
+    this.resumeTimer.unref();
+  }
+
   private kick(): void {
     if (this.stopped || !this.enabled) {
       return;
@@ -397,6 +438,13 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   }
 
   private async work(): Promise<void> {
+    for (const slot of SLOTS) {
+      const progress = this.progress[slot];
+      if (progress && !progress.countsRead) {
+        await this.refreshCounts(slot, progress);
+        this.emit('progress');
+      }
+    }
     while (!this.stopped && this.enabled) {
       let moved = false;
       for (const slot of SLOTS) {
@@ -597,6 +645,64 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     progress.forward = Number(forward);
     progress.back = Number(back);
     progress.chatsDone = progress.back === 0;
+    const newest = await chats.newestRowid();
+    if (progress.forward > newest) {
+      progress.forward = rewoundFloor(newest);
+      await this.saveCursor(progress, 'fwd', progress.forward);
+    }
+  }
+
+  /**
+   * A deleted chat frees the newest `items` rowids, and SQLite hands them to
+   * the next messages, below a forward cursor that had already passed them. The
+   * cursors step back under them; rows walked twice cost the child only a hash
+   * check.
+   */
+  private async rewindChatCursors(): Promise<void> {
+    const chats = this.chatProvider;
+    const models = [this.config.model, this.config.pendingModel].filter(
+      (model): model is EmbeddingModelRef => model !== null,
+    );
+    if (!chats || models.length === 0) {
+      return;
+    }
+    const floor = rewoundFloor(await chats.newestRowid());
+    for (const slot of SLOTS) {
+      const progress = this.progress[slot];
+      if (progress && progress.forward !== null && progress.forward > floor) {
+        progress.forward = floor;
+      }
+    }
+    const keys = models.map(forwardCursorKey);
+    if (this.process.alive) {
+      try {
+        for (const key of keys) {
+          const value = await this.process.request(
+            { op: 'getMeta', key },
+            EMBEDDING_CONTROL_TIMEOUT_MS,
+          );
+          if (value !== null && Number(value) > floor) {
+            await this.process.request(
+              { op: 'setMeta', key, value: String(floor) },
+              EMBEDDING_CONTROL_TIMEOUT_MS,
+            );
+          }
+        }
+        return;
+      } catch (err) {
+        this.logger.warn(
+          `could not step the chat cursors back in the embedding child, writing the file: ${String(err)}`,
+        );
+      }
+    }
+    await this.writeIndexFile('could not step the chat cursors back', (db) =>
+      db
+        .updateTable('meta')
+        .set({ value: String(floor) })
+        .where('key', 'in', keys)
+        .where(sql<number>`cast(value as integer)`, '>', floor)
+        .execute(),
+    );
   }
 
   private async saveCursor(
@@ -627,6 +733,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       knowledge: counts.knowledge,
       chats: counts.chats,
     };
+    progress.countsRead = true;
   }
 
   private async refreshTotals(): Promise<void> {
@@ -687,20 +794,29 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
         );
       }
     }
+    const queuedAt = Date.now();
+    await this.writeIndexFile('could not queue a vector deletion', (db) =>
+      db
+        .insertInto('deletions')
+        .values(rows.map((row) => ({ ...row, queued_at: queuedAt })))
+        .execute(),
+    );
+  }
+
+  /** A write the daemon makes to the index file itself, while the child is down; none when the file does not exist. */
+  private async writeIndexFile(
+    failure: string,
+    write: (db: Kysely<EmbeddingsDatabase>) => Promise<unknown>,
+  ): Promise<void> {
     if (!existsSync(this.process.dbPath)) {
       return;
     }
     const raw = new DatabaseSync(this.process.dbPath);
     try {
       raw.exec('PRAGMA busy_timeout = 5000;');
-      const db = kyselyOverNodeSqlite<EmbeddingsDatabase>(raw);
-      const queuedAt = Date.now();
-      await db
-        .insertInto('deletions')
-        .values(rows.map((row) => ({ ...row, queued_at: queuedAt })))
-        .execute();
+      await write(kyselyOverNodeSqlite<EmbeddingsDatabase>(raw));
     } catch (err) {
-      this.logger.warn(`could not queue a vector deletion: ${String(err)}`);
+      this.logger.warn(`${failure}: ${String(err)}`);
     } finally {
       raw.close();
     }
@@ -734,7 +850,12 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   }
 
   private stopTimers(): void {
-    for (const timer of [this.chatPoll, this.sweep, this.changedTimer]) {
+    for (const timer of [
+      this.chatPoll,
+      this.sweep,
+      this.changedTimer,
+      this.resumeTimer,
+    ]) {
       if (timer) {
         clearInterval(timer);
       }
@@ -742,6 +863,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     this.chatPoll = null;
     this.sweep = null;
     this.changedTimer = null;
+    this.resumeTimer = null;
   }
 
   private async pollChats(): Promise<void> {

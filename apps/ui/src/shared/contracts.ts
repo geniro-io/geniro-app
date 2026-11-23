@@ -1061,8 +1061,9 @@ export type UpdatePhase =
 /**
  * What the search model is doing, pushed at every window on every change.
  *
- * `receivedBytes` / `totalBytes` are set while bytes move; `reason` only in
- * `failed`; `systemVersion` only in `unsupported`; `modelBytes` is the ready
+ * `receivedBytes` is set while bytes move; `totalBytes` is the pinned model's
+ * download size in every phase but `unsupported`; `reason` only in `failed`
+ * and a failed update; `systemVersion` only in `unsupported`; `modelBytes` is the ready
  * model folder's size on disk, 0 when there is none.
  */
 export type SearchModelPhase =

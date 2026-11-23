@@ -162,6 +162,7 @@ describe('SearchModelService', () => {
     await h.service.waitForRun();
 
     expect(h.service.getState().phase).toBe('ready');
+    expect(h.service.getState().totalBytes).toBe(30);
     expect(h.service.getState().modelBytes).toBeGreaterThan(0);
     expect(h.service.daemonModels().model?.revision).toBe(MANIFEST.revision);
     expect(h.pushCount()).toBeGreaterThan(0);
@@ -177,6 +178,7 @@ describe('SearchModelService', () => {
     expect(h.service.getState()).toMatchObject({
       phase: 'failed',
       reason: 'not-published',
+      totalBytes: 30,
     });
     expect(h.writes).toEqual([true, false]);
     expect(h.switchOn()).toBe(false);

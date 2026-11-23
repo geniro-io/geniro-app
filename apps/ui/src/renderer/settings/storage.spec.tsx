@@ -158,12 +158,18 @@ async function unfold(rowName: string): Promise<void> {
   await act(async () => buttonNamed(rowName).click());
 }
 
-function rowNamed(name: string): HTMLElement {
-  const row = [
-    ...container.querySelectorAll<HTMLElement>('[data-slot="storage-row"]'),
-  ].find(
-    (candidate) => candidate.querySelector('button')?.textContent === name,
+function rowNamedOrNull(name: string): HTMLElement | null {
+  return (
+    [
+      ...container.querySelectorAll<HTMLElement>('[data-slot="storage-row"]'),
+    ].find(
+      (candidate) => candidate.querySelector('button')?.textContent === name,
+    ) ?? null
   );
+}
+
+function rowNamed(name: string): HTMLElement {
+  const row = rowNamedOrNull(name);
   if (!row) {
     throw new Error(`no row "${name}"`);
   }
@@ -1290,22 +1296,28 @@ function actionIn(row: HTMLElement, text: string): HTMLButtonElement {
 }
 
 describe('Storage — search by meaning', () => {
-  it('lists the search model as its own row, and its Delete removes the model through main', async () => {
-    const deleteSearchModel = vi.fn(() =>
-      Promise.resolve({
-        phase: 'off' as const,
-        receivedBytes: 0,
-        totalBytes: 0,
-        reason: null,
-        systemVersion: null,
-        modelBytes: 0,
-      }),
-    );
+  const offState = {
+    phase: 'off' as const,
+    receivedBytes: 0,
+    totalBytes: 0,
+    reason: null,
+    systemVersion: null,
+    modelBytes: 0,
+  };
+
+  it('lists the search model as its own row, and its Delete removes the model through main and measures again', async () => {
+    let modelOnDisk = true;
+    const deleteSearchModel = vi.fn(() => {
+      modelOnDisk = false;
+      return Promise.resolve(offState);
+    });
     window.geniro = createPreloadStub({
       getAppStorage: vi.fn((_unclaimed: string[]) =>
         Promise.resolve({
           ...APP,
-          searchModel: { name: 'models', bytes: 5 * 1024 * 1024 },
+          searchModel: modelOnDisk
+            ? { name: 'models', bytes: 5 * 1024 * 1024 }
+            : null,
         }),
       ),
       deleteSearchModel,
@@ -1331,6 +1343,42 @@ describe('Storage — search by meaning', () => {
     await flush();
 
     expect(deleteSearchModel).toHaveBeenCalledTimes(1);
+    expect(rowNamedOrNull('Search model')).toBeNull();
+  });
+
+  it('measures again when the search model is deleted or finishes downloading elsewhere', async () => {
+    let modelOnDisk = true;
+    let announce: (state: typeof offState) => void = () => undefined;
+    window.geniro = createPreloadStub({
+      getAppStorage: vi.fn((_unclaimed: string[]) =>
+        Promise.resolve({
+          ...APP,
+          searchModel: modelOnDisk
+            ? { name: 'models', bytes: 5 * 1024 * 1024 }
+            : null,
+        }),
+      ),
+      onSearchModelState: vi.fn(
+        (listener: (state: typeof offState) => void) => {
+          announce = listener;
+          return () => undefined;
+        },
+      ),
+    });
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+    expect(figureOf('Search model')).toBe('5.0 MB');
+
+    modelOnDisk = false;
+    await act(async () => announce(offState));
+    await flush();
+
+    expect(rowNamedOrNull('Search model')).toBeNull();
   });
 
   it('the search index’s Delete asks first, then deletes the index through the daemon', async () => {

@@ -160,6 +160,7 @@ describe('EmbeddingProcessService', () => {
     expect(events).toContainEqual({
       kind: 'crashed',
       reason: 'the embedding process exited with code 3',
+      restartInMs: 1_000,
     });
     expect(service.alive).toBe(false);
   });

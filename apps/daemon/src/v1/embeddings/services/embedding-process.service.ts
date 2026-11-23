@@ -85,7 +85,7 @@ interface Running {
 export type EmbeddingProcessEvent =
   | { kind: 'started' }
   | { kind: 'stopped' }
-  | { kind: 'crashed'; reason: string };
+  | { kind: 'crashed'; reason: string; restartInMs: number };
 
 /**
  * Owns the one embedding child, like `AgentSessionRegistry` owns kept CLI
@@ -350,11 +350,16 @@ export class EmbeddingProcessService implements OnApplicationShutdown {
     this.failures += 1;
     this.lastFailure = `the embedding process ${how}`;
     const delay = EMBEDDING_RESTART_DELAYS_MS[this.failures - 1];
-    this.downUntil = Date.now() + (delay ?? EMBEDDING_GIVE_UP_MS);
+    const restartInMs = delay ?? EMBEDDING_GIVE_UP_MS;
+    this.downUntil = Date.now() + restartInMs;
     this.logger.warn(
       `${this.lastFailure}; ${delay === undefined ? 'giving up for now' : `may restart in ${delay} ms`}`,
     );
-    this.events.next({ kind: 'crashed', reason: this.lastFailure });
+    this.events.next({
+      kind: 'crashed',
+      reason: this.lastFailure,
+      restartInMs,
+    });
   }
 
   private armIdle(): void {

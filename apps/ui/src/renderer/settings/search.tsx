@@ -14,6 +14,7 @@ import { Switch } from '../components/ui/switch';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { forgetStorageReading } from './storage';
 
 export type SearchApi = Pick<
   EmbeddingsApi,
@@ -225,6 +226,7 @@ export function SearchSettings({
     if (api !== null) {
       await api.deleteEmbeddingIndex();
     }
+    forgetStorageReading();
     await readNow();
   };
 

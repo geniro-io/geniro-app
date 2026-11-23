@@ -8,7 +8,11 @@ import {
 } from 'lucide-react';
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 
-import type { AppStorageUsage, StorageWorktree } from '../../shared/contracts';
+import type {
+  AppStorageUsage,
+  SearchModelState,
+  StorageWorktree,
+} from '../../shared/contracts';
 import {
   type StorageApi,
   type StorageArchivedPeriod,
@@ -492,6 +496,19 @@ export function Storage({
     }
   }, [measure]);
 
+  useEffect(() => {
+    let previous: SearchModelState['phase'] | null = null;
+    return window.geniro.onSearchModelState((next) => {
+      if (
+        next.phase !== previous &&
+        (next.phase === 'off' || next.phase === 'ready')
+      ) {
+        void measure();
+      }
+      previous = next.phase;
+    });
+  }, [measure]);
+
   const job = reading?.daemon.job ?? null;
   const running = job?.state === 'running';
   const busy = running || job?.state === 'scheduled';
@@ -761,6 +778,7 @@ export function Storage({
           busyLabel="Deleting…"
           onConfirm={async () => {
             await window.geniro.deleteSearchModel();
+            void measure();
           }}>
           Delete…
         </ConfirmActionButton>

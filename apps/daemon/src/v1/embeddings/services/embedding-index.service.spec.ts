@@ -100,6 +100,10 @@ class FakeEmbeddingProcess {
     this.alive = false;
   }
 
+  crash(restartInMs: number): void {
+    this.events.next({ kind: 'crashed', reason: 'killed', restartInMs });
+  }
+
   async request<Op extends WorkerOp>(
     request: WorkerRequestOf<Op>,
     _timeoutMs: number,
@@ -209,15 +213,20 @@ class FakeChats implements ChatSourceProvider {
   readonly beforeCalls: number[] = [];
   readonly afterCalls: number[] = [];
 
-  add(rowid: number, runId: string): void {
+  add(rowid: number, runId: string, itemId = `c${rowid}`): void {
     this.rows.push({
       rowid,
-      itemId: `c${rowid}`,
+      itemId,
       runId,
       createdAt: rowid,
-      textHash: `chat-${rowid}`,
-      text: `message ${rowid}`,
+      textHash: `chat-${itemId}`,
+      text: `message ${itemId}`,
     });
+  }
+
+  removeRun(runId: string): void {
+    const kept = this.rows.filter((row) => row.runId !== runId);
+    this.rows.splice(0, this.rows.length, ...kept);
   }
 
   async total(): Promise<number> {
@@ -401,6 +410,70 @@ describe('EmbeddingIndexService', () => {
       expect(chats.afterCalls).toContain(2);
       expect(indexedChatIds()).toEqual(['c2', 'c1', 'c3', 'c4']);
       expect(process.meta.get('chats:gemma@rev-1:fwd')).toBe('4');
+    });
+
+    it('indexes messages that reuse the rowids of a deleted newest chat', async () => {
+      chats.add(1, 'old');
+      chats.add(2, 'old');
+      chats.add(3, 'newest');
+      chats.add(4, 'newest');
+      index.registerChats(chats);
+      await index.setConfig(ON);
+      await waitReady();
+
+      chats.removeRun('newest');
+      await index.deleteRuns(['newest']);
+      chats.add(3, 'old', 'reply-1');
+      chats.add(4, 'old', 'reply-2');
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(indexedChatIds()).toEqual(
+        expect.arrayContaining(['reply-1', 'reply-2']),
+      );
+      expect(process.meta.get('chats:gemma@rev-1:fwd')).toBe('4');
+    });
+
+    it('steps back a stored forward cursor that is past the newest message, so the messages below it are indexed', async () => {
+      process.meta.set('chats:gemma@rev-1:fwd', '82');
+      process.meta.set('chats:gemma@rev-1:back', '0');
+      chats.add(70, 'r1', 'late-1');
+      chats.add(71, 'r1', 'late-2');
+      index.registerChats(chats);
+
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(indexedChatIds()).toEqual(['late-1', 'late-2']);
+      expect(process.meta.get('chats:gemma@rev-1:fwd')).toBe('71');
+    });
+
+    it('steps the stored cursor back in the file when a chat is deleted while the child is down', async () => {
+      const raw = new DatabaseSync(process.dbPath);
+      raw.exec(
+        'CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE deletions (source TEXT NOT NULL, source_id TEXT, run_id TEXT, queued_at INTEGER NOT NULL);',
+      );
+      raw
+        .prepare('INSERT INTO meta (key, value) VALUES (?, ?)')
+        .run('chats:gemma@rev-1:fwd', '82');
+      raw.close();
+      chats.add(40, 'r1');
+      index.registerChats(chats);
+      await index.setConfig({ ...ON, enabled: false });
+      process.alive = false;
+
+      await index.deleteRuns(['gone']);
+
+      const check = new DatabaseSync(process.dbPath);
+      try {
+        expect(
+          check
+            .prepare('SELECT value FROM meta WHERE key = ?')
+            .get('chats:gemma@rev-1:fwd'),
+        ).toEqual({ value: '8' });
+      } finally {
+        check.close();
+      }
     });
 
     it('keeps chats waiting on battery while memories still index, and reports the pause', async () => {
@@ -740,6 +813,65 @@ describe('EmbeddingIndexService', () => {
 
       expect(process.stops).toBeGreaterThan(0);
       expect((await index.status()).state).toBe('off');
+    });
+
+    it('carries on with the batch a crash cut short once the child may start again', async () => {
+      memory.set('m1', 'one');
+      let crashes = 1;
+      process.handlers.index = (request) => {
+        if (crashes > 0) {
+          crashes -= 1;
+          throw new EmbeddingUnavailableError('the embedding process exited');
+        }
+        return process.answer(request) as WorkerResults['index'];
+      };
+      await index.setConfig(ON);
+      await vi.waitFor(() => expect(crashes).toBe(0), { timeout: 3_000 });
+      expect(process.stored.memory.has('m1')).toBe(false);
+
+      process.crash(10);
+
+      await vi.waitFor(
+        () => expect(process.stored.memory.get('m1')).toBe('hash-one'),
+        { timeout: 3_000 },
+      );
+    });
+
+    it('keeps the counts it last read while switching on again re-checks the index', async () => {
+      memory.set('m1', 'one');
+      memory.set('m2', 'two');
+      await index.setConfig(ON);
+      await waitReady();
+      await index.setConfig({ ...ON, enabled: false });
+
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      process.handlers.counts = async (request) => {
+        await gate;
+        return process.answer(request) as WorkerResults['counts'];
+      };
+      await index.setConfig(ON);
+
+      expect((await index.status()).counts.memory).toEqual({
+        indexed: 2,
+        total: 2,
+      });
+      release();
+      await waitReady();
+    });
+
+    it('reads the stored counts before any other work after a start', async () => {
+      process.stored.memory.set('m1', 'hash-one');
+      memory.set('m1', 'one');
+
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(process.requests.find((request) => request.op !== 'open')).toEqual(
+        { op: 'counts', slot: 'active' },
+      );
     });
 
     it("forgives the child's earlier failures on every config push", async () => {

@@ -32,7 +32,7 @@ describe('textSimilarity', () => {
       ),
     ).toEqual({ shared: 0, cosine: 0 });
     expect(
-      nearDuplicate({ title: 'a b', body: 'c' }, { title: 'a b', body: 'c' }),
+      nearDuplicate({ title: 'a b', body: 'c' }, { title: 'a b', body: 'd' }),
     ).toBe(false);
   });
 });
@@ -60,6 +60,26 @@ describe('nearDuplicate', () => {
     expect(nearDuplicate(left, { title: 'Global kiwi', body: 'mango' })).toBe(
       true,
     );
+  });
+
+  it('counts an exact copy as a duplicate however short, ignoring case, spacing and punctuation', () => {
+    const kiwi = { title: 'Global kiwi', body: 'Global kiwi' };
+
+    expect(
+      nearDuplicate(kiwi, { title: 'global  KIWI', body: 'Global kiwi.' }),
+    ).toBe(true);
+    expect(
+      nearDuplicate({ title: 'a b', body: 'c' }, { title: 'A b', body: 'c' }),
+    ).toBe(true);
+    expect(nearDuplicate(kiwi, { title: 'Global kiwi', body: 'ripe' })).toBe(
+      false,
+    );
+    expect(
+      nearDuplicate(kiwi, { title: 'kiwi Global', body: 'Global kiwi' }),
+    ).toBe(false);
+    expect(
+      nearDuplicate(kiwi, { title: 'Project kiwi', body: 'Project kiwi' }),
+    ).toBe(false);
   });
 
   it('catches a reworded title over the same body', () => {
@@ -103,9 +123,13 @@ describe('nearDuplicateCandidatesQuery', () => {
     expect(query?.split(' OR ')).toHaveLength(64);
   });
 
+  it('searches every word when none is long enough to count', () => {
+    expect(nearDuplicateCandidatesQuery({ title: 'CI', body: 'is ok' })).toBe(
+      '"ci"* OR "is"* OR "ok"*',
+    );
+  });
+
   it('is null when the note has no word to search by', () => {
-    expect(
-      nearDuplicateCandidatesQuery({ title: 'a', body: 'b 42' }),
-    ).toBeNull();
+    expect(nearDuplicateCandidatesQuery({ title: '—', body: '?!' })).toBeNull();
   });
 });

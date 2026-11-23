@@ -1,3 +1,3 @@
 ### Improved
 
-- **Memory:** a note that repeats one memory already has in other words, or the same note saved again globally and in a project, is caught before it is stored
+- **Memory:** a note that repeats one memory already has in other words, an exact copy of a note however short, or the same note saved again globally and in a project, is caught before it is stored

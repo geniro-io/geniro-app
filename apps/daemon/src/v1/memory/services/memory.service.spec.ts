@@ -220,6 +220,87 @@ describe('MemoryService', () => {
       await em.flush();
     }
 
+    it('refuses an exact copy of a two-word note in the same scope', async () => {
+      const original = created(
+        await db.service.save(
+          AGENT,
+          { title: 'Global kiwi', body: 'Global kiwi' },
+          NONE,
+        ),
+      );
+
+      const copy = await db.service.save(
+        AGENT,
+        { title: 'global  KIWI', body: 'Global kiwi.' },
+        NONE,
+      );
+
+      expect(
+        copy.kind === 'near_duplicate' &&
+          copy.candidates.map((hit) => hit.handle),
+      ).toEqual([original.handle]);
+      expect(await db.em.fork().count(Memory, {})).toBe(1);
+    });
+
+    it('refuses an exact copy of a two-word global note saved from a project, and of a note with no long word', async () => {
+      await seedProjects();
+      const original = created(
+        await db.service.save(
+          AGENT,
+          { title: 'Global kiwi', body: 'Global kiwi' },
+          NONE,
+        ),
+      );
+      const tiny = created(
+        await db.service.save(AGENT, { title: 'CI', body: 'is ok' }, NONE),
+      );
+
+      const projectCopy = await db.service.save(
+        AGENT,
+        { title: 'Global kiwi', body: 'Global kiwi', scope: 'project' },
+        inProject('p1'),
+      );
+      const tinyCopy = await db.service.save(
+        AGENT,
+        { title: 'CI', body: 'is ok', scope: 'project' },
+        inProject('p1'),
+      );
+
+      expect(
+        projectCopy.kind === 'near_duplicate' &&
+          projectCopy.candidates.map((hit) => hit.handle),
+      ).toEqual([original.handle]);
+      expect(
+        tinyCopy.kind === 'near_duplicate' &&
+          tinyCopy.candidates.map((hit) => hit.handle),
+      ).toEqual([tiny.handle]);
+    });
+
+    it('stores short notes that share a word but are not copies', async () => {
+      await seedProjects();
+      created(
+        await db.service.save(
+          AGENT,
+          { title: 'Global kiwi', body: 'Global kiwi' },
+          NONE,
+        ),
+      );
+
+      const sameScope = await db.service.save(
+        AGENT,
+        { title: 'Project kiwi', body: 'Project kiwi' },
+        NONE,
+      );
+      const otherScope = await db.service.save(
+        AGENT,
+        { title: 'Global kiwi', body: 'ripe', scope: 'project' },
+        inProject('p1'),
+      );
+
+      expect(sameScope.kind).toBe('created');
+      expect(otherScope.kind).toBe('created');
+    });
+
     it('refuses a reworded title over the same body, quoting the entry', async () => {
       const original = created(
         await db.service.save(

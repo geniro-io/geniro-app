@@ -9,7 +9,7 @@ import { termsOf } from './memory-pairs';
  */
 export const NEAR_DUPLICATE_SIMILARITY = 0.42;
 
-/** Fewer words in common than this never make a duplicate, however short both notes are. */
+/** Fewer words in common than this never make a duplicate, however short both notes are, unless they are exact copies. */
 export const NEAR_DUPLICATE_MIN_SHARED_WORDS = 3;
 
 /** The most of a new note's words its candidates are searched by. */
@@ -22,11 +22,20 @@ export interface NoteText {
 
 /**
  * An FTS5 query for entries sharing any of a note's words, its title's first
- * and then its longest, or null when it has none.
+ * and then its longest — every word of any length when none is long enough to
+ * count, so an exact copy is still found — or null when it has none.
  */
 export function nearDuplicateCandidatesQuery(note: NoteText): string | null {
   const title = termsOf(note.title, '');
-  const parts = [...wordsOf(note)]
+  const counted = wordsOf(note);
+  const words =
+    counted.size > 0
+      ? counted
+      : new Set([
+          ...wordSequenceOf(note.title),
+          ...wordSequenceOf(ruleOfLessonBody(note.body)),
+        ]);
+  const parts = [...words]
     .sort(
       (a, b) =>
         Number(title.has(b)) - Number(title.has(a)) ||
@@ -65,7 +74,30 @@ function wordsOf(note: NoteText): Set<string> {
   return termsOf(note.title, ruleOfLessonBody(note.body));
 }
 
+function wordSequenceOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+/** Whether two notes have the same words in the same order, in title and body, ignoring case and punctuation. */
+export function sameText(a: NoteText, b: NoteText): boolean {
+  const left = wordSequenceOf(a.title);
+  const right = wordSequenceOf(b.title);
+  const leftBody = wordSequenceOf(ruleOfLessonBody(a.body));
+  const rightBody = wordSequenceOf(ruleOfLessonBody(b.body));
+  return (
+    left.length + leftBody.length > 0 &&
+    left.join(' ') === right.join(' ') &&
+    leftBody.join(' ') === rightBody.join(' ')
+  );
+}
+
 export function nearDuplicate(a: NoteText, b: NoteText): boolean {
+  if (sameText(a, b)) {
+    return true;
+  }
   const { shared, cosine } = textSimilarity(a, b);
   return (
     shared >= NEAR_DUPLICATE_MIN_SHARED_WORDS &&

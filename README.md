@@ -116,7 +116,7 @@ Agents publish live HTML pages that open next to the chat, with audio, video, fo
 <td valign="top">
 
 <b>🃏 Rich cards</b><br>
-Charts, comparisons, scorecards, image galleries, review findings, patches, plans, questions and buttons, instead of a wall of text.
+Charts, comparisons, scorecards, image galleries, plans, questions and buttons, instead of a wall of text.
 
 </td>
 </tr>
@@ -309,8 +309,6 @@ Geniro gives every agent a set of MCP tools for showing results instead of descr
 | ⚖️ **Comparison** | Options scored against criteria, with a recommendation |
 | 🔢 **Scorecard** | The headline figures, each with its delta |
 | 🖼 **Gallery** | Screenshots and images in a grid, with full-screen zoom |
-| 🐞 **Findings** | A code review grouped by file, each finding with a verdict |
-| 🩹 **Patch** | A one-file diff you **Approve** or **Deny** |
 | 🗺 **Plan** | A plan you approve before any work starts |
 | ❓ **Question** | Multiple-choice questions you answer with a click |
 | 🔘 **Buttons** | "Press when the PR is merged" or "Stop the preview server" |
@@ -321,12 +319,10 @@ Agents can also search your past chats and read the conversation around any hit.
 
 <table>
 <tr>
-<td width="33%"><img src="docs/screenshots/chat-findings.png" alt="A code review reported as a card, grouped by file, each finding with a verdict, below two sub-agent blocks"></td>
-<td width="33%"><img src="docs/screenshots/chat-comparison.png" alt="A scorecard above a comparison table with per-cell verdicts and a recommendation"></td>
-<td width="34%"><img src="docs/screenshots/chat-chart.png" alt="A line chart of bundle size over fourteen builds, plotted from the agent's own numbers"></td>
+<td width="50%"><img src="docs/screenshots/chat-comparison.png" alt="A scorecard above a comparison table with per-cell verdicts and a recommendation"></td>
+<td width="50%"><img src="docs/screenshots/chat-chart.png" alt="A line chart of bundle size over fourteen builds, plotted from the agent's own numbers"></td>
 </tr>
 <tr>
-<td align="center"><b>Findings</b></td>
 <td align="center"><b>Scorecard + comparison</b></td>
 <td align="center"><b>Charts</b></td>
 </tr>
@@ -501,9 +497,8 @@ To stay quick on a phone, a long chat opens on its newest 250 items (scroll up f
 
 <table>
 <tr>
-<td width="33%"><img src="docs/screenshots/phone-chats.png" alt="The chat list on a phone, grouped by project, above the bottom tab bar"></td>
-<td width="33%"><img src="docs/screenshots/phone-findings.png" alt="A code-review card on a phone"></td>
-<td width="34%"><img src="docs/screenshots/remote-access.png" alt="Settings, Remote access: the Wi-Fi links, a QR code, the internet address button and the pairing code"></td>
+<td width="50%"><img src="docs/screenshots/phone-chats.png" alt="The chat list on a phone, grouped by project, above the bottom tab bar"></td>
+<td width="50%"><img src="docs/screenshots/remote-access.png" alt="Settings, Remote access: the Wi-Fi links, a QR code, the internet address button and the pairing code"></td>
 </tr>
 </table>
 

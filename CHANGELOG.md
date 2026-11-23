@@ -2,7 +2,19 @@
 
 What changed in each Geniro release, newest first. The app shows it in Settings → What's new, and after an update.
 
-A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.317.0 were taken from the pull request titles.
+A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.317.1 were taken from the pull request titles.
+
+## 1.317.1 — 2026-11-23
+
+### Improved
+
+- Anchor a call card's tool readings only while its turn runs
+- Open large threads in one frame without re-reading on first page
+
+### Fixed
+
+- Let codex's built-in Apps server be switched off
+- Leave an agent worktree's unadded files out of the changes chip
 
 ## 1.317.0 — 2026-11-23
 

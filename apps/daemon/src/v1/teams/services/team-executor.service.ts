@@ -5814,6 +5814,19 @@ export class TeamExecutorService
         : nodeSessionKey(runId, node.id);
       // WHO this turn is, to the call broker: the member, in this conversation.
       const caller = callerKey(node.id, callContext?.conversationId ?? null);
+      const noteConversation = {
+        memberId: callerNodeOf(caller),
+        conversationId: callerConversationOf(caller),
+      };
+      const forgetNotesOnCompaction = (event: AgentEvent): void => {
+        if (
+          event.type === 'context_compacted' &&
+          event.phase === 'finished' &&
+          event.parentToolUseId === undefined
+        ) {
+          this.teamNotes?.forgetShown(runId, noteConversation);
+        }
+      };
       const plainTurn =
         !extras.compaction &&
         adapter.geniroCommandFor(prompt) === null &&
@@ -6410,6 +6423,11 @@ export class TeamExecutorService
             if (!callContext) {
               nodeSessionIds.set(node.id, event.sessionId);
             }
+            this.teamNotes?.sessionOpened(
+              runId,
+              noteConversation,
+              event.sessionId,
+            );
             await saveSessionId(event.sessionId);
             if (callContext) {
               enqueue(() =>
@@ -6869,6 +6887,7 @@ export class TeamExecutorService
           const mapped = markedForContinuation(event, mapEventToItem(event));
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
+          forgetNotesOnCompaction(event);
           for (const row of compactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
               ...row.payload,
@@ -7275,6 +7294,7 @@ export class TeamExecutorService
           ) {
             await takeOffTurnNodeBadge(sessionKey, node.id, callId);
           }
+          forgetNotesOnCompaction(event);
           for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
               ...row.payload,

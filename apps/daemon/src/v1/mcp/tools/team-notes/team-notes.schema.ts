@@ -21,7 +21,8 @@ export function teamNotesSchema(): Record<string, unknown> {
       since: {
         type: 'integer',
         minimum: 0,
-        description: 'Only notes after this note number.',
+        description:
+          'Only notes after this note number. 0 reads every note, including the ones you were already shown.',
       },
       before: {
         type: 'integer',

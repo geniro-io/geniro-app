@@ -157,6 +157,14 @@ export const CLAUDE_CODE_MODE_ENV_VALUE = '1';
 export const CLAUDE_CODE_MODE_MIN_VERSION = [2, 1, 330] as const;
 /** The CLI's own refusal names Opus 5.5, Sonnet 5.5 and later. */
 export const CLAUDE_CODE_MODE_MIN_MODEL = [5, 5] as const;
+/**
+ * The line the CLI writes FIRST into a session started in Code Mode's
+ * transcript (`{"type":"repl-mode","replMode":true,…}`), measured on 2.1.330. A
+ * session started without it has no such line.
+ */
+export const CLAUDE_CODE_MODE_SESSION_LINE_TYPE = 'repl-mode';
+/** How much of a transcript's head is read for that line; it is the first one. */
+export const CLAUDE_CODE_MODE_SESSION_HEAD_BYTES = 4096;
 export const CLAUDE_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
 export const CLAUDE_THIRD_PARTY_PROVIDER_ENV_KEYS = [
   'CLAUDE_CODE_USE_BEDROCK',

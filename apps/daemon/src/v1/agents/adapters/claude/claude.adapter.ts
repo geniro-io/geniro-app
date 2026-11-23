@@ -182,6 +182,7 @@ import {
   codeModeParameter,
   codeModeRouteRefusal,
   codeModeVersionRefusal,
+  sessionStartedInCodeMode,
   wantsCodeMode,
 } from './utils/claude-code-mode.utils';
 import { reloadCommandsRequestLine } from './utils/claude-commands.utils';
@@ -1086,6 +1087,8 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /** Per-turn `--mcp-config` file paths, written by prepareTurn. */
   private readonly mcpConfigPaths = new WeakMap<AgentTurnInput, string>();
+  /** Each turn's Code Mode, read once: `sessionKey` and the argv both ask. */
+  private readonly turnCodeModes = new WeakMap<AgentTurnInput, boolean>();
   private readonly systemPromptPaths = new WeakMap<AgentTurnInput, string>();
 
   /**
@@ -2500,6 +2503,29 @@ export class ClaudeAdapter extends AgentAdapter {
     ]);
   }
 
+  /**
+   * Code Mode for this turn: what it asked for when it starts a session, and
+   * what the resumed session started with otherwise — a team member's or a
+   * card's stored setting can change under a session that cannot follow it.
+   */
+  private turnCodeMode(input: AgentTurnInput): boolean {
+    const known = this.turnCodeModes.get(input);
+    if (known !== undefined) {
+      return known;
+    }
+    const wanted = wantsCodeMode(input.modelParameters);
+    const resumed = input.resumeSessionId
+      ? sessionStartedInCodeMode(
+          this.profileDir(input.configDir ?? null),
+          input.resumeSessionId,
+          input.cwd,
+        )
+      : null;
+    const codeMode = resumed ?? wanted;
+    this.turnCodeModes.set(input, codeMode);
+    return codeMode;
+  }
+
   private settingsArgs(input: AgentTurnInput): string[] {
     return claudeSettingsArgs({
       modelParameters: input.modelParameters,
@@ -2508,7 +2534,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // A read-only turn's `--tools` allow-list keeps Code Mode off anyway, and
       // such a chat is read-only from its first turn, so no session it resumes
       // was started in Code Mode.
-      codeMode: wantsCodeMode(input.modelParameters) && input.readOnly !== true,
+      codeMode: input.readOnly !== true && this.turnCodeMode(input),
       // Sorted, so a reordered list reads as the same settings (`sessionKey`).
       deniedMcpServers: claudeSwitchedOffServers(
         this.switchedOffServers(input),

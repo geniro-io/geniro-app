@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { CLAUDE_CODE_MODE_PARAMETER_ID } from '../claude.const';
 import {
@@ -6,8 +10,10 @@ import {
   codeModeParameter,
   codeModeRouteRefusal,
   codeModeVersionRefusal,
+  sessionStartedInCodeMode,
   wantsCodeMode,
 } from './claude-code-mode.utils';
+import { claudeProjectDirName } from './claude-sessions.utils';
 
 describe('codeModeParameter', () => {
   it('offers On and Off, reads Off by default and is fixed per session', () => {
@@ -116,5 +122,42 @@ describe('codeModeRouteRefusal', () => {
     expect(
       codeModeRouteRefusal({ CLAUDE_CODE_USE_VERTEX: '1' }, false),
     ).toMatch(/Vertex/);
+  });
+});
+
+describe('sessionStartedInCodeMode', () => {
+  const SESSION = '0b6f2f4e-1111-4222-8333-944455556666';
+  const CWD = '/work/proj';
+  let profile: string;
+
+  const transcript = (firstLine: string): void => {
+    const dir = join(profile, 'projects', claudeProjectDirName(CWD));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${SESSION}.jsonl`),
+      `${firstLine}\n{"type":"user","message":{"content":"hi"}}\n`,
+    );
+  };
+
+  afterEach(() => {
+    rmSync(profile, { recursive: true, force: true });
+  });
+
+  it('reads Code Mode off the first line the CLI writes into such a session', () => {
+    profile = mkdtempSync(join(tmpdir(), 'geniro-code-mode-'));
+    transcript(`{"type":"repl-mode","replMode":true,"sessionId":"${SESSION}"}`);
+    expect(sessionStartedInCodeMode(profile, SESSION, CWD)).toBe(true);
+  });
+
+  it('answers false for a session that started without it', () => {
+    profile = mkdtempSync(join(tmpdir(), 'geniro-code-mode-'));
+    transcript('{"type":"permission-mode","permissionMode":"default"}');
+    expect(sessionStartedInCodeMode(profile, SESSION, CWD)).toBe(false);
+  });
+
+  it('answers null when the transcript is not there or the id is not a plain id', () => {
+    profile = mkdtempSync(join(tmpdir(), 'geniro-code-mode-'));
+    expect(sessionStartedInCodeMode(profile, SESSION, CWD)).toBeNull();
+    expect(sessionStartedInCodeMode(profile, '../escape', CWD)).toBeNull();
   });
 });

@@ -1,8 +1,8 @@
 ### New
 
-- **Code mode for Claude Code chats:** a per-chat switch that lets Claude write one script that calls many tools at once
+- **Code mode for Claude Code:** a switch that lets Claude write one script that calls many tools at once
 
-  Turn on Code mode in a Claude Code chat's model settings before you send the first message. Claude then batches tool calls into a single script instead of calling them one by one. It is off by default and experimental. It needs Claude Code 2.1.330 or later, a Claude 5.5 model or newer, and Anthropic's own API; where it cannot run, the switch says why. Once the chat has started, Code mode stays as it was for that conversation, and a model that cannot continue it is refused.
+  Turn on Code mode wherever you pick a Claude Code model: a chat before its first message, a team member, a project's or a task's run settings, a saved run configuration, the command center or an analysis. Claude then batches tool calls into a single script instead of calling them one by one. It is off by default and experimental. It needs Claude Code 2.1.330 or later, a Claude 5.5 model or newer, and Anthropic's own API; where it cannot run, the switch says why. A conversation keeps the mode it started with: a chat refuses a model that cannot continue it, and a team member or task whose setting changes later picks it up in its next conversation.
 
 ### Improved
 

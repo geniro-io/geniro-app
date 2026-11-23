@@ -78,6 +78,7 @@ import {
   backgroundDelegateLines,
   taskNotification,
 } from './utils/__tests__/claude-subagent-stream';
+import { claudeProjectDirName } from './utils/claude-sessions.utils';
 
 /**
  * A child that DIES when signalled, the way a real CLI does: `close` follows
@@ -3150,6 +3151,65 @@ describe('ClaudeAdapter — code mode', () => {
     expect(
       JSON.parse(offArgs[offArgs.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!),
     ).toEqual({ crossSessionInbound: 'refuse' });
+  });
+
+  it('follows the session it resumes, whatever the stored setting says now', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'geniro-code-mode-resume-'));
+    const session = '0b6f2f4e-1111-4222-8333-944455556666';
+    const filed = join(profile, 'projects', claudeProjectDirName('/proj'));
+    mkdirSync(filed, { recursive: true });
+    const settingsEnv = (
+      modelParameters: Record<string, string>,
+      resumeSessionId: string,
+    ): unknown => {
+      const spawned = fakeSpawn();
+      new ClaudeAdapter({
+        spawn: spawned.spawn,
+        waitForMcpServers: false,
+      }).start(
+        {
+          prompt: 'go',
+          cwd: '/proj',
+          model: 'claude-opus-5-5',
+          configDir: profile,
+          resumeSessionId,
+          modelParameters,
+        },
+        () => {},
+      );
+      const args = spawned.captured.args!;
+      return (
+        JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!) as {
+          env?: unknown;
+        }
+      ).env;
+    };
+    try {
+      writeFileSync(
+        join(filed, `${session}.jsonl`),
+        `{"type":"repl-mode","replMode":true,"sessionId":"${session}"}\n`,
+      );
+      expect(
+        settingsEnv({ [CLAUDE_CODE_MODE_PARAMETER_ID]: 'false' }, session),
+      ).toEqual({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' });
+
+      writeFileSync(
+        join(filed, `${session}.jsonl`),
+        '{"type":"permission-mode","permissionMode":"default"}\n',
+      );
+      expect(
+        settingsEnv({ [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true' }, session),
+      ).toBeUndefined();
+
+      expect(
+        settingsEnv(
+          { [CLAUDE_CODE_MODE_PARAMETER_ID]: 'true' },
+          '0b6f2f4e-1111-4222-8333-000000000000',
+        ),
+      ).toEqual({ CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' });
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
   });
 
   it('leaves it off on a read-only turn, whose tool allow-list keeps it off anyway', () => {

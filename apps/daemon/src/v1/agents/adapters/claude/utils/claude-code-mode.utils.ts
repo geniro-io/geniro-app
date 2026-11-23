@@ -1,3 +1,7 @@
+import { closeSync, openSync, readSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { isPlainSessionId } from '../../../utils/session-id';
 import type { AgentModelParameter } from '../../adapter.types';
 import {
   CLAUDE_BASE_URL_ENV,
@@ -8,8 +12,13 @@ import {
   CLAUDE_CODE_MODE_OFF_VALUE,
   CLAUDE_CODE_MODE_ON_VALUE,
   CLAUDE_CODE_MODE_PARAMETER_ID,
+  CLAUDE_CODE_MODE_SESSION_HEAD_BYTES,
+  CLAUDE_CODE_MODE_SESSION_LINE_TYPE,
+  CLAUDE_SESSION_FILE_SUFFIX,
+  CLAUDE_SESSIONS_DIR_NAME,
   CLAUDE_THIRD_PARTY_PROVIDER_ENV_KEYS,
 } from '../claude.const';
+import { claudeProjectDirName } from './claude-sessions.utils';
 
 /** The chip for Code Mode, disabled with `unavailableReason` when it cannot run. */
 export function codeModeParameter(
@@ -117,4 +126,56 @@ export function codeModeRouteRefusal(
     return "Code mode runs only on Anthropic's own API, not through a custom ANTHROPIC_BASE_URL";
   }
   return null;
+}
+
+/**
+ * Whether the session a turn resumes was started in Code Mode, read off the
+ * first line of its transcript; null when the transcript is not where the
+ * folder files it, so the caller falls back to what the turn asked for.
+ *
+ * The CLI fixes Code Mode when a session starts, so this — not the setting a
+ * team member, card or run configuration holds today — decides a resume: with
+ * it off a Code Mode session exits 1, and turning it on later is ignored.
+ */
+export function sessionStartedInCodeMode(
+  profileDir: string,
+  sessionId: string,
+  cwd: string,
+): boolean | null {
+  if (!isPlainSessionId(sessionId)) {
+    return null;
+  }
+  const path = join(
+    profileDir,
+    CLAUDE_SESSIONS_DIR_NAME,
+    claudeProjectDirName(cwd),
+    `${sessionId}${CLAUDE_SESSION_FILE_SUFFIX}`,
+  );
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const head = Buffer.alloc(CLAUDE_CODE_MODE_SESSION_HEAD_BYTES);
+    const read = readSync(fd, head, 0, head.length, 0);
+    const firstLine = head.subarray(0, read).toString('utf8').split('\n', 1)[0];
+    try {
+      const line = JSON.parse(firstLine ?? '') as {
+        type?: unknown;
+        replMode?: unknown;
+      };
+      return (
+        line.type === CLAUDE_CODE_MODE_SESSION_LINE_TYPE &&
+        line.replMode === true
+      );
+    } catch {
+      return false;
+    }
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }

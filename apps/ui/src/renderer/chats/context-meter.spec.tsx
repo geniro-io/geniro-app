@@ -920,29 +920,24 @@ describe('the expanded readout the meter opens onto', () => {
     expect(refreshButton()?.querySelector('.text-success')).toBeNull();
   });
 
-  it('acknowledges a press the live re-read superseded once the carried request answers', async () => {
-    vi.useFakeTimers();
-    try {
-      const load = vi
-        .fn()
-        .mockResolvedValueOnce(withPlanAged(1))
-        .mockReturnValueOnce(new Promise(() => {}))
-        .mockResolvedValue(withPlanAged(0));
-      renderWithLoader(load, 'run-1', true);
-      openMeter();
-      await act(async () => {});
-      await press();
-      expect(pressOutcome()).toBeNull();
+  it('acknowledges a press the turn settling superseded once the carried request answers', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(withPlanAged(1))
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValue(withPlanAged(0));
+    renderWithLoader(load, 'run-1', true);
+    openMeter();
+    await act(async () => {});
+    await press();
+    expect(pressOutcome()).toBeNull();
 
-      await act(async () => {
-        vi.advanceTimersByTime(10_000);
-      });
+    render(tree(load, 'run-1', false));
+    await act(async () => {});
 
-      expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
-      expect(pressOutcome()).toBe('Updated just now');
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+    expect(pressOutcome()).toBe('Updated just now');
   });
 
   it('shows a failed press once, in the sentence section, when the account has no limits to draw', async () => {
@@ -1258,39 +1253,68 @@ describe('the expanded readout the meter opens onto', () => {
     }
   });
 
-  it('keeps a refresh press alive when the live re-read supersedes it mid-flight', async () => {
-    // The live tick re-runs the one fetch and drops the in-flight reply. A
-    // press it dropped must ride on the request that replaced it, or that
-    // ordinary read serves the very reading the user pressed to replace.
+  it('lands a reading that takes longer than the live re-read interval while the agent works', async () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn<ChatMetricsLoader>(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve(METRICS), 10_500);
+          }),
+      );
+      renderWithLoader(load, 'run-1', true);
+      openMeter();
+      await act(async () => {});
+      expect(container.textContent).toContain('Reading the agent’s context…');
+
+      for (let step = 0; step < 6; step += 1) {
+        await act(async () => {
+          vi.advanceTimersByTime(10_000);
+        });
+      }
+
+      expect(container.textContent).not.toContain(
+        'Reading the agent’s context…',
+      );
+      expect(container.textContent).toContain('This thread');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a refresh press answer itself while the agent works, however long it takes', async () => {
     vi.useFakeTimers();
     try {
       const load = vi
         .fn()
         .mockResolvedValueOnce(withPlanAged(1))
-        .mockReturnValueOnce(new Promise(() => {}))
-        .mockResolvedValue(withPlanAged(1));
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            setTimeout(() => resolve(withPlanAged(0)), 15_000);
+          }),
+        )
+        .mockResolvedValue(withPlanAged(0));
       renderWithLoader(load, 'run-1', true);
       openMeter();
       await act(async () => {});
-
-      act(() =>
-        container
-          .querySelector<HTMLButtonElement>('[data-slot="plan-limits-refresh"]')
-          ?.click(),
-      );
-      await act(async () => {});
+      await press();
       expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(pressOutcome()).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(pressOutcome()).toBe('Updated just now');
 
       await act(async () => {
         vi.advanceTimersByTime(10_000);
       });
       expect(load).toHaveBeenCalledTimes(3);
-      expect(load).toHaveBeenLastCalledWith('run-1', null, null, true);
-
-      // Answered, so the next tick is an ordinary read again.
-      await act(async () => {
-        vi.advanceTimersByTime(10_000);
-      });
       expect(load).toHaveBeenLastCalledWith('run-1', null, null, false);
     } finally {
       vi.useRealTimers();

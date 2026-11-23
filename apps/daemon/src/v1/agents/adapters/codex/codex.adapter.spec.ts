@@ -1390,6 +1390,127 @@ describe('context readout', () => {
     });
   });
 
+  describe('the servers a thread lists', () => {
+    /** A live process whose listings answer only when the test says so. */
+    function heldListings(): {
+      live: AgentSession;
+      asks: () => number;
+      answer: (servers: string[] | null) => void;
+    } {
+      const pending: ((servers: string[] | null) => void)[] = [];
+      const live = {
+        ask: (request: { line: string; read: (obj: unknown) => unknown }) =>
+          new Promise((resolve) => {
+            const { id } = JSON.parse(request.line) as { id: string };
+            pending.push((servers) =>
+              resolve(
+                servers === null
+                  ? null
+                  : request.read({
+                      id,
+                      result: {
+                        data: servers.map((name) => ({
+                          name,
+                          runtimeStatus: 'connected',
+                          tools: { a: {} },
+                        })),
+                      },
+                    }),
+              ),
+            );
+          }),
+      } as unknown as AgentSession;
+      return {
+        live,
+        asks: () => pending.length,
+        answer: (servers) => pending.shift()?.(servers),
+      };
+    }
+
+    function read(adapter: CodexAdapter, live: AgentSession) {
+      return adapter.readContextUsage({
+        live,
+        sessionId: THREAD,
+        configDir: null,
+      });
+    }
+
+    /** The read's answer, or `waiting` when it has not settled by the next macrotask. */
+    function settledOrWaiting(reading: Promise<unknown>): Promise<unknown> {
+      return Promise.race([
+        reading,
+        new Promise((resolve) => setImmediate(() => resolve('waiting'))),
+      ]);
+    }
+
+    async function primed(servers: string[]) {
+      const adapter = adapterWith();
+      const listings = heldListings();
+      const first = read(adapter, listings.live);
+      listings.answer(servers);
+      await first;
+      return adapter;
+    }
+
+    it('answers a later read at once from the servers the thread last listed while a slow listing is still out', async () => {
+      const adapter = await primed(['linear', 'figma']);
+      const slow = heldListings();
+
+      const answer = await settledOrWaiting(read(adapter, slow.live));
+
+      expect(answer).toMatchObject({
+        servers: [
+          { name: 'linear', toolCount: 1 },
+          { name: 'figma', toolCount: 1 },
+        ],
+      });
+      expect(slow.asks()).toBe(1);
+    });
+
+    it('makes the first read wait for the listing, and puts one listing to codex for reads that overlap it', async () => {
+      const adapter = adapterWith();
+      const listings = heldListings();
+
+      const first = read(adapter, listings.live);
+      const second = read(adapter, listings.live);
+      expect(await settledOrWaiting(first)).toBe('waiting');
+      expect(listings.asks()).toBe(1);
+
+      listings.answer(['linear']);
+      for (const reading of [first, second]) {
+        await expect(reading).resolves.toMatchObject({
+          servers: [{ name: 'linear', toolCount: 1 }],
+        });
+      }
+    });
+
+    it('serves the refreshed list on the next read once the background listing lands', async () => {
+      const adapter = await primed(['linear']);
+      const listings = heldListings();
+      await read(adapter, listings.live);
+
+      listings.answer(['github']);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      await expect(
+        settledOrWaiting(read(adapter, heldListings().live)),
+      ).resolves.toMatchObject({ servers: [{ name: 'github', toolCount: 1 }] });
+    });
+
+    it('keeps the held list when a background listing comes back empty', async () => {
+      const adapter = await primed(['linear']);
+      const listings = heldListings();
+      await read(adapter, listings.live);
+
+      listings.answer(null);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      await expect(
+        settledOrWaiting(read(adapter, heldListings().live)),
+      ).resolves.toMatchObject({ servers: [{ name: 'linear', toolCount: 1 }] });
+    });
+  });
+
   it('has nothing to ask without a live process', async () => {
     await expect(
       adapterWith().readContextUsage({

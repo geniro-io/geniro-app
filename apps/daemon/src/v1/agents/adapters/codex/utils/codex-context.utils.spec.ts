@@ -22,6 +22,7 @@ const FACTS: CodexThreadFacts = {
   instructionSources: ['/home/u/.codex/AGENTS.md'],
   model: 'gpt-5.5',
   autoCompactTokens: 200_000,
+  mcpServers: null,
 };
 
 function server(

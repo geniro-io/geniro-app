@@ -47,7 +47,7 @@ export type EmbeddingModelRef = z.infer<typeof EmbeddingModelRefSchema>;
  * downloaded and verified, a newer one being indexed beside it, and whether the
  * Mac runs on battery (chat indexing waits for power).
  *
- * TWIN PARSER: `searchConfigOf` in `apps/ui/src/main/search-model/search-config-push.ts`.
+ * TWIN PARSER: `searchConfigOf` in `apps/ui/src/main/search-config-push.ts`.
  */
 export const EmbeddingConfigSchema = z
   .object({

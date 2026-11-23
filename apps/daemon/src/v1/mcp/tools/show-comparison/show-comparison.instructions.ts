@@ -3,8 +3,10 @@ export function showComparisonInstructions(): string {
   return (
     'Lay several options side by side against the same criteria, as a table this app draws, and say which ' +
     'one you would pick. ' +
-    'Use it when you have been asked to choose between alternatives — libraries, designs, storage engines, ' +
-    'approaches. ' +
+    'Use it whenever you are asked to choose — which library, design or approach, where to start, which ' +
+    'source to use, what to do when a limit is hit — and would otherwise answer with a markdown table of the ' +
+    'options and a recommendation under it. Numbers with no choice to make belong in show_chart or ' +
+    'show_metrics, not here. ' +
     'Prefer it over writing a markdown table, but ONLY because of two things a table cannot carry, and only ' +
     'when you can supply them: a `verdict` on each cell, which is what lets the reader see at a glance which ' +
     'column wins, and a `recommendation` naming the option you would take and why. If every cell would be ' +

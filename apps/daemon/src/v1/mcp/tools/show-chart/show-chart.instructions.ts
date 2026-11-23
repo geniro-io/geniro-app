@@ -2,8 +2,10 @@
 export function showChartInstructions(): string {
   return (
     'Plot numbers as a chart this app draws for the user. ' +
-    'Use it when you have SEVERAL readings of one thing — a trend over time, or one quantity across ' +
-    'categories — instead of writing them out as a table or an ASCII bar chart. ' +
+    'Use it whenever you have SEVERAL readings of one thing and would otherwise write them as a markdown ' +
+    'table or an ASCII bar chart: a figure over time (spend by month, a timing per release, errors per day) ' +
+    'or a total split across categories (a monthly bill by service, hours by phase, files by language). ' +
+    'A table of such numbers is the signal to call this instead. ' +
     'Choose between this and show_metrics by what the numbers ARE: several readings of ONE thing is a ' +
     'chart; one current reading each of SEVERAL unrelated things (coverage, bundle size, test count) is a ' +
     'scorecard — they share no axis, so a chart of them is one huge bar and two invisible ones. ' +

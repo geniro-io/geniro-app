@@ -25,12 +25,21 @@ afterEach(() => {
 function render(
   view: AppView,
   onNavigate: (next: AppView) => void = () => undefined,
+  warnings: Partial<Record<AppView, string>> = {},
+  counts: Partial<Record<AppView, number>> = {},
 ): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<BottomTabBar view={view} onNavigate={onNavigate} />);
+    root!.render(
+      <BottomTabBar
+        view={view}
+        onNavigate={onNavigate}
+        warnings={warnings}
+        counts={counts}
+      />,
+    );
   });
   return container;
 }
@@ -75,6 +84,33 @@ describe('BottomTabBar', () => {
       settings.click();
     });
     expect(onNavigate).toHaveBeenCalledWith('settings');
+  });
+
+  it('marks Settings with a warning dot and says so, and leaves its count alone', () => {
+    const el = render(
+      'chats',
+      () => undefined,
+      { settings: '1 account needs sign-in' },
+      { settings: 2 },
+    );
+    const flagged = tabs(el).filter((tab) =>
+      tab.querySelector('[data-slot="nav-warning"]'),
+    );
+    expect(flagged.map((tab) => tab.getAttribute('aria-label'))).toEqual([
+      'Settings, 2 waiting, 1 account needs sign-in',
+    ]);
+    expect(flagged[0]?.getAttribute('title')).toBe(
+      'Settings, 1 account needs sign-in',
+    );
+    expect(
+      flagged[0]?.querySelector('[data-slot="nav-count"]')?.textContent,
+    ).toBe('2');
+  });
+
+  it('draws no warning dot where no warning is given', () => {
+    expect(
+      render('chats').querySelector('[data-slot="nav-warning"]'),
+    ).toBeNull();
   });
 
   it('is drawn below `sm` only — the rail is the navigation at wider widths', () => {

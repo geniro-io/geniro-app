@@ -212,6 +212,7 @@ let root: Root | null;
 async function mount(
   section?: SettingsSection,
   memoryWaiting: number | null = null,
+  onClisDetected?: (detections: CliDetection[]) => void,
 ): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -223,6 +224,7 @@ async function mount(
         handle={handle}
         section={section}
         memoryWaiting={memoryWaiting}
+        onClisDetected={onClisDetected}
       />,
     );
   });
@@ -1748,6 +1750,48 @@ describe('Settings — sections', () => {
     expect(
       container.querySelector('[data-slot="section-waiting"]')?.textContent,
     ).toBe('5');
+  });
+
+  it('counts the accounts that need sign-in on the General row', async () => {
+    geniro.detectClis.mockResolvedValue([
+      det('claude', { loggedIn: false }),
+      det('cursor-agent', {
+        loggedIn: true,
+        profileLogins: { '/b': false },
+      }),
+    ]);
+    await mount('fast-actions');
+
+    expect(
+      container.querySelector('[data-slot="section-sign-in"]')?.textContent,
+    ).toBe('2');
+  });
+
+  it('draws no sign-in count while every account is signed in or unknown', async () => {
+    geniro.detectClis.mockResolvedValue([
+      det('claude', { loggedIn: true, profileLogins: { '/b': null } }),
+      det('cursor-agent'),
+    ]);
+    await mount('fast-actions');
+
+    expect(container.querySelector('[data-slot="section-sign-in"]')).toBeNull();
+  });
+
+  it('hands each fresh detection to its owner, so the nav warning follows Re-check', async () => {
+    const onClisDetected = vi.fn();
+    let detections: CliDetection[] = [det('claude')];
+    geniro.detectClis.mockImplementation(async () => detections);
+    await mount(undefined, null, onClisDetected);
+
+    detections = [det('claude', { loggedIn: false })];
+    const recheck = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Re-check',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      recheck.click();
+    });
+
+    expect(onClisDetected).toHaveBeenLastCalledWith(detections);
   });
 
   it('draws no Memory count while nothing waits', async () => {

@@ -540,6 +540,8 @@ describe('EmbeddingStore', () => {
         150,
       );
       expect(await store.getMeta('chat_deleted_since_vacuum')).toBeNull();
+      expect(freelistPages(path)).toBeGreaterThan(0);
+      store.vacuumIfDue();
       expect(freelistPages(path)).toBe(0);
       const afterVacuum = checkpointedSize(path);
 

@@ -162,6 +162,16 @@ class EmbeddingWorker {
     }
   }
 
+  compactIfDue(): void {
+    try {
+      this.store?.vacuumIfDue();
+    } catch (err) {
+      process.stderr.write(
+        `could not compact embeddings.db: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+
   async close(): Promise<void> {
     await this.releaseExcept([]);
     this.store?.close();
@@ -237,20 +247,30 @@ function main(): void {
     // A lower priority is a courtesy; the work runs without it.
   }
   const worker = new EmbeddingWorker();
+  let inFlight = 0;
   process.on('message', (message: unknown) => {
     if (!isRequest(message)) {
       return;
     }
     const { id, ...request } = message;
-    worker.handle(request as WorkerRequest).then(
-      (result) => reply({ id, ok: true, result }),
-      (err: unknown) =>
-        reply({
-          id,
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-    );
+    inFlight += 1;
+    worker
+      .handle(request as WorkerRequest)
+      .then(
+        (result) => reply({ id, ok: true, result }),
+        (err: unknown) =>
+          reply({
+            id,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+      )
+      .finally(() => {
+        inFlight -= 1;
+        if (inFlight === 0) {
+          worker.compactIfDue();
+        }
+      });
   });
   process.on('disconnect', () => {
     void worker.close().finally(() => process.exit(0));

@@ -108,6 +108,8 @@ function bestPerKey<T extends { similarity: number }>(
  * vectors in a plain table scanned here, chat vectors in a `vec0` table.
  */
 export class EmbeddingStore {
+  private vacuumDue = false;
+
   private constructor(
     private readonly path: string,
     private readonly raw: DatabaseSync,
@@ -447,7 +449,7 @@ export class EmbeddingStore {
       .deleteFrom('meta')
       .where('key', '!=', 'schema_version')
       .execute();
-    this.vacuum();
+    this.vacuumDue = true;
   }
 
   private async ensureSchema(): Promise<void> {
@@ -583,13 +585,22 @@ export class EmbeddingStore {
       .executeTakeFirst();
     if (since >= EMBEDDING_VACUUM_SHARE * (Number(left?.n ?? 0) + since)) {
       await this.setMeta(DELETED_SINCE_VACUUM, null);
-      this.vacuum();
+      this.vacuumDue = true;
       return;
     }
     await this.setMeta(DELETED_SINCE_VACUUM, String(since));
   }
 
-  private vacuum(): void {
+  /**
+   * Give deleted rows' space back to the disk, when deletions asked for it.
+   * The worker calls it only with no request in flight: SQLite refuses
+   * `VACUUM` inside another request's open transaction.
+   */
+  vacuumIfDue(): void {
+    if (!this.vacuumDue) {
+      return;
+    }
     this.raw.exec('VACUUM');
+    this.vacuumDue = false;
   }
 }

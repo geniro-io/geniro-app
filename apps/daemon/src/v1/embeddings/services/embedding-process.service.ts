@@ -60,7 +60,16 @@ export function defaultWorkerLaunch(): EmbeddingWorkerLaunch {
   };
 }
 
+/** Requests whose success shows the child does real work, not only that it started. */
+const WORK_OPS: ReadonlySet<WorkerOp> = new Set([
+  'index',
+  'indexChats',
+  'score',
+  'searchChats',
+]);
+
 interface PendingRequest {
+  op: WorkerOp;
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
@@ -278,7 +287,7 @@ export class EmbeddingProcessService implements OnApplicationShutdown {
           ),
         );
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { op: request.op, resolve, reject, timer });
       try {
         running.child.send({ id, ...request });
       } catch (err) {
@@ -310,7 +319,9 @@ export class EmbeddingProcessService implements OnApplicationShutdown {
     clearTimeout(waiting.timer);
     this.armIdle();
     if (reply.ok) {
-      this.failures = 0;
+      if (WORK_OPS.has(waiting.op)) {
+        this.failures = 0;
+      }
       waiting.resolve(reply.result);
     } else {
       waiting.reject(new Error(reply.error));

@@ -123,6 +123,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     const before = this.config;
     this.config = { ...next };
     this.process.forgiveFailures();
+    const wasEnabled = before.enabled && before.model !== null;
     if (!this.enabled) {
       this.stopTimers();
       this.process.stop();
@@ -134,6 +135,9 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       next.model !== null &&
       next.pendingModel === null &&
       keyOf(before.pendingModel) === keyOf(next.model);
+    if (!wasEnabled) {
+      this.progress = { active: null, pending: null };
+    }
     this.progress = {
       active: this.carried(next.model),
       pending: next.pendingModel ? this.carried(next.pendingModel) : null,
@@ -446,48 +450,55 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
         continue;
       }
       const ids = [...queue].slice(0, DOCUMENT_BATCH);
-      const documents = await provider.documents(ids);
-      const found = new Set(documents.map((document) => document.sourceId));
-      const gone = ids.filter((id) => !found.has(id));
-      for (const target of SLOTS) {
-        if (!this.progress[target]) {
-          continue;
-        }
-        if (documents.length === 0) {
-          continue;
-        }
-        const stale = new Set(
-          await this.process.request(
-            {
-              op: 'missing',
-              source,
-              slot: target,
-              items: documents.map(({ sourceId, textHash }) => ({
-                sourceId,
-                textHash,
-              })),
-            },
-            EMBEDDING_CONTROL_TIMEOUT_MS,
-          ),
-        );
-        const changed = documents.filter((document) =>
-          stale.has(document.sourceId),
-        );
-        if (changed.length > 0) {
-          await this.process.request(
-            { op: 'index', source, slot: target, documents: changed },
-            EMBEDDING_BATCH_TIMEOUT_MS,
-          );
-        }
-      }
-      if (gone.length > 0) {
-        await this.process.request(
-          { op: 'delete', source, sourceIds: gone },
-          EMBEDDING_CONTROL_TIMEOUT_MS,
-        );
-      }
       for (const id of ids) {
         queue.delete(id);
+      }
+      try {
+        const documents = await provider.documents(ids);
+        const found = new Set(documents.map((document) => document.sourceId));
+        const gone = ids.filter((id) => !found.has(id));
+        for (const target of SLOTS) {
+          if (!this.progress[target]) {
+            continue;
+          }
+          if (documents.length === 0) {
+            continue;
+          }
+          const stale = new Set(
+            await this.process.request(
+              {
+                op: 'missing',
+                source,
+                slot: target,
+                items: documents.map(({ sourceId, textHash }) => ({
+                  sourceId,
+                  textHash,
+                })),
+              },
+              EMBEDDING_CONTROL_TIMEOUT_MS,
+            ),
+          );
+          const changed = documents.filter((document) =>
+            stale.has(document.sourceId),
+          );
+          if (changed.length > 0) {
+            await this.process.request(
+              { op: 'index', source, slot: target, documents: changed },
+              EMBEDDING_BATCH_TIMEOUT_MS,
+            );
+          }
+        }
+        if (gone.length > 0) {
+          await this.process.request(
+            { op: 'delete', source, sourceIds: gone },
+            EMBEDDING_CONTROL_TIMEOUT_MS,
+          );
+        }
+      } catch (err) {
+        for (const id of ids) {
+          queue.add(id);
+        }
+        throw err;
       }
       await this.refreshCounts(slot, progress);
       return true;

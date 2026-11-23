@@ -305,6 +305,15 @@ export class SearchModelService {
         `the search model download failed: ${err instanceof Error ? err.message : String(err)}`,
         { kind: 'search-model-failed', reason },
       );
+      if (kind === 'update') {
+        this.set({
+          phase: 'update-available',
+          receivedBytes: 0,
+          totalBytes: total,
+          reason,
+        });
+        return;
+      }
       this.deps.writeSwitch(false);
       this.set({ phase: 'failed', receivedBytes: 0, totalBytes: 0, reason });
       await this.deps.pushConfig();

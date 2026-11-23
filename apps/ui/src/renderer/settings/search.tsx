@@ -323,7 +323,11 @@ export function SearchSettings({
         <SettingsPanelRow
           key="update"
           label="A newer search model is available"
-          description={`Search keeps using the current model until the new one is downloaded and indexed. The download is ${modelMegabytes}; the old model is deleted once the new index is complete.`}>
+          description={
+            state.reason === null
+              ? `Search keeps using the current model until the new one is downloaded and indexed. The download is ${modelMegabytes}; the old model is deleted once the new index is complete.`
+              : `The update did not finish: ${SEARCH_MODEL_FAILURE_SENTENCES[state.reason]} Search keeps using the current model.`
+          }>
           <Button
             variant="default"
             size="sm"

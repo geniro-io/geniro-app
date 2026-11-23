@@ -2,7 +2,60 @@
 
 What changed in each Geniro release, newest first. The app shows it in Settings → What's new, and after an update.
 
-A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.318.0 were taken from the pull request titles.
+A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.323.1 were taken from the pull request titles.
+
+## 1.323.1 — 2026-11-23
+
+### Fixed
+
+- Stop showing a held call as waiting once its callee is continued
+
+## 1.323.0 — 2026-11-23
+
+### New
+
+- Draw every agent interaction in a team chat as one card
+
+## 1.322.0 — 2026-11-23
+
+### New
+
+- Warn in Settings and on its menu icon when an agent account needs sign-in
+
+## 1.321.0 — 2026-11-23
+
+### New
+
+- Name concrete triggers for show_chart and show_comparison
+
+## 1.320.0 — 2026-11-23
+
+### New
+
+- Feed failed goals and pitfall notes to lessons and thread analysis
+- Team_notes with no filter returns only unread notes
+
+## 1.319.1 — 2026-11-23
+
+### Fixed
+
+- Show a chat link to a local path in Finder
+
+## 1.319.0 — 2026-11-23
+
+### New
+
+- Name the awaited call on the working row
+
+### Fixed
+
+- Refuse an over-long question instead of cutting it
+
+## 1.318.1 — 2026-11-23
+
+### Fixed
+
+- Ask before an in-app browser page with unsaved changes reloads or unloads
 
 ## 1.318.0 — 2026-11-23
 

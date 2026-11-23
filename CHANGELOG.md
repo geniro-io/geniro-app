@@ -2,7 +2,13 @@
 
 What changed in each Geniro release, newest first. The app shows it in Settings → What's new, and after an update.
 
-A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.317.2 were taken from the pull request titles.
+A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.317.3 were taken from the pull request titles.
+
+## 1.317.3 — 2026-11-23
+
+### Fixed
+
+- Tell agents a named page style is not a fixed theme
 
 ## 1.317.2 — 2026-11-23
 

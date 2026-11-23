@@ -29,6 +29,7 @@ import {
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
+import { memoryBodyOf } from '../utils/lesson-body';
 import { importedTextHash, indexHandlesOf } from '../utils/memory-text';
 import type { MemoryService } from './memory.service';
 import { MemoryReviewService } from './memory-review.service';
@@ -208,20 +209,187 @@ describe('MemoryService', () => {
     expect(vouched.kind).toBe('created');
   });
 
-  it('does not call an entry in another scope a duplicate', async () => {
-    await db.service.save(
-      AGENT,
-      { title: 'Always run pnpm full-check', body: 'global' },
-      NONE,
-    );
+  describe('near duplicates by text', () => {
+    const EDIT_BODY =
+      'The pull request editor fails on this organisation because projects classic is deprecated; patch the description through the REST endpoint instead.';
 
-    const outcome = await db.service.save(
-      AGENT,
-      { title: 'Always run pnpm full-check', body: 'project' },
-      inProject('project-1'),
-    );
+    async function seedProjects() {
+      const em = db.em.fork();
+      em.persist(make(Project, { id: 'p1', name: 'App', folder: '/repo/app' }));
+      em.persist(make(Project, { id: 'p2', name: 'Other', folder: '/repo/o' }));
+      await em.flush();
+    }
 
-    expect(outcome.kind).toBe('created');
+    it('refuses a reworded title over the same body, quoting the entry', async () => {
+      const original = created(
+        await db.service.save(
+          AGENT,
+          { title: 'gh pr edit fails here', body: EDIT_BODY },
+          NONE,
+        ),
+      );
+
+      const outcome = await db.service.save(
+        AGENT,
+        { title: 'Editing pull requests needs the REST API', body: EDIT_BODY },
+        NONE,
+      );
+
+      expect(outcome).toMatchObject({
+        kind: 'near_duplicate',
+        candidates: [{ handle: original.handle, excerpt: expect.any(String) }],
+      });
+    });
+
+    it('stores the same title over a different body', async () => {
+      await db.service.save(
+        AGENT,
+        { title: 'How to restart the local stand', body: EDIT_BODY },
+        NONE,
+      );
+
+      const outcome = await db.service.save(
+        AGENT,
+        {
+          title: 'How to restart the local stand',
+          body: 'Stop every process the stand started in its worktree, wait for the ports to close, then boot it again from its pointer note.',
+        },
+        NONE,
+      );
+
+      expect(outcome.kind).toBe('created');
+    });
+
+    it('refuses a project save that repeats a global entry, and a global save that repeats the run’s project entry', async () => {
+      await seedProjects();
+      const global = created(
+        await db.service.save(
+          AGENT,
+          { title: 'gh pr edit fails here', body: EDIT_BODY },
+          NONE,
+        ),
+      );
+      const project = created(
+        await db.service.save(
+          AGENT,
+          {
+            title: 'Restart the whole dev stand',
+            body: 'Never stop only the daemon of a dev stand; restart the whole stand so the window reconnects.',
+            scope: 'project',
+          },
+          inProject('p1'),
+        ),
+      );
+
+      const projectRepeat = await db.service.save(
+        AGENT,
+        {
+          title: 'Use the REST API to edit a pull request',
+          body: EDIT_BODY,
+          scope: 'project',
+        },
+        inProject('p1'),
+      );
+      const globalRepeat = await db.service.save(
+        AGENT,
+        {
+          title: 'Restart a dev stand whole',
+          body: 'Never stop only the daemon of a dev stand; restart the whole stand so the window reconnects.',
+          scope: 'global',
+        },
+        inProject('p1'),
+      );
+
+      expect(
+        projectRepeat.kind === 'near_duplicate' &&
+          projectRepeat.candidates.map((hit) => hit.handle),
+      ).toEqual([global.handle]);
+      expect(
+        globalRepeat.kind === 'near_duplicate' &&
+          globalRepeat.candidates.map((hit) => hit.handle),
+      ).toEqual([project.handle]);
+    });
+
+    it('never blocks on, or quotes, another project’s entry the run cannot see', async () => {
+      await seedProjects();
+      await db.service.save(
+        AGENT,
+        { title: 'gh pr edit fails here', body: EDIT_BODY, scope: 'project' },
+        inProject('p2'),
+      );
+
+      const projectSave = await db.service.save(
+        AGENT,
+        { title: 'gh pr edit fails here', body: EDIT_BODY, scope: 'project' },
+        inProject('p1'),
+      );
+      const globalSave = await db.service.save(
+        AGENT,
+        {
+          title: 'gh pr edit fails here too',
+          body: EDIT_BODY,
+          scope: 'global',
+        },
+        inProject('p1'),
+      );
+
+      expect(projectSave.kind).toBe('created');
+      expect(globalSave.kind).toBe('near_duplicate');
+      expect(JSON.stringify(globalSave)).not.toContain('"projectId":"p2"');
+    });
+
+    it('stores an entry beside a different one in a scope seen together', async () => {
+      await seedProjects();
+      await db.service.save(
+        AGENT,
+        { title: 'gh pr edit fails here', body: EDIT_BODY },
+        NONE,
+      );
+
+      const outcome = await db.service.save(
+        AGENT,
+        {
+          title: 'Restart the whole dev stand',
+          body: 'Never stop only the daemon of a dev stand; restart the whole stand so the window reconnects.',
+          scope: 'project',
+        },
+        inProject('p1'),
+      );
+
+      expect(outcome.kind).toBe('created');
+    });
+
+    it('checks the user’s global entry against every scope, and the import preview by text', async () => {
+      await seedProjects();
+      const inOther = created(
+        await db.service.save(
+          AGENT,
+          { title: 'gh pr edit fails here', body: EDIT_BODY, scope: 'project' },
+          inProject('p2'),
+        ),
+      );
+      const note = {
+        title: 'Edit pull requests through REST',
+        body: EDIT_BODY,
+      };
+
+      const userCopy = await db.service.create({
+        ...note,
+        type: 'reference',
+        projectId: null,
+      });
+      const preview = await db.service.similarTo(note, NONE);
+      const previewInP1 = await db.service.similarTo(note, inProject('p1'));
+
+      expect(
+        userCopy.kind === 'near_duplicate' &&
+          userCopy.candidates.map((hit) => hit.handle),
+      ).toEqual([inOther.handle]);
+      expect(preview.map((row) => row.handle)).toEqual([
+        Number(inOther.handle.slice(1)),
+      ]);
+      expect(previewInP1).toEqual([]);
+    });
   });
 
   it('refuses a stale rev and returns the current entry', async () => {
@@ -1646,35 +1814,43 @@ describe('MemoryService', () => {
         expect(global).toMatchObject({ projectId: null, teamSlug: null });
       });
 
-      it('counts a same-titled entry a duplicate only in the same team', async () => {
-        await db.service.save(
-          AGENT,
-          { title: 'Use pnpm', body: 'x', scope: 'team' },
-          TEAM_A,
+      it('counts a team entry a duplicate for its own team’s saves, global ones included, and for no other team', async () => {
+        const note = {
+          title: 'Install with pnpm only',
+          body: 'Install workspace packages with pnpm, never npm or yarn.',
+        };
+        const teamEntry = created(
+          await db.service.save(AGENT, { ...note, scope: 'team' }, TEAM_A),
         );
 
+        const inTeamB = await db.service.save(
+          AGENT,
+          { ...note, scope: 'team' },
+          TEAM_B,
+        );
+        const inTeamA = await db.service.save(
+          AGENT,
+          { ...note, scope: 'team' },
+          TEAM_A,
+        );
+        const globalFromTeamA = await db.service.save(
+          AGENT,
+          { ...note, scope: 'global' },
+          TEAM_A,
+        );
+        const globalFromNoTeam = await db.service.save(
+          AGENT,
+          { ...note, scope: 'global' },
+          inProject('p1'),
+        );
+
+        expect(inTeamB.kind).toBe('created');
+        expect(inTeamA.kind).toBe('near_duplicate');
         expect(
-          (
-            await db.service.save(
-              AGENT,
-              { title: 'Use pnpm', body: 'x', scope: 'team' },
-              TEAM_B,
-            )
-          ).kind,
-        ).toBe('created');
-        expect(
-          (
-            await db.service.save(
-              AGENT,
-              { title: 'Use pnpm', body: 'x', scope: 'team' },
-              TEAM_A,
-            )
-          ).kind,
-        ).toBe('near_duplicate');
-        expect(
-          (await db.service.save(AGENT, { title: 'Use pnpm', body: 'x' }, NONE))
-            .kind,
-        ).toBe('created');
+          globalFromTeamA.kind === 'near_duplicate' &&
+            globalFromTeamA.candidates.map((hit) => hit.handle),
+        ).toEqual([teamEntry.handle]);
+        expect(globalFromNoTeam.kind).toBe('created');
       });
     });
   });
@@ -2130,11 +2306,16 @@ describe('MemoryService', () => {
       expect(missing).toMatchObject({ kind: 'refused', code: 'NO_PROJECT' });
     });
 
-    it('refuses the user a near-duplicate title until the user vouches past it', async () => {
-      await seedRows([{ title: 'Use pnpm for installs' }]);
+    it('refuses the user a near duplicate until the user vouches past it', async () => {
+      await seedRows([
+        {
+          title: 'Use pnpm for installs',
+          body: 'Workspace packages install with pnpm',
+        },
+      ]);
       const input = {
-        title: 'Use pnpm for installs',
-        body: 'again',
+        title: 'Install packages with pnpm',
+        body: 'Workspace installs use pnpm',
         type: 'project' as const,
         projectId: null,
       };
@@ -3501,6 +3682,34 @@ describe('MemoryService.fileLesson', () => {
   const SOURCE = { sourceRunId: 'src-1', proposalId: 'lp-1' };
   const FACTS = { taskId: null, cwd: '/repo/app' };
 
+  interface LessonText {
+    title: string;
+    body: string;
+    type: 'feedback';
+  }
+
+  function file(
+    input: LessonText,
+    {
+      place = NONE,
+      viewer = place,
+      source = SOURCE,
+    }: {
+      place?: RunPlace;
+      viewer?: RunPlace;
+      source?: typeof SOURCE;
+    } = {},
+  ): Promise<MemorySaveOutcome> {
+    return db.service.fileLesson(LESSON, input, place, source, viewer);
+  }
+
+  const RETRY_THREAD = {
+    why: 'The thread kept retrying the release.',
+    sourceTitle: 'Release review thread',
+    evidenceSeq: 12,
+    evidenceQuote: 'we retried the release again',
+  };
+
   beforeEach(async () => {
     db = await memoryDb();
     db.service.setConfig(DEFAULT_MEMORY_CONFIG);
@@ -3512,16 +3721,11 @@ describe('MemoryService.fileLesson', () => {
 
   it('writes an active entry stamped as a lesson, naming its thread and proposal', async () => {
     const entry = created(
-      await db.service.fileLesson(
-        LESSON,
-        {
-          title: 'Check before retrying',
-          body: 'Change the input first.',
-          type: 'feedback',
-        },
-        NONE,
-        SOURCE,
-      ),
+      await file({
+        title: 'Check before retrying',
+        body: 'Change the input first.',
+        type: 'feedback',
+      }),
     );
 
     expect(entry).toMatchObject({
@@ -3541,12 +3745,11 @@ describe('MemoryService.fileLesson', () => {
   });
 
   it('keeps the entry out of the next run’s index but finds it by search', async () => {
-    await db.service.fileLesson(
-      LESSON,
-      { title: 'Check before retrying', body: 'zebra rule', type: 'feedback' },
-      NONE,
-      SOURCE,
-    );
+    await file({
+      title: 'Check before retrying',
+      body: 'zebra rule',
+      type: 'feedback',
+    });
 
     const snapshot = await db.service.runSnapshot(FACTS);
     const hits = await db.service.search('zebra', NONE, 10);
@@ -3560,12 +3763,11 @@ describe('MemoryService.fileLesson', () => {
     db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, agentWrites: 'pending' });
 
     const entry = created(
-      await db.service.fileLesson(
-        LESSON,
-        { title: 'Check before retrying', body: 'x', type: 'feedback' },
-        NONE,
-        SOURCE,
-      ),
+      await file({
+        title: 'Check before retrying',
+        body: 'x',
+        type: 'feedback',
+      }),
     );
 
     expect(entry.status).toBe('pending');
@@ -3573,18 +3775,11 @@ describe('MemoryService.fileLesson', () => {
   });
 
   it('names the lessons whose entry still waits for review, and no active one', async () => {
-    await db.service.fileLesson(
-      LESSON,
-      { title: 'Check before retrying', body: 'x', type: 'feedback' },
-      NONE,
-      SOURCE,
-    );
+    await file({ title: 'Check before retrying', body: 'x', type: 'feedback' });
     db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, agentWrites: 'pending' });
-    await db.service.fileLesson(
-      LESSON,
+    await file(
       { title: 'Read the log tail first', body: 'y', type: 'feedback' },
-      NONE,
-      { sourceRunId: 'src-1', proposalId: 'lp-2' },
+      { source: { sourceRunId: 'src-1', proposalId: 'lp-2' } },
     );
 
     expect(
@@ -3599,14 +3794,93 @@ describe('MemoryService.fileLesson', () => {
       NONE,
     );
 
-    const outcome = await db.service.fileLesson(
-      LESSON,
-      { title: 'Run pnpm full-check always', body: 'again', type: 'feedback' },
-      NONE,
-      SOURCE,
-    );
+    const outcome = await file({
+      title: 'Run pnpm full-check always',
+      body: 'again',
+      type: 'feedback',
+    });
 
     expect(outcome.kind).toBe('near_duplicate');
     expect(await db.em.fork().count(Memory, {})).toBe(1);
+  });
+
+  it('compares lessons by title and rule, so a trailer two lessons of one thread share makes no duplicate', async () => {
+    await file({
+      title: 'WHEN a release stays draft → inspect the release run',
+      body: memoryBodyOf(
+        RETRY_THREAD,
+        'Rerun the failed release job instead of waiting.',
+      ),
+      type: 'feedback',
+    });
+
+    const outcome = await file(
+      {
+        title: 'WHEN a merged fix is for the user → name the version',
+        body: memoryBodyOf(
+          RETRY_THREAD,
+          'Tell the user which release carries the merged fix.',
+        ),
+        type: 'feedback',
+      },
+      { source: { sourceRunId: 'src-1', proposalId: 'lp-2' } },
+    );
+
+    expect(outcome.kind).toBe('created');
+  });
+
+  it('catches a lesson that rewords a stored lesson, its trailer and all', async () => {
+    const stored = created(
+      await file({
+        title: 'WHEN a release stays draft → inspect the failed release job',
+        body: memoryBodyOf(
+          RETRY_THREAD,
+          'Open the failed release workflow run, read its error and rerun that job instead of waiting for the draft to publish.',
+        ),
+        type: 'feedback',
+      }),
+    );
+
+    const outcome = await file(
+      {
+        title: 'WHEN the release draft never publishes → rerun the failed job',
+        body: memoryBodyOf(
+          {
+            why: 'Waiting on a stuck draft wasted an hour.',
+            sourceTitle: 'Another release thread',
+            evidenceSeq: 40,
+            evidenceQuote: 'still a draft after an hour',
+          },
+          'Read the error of the failed release workflow run and rerun that job; never wait for the draft to publish.',
+        ),
+        type: 'feedback',
+      },
+      { source: { sourceRunId: 'src-2', proposalId: 'lp-2' } },
+    );
+
+    expect(
+      outcome.kind === 'near_duplicate' &&
+        outcome.candidates.map((hit) => hit.handle),
+    ).toEqual([stored.handle]);
+  });
+
+  it('checks only what the thread could see when filing a global lesson', async () => {
+    await db.service.create({
+      title: 'Restart the whole dev stand',
+      body: 'Never stop only the daemon of a dev stand; restart the whole stand so the window reconnects.',
+      type: 'feedback',
+      projectId: null,
+      teamSlug: 'other-team',
+    });
+    const repeat: LessonText = {
+      title: 'Restart the whole dev stand',
+      body: 'Never stop only the daemon of a dev stand; restart the whole stand so the window reconnects.',
+      type: 'feedback',
+    };
+
+    expect(
+      (await file(repeat, { viewer: { projectId: null, teamSlug: 'team-a' } }))
+        .kind,
+    ).toBe('created');
   });
 });

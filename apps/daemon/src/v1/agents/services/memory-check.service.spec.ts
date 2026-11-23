@@ -105,8 +105,19 @@ describe('MemoryCheckService', () => {
     body: string,
     actor: MemoryActor = USER,
     place: RunPlace = NONE,
+    twins: MemoryEntry[] = [],
   ): Promise<MemoryEntry> {
-    const outcome = await db.service.save(actor, { title, body }, place);
+    const outcome = await db.service.save(
+      actor,
+      {
+        title,
+        body,
+        ...(twins.length === 0
+          ? {}
+          : { notDuplicateOf: twins.map((twin) => twin.handle) }),
+      },
+      place,
+    );
     if (outcome.kind !== 'created') {
       throw new Error(`expected a created entry, got ${outcome.kind}`);
     }
@@ -121,6 +132,9 @@ describe('MemoryCheckService', () => {
     const second = await seed(
       'Workspace install',
       'Always run pnpm install here, and never npm install.',
+      USER,
+      NONE,
+      [first],
     );
     return {
       first,
@@ -189,7 +203,7 @@ describe('MemoryCheckService', () => {
   });
 
   it('a finding is asked again and shown again after its text changes, even if dismissed', async () => {
-    const { request, first } = await seedPair();
+    const { request, first, second } = await seedPair();
     const ask = vi.spyOn(claude(), 'askOnce').mockResolvedValue(
       answer([
         {
@@ -213,6 +227,7 @@ describe('MemoryCheckService', () => {
       type: first.type,
       projectId: first.projectId,
       teamSlug: first.teamSlug,
+      notDuplicateOf: [second.handle],
     });
     expect(edited.kind).toBe('updated');
 
@@ -260,7 +275,7 @@ describe('MemoryCheckService', () => {
   });
 
   it('a pair checked is not asked again until a text changes', async () => {
-    const { request, first, pair } = await seedPair();
+    const { request, first, second, pair } = await seedPair();
     vi.spyOn(claude(), 'askOnce').mockResolvedValue(
       answer([{ id: 'p1', verdict: 'unrelated' }]),
     );
@@ -278,6 +293,7 @@ describe('MemoryCheckService', () => {
       type: first.type,
       projectId: first.projectId,
       teamSlug: first.teamSlug,
+      notDuplicateOf: [second.handle],
     });
 
     expect(await db.findings.candidatePairs()).toHaveLength(1);
@@ -399,6 +415,9 @@ describe('MemoryCheckService', () => {
     const second = await seed(
       'Workspace install',
       'Always run pnpm install here, and never npm install.',
+      USER,
+      NONE,
+      [first],
     );
     registerSecret('sk-live-123456789', 'test');
     const ask = vi
@@ -416,10 +435,16 @@ describe('MemoryCheckService', () => {
   });
 
   it('lists the pairs of a dozen entries sharing words, and leaves the cost unknown for a model the catalog does not list', async () => {
+    const seeded: MemoryEntry[] = [];
     for (const topic of TOPICS) {
-      await seed(
-        `${topic} workspace rule`,
-        'Keep the workspace note in order.',
+      seeded.push(
+        await seed(
+          `${topic} workspace rule`,
+          'Keep the workspace note in order.',
+          USER,
+          NONE,
+          seeded,
+        ),
       );
     }
 

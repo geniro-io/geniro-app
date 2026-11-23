@@ -97,10 +97,7 @@ export class MemoryImportService {
               ? 'ambiguous'
               : 'none',
         similarTo: (
-          await this.memory.similarTo(note.title, {
-            projectId,
-            teamSlug: null,
-          })
+          await this.memory.similarTo(note, { projectId, teamSlug: null })
         ).map((row) => ({
           handle: memoryHandle(row.handle),
           title: row.title,

@@ -463,6 +463,7 @@ describe('MemoryMarks through MemoryService', () => {
         },
         NONE,
         SOURCE,
+        NONE,
       ),
     );
     await thread('l1', { title: 'Retry one' });
@@ -497,6 +498,7 @@ describe('MemoryMarks through MemoryService', () => {
         },
         NONE,
         SOURCE,
+        NONE,
       ),
     );
     for (const id of ['l1', 'l2', 'l3', 'l4']) {
@@ -539,6 +541,7 @@ describe('MemoryMarks through MemoryService', () => {
         },
         NONE,
         SOURCE,
+        NONE,
       ),
     );
     for (const id of ['l1', 'l2']) {
@@ -580,6 +583,7 @@ describe('MemoryMarks through MemoryService', () => {
         },
         NONE,
         SOURCE,
+        NONE,
       ),
     );
     await thread('l1', { title: 'Retry one' });
@@ -630,6 +634,7 @@ describe('MemoryMarks through MemoryService', () => {
         },
         NONE,
         SOURCE,
+        NONE,
       ),
     );
 

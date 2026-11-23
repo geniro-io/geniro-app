@@ -16,7 +16,8 @@ import {
   parseMemoryHandle,
 } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
-import { similarTitles } from '../../memory/utils/memory-text';
+import { memoryBodyOf } from '../../memory/utils/lesson-body';
+import { nearDuplicate } from '../../memory/utils/memory-duplicates';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { AgentKind } from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
@@ -41,7 +42,7 @@ import {
   type LessonTarget,
 } from '../lessons.types';
 import { placesOfRun } from '../utils/lesson-places';
-import { memoryBodyOf, placesOf } from './lesson-proposal.service';
+import { placesOf } from './lesson-proposal.service';
 import { LessonRowWriter } from './lesson-row.writer';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
@@ -237,7 +238,7 @@ export class LessonFilingService {
         });
       }
       const same = visible.find((entry) =>
-        similarTitles(entry.title, lesson.title),
+        nearDuplicate(entry, { title: lesson.title, body: lesson.rule }),
       );
       if (same !== undefined && lesson.dedup.verdict === 'new') {
         problems.push({
@@ -548,6 +549,7 @@ export class LessonFilingService {
       },
       place,
       { sourceRunId: row.sourceRunId, proposalId: row.id },
+      { projectId: row.projectId, teamSlug: row.teamSlug },
     );
     if (saved.kind === 'created' || saved.kind === 'updated') {
       row.status = 'saved';

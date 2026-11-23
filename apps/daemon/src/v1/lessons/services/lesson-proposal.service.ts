@@ -18,6 +18,7 @@ import {
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { placeKeyOf } from '../../knowledge/utils/knowledge-text';
 import { MemoryService } from '../../memory/services/memory.service';
+import { memoryBodyOf } from '../../memory/utils/lesson-body';
 import { savedEntryOrThrow } from '../../memory/utils/memory-outcome';
 import type { ProjectInstructionBlock } from '../../projects/projects.types';
 import { ProjectsService } from '../../projects/services/projects.service';
@@ -668,18 +669,6 @@ export class LessonProposalService {
     }
     return place;
   }
-}
-
-/** The memory entry's body: the rule in full, then why, then where it came from. */
-export function memoryBodyOf(
-  row: Pick<
-    LessonProposal,
-    'why' | 'sourceTitle' | 'evidenceSeq' | 'evidenceQuote'
-  >,
-  rule: string,
-): string {
-  const from = row.sourceTitle === null ? 'a thread' : `"${row.sourceTitle}"`;
-  return `${rule}\n\nWhy: ${row.why}\n\nLesson from ${from}, message #${row.evidenceSeq}: “${row.evidenceQuote}”`;
 }
 
 /** A rule as one instructions line: a bullet, its line breaks folded. */

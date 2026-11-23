@@ -128,7 +128,7 @@ export function memorySaveResultText(
             : []),
           ...(outcome.pending.length > 0
             ? [
-                `Waiting for the user's review, with a title like yours (not shown): ${outcome.pending.join(', ')}.`,
+                `Waiting for the user's review, with text like yours (not shown): ${outcome.pending.join(', ')}.`,
               ]
             : []),
           `Not saved: this looks like a note memory already has. ${how}`,

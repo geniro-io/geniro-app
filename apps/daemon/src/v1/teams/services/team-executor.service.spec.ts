@@ -7971,8 +7971,63 @@ describe('TeamExecutorService — agent calls', () => {
         }
         return outcome.notes.map((note) => note.text);
       };
-      return { turn, unreadTexts };
+      const teamNotesCall = (id: string, parentToolUseId?: string) => ({
+        type: 'tool_call' as const,
+        id,
+        name: `mcp__${hostMcpServerName(run.id)}__team_notes`,
+        input: {},
+        ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+      });
+      const teamNotesResult = (
+        id: string,
+        isError: boolean,
+        parentToolUseId?: string,
+      ) => ({
+        type: 'tool_result' as const,
+        id,
+        name: null,
+        result: 'notes',
+        isError,
+        ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+      });
+      return { turn, unreadTexts, teamNotesCall, teamNotesResult };
     }
+
+    it('forgets what the callee was shown when a delegate of it read the notes, but not after its own read', async () => {
+      const { turn, unreadTexts, teamNotesCall, teamNotesResult } =
+        await helperTurnReading();
+      turn.emit(teamNotesCall('own-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+      turn.emit(teamNotesResult('own-read', false));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emit(teamNotesCall('delegate-read', 'tool-delegate'));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+      turn.emit(teamNotesResult('delegate-read', false, 'tool-delegate'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
+
+    it('forgets what the callee was shown when its read failed or its turn ended before the reply', async () => {
+      const { turn, unreadTexts, teamNotesCall, teamNotesResult } =
+        await helperTurnReading();
+      turn.emit(teamNotesCall('failed-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+      turn.emit(teamNotesResult('failed-read', true));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+
+      turn.emit(teamNotesCall('cut-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+      completeTurn(turn, 'stopped');
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
 
     it('forgets what the callee was shown when its main-thread context is compacted, but not a delegate’s compaction', async () => {
       const { turn, unreadTexts } = await helperTurnReading();

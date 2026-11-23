@@ -46,6 +46,7 @@ import {
   type FollowUpBackgroundWork,
   HOST_BROWSER_HOST_CARD,
   HOST_QUESTION_TOOL,
+  HOST_TEAM_NOTES_TOOL,
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
@@ -183,6 +184,7 @@ import {
   standingProposalCardId,
 } from '../../agents/utils/host-teams';
 import { threadCardFields } from '../../agents/utils/host-thread-message';
+import { isHostToolCall } from '../../agents/utils/host-tool';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import {
   endsReasoningStretch,
@@ -5818,12 +5820,41 @@ export class TeamExecutorService
         memberId: callerNodeOf(caller),
         conversationId: callerConversationOf(caller),
       };
-      const forgetNotesOnCompaction = (event: AgentEvent): void => {
+      const openNoteReads = new Map<string, boolean>();
+      const forgetNotesNotSeen = (event: AgentEvent): void => {
+        if (
+          event.type === 'tool_call' &&
+          isHostToolCall(
+            hostMcpServerName(runId),
+            event.name,
+            HOST_TEAM_NOTES_TOOL,
+          )
+        ) {
+          openNoteReads.set(event.id, event.parentToolUseId !== undefined);
+          return;
+        }
+        if (event.type === 'tool_result') {
+          const byDelegate = openNoteReads.get(event.id);
+          if (byDelegate === undefined) {
+            return;
+          }
+          openNoteReads.delete(event.id);
+          if (byDelegate || event.isError) {
+            this.teamNotes?.forgetShown(runId, noteConversation);
+          }
+          return;
+        }
         if (
           event.type === 'context_compacted' &&
           event.phase === 'finished' &&
           event.parentToolUseId === undefined
         ) {
+          this.teamNotes?.forgetShown(runId, noteConversation);
+        }
+      };
+      const forgetNoteReadsLeftOpen = (): void => {
+        if (openNoteReads.size > 0) {
+          openNoteReads.clear();
           this.teamNotes?.forgetShown(runId, noteConversation);
         }
       };
@@ -6887,7 +6918,7 @@ export class TeamExecutorService
           const mapped = markedForContinuation(event, mapEventToItem(event));
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
-          forgetNotesOnCompaction(event);
+          forgetNotesNotSeen(event);
           for (const row of compactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
               ...row.payload,
@@ -7294,7 +7325,7 @@ export class TeamExecutorService
           ) {
             await takeOffTurnNodeBadge(sessionKey, node.id, callId);
           }
-          forgetNotesOnCompaction(event);
+          forgetNotesNotSeen(event);
           for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
               ...row.payload,
@@ -7584,6 +7615,7 @@ export class TeamExecutorService
         });
       };
       const finish = (): NodeTurnResult => {
+        forgetNoteReadsLeftOpen();
         // What this turn spent that no row carries is either recorded by now
         // or will be by a line this key no longer answers for — so the live
         // figure comes down with the turn, never to be added twice.

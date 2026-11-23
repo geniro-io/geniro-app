@@ -2,7 +2,13 @@
 
 What changed in each Geniro release, newest first. The app shows it in Settings → What's new, and after an update.
 
-A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.317.3 were taken from the pull request titles.
+A change not released yet is one file in `changelog/unreleased/` (format and rules: `.claude/rules/changelog.md`). The entries up to 1.318.0 were taken from the pull request titles.
+
+## 1.318.0 — 2026-11-23
+
+### New
+
+- Show what happened on a thread in the Progress window
 
 ## 1.317.3 — 2026-11-23
 

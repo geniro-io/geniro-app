@@ -458,10 +458,10 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
             (item.payload as { callId?: string }).callId === 'call-2',
         )
         .map((item) => item.seq);
-      // Statuses, task list, turn end, notice and settle; the newest NAMED tool
-      // call and its reply, the newest words and the newest row. Never its
-      // older words, the user's message or the rows that say nothing.
-      expect(qa).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 22, 23]);
+      // Statuses, task list, turn end, notice and settle; the newest words and
+      // the newest row. A settled call names no tool: no tool call, no reply.
+      // Never its older words, the user's message or the rows that say nothing.
+      expect(qa).toEqual([9, 12, 13, 14, 15, 16, 22, 23]);
     });
 
     it('anchors older named tool calls too, for the card to pass over one it hides', async () => {
@@ -475,8 +475,15 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
           payload: JSON.stringify({ ...payload, callId: 'call-2' }),
         });
       await row(9, { id: 't1', name: 'Bash' });
+      await dao.create({
+        runId: 'run-a',
+        seq: 10,
+        kind: 'status',
+        memberId: 'qa',
+        payload: JSON.stringify({ callId: 'call-2', status: 'running' }),
+      });
       // Newer, and one of geniro's own: the folded card never draws it.
-      await row(10, { id: 't2', name: 'mcp__geniro__show_chart' });
+      await row(11, { id: 't2', name: 'mcp__geniro__show_chart' });
 
       const { anchors } = await readingService().read(
         'run-a',
@@ -493,7 +500,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
               (item.payload as { callId?: string }).callId === 'call-2',
           )
           .map((item) => item.seq),
-      ).toEqual([9, 10]);
+      ).toEqual([9, 11]);
     });
 
     /** One row of the run, written the way the tests above write theirs. */
@@ -531,6 +538,62 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         .map((item) => item.seq);
     }
 
+    it('anchors no named tool call of a settled call, nor its reply', async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', {
+        id: 't10',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      await row(11, 'tool_result', 'qa', { id: 't10', callId: 'call-2' });
+      await row(12, 'status', 'qa', { callId: 'call-2', status: 'completed' });
+
+      expect(await anchoredOf('call-2', ['tool_call', 'tool_result'])).toEqual(
+        [],
+      );
+    });
+
+    it("cuts a call's result to the preview cap among a root page's anchors, and returns it whole on the call's own page", async () => {
+      await teamRun();
+      const result = { text: 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1) };
+      await row(9, 'call_result', 'manager', {
+        callId: 'call-2',
+        status: 'ok',
+        result,
+      });
+
+      const root = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 1, take: 'newest' },
+        { root: true },
+      );
+      expect(
+        root.anchors
+          .filter((item) => item.kind === 'call_result')
+          .map((item) => item.payload),
+      ).toEqual([
+        {
+          callId: 'call-2',
+          status: 'ok',
+          result: { text: 'x'.repeat(CARD_ROW_PREVIEW_CHARS) },
+        },
+      ]);
+
+      const own = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 50 },
+        { call: 'call-2' },
+      );
+      expect(
+        [...own.items, ...own.anchors]
+          .filter((item) => item.kind === 'call_result')
+          .map((item) => item.payload),
+      ).toEqual([{ callId: 'call-2', status: 'ok', result }]);
+    });
+
     it("cuts a callee's long tool result to the preview cap among a root page's anchors", async () => {
       await teamRun();
       const result = 'x'.repeat(CARD_ROW_PREVIEW_CHARS + 1);
@@ -544,6 +607,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         callId: 'call-2',
         result,
       });
+      await row(11, 'status', 'qa', { callId: 'call-2', status: 'running' });
 
       const { anchors } = await readingService().read(
         'run-a',
@@ -764,6 +828,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
           callId: 'call-2',
         });
       }
+      await row(26, 'status', 'qa', { callId: 'call-2', status: 'running' });
 
       expect(await anchoredOf('call-1', ['tool_call'])).toEqual([12, 13, 14]);
       expect(await anchoredOf('call-2', ['tool_call'])).toEqual([
@@ -860,6 +925,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       await row(13, 'shell_info', 'qa', { id: 's1', callId: 'call-2' });
       await row(14, 'subagent_info', 'qa', { id: 'd1', callId: 'call-2' });
       await row(15, 'message', 'qa', { text: 'later', callId: 'call-2' });
+      await row(16, 'status', 'qa', { callId: 'call-2', status: 'running' });
 
       const anchored = await anchoredOf('call-2', [
         'tool_result',

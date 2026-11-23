@@ -12,6 +12,7 @@ export const CARD_ROW_PREVIEW_CHARS = 2000;
 const PREVIEWED_FIELD: Partial<Record<ItemKind, string>> = {
   tool_call: 'input',
   tool_result: 'result',
+  call_result: 'result',
   message: 'text',
 };
 

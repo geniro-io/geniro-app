@@ -5481,6 +5481,76 @@ export interface HostRowWire {
   threadDone?: ThreadDoneRow[];
 }
 
+/** What a call event row says of the callee and the call it is about. */
+interface CallEventSubject {
+  /** The call the event is about — not the call the row is filed under. */
+  callId: string;
+  /** The callee, by the name its caller knows it by. */
+  callee: string;
+}
+
+/** A finished call's ending; `result` is the start of the answer, only when it completed. */
+interface CallEventEnding {
+  status?: 'completed' | 'failed' | 'cancelled';
+  result?: string;
+}
+
+/** The question a parked callee asked. */
+interface CallEventQuestion {
+  question?: string;
+  options?: string[];
+}
+
+/**
+ * One call a wake row is about: why the caller was started again.
+ *
+ * TWIN PARSER: read by `readWakeNotice` in
+ * `apps/ui/src/renderer/chats/wake-payload.ts`.
+ */
+export interface WakeRowEntry
+  extends CallEventSubject, CallEventEnding, CallEventQuestion {
+  reason: 'asked' | 'finished';
+  calleeNodeId?: string;
+}
+
+/**
+ * A call that finished or asked while its caller was working, told inside
+ * that running turn.
+ *
+ * TWIN PARSER: read by `readWakeReason` in
+ * `apps/ui/src/renderer/chats/wake-payload.ts`, through `readAgentCallEvents`
+ * in `apps/ui/src/renderer/chats/agent-event-payload.ts`.
+ */
+export interface ToldWorkingRow
+  extends CallEventSubject, CallEventEnding, CallEventQuestion {
+  reason: 'finished' | 'asked';
+  calleeNodeId: string;
+}
+
+/**
+ * A question no turn of the caller was left to answer.
+ *
+ * TWIN PARSER: read by `readAgentCallEvents` in
+ * `apps/ui/src/renderer/chats/agent-event-payload.ts`.
+ */
+export interface OrphanQuestionRow extends CallEventSubject {
+  calleeNodeId: string;
+  outcome: 'continues' | 'stopped';
+}
+
+/**
+ * A `system` row the call broker writes about one of the caller's calls.
+ * `callId` places the row inside the call the caller's conversation answers.
+ */
+export interface CallNoticeRowWire {
+  severity: 'info';
+  message: string;
+  callId?: string;
+  wake?: WakeRowEntry[];
+  toldWorking?: ToldWorkingRow;
+  orphanQuestion?: OrphanQuestionRow;
+}
+
 export interface ThreadDoneRow {
   runId: string;
   title: string;

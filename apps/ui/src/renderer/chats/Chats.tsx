@@ -140,6 +140,7 @@ import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
 import { BrowserColumn } from './browser/browser-column';
 import { BrowserGrid } from './browser/browser-grid';
+import { pairCallAnswers } from './call-answers';
 import { continueCallClocks } from './call-clock';
 import {
   type CalleeReading,
@@ -4963,6 +4964,10 @@ export function Chats({
   // a fresh Set per render would re-render every memoized row shell below.
   const cardBacked = useMemo(
     () => cardBackedRequestIds(transcriptRows),
+    [transcriptRows],
+  );
+  const callAnswerPairs = useMemo(
+    () => pairCallAnswers(transcriptRows),
     [transcriptRows],
   );
   // Which requests died with their turn. READ from the transcript, never
@@ -10772,6 +10777,7 @@ export function Chats({
                     overflow past the scroll origin, where it cannot be reached
                     by scrolling up. The margin has no such failure mode. */}
                     <TranscriptContexts
+                      callAnswerPairs={callAnswerPairs}
                       runOutcomes={activeRunOutcomes}
                       runStages={activeRun?.stages ?? null}
                       openTeamNote={

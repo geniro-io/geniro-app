@@ -36,8 +36,34 @@ export const Team: Story = {
   },
 };
 
+export const Member: Story = {
+  args: {
+    look: {
+      kind: 'member',
+      name: 'Senior Engineer',
+      avatar: { kind: 'initials', value: 'SE' },
+      colorKey: 'senior',
+    },
+  },
+};
+
+export const MemberEmoji: Story = {
+  args: {
+    look: {
+      kind: 'member',
+      name: 'QA',
+      avatar: { kind: 'emoji', value: '🦊' },
+      colorKey: 'qa',
+    },
+  },
+};
+
 export const Manager: Story = {
   args: { look: { kind: 'manager' } },
+};
+
+export const Monitor: Story = {
+  args: { look: { kind: 'monitor' } },
 };
 
 export const Unknown: Story = {};

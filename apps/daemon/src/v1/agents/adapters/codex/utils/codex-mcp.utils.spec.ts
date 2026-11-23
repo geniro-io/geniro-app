@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CODEX_APPS_LOCKED_TOGGLE_REASON,
+  CODEX_APPS_PROJECT_TOGGLE_REASON,
   CODEX_BUILTIN_SIGN_IN_REASON,
   CODEX_BUILTIN_TOGGLE_REASON,
   CODEX_MCP_STATUS_MAX_PAGES,
@@ -10,9 +12,10 @@ import {
   CodexMcpListing,
   codexMcpRow,
   codexMcpStatus,
-  codexMcpToggleRefusal,
+  codexMcpToggleTarget,
   codexTurnMcpOverrides,
   codexTurnToggleReason,
+  readCodexAppsFeature,
   readCodexMcpConfig,
   readCodexMcpServerStatus,
   readCodexUserMcpLayer,
@@ -95,6 +98,31 @@ const PAGE = [
 
 const line = (frame: unknown): string => `${JSON.stringify(frame)}\n`;
 
+/** {@link CONFIG_RESULT} with `features.apps` set in the given layer. */
+function withAppsFeature(
+  enabled: boolean,
+  layer: unknown = USER_LAYER,
+): Record<string, unknown> {
+  const origins: Record<string, unknown> = {
+    ...CONFIG_RESULT.origins,
+    'features.apps': layer,
+  };
+  return {
+    ...CONFIG_RESULT,
+    config: { ...CONFIG_RESULT.config, features: { apps: enabled } },
+    origins,
+  };
+}
+
+const PROFILE_LAYER = {
+  name: { type: 'user', file: '/home/u/.codex/profiles/p.toml', profile: 'p' },
+  version: 'sha256:p',
+};
+const MANAGED_LAYER = {
+  name: { type: 'mdm', domain: 'com.openai.codex' },
+  version: 'sha256:m',
+};
+
 describe('readCodexMcpConfig', () => {
   it('places each server in the layer that DEFINES it, with its own enabled flag', () => {
     const config = readCodexMcpConfig(CONFIG_RESULT);
@@ -171,13 +199,44 @@ describe('codexMcpStatus', () => {
   });
 });
 
+describe('readCodexAppsFeature', () => {
+  it('reads nothing when no layer sets the flag', () => {
+    expect(readCodexAppsFeature(CONFIG_RESULT)).toEqual({
+      enabled: null,
+      layer: null,
+    });
+    expect(readCodexAppsFeature(null)).toEqual({ enabled: null, layer: null });
+  });
+
+  it('reads the flag and the layer that sets it', () => {
+    expect(readCodexAppsFeature(withAppsFeature(false))).toEqual({
+      enabled: false,
+      layer: 'user',
+    });
+    expect(readCodexAppsFeature(withAppsFeature(true, PROJECT_LAYER))).toEqual({
+      enabled: true,
+      layer: 'project',
+    });
+    expect(
+      readCodexAppsFeature(withAppsFeature(false, MANAGED_LAYER)).layer,
+    ).toBe('other');
+  });
+
+  it('reads a profile’s user layer as one the switch cannot outrank', () => {
+    expect(
+      readCodexAppsFeature(withAppsFeature(false, PROFILE_LAYER)).layer,
+    ).toBe('other');
+  });
+});
+
 describe('codexMcpRow', () => {
   const config = readCodexMcpConfig(CONFIG_RESULT);
-  const rowOf = (name: string) => {
+  const rowOf = (name: string, configResult: unknown = CONFIG_RESULT) => {
     const entry = PAGE.find((s) => s.name === name)!;
     return codexMcpRow(
       readCodexMcpServerStatus(entry)!,
       config.get(name) ?? null,
+      readCodexAppsFeature(configResult),
     );
   };
 
@@ -193,12 +252,38 @@ describe('codexMcpRow', () => {
     expect(rowOf('playwright')).not.toHaveProperty('signInUnavailableReason');
   });
 
-  it('says why a built-in server has neither a switch nor a sign-in', () => {
+  it('offers the built-in Apps server a switch but no sign-in', () => {
     expect(rowOf('codex_apps')).toMatchObject({
       status: 'connected',
       transport: 'http',
       target: 'https://chatgpt.com',
       toolCount: 3,
+      toggleUnavailableReason: null,
+      signInUnavailableReason: CODEX_BUILTIN_SIGN_IN_REASON,
+    });
+    expect(
+      rowOf('codex_apps', withAppsFeature(true)).toggleUnavailableReason,
+    ).toBeNull();
+  });
+
+  it('locks the Apps switch where a layer above codex’s config.toml sets the flag', () => {
+    expect(
+      rowOf('codex_apps', withAppsFeature(true, PROJECT_LAYER))
+        .toggleUnavailableReason,
+    ).toBe(CODEX_APPS_PROJECT_TOGGLE_REASON);
+    expect(
+      rowOf('codex_apps', withAppsFeature(true, MANAGED_LAYER))
+        .toggleUnavailableReason,
+    ).toBe(CODEX_APPS_LOCKED_TOGGLE_REASON);
+  });
+
+  it('says why any other built-in server has neither a switch nor a sign-in', () => {
+    const row = codexMcpRow(
+      readCodexMcpServerStatus(status({ name: 'other_builtin' }))!,
+      null,
+      readCodexAppsFeature(CONFIG_RESULT),
+    );
+    expect(row).toMatchObject({
       toggleUnavailableReason: CODEX_BUILTIN_TOGGLE_REASON,
       signInUnavailableReason: CODEX_BUILTIN_SIGN_IN_REASON,
     });
@@ -297,18 +382,55 @@ describe('a member’s per-turn switch (codexTurnMcpOverrides / codexTurnToggleR
         }),
       )!,
       null,
+      readCodexAppsFeature(null),
     );
     expect(row.turnToggleUnavailableReason).toContain('whole plugin');
   });
 });
 
-describe('codexMcpToggleRefusal', () => {
-  it('allows only a server the user config defines', () => {
-    expect(codexMcpToggleRefusal(CONFIG_RESULT, 'playwright')).toBeNull();
-    expect(codexMcpToggleRefusal(CONFIG_RESULT, 'local')).toContain(
+describe('codexMcpToggleTarget', () => {
+  it('writes a user-defined server’s own enabled key', () => {
+    expect(codexMcpToggleTarget(CONFIG_RESULT, 'playwright')).toEqual({
+      ok: true,
+      keyPath: 'mcp_servers.playwright.enabled',
+    });
+  });
+
+  it('writes features.apps for the built-in Apps server, never an mcp_servers table', () => {
+    expect(codexMcpToggleTarget(CONFIG_RESULT, 'codex_apps')).toEqual({
+      ok: true,
+      keyPath: 'features.apps',
+    });
+    expect(codexMcpToggleTarget(withAppsFeature(false), 'codex_apps')).toEqual({
+      ok: true,
+      keyPath: 'features.apps',
+    });
+  });
+
+  it('refuses the Apps switch where a layer above codex’s config.toml sets the flag', () => {
+    const project = codexMcpToggleTarget(
+      withAppsFeature(false, PROJECT_LAYER),
+      'codex_apps',
+    );
+    expect(project.ok === false && project.reason).toContain(
+      CODEX_APPS_PROJECT_TOGGLE_REASON,
+    );
+    const profile = codexMcpToggleTarget(
+      withAppsFeature(false, PROFILE_LAYER),
+      'codex_apps',
+    );
+    expect(profile.ok === false && profile.reason).toContain(
+      CODEX_APPS_LOCKED_TOGGLE_REASON,
+    );
+  });
+
+  it('refuses a project server and a name the config does not define', () => {
+    const local = codexMcpToggleTarget(CONFIG_RESULT, 'local');
+    expect(local.ok === false && local.reason).toContain(
       CODEX_PROJECT_TOGGLE_REASON,
     );
-    expect(codexMcpToggleRefusal(CONFIG_RESULT, 'codex_apps')).toContain(
+    const unknown = codexMcpToggleTarget(CONFIG_RESULT, 'other_builtin');
+    expect(unknown.ok === false && unknown.reason).toContain(
       'is not defined in codex',
     );
   });
@@ -340,6 +462,7 @@ describe('CodexMcpListing', () => {
   /** A server that answers each request once, by id. */
   function server(
     pages: unknown[][],
+    configResult: unknown = CONFIG_RESULT,
   ): (sent: Record<string, unknown>[]) => string[] {
     const answered = new Set<unknown>();
     return (sent) => {
@@ -354,7 +477,7 @@ describe('CodexMcpListing', () => {
             out.push(line({ id: frame.id, result: {} }));
             break;
           case 'config/read':
-            out.push(line({ id: frame.id, result: CONFIG_RESULT }));
+            out.push(line({ id: frame.id, result: configResult }));
             break;
           case 'thread/start':
             out.push(line({ id: frame.id, result: { thread: { id: 'T1' } } }));
@@ -399,6 +522,101 @@ describe('CodexMcpListing', () => {
       'linear',
       'local',
     ]);
+  });
+
+  describe('the Apps server switched off', () => {
+    const withoutApps = PAGE.filter((entry) => entry.name !== 'codex_apps');
+
+    it('keeps a switched-off row codex no longer lists, so it can be switched back on', () => {
+      const listing = new CodexMcpListing('1.0.0', '/repo');
+      const { stdout } = drive(
+        listing,
+        server([withoutApps], withAppsFeature(false)),
+      );
+      const outcome = listing.outcome(stdout);
+      const apps = outcome.ok
+        ? outcome.servers.find((row) => row.name === 'codex_apps')
+        : undefined;
+      expect(apps).toMatchObject({
+        status: 'disabled',
+        toolCount: null,
+        target: null,
+        transport: null,
+        plugin: null,
+        toggleUnavailableReason: null,
+        turnToggleUnavailableReason: null,
+        signInUnavailableReason: CODEX_BUILTIN_SIGN_IN_REASON,
+      });
+    });
+
+    it('locks that row where a layer above codex’s config.toml switched it off', () => {
+      const listing = new CodexMcpListing('1.0.0', '/repo');
+      const { stdout } = drive(
+        listing,
+        server([withoutApps], withAppsFeature(false, PROJECT_LAYER)),
+      );
+      const outcome = listing.outcome(stdout);
+      expect(
+        outcome.ok &&
+          outcome.servers.find((row) => row.name === 'codex_apps')
+            ?.toggleUnavailableReason,
+      ).toBe(CODEX_APPS_PROJECT_TOGGLE_REASON);
+    });
+
+    it('never doubles a codex_apps row codex lists or the config defines', () => {
+      const listed = new CodexMcpListing('1.0.0', '/repo');
+      const listedRead = drive(listed, server([PAGE], withAppsFeature(false)));
+      const listedOutcome = listed.outcome(listedRead.stdout);
+      const listedRows = listedOutcome.ok
+        ? listedOutcome.servers.filter((row) => row.name === 'codex_apps')
+        : [];
+      expect(listedRows).toHaveLength(1);
+      expect(listedRows[0]?.status).toBe('connected');
+
+      const definedConfig = withAppsFeature(false);
+      definedConfig.config = {
+        ...(definedConfig.config as Record<string, unknown>),
+        mcp_servers: {
+          ...CONFIG_RESULT.config.mcp_servers,
+          codex_apps: { url: 'https://example.test/mcp' },
+        },
+      };
+      const defined = new CodexMcpListing('1.0.0', '/repo');
+      const definedRead = drive(defined, server([withoutApps], definedConfig));
+      const definedOutcome = defined.outcome(definedRead.stdout);
+      expect(
+        definedOutcome.ok && definedOutcome.servers.map((row) => row.name),
+      ).not.toContain('codex_apps');
+    });
+
+    it('adds no row while the flag is on or unset', () => {
+      for (const config of [CONFIG_RESULT, withAppsFeature(true)]) {
+        const listing = new CodexMcpListing('1.0.0', '/repo');
+        const { stdout } = drive(listing, server([withoutApps], config));
+        const outcome = listing.outcome(stdout);
+        expect(
+          outcome.ok && outcome.servers.map((row) => row.name),
+        ).not.toContain('codex_apps');
+      }
+    });
+
+    it('adds it to a health read of that server only', () => {
+      const apps = new CodexMcpListing('1.0.0', '/repo', 'codex_apps');
+      const appsRead = drive(apps, server([[]], withAppsFeature(false)));
+      const appsOutcome = apps.outcome(appsRead.stdout);
+      expect(
+        appsOutcome.ok && appsOutcome.servers.map((row) => row.name),
+      ).toEqual(['codex_apps']);
+      const other = new CodexMcpListing('1.0.0', '/repo', 'playwright');
+      const otherRead = drive(
+        other,
+        server([[PAGE[2]]], withAppsFeature(false)),
+      );
+      const otherOutcome = other.outcome(otherRead.stdout);
+      expect(
+        otherOutcome.ok && otherOutcome.servers.map((row) => row.name),
+      ).toEqual(['playwright']);
+    });
   });
 
   it('follows the cursor across pages', () => {

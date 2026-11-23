@@ -11,11 +11,15 @@ import {
   type JsonRpcId,
 } from '../../utils/json-rpc.utils';
 import {
+  CODEX_APPS_FEATURE,
   CODEX_APPS_FEATURE_KEY,
+  CODEX_APPS_LOCKED_TOGGLE_REASON,
+  CODEX_APPS_PROJECT_TOGGLE_REASON,
   CODEX_APPS_SERVER_NAME,
   CODEX_BUILTIN_SIGN_IN_REASON,
   CODEX_BUILTIN_TOGGLE_REASON,
   CODEX_BUILTIN_TURN_TOGGLE_REASON,
+  CODEX_FEATURES_TABLE,
   CODEX_INITIALIZED_NOTIFICATION,
   CODEX_MCP_ENABLED_FIELD,
   CODEX_MCP_SERVERS_KEY,
@@ -177,8 +181,9 @@ export function codexMcpStatus(
  * Whether a row can be SWITCHED is decided by where it is defined, because the
  * switch writes `mcp_servers.<name>.enabled` into codex's USER config: a server
  * defined there is switchable, while a plugin's server, a project's, or one
- * codex builds in (`codex_apps`) would gain a stray `[mcp_servers.<name>]`
- * table that defines nothing. Such rows say why instead.
+ * codex builds in would gain a stray `[mcp_servers.<name>]` table that defines
+ * nothing. Such rows say why instead — except `codex_apps`, whose switch is
+ * `features.apps` (see {@link codexMcpToggleTarget}).
  *
  * A server neither the config nor a plugin names is one `codex mcp login`
  * cannot find either (measured: `No MCP server named 'codex_apps' found`), so
@@ -190,6 +195,7 @@ export function codexMcpRow(
   config:
     | (CodexMcpConfigEntry & { command: string | null; url: string | null })
     | null,
+  apps: CodexAppsFeature,
 ): AgentMcpServer {
   const { status, detail } = codexMcpStatus(server, config);
   const target = server.httpOrigin ?? config?.url ?? config?.command ?? null;
@@ -210,7 +216,7 @@ export function codexMcpRow(
         ? server.toolCount
         : null,
     plugin: server.pluginId,
-    toggleUnavailableReason: toggleReason(server, config),
+    toggleUnavailableReason: toggleReason(server, config, apps),
     turnToggleUnavailableReason: codexTurnToggleReason(
       server.name,
       server.pluginId,
@@ -225,12 +231,15 @@ export function codexMcpRow(
 function toggleReason(
   server: CodexMcpServerStatus,
   config: CodexMcpConfigEntry | null,
+  apps: CodexAppsFeature,
 ): string | null {
   if (server.pluginId !== null) {
     return CODEX_PLUGIN_TOGGLE_REASON.replace('%s', server.pluginId);
   }
   if (config === null) {
-    return CODEX_BUILTIN_TOGGLE_REASON;
+    return server.name === CODEX_APPS_SERVER_NAME
+      ? codexAppsToggleReason(apps)
+      : CODEX_BUILTIN_TOGGLE_REASON;
   }
   switch (config.layer) {
     case 'user':
@@ -240,6 +249,69 @@ function toggleReason(
     case 'other':
       return CODEX_BUILTIN_TOGGLE_REASON;
   }
+}
+
+/** What codex's config says about `features.apps`, the switch of {@link CODEX_APPS_SERVER_NAME}. */
+export interface CodexAppsFeature {
+  /** Null when no layer sets it. */
+  enabled: boolean | null;
+  /** The layer that sets it, null when none does. */
+  layer: CodexMcpLayer | null;
+}
+
+/**
+ * `features.apps` off a `config/read` result. A profile's user layer reads as
+ * `other`: the switch writes the base config.toml, which a profile outranks.
+ */
+export function readCodexAppsFeature(result: unknown): CodexAppsFeature {
+  const record = asRecord(result);
+  const value = asRecord(asRecord(record?.config)?.[CODEX_FEATURES_TABLE])?.[
+    CODEX_APPS_FEATURE
+  ];
+  const origin = asRecord(asRecord(record?.origins)?.[CODEX_APPS_FEATURE_KEY]);
+  const profile = asRecord(origin?.name)?.profile;
+  return {
+    enabled: typeof value === 'boolean' ? value : null,
+    layer:
+      origin === null
+        ? null
+        : profile !== null && profile !== undefined
+          ? 'other'
+          : layerOf(origin),
+  };
+}
+
+function codexAppsToggleReason(apps: CodexAppsFeature): string | null {
+  switch (apps.layer) {
+    case null:
+    case 'user':
+      return null;
+    case 'project':
+      return CODEX_APPS_PROJECT_TOGGLE_REASON;
+    case 'other':
+      return CODEX_APPS_LOCKED_TOGGLE_REASON;
+  }
+}
+
+/**
+ * The row for `codex_apps` while `features.apps` is off: codex then leaves it
+ * out of the listing altogether, and a row that vanished could not be switched
+ * back on.
+ */
+function codexAppsOffRow(apps: CodexAppsFeature): AgentMcpServer {
+  return codexMcpRow(
+    {
+      name: CODEX_APPS_SERVER_NAME,
+      runtimeStatus: 'disabled',
+      authStatus: null,
+      pluginId: null,
+      httpOrigin: null,
+      toolCount: 0,
+      toolsError: null,
+    },
+    null,
+    apps,
+  );
 }
 
 // ── A team member's switched-off servers (one turn) ──────────────────────
@@ -459,11 +531,19 @@ export class CodexMcpListing {
       };
     }
     const config = readCodexMcpConfig(this.configResult);
+    const apps = readCodexAppsFeature(this.configResult);
+    const servers = statuses.map((status) =>
+      codexMcpRow(status, config.get(status.name) ?? null, apps),
+    );
+    const appsOff =
+      apps.enabled === false &&
+      (this.serverName === null ||
+        this.serverName === CODEX_APPS_SERVER_NAME) &&
+      !config.has(CODEX_APPS_SERVER_NAME) &&
+      !statuses.some((status) => status.name === CODEX_APPS_SERVER_NAME);
     return {
       ok: true,
-      servers: statuses.map((status) =>
-        codexMcpRow(status, config.get(status.name) ?? null),
-      ),
+      servers: appsOff ? [...servers, codexAppsOffRow(apps)] : servers,
     };
   }
 
@@ -640,29 +720,50 @@ export class CodexMcpListing {
   }
 }
 
+export type CodexMcpToggleTarget =
+  { ok: true; keyPath: string } | { ok: false; reason: string };
+
 /**
- * Why `mcp_servers.<name>.enabled` must NOT be written for `server`, or null
- * when it may — read off a `config/read` result. The write lands in codex's
- * USER `config.toml`, so it is only meaningful for a server defined there: for
- * any other a `[mcp_servers.<name>]` table holding nothing but `enabled` would
+ * Where the switch for `server` lands in codex's USER `config.toml`, read off
+ * a `config/read` result: `mcp_servers.<name>.enabled` for a server defined
+ * there, `features.apps` for the built-in Apps server. Anything else is
+ * refused — a `[mcp_servers.<name>]` table holding nothing but `enabled` would
  * be junk in the user's config, and the switch would move while codex went on
  * loading the server exactly as before.
  */
-export function codexMcpToggleRefusal(
+export function codexMcpToggleTarget(
   configResult: unknown,
   server: string,
-): string | null {
+): CodexMcpToggleTarget {
   const entry = readCodexMcpConfig(configResult).get(server);
   if (entry === undefined) {
-    return `"${server}" is not defined in codex's config.toml, so the switch geniro writes there cannot reach it`;
+    if (server === CODEX_APPS_SERVER_NAME) {
+      const reason = codexAppsToggleReason(readCodexAppsFeature(configResult));
+      return reason === null
+        ? { ok: true, keyPath: CODEX_APPS_FEATURE_KEY }
+        : { ok: false, reason: `"${server}" is ${reason}` };
+    }
+    return {
+      ok: false,
+      reason: `"${server}" is not defined in codex's config.toml, so the switch geniro writes there cannot reach it`,
+    };
   }
   switch (entry.layer) {
     case 'user':
-      return null;
+      return {
+        ok: true,
+        keyPath: codexMcpServerKey(server, CODEX_MCP_ENABLED_FIELD),
+      };
     case 'project':
-      return `"${server}" is ${CODEX_PROJECT_TOGGLE_REASON}`;
+      return {
+        ok: false,
+        reason: `"${server}" is ${CODEX_PROJECT_TOGGLE_REASON}`,
+      };
     case 'other':
-      return `"${server}" is ${CODEX_BUILTIN_TOGGLE_REASON}`;
+      return {
+        ok: false,
+        reason: `"${server}" is ${CODEX_BUILTIN_TOGGLE_REASON}`,
+      };
   }
 }
 

@@ -29,8 +29,8 @@ import type {
 } from '../adapter.types';
 import { CodexAdapter, type CodexAdapterOptions } from './codex.adapter';
 import {
+  CODEX_APPS_PROJECT_TOGGLE_REASON,
   CODEX_BUILTIN_SIGN_IN_REASON,
-  CODEX_BUILTIN_TOGGLE_REASON,
   CODEX_SESSION_SEARCH_PAGE,
 } from './codex.const';
 
@@ -855,7 +855,7 @@ describe('listings', () => {
           name: 'codex_apps',
           status: 'connected',
           toolCount: 1,
-          toggleUnavailableReason: CODEX_BUILTIN_TOGGLE_REASON,
+          toggleUnavailableReason: null,
           signInUnavailableReason: CODEX_BUILTIN_SIGN_IN_REASON,
         },
       ],
@@ -978,10 +978,53 @@ describe('switching an MCP server', () => {
     await expect(
       adapterWith({ groupSpawnFn }).setMcpServerEnabled(
         '/repo',
-        'codex_apps',
+        'other_builtin',
         false,
       ),
     ).rejects.toThrow('is not defined in codex');
+    expect(calls).toHaveLength(1);
+    expect(sentMethods(calls[0]!.stdin)).not.toContain('config/value/write');
+  });
+
+  it.each([false, true])(
+    'switches the built-in Apps server through codex’s features.apps flag (%s)',
+    async (enabled) => {
+      const { groupSpawnFn, calls } = oneshotSpawn([
+        answered({ config: { mcp_servers: {} }, origins: {} }),
+        answered({ status: 'ok' }),
+      ]);
+      await adapterWith({ groupSpawnFn }).setMcpServerEnabled(
+        '/repo',
+        'codex_apps',
+        enabled,
+      );
+      expect(paramsSentFor(calls[1]!.stdin, 'config/value/write')).toEqual({
+        keyPath: 'features.apps',
+        value: enabled,
+        mergeStrategy: 'upsert',
+      });
+    },
+  );
+
+  it('refuses the Apps switch where a project sets features.apps, and writes nothing', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered({
+        config: { mcp_servers: {}, features: { apps: true } },
+        origins: {
+          'features.apps': {
+            name: { type: 'project', dotCodexFolder: '/repo/.codex' },
+            version: 'v',
+          },
+        },
+      }),
+    );
+    await expect(
+      adapterWith({ groupSpawnFn }).setMcpServerEnabled(
+        '/repo',
+        'codex_apps',
+        false,
+      ),
+    ).rejects.toThrow(CODEX_APPS_PROJECT_TOGGLE_REASON);
     expect(calls).toHaveLength(1);
     expect(sentMethods(calls[0]!.stdin)).not.toContain('config/value/write');
   });

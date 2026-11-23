@@ -1,4 +1,6 @@
 import type { AgentFailureClass } from '../../agents/adapters/adapter.types';
+import type { AccountSignIns } from '../../agents/services/account-sign-ins.service';
+import type { ConfigDirPinService } from '../../agents/services/config-dir-pin.service';
 import { effectiveAccountKey } from '../../agents/utils/plan-limits-ledger';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
@@ -258,6 +260,23 @@ export class PoolCooldowns {
       cwd,
     );
   }
+}
+
+/**
+ * The daemon's one record: reading each run folder's account pin, and told of
+ * every account sign-in geniro runs.
+ */
+export function daemonPoolCooldowns(
+  pins: Pick<ConfigDirPinService, 'forRun'>,
+  signIns: Pick<AccountSignIns, 'onSignedIn'>,
+): PoolCooldowns {
+  const cooldowns = new PoolCooldowns(
+    (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
+  );
+  signIns.onSignedIn((agent, configDir) =>
+    cooldowns.signedIn(agent, configDir),
+  );
+  return cooldowns;
 }
 
 /**

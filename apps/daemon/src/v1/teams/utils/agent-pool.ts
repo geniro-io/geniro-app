@@ -226,30 +226,41 @@ export function conversationStartMember(input: {
 }
 
 /**
- * Why a call did not start on the member its caller asked for — said in the
- * caller's envelope, which would otherwise name only the member that ran.
+ * The standings a call reads when its caller names `requested`: a member spent
+ * only for being signed out counts as unspent for it, since a sign-in outside
+ * geniro is invisible and the call is the attempt that proves it.
+ */
+export function standingsForRequest(
+  standings: readonly (PoolStanding | null)[],
+  requested: number | null,
+  requestedSignedOut: boolean,
+): (PoolStanding | null)[] {
+  return standings.map((standing, i) =>
+    requestedSignedOut && i + 1 === requested ? null : standing,
+  );
+}
+
+/**
+ * Why the member a caller asked for did not run its call, when it was never
+ * tried — said in the caller's envelope beside the member that did.
  */
 export function preferredMemberSkipNote(
   preferred: number,
-  startedOn: number,
   spend: PoolSpend | null,
   busy: boolean,
 ): string {
   if (spend !== null) {
     const until = new Date(spend.until).toISOString();
-    const why = spend.signedOut
-      ? 'is signed out'
-      : spend.standing === 'limit'
-        ? 'hit a usage limit'
-        : 'failed before doing any work in this run';
-    const retry = spend.signedOut
-      ? `it is tried again from ${until}, or as soon as its profile is signed in again in Geniro`
-      : `it is tried again from ${until}`;
-    return `member ${preferred} ${why}, so the call ran on member ${startedOn}; ${retry}.`;
+    if (spend.signedOut) {
+      return `member ${preferred} is signed out — name member: ${preferred} on the call to try it now, or sign its profile in again in Geniro; otherwise it is tried again from ${until}.`;
+    }
+    return spend.standing === 'limit'
+      ? `member ${preferred} hit a usage limit; it is tried again from ${until}.`
+      : `member ${preferred} failed before doing any work in this run; it is tried again from ${until}.`;
   }
   return busy
-    ? `the conversation stayed on member ${startedOn}, whose process is still running work of its own; it moves to member ${preferred} once that work ends.`
-    : `the conversation stayed on member ${startedOn}: member ${preferred} is not yet known to work again — name member: ${preferred} on the call to try it now.`;
+    ? `the conversation's process is still running work of its own; it moves to member ${preferred} once that work ends.`
+    : `member ${preferred} is not yet known to work again — name member: ${preferred} on the call to try it now.`;
 }
 
 /**

@@ -5982,7 +5982,9 @@ describe('CallBroker — agent pool', () => {
       });
 
       it('keeps a continuation that names no member where it is until the member asked for earlier answers', async () => {
-        const { broker, launches, lapse } = await threadAfterSignOut();
+        const { broker, launches, lapse } = await threadAfterSignOut({
+          instantOutcome: { member: 2 },
+        });
         await broker.callAgent('run-1', 'orch', {
           title: 'more',
           agent: 'helper',
@@ -5996,7 +5998,9 @@ describe('CallBroker — agent pool', () => {
       });
 
       it('moves to the member asked for at once when geniro signs its profile in again', async () => {
-        const { broker, launches } = await threadAfterSignOut();
+        const { broker, launches } = await threadAfterSignOut({
+          instantOutcome: { member: 2 },
+        });
         await broker.callAgent('run-1', 'orch', {
           title: 'more',
           agent: 'helper',
@@ -6004,7 +6008,6 @@ describe('CallBroker — agent pool', () => {
           thread: 'call-1',
           member: 1,
         });
-        expect(launches[1]!.callee.agent).toBe('codex');
 
         broker.poolCooldowns.signedIn('claude', null);
         await broker.callAgent('run-1', 'orch', {
@@ -6020,16 +6023,53 @@ describe('CallBroker — agent pool', () => {
         });
       });
 
-      it('names the member asked for in the envelope, and why another one ran the call', async () => {
-        const { broker } = await threadAfterSignOut({
-          instantOutcome: { member: 2 },
-        });
-        const result = await broker.callAgent('run-1', 'orch', {
+      it('tries the member the continuation names while it is only signed out, keeping member 2 to hand on to', async () => {
+        const { broker, launches } = await threadAfterSignOut();
+        await broker.callAgent('run-1', 'orch', {
           title: 'more',
           agent: 'helper',
           message: 'more',
           thread: 'call-1',
           member: 1,
+        });
+        expect(launches[1]!.callee.agent).toBe('claude');
+        expect(launches[1]!.pool).toMatchObject({
+          member: 1,
+          sessionMember: 2,
+          preferred: 1,
+        });
+        expect(launches[1]!.pool!.fallbacks.map((f) => f.member)).toEqual([2]);
+      });
+
+      it('starts a new call on the member it names while that member is only signed out', async () => {
+        const { broker, launches } = harness({ calleesOf: pooledCallees() });
+        signedOut(broker, 1);
+        await broker.callAgent('run-1', 'orch', {
+          title: 'named',
+          agent: 'helper',
+          message: 'm',
+          member: 1,
+        });
+        expect(launches[0]!.callee.agent).toBe('claude');
+        expect(launches[0]!.pool!.fallbacks.map((f) => f.member)).toEqual([2]);
+      });
+
+      it('names the member asked for in the envelope, and why it was not tried, when the thread only remembers it', async () => {
+        const { broker } = await threadAfterSignOut({
+          instantOutcome: { member: 2 },
+        });
+        await broker.callAgent('run-1', 'orch', {
+          title: 'more',
+          agent: 'helper',
+          message: 'more',
+          thread: 'call-1',
+          member: 1,
+        });
+        const result = await broker.callAgent('run-1', 'orch', {
+          title: 'again',
+          agent: 'helper',
+          message: 'again',
+          thread: 'call-2',
         });
         expect(result).toMatchObject({
           status: 'ok',
@@ -6037,13 +6077,13 @@ describe('CallBroker — agent pool', () => {
             member: 2,
             preferred_member: 1,
             preferred_member_note: expect.stringMatching(
-              /^member 1 is signed out, so the call ran on member 2; it is tried again from .+, or as soon as its profile is signed in again in Geniro\.$/,
+              /^member 1 is signed out — name member: 1 on the call to try it now, or sign its profile in again in Geniro; otherwise it is tried again from .+\.$/,
             ),
           },
         });
       });
 
-      it('says the member asked for was tried first when it failed and the call was handed on', async () => {
+      it('says the member asked for was tried and failed when the call was handed past it', async () => {
         const { broker } = harness({
           calleesOf: pooledCallees(),
           instantOutcome: {
@@ -6070,7 +6110,7 @@ describe('CallBroker — agent pool', () => {
             member: 2,
             preferred_member: 1,
             preferred_member_note:
-              'member 1 was tried first and failed — see pool_skipped.',
+              'member 1 was tried and failed — see pool_skipped.',
             pool_skipped: [{ member: 1, failure: 'auth_expired' }],
           },
         });

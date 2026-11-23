@@ -35,6 +35,6 @@ export function callAgentInstructions(
     `${CALL_RESULT_ACTIONS} ` +
     'An agent listed with an "agent pool" runs on numbered configurations (CLI, model, account) in priority order: a new conversation uses member 1 first, skipping members with a recent usage limit or lapsed sign-in while they recover. If a member hits a usage limit, is signed out, or fails before doing any work, the call falls back to the next member in priority order — the envelope\'s "member" says which ran it and "pool_skipped" which failed. ' +
     "To have the callee work inside one project of a folder that holds several, pass `folder` — a subfolder of this chat's folder; a thread keeps the folder it started in. " +
-    'Omit member unless the user requests a specific pool member, CLI, model, or account; then pass its member number: the call starts there, still falls back the same way when that member is spent, and returns to it once it is available again. When another member runs it, the envelope\'s "preferred_member_note" says why — tell the user.'
+    'Omit member unless the user requests a specific pool member, CLI, model, or account; then pass its member number: the call starts there — even when that member is only signed out, since the user may have signed in again — still falls back the same way when it fails or is at a usage limit, and returns to it once it is available again. When another member runs it, the envelope\'s "preferred_member_note" says why — tell the user.'
   );
 }

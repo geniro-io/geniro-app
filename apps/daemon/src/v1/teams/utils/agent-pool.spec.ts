@@ -20,6 +20,7 @@ import {
   poolSwitchNotice,
   preferredAttemptOrder,
   preferredMemberSkipNote,
+  standingsForRequest,
 } from './agent-pool';
 
 function pooled(): TeamMember {
@@ -176,33 +177,60 @@ describe('preferredAttemptOrder', () => {
 });
 
 describe('preferredMemberSkipNote', () => {
-  it('says why the member asked for did not take the call, and when it is tried again', () => {
+  it('says why the member asked for was not tried, and when it is tried again', () => {
     expect(
       preferredMemberSkipNote(
         1,
-        2,
+        { standing: 'limit', until: 0, signedOut: true },
+        false,
+      ),
+    ).toBe(
+      'member 1 is signed out — name member: 1 on the call to try it now, or sign its profile in again in Geniro; otherwise it is tried again from 1970-01-01T00:00:00.000Z.',
+    );
+    expect(
+      preferredMemberSkipNote(
+        1,
         { standing: 'limit', until: 0, signedOut: false },
         false,
       ),
     ).toBe(
-      'member 1 hit a usage limit, so the call ran on member 2; it is tried again from 1970-01-01T00:00:00.000Z.',
+      'member 1 hit a usage limit; it is tried again from 1970-01-01T00:00:00.000Z.',
     );
     expect(
       preferredMemberSkipNote(
         1,
-        2,
         { standing: 'unavailable', until: 0, signedOut: false },
         false,
       ),
     ).toBe(
-      'member 1 failed before doing any work in this run, so the call ran on member 2; it is tried again from 1970-01-01T00:00:00.000Z.',
+      'member 1 failed before doing any work in this run; it is tried again from 1970-01-01T00:00:00.000Z.',
     );
-    expect(preferredMemberSkipNote(1, 2, null, true)).toBe(
-      'the conversation stayed on member 2, whose process is still running work of its own; it moves to member 1 once that work ends.',
+    expect(preferredMemberSkipNote(1, null, true)).toBe(
+      "the conversation's process is still running work of its own; it moves to member 1 once that work ends.",
     );
-    expect(preferredMemberSkipNote(1, 2, null, false)).toBe(
-      'the conversation stayed on member 2: member 1 is not yet known to work again — name member: 1 on the call to try it now.',
+    expect(preferredMemberSkipNote(1, null, false)).toBe(
+      'member 1 is not yet known to work again — name member: 1 on the call to try it now.',
     );
+  });
+});
+
+describe('standingsForRequest', () => {
+  it('reads the member a caller names as unspent when it is only signed out', () => {
+    expect(standingsForRequest(['limit', 'limit'], 1, true)).toEqual([
+      null,
+      'limit',
+    ]);
+  });
+
+  it('leaves every standing as it is otherwise', () => {
+    expect(standingsForRequest(['limit', null], 1, false)).toEqual([
+      'limit',
+      null,
+    ]);
+    expect(standingsForRequest(['limit', 'limit'], null, true)).toEqual([
+      'limit',
+      'limit',
+    ]);
   });
 });
 

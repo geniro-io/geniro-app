@@ -37,11 +37,13 @@ import type {
 } from '../teams.types';
 import {
   conversationStartMember,
+  poolAttemptOrder,
   poolAttempts,
   poolMemberNode,
   poolSize,
   preferredAttemptOrder,
   preferredMemberSkipNote,
+  standingsForRequest,
 } from '../utils/agent-pool';
 import { readCallFolder } from '../utils/call-folder';
 import { calleeFailedEnvelopeError } from '../utils/callee-failure';
@@ -4465,13 +4467,24 @@ export class CallBroker implements OnModuleInit {
       preferred !== null && poolMemberNode(callee, preferred) !== null
         ? preferred
         : null;
-    const order = preferredAttemptOrder(pool.order, pool.standings, wanted);
+    const standings = standingsForRequest(
+      pool.standings,
+      requested,
+      requested !== null &&
+        this.poolCooldowns.spend(poolMemberNode(callee, requested)!, site)
+          ?.signedOut === true,
+    );
+    const order = preferredAttemptOrder(
+      poolAttemptOrder(standings),
+      standings,
+      wanted,
+    );
     const busy = threadMember !== null && holdsWork();
     const first =
       threadMember === null
         ? order[0]!
         : conversationStartMember({
-            standings: pool.standings,
+            standings,
             proven: pool.proven,
             order,
             held: threadMember,
@@ -4486,7 +4499,6 @@ export class CallBroker implements OnModuleInit {
           ? null
           : preferredMemberSkipNote(
               wanted,
-              first,
               this.poolCooldowns.spend(poolMemberNode(callee, wanted)!, site),
               busy,
             ),
@@ -5785,7 +5797,7 @@ function poolEnvelopeFields(
           preferred_member: preferred.member!,
           preferred_member_note:
             triedPreferred || preferred.skipNote === null
-              ? `member ${preferred.member} was tried first and failed — see pool_skipped.`
+              ? `member ${preferred.member} was tried and failed — see pool_skipped.`
               : preferred.skipNote,
         }
       : {}),

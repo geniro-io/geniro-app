@@ -20,7 +20,10 @@ import { CapabilitiesService } from './services/capabilities.service';
 import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
 import { InstructionSizesService } from './services/instruction-sizes.service';
 import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
-import { PoolCooldowns } from './services/pool-cooldowns.store';
+import {
+  daemonPoolCooldowns,
+  PoolCooldowns,
+} from './services/pool-cooldowns.store';
 import { ProjectChatService } from './services/project-chat.service';
 import { ProjectInstructionSizesService } from './services/project-instruction-sizes.service';
 import { RestartContinuationService } from './services/restart-continuation.service';
@@ -91,15 +94,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
       // One record for the daemon: a limit belongs to an account, whichever
       // run met it.
       provide: PoolCooldowns,
-      useFactory: (pins: ConfigDirPinService, signIns: AccountSignIns) => {
-        const cooldowns = new PoolCooldowns(
-          (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
-        );
-        signIns.onSignedIn((agent, configDir) =>
-          cooldowns.signedIn(agent, configDir),
-        );
-        return cooldowns;
-      },
+      useFactory: daemonPoolCooldowns,
       inject: [ConfigDirPinService, AccountSignIns],
     },
     TeamExecutorService,

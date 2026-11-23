@@ -4,7 +4,9 @@ import { join } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
+import { AccountSignIns } from '../../agents/services/account-sign-ins.service';
 import {
+  daemonPoolCooldowns,
   POOL_COOLDOWN_FALLBACK_MS,
   type PoolAttemptResult,
   PoolCooldowns,
@@ -269,6 +271,21 @@ describe('PoolCooldowns', () => {
 
       expect(cooldowns.standing(SENIOR, FOLDER)).toBeNull();
       expect(cooldowns.proven(SENIOR, FOLDER)).toBe(true);
+    });
+
+    it('reaches the daemon’s record through the account sign-ins it listens to', () => {
+      const signIns = new AccountSignIns();
+      const cooldowns = daemonPoolCooldowns({ forRun: () => null }, signIns);
+      cooldowns.record(
+        SENIOR,
+        FOLDER,
+        failed({ failureClass: 'auth_expired' }),
+        true,
+      );
+
+      signIns.signedIn('claude', PROFILE);
+
+      expect(cooldowns.standing(SENIOR, FOLDER)).toBeNull();
     });
 
     it('leaves a usage limit, another profile and another CLI spent', () => {

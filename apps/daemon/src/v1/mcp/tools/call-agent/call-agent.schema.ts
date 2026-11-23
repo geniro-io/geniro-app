@@ -45,7 +45,7 @@ export function callAgentSchema(): Record<string, unknown> {
         type: 'integer',
         minimum: 1,
         description:
-          'Optional, only when the user requests a specific member of an "agent pool" (CLI, model, or account): its member number. The call starts on that member and still falls back to the next available member when it hits a usage limit or is signed out; the conversation returns to it once it is available again, and a thread keeps it as its preferred member. When another member runs the call, the envelope names it in "preferred_member" and says why in "preferred_member_note". Otherwise omit to use the first available member in priority order. A thread starts on the member holding its latest session and may fall back.',
+          'Optional, only when the user requests a specific member of an "agent pool" (CLI, model, or account): its member number. The call starts on that member — tried even when it is only signed out — and still falls back to the next available member when it hits a usage limit or is signed out; the conversation returns to it once it is available again, and a thread keeps it as its preferred member. When another member runs the call, the envelope names it in "preferred_member" and says why in "preferred_member_note". Otherwise omit to use the first available member in priority order. A thread starts on the member holding its latest session and may fall back.',
       },
     },
     required: ['agent', 'message', 'title'],

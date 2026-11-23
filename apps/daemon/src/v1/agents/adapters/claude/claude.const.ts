@@ -1570,20 +1570,7 @@ export const CLAUDE_AUTH_EXPIRED_MARKERS: readonly string[] = [
    * CLI's own label for the model endpoint and nothing else.
    */
   'Failed to authenticate. API Error',
-  /*
-   * A login past its renewal limit, observed verbatim as a team callee's
-   * error row (2026-11-23), handed on as an ordinary failure for lacking a
-   * marker:
-   *
-   * ```
-   * Failed to authenticate: this login reached its time limit and cannot be
-   * renewed. Run `claude auth login` to sign in again, or use `claude
-   * setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs
-   * ```
-   *
-   * The cure it names is the account's own command, which a server's failure
-   * never names (that one says `claude mcp login`).
-   */
+  // Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again
   'Run `claude auth login`',
 ];
 

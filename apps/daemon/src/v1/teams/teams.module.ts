@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { RunDao } from '../agents/dao/run.dao';
+import { AccountSignIns } from '../agents/services/account-sign-ins.service';
 import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
@@ -90,11 +91,16 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
       // One record for the daemon: a limit belongs to an account, whichever
       // run met it.
       provide: PoolCooldowns,
-      useFactory: (pins: ConfigDirPinService) =>
-        new PoolCooldowns(
+      useFactory: (pins: ConfigDirPinService, signIns: AccountSignIns) => {
+        const cooldowns = new PoolCooldowns(
           (agent, cwd) => pins.forRun(agent, cwd)?.effective ?? null,
-        ),
-      inject: [ConfigDirPinService],
+        );
+        signIns.onSignedIn((agent, configDir) =>
+          cooldowns.signedIn(agent, configDir),
+        );
+        return cooldowns;
+      },
+      inject: [ConfigDirPinService, AccountSignIns],
     },
     TeamExecutorService,
     RestartContinuationService,

@@ -19,6 +19,7 @@ import {
   poolSize,
   poolSwitchNotice,
   preferredAttemptOrder,
+  preferredMemberSkipNote,
 } from './agent-pool';
 
 function pooled(): TeamMember {
@@ -174,6 +175,37 @@ describe('preferredAttemptOrder', () => {
   });
 });
 
+describe('preferredMemberSkipNote', () => {
+  it('says why the member asked for did not take the call, and when it is tried again', () => {
+    expect(
+      preferredMemberSkipNote(
+        1,
+        2,
+        { standing: 'limit', until: 0, signedOut: false },
+        false,
+      ),
+    ).toBe(
+      'member 1 hit a usage limit, so the call ran on member 2; it is tried again from 1970-01-01T00:00:00.000Z.',
+    );
+    expect(
+      preferredMemberSkipNote(
+        1,
+        2,
+        { standing: 'unavailable', until: 0, signedOut: false },
+        false,
+      ),
+    ).toBe(
+      'member 1 failed before doing any work in this run, so the call ran on member 2; it is tried again from 1970-01-01T00:00:00.000Z.',
+    );
+    expect(preferredMemberSkipNote(1, 2, null, true)).toBe(
+      'the conversation stayed on member 2, whose process is still running work of its own; it moves to member 1 once that work ends.',
+    );
+    expect(preferredMemberSkipNote(1, 2, null, false)).toBe(
+      'the conversation stayed on member 2: member 1 is not yet known to work again — name member: 1 on the call to try it now.',
+    );
+  });
+});
+
 describe('conversationStartMember', () => {
   const start = (
     patch: Partial<Parameters<typeof conversationStartMember>[0]> & {
@@ -202,6 +234,50 @@ describe('conversationStartMember', () => {
 
   it('keeps it where it is when every other member is limited too', () => {
     expect(start({ standings: ['limit', 'limit'], held: 2 })).toBe(2);
+  });
+
+  it('moves it to the member named for this turn while that member is unspent, proven or not', () => {
+    const order = preferredAttemptOrder([2, 1], [null, null], 1);
+    expect(
+      start({
+        standings: [null, null],
+        proven: [false, true],
+        order,
+        held: 2,
+        preferred: 1,
+        requested: 1,
+      }),
+    ).toBe(1);
+    expect(
+      start({
+        standings: [null, null],
+        proven: [false, true],
+        order,
+        held: 2,
+        preferred: 1,
+      }),
+    ).toBe(2);
+    expect(
+      start({
+        standings: ['unavailable', null],
+        proven: [false, true],
+        order: preferredAttemptOrder([2, 1], ['unavailable', null], 1),
+        held: 2,
+        preferred: 1,
+        requested: 1,
+      }),
+    ).toBe(2);
+    expect(
+      start({
+        standings: [null, null],
+        proven: [false, true],
+        order,
+        held: 2,
+        preferred: 1,
+        requested: 1,
+        holdsWork: true,
+      }),
+    ).toBe(2);
   });
 
   it('keeps it on a member spent only on an ordinary failure', () => {

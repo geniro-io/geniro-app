@@ -9,6 +9,7 @@ import type {
   AgentMcpServerStatus,
   AgentSpawnInfo,
 } from '../../agents/adapters/adapter.types';
+import { AccountSignIns } from '../../agents/services/account-sign-ins.service';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -198,15 +199,18 @@ function build(
     }),
     retireSessionsReachedBy: vi.fn(() => Promise.resolve(1)),
   };
+  const signIns = new AccountSignIns();
   const service = new CliAuthService(
     registry,
     processes as never,
     sessions,
     caches,
     mcp as unknown as AgentMcpService,
+    signIns,
   );
   return {
     service,
+    signIns,
     sessions,
     vocabularies,
     mirrors,
@@ -745,6 +749,27 @@ describe('CliAuthService — what an account change invalidates', () => {
       expect.stringContaining('signed in'),
       'account',
     );
+    cleanup();
+  });
+
+  it('tells the account sign-in listeners which profile signed in, and only once it succeeded', async () => {
+    const { service, fake, exit, signIns, cleanup } = build();
+    const heard: [AgentKind, string | null][] = [];
+    signIns.onSignedIn((agent, configDir) => heard.push([agent, configDir]));
+
+    const failed = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await failed;
+    exit(null);
+    await tick();
+    expect(heard).toEqual([]);
+
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/b\n');
+    await started;
+    exit('done');
+    await tick();
+    expect(heard).toEqual([[AgentKind.Claude, null]]);
     cleanup();
   });
 

@@ -586,6 +586,19 @@ describe('ClaudeAdapter', () => {
     );
   });
 
+  it('reads a login past its renewal limit as a lapsed sign-in', () => {
+    const { spawn } = fakeSpawn();
+    const adapter = new ClaudeAdapter({ spawn, waitForMcpServers: false });
+    const message =
+      'Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs';
+
+    expect(adapter.failureFrom(message)).toEqual({
+      class: 'auth_expired',
+      resetsAt: null,
+    });
+    expect(adapter.errorRecovery(message)).toBe('cli-login');
+  });
+
   it('does not offer the account sign-in for an MCP server that failed to authenticate', () => {
     // The bare `Failed to authenticate` is also how a SERVER's failure reads,
     // and `claude auth login` does not cure that one.

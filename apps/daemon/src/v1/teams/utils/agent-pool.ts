@@ -7,6 +7,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   CalleePoolAttempt,
   CalleeTurnOutcome,
+  PoolSpend,
   PoolStanding,
   TeamAgentPoolMember,
   TeamMember,
@@ -192,7 +193,9 @@ function ranksBefore(
  * the member it is on still runs work of its own, which leaving would stop. A
  * member spent on an ordinary failure keeps the conversation it has.
  * "Earlier" is pool order, with the member a caller asked for (`preferred`,
- * whose `order` is {@link preferredAttemptOrder}'s) ahead of every other.
+ * whose `order` is {@link preferredAttemptOrder}'s) ahead of every other. A
+ * member named for this very turn (`requested`) needs no proof, only to be
+ * unspent: the caller asking for it is the attempt that proves it.
  */
 export function conversationStartMember(input: {
   standings: readonly (PoolStanding | null)[];
@@ -202,6 +205,7 @@ export function conversationStartMember(input: {
   hasSession: boolean;
   holdsWork: boolean;
   preferred?: number | null;
+  requested?: number | null;
 }): number {
   const { standings, proven, order, held, hasSession, holdsWork } = input;
   const first = order[0]!;
@@ -211,11 +215,41 @@ export function conversationStartMember(input: {
   if (standings[held - 1] === 'limit') {
     return standings[first - 1] === 'limit' ? held : first;
   }
+  const provenOrAsked =
+    proven[first - 1] === true ||
+    (first === input.requested && standings[first - 1] === null);
   return ranksBefore(first, held, input.preferred ?? null) &&
-    proven[first - 1] === true &&
+    provenOrAsked &&
     !holdsWork
     ? first
     : held;
+}
+
+/**
+ * Why a call did not start on the member its caller asked for — said in the
+ * caller's envelope, which would otherwise name only the member that ran.
+ */
+export function preferredMemberSkipNote(
+  preferred: number,
+  startedOn: number,
+  spend: PoolSpend | null,
+  busy: boolean,
+): string {
+  if (spend !== null) {
+    const until = new Date(spend.until).toISOString();
+    const why = spend.signedOut
+      ? 'is signed out'
+      : spend.standing === 'limit'
+        ? 'hit a usage limit'
+        : 'failed before doing any work in this run';
+    const retry = spend.signedOut
+      ? `it is tried again from ${until}, or as soon as its profile is signed in again in Geniro`
+      : `it is tried again from ${until}`;
+    return `member ${preferred} ${why}, so the call ran on member ${startedOn}; ${retry}.`;
+  }
+  return busy
+    ? `the conversation stayed on member ${startedOn}, whose process is still running work of its own; it moves to member ${preferred} once that work ends.`
+    : `the conversation stayed on member ${startedOn}: member ${preferred} is not yet known to work again — name member: ${preferred} on the call to try it now.`;
 }
 
 /**

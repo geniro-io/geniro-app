@@ -3,6 +3,7 @@ import {
   ListChecks,
   MessageSquare,
   RefreshCw,
+  Sparkles,
   Users,
 } from 'lucide-react';
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
@@ -40,6 +41,7 @@ import { describeDaemonError } from '../daemon-api';
 import { formatBytes } from '../format-bytes';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { formatPercent } from '../stats/stats-format';
+import type { SearchApi } from './search';
 import {
   ARCHIVED_CHATS_HELP,
   cleanHelp,
@@ -417,9 +419,12 @@ function StorageDetails({
  */
 export function Storage({
   api,
+  search = null,
   remote = isRemoteRuntime(),
 }: {
   api: StorageClient | null;
+  /** Search by meaning's status and index: its index's Delete is there. */
+  search?: SearchApi | null;
   remote?: boolean;
 }): React.JSX.Element {
   const [reading, setReading] = useState<Reading | null>(
@@ -630,6 +635,7 @@ export function Storage({
   const worktrees = app?.worktrees ?? [];
   const browserCache = app?.browserCache ?? [];
   const appData = app?.appData ?? [];
+  const searchModel = app?.searchModel ?? null;
 
   const overview: { key: string; label: string; bytes: number }[] = [
     ...daemon.groups.map((group) => ({
@@ -640,6 +646,11 @@ export function Storage({
     { key: 'worktrees', label: 'Task worktrees', bytes: sum(worktrees) },
     { key: 'browserCache', label: 'Window cache', bytes: sum(browserCache) },
     { key: 'appData', label: 'Window data', bytes: sum(appData) },
+    {
+      key: 'searchModel',
+      label: 'Search model',
+      bytes: searchModel?.bytes ?? 0,
+    },
   ]
     .filter((row) => row.bytes > 0)
     .sort((a, b) => b.bytes - a.bytes);
@@ -677,7 +688,11 @@ export function Storage({
       </Fragment>
     ));
 
-  const groupRow = (id: StorageGroupIdEnum, note?: React.ReactNode) => {
+  const groupRow = (
+    id: StorageGroupIdEnum,
+    note?: React.ReactNode,
+    actions?: React.ReactNode,
+  ) => {
     const group = groupOf(id);
     if (group === undefined) {
       return null;
@@ -698,9 +713,59 @@ export function Storage({
           />
         }>
         {group.clean.length === 0 ? null : cleanButtons(group.clean)}
+        {actions ?? null}
       </StorageRow>
     );
   };
+
+  const searchIndexDelete =
+    search === null ? null : (
+      <ConfirmActionButton
+        variant="outline"
+        size="sm"
+        disabled={remote}
+        title="Delete the search index; it is rebuilt in the background if search by meaning is on"
+        question="Delete the search index?"
+        description="The index is removed. If search by meaning is on, it is rebuilt from your notes, documents and chats in the background."
+        confirmLabel="Delete index"
+        busyLabel="Deleting…"
+        onConfirm={async () => {
+          await search.deleteEmbeddingIndex();
+          void measure();
+        }}>
+        Delete…
+      </ConfirmActionButton>
+    );
+
+  const searchModelRow =
+    searchModel === null ? null : (
+      <StorageRow
+        key="searchModel"
+        name="Search model"
+        figure={formatBytes(searchModel.bytes) ?? '0 B'}
+        dot={dotOf('searchModel')}
+        details={
+          <StorageDetails
+            about="The downloaded search model. Turning search by meaning off keeps it; deleting it turns the feature off, and turning it on again downloads it."
+            entries={[searchModel]}
+          />
+        }>
+        <ConfirmActionButton
+          variant="outline"
+          size="sm"
+          disabled={remote}
+          title="Delete the search model from this Mac; search by meaning turns off"
+          question="Delete the search model?"
+          description="The model is removed from this Mac and search by meaning turns off. Turning it on again downloads it."
+          confirmLabel="Delete"
+          busyLabel="Deleting…"
+          onConfirm={async () => {
+            await window.geniro.deleteSearchModel();
+          }}>
+          Delete…
+        </ConfirmActionButton>
+      </StorageRow>
+    );
 
   const taskRows = [
     worktrees.length === 0 ? null : (
@@ -841,6 +906,24 @@ export function Storage({
           {groupRow(StorageGroupIdEnum.ChatFiles)}
         </SettingsPanel>
       </SettingsGroup>
+
+      {searchModelRow === null &&
+      groupOf(StorageGroupIdEnum.SearchIndex) === undefined ? null : (
+        <SettingsGroup
+          icon={<Sparkles />}
+          title="Search by meaning"
+          description="The search model and the index built from your notes, documents and chats."
+          hint="The model is downloaded once and kept until you delete it. The index is rebuilt from your notes, documents and chats whenever it is missing, so deleting it is safe. The switch is on the Search page.">
+          <SettingsPanel>
+            {groupRow(
+              StorageGroupIdEnum.SearchIndex,
+              undefined,
+              searchIndexDelete,
+            )}
+            {searchModelRow}
+          </SettingsPanel>
+        </SettingsGroup>
+      )}
 
       {taskRows.length === 0 ? null : (
         <SettingsGroup

@@ -428,7 +428,12 @@ export function createPreloadStub(
     },
     getAppStorage: () => {
       note('getAppStorage');
-      return Promise.resolve({ worktrees: [], browserCache: [], appData: [] });
+      return Promise.resolve({
+        worktrees: [],
+        browserCache: [],
+        appData: [],
+        searchModel: null,
+      });
     },
     removeStorageWorktree: () => {
       note('removeStorageWorktree');

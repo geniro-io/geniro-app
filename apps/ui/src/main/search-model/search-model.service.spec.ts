@@ -213,6 +213,7 @@ describe('SearchModelService', () => {
     await h.service.start();
 
     expect(h.service.getState().phase).toBe('update-available');
+    expect(h.service.getState().totalBytes).toBe(30);
     expect(h.service.daemonModels().model?.revision).toBe('oldrev0123456789');
     expect(h.download).not.toHaveBeenCalled();
   });

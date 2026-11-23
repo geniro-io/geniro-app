@@ -72,6 +72,7 @@ import {
 const Teams = lazy(() =>
   import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );
+import { useSearchModelFailureNotice } from './settings/search';
 import type { SettingsSection } from './settings/Settings';
 import {
   signInsNeededText,
@@ -540,13 +541,22 @@ export function App(): React.JSX.Element {
   // A run's banner brings the chat view with it — main has already raised the
   // window. Which thread it opens is `Chats`' own listener on the same channel;
   // it is split that way because the view is app state and the active run is
-  // not. A search-model banner opens Settings.
+  // not. A search-model banner opens Settings on its Search page.
   useEffect(
     () =>
       window.geniro.onNotificationActivated((activation) => {
-        setView(activation.kind === 'run' ? 'chats' : 'settings');
+        if (activation.kind === 'run') {
+          setView('chats');
+          return;
+        }
+        setSettingsSection(activation.section);
+        setSettingsSectionOpen(true);
+        setView('settings');
       }),
     [],
+  );
+  useSearchModelFailureNotice(
+    view === 'settings' && settingsSection === 'search',
   );
 
   // ⌥⌘L opens the debug drawer, and since the title bar's trigger was removed

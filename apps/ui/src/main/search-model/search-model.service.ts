@@ -77,7 +77,7 @@ export class SearchModelService {
     this.state = {
       phase: unsupported ? 'unsupported' : 'off',
       receivedBytes: 0,
-      totalBytes: 0,
+      totalBytes: unsupported ? 0 : totalBytesOf(deps.manifest),
       reason: null,
       systemVersion: unsupported ? deps.systemVersion : null,
       modelBytes: 0,
@@ -111,7 +111,12 @@ export class SearchModelService {
     if (!enabled) {
       this.deps.writeSwitch(false);
       await this.pause(PAUSE_DOWNLOAD);
-      this.set({ phase: 'off', receivedBytes: 0, totalBytes: 0, reason: null });
+      this.set({
+        phase: 'off',
+        receivedBytes: 0,
+        totalBytes: totalBytesOf(this.deps.manifest),
+        reason: null,
+      });
       await this.deps.pushConfig();
       return this.state;
     }
@@ -132,7 +137,12 @@ export class SearchModelService {
     }
     this.deps.writeSwitch(false);
     await this.pause(DISCARD_PARTIALS);
-    this.set({ phase: 'off', receivedBytes: 0, totalBytes: 0, reason: null });
+    this.set({
+      phase: 'off',
+      receivedBytes: 0,
+      totalBytes: totalBytesOf(this.deps.manifest),
+      reason: null,
+    });
     await this.deps.pushConfig();
     return this.state;
   }
@@ -167,7 +177,7 @@ export class SearchModelService {
     this.set({
       phase: 'off',
       receivedBytes: 0,
-      totalBytes: 0,
+      totalBytes: totalBytesOf(this.deps.manifest),
       reason: null,
       modelBytes: 0,
     });
@@ -210,7 +220,12 @@ export class SearchModelService {
 
     if (!this.deps.readSwitch()) {
       this.stopPoll();
-      this.set({ phase: 'off', receivedBytes: 0, totalBytes: 0, reason: null });
+      this.set({
+        phase: 'off',
+        receivedBytes: 0,
+        totalBytes: totalBytesOf(this.deps.manifest),
+        reason: null,
+      });
     } else if (this.pending !== null) {
       this.startPoll();
       this.set({
@@ -230,7 +245,7 @@ export class SearchModelService {
       this.set({
         phase: 'update-available',
         receivedBytes: 0,
-        totalBytes: 0,
+        totalBytes: totalBytesOf(manifest),
         reason: null,
       });
     } else {

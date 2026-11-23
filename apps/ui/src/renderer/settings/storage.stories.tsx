@@ -88,6 +88,7 @@ const APP: AppStorageUsage = {
     { name: 'Local Storage', bytes: 3 * MB },
     { name: 'Browser data', bytes: 41 * MB },
   ],
+  searchModel: null,
 };
 
 function client(usage: StorageUsageDto): StorageClient {

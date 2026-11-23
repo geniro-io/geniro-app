@@ -10,6 +10,7 @@ import type {
   AppStorageUsage,
   StorageWorktree,
 } from '../shared/contracts';
+import { SEARCH_MODEL_DIR_NAME } from '../shared/search-model';
 import { PARTITION_DIR_PREFIX } from './browser/browser-sessions';
 import { readRegistry, WORKTREES_DIR_NAME } from './worktree-service';
 
@@ -136,6 +137,7 @@ export async function readAppStorage(
 
   const browserCache: AppStorageEntry[] = [];
   const appData: AppStorageEntry[] = [];
+  let searchModel: AppStorageEntry | null = null;
   for (const name of names) {
     if (
       name === WORKTREES_DIR_NAME ||
@@ -144,10 +146,14 @@ export async function readAppStorage(
       continue;
     }
     const entry = { name, bytes: sizes.get(name) ?? 0 };
+    if (name === SEARCH_MODEL_DIR_NAME) {
+      searchModel = entry;
+      continue;
+    }
     (BROWSER_CACHE_DIRS.includes(name) ? browserCache : appData).push(entry);
   }
   appData.push(...partitionEntries(partitionNames, partitionPath, sizes));
-  return { worktrees, browserCache, appData };
+  return { worktrees, browserCache, appData, searchModel };
 }
 
 /**

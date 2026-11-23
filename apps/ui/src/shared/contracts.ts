@@ -2549,6 +2549,8 @@ export interface AppStorageUsage {
   worktrees: StorageWorktree[];
   browserCache: AppStorageEntry[];
   appData: AppStorageEntry[];
+  /** The downloaded search model folder, or null when none is on disk. */
+  searchModel: AppStorageEntry | null;
 }
 
 /** What a Remove press did to one worktree. */

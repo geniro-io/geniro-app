@@ -25,5 +25,8 @@ export const SEARCH_MODEL_FAILURE_SENTENCES: Record<
   unknown: 'Something went wrong.',
 };
 
+/** The folder under `<userData>` that holds the downloaded models. Main owns it. */
+export const SEARCH_MODEL_DIR_NAME = 'models';
+
 /** The title of the banner a failed download posts when Settings → Search is not showing. */
 export const SEARCH_MODEL_FAILED_TITLE = 'Search model download failed';

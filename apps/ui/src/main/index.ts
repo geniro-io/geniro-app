@@ -18,6 +18,7 @@ import {
   TRAFFIC_LIGHT_INSET,
 } from '../shared/contracts';
 import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
+import { SEARCH_MODEL_DIR_NAME } from '../shared/search-model';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { guardArtifactFrameNavigations } from './artifact-frame-navigation';
@@ -287,7 +288,7 @@ onSettingsWritten((settings) => {
  */
 const searchModel = new SearchModelService({
   manifest: searchModelManifest,
-  modelsDir: () => join(app.getPath('userData'), 'models'),
+  modelsDir: () => join(app.getPath('userData'), SEARCH_MODEL_DIR_NAME),
   systemVersion: process.getSystemVersion(),
   readSwitch: () => readSettings().semanticSearch.enabled,
   writeSwitch: (enabled) => {
@@ -299,7 +300,7 @@ const searchModel = new SearchModelService({
         isPackaged: app.isPackaged,
         override: process.env.GENIRO_SEARCH_MODEL_URL ?? null,
       }),
-      modelsDir: join(app.getPath('userData'), 'models'),
+      modelsDir: join(app.getPath('userData'), SEARCH_MODEL_DIR_NAME),
     }).download(manifest, input),
   pendingIndexComplete: () =>
     searchConfigPush.pendingIndexComplete(supervisor.getHandle()),

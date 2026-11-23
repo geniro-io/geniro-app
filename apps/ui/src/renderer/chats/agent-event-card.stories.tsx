@@ -61,6 +61,7 @@ type Story = StoryObj<typeof meta>;
 export const FinishedWithLongAnswer: Story = {
   args: {
     kind: 'finished',
+    tail: 'told Manager mid-turn',
     text: LONG_ANSWER,
     outcome: { text: 'Merged into the working tree' },
   },
@@ -69,6 +70,7 @@ export const FinishedWithLongAnswer: Story = {
 export const Failed: Story = {
   args: {
     kind: 'failed',
+    tail: 'told Manager mid-turn',
     text: 'The seed check failed on its second run; the same row is missing each time.',
     outcome: { text: 'Stopped after the second retry', tone: 'destructive' },
   },
@@ -77,6 +79,7 @@ export const Failed: Story = {
 export const AskedWaitingWithOptions: Story = {
   args: {
     kind: 'asked',
+    tail: 'woke Manager',
     text: 'The branch has two unmerged commits. Which should I keep?',
     options: ['Keep both commits', 'Keep the newer commit only'],
     waiting: true,
@@ -105,7 +108,7 @@ export const MessageTo: Story = {
   args: {
     kind: 'message',
     text: 'Please rebase on main before the next run.',
-    agent: 'Manager',
+    tail: 'Manager',
   },
 };
 
@@ -113,7 +116,7 @@ export const AnswerTo: Story = {
   args: {
     kind: 'answer',
     text: 'Yes, keep the newer commit and drop the other.',
-    agent: 'Manager',
+    tail: 'Manager',
   },
 };
 

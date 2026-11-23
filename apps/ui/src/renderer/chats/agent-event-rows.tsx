@@ -51,14 +51,29 @@ function eventOutcomeOf(event: AgentCallEvent): EventOutcome | null {
   };
 }
 
+function tailOf(event: AgentCallEvent, agent: string | null): string | null {
+  if (agent === null || event.delivery === null) {
+    return null;
+  }
+  if (event.delivery === 'woke') {
+    return `woke ${agent}`;
+  }
+  return event.kind === 'asked'
+    ? `passed to ${agent} mid-turn`
+    : `told ${agent} mid-turn`;
+}
+
 /** A row telling an agent what became of its calls, one card per call. */
 export function AgentCallEventRow({
   events,
   nodes,
+  agent,
   memoryKey,
 }: {
   events: readonly AgentCallEvent[];
   nodes: Nodes;
+  /** The agent whose transcript holds the row. */
+  agent: string | null;
   memoryKey: string;
 }): React.JSX.Element {
   return (
@@ -74,6 +89,7 @@ export function AgentCallEventRow({
             memberId={memberId}
             meta={meta}
             callId={event.callId}
+            tail={tailOf(event, agent)}
             text={event.kind === 'asked' ? event.question : event.result}
             options={event.kind === 'asked' ? event.options : []}
             outcome={eventOutcomeOf(event)}

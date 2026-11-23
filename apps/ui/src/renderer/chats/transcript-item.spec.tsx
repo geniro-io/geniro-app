@@ -1863,6 +1863,119 @@ describe('TranscriptItem — agent interaction rows draw event cards', () => {
   const cards = (): Element[] => [
     ...container.querySelectorAll('[data-slot="agent-event-card"]'),
   ];
+  const tails = (): (string | null)[] =>
+    cards().map(
+      (card) =>
+        card.querySelector('[data-slot="agent-event-member"]')?.textContent ??
+        null,
+    );
+
+  it('says on a told card that the lead was told mid-turn', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          severity: 'info',
+          message:
+            'Told this agent that Epilogue finished call-2 while it was working.',
+          toldWorking: {
+            callId: 'call-2',
+            callee: 'Epilogue',
+            calleeNodeId: 'epilogue',
+            reason: 'finished',
+            status: 'completed',
+            result: 'All green.',
+          },
+        })}
+        nodes={NODES}
+      />,
+    );
+    expect(tails()).toEqual(['· told Orchestrator mid-turn']);
+  });
+
+  it('says on a passed question that the lead was passed it mid-turn', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          severity: 'info',
+          message:
+            "Passed Epilogue's question in call-3 to this agent while it was working.",
+        })}
+        nodes={NODES}
+      />,
+    );
+    expect(tails()).toEqual(['· passed to Orchestrator mid-turn']);
+  });
+
+  it('says on each card of a wake row that the lead was woken', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          severity: 'info',
+          message:
+            'Picked back up — Epilogue finished call-2; Epilogue asked a question in call-3.',
+          wake: [
+            {
+              callId: 'call-2',
+              callee: 'Epilogue',
+              reason: 'finished',
+              calleeNodeId: 'epilogue',
+              status: 'completed',
+              result: 'The build passed.',
+            },
+            {
+              callId: 'call-3',
+              callee: 'Epilogue',
+              reason: 'asked',
+              calleeNodeId: 'epilogue',
+              question: 'Ship it?',
+              options: ['Yes', 'No'],
+            },
+          ],
+        })}
+        nodes={NODES}
+      />,
+    );
+    expect(tails()).toEqual(['· woke Orchestrator', '· woke Orchestrator']);
+  });
+
+  it('draws no tail on an orphaned question, which no turn of the lead answered', () => {
+    render(
+      <TranscriptItem
+        item={item('system', {
+          severity: 'info',
+          callId: 'call-3',
+          message:
+            'Epilogue asked a question in call-3 and no turn of this agent was left to answer it, so it goes on without an answer.',
+          orphanQuestion: {
+            callId: 'call-3',
+            callee: 'Epilogue',
+            calleeNodeId: 'epilogue',
+            outcome: 'continues',
+          },
+        })}
+        nodes={NODES}
+      />,
+    );
+    expect(tails()).toEqual([null]);
+  });
+
+  it('draws no tail when the row has no agent to name', () => {
+    render(
+      <TranscriptItem
+        item={item(
+          'system',
+          {
+            severity: 'info',
+            message:
+              'Told this agent that Epilogue finished call-2 while it was working.',
+          },
+          null,
+        )}
+        nodes={NODES}
+      />,
+    );
+    expect(tails()).toEqual([null]);
+  });
 
   it('draws a wake row as one member card per call, never a picked-back-up divider', () => {
     render(

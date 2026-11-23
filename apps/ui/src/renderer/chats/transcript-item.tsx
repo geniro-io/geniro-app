@@ -577,6 +577,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           <AgentCallEventRow
             events={callEvents}
             nodes={nodes}
+            agent={nodeName(item.memberId)}
             memoryKey={`agent-event:${item.id}`}
           />
         );

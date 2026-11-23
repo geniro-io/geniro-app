@@ -5,6 +5,8 @@ import {
   type WakeStatus,
 } from './wake-payload';
 
+type CallDelivery = 'told' | 'woke';
+
 /** One thing that happened to a call an agent made, as its transcript row says it. */
 export interface AgentCallEvent {
   kind: 'finished' | 'asked' | 'no-answer';
@@ -17,6 +19,7 @@ export interface AgentCallEvent {
   question: string | null;
   options: string[];
   noAnswer: 'continues' | 'stopped' | null;
+  delivery: CallDelivery | null;
 }
 
 const TOLD_FINISHED =
@@ -49,13 +52,13 @@ export function readAgentCallEvents(payload: unknown): AgentCallEvent[] | null {
   }
   const wake = readWakeNotice(payload);
   if (wake !== null) {
-    return wake.map(eventOfReason);
+    return wake.map((reason) => eventOfReason(reason, 'woke'));
   }
   const toldWorking = readWakeReason(
     (payload as { toldWorking?: unknown }).toldWorking,
   );
   if (toldWorking !== null) {
-    return [eventOfReason(toldWorking)];
+    return [eventOfReason(toldWorking, 'told')];
   }
   const orphan = readOrphanQuestion(
     (payload as { orphanQuestion?: unknown }).orphanQuestion,
@@ -90,7 +93,10 @@ export function memberIdOfEvent(
   return named.length === 1 && only !== undefined ? only[0] : null;
 }
 
-function eventOfReason(reason: WakeReason): AgentCallEvent {
+function eventOfReason(
+  reason: WakeReason,
+  delivery: CallDelivery,
+): AgentCallEvent {
   return {
     kind: reason.reason,
     callId: reason.callId,
@@ -101,6 +107,7 @@ function eventOfReason(reason: WakeReason): AgentCallEvent {
     question: reason.question ?? null,
     options: reason.options ?? [],
     noAnswer: null,
+    delivery,
   };
 }
 
@@ -133,17 +140,17 @@ function readOrphanQuestion(entry: unknown): AgentCallEvent | null {
 function readStoredSentence(message: string): AgentCallEvent[] | null {
   const toldFinished = pairOf(TOLD_FINISHED, message);
   if (toldFinished !== null) {
-    return [unnamedEvent('finished', ...toldFinished)];
+    return delivered([unnamedEvent('finished', ...toldFinished)], 'told');
   }
   const passed = pairOf(PASSED_QUESTION, message);
   if (passed !== null) {
-    return [unnamedEvent('asked', ...passed)];
+    return delivered([unnamedEvent('asked', ...passed)], 'told');
   }
   const reasons =
     singleOf(PICKED_BACK_UP, message) ??
     singleOf(STARTED_ANOTHER_TURN, message);
   if (reasons !== null) {
-    return readReasonList(reasons);
+    return delivered(readReasonList(reasons), 'woke');
   }
   const continues = pairOf(WENT_ON_WITHOUT_ANSWER, message);
   if (continues !== null) {
@@ -189,6 +196,15 @@ function singleOf(pattern: RegExp, text: string): string | null {
   return only ?? null;
 }
 
+function delivered(
+  events: AgentCallEvent[] | null,
+  delivery: CallDelivery,
+): AgentCallEvent[] | null {
+  return events === null
+    ? null
+    : events.map((event) => ({ ...event, delivery }));
+}
+
 function unnamedEvent(
   kind: AgentCallEvent['kind'],
   callee: string,
@@ -204,5 +220,6 @@ function unnamedEvent(
     question: null,
     options: [],
     noAnswer: null,
+    delivery: null,
   };
 }

@@ -16,6 +16,7 @@ const finishedEvent = (
   question: null,
   options: [],
   noAnswer: null,
+  delivery: null,
   ...fields,
 });
 
@@ -42,6 +43,7 @@ describe('readAgentCallEvents — structured keys', () => {
         calleeMemberId: 'node-ada',
         status: 'completed',
         result: 'Shipped the parser.',
+        delivery: 'woke',
       }),
     ]);
   });
@@ -71,6 +73,7 @@ describe('readAgentCallEvents — structured keys', () => {
         question: 'Which stand?',
         options: ['Local', 'Sandbox'],
         noAnswer: null,
+        delivery: 'woke',
       },
     ]);
   });
@@ -87,7 +90,13 @@ describe('readAgentCallEvents — structured keys', () => {
           },
         ],
       }),
-    ).toEqual([finishedEvent({ callId: 'call-3', callee: 'Tony Stark' })]);
+    ).toEqual([
+      finishedEvent({
+        callId: 'call-3',
+        callee: 'Tony Stark',
+        delivery: 'woke',
+      }),
+    ]);
   });
 
   it('skips a malformed wake entry and keeps the valid ones', () => {
@@ -99,7 +108,13 @@ describe('readAgentCallEvents — structured keys', () => {
           { callId: 'call-4', callee: 'Tony Stark', reason: 'finished' },
         ],
       }),
-    ).toEqual([finishedEvent({ callId: 'call-4', callee: 'Tony Stark' })]);
+    ).toEqual([
+      finishedEvent({
+        callId: 'call-4',
+        callee: 'Tony Stark',
+        delivery: 'woke',
+      }),
+    ]);
   });
 
   it('falls through to the stored text when every wake entry is malformed', () => {
@@ -109,7 +124,13 @@ describe('readAgentCallEvents — structured keys', () => {
           'Told this agent that Tony Stark finished call-5 while it was working.',
         wake: [{ callId: 'call-x', callee: 'Nobody', reason: 'sleeping' }],
       }),
-    ).toEqual([finishedEvent({ callId: 'call-5', callee: 'Tony Stark' })]);
+    ).toEqual([
+      finishedEvent({
+        callId: 'call-5',
+        callee: 'Tony Stark',
+        delivery: 'told',
+      }),
+    ]);
   });
 
   it('reads a toldWorking object as one finished event', () => {
@@ -131,6 +152,7 @@ describe('readAgentCallEvents — structured keys', () => {
         callee: 'Ada Lovelace',
         calleeMemberId: 'node-ada',
         status: 'failed',
+        delivery: 'told',
       }),
     ]);
   });
@@ -158,6 +180,7 @@ describe('readAgentCallEvents — structured keys', () => {
         question: 'Proceed?',
         options: ['yes', 'no'],
         noAnswer: null,
+        delivery: 'told',
       },
     ]);
   });
@@ -183,6 +206,7 @@ describe('readAgentCallEvents — structured keys', () => {
         question: null,
         options: [],
         noAnswer: 'continues',
+        delivery: null,
       },
     ]);
   });
@@ -208,6 +232,7 @@ describe('readAgentCallEvents — structured keys', () => {
         question: null,
         options: [],
         noAnswer: 'stopped',
+        delivery: null,
       },
     ]);
   });
@@ -219,7 +244,13 @@ describe('readAgentCallEvents — structured keys', () => {
           'Told this agent that Ada Lovelace finished call-10 while it was working.',
         wake: [{ callId: 'call-11', callee: 'Tony Stark', reason: 'finished' }],
       }),
-    ).toEqual([finishedEvent({ callId: 'call-11', callee: 'Tony Stark' })]);
+    ).toEqual([
+      finishedEvent({
+        callId: 'call-11',
+        callee: 'Tony Stark',
+        delivery: 'woke',
+      }),
+    ]);
   });
 });
 
@@ -230,7 +261,13 @@ describe('readAgentCallEvents — stored sentences', () => {
         message:
           'Told this agent that Ada Lovelace finished call-12 while it was working.',
       }),
-    ).toEqual([finishedEvent({ callId: 'call-12', callee: 'Ada Lovelace' })]);
+    ).toEqual([
+      finishedEvent({
+        callId: 'call-12',
+        callee: 'Ada Lovelace',
+        delivery: 'told',
+      }),
+    ]);
   });
 
   it('reads a passed-question sentence, with an apostrophe-free name', () => {
@@ -250,6 +287,7 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: null,
+        delivery: 'told',
       },
     ]);
   });
@@ -271,6 +309,7 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: null,
+        delivery: 'told',
       },
     ]);
   });
@@ -292,8 +331,13 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: null,
+        delivery: 'woke',
       },
-      finishedEvent({ callId: 'call-16', callee: 'Peter Parker' }),
+      finishedEvent({
+        callId: 'call-16',
+        callee: 'Peter Parker',
+        delivery: 'woke',
+      }),
     ]);
   });
 
@@ -304,7 +348,11 @@ describe('readAgentCallEvents — stored sentences', () => {
           'Started another turn for this agent: Ada Lovelace finished call-17; Peter Parker asked a question in call-18 after its turn had ended.',
       }),
     ).toEqual([
-      finishedEvent({ callId: 'call-17', callee: 'Ada Lovelace' }),
+      finishedEvent({
+        callId: 'call-17',
+        callee: 'Ada Lovelace',
+        delivery: 'woke',
+      }),
       {
         kind: 'asked',
         callId: 'call-18',
@@ -315,6 +363,7 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: null,
+        delivery: 'woke',
       },
     ]);
   });
@@ -345,6 +394,7 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: 'continues',
+        delivery: null,
       },
     ]);
   });
@@ -366,6 +416,7 @@ describe('readAgentCallEvents — stored sentences', () => {
         question: null,
         options: [],
         noAnswer: 'stopped',
+        delivery: null,
       },
     ]);
   });

@@ -24,6 +24,7 @@ import {
   ThreadHead,
   type ThreadIdentity,
 } from '../components/thread-head';
+import type { ThreadLabelsView } from '../components/thread-labels';
 import { AnsiText } from '../components/ui/ansi-text';
 import { Button } from '../components/ui/button';
 import { OptionList } from '../components/ui/option-list';
@@ -153,6 +154,16 @@ const KIND_META: Record<
     tone: 'destructive',
     rail: 'muted',
   },
+};
+
+type ThreadStatusView = NonNullable<ThreadLabelsView['status']>;
+
+const CALL_STATUS: Partial<Record<MemberEventKind, ThreadStatusView>> = {
+  finished: { attention: 'done', text: 'finished' },
+  answered: { attention: 'done', text: 'answered' },
+  failed: { attention: 'blocked', text: 'failed' },
+  asked: { attention: 'question', text: 'asking' },
+  'no-answer': { attention: 'blocked', text: 'no answer' },
 };
 
 /**
@@ -352,12 +363,13 @@ export function AgentEventStack({
   );
 }
 
-/** A member of the run as its card heads it: its face, its name and its CLI. */
+/** A member of the run as its card heads it: its face, its name, its status and its CLI. */
 function memberIdentity(
   name: string,
   memberId: string | null,
   meta: TranscriptNodeMeta | undefined,
   agentLabel: string | null,
+  status: ThreadStatusView | null,
 ): ThreadIdentity {
   return {
     ...bareThreadIdentity(name),
@@ -367,6 +379,7 @@ function memberIdentity(
       avatar: meta?.avatar ?? null,
       colorKey: memberId ?? name,
     },
+    status,
     agentLabel,
   };
 }
@@ -402,8 +415,8 @@ export interface MemberEventCardProps {
   /** What the run knows of the member, when it is one of its team. */
   meta?: TranscriptNodeMeta;
   callId: string | null;
-  /** The agent the event was reported to, beside the label. */
-  agent?: string | null;
+  /** What the event line says after the label. */
+  tail?: string | null;
   text?: string | null;
   options?: readonly string[];
   waiting?: boolean;
@@ -421,7 +434,7 @@ export const MemberEventCard = memo(function MemberEventCard({
   memberId,
   meta,
   callId,
-  agent = null,
+  tail = null,
   text = null,
   options = [],
   waiting = false,
@@ -435,9 +448,15 @@ export const MemberEventCard = memo(function MemberEventCard({
     <AgentEventCard
       kind={kind}
       slot="agent-event"
-      identity={memberIdentity(name, memberId, meta, agentLabel)}
+      identity={memberIdentity(
+        name,
+        memberId,
+        meta,
+        agentLabel,
+        CALL_STATUS[kind] ?? null,
+      )}
       handle={callId}
-      member={agent}
+      member={tail}
       waiting={waiting}
       text={text}
       options={options}

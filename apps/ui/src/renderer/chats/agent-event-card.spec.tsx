@@ -15,6 +15,7 @@ import {
 } from './agent-event-card';
 import { RevealCallContext } from './call-block';
 import type { MonitorEnd, MonitorEntry } from './monitor-payload';
+import { ThreadEventCard } from './thread-event-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -155,19 +156,76 @@ describe('MemberEventCard', () => {
     ).toBe('call-7');
   });
 
-  it('names the agent the event was reported to beside its label', () => {
+  it('draws its tail after the label, as the line of the event', () => {
     const el = render(
       <MemberEventCard
-        kind="message"
+        kind="finished"
         name="Researcher"
         memberId="m-researcher"
         callId="call-7"
-        agent="Manager"
+        tail="told Manager mid-turn"
       />,
     );
     expect(
       el.querySelector('[data-slot="agent-event-member"]')?.textContent,
-    ).toBe('· Manager');
+    ).toBe('· told Manager mid-turn');
+  });
+
+  it.each([
+    ['finished', 'finished', 'text-success'],
+    ['answered', 'answered', 'text-success'],
+    ['failed', 'failed', 'text-destructive'],
+    ['asked', 'asking', 'text-warning'],
+    ['no-answer', 'no answer', 'text-destructive'],
+  ] as const)('chips a %s event as "%s" in its tone', (kind, chip, tone) => {
+    const el = render(
+      <MemberEventCard
+        kind={kind}
+        name="Researcher"
+        memberId="m-researcher"
+        callId="call-7"
+      />,
+    );
+    const status = el.querySelector<HTMLElement>(
+      '[data-slot="agent-event-status"]',
+    );
+    expect(status?.textContent).toBe(chip);
+    expect(status?.className).toContain(tone);
+  });
+
+  it.each(['cancelled', 'skipped', 'message', 'answer'] as const)(
+    'draws no status chip on a %s event',
+    (kind) => {
+      const el = render(
+        <MemberEventCard
+          kind={kind}
+          name="Researcher"
+          memberId="m-researcher"
+          callId="call-7"
+        />,
+      );
+      expect(el.querySelector('[data-slot="agent-event-status"]')).toBeNull();
+    },
+  );
+
+  it('draws the status chip before the CLI chip', () => {
+    const el = render(
+      <AgentIdentityContext.Provider value={[CLAUDE]}>
+        <MemberEventCard
+          kind="finished"
+          name="Researcher"
+          memberId="m-researcher"
+          callId="call-7"
+          meta={{ name: 'Researcher', kind: 'agent', agent: 'claude' }}
+        />
+      </AgentIdentityContext.Provider>,
+    );
+    const labels = el.querySelector('[data-slot="agent-event-labels"]');
+    expect(
+      [...(labels?.children ?? [])].map((child) =>
+        child.getAttribute('data-slot'),
+      ),
+    ).toEqual(['agent-event-status', 'agent-event-agent']);
   });
 
   it('draws the answer a finished call gave, its markdown rendered', () => {
@@ -519,6 +577,18 @@ describe('MonitorEventCard', () => {
     expect(el.querySelector('[data-slot="monitor-event-outcome"]')).toBeNull();
   });
 
+  it('draws no call status chip on a monitor event', () => {
+    const el = render(
+      <MonitorEventCard
+        entry={monitor()}
+        woke
+        agent={null}
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(el.querySelector('[data-slot="monitor-event-status"]')).toBeNull();
+  });
+
   it('draws a batch delivered without a turn of its own as a report, never as a stop', () => {
     const el = render(
       <MonitorEventCard
@@ -581,6 +651,16 @@ describe('MonitorEventCard', () => {
     );
     expect(outcome?.textContent).toBe('exit code 2');
     expect(outcome?.className).toContain('text-destructive');
+  });
+});
+
+describe('ThreadEventCard', () => {
+  it('draws no call status chip on a thread event', () => {
+    const el = render(
+      <ThreadEventCard kind="done" runId="run-9" title="Billing fixes" />,
+    );
+    expect(el.querySelector('[data-slot="thread-event-card"]')).not.toBeNull();
+    expect(el.querySelector('[data-slot="thread-event-status"]')).toBeNull();
   });
 });
 

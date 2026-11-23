@@ -48,7 +48,6 @@ import {
   type RemotePolicy,
 } from './ipc-registry';
 import {
-  artifactPathSchema,
   artifactSaveSchema,
   branchNameSchema,
   browserAddressSchema,
@@ -68,6 +67,7 @@ import {
   configProfileNameSchema,
   detectClisOptionsSchema,
   epochMsSchema,
+  finderPathSchema,
   gitDirSchema,
   knowledgeExportSaveSchema,
   lineFlushRequestIdSchema,
@@ -100,7 +100,6 @@ import {
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
-import { openArtifactPath } from './open-artifact-path';
 import { openInTerminal } from './open-terminal';
 import type { RemoteAccess } from './remote/remote-access';
 import { revealPath } from './reveal-path';
@@ -109,6 +108,7 @@ import { saveChatExport } from './save-chat-export';
 import { saveKnowledgeExport } from './save-knowledge-export';
 import { saveMemoryExport } from './save-memory-export';
 import { readSettings, updateSettings } from './settings';
+import { showInFinder } from './show-in-finder';
 import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
 import { reportMainLog } from './window-diagnostics';
@@ -801,11 +801,12 @@ export function registerIpc(
     (_event, path: unknown) => revealPath(revealPathSchema.parse(path)),
   );
 
-  // A button on an agent's page: opens a plain folder, reveals anything else.
+  // A path an agent named, from its page's button or a chat link: opens a plain
+  // folder, reveals anything else.
   handle(
-    IPC.openArtifactPath,
+    IPC.showInFinder,
     denyRemotely('opens a Finder window on the computer running geniro'),
-    (_event, path: unknown) => openArtifactPath(artifactPathSchema.parse(path)),
+    (_event, path: unknown) => showInFinder(finderPathSchema.parse(path)),
   );
 
   // Settings → Storage. Every name is one segment the schema bounds, joined

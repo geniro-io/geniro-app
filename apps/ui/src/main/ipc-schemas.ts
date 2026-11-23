@@ -751,10 +751,10 @@ export const changesPullRequestsSchema = z
 export const revealPathSchema = absolutePath;
 
 /**
- * A folder or file an artifact page's button names. Shape only: what may happen to
- * it — open a plain folder, reveal anything else — is `openArtifactPath`'s call.
+ * A folder or file an agent named, from its page's button or a chat link. Shape only: what may happen to
+ * it — open a plain folder, reveal anything else — is `showInFinder`'s call.
  */
-export const artifactPathSchema = absolutePath;
+export const finderPathSchema = absolutePath;
 
 /** A terminal tab's id — minted by the renderer, so held to a UUID's shape. */
 export const terminalIdSchema = z.uuid();

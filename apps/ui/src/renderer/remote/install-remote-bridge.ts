@@ -342,10 +342,8 @@ export function installRemoteBridge(): void {
       >,
     revealPath: (path) =>
       invoke(IPC.revealPath, [path]) as ReturnType<GeniroApi['revealPath']>,
-    openArtifactPath: (path) =>
-      invoke(IPC.openArtifactPath, [path]) as ReturnType<
-        GeniroApi['openArtifactPath']
-      >,
+    showInFinder: (path) =>
+      invoke(IPC.showInFinder, [path]) as ReturnType<GeniroApi['showInFinder']>,
     getAppStorage: (unclaimed) =>
       invoke(IPC.getAppStorage, [unclaimed]) as ReturnType<
         GeniroApi['getAppStorage']

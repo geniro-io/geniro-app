@@ -784,6 +784,49 @@ describe('MemoryService', () => {
       expect(indexIds).toHaveLength(indexHandlesOf(memoryIndex ?? '').length);
     });
 
+    it('lists an indexable match first though sixty unindexed ones match it more strongly', async () => {
+      await fillIndex();
+      const em = db.em.fork();
+      for (let n = 0; n < 60; n += 1) {
+        em.persist(
+          make(Memory, {
+            handle: 200 + n,
+            title: `Invoice export invoice export invoice export ${n}`,
+            body: 'x',
+            type: 'project',
+            status: 'active',
+            sourceActor: 'agent',
+          }),
+        );
+      }
+      const target = make(Memory, {
+        handle: 100,
+        title: 'Invoice export format',
+        body: 'x',
+        type: 'project',
+        status: 'active',
+        sourceActor: 'user',
+      });
+      em.persist(target);
+      await em.flush();
+      await db.em
+        .fork()
+        .nativeUpdate(
+          Memory,
+          { id: target.id },
+          { updatedAt: new Date('2020-01-01T00:00:00Z') },
+        );
+
+      const { memoryIndex, indexIds } = await db.service.runSnapshot(
+        FACTS,
+        'invoice export',
+      );
+
+      expect(indexHandlesOf(memoryIndex ?? '')[0]).toBe('m100');
+      expect(indexIds[0]).toBe(target.id);
+      expect(memoryIndex).not.toContain('Invoice export invoice export');
+    });
+
     it('leaves out an agent’s unreviewed entry that matches the first message', async () => {
       const kept = created(
         await db.service.save(USER, { title: 'Kept note', body: 'x' }, NONE),

@@ -621,7 +621,11 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     try {
       return await this.memories.matchIds(
         query,
-        { statuses: ['active'], places: { visibleTo: place } },
+        {
+          statuses: ['active'],
+          places: { visibleTo: place },
+          reach: 'index',
+        },
         MEMORY_INDEX_MATCH_CANDIDATES,
         this.em.fork(),
       );

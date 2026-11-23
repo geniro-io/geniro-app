@@ -50,7 +50,7 @@ export const MEMORY_INDEX_MAX_BYTES = 4096;
 export const MEMORY_INDEX_RELEVANT_MAX_BYTES = 2048;
 /** The most distinct words of a run's first message the index searches for; the text helpers read no more than thirty words of one. */
 export const MEMORY_INDEX_MATCH_TERMS = 30;
-/** The best full-text matches the index looks at before it drops the ones it may not list. */
+/** The best full-text matches of a run's first message the index takes, among the entries it may list. */
 export const MEMORY_INDEX_MATCH_CANDIDATES = 50;
 
 /** What an agent may say about an entry it relied on or found wrong. */

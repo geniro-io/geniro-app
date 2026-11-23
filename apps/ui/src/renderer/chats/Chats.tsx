@@ -3698,8 +3698,6 @@ export function Chats({
         createChatDto: {
           ...composer,
           cwd,
-          // The opening words the daemon reads to pick the memory index. The wire
-          // takes up to 16000 characters; a bounded share is sent.
           ...(firstMessage.trim()
             ? { firstMessage: firstMessage.slice(0, 4000) }
             : {}),

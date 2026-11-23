@@ -23,14 +23,14 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { openArtifactPath } = await import('./open-artifact-path');
+const { showInFinder } = await import('./show-in-finder');
 
 let root: string;
 
 beforeEach(() => {
   mocks.openPath.mockClear();
   mocks.showItemInFolder.mockClear();
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'open-artifact-path-')));
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'show-in-finder-')));
 });
 
 afterEach(() => {
@@ -43,11 +43,11 @@ function folder(...parts: string[]): string {
   return path;
 }
 
-describe('openArtifactPath', () => {
+describe('showInFinder', () => {
   it('opens a plain folder in Finder', async () => {
     const reports = folder('reports');
 
-    expect(await openArtifactPath(reports)).toEqual({ shown: 'opened' });
+    expect(await showInFinder(reports)).toEqual({ shown: 'opened' });
     expect(mocks.openPath).toHaveBeenCalledWith(reports);
     expect(mocks.showItemInFolder).not.toHaveBeenCalled();
   });
@@ -56,7 +56,7 @@ describe('openArtifactPath', () => {
     const script = join(root, 'run.command');
     writeFileSync(script, '#!/bin/sh\n');
 
-    expect(await openArtifactPath(script)).toEqual({ shown: 'revealed' });
+    expect(await showInFinder(script)).toEqual({ shown: 'revealed' });
     expect(mocks.showItemInFolder).toHaveBeenCalledWith(script);
     expect(mocks.openPath).not.toHaveBeenCalled();
   });
@@ -66,9 +66,9 @@ describe('openArtifactPath', () => {
     const hidden = folder('.Tool.app');
     const bare = folder('Bare', 'Contents');
 
-    await openArtifactPath(app);
-    await openArtifactPath(hidden);
-    await openArtifactPath(join(bare, '..'));
+    await showInFinder(app);
+    await showInFinder(hidden);
+    await showInFinder(join(bare, '..'));
 
     expect(mocks.showItemInFolder.mock.calls).toEqual([
       [app],
@@ -83,7 +83,7 @@ describe('openArtifactPath', () => {
     const link = join(root, 'Applications');
     symlinkSync(app, link);
 
-    expect(await openArtifactPath(link)).toEqual({ shown: 'revealed' });
+    expect(await showInFinder(link)).toEqual({ shown: 'revealed' });
     expect(mocks.showItemInFolder).toHaveBeenCalledWith(app);
     expect(mocks.openPath).not.toHaveBeenCalled();
   });
@@ -91,11 +91,11 @@ describe('openArtifactPath', () => {
   it('opens a dot-folder, whose leading dot is not an extension', async () => {
     const hidden = folder('.config');
 
-    expect(await openArtifactPath(hidden)).toEqual({ shown: 'opened' });
+    expect(await showInFinder(hidden)).toEqual({ shown: 'opened' });
   });
 
   it('answers a reason for a path with nothing at it, and shows nothing', async () => {
-    expect(await openArtifactPath(join(root, 'gone'))).toEqual({
+    expect(await showInFinder(join(root, 'gone'))).toEqual({
       shown: null,
       reason: 'nothing is at that path',
     });
@@ -106,7 +106,7 @@ describe('openArtifactPath', () => {
   it('passes on the reason Finder could not open a folder', async () => {
     mocks.openPath.mockResolvedValueOnce('Permission denied');
 
-    expect(await openArtifactPath(folder('locked'))).toEqual({
+    expect(await showInFinder(folder('locked'))).toEqual({
       shown: null,
       reason: 'Permission denied',
     });

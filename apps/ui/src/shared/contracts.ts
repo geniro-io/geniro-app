@@ -1848,8 +1848,8 @@ export interface OnboardingInput {
   cliPaths?: Partial<Record<CliKind, string>>;
 }
 
-/** What showing an artifact page's folder or file in Finder did, or why it showed nothing. */
-export type ArtifactPathOutcome =
+/** What showing an agent's folder or file in Finder did, or why it showed nothing. */
+export type FinderOutcome =
   { shown: 'opened' | 'revealed' } | { shown: null; reason: string };
 
 /**
@@ -2244,11 +2244,11 @@ export interface GeniroApi {
     path: string,
   ): Promise<{ revealed: boolean; reason: string | null }>;
   /**
-   * Show a folder or file a button on an agent's artifact page names, in Finder: a
-   * plain folder opens, anything else is revealed, so nothing is ever launched.
-   * Desktop only.
+   * Show a folder or file an agent named — a button on its artifact page, or a chat
+   * link to a local path — in Finder: a plain folder opens, anything else is
+   * revealed, so nothing is ever launched. Desktop only.
    */
-  openArtifactPath(path: string): Promise<ArtifactPathOutcome>;
+  showInFinder(path: string): Promise<FinderOutcome>;
   /**
    * Toggle Chrome DevTools on this window — the same Elements / Console /
    * Network panels a browser gives you, because the renderer IS a browser.
@@ -2539,7 +2539,7 @@ export const IPC = {
   carryChangesToBranch: 'geniro:carryChangesToBranch',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
-  openArtifactPath: 'geniro:openArtifactPath',
+  showInFinder: 'geniro:showInFinder',
   getAppStorage: 'geniro:getAppStorage',
   removeStorageWorktree: 'geniro:removeStorageWorktree',
   clearBrowserCache: 'geniro:clearBrowserCache',

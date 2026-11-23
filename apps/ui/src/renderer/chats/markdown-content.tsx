@@ -120,9 +120,11 @@ export function alignClass(
  */
 function TranscriptLink({
   href,
+  title,
   children,
 }: {
   href: string | undefined;
+  title: string | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -132,6 +134,7 @@ function TranscriptLink({
     // of them pushed the transcript 139px past its pane.
     <ChatLink
       href={href}
+      title={title}
       className="text-primary underline underline-offset-2 break-all">
       {children}
     </ChatLink>
@@ -220,8 +223,10 @@ const COMPONENTS: Components = {
       </div>
     );
   },
-  a: ({ children, href }) => (
-    <TranscriptLink href={href}>{children}</TranscriptLink>
+  a: ({ children, href, title }) => (
+    <TranscriptLink href={href} title={title}>
+      {children}
+    </TranscriptLink>
   ),
   blockquote: ({ children }) => (
     <blockquote className="m-0 border-l-2 border-border pl-3 text-muted-foreground not-first:mt-2">

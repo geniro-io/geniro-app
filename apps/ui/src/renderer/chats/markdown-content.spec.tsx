@@ -440,6 +440,23 @@ describe('MarkdownContent — links and the chat browser', () => {
     click(anchor, { button: 0 });
     expect(openUrl).not.toHaveBeenCalled();
   });
+
+  it('tooltips a local path "Show in Finder", keeps a title the markdown gives, and adds none to a web or mail link', () => {
+    const titles = Array.from(
+      render(
+        <MarkdownContent
+          content={[
+            '[plain](/Users/a/notes.md)',
+            '[titled](/Users/a/notes.md "My title")',
+            '[web](https://example.com/a)',
+            '[mail](mailto:a@b.co)',
+          ].join(' ')}
+        />,
+      ).querySelectorAll('a'),
+      (anchor) => anchor.getAttribute('title'),
+    );
+    expect(titles).toEqual(['Show in Finder', 'My title', null, null]);
+  });
 });
 
 describe('MarkdownContent — an image sits on a line of its own', () => {

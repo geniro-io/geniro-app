@@ -13,7 +13,6 @@ import {
   ANSWERS_SAVE_DELAY_MS,
   ArtifactFrame,
   MAX_ANSWER_NAME,
-  OPEN_PATH_GAP_MS,
 } from './artifact-frame';
 import {
   BrowserPaneContext,
@@ -27,6 +26,7 @@ import {
   type PublishedArtifact,
 } from './published-artifact';
 import { FRAME_GESTURE_EVENT } from './scroll-follow';
+import { OPEN_PATH_GAP_MS } from './use-show-in-finder';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -459,16 +459,16 @@ describe('ArtifactFrame — an Escape the page hands over', () => {
 });
 
 describe('ArtifactFrame — a folder button on the page', () => {
-  let openArtifactPath: ReturnType<
+  let showInFinder: ReturnType<
     typeof vi.fn<(path: string) => Promise<unknown>>
   >;
   let activation: { isActive: boolean };
 
   beforeEach(() => {
-    openArtifactPath = vi.fn<(path: string) => Promise<unknown>>(() =>
+    showInFinder = vi.fn<(path: string) => Promise<unknown>>(() =>
       Promise.resolve({ shown: 'opened' }),
     );
-    (window as unknown as { geniro: unknown }).geniro = { openArtifactPath };
+    (window as unknown as { geniro: unknown }).geniro = { showInFinder };
     activation = { isActive: true };
     Object.defineProperty(navigator, 'userActivation', {
       configurable: true,
@@ -485,7 +485,7 @@ describe('ArtifactFrame — a folder button on the page', () => {
     await render();
     focusFrame();
     await post({ type: 'open-path', path: '/Users/me/reports' });
-    expect(openArtifactPath).toHaveBeenCalledWith('/Users/me/reports');
+    expect(showInFinder).toHaveBeenCalledWith('/Users/me/reports');
   });
 
   it('shows nothing the page asks for without a fresh click, though it holds focus', async () => {
@@ -493,7 +493,7 @@ describe('ArtifactFrame — a folder button on the page', () => {
     await render();
     focusFrame();
     await post({ type: 'open-path', path: '/Users/me/reports' });
-    expect(openArtifactPath).not.toHaveBeenCalled();
+    expect(showInFinder).not.toHaveBeenCalled();
   });
 
   it('acts on one folder while a click stays fresh, so one click cannot open a burst of them', async () => {
@@ -505,20 +505,20 @@ describe('ArtifactFrame — a folder button on the page', () => {
     await post({ type: 'open-path', path: '/b' });
     now.mockReturnValue(1_000_000 + OPEN_PATH_GAP_MS);
     await post({ type: 'open-path', path: '/c' });
-    expect(openArtifactPath.mock.calls).toEqual([['/a'], ['/c']]);
+    expect(showInFinder.mock.calls).toEqual([['/a'], ['/c']]);
   });
 
   it('shows nothing its own frame asks while the user is not in that frame', async () => {
     await render();
     await post({ type: 'open-path', path: '/Users/me/reports' });
-    expect(openArtifactPath).not.toHaveBeenCalled();
+    expect(showInFinder).not.toHaveBeenCalled();
   });
 
   it('shows nothing for a path posted from anything that is not its own frame', async () => {
     await render();
     focusFrame();
     await post({ type: 'open-path', path: '/Users/me/reports' }, window);
-    expect(openArtifactPath).not.toHaveBeenCalled();
+    expect(showInFinder).not.toHaveBeenCalled();
   });
 
   it('shows nothing for a relative path, a NUL or something that is not a path', async () => {
@@ -527,11 +527,11 @@ describe('ArtifactFrame — a folder button on the page', () => {
     await post({ type: 'open-path', path: 'reports' });
     await post({ type: 'open-path', path: '/tmp/a\u0000b' });
     await post({ type: 'open-path', path: 42 });
-    expect(openArtifactPath).not.toHaveBeenCalled();
+    expect(showInFinder).not.toHaveBeenCalled();
   });
 
   it('says under the page why a folder could not be shown, in its own words, never the page’s', async () => {
-    openArtifactPath.mockResolvedValueOnce({
+    showInFinder.mockResolvedValueOnce({
       shown: null,
       reason: 'nothing is at that path',
     });

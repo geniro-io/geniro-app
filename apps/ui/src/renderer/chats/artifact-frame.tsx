@@ -21,6 +21,7 @@ import {
   type FrameGesture,
   frameGestureOf,
 } from './scroll-follow';
+import { pathToOpen, useShowInFinder } from './use-show-in-finder';
 
 /**
  * The message `source` tags, and the messages either side sends.
@@ -79,19 +80,6 @@ function linkToOpen(href: unknown): string | null {
   return EXTERNAL_LINK_SCHEMES.has(url.protocol) ? url.href : null;
 }
 
-/** The longest path a page's folder button may name, as main's schema bounds it. */
-const MAX_OPEN_PATH = 1024;
-
-/** The absolute path a page's folder button names, or null when it names none. */
-function pathToOpen(path: unknown): string | null {
-  return typeof path === 'string' &&
-    path.startsWith('/') &&
-    path.length <= MAX_OPEN_PATH &&
-    !path.includes('\u0000')
-    ? path
-    : null;
-}
-
 /**
  * The longest name one answer is saved under.
  *
@@ -119,21 +107,6 @@ export const ANSWERS_RETRY_MS = 2000;
 
 /** How many times one batch of answers is sent before the frame says it was not kept. */
 const ANSWERS_SAVE_ATTEMPTS = 3;
-
-/**
- * The shortest gap between two folder buttons acted on: as long as a click stays
- * fresh in Chromium (`navigator.userActivation`, 5 s), so one click opens at most
- * one Finder window.
- */
-export const OPEN_PATH_GAP_MS = 5000;
-
-/** Whether the user's click (or key) that this message follows is still fresh. */
-function userJustActed(): boolean {
-  return (
-    (navigator as { userActivation?: { isActive: boolean } }).userActivation
-      ?.isActive === true
-  );
-}
 
 /**
  * Answers the page changed and not yet kept, with the page they belong to, the
@@ -206,10 +179,9 @@ export function ArtifactFrame({
   const pendingAnswers = useRef<PendingAnswers | null>(null);
   const answersTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameToken = useRef(Symbol('artifact frame'));
-  const lastOpenedAt = useRef(0);
   const [height, setHeight] = useState(INITIAL_HEIGHT);
   const [picture, setPicture] = useState<FramePicture | null>(null);
-  const [openFailure, setOpenFailure] = useState<string | null>(null);
+  const finder = useShowInFinder();
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   // Re-sent on a theme change: the page holds whatever it was last given, so
   // without this an artifact stays in the palette it was opened under.
@@ -328,28 +300,6 @@ export function ArtifactFrame({
     [answersStore, artifact.artifactId, saveAnswers],
   );
 
-  const openPath = useLatestCallback((path: string): void => {
-    const now = Date.now();
-    if (!userJustActed() || now - lastOpenedAt.current < OPEN_PATH_GAP_MS) {
-      return;
-    }
-    lastOpenedAt.current = now;
-    window.geniro
-      .openArtifactPath(path)
-      .then((outcome) => {
-        setOpenFailure(
-          outcome.shown === null
-            ? `The page's folder could not be shown: ${outcome.reason}`
-            : null,
-        );
-      })
-      .catch((error: unknown) => {
-        setOpenFailure(
-          `The page's folder could not be shown: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-  }, []);
-
   const openLink = useLatestCallback(
     (link: string): void => {
       if (!openInChatBrowserByDefault(pane, link)) {
@@ -434,7 +384,7 @@ export function ArtifactFrame({
       if (message.type === 'open-path') {
         const path = pathToOpen(message.path);
         if (userIsInFrame && path !== null) {
-          openPath(path);
+          finder.show(path);
         }
         return;
       }
@@ -448,7 +398,7 @@ export function ArtifactFrame({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [postTheme, openLink, restoreAnswers, keepAnswer, openPath]);
+  }, [postTheme, openLink, restoreAnswers, keepAnswer, finder.show]);
 
   // Answers still settling when the frame goes are kept, not dropped.
   useEffect(() => saveAnswers, [saveAnswers]);
@@ -477,7 +427,14 @@ export function ArtifactFrame({
   }
 
   const notices = [
-    { id: 'open', text: openFailure, clear: () => setOpenFailure(null) },
+    {
+      id: 'open',
+      text:
+        finder.failure === null
+          ? null
+          : `The page's folder could not be shown: ${finder.failure}`,
+      clear: finder.clearFailure,
+    },
     { id: 'save', text: saveFailure, clear: () => setSaveFailure(null) },
   ].filter((notice) => notice.text !== null);
 

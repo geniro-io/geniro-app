@@ -8,7 +8,6 @@ import type { ChatArtifactsService } from '../../agents/services/chat-artifacts.
 import type { CommandCenterBroker } from '../../agents/services/command-center.broker';
 import type { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
-import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import type { FlagBroker } from '../../agents/services/flag.broker';
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GalleryImageService } from '../../agents/services/gallery-image.service';
@@ -20,7 +19,6 @@ import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { MilestoneBroker } from '../../agents/services/milestone.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
-import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
@@ -52,7 +50,6 @@ import { ArchiveThreadsTool } from './archive-threads/archive-threads.tool';
 import { ArtifactAnswersTool } from './artifact-answers/artifact-answers.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
 import { AwaitAgentTool } from './await-agent/await-agent.tool';
-import { BackupTeamTool } from './backup-team/backup-team.tool';
 import { BoardTools } from './board/board.tools';
 import { createBrowserTools } from './browser-shared/browser-tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
@@ -81,7 +78,6 @@ import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NoteThreadTool } from './note-thread/note-thread.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposeLessonsTool } from './propose-lessons/propose-lessons.tool';
-import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
 import { ProposeTeamTool } from './propose-team/propose-team.tool';
 import { PublishActionTool } from './publish-action/publish-action.tool';
@@ -91,7 +87,6 @@ import { ReadCommandCenterTool } from './read-command-center/read-command-center
 import { ReadTeamsTool } from './read-teams/read-teams.tool';
 import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
-import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
 import { SaveProjectInstructionsTool } from './save-project-instructions/save-project-instructions.tool';
 import { SaveTeamChangeTool } from './save-team-change/save-team-change.tool';
@@ -114,7 +109,6 @@ export const MCP_TOOLS = Symbol('MCP_TOOLS');
 export interface McpToolDeps {
   calls: CallBroker;
   questions: UserQuestionBroker;
-  findings: FindingsReportBroker;
   charts: ChartBroker;
   metrics: MetricsBroker;
   comparisons: ComparisonBroker;
@@ -133,7 +127,6 @@ export interface McpToolDeps {
   goals: GoalsService;
   goalWriters: GoalWritersBroker;
   stages: StageService;
-  patches: PatchBroker;
   plans: PlanBroker;
   notices: NotifyBroker;
   board: TaskBoardBroker;
@@ -194,7 +187,6 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new GoalsTool(deps.goals, deps.goalWriters),
     new FlagIssueTool(deps.flags),
     new AskUserQuestionTool(deps.questions),
-    new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),
@@ -202,7 +194,6 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowArtifactTool(deps.artifacts, deps.shares),
     new ArtifactAnswersTool(deps.artifacts, deps.artifactAnswers),
     ...createBrowserTools(deps.browser, deps.attachments),
-    new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),
     new PublishActionTool(deps.actions),
     new RemoveActionTool(deps.actions),
@@ -268,7 +259,6 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
       deps.projectInstructions,
       deps.projectInstructionCards,
     ),
-    new BackupTeamTool(deps.teamBuilders, deps.teamChanges),
     new NotifyUserTool(deps.notices),
   ];
 }

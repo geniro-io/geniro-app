@@ -59,7 +59,7 @@ function makeBlock({
   /** The model its CLI says it resolved to, declared as the daemon declares it. */
   model?: string;
   /**
-   * The delegate drew a findings card, carrying the `parentToolUseId` the
+   * The delegate drew a chart card, carrying the `parentToolUseId` the
    * daemon's own `attributeCard` stamps onto a render-family row.
    */
   card?: boolean;
@@ -102,14 +102,12 @@ function makeBlock({
     }),
     ...(card
       ? [
-          item('report_findings', {
+          item('show_chart', {
             parentToolUseId: 'task-1',
-            findings: [
-              {
-                file: 'src/parse.ts',
-                summary: 'An off-by-one in the loop bound',
-              },
-            ],
+            title: 'Loop bound defects',
+            kind: 'line',
+            labels: ['parse', 'index'],
+            series: [{ name: 'defects', values: [1, 0] }],
           }),
         ]
       : []),
@@ -248,7 +246,7 @@ describe('SubagentBlock', () => {
     expect(line).not.toContain('may still be running');
   });
 
-  it('OPENS a delegate that drew a findings card, with no press', () => {
+  it('OPENS a delegate that drew a chart card, with no press', () => {
     // Two things at once, and both are the point. The card is the ONLY copy of
     // what it says — the result the agent got back from that tool is a receipt
     // — so a shut fold turns a report into work the reader has to go looking
@@ -267,7 +265,7 @@ describe('SubagentBlock', () => {
     );
 
     expect(expanded()).toBe('true');
-    expect(container.textContent).toContain('src/parse.ts');
+    expect(container.textContent).toContain('Loop bound defects');
   });
 
   it('lets the reader shut it, and then SAYS what it is holding', () => {
@@ -275,7 +273,7 @@ describe('SubagentBlock', () => {
     // on. That is what makes the closed header's line load-bearing rather than
     // decorative: a reader who opened a running delegate and folded it away
     // before it reported is exactly the one who would otherwise be left with a
-    // silent header over the only copy of its findings.
+    // silent header over the only copy of its chart.
     act(() =>
       root.render(
         <TranscriptEntryView
@@ -292,7 +290,7 @@ describe('SubagentBlock', () => {
     });
 
     expect(expanded()).toBe('false');
-    expect(container.textContent).toContain('reported 1 finding');
+    expect(container.textContent).toContain('drew a chart');
   });
 
   it('renders the delegate as a block that is COLLAPSED by default', () => {
@@ -1495,15 +1493,16 @@ describe('the window note counts the rows the card holds', () => {
       }),
       item('tool_call', {
         id: 'f1',
-        name: 'mcp__geniro-run-1__report_findings',
+        name: 'mcp__geniro-run-1__show_chart',
         input: {},
         parentToolUseId: 'task-1',
       }),
-      item('report_findings', {
+      item('show_chart', {
         parentToolUseId: 'task-1',
-        findings: [
-          { file: 'src/parse.ts', summary: 'An off-by-one in the loop bound' },
-        ],
+        title: 'Loop bound defects',
+        kind: 'line',
+        labels: ['parse', 'index'],
+        series: [{ name: 'defects', values: [1, 0] }],
       }),
       item('tool_call', {
         id: 'g3',

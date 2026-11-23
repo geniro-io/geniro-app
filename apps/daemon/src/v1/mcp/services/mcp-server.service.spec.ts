@@ -20,7 +20,6 @@ import {
   HISTORY_RESULT_PREFACE,
   HOST_ANALYZED_THREAD_TOOL,
   HOST_ARTIFACT_TOOL,
-  HOST_BACKUP_TEAM_TOOL,
   HOST_BOARD_TOOLS,
   HOST_BROWSER_CLICK_TOOL,
   HOST_BROWSER_GET_COOKIES_TOOL,
@@ -33,7 +32,6 @@ import {
   HOST_BROWSER_TYPE_TOOL,
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
-  HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_GOALS_TOOL,
   HOST_KNOWLEDGE_READ_TOOL,
@@ -53,7 +51,6 @@ import {
   HOST_METRICS_TOOL,
   HOST_MOVE_STAGE_TOOL,
   HOST_NOTIFY_TOOL,
-  HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
@@ -84,7 +81,6 @@ import type { ChatArtifactsService } from '../../agents/services/chat-artifacts.
 import { CommandCenterBroker } from '../../agents/services/command-center.broker';
 import { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
-import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { FlagBroker } from '../../agents/services/flag.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GalleryImageService } from '../../agents/services/gallery-image.service';
@@ -98,7 +94,6 @@ import { MilestoneBroker } from '../../agents/services/milestone.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { NotifyBroker } from '../../agents/services/notify.broker';
-import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
@@ -182,7 +177,6 @@ import { createBrowserTools } from '../tools/browser-shared/browser-tools';
 import { GoalsTool } from '../tools/goals/goals.tool';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
-import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
 
@@ -235,9 +229,7 @@ function broker(
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
-  findings = new FindingsReportBroker(),
   charts = new ChartBroker(),
-  patches = new PatchBroker(),
   plans = new PlanBroker(),
   metrics = new MetricsBroker(),
   comparisons = new ComparisonBroker(),
@@ -291,7 +283,6 @@ function service(
       commandCenterOps: new CommandCenterOpsBroker(),
       calls: callBroker,
       questions,
-      findings,
       charts,
       metrics,
       comparisons,
@@ -310,7 +301,6 @@ function service(
       goals,
       goalWriters: new GoalWritersBroker(),
       stages,
-      patches,
       plans,
       notices,
       board: taskBoard,
@@ -348,13 +338,6 @@ function service(
 }
 
 /**
- * A service whose only registered host tool is the patch one.
- *
- * Named rather than spelled out at five call sites: `propose_patch` is the
- * fifth positional argument, so reaching it means naming four empty brokers,
- * and a reader would have to count them to see which tool a test is about.
- */
-/**
  * A service with EVERY host sink registered, so `tools/list` returns the whole
  * render family at once. What the description tests below are written against:
  * a model reads these as one list, not one tool at a time, which is exactly how
@@ -365,9 +348,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     throw new Error('not called');
   };
   const questions = new UserQuestionBroker();
-  const findings = new FindingsReportBroker();
   const charts = new ChartBroker();
-  const patches = new PatchBroker();
   const plans = new PlanBroker();
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
@@ -390,9 +371,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   projectCards.register('run-1', 'agent', noop as never);
   for (const broker of [
     questions,
-    findings,
     charts,
-    patches,
     plans,
     metrics,
     comparisons,
@@ -431,9 +410,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const server = service(
     new CallBroker(),
     questions,
-    findings,
     charts,
-    patches,
     plans,
     metrics,
     comparisons,
@@ -582,19 +559,7 @@ function actionService(actions: ActionBroker): McpServerService {
     undefined,
     undefined,
     undefined,
-    undefined,
-    undefined,
     actions,
-  );
-}
-
-function patchService(patches: PatchBroker): McpServerService {
-  return service(
-    new CallBroker(),
-    new UserQuestionBroker(),
-    new FindingsReportBroker(),
-    new ChartBroker(),
-    patches,
   );
 }
 
@@ -605,9 +570,7 @@ function galleryService(
   return service(
     new CallBroker(),
     new UserQuestionBroker(),
-    new FindingsReportBroker(),
     new ChartBroker(),
-    new PatchBroker(),
     new PlanBroker(),
     new MetricsBroker(),
     new ComparisonBroker(),
@@ -744,9 +707,7 @@ function artifactService(
   return service(
     new CallBroker(),
     new UserQuestionBroker(),
-    new FindingsReportBroker(),
     new ChartBroker(),
-    new PatchBroker(),
     new PlanBroker(),
     new MetricsBroker(),
     new ComparisonBroker(),
@@ -903,7 +864,7 @@ describe('McpServerService', () => {
      */
     function memoryService(memory: MemoryService): McpServerService {
       const args: Parameters<typeof service> = [];
-      args[26] = memory;
+      args[24] = memory;
       return service(...args);
     }
 
@@ -1522,8 +1483,6 @@ describe('McpServerService', () => {
       });
       await db.ensureIndex();
       history = service(
-        undefined,
-        undefined,
         undefined,
         undefined,
         undefined,
@@ -2379,6 +2338,15 @@ describe('McpServerService', () => {
     );
   });
 
+  it.each(['propose_patch', 'report_findings', 'backup_team'])(
+    'lists no %s even with every host sink registered',
+    async (name) => {
+      expect((await everyHostTool()).map((tool) => tool.name)).not.toContain(
+        name,
+      );
+    },
+  );
+
   it('answers a dead run with the RUN_NOT_ACTIVE envelope', async () => {
     const { json } = await post(
       service(new CallBroker()),
@@ -2563,206 +2531,6 @@ describe('McpServerService', () => {
     expect(JSON.parse(result.content[0]!.text).error).toContain('INVALID_ARGS');
   });
 
-  it('does not offer report_findings to an agent with nowhere to draw a card', async () => {
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker()),
-      'run-1',
-      'agent',
-      rpc('tools/list', {}),
-    );
-    const tools = (json().result as { tools: { name: string }[] }).tools;
-    expect(tools.map((t) => t.name)).not.toContain(HOST_FINDINGS_TOOL);
-  });
-
-  it('offers report_findings once a turn has registered a reporter', async () => {
-    const findings = new FindingsReportBroker();
-    findings.register('run-1', 'agent', async () => ({
-      status: 'recorded',
-      count: 0,
-    }));
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker(), findings),
-      'run-1',
-      'agent',
-      rpc('tools/list', {}),
-    );
-    const tools = (
-      json().result as {
-        tools: { name: string; inputSchema: Record<string, unknown> }[];
-      }
-    ).tools;
-    const tool = tools.find((t) => t.name === HOST_FINDINGS_TOOL);
-    expect(tool).toBeDefined();
-    // The advertised shape is claude's ReportFindings, snake_case included, so
-    // an agent that has learned that tool needs to learn nothing new here.
-    const items = (
-      tool!.inputSchema as {
-        properties: { findings: { items: { required: string[] } } };
-      }
-    ).properties.findings.items;
-    expect(items.required).toEqual(['file', 'summary', 'failure_scenario']);
-  });
-
-  it('tools/call report_findings hands the report over and answers with a receipt', async () => {
-    const findings = new FindingsReportBroker();
-    const recorded: unknown[] = [];
-    findings.register('run-1', 'agent', async (report) => {
-      recorded.push(report);
-      return { status: 'recorded', count: report.findings.length };
-    });
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker(), findings),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_FINDINGS_TOOL,
-        arguments: {
-          level: 'high',
-          findings: [
-            {
-              file: 'src/queue/processor.ts',
-              line: 402,
-              summary: 'finalizeCompleted no longer checks generation',
-              short_summary: 'CAS guard weakened',
-              failure_scenario: 'A superseded worker wins the write.',
-              verdict: 'CONFIRMED',
-            },
-          ],
-        },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(recorded).toEqual([
-      {
-        level: 'high',
-        findings: [
-          {
-            file: 'src/queue/processor.ts',
-            line: 402,
-            summary: 'finalizeCompleted no longer checks generation',
-            shortSummary: 'CAS guard weakened',
-            failureScenario: 'A superseded worker wins the write.',
-            verdict: 'CONFIRMED',
-          },
-        ],
-      },
-    ]);
-    expect(result.isError).toBe(false);
-    // A RECEIPT, never the findings themselves — the card is how the user sees
-    // them, and echoing them here would spend the window on them twice.
-    expect(result.content[0]!.text).toBe(
-      '1 finding recorded and shown to the user.',
-    );
-    expect(result.content[0]!.text).not.toContain('finalizeCompleted');
-  });
-
-  it('accepts an empty report — nothing survived verification is an answer', async () => {
-    const findings = new FindingsReportBroker();
-    findings.register('run-1', 'agent', async (report) => ({
-      status: 'recorded',
-      count: report.findings.length,
-    }));
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker(), findings),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_FINDINGS_TOOL,
-        arguments: { findings: [] },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(false);
-    expect(result.content[0]!.text).toBe('No findings recorded.');
-  });
-
-  it('refuses a findings argument that is not an array', async () => {
-    const findings = new FindingsReportBroker();
-    let reports = 0;
-    findings.register('run-1', 'agent', async () => {
-      reports += 1;
-      return { status: 'recorded', count: 0 };
-    });
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker(), findings),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_FINDINGS_TOOL,
-        arguments: { findings: 'three things' },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('INVALID_ARGS');
-    expect(reports).toBe(0);
-  });
-
-  it('tells a call whose findings all failed to parse apart from an empty report', async () => {
-    // Answering "0 findings recorded" here would have the model believe it had
-    // reported and move on, when every finding it found was dropped at the edge.
-    const findings = new FindingsReportBroker();
-    let reports = 0;
-    findings.register('run-1', 'agent', async () => {
-      reports += 1;
-      return { status: 'recorded', count: 0 };
-    });
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker(), findings),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_FINDINGS_TOOL,
-        arguments: { findings: [{ summary: 'a defect with no file' }] },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('INVALID_ARGS');
-    expect(reports).toBe(0);
-  });
-
-  it('answers a report it cannot record without flagging a tool failure', async () => {
-    // The listing and the call are separate requests, so a turn can settle
-    // between them. The agent still holds the findings and can write them out.
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker()),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_FINDINGS_TOOL,
-        arguments: {
-          findings: [
-            {
-              file: 'a.ts',
-              summary: 'x',
-              failure_scenario: 'y',
-            },
-          ],
-        },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(false);
-    expect(result.content[0]!.text).toContain('could not be recorded');
-    expect(result.content[0]!.text).toContain('in your reply');
-  });
-
   it('does not offer show_chart to an agent with nowhere to draw one', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
@@ -2782,12 +2550,7 @@ describe('McpServerService', () => {
       points: 1,
     }));
     const { json } = await post(
-      service(
-        new CallBroker(),
-        new UserQuestionBroker(),
-        new FindingsReportBroker(),
-        charts,
-      ),
+      service(new CallBroker(), new UserQuestionBroker(), charts),
       'run-1',
       'agent',
       rpc('tools/list', {}),
@@ -2935,12 +2698,7 @@ describe('McpServerService', () => {
       };
     });
     const { json } = await post(
-      service(
-        new CallBroker(),
-        new UserQuestionBroker(),
-        new FindingsReportBroker(),
-        charts,
-      ),
+      service(new CallBroker(), new UserQuestionBroker(), charts),
       'run-1',
       'agent',
       rpc('tools/call', {
@@ -2968,7 +2726,7 @@ describe('McpServerService', () => {
       },
     ]);
     expect(result.isError).toBe(false);
-    // A RECEIPT, never the numbers — same bargain as the findings tool.
+    // A RECEIPT, never the numbers.
     expect(result.content[0]!.text).toBe(
       'Chart drawn for the user: 1 series over 2 points.',
     );
@@ -2976,8 +2734,8 @@ describe('McpServerService', () => {
   });
 
   it('refuses a chart with nothing plottable, without reaching the drawer', async () => {
-    // Unlike an empty findings report — a real review outcome — a chart of
-    // nothing is only ever a mistake, so it is answered as a malformed call.
+    // A chart of nothing is only ever a mistake, so it is answered as a
+    // malformed call.
     const charts = new ChartBroker();
     const drawn: unknown[] = [];
     charts.register('run-1', 'agent', async (chart) => {
@@ -2985,12 +2743,7 @@ describe('McpServerService', () => {
       return { status: 'drawn', series: 0, points: 0 };
     });
     const { json } = await post(
-      service(
-        new CallBroker(),
-        new UserQuestionBroker(),
-        new FindingsReportBroker(),
-        charts,
-      ),
+      service(new CallBroker(), new UserQuestionBroker(), charts),
       'run-1',
       'agent',
       rpc('tools/call', {
@@ -3576,8 +3329,6 @@ describe('McpServerService', () => {
         undefined,
         undefined,
         undefined,
-        undefined,
-        undefined,
         notices,
       ),
       'run-1',
@@ -3614,8 +3365,6 @@ describe('McpServerService', () => {
         undefined,
         undefined,
         undefined,
-        undefined,
-        undefined,
         notices,
       ),
       'run-1',
@@ -3632,7 +3381,7 @@ describe('McpServerService', () => {
 
   it('refuses a gallery naming no picture, without reaching the drawer', async () => {
     // A gallery of nothing is only ever a mistake, so it is a malformed call
-    // rather than an empty result — the chart's rule, not the findings tool's.
+    // rather than an empty result — the chart's rule.
     const galleries = new GalleryBroker();
     const shown: unknown[] = [];
     galleries.register('run-1', 'agent', async (gallery) => {
@@ -3701,140 +3450,6 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).toContain('in your reply');
   });
 
-  it('does not offer propose_patch to an agent with nobody to accept it', async () => {
-    const { json } = await post(
-      service(new CallBroker(), new UserQuestionBroker()),
-      'run-1',
-      'agent',
-      rpc('tools/list', {}),
-    );
-    const tools = (json().result as { tools: { name: string }[] }).tools;
-    expect(tools.map((t) => t.name)).not.toContain(HOST_PATCH_TOOL);
-  });
-
-  it('offers propose_patch with Edit’s own field names', async () => {
-    // Not cosmetic: the renderer's `editDiffOf` reads exactly these, so the
-    // card draws the diff with no second diff renderer.
-    const patches = new PatchBroker();
-    patches.register('run-1', 'agent', async () => ({
-      status: 'declined',
-    }));
-    const { json } = await post(
-      patchService(patches),
-      'run-1',
-      'agent',
-      rpc('tools/list', {}),
-    );
-    const tools = (
-      json().result as {
-        tools: { name: string; inputSchema: Record<string, unknown> }[];
-      }
-    ).tools;
-    const tool = tools.find((t) => t.name === HOST_PATCH_TOOL);
-    expect(tool).toBeDefined();
-    const schema = tool!.inputSchema as {
-      properties: Record<string, unknown>;
-      required: string[];
-    };
-    expect(Object.keys(schema.properties).sort()).toEqual([
-      'file_path',
-      'new_string',
-      'old_string',
-      'summary',
-    ]);
-    // `old_string` is NOT required — omitting it is how a whole file is written.
-    expect(schema.required).not.toContain('old_string');
-  });
-
-  it('tools/call propose_patch hands the patch over and answers the verdict', async () => {
-    const patches = new PatchBroker();
-    const seen: unknown[] = [];
-    patches.register('run-1', 'agent', async (patch) => {
-      seen.push(patch);
-      return { status: 'applied', path: 'src/a.ts' };
-    });
-    const { json } = await post(
-      patchService(patches),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_PATCH_TOOL,
-        arguments: {
-          file_path: 'src/a.ts',
-          old_string: 'const timeout = 30;',
-          new_string: 'const timeout = 60;',
-          summary: 'Raise the timeout',
-        },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(seen).toEqual([
-      {
-        filePath: 'src/a.ts',
-        oldString: 'const timeout = 30;',
-        newString: 'const timeout = 60;',
-        summary: 'Raise the timeout',
-      },
-    ]);
-    expect(result.isError).toBe(false);
-    expect(result.content[0]!.text).toContain('Applied to src/a.ts');
-    expect(result.content[0]!.text).toContain('do not write it again');
-  });
-
-  it('a REJECTION is not a tool error — the user used the gate', async () => {
-    // Flagged as an error, a model reads its own call as malformed and retries
-    // the change the user just turned down.
-    const patches = new PatchBroker();
-    patches.register('run-1', 'agent', async () => ({ status: 'declined' }));
-    const { json } = await post(
-      patchService(patches),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_PATCH_TOOL,
-        arguments: { file_path: 'a.ts', new_string: 'x' },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(false);
-    expect(result.content[0]!.text).toContain('Do not apply it another way');
-  });
-
-  it('refuses a malformed patch by NAMING the field, without asking anybody', async () => {
-    const patches = new PatchBroker();
-    const seen: unknown[] = [];
-    patches.register('run-1', 'agent', async (patch) => {
-      seen.push(patch);
-      return { status: 'declined' };
-    });
-    const { json } = await post(
-      patchService(patches),
-      'run-1',
-      'agent',
-      rpc('tools/call', {
-        name: HOST_PATCH_TOOL,
-        arguments: {
-          file_path: 'a.ts',
-          old_string: 'same',
-          new_string: 'same',
-        },
-      }),
-    );
-    const result = json().result as {
-      content: { text: string }[];
-      isError: boolean;
-    };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain('identical');
-    expect(seen).toEqual([]);
-  });
-
   it('methodNotAllowed answers 405 with a JSON-RPC error body', () => {
     const send = vi.fn();
     const header = vi.fn(() => ({ send }));
@@ -3852,8 +3467,7 @@ describe('McpServerService', () => {
  * The tool DESCRIPTIONS, which are the routing logic — the only thing that
  * decides which of seven near-neighbours a model reaches for. They were written
  * one tool at a time and audited only later as a set, which is how `show_chart`
- * came to describe the scorecard case without ever naming `show_metrics`, and
- * how `propose_patch` came to promise "the four outcomes" and list three.
+ * came to describe the scorecard case without ever naming `show_metrics`.
  *
  * Asserted on the tools/list RESPONSE rather than on the source string: that is
  * the text a model actually receives.
@@ -3932,8 +3546,6 @@ describe('McpServerService — the board tools', () => {
     board.install({ tools: () => BOARD_TOOLS, call, ...handler });
     const subject = service(
       new CallBroker(),
-      undefined,
-      undefined,
       undefined,
       undefined,
       undefined,
@@ -4205,7 +3817,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
   describe('the knowledge tools', () => {
     function knowledgeService(knowledge: KnowledgeService): McpServerService {
       return service(
-        ...([...Array.from({ length: 30 }), knowledge] as unknown as Parameters<
+        ...([...Array.from({ length: 28 }), knowledge] as unknown as Parameters<
           typeof service
         >),
       );
@@ -4281,7 +3893,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         // Every other broker left to its default; `runOutcomes` is the last.
         service(
           ...([
-            ...Array.from({ length: 23 }),
+            ...Array.from({ length: 21 }),
             runOutcomes,
           ] as unknown as Parameters<typeof service>),
         ),
@@ -4533,33 +4145,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(read).toMatch(/Do not use it to wait for another agent/);
   });
 
-  it('keeps propose_patch and propose_plan descriptions byte-identical in both modes', () => {
-    // The BLOCKING pair is the text these two tools served before the deferred
-    // mode existed, byte for byte; the DEFERRED pair is new. A drift in either
-    // is a model-facing behaviour change, not a refactor detail.
-    const patchDeferred =
-      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
-      'app writes the file only if they accept. ' +
-      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
-      'write the file yourself: if the user accepts, the change is already on disk. ' +
-      'One file per call; call it again for the next one. ' +
-      'The call returns at once — the card is on their screen, so STOP and end your turn. Do not write the file ' +
-      'yourself, and do not call this again for the same change. What happened arrives as your next user message, ' +
-      'and the four outcomes mean different things: applied (it is on disk, do not write it again), rejected ' +
-      '(do NOT route around it — ask what they would prefer), stale (they ACCEPTED but the file no longer matches, ' +
-      'so re-read it and propose again — this is not a refusal), and unavailable (the card could not be shown at ' +
-      'all, so describe the change in your reply instead).';
-    const patchBlocking =
-      'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
-      'app writes the file only if they accept. ' +
-      'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
-      'write the file yourself: if the user accepts, the change is already on disk. ' +
-      'One file per call; call it again for the next one. ' +
-      'The result tells you what happened, and the four outcomes mean different things: applied (it is on ' +
-      'disk, do not write it again), rejected (do NOT route around it — ask what they would prefer), stale ' +
-      '(they ACCEPTED but the file no longer matches, so re-read it and propose again — this is not a ' +
-      'refusal), and unavailable (the card could not be shown at all, so describe the change in your reply ' +
-      'instead).';
+  it('keeps the propose_plan descriptions byte-identical in both modes', () => {
+    // A drift in either is a model-facing behaviour change, not a refactor
+    // detail.
     const planBody =
       'Use it when the work is worth more than a couple of edits, when a request could reasonably be read more ' +
       'than one way, or when you are about to touch something wide — a rename across files, a dependency, a ' +
@@ -4591,30 +4179,24 @@ describe('McpServerService — what the descriptions tell a model', () => {
       'note outranks the plan you proposed. ' +
       planTail;
 
-    expect(proposePatchInstructions(true)).toBe(patchDeferred);
-    expect(proposePatchInstructions(false)).toBe(patchBlocking);
     expect(proposePlanInstructions(true)).toBe(planDeferred);
     expect(proposePlanInstructions(false)).toBe(planBlocking);
   });
 
-  it('tells a deferring plan and patch that the call returns at once', async () => {
+  it('tells a deferring plan that the call returns at once', async () => {
     // The blocking sentences stay for a sink that holds the call. A cursor
     // listing is the other one: the model has to stop, because the verdict
     // arrives later, as a message, and waiting on this call is how it times out.
     const plans = new PlanBroker();
-    const patches = new PatchBroker();
     const noop = async (): Promise<never> => {
       throw new Error('not called');
     };
     plans.register('run-1', 'agent', noop as never, { answersAtOnce: true });
-    patches.register('run-1', 'agent', noop as never, { answersAtOnce: true });
     const { json } = await post(
       service(
         new CallBroker(),
         new UserQuestionBroker(),
-        new FindingsReportBroker(),
         new ChartBroker(),
-        patches,
         plans,
       ),
       'run-1',
@@ -4623,33 +4205,16 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     const tools = (json().result as { tools: ToolListing[] }).tools;
     const plan = find(tools, HOST_PLAN_TOOL);
-    const patch = find(tools, HOST_PATCH_TOOL);
     expect(plan).toContain('returns at once');
     expect(plan).toContain('next user message');
     expect(plan).not.toContain('The call blocks');
-    expect(patch).toContain('returns at once');
-    expect(patch).toContain('four outcomes');
-    expect(patch).toContain('next user message');
   });
 
-  it('names ALL FOUR patch outcomes it promises', async () => {
-    // It said "the four outcomes mean different things" and listed three,
-    // leaving `unavailable` — the one where nothing was decided at all — for
-    // the model to guess at.
-    const description = find(await everyHostTool(), HOST_PATCH_TOOL);
-    expect(description).toContain('four outcomes');
-    for (const outcome of ['applied', 'rejected', 'stale', 'unavailable']) {
-      expect(description, `outcome ${outcome} unmentioned`).toContain(outcome);
-    }
-  });
-
-  it('disambiguates the two tools claude ships its own version of', async () => {
-    // Measured in the claude 2.1.247 binary: `ReportFindings` and
-    // `ExitPlanMode` are both in there. `ExitPlanMode` is REACHABLE from
-    // geniro, since `plan` is one of the four approval modes a chat can run
-    // under — so a model can genuinely hold both tools at once.
+  it('disambiguates the plan tool from claude’s own ExitPlanMode', async () => {
+    // `ExitPlanMode` is REACHABLE from geniro, since `plan` is one of the four
+    // approval modes a chat can run under — so a model can genuinely hold both
+    // tools at once.
     const tools = await everyHostTool();
-    expect(find(tools, HOST_FINDINGS_TOOL)).toContain('ReportFindings');
     expect(find(tools, HOST_PLAN_TOOL)).toContain('ExitPlanMode');
   });
 
@@ -4659,7 +4224,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
     // on screen twice and spent its context for the privilege.
     const tools = await everyHostTool();
     for (const name of [
-      HOST_FINDINGS_TOOL,
       HOST_CHART_TOOL,
       HOST_METRICS_TOOL,
       HOST_COMPARISON_TOOL,
@@ -4680,11 +4244,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const tools = await everyHostTool();
     for (const name of [
       HOST_QUESTION_TOOL,
-      HOST_FINDINGS_TOOL,
       HOST_CHART_TOOL,
       HOST_METRICS_TOOL,
       HOST_COMPARISON_TOOL,
-      HOST_PATCH_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
       HOST_ARTIFACT_TOOL,
@@ -4711,7 +4273,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
     }
     for (const name of [
       HOST_QUESTION_TOOL,
-      HOST_FINDINGS_TOOL,
       HOST_COMPARISON_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
@@ -4769,8 +4330,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       const { json } = await post(
         service(
           new CallBroker(),
-          undefined,
-          undefined,
           undefined,
           undefined,
           undefined,
@@ -4919,7 +4478,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
-      findings: new FindingsReportBroker(),
       charts: new ChartBroker(),
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
@@ -4928,7 +4486,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
-      patches: new PatchBroker(),
       plans: new PlanBroker(),
       notices: new NotifyBroker(),
       board: new TaskBoardBroker(),
@@ -4971,7 +4528,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
           HOST_READ_TEAMS_TOOL,
           HOST_PROPOSE_TEAM_TOOL,
           HOST_TEAM_CHANGE_TOOL,
-          HOST_BACKUP_TEAM_TOOL,
         ].includes(name),
       );
     const described = (name: string): string =>
@@ -4981,8 +4537,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_READ_TEAMS_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
       HOST_TEAM_CHANGE_TOOL,
-      HOST_BACKUP_TEAM_TOOL,
     ]);
+    expect(listing.map((tool) => tool.name)).not.toContain('backup_team');
     // The builder's own words: edits to this team, not a whole one.
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toMatch(
       /the team this chat edits/,
@@ -4996,8 +4552,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       /never as a rehearsal of a card/,
     );
     expect(described(HOST_TEAM_CHANGE_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
-    expect(described(HOST_BACKUP_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
-    expect(described(HOST_BACKUP_TEAM_TOOL)).toMatch(/Do NOT use it/);
     expect(described(HOST_READ_TEAMS_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(described(HOST_TEAM_CHANGE_TOOL)).toContain(HOST_READ_TEAMS_TOOL);
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toMatch(/Do not use it/);
@@ -5029,7 +4583,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
-      findings: new FindingsReportBroker(),
       charts: new ChartBroker(),
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
@@ -5038,7 +4591,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
-      patches: new PatchBroker(),
       plans: new PlanBroker(),
       notices: new NotifyBroker(),
       board: new TaskBoardBroker(),
@@ -5105,9 +4657,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         HOST_READ_TEAMS_TOOL,
       ]),
     );
-    for (const builderOnly of [HOST_TEAM_CHANGE_TOOL, HOST_BACKUP_TEAM_TOOL]) {
-      expect(names).not.toContain(builderOnly);
-    }
+    expect(names).not.toContain(HOST_TEAM_CHANGE_TOOL);
     expect(Object.keys(schemaOf(HOST_READ_TEAMS_TOOL).properties)).toEqual(
       expect.arrayContaining(['slug', 'overlays', 'projects']),
     );
@@ -5348,7 +4898,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
-      findings: new FindingsReportBroker(),
       charts: new ChartBroker(),
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
@@ -5357,7 +4906,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
-      patches: new PatchBroker(),
       plans: new PlanBroker(),
       notices: new NotifyBroker(),
       board: new TaskBoardBroker(),
@@ -5495,7 +5043,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
         attachments: {} as AttachmentStoreService,
         calls: new CallBroker(),
         questions: new UserQuestionBroker(),
-        findings: new FindingsReportBroker(),
         charts: new ChartBroker(),
         metrics: new MetricsBroker(),
         comparisons: new ComparisonBroker(),
@@ -5504,7 +5051,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
         artifacts: new ArtifactBroker(),
         artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),
-        patches: new PatchBroker(),
         plans: new PlanBroker(),
         notices: new NotifyBroker(),
         board: new TaskBoardBroker(),
@@ -5647,7 +5193,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       attachments: {} as AttachmentStoreService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
-      findings: new FindingsReportBroker(),
       charts: new ChartBroker(),
       metrics: new MetricsBroker(),
       comparisons: new ComparisonBroker(),
@@ -5656,7 +5201,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
-      patches: new PatchBroker(),
       plans: new PlanBroker(),
       notices: new NotifyBroker(),
       board: new TaskBoardBroker(),
@@ -5718,7 +5262,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
         attachments: {} as AttachmentStoreService,
         calls: new CallBroker(),
         questions: new UserQuestionBroker(),
-        findings: new FindingsReportBroker(),
         charts: new ChartBroker(),
         metrics: new MetricsBroker(),
         comparisons: new ComparisonBroker(),
@@ -5727,7 +5270,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
         artifacts: new ArtifactBroker(),
         artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),
-        patches: new PatchBroker(),
         plans: new PlanBroker(),
         notices: new NotifyBroker(),
         board: new TaskBoardBroker(),
@@ -5883,8 +5425,6 @@ describe('McpServerService — what the descriptions tell a model', () => {
       const { json } = await post(
         service(
           new CallBroker(),
-          undefined,
-          undefined,
           undefined,
           undefined,
           undefined,
@@ -6496,8 +6036,6 @@ describe('McpServerService — the monitor tools', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
-      undefined,
       broker,
     );
 
@@ -6700,8 +6238,6 @@ describe('McpServerService — the team-note tools', () => {
   const teamService = (teamNotes: TeamNoteBroker): McpServerService =>
     service(
       new CallBroker(),
-      undefined,
-      undefined,
       undefined,
       undefined,
       undefined,

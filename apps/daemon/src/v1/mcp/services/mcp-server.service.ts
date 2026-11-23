@@ -41,9 +41,8 @@ function wireResult(result: McpToolResult): CallToolResult {
  * member can use over the streamable-http transport: the call surface
  * (call_agent / await_agent / answer_agent) to a member with teammates to call,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
- * own, and the RENDER family — `report_findings`, `show_chart`, `show_metrics`,
- * `show_comparison`, `show_gallery`, `propose_patch` and `propose_plan` — to a
- * turn whose transcript can draw them.
+ * own, and the RENDER family — `show_chart`, `show_metrics`, `show_comparison`,
+ * `show_gallery` and `propose_plan` — to a turn whose transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a team member is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh

@@ -1,14 +1,12 @@
 ---
-description: Host tools — the sink broker base, tools kept past the turn, receipts, the render tools, show_artifact, propose_patch, propose_plan, notify_user, description audit and member sinks
+description: Host tools — the sink broker base, tools kept past the turn, receipts, the render tools, show_artifact, propose_plan, notify_user, description audit and member sinks
 paths:
   - "apps/daemon/src/v1/mcp/*.ts"
   - "apps/daemon/src/v1/mcp/controllers/**"
   - "apps/daemon/src/v1/mcp/services/**"
   - "apps/daemon/src/v1/mcp/tools/*.ts"
-  - "apps/daemon/src/v1/mcp/tools/report-findings/**"
   - "apps/daemon/src/v1/mcp/tools/show-*/**"
   - "apps/daemon/src/v1/mcp/tools/artifact-answers/**"
-  - "apps/daemon/src/v1/mcp/tools/propose-patch/**"
   - "apps/daemon/src/v1/mcp/tools/propose-plan/**"
   - "apps/daemon/src/v1/mcp/tools/notify-user/**"
   - "apps/daemon/src/v1/agents/**/host-*"
@@ -22,10 +20,10 @@ paths:
 
 # Host tools
 
-geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `artifact_answers`, `propose_patch`, `propose_plan`, `notify_user`, `publish_action`, `remove_action`, `monitor`, `stop_monitor`, `list_monitors`, `team_note`, `team_notes`, `record_outcome`, `milestone`, `goals`, `move_stage`, `read_teams`, `propose_team`; the shared memory's four tools are in `.claude/rules/daemon-memory.md`, the knowledge store's three in `.claude/rules/daemon-knowledge.md`). Layout and wiring: `mcp-tools.md`. Brokers live in `v1/agents/services/` over `HostSinkBroker`.
+geniro's render and card tools (`show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `artifact_answers`, `propose_plan`, `notify_user`, `publish_action`, `remove_action`, `monitor`, `stop_monitor`, `list_monitors`, `team_note`, `team_notes`, `record_outcome`, `milestone`, `goals`, `move_stage`, `read_teams`, `propose_team`; the shared memory's four tools are in `.claude/rules/daemon-memory.md`, the knowledge store's three in `.claude/rules/daemon-knowledge.md`). Layout and wiring: `mcp-tools.md`. Brokers live in `v1/agents/services/` over `HostSinkBroker`.
 
 - `HostSinkBroker`: the disposer is identity-checked (per entry) and `deliver` never throws. Keep both in the base only. Per-sink facts go in `register`'s options (`answersAtOnce`) and leave with the sink; never keep a side set beside it.
-- A chat's tools that hold nothing of the turn (`report_findings`, `show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `notify_user`, `publish_action` / `remove_action`, `record_outcome`, `milestone`, the monitor tools, and an analysis's own tools — `.claude/rules/daemon-thread-analysis.md`) stay registered past it (`ChatService.keepHostTools`, each row written on its own fork), because the CLI opens a stretch by itself when a background command reports. A team's stay between passes on the same terms. The next turn's registration replaces them; a start that failed and a deleted run drop them. A card that parks on the user (`ask_user_question`, `propose_plan`, `propose_patch`, `propose_team`, `save_project_instructions`) still dies with its turn, which sweeps it, and answers that no turn is running. The monitor tools stay only where the call is put to the user first (`hostToolCallUngatedReason` null), since the approval chip can move while no turn runs.
+- A chat's tools that hold nothing of the turn (`show_chart`, `show_metrics`, `show_comparison`, `show_gallery`, `show_artifact`, `notify_user`, `publish_action` / `remove_action`, `record_outcome`, `milestone`, the monitor tools, and an analysis's own tools — `.claude/rules/daemon-thread-analysis.md`) stay registered past it (`ChatService.keepHostTools`, each row written on its own fork), because the CLI opens a stretch by itself when a background command reports. A team's stay between passes on the same terms. The next turn's registration replaces them; a start that failed and a deleted run drop them. A card that parks on the user (`ask_user_question`, `propose_plan`, `propose_team`, `save_project_instructions`) still dies with its turn, which sweeps it, and answers that no turn is running. The monitor tools stay only where the call is put to the user first (`hostToolCallUngatedReason` null), since the approval chip can move while no turn runs.
 - The tool result is a receipt; the row is the only copy of the payload.
 - A card is attributed to a delegate only when the turn is held, exactly one delegate is open, and its launching call is known (`attributableDelegate`). Otherwise null; never guess.
 - Positional payloads (`show_chart` series vs `labels`, `show_comparison` cells vs `options`): blank an unreadable entry, never drop it, and re-align on both sides (renderer twin). A gallery is a set; drop unreadable entries.
@@ -43,12 +41,10 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - The serving key is registered with `registerSecret` at its mint site.
   - Team members publish too; publishers are dropped with the run, not at pass end.
   - Ids are the run's (`<runId>/<artifactId>`), whichever member publishes. A team page's row names the call its publishing conversation answers (`CallBroker.callAnsweredBy`, resolved once), and that call's envelope plus every ancestor call's still running lists it under `artifacts` (`notePublishedArtifact`, noted before the write so a call settling meanwhile still names it, undone if the row fails). The notes start from `CallBroker.callToNoteOn`: the answered call, else — a callee carrying on after its call settled — its conversation's newest call, so a page or button published then still reaches the running calls above. A page row never fetches its call as an anchor (`anchorNeedsOf` / `unplacedStructureOf`), since it is drawn outside the call's card. The tool's run-wide wording keys on `ArtifactBroker.inTeamRun`, never on call registration (a team of one registers no calls).
-- `propose_patch`:
-  - The call auto-approves; the Apply card shows even in `auto`. Caps refuse.
-  - `applyHostPatch` writes only inside the run's cwd per `utils/write-containment.ts` (shared with codex `acceptEdits`): lexical and real-path, under both readings. It is rechecked at write time with `O_NOFOLLOW`; hard-linked targets are refused.
-  - `old_string` must match exactly once. Filesystem errors go to the model as their `code` only (paths leave the machine).
+- `utils/write-containment.ts` judges every write geniro lets through unasked (codex `acceptEdits`): lexical and real-path, under both readings; hard-linked targets are refused.
+- A transcript row naming a tool geniro no longer serves (`propose_patch`, `report_findings`, `backup_team`) renders as an ordinary row; a stored `report_findings` item is skipped, and a `kind: 'patch'` deferred card reads as null and is cleared at boot.
 - `propose_plan`: no `stale` outcome; a blank note is normalized to absent; caps truncate.
 - `notify_user` writes no row; it publishes on `run_status`.
 
-- Descriptions are audited as a set (`mcp-server.service.spec.ts`). `report_findings` asks to be preferred over claude's `ReportFindings`; `propose_plan` says to use either plan mode or this tool, never both.
-- No team member registers a findings/chart/metrics/comparison/gallery/notify sink; `show_artifact` is the one render tool members get, and `publish_action` / `remove_action`, the monitor tools, the team-note tools, `record_outcome`, `milestone` and `move_stage` the other host tools; the shared memory's and the knowledge store's tools are offered on every endpoint (`.claude/rules/daemon-memory.md`, `.claude/rules/daemon-knowledge.md`).
+- Descriptions are audited as a set (`mcp-server.service.spec.ts`). `propose_plan` says to use either plan mode or this tool, never both.
+- No team member registers a chart/metrics/comparison/gallery/notify sink; `show_artifact` is the one render tool members get, and `publish_action` / `remove_action`, the monitor tools, the team-note tools, `record_outcome`, `milestone` and `move_stage` the other host tools; the shared memory's and the knowledge store's tools are offered on every endpoint (`.claude/rules/daemon-memory.md`, `.claude/rules/daemon-knowledge.md`).

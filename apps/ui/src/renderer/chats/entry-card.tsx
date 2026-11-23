@@ -5,7 +5,6 @@ import { ArtifactCard } from './artifact-block';
 import { BrowserScreenshotCard } from './browser-screenshot-card';
 import { ChartCard } from './chart-block';
 import { ComparisonCard } from './comparison-block';
-import { FindingsCard } from './findings-block';
 import { GalleryCard } from './gallery-block';
 import { LessonsBlock } from './lessons-block';
 import { MetricsCard } from './metrics-block';
@@ -46,13 +45,6 @@ export const EntryCard = memo(function EntryCard({
   switch (entry.type) {
     case 'task-list':
       return <TaskListCard entry={entry} />;
-    case 'findings':
-      return (
-        <FindingsCard
-          report={entry.report}
-          memoryKey={`findings:${entry.id}`}
-        />
-      );
     case 'recommendations':
       return <RecommendationsBlock entry={entry} />;
     case 'lessons':

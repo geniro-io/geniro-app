@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILDER_CHAT_ANALYSED_RUNS,
   HOST_ANALYZED_THREAD_TOOL,
-  HOST_BACKUP_TEAM_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
@@ -93,12 +92,11 @@ describe('composeTeamChatInstructions', () => {
     expect(BRIEF).toMatch(/Fix only what that\s+refusal names/);
   });
 
-  it('backs the file up through backup_team when the user asks', () => {
+  it('says every approved save backs the file up first, and offers no backup tool', () => {
     expect(BRIEF).toMatch(
-      new RegExp(
-        `Back the file up with ${HOST_BACKUP_TEAM_TOOL} whenever the user asks`,
-      ),
+      /with\s+a backup of the file before it, only when they approve/,
     );
+    expect(BRIEF).not.toMatch(/backup_team/);
   });
 
   it('builds a new team on one card too, never by writing the document', () => {

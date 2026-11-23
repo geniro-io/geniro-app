@@ -101,8 +101,7 @@ describe('readMetrics', () => {
   });
 
   it('answers a payload that is not a scorecard with null', () => {
-    // Null where the findings reader returns an empty report: an empty review
-    // is a result worth a card, a scorecard with no figures is not.
+    // A scorecard with no figures has nothing to draw, so it is not a card.
     for (const payload of [
       null,
       'metrics',

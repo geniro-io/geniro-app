@@ -15,8 +15,8 @@ const DIFF_CONTEXT = 3;
 
 /**
  * Whether a permission request names `save_project_instructions`. Auto-approved
- * on `isHostPatchCall`'s reasoning: the call writes nothing, its card with the
- * old and new text is the gate.
+ * because the call writes nothing: its card with the old and new text is the
+ * gate.
  */
 export function isHostProjectInstructionsCall(
   serverName: string | null,

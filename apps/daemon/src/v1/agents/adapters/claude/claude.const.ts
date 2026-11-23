@@ -958,7 +958,7 @@ export const CLAUDE_MCP_CONFIG_FILE_MODE = 0o600;
  * still on screen waiting to be answered. Nothing in geniro expires one — the
  * turn's silence deadline is already exempt while it is blocked on a verdict —
  * so the deadline was the CLI's, and it belongs to the TOOL CALL rather than to
- * the turn: `ask_user_question`, `propose_patch` and `propose_plan` are all
+ * the turn: `ask_user_question` and `propose_plan` are both
  * served by holding the HTTP POST open until a human answers, and the client
  * gives up first.
  *

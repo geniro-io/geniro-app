@@ -72,9 +72,7 @@ function axisLabel(value: unknown): string {
 }
 
 function chartKind(value: unknown): ChartKind {
-  // Defaults rather than refuses, unlike the enum reads in `host-findings`:
-  // there a bad `verdict` costs one badge, here a bad `kind` would cost the
-  // whole plot. Every dataset this tool accepts can be drawn as a line, so the
+  // Defaults rather than refuses: a bad `kind` would cost the whole plot. Every dataset this tool accepts can be drawn as a line, so the
   // default is the one that is never nonsense.
   return typeof value === 'string' &&
     (CHART_KINDS as readonly string[]).includes(value)

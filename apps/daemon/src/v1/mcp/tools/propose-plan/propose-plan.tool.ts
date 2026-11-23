@@ -41,8 +41,8 @@ export class ProposePlanTool extends BaseMcpTool {
     if (!read.ok) {
       return this.invalidArgs(read.reason);
     }
-    // BLOCKS until the user answers the card, like `propose_patch` and
-    // `ask_user_question` and unlike the two drawing tools — unless this CLI
+    // BLOCKS until the user answers the card, like `ask_user_question` and
+    // unlike the drawing tools — unless this CLI
     // will not hold the call open, when the sink answers `posted` at once and
     // the verdict arrives as the run's next message.
     const outcome = await context.whileCancellable((signal) =>

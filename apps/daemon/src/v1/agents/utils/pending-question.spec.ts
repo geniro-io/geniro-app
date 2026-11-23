@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  pendingCardRequestId,
   readPendingQuestion,
   serializePendingQuestion,
 } from './pending-question';
@@ -53,27 +54,28 @@ describe('pending question snapshots', () => {
     expect(questions[0]?.options).toEqual([{ label: 'Postgres' }]);
   });
 
-  it('round-trips a plan and a patch in the same column', () => {
+  it.each([
+    [
+      'a card no reader accepts',
+      '{"kind":"patch","requestId":"old-patch"}',
+      'old-patch',
+    ],
+    ['a row with no id', '{"kind":"patch"}', null],
+    ['text that is not JSON', '{not json', null],
+    ['an empty column', null, null],
+  ])('reads the card id of %s', (_name, stored, id) => {
+    expect(pendingCardRequestId(stored)).toBe(id);
+  });
+
+  it('round-trips a plan', () => {
     const plan = {
       kind: 'plan' as const,
       requestId: 'req-plan',
       title: 'Make the queue test deterministic',
       steps: [{ title: 'Replace the sleep', detail: 'wait for the queue' }],
     };
-    const patch = {
-      kind: 'patch' as const,
-      requestId: 'req-patch',
-      fingerprint: null,
-      patch: {
-        filePath: 'a.ts',
-        oldString: 'const timeout = 30;',
-        newString: 'const timeout = 60;',
-        summary: 'Raise the timeout',
-      },
-    };
 
     expect(readPendingQuestion(serializePendingQuestion(plan))).toEqual(plan);
-    expect(readPendingQuestion(serializePendingQuestion(patch))).toEqual(patch);
   });
 
   it('round-trips a project-instructions card, and drops one that does not read', () => {
@@ -110,38 +112,6 @@ describe('pending question snapshots', () => {
     });
   });
 
-  it.each(['absent' as const, { sha256: 'a'.repeat(64) }, null])(
-    'round-trips a patch fingerprint %j',
-    (fingerprint) => {
-      const snapshot = {
-        kind: 'patch' as const,
-        requestId: 'req-patch',
-        patch: { filePath: 'a.ts', newString: 'replacement' },
-        fingerprint,
-      };
-      expect(readPendingQuestion(serializePendingQuestion(snapshot))).toEqual(
-        snapshot,
-      );
-    },
-  );
-
-  it.each([undefined, {}, { sha256: 'not a hash' }, 42])(
-    'refuses an unreadable patch fingerprint %j',
-    (fingerprint) => {
-      expect(
-        readPendingQuestion(
-          JSON.stringify({
-            kind: 'patch',
-            requestId: 'req-patch',
-            file_path: 'a.ts',
-            new_string: 'replacement',
-            fingerprint,
-          }),
-        ),
-      ).toBeNull();
-    },
-  );
-
   it.each([
     [
       'a question from an older build that names no kind',
@@ -174,8 +144,16 @@ describe('pending question snapshots', () => {
       '{"kind":"plan","requestId":"req-1","title":"T","steps":[]}',
     ],
     [
-      'a patch over the size the live reader refuses',
-      `{"kind":"patch","requestId":"req-1","fingerprint":null,"file_path":"a.ts","new_string":"${'x'.repeat(200_001)}"}`,
+      'a patch card stored by a build that still raised one',
+      JSON.stringify({
+        kind: 'patch',
+        requestId: 'req-1',
+        fingerprint: null,
+        file_path: 'a.ts',
+        old_string: 'const timeout = 30;',
+        new_string: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      }),
     ],
   ])('answers null for %s', (_name, stored) => {
     // The column is TEXT that outlives the process that wrote it, so a row from

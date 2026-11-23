@@ -624,43 +624,6 @@ describe('TeamChangeService', () => {
     });
   });
 
-  it('backs the file up as it stands when asked, and refuses a deleted team', async () => {
-    const before = await readFile(join(dir, 'dev-team.team.yaml'), 'utf8');
-
-    const result = await service.backUp('dev-team');
-
-    const backups = await readdir(join(dir, TEAM_BACKUP_DIR));
-    expect(result).toEqual({
-      backedUp: true,
-      backup: `${TEAM_BACKUP_DIR}/${backups[0]}`,
-    });
-    expect(
-      await readFile(join(dir, TEAM_BACKUP_DIR, backups[0]!), 'utf8'),
-    ).toBe(before);
-    await store.delete('dev-team');
-    expect(await service.backUp('dev-team')).toMatchObject({
-      error: 'TEAM_GONE',
-    });
-  });
-
-  it('answers the backup it already has for an unchanged file, and copies a changed one', async () => {
-    const first = await service.backUp('dev-team');
-
-    expect(await service.backUp('dev-team')).toEqual({
-      backedUp: true,
-      backup: first.backup,
-      unchangedSinceThatBackup: true,
-    });
-    expect(await readdir(join(dir, TEAM_BACKUP_DIR))).toHaveLength(1);
-
-    await store.save('dev-team', FASTER);
-    const changed = await service.backUp('dev-team');
-
-    expect(changed.backup).not.toBe(first.backup);
-    expect(changed).not.toHaveProperty('unchangedSinceThatBackup');
-    expect(await readdir(join(dir, TEAM_BACKUP_DIR))).toHaveLength(2);
-  });
-
   describe('a lesson saved into one member', () => {
     const LESSON = {
       slug: 'dev-team',

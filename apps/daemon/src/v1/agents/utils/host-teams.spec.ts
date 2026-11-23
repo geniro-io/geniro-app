@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  HOST_BACKUP_TEAM_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
@@ -44,12 +43,8 @@ describe('team host-tool predicates', () => {
 describe('isHostBuilderTeamCall', () => {
   const call = (tool: string) => `mcp__${SERVER}__${tool}`;
 
-  it('passes the read, the backup and the check, which write no change', () => {
-    for (const tool of [
-      HOST_READ_TEAMS_TOOL,
-      HOST_BACKUP_TEAM_TOOL,
-      HOST_TEAM_CHANGE_TOOL,
-    ]) {
+  it('passes the read and the check, which write no change', () => {
+    for (const tool of [HOST_READ_TEAMS_TOOL, HOST_TEAM_CHANGE_TOOL]) {
       expect(isHostBuilderTeamCall(SERVER, call(tool))).toBe(true);
     }
     // The proposal passes on its own predicate, for every chat.
@@ -69,11 +64,7 @@ describe('isHostLibraryReadCall', () => {
     expect(isHostLibraryReadCall(SERVER, call(HOST_READ_TEAMS_TOOL))).toBe(
       true,
     );
-    for (const tool of [
-      HOST_PROPOSE_TEAM_TOOL,
-      HOST_BACKUP_TEAM_TOOL,
-      HOST_TEAM_CHANGE_TOOL,
-    ]) {
+    for (const tool of [HOST_PROPOSE_TEAM_TOOL, HOST_TEAM_CHANGE_TOOL]) {
       expect(isHostLibraryReadCall(SERVER, call(tool))).toBe(false);
     }
     expect(

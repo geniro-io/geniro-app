@@ -2,7 +2,6 @@ import { dirname } from 'node:path';
 
 import {
   BUILDER_CHAT_ANALYSED_RUNS,
-  HOST_BACKUP_TEAM_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
@@ -217,7 +216,6 @@ HOW TO WORK
   \`project\` with the blocks that add it on ONE card — one approval writes
   both. Move the text whole; when it does not fit the project's limit, say
   so and ask the user what to drop before you shorten anything.
-- Back the file up with ${HOST_BACKUP_TEAM_TOOL} whenever the user asks.
 - The one time you open the file yourself: when a proposal answers
   TEAM_UNREADABLE, the file cannot be loaded. Fix only what that
   refusal names, with your own file tools, then propose the change.

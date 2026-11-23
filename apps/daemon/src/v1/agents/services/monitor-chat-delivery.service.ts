@@ -39,7 +39,7 @@ interface SendFailures {
  * Never into a running turn, on any CLI: output that arrives while the agent
  * works is held — one message per monitor, later batches merged into it — and
  * goes out when the turn ends, as a turn of its own whose opening row is the
- * monitor row rather than a user message. A question, plan or patch card left
+ * monitor row rather than a user message. A question, plan or project card left
  * for the user holds it too: the user's answer starts the next turn, and this
  * waits for that turn's end. The thread's Stop drops what is held.
  *

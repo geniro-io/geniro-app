@@ -32,7 +32,7 @@ export function isHostAnalysisReadCall(
 
 /**
  * Whether a permission request names the recommendations card or its outcome
- * marks — the render family's reading (`isHostFindingsCall`): the call draws
+ * marks — the render family's reading (`isHostChartCall`): the call draws
  * in this app's own transcript and changes nothing outside it.
  */
 export function isHostRecommendationsCall(

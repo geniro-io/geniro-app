@@ -19,8 +19,6 @@ import type { MemberCallWait } from './call-waits';
 import type { ChartSpec } from './chart-payload';
 import { readChart } from './chart-payload';
 import { type ComparisonSpec, readComparison } from './comparison-payload';
-import type { FindingsReport } from './findings-payload';
-import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
 import {
   BROWSER_SCREENSHOT,
@@ -696,35 +694,6 @@ export interface TaskListEntry {
 }
 
 /**
- * One code-review findings report, drawn as its own card.
- *
- * A row each, where {@link TaskListEntry} coalesces a run of announcements into
- * one card: a task list arrives as patches, so no single row is ever the list,
- * while a findings report arrives whole. Two reports are therefore two cards —
- * and the second one is usually the same findings carrying `outcome` after the
- * agent acted on them, which is a step in the conversation rather than a
- * correction to the first card.
- */
-export interface FindingsEntry {
-  type: 'findings';
-  id: string;
-  createdAt: string;
-  seq: number;
-  memberId: string | null;
-  /**
-   * The thread that produced it: a delegate's report is its own.
-   *
-   * Read the same way `task-list` reads it, and stamped by the daemon's own
-   * `ChatService.attributeCard` — but only when exactly one delegate is
-   * mid-work, since the tool reaches it through one MCP endpoint per NODE with
-   * no thread on the call. So the daemon infers the thread from live turn state
-   * or says nothing, and a card left null renders on the main thread.
-   */
-  parentToolUseId: string | null;
-  report: FindingsReport;
-}
-
-/**
  * An analysis's recommendations card, with what has happened to it since:
  * the selection the user applied (a later user message's `apply`) and each
  * item's outcome (`recommendation_outcome` rows, which draw nothing of their
@@ -736,7 +705,15 @@ export interface RecommendationsEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
+  /**
+   * The thread that produced it: a delegate's card is its own.
+   *
+   * Read the same way `task-list` reads it, and stamped by the daemon's own
+   * `ChatService.attributeCard` — but only when exactly one delegate is
+   * mid-work, since the host tools reach it through one MCP endpoint per NODE
+   * with no thread on the call. So the daemon infers the thread from live turn
+   * state or says nothing, and a card left null renders on the main thread.
+   */
   parentToolUseId: string | null;
   runId: string;
   card: RecommendationsCardData;
@@ -755,7 +732,7 @@ export interface LessonsEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is. */
   parentToolUseId: string | null;
   card: LessonsCardData;
   outcomes: Readonly<Record<string, LessonOutcomeView>>;
@@ -764,9 +741,8 @@ export interface LessonsEntry {
 /**
  * One chart an agent handed over, plotted as its own card.
  *
- * A row each, on {@link FindingsEntry}'s reasoning and for the same reason: a
- * chart arrives whole, so two charts are two plots rather than one that
- * redraws itself under a reader who has already scrolled past it.
+ * A row each: a chart arrives whole, so two charts are two plots rather than
+ * one that redraws itself under a reader who has already scrolled past it.
  */
 export interface ChartEntry {
   type: 'chart';
@@ -774,7 +750,7 @@ export interface ChartEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   chart: ChartSpec;
@@ -783,9 +759,8 @@ export interface ChartEntry {
 /**
  * One scorecard an agent handed over — a handful of headline figures.
  *
- * A row each, on {@link FindingsEntry}'s reasoning: it arrives whole, so two
- * scorecards are two cards rather than one that rewrites itself under a reader
- * who has already scrolled past it.
+ * A row each: it arrives whole, so two scorecards are two cards rather than one
+ * that rewrites itself under a reader who has already scrolled past it.
  */
 export interface MetricsEntry {
   type: 'metrics';
@@ -793,7 +768,7 @@ export interface MetricsEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   metrics: MetricsSpec;
@@ -802,9 +777,8 @@ export interface MetricsEntry {
 /**
  * One comparison an agent handed over, drawn as its own card.
  *
- * A row each, on {@link FindingsEntry}'s reasoning: it arrives whole, so two
- * comparisons are two tables rather than one that rewrites itself under a
- * reader who has already scrolled past it.
+ * A row each: it arrives whole, so two comparisons are two tables rather than
+ * one that rewrites itself under a reader who has already scrolled past it.
  */
 export interface ComparisonEntry {
   type: 'comparison';
@@ -812,7 +786,7 @@ export interface ComparisonEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   comparison: ComparisonSpec;
@@ -821,9 +795,8 @@ export interface ComparisonEntry {
 /**
  * One set of pictures an agent handed over, drawn as its own card.
  *
- * A row each, on {@link FindingsEntry}'s reasoning: it arrives whole, so two
- * galleries are two grids rather than one that rewrites itself under a reader
- * who has already scrolled past it.
+ * A row each: it arrives whole, so two galleries are two grids rather than one
+ * that rewrites itself under a reader who has already scrolled past it.
  */
 export interface GalleryEntry {
   type: 'gallery';
@@ -831,7 +804,7 @@ export interface GalleryEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   gallery: GallerySpec;
@@ -844,8 +817,7 @@ export interface GalleryEntry {
  *
  * Unlike every card above it is not a row the daemon writes: it is a tool pair
  * whose call row is hidden from the tool group and whose result row lands on
- * {@link pair} when it arrives. A row each, on {@link FindingsEntry}'s
- * reasoning.
+ * {@link pair} when it arrives. A row each: two of them are two cards.
  */
 export interface PairCardEntry {
   type: PairCardType;
@@ -853,7 +825,7 @@ export interface PairCardEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   pair: ToolPair;
@@ -862,9 +834,8 @@ export interface PairCardEntry {
 /**
  * One page an agent published, drawn as its own card.
  *
- * A row each, on {@link FindingsEntry}'s reasoning — and here the reasoning is
- * sharper than for its siblings rather than merely inherited. This is the one
- * revisable tool in the family, so collapsing a republished id to a single
+ * A row each, for a sharper reason than a card that arrives whole: this is the
+ * one revisable tool in the family, so collapsing a republished id to a single
  * entry is exactly what the transcript must NOT do: a card in the scrollback
  * announced a particular version, and rewriting it under a reader who has
  * already scrolled past would silently change what the conversation said. The
@@ -876,7 +847,7 @@ export interface ArtifactEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   artifact: PublishedArtifact;
@@ -921,8 +892,8 @@ export interface ActionEntry {
  * `workflow_info` rows say, which is why this card has a roster where a
  * sub-agent block has a conversation.
  *
- * ONE card per workflow, unlike the findings card's one-per-row: a workflow
- * announces itself dozens of times as its roster changes, and every
+ * ONE card per workflow, where every other card here is one per row: a
+ * workflow announces itself dozens of times as its roster changes, and every
  * announcement is a fresh snapshot of the SAME work — so a card each would be
  * the same fleet redrawn forty times down the transcript.
  */
@@ -933,7 +904,7 @@ export interface WorkflowEntry {
   createdAt: string;
   seq: number;
   memberId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
+  /** Read exactly as {@link RecommendationsEntry.parentToolUseId} is. */
   parentToolUseId: string | null;
   workflow: WorkflowDeclaration;
   /** The script the tool was handed — the card's REQUEST panel. */
@@ -1025,7 +996,6 @@ export type TranscriptEntry =
   | TurnBlockEntry
   | SubagentBlockEntry
   | TaskListEntry
-  | FindingsEntry
   | RecommendationsEntry
   | LessonsEntry
   | ChartEntry
@@ -1062,7 +1032,6 @@ export type TranscriptEntry =
  */
 export type CardEntry =
   | TaskListEntry
-  | FindingsEntry
   | RecommendationsEntry
   | LessonsEntry
   | ChartEntry
@@ -1093,7 +1062,6 @@ export function isPairCardEntry(
 export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
   return (
     entry.type === 'task-list' ||
-    entry.type === 'findings' ||
     entry.type === 'recommendations' ||
     entry.type === 'lessons' ||
     entry.type === 'chart' ||
@@ -3113,6 +3081,7 @@ export function groupTranscript(
       item.kind === 'shell_info' ||
       item.kind === 'workflow_info' ||
       item.kind === 'subagent_info' ||
+      item.kind === 'report_findings' ||
       isHeldCountUpdate(item) ||
       isUndrawnMonitorNotice(item)
     ) {
@@ -3120,8 +3089,9 @@ export function groupTranscript(
       // a detached command (`shell-activity.ts` is their only reader), the third
       // describes a running workflow and is folded into that workflow's own card
       // by `buildWorkflowCards`, the fourth declares a delegate and is read off
-      // `items` by `buildSubagentBlocks`. None renders anything here. Skipped
-      // OUTRIGHT rather than left to the fall-through below, which treats any
+      // `items` by `buildSubagentBlocks`. None renders anything here, and
+      // neither does a `report_findings` row, which older transcripts still hold.
+      // Skipped OUTRIGHT rather than left to the fall-through below, which treats any
       // other kind as the node having "said something" and closes its open tool
       // group — so a burst of them would chop one turn's tools into a run of
       // one-call rows for rows nobody can see. A workflow announces itself once
@@ -3150,7 +3120,9 @@ export function groupTranscript(
         if (callId) {
           pairsByCallId.set(callId, pair);
         }
-        // Closes both open runs, for the reason the findings card does.
+        // Closes both open runs: a card is a narrative row of its own, and leaving
+        // the task card open lets a later announcement rewrite that card above
+        // this one, so it ends up showing state from after the work it sits over.
         openGroups.delete(groupKey(item));
         openTaskCards.delete(groupKey(item));
         entries.push({
@@ -3240,29 +3212,6 @@ export function groupTranscript(
       entries.push({ type: 'item', item });
       continue;
     }
-    if (item.kind === 'report_findings') {
-      const report = readFindingsReport(item);
-      if (report === null) {
-        continue;
-      }
-      // A card is a narrative row of its own, so it closes BOTH of the thread's
-      // open runs — the tool group and the task card — exactly as every other
-      // rendered row does. Leaving the task card open lets a later announcement
-      // rewrite the card ABOVE this one in place, so it ends up showing state
-      // from after the findings it sits over.
-      openGroups.delete(groupKey(item));
-      openTaskCards.delete(groupKey(item));
-      entries.push({
-        type: 'findings',
-        id: item.id,
-        createdAt: item.createdAt,
-        seq: item.seq,
-        memberId: item.memberId,
-        parentToolUseId: subagentIdOf(item),
-        report,
-      });
-      continue;
-    }
     if (item.kind === 'recommendation_outcome') {
       // Folded into its card above; it draws nothing of its own.
       continue;
@@ -3320,7 +3269,7 @@ export function groupTranscript(
       if (card === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({
@@ -3342,7 +3291,7 @@ export function groupTranscript(
       if (chart === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({
@@ -3361,7 +3310,7 @@ export function groupTranscript(
       if (metrics === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({
@@ -3380,7 +3329,7 @@ export function groupTranscript(
       if (comparison === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({
@@ -3399,7 +3348,7 @@ export function groupTranscript(
       if (gallery === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({
@@ -3418,7 +3367,7 @@ export function groupTranscript(
       if (artifact === null) {
         continue;
       }
-      // Closes both open runs, for the reason the findings card does.
+      // Closes both open runs, as every card does.
       openGroups.delete(groupKey(item));
       openTaskCards.delete(groupKey(item));
       entries.push({

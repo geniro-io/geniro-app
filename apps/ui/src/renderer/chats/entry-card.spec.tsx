@@ -70,30 +70,6 @@ describe('EntryCard', () => {
     ).toContain('Sweep the sibling paths');
   });
 
-  it('draws a findings report', () => {
-    expect(
-      draw({
-        ...base,
-        type: 'findings',
-        report: {
-          level: null,
-          findings: [
-            {
-              file: 'src/a.ts',
-              line: null,
-              summary: 'A guard was weakened',
-              shortSummary: null,
-              failureScenario: null,
-              category: null,
-              verdict: null,
-              outcome: null,
-            },
-          ],
-        },
-      }),
-    ).toContain('src/a.ts');
-  });
-
   it('draws a chart', () => {
     expect(
       draw({

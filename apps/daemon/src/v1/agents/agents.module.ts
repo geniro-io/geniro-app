@@ -93,7 +93,6 @@ import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { DelegateSpendStore } from './services/delegate-spend.store';
 import { EffortsService } from './services/efforts.service';
-import { FindingsReportBroker } from './services/findings-report.broker';
 import { FlagBroker } from './services/flag.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
@@ -128,7 +127,6 @@ import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
 import { OneShotAskService } from './services/one-shot-ask.service';
 import { PartialStreamService } from './services/partial-stream.service';
-import { PatchBroker } from './services/patch.broker';
 import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
 import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
@@ -279,7 +277,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     TaskListCaptureService,
     PolledSpendService,
     UserQuestionBroker,
-    FindingsReportBroker,
     AnalysisBroker,
     AnalysisReportsService,
     ProjectInstructionsChangeService,
@@ -289,7 +286,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     CommandCenterBroker,
     CommandCenterOpsBroker,
     ChartBroker,
-    PatchBroker,
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
@@ -694,12 +690,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // actually put the card on screen registers here.
     UserQuestionBroker,
     // Exported on the same terms: the MCP host serves the RENDER family —
-    // `report_findings`, `show_chart` and `propose_patch` — through these
-    // brokers, and the turn that can actually persist the row (and, for a
-    // patch, write the file) registers here.
-    FindingsReportBroker,
+    // `show_chart` and its siblings — through these brokers, and the turn
+    // that can actually persist the row registers here.
     ChartBroker,
-    PatchBroker,
     ProjectInstructionsBroker,
     ComparisonBroker,
     MetricsBroker,

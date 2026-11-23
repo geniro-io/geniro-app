@@ -307,98 +307,8 @@ export interface StandingHostQuestion {
   closed: boolean;
 }
 
-/**
- * TWIN PARSER: apps/ui/src/renderer/chats/findings-payload.ts — the reader over
- * the `report_findings` item payload this tool produces.
- *
- * The second tool geniro registers on the run's own MCP server. It exists so an
- * agent can hand the APP a typed list of findings and have the transcript draw
- * them, instead of printing markdown the transcript shows as prose. The findings
- * never re-enter the model's context: the call answers with a short receipt, and
- * the data lives in the item the renderer reads.
- *
- * The ARGUMENT shape deliberately mirrors claude's own `ReportFindings` tool,
- * snake_case field names included, so an agent that has learned one already
- * knows this one. The daemon's own types are camelCase; `readHostFindingsReport`
- * is the one place that seam is crossed.
- *
- * Unlike {@link HOST_QUESTION_TOOL} this is NOT registered only for a CLI that
- * lacks its own: a host-rendered card is a property of THIS app's transcript,
- * which no CLI can produce for itself.
- */
-export const HOST_FINDINGS_TOOL = 'report_findings';
-
-/**
- * Caps on one report. They TRUNCATE rather than refuse, on the same rule the
- * question caps above follow: a model that found forty things has still done
- * the work, and failing the call would leave it no way to report at all.
- */
-export const MAX_HOST_FINDINGS = 32;
-export const MAX_FINDING_TEXT_LENGTH = 4000;
-export const MAX_FINDING_SHORT_SUMMARY_LENGTH = 60;
-export const MAX_FINDING_CATEGORY_LENGTH = 40;
-export const MAX_FINDING_PATH_LENGTH = 1024;
-
-export const FINDING_LEVELS = [
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-] as const;
-export type FindingLevel = (typeof FINDING_LEVELS)[number];
-
-export const FINDING_VERDICTS = ['CONFIRMED', 'PLAUSIBLE'] as const;
-export type FindingVerdict = (typeof FINDING_VERDICTS)[number];
-
 export const ARCHIVE_LESSONS = ['reflect', 'skip'] as const;
 export type ArchiveLessons = (typeof ARCHIVE_LESSONS)[number];
-
-export const FINDING_OUTCOMES = [
-  'fixed',
-  'skipped',
-  'no_change_needed',
-] as const;
-export type FindingOutcome = (typeof FINDING_OUTCOMES)[number];
-
-/** One finding of a host-rendered report. */
-export interface HostFinding {
-  file: string;
-  line?: number;
-  summary: string;
-  /** The collapsed label — short because it shares one row with a badge. */
-  shortSummary?: string;
-  /**
-   * Optional here though the tool advertises it as required: the reader is
-   * defensive, and a finding that named a real defect without spelling out how
-   * it fails is worth a row rather than being dropped whole.
-   */
-  failureScenario?: string;
-  category?: string;
-  /** Present only where the agent ran a verification pass over the finding. */
-  verdict?: FindingVerdict;
-  /** Present only on a RE-report, after the agent acted on its own findings. */
-  outcome?: FindingOutcome;
-}
-
-/** One `report_findings` call, as the card will draw it. */
-export interface HostFindingsReport {
-  level?: FindingLevel;
-  findings: HostFinding[];
-}
-
-/**
- * What a findings report resolves to.
- *
- * Two arms where a question has three: nothing here is put to the user, so
- * there is no `declined`. `unavailable` is every way the report could not be
- * RECORDED — no turn to file it against, the turn settled underneath it — and
- * stays separate from `recorded` so the agent can tell a card nobody will see
- * from one that is now on screen.
- */
-export type HostFindingsOutcome =
-  | { status: 'recorded'; count: number }
-  | { status: 'unavailable'; reason: string };
 
 /**
  * The analysis tools ("Analyze thread", a team's "Analyze & improve"):
@@ -417,8 +327,6 @@ export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_TEAM_CHANGE_TOOL = 'save_team_change';
 /** An analysis's write of applied project-instructions (`P-`) items. */
 export const HOST_PROJECT_INSTRUCTIONS_TOOL = 'save_project_instructions';
-/** A team builder chat's own backup of its file, taken when the agent decides. */
-export const HOST_BACKUP_TEAM_TOOL = 'backup_team';
 
 /**
  * The team tools of every chat: read the library, and propose a team or a
@@ -1806,12 +1714,11 @@ export interface AnalysisSink {
  * TWIN PARSER: apps/ui/src/renderer/chats/chart-payload.ts — the reader over the
  * `show_chart` item payload this tool produces.
  *
- * The third tool geniro registers on the run's own MCP server, and the second
- * of the RENDER family — an agent hands over typed numbers and this app plots
- * them, instead of spending its output on an ASCII bar chart or a markdown table
- * the reader has to hold in their head. Same bargain as the findings tool: the
- * data goes to the screen, the call answers with a receipt, and nothing
- * re-enters the model's context.
+ * The first of the RENDER family — an agent hands over typed numbers and this
+ * app plots them, instead of spending its output on an ASCII bar chart or a
+ * markdown table the reader has to hold in their head. The data goes to the
+ * screen, the call answers with a receipt, and nothing re-enters the model's
+ * context.
  *
  * Nothing here mirrors a claude tool, because claude has none — this is
  * geniro's own shape, and the snake_case argument names exist only for
@@ -1868,9 +1775,8 @@ export interface HostChartSeries {
 /** One `show_chart` call, as the card will plot it. */
 export interface HostChart {
   /**
-   * Optional here though the tool advertises it as required, on the reasoning
-   * {@link HostFinding.failureScenario} follows: a plot of real numbers is
-   * worth drawing under a generic heading, where dropping it over a missing
+   * Optional here though the tool advertises it as required: a plot of real
+   * numbers is worth drawing under a generic heading, where dropping it over a missing
    * caption would throw away the measurement itself.
    */
   title?: string;
@@ -1886,11 +1792,10 @@ export interface HostChart {
 /**
  * What a chart resolves to.
  *
- * Two arms, like the findings report and for the same reason — nothing is put
- * to the user, so there is no `declined`. The counts are in the receipt because
- * the caps above TRUNCATE silently otherwise: an agent that sent seven series
- * and reads back "5 series" learns what happened without the findings ever
- * being echoed.
+ * Two arms: nothing is put to the user, so there is no `declined`. The counts
+ * are in the receipt because the caps above TRUNCATE silently otherwise: an
+ * agent that sent seven series and reads back "5 series" learns what happened
+ * without the data ever being echoed.
  */
 export type HostChartOutcome =
   | { status: 'drawn'; series: number; points: number }
@@ -1948,8 +1853,7 @@ export const SENTIMENTS = ['good', 'bad', 'neutral'] as const;
 export type Sentiment = (typeof SENTIMENTS)[number];
 
 /**
- * Caps on one scorecard. They TRUNCATE, like every cap in this family except
- * the patch tool's.
+ * Caps on one scorecard. They TRUNCATE, like every cap in this family.
  *
  * The count is where a scorecard stops being scannable at a glance, which is
  * the only thing it does better than a sentence — past that the figures want a
@@ -1990,7 +1894,7 @@ export interface HostMetrics {
 /**
  * What a scorecard resolves to.
  *
- * Two arms, like the findings report and the chart: nothing is put to the user
+ * Two arms, like the chart: nothing is put to the user
  * to decide, so there is no `declined`. The count is in the receipt because the
  * cap above truncates silently otherwise — an agent that sent twelve figures
  * and reads back "8 figures" learns what happened without them being echoed.
@@ -2035,8 +1939,7 @@ export type HostMetricsOutcome =
 export const HOST_COMPARISON_TOOL = 'show_comparison';
 
 /**
- * Caps on one comparison. They TRUNCATE, like the rest of this family bar the
- * patch tool.
+ * Caps on one comparison. They TRUNCATE, like the rest of this family.
  *
  * FOUR options is where a side-by-side stops being side-by-side in a
  * transcript column — the fifth is what makes the table scroll horizontally,
@@ -2213,9 +2116,8 @@ export interface HostGallery {
  * twenty-four and knows, without being handed its own list.
  *
  * A gallery with no readable path is a MALFORMED call rather than an empty
- * result, answered as INVALID_ARGS on {@link HostChartOutcome}'s rule: an empty
- * findings report is a real review outcome, a gallery of no pictures is only
- * ever a mistake.
+ * result, answered as INVALID_ARGS on {@link HostChartOutcome}'s rule: a
+ * gallery of no pictures is only ever a mistake.
  */
 export type HostGalleryOutcome =
   | { status: 'drawn'; images: number }
@@ -2344,9 +2246,9 @@ export const HOST_ARTIFACT_ANSWERS_TOOL = 'artifact_answers';
 
 /**
  * Caps on one artifact. Unlike the gallery's beside them these REFUSE rather than
- * truncate, on {@link HOST_PATCH_TOOL}'s rule: the first N bytes of an HTML
- * document is not a smaller document, it is a broken one — an unclosed tag, half
- * a script, a page that renders as its own source. An agent told the page was too
+ * truncate: the first N bytes of an HTML document is not a smaller document, it
+ * is a broken one — an unclosed tag, half a script, a page that renders as its
+ * own source. An agent told the page was too
  * large can write a smaller one; an agent handed a silent truncation publishes
  * rubbish and is told it succeeded.
  *
@@ -2514,90 +2416,6 @@ export type HostBoardTool = (typeof HOST_BOARD_TOOLS)[number];
 export const HOST_BOARD_ASKED_TOOLS: readonly HostBoardTool[] = ['delete_task'];
 
 /**
- * The render family's third tool, and the first that is not only a drawing.
- *
- * An agent proposes a change it has NOT made: the transcript shows the diff
- * with Apply and Reject, and geniro writes the file if the user presses Apply.
- * That is the whole point of it — an agent working under `ask` can hand over a
- * fix without holding a write gate open, and an agent that is not allowed to
- * edit at all can still be useful.
- *
- * THREE ways this one is not like its siblings, each load-bearing:
- *
- * 1. It PARKS. `report_findings` and `show_chart` are fire-and-forget; this one
- *    resolves only when the user answers, so it uses the same parked-promise
- *    machinery as {@link HOST_QUESTION_TOOL} — and, like it, rides an ordinary
- *    `approval_request` row rather than inventing a second card channel.
- * 2. It carries a REAL gate, and exactly one. The tool CALL auto-approves like
- *    its siblings' — calling it writes nothing, it only puts a diff on screen —
- *    while the Apply press on that diff is what reaches the disk. Getting this
- *    backwards puts a meaningless "allow propose_patch?" card in front of the
- *    meaningful one, which is what a live turn did before the auto-approve arm
- *    existed.
- * 3. Its caps REFUSE rather than truncate. Every cap above truncates, because a
- *    model that found forty things has still done the work. Truncating a patch
- *    would write a TRUNCATED FILE — the one place where taking the first N
- *    characters is worse than answering "too large".
- *
- * The argument names are `Edit`'s (`file_path` / `old_string` / `new_string`)
- * and deliberately so: an agent that knows that tool needs to learn nothing,
- * and the renderer's `editDiffOf` already draws exactly this shape, so the card
- * gets its diff without a second diff renderer.
- */
-export const HOST_PATCH_TOOL = 'propose_patch';
-
-/**
- * Refusal thresholds, not truncation points — see (3) above.
- *
- * The text cap is per side and generous: it has to hold a whole new file, since
- * a patch with no `old_string` IS a file creation.
- */
-export const MAX_PATCH_TEXT_LENGTH = 200_000;
-export const MAX_PATCH_PATH_LENGTH = 1024;
-export const MAX_PATCH_SUMMARY_LENGTH = 200;
-
-/** One `propose_patch` call, as the card will show it. */
-export interface HostPatch {
-  /** Where the change goes, resolved against the run's own cwd. */
-  filePath: string;
-  /**
-   * The exact text being replaced, or absent to write the file WHOLE.
-   *
-   * Absent is `Write`'s shape — a new file, or a deliberate full rewrite — and
-   * the renderer already draws that as additions only.
-   */
-  oldString?: string;
-  newString: string;
-  /** One line saying what the change does; the card's heading. */
-  summary?: string;
-}
-
-/** The whole-file target's byte state when its patch card was raised. */
-export type HostPatchFingerprint = 'absent' | { sha256: string };
-
-/**
- * What a proposed patch resolves to.
- *
- * Four arms, and `stale` is the one that earns its place: the user said YES and
- * the write still could not happen — the file no longer holds the text the
- * agent matched on, it holds it twice, or the path is one this app will not
- * write to. Folding that into `declined` would tell the agent its fix was
- * rejected when it was in fact accepted, and folding it into `unavailable`
- * would hide that the right move is to look at the file again and re-propose.
- * The `reason` is what separates the cases.
- *
- * `posted` is the fifth, and it is not an ending — the same arm a deferred
- * question has. A CLI that will not hold the call open is told the card is up;
- * Apply or Reject arrives later, as the run's next message.
- */
-export type HostPatchOutcome =
-  | { status: 'applied'; path: string }
-  | { status: 'declined' }
-  | { status: 'stale'; reason: string }
-  | { status: 'posted' }
-  | { status: 'unavailable'; reason: string };
-
-/**
  * An analysis's change to a project's instructions, put on a card with the
  * old and new text before anything is written — in every approval mode,
  * because the text reaches every later run in the project.
@@ -2627,7 +2445,12 @@ export interface ProjectChatSource {
   brief(projectId: string, cwd: string): Promise<string>;
 }
 
-/** What a project-instructions card resolves to; the arms mean what {@link HostPatchOutcome}'s do. */
+/**
+ * What a project-instructions card resolves to. `stale` is the user's yes that
+ * still could not be written — the instructions moved past `baseRevision` — so
+ * the agent re-reads them rather than taking it as a rejection. `posted` is not
+ * an ending: the card is up and the verdict arrives as the run's next message.
+ */
 export type HostProjectInstructionsOutcome =
   | { status: 'saved'; instructionsRevision: number }
   | { status: 'declined' }
@@ -2647,21 +2470,21 @@ export type HostProjectInstructionsOutcome =
  * cheapest correction there is — a plan is redirected in one sentence, while
  * the same misunderstanding found after the edits costs a revert.
  *
- * Structurally this is {@link HOST_PATCH_TOOL}'s twin: it PARKS on an ordinary
- * `approval_request` row, its CALL auto-approves (proposing changes nothing), and
- * the press on the card is the only gate. Three things are its own:
+ * It PARKS on an ordinary `approval_request` row, its CALL auto-approves
+ * (proposing changes nothing), and the press on the card is the only gate.
+ * Three things are its own:
  *
- * 1. Approving performs NO action. A patch's Apply writes a file; a plan's
- *    Approve is the answer itself, and the work that follows is the agent's own
- *    ordinary turn. So there is no `stale` arm — nothing can have moved
- *    underneath a decision that touches nothing.
+ * 1. Approving performs NO action. A plan's Approve is the answer itself, and
+ *    the work that follows is the agent's own ordinary turn. So there is no
+ *    `stale` arm — nothing can have moved underneath a decision that touches
+ *    nothing.
  * 2. Both verdicts carry an optional NOTE, and that is where most of this tool's
  *    value is. "No" alone tells an agent nothing and costs a round trip to ask
  *    what the user would rather have; "no — leave the parser alone, just fix the
  *    cap" redirects it in the same press. It rides the `answer` field the
  *    approval channel already carries for questions.
- * 3. It is not a question, and is tracked as `question: false` like the patch
- *    tool. The badge then reads "waiting for approval", which is what a card
+ * 3. It is not a question, and is tracked as `question: false` like the
+ *    project-instructions card. The badge then reads "waiting for approval", which is what a card
  *    whose primary controls are Approve and Reject actually wants — the note is
  *    an addition to a verdict, not the verdict itself.
  *
@@ -2672,8 +2495,7 @@ export type HostProjectInstructionsOutcome =
 export const HOST_PLAN_TOOL = 'propose_plan';
 
 /**
- * Truncation points, on the findings tool's rule rather than the patch tool's:
- * a plan that overran is still a plan, and showing fifteen of its steps beats
+ * Truncation points rather than refusals: a plan that overran is still a plan, and showing fifteen of its steps beats
  * refusing the call. The step cap is where a plan stops being readable at a
  * glance, which is the only thing this card is better at than prose.
  */
@@ -2700,12 +2522,12 @@ export interface HostPlan {
 /**
  * What a proposed plan resolves to.
  *
- * Three arms, one fewer than the patch tool's: approving a plan performs no
- * action, so nothing can go `stale` between the press and the effect. The note
+ * Two verdict arms and no `stale`: approving a plan performs no action, so
+ * nothing can go stale between the press and the effect. The note
  * hangs off BOTH verdicts because a user who approves with a caveat is telling
  * the agent something it must not lose.
  *
- * `posted` is the fourth, shared with the question and the patch: the card is
+ * `posted` is shared with the question and the project card: the card is
  * on screen and the verdict will arrive as the run's next message, because
  * this CLI will not hold the call open for a person.
  */

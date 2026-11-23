@@ -535,7 +535,7 @@ export function BlockPendingLine({
  *
  * `defaultOpen` is the one exception to starting shut, and it earned itself: a
  * delegate's block
- * can hold a RENDER CARD — a findings report, a chart — and that row is the
+ * can hold a RENDER CARD — a chart, a scorecard — and that row is the
  * only copy of what it says, the tool result being a receipt. Shut, the card is
  * work the reader has to go looking for, which is worse than the unattributed
  * row filing it under the delegate replaced. So a block that holds one opens.

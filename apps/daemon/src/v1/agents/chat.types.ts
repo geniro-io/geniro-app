@@ -4911,6 +4911,8 @@ export interface TeamNotesQuery {
   before: number | null;
   limit: number;
   includeSuperseded: boolean;
+  /** No filter given: only notes this conversation was not shown and did not write. */
+  unreadOnly: boolean;
 }
 
 export type TeamNoteWriteOutcome =
@@ -4932,6 +4934,9 @@ export interface TeamNotesReadOutcome {
   nextBefore: number | null;
   /** Notes the reading conversation has still not been shown. */
   unread: number;
+  unreadOnly: boolean;
+  /** Notes an unread-only read left out because this conversation was shown them or wrote them. */
+  seenLeftOut: number;
 }
 
 /** geniro's own tool any agent records a problem that cost work or met the user's disagreement with. */

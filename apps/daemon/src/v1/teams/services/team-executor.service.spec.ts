@@ -7960,6 +7960,7 @@ describe('TeamExecutorService — agent calls', () => {
       before: null,
       limit: 50,
       includeSuperseded: false,
+      unreadOnly: false,
     });
     expect(read).toMatchObject({
       status: 'read',
@@ -7971,6 +7972,164 @@ describe('TeamExecutorService — agent calls', () => {
     await service.deleteRun(run.id);
     expect(teamNotes.canUse(run.id, 'a')).toBe(false);
     expect(teamNotes.canUse(run.id, 'b')).toBe(false);
+  });
+
+  describe('what a conversation was shown is forgotten when its context resets', () => {
+    const UNREAD_NOTES = {
+      kinds: [],
+      author: null,
+      since: null,
+      before: null,
+      limit: 50,
+      includeSuperseded: false,
+      unreadOnly: true,
+    };
+    const COMPACTED = {
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 900_000,
+      postTokens: 20_000,
+    } as const;
+
+    async function helperTurnReading() {
+      const { service, claude, callBroker, teamNotes } = setup();
+      const run = await service.startRun({
+        slug: 'c',
+        team: CALL_WF,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const wrote = await teamNotes.write(run.id, 'orch', 'orch', {
+        kind: 'fact',
+        text: 'the build runs on CI',
+      });
+      expect(wrote.status).toBe('written');
+      void callBroker.callAgent(run.id, 'orch', {
+        title: 'why',
+        agent: 'helper',
+        message: 'plan it',
+        mode: 'async',
+      });
+      await drain();
+      const turn = claude.starts.at(-1)!;
+      const helper = callerKey('helper', 'call-1');
+      const unreadTexts = async (): Promise<string[]> => {
+        const outcome = await teamNotes.read(
+          run.id,
+          'helper',
+          helper,
+          UNREAD_NOTES,
+        );
+        if (outcome.status !== 'read') {
+          throw new Error(`expected a read, got ${outcome.status}`);
+        }
+        return outcome.notes.map((note) => note.text);
+      };
+      const teamNotesCall = (id: string, parentToolUseId?: string) => ({
+        type: 'tool_call' as const,
+        id,
+        name: `mcp__${hostMcpServerName(run.id)}__team_notes`,
+        input: {},
+        ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+      });
+      const teamNotesResult = (
+        id: string,
+        isError: boolean,
+        parentToolUseId?: string,
+      ) => ({
+        type: 'tool_result' as const,
+        id,
+        name: null,
+        result: 'notes',
+        isError,
+        ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+      });
+      return { turn, unreadTexts, teamNotesCall, teamNotesResult };
+    }
+
+    it('forgets what the callee was shown when a delegate of it read the notes, but not after its own read', async () => {
+      const { turn, unreadTexts, teamNotesCall, teamNotesResult } =
+        await helperTurnReading();
+      turn.emit(teamNotesCall('own-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+      turn.emit(teamNotesResult('own-read', false));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emit(teamNotesCall('delegate-read', 'tool-delegate'));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+      turn.emit(teamNotesResult('delegate-read', false, 'tool-delegate'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
+
+    it('forgets what the callee was shown when its read failed or its turn ended before the reply', async () => {
+      const { turn, unreadTexts, teamNotesCall, teamNotesResult } =
+        await helperTurnReading();
+      turn.emit(teamNotesCall('failed-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+      turn.emit(teamNotesResult('failed-read', true));
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+
+      turn.emit(teamNotesCall('cut-read'));
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+      completeTurn(turn, 'stopped');
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
+
+    it('forgets what the callee was shown when its main-thread context is compacted, but not a delegate’s compaction', async () => {
+      const { turn, unreadTexts } = await helperTurnReading();
+      turn.emit({ type: 'session', sessionId: 's-helper' });
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emit({ ...COMPACTED, parentToolUseId: 'tool-delegate' });
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emit(COMPACTED);
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
+
+    it('forgets what the callee was shown when its session is replaced, and keeps it when the id repeats', async () => {
+      const { turn, unreadTexts } = await helperTurnReading();
+      turn.emit({ type: 'session', sessionId: 's-helper' });
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+
+      turn.emit({ type: 'session', sessionId: 's-helper' });
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emit({ type: 'session', sessionId: 's-replaced' });
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
+
+    it('forgets what the callee was shown when a compaction lands after its turn ended', async () => {
+      const { turn, unreadTexts } = await helperTurnReading();
+      turn.emit({ type: 'session', sessionId: 's-helper' });
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+
+      completeTurn(turn, 'planned');
+      await drain();
+      expect(await unreadTexts()).toEqual([]);
+
+      turn.emitOffTurn(COMPACTED);
+      await drain();
+      expect(await unreadTexts()).toEqual(['the build runs on CI']);
+    });
   });
 
   describe("the lead's team and project tools", () => {

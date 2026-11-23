@@ -124,7 +124,10 @@ const QUERY: TeamNotesQuery = {
   before: null,
   limit: 50,
   includeSuperseded: false,
+  unreadOnly: false,
 };
+
+const UNREAD: TeamNotesQuery = { ...QUERY, unreadOnly: true };
 
 function written(outcome: TeamNoteWriteOutcome | HostSinkUnavailable): {
   seq: number;
@@ -458,6 +461,198 @@ describe('TeamNoteBroker', () => {
         conversationId: null,
       }),
     ).toBe(1);
+  });
+
+  it('a no-filter read shows only the notes the conversation was not shown and did not write, and then none', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer', 'reviewer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'first',
+      }),
+    );
+    written(
+      await broker.write('run-a', 'reviewer', 'reviewer', {
+        kind: 'fact',
+        text: 'second',
+      }),
+    );
+
+    const first = read(
+      await broker.read('run-a', 'manager', 'manager', UNREAD),
+    );
+    expect(first.notes.map((note) => note.text)).toEqual(['second', 'first']);
+    expect(first.seenLeftOut).toBe(0);
+    expect(first.unreadOnly).toBe(true);
+
+    const again = read(
+      await broker.read('run-a', 'manager', 'manager', UNREAD),
+    );
+    expect(again.notes).toEqual([]);
+    expect(again.seenLeftOut).toBe(2);
+
+    written(
+      await broker.write('run-a', 'reviewer', 'reviewer', {
+        kind: 'fact',
+        text: 'third',
+      }),
+    );
+    const later = read(
+      await broker.read('run-a', 'manager', 'manager', UNREAD),
+    );
+    expect(later.notes.map((note) => note.text)).toEqual(['third']);
+    expect(later.seenLeftOut).toBe(2);
+  });
+
+  it('since 0 reads every note, and a kind or author read still returns the notes already shown', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'shown',
+      }),
+    );
+    read(await broker.read('run-a', 'manager', 'manager', UNREAD));
+
+    const all = read(
+      await broker.read('run-a', 'manager', 'manager', { ...QUERY, since: 0 }),
+    );
+    expect(all.notes.map((note) => note.text)).toEqual(['shown']);
+    expect(all.unreadOnly).toBe(false);
+    expect(all.seenLeftOut).toBe(0);
+
+    const byAuthor = read(
+      await broker.read('run-a', 'manager', 'manager', {
+        ...QUERY,
+        author: 'engineer',
+      }),
+    );
+    expect(byAuthor.notes.map((note) => note.text)).toEqual(['shown']);
+  });
+
+  it('keeps a conversation’s own notes out of the no-filter read, and since 0 still returns them', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer/c1', {
+        kind: 'fact',
+        text: 'mine',
+      }),
+    );
+
+    const unread = read(
+      await broker.read('run-a', 'engineer', 'engineer/c1', UNREAD),
+    );
+    expect(unread.notes).toEqual([]);
+    expect(unread.seenLeftOut).toBe(1);
+
+    const all = read(
+      await broker.read('run-a', 'engineer', 'engineer/c1', {
+        ...QUERY,
+        since: 0,
+      }),
+    );
+    expect(all.notes.map((note) => note.text)).toEqual(['mine']);
+  });
+
+  it('a fresh conversation of a member gets every note it did not write on its first no-filter read', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'one',
+      }),
+    );
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'two',
+      }),
+    );
+    read(await broker.read('run-a', 'manager', 'manager/c1', UNREAD));
+
+    const other = read(
+      await broker.read('run-a', 'manager', 'manager/c2', UNREAD),
+    );
+    expect(other.notes.map((note) => note.text)).toEqual(['two', 'one']);
+  });
+
+  it('forgetShown makes the next no-filter read show every note again', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'kept',
+      }),
+    );
+    const manager = { memberId: 'manager', conversationId: null };
+    read(await broker.read('run-a', 'manager', 'manager', UNREAD));
+    expect(
+      read(await broker.read('run-a', 'manager', 'manager', UNREAD)).notes,
+    ).toEqual([]);
+
+    broker.forgetShown('run-a', manager);
+    expect(broker.unreadCount('run-a', manager)).toBe(1);
+    const again = read(
+      await broker.read('run-a', 'manager', 'manager', UNREAD),
+    );
+    expect(again.notes.map((note) => note.text)).toEqual(['kept']);
+  });
+
+  it('sessionOpened forgets what a conversation was shown only when its session id changes', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'kept',
+      }),
+    );
+    const manager = { memberId: 'manager', conversationId: null };
+
+    broker.sessionOpened('run-a', manager, 's1');
+    read(await broker.read('run-a', 'manager', 'manager', UNREAD));
+    broker.sessionOpened('run-a', manager, 's1');
+    expect(
+      read(await broker.read('run-a', 'manager', 'manager', UNREAD)).notes,
+    ).toEqual([]);
+
+    broker.sessionOpened('run-a', manager, 's2');
+    expect(
+      read(await broker.read('run-a', 'manager', 'manager', UNREAD)).notes.map(
+        (note) => note.text,
+      ),
+    ).toEqual(['kept']);
+  });
+
+  it('a restart forgets what was shown and the session ids, so the first session after it forgets nothing more', async () => {
+    const { broker, items } = setUp();
+    register(broker, items, 'run-a', ['manager', 'engineer']);
+    written(
+      await broker.write('run-a', 'engineer', 'engineer', {
+        kind: 'fact',
+        text: 'kept',
+      }),
+    );
+    const manager = { memberId: 'manager', conversationId: null };
+    broker.sessionOpened('run-a', manager, 's1');
+    read(await broker.read('run-a', 'manager', 'manager', UNREAD));
+
+    broker.forgetRun('run-a');
+    await broker.prime('run-a');
+    const afterRestart = read(
+      await broker.read('run-a', 'manager', 'manager', UNREAD),
+    );
+    expect(afterRestart.notes.map((note) => note.text)).toEqual(['kept']);
+
+    broker.sessionOpened('run-a', manager, 's2');
+    expect(
+      read(await broker.read('run-a', 'manager', 'manager', UNREAD)).notes,
+    ).toEqual([]);
   });
 
   it('filters by kind and by author name or member id', async () => {

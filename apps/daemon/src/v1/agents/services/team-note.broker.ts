@@ -74,9 +74,10 @@ function authorKey(memberId: string, conversationId: string | null): string {
  * A note counts as read only once a reply showed it, so a narrowed read
  * (one kind, one author, an older page) leaves the rest unread. A superseded
  * note never counts: a default read never shows it, and its replacement is
- * the note to read. After a restart nothing has been shown, so every other
- * note a conversation did not write counts again: the figure over-reports
- * rather than hides a note.
+ * the note to read. A conversation's record is forgotten when its context
+ * resets (`forgetShown`, `sessionOpened`) and after a restart, so every other
+ * note it did not write counts again: the figure over-reports rather than
+ * hides a note.
  */
 @Injectable()
 export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
@@ -85,6 +86,8 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
   private readonly loadLog = new Logger(TeamNoteBroker.name);
   /** Per run, per author key: every seq a `team_notes` reply showed it. */
   private readonly shown = new Map<string, Map<string, Set<number>>>();
+  /** Per run, per author key: the session id its CLI last reported. */
+  private readonly sessions = new Map<string, Map<string, string>>();
   /** Per run, the tail of its write chain. */
   private readonly writes = new KeyedChain();
 
@@ -167,10 +170,44 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     );
   }
 
+  /** A conversation's context was reset: its next no-filter read shows every note it did not write. */
+  forgetShown(
+    runId: string,
+    writer: { memberId: string; conversationId: string | null },
+  ): void {
+    this.shown
+      .get(runId)
+      ?.delete(authorKey(writer.memberId, writer.conversationId));
+  }
+
+  /**
+   * The session id a conversation's CLI reported. A different id than the last
+   * one is a new session — a pool hand-off, a carried compaction, a lost session —
+   * and what the conversation was shown went with the old one.
+   */
+  sessionOpened(
+    runId: string,
+    writer: { memberId: string; conversationId: string | null },
+    sessionId: string,
+  ): void {
+    let bySession = this.sessions.get(runId);
+    if (bySession === undefined) {
+      bySession = new Map();
+      this.sessions.set(runId, bySession);
+    }
+    const author = authorKey(writer.memberId, writer.conversationId);
+    const previous = bySession.get(author);
+    bySession.set(author, sessionId);
+    if (previous !== undefined && previous !== sessionId) {
+      this.forgetShown(runId, writer);
+    }
+  }
+
   forgetRun(runId: string): void {
     this.indexes.delete(runId);
     this.loading.delete(runId);
     this.shown.delete(runId);
+    this.sessions.delete(runId);
     this.writes.forget(runId);
   }
 
@@ -240,20 +277,28 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     const author = authorKey(writer.memberId, writer.conversationId);
     const index = await this.indexOf(runId);
     const wanted = query.author?.trim().toLowerCase() ?? null;
-    const matching = foldTeamNotes(
+    const seen = this.shownTo(runId, author);
+    const found = foldTeamNotes(
       await this.itemDao.teamNoteRows(runId, this.em.fork()),
-    )
+    ).filter(
+      (note) =>
+        (query.includeSuperseded || note.supersededBy === null) &&
+        (query.kinds.length === 0 || query.kinds.includes(note.kind)) &&
+        (query.since === null || note.seq > query.since) &&
+        (query.before === null || note.seq < query.before) &&
+        (wanted === null ||
+          note.memberId.toLowerCase() === wanted ||
+          sink.agentName(note.memberId).toLowerCase() === wanted),
+    );
+    const matching = found
       .filter(
         (note) =>
-          (query.includeSuperseded || note.supersededBy === null) &&
-          (query.kinds.length === 0 || query.kinds.includes(note.kind)) &&
-          (query.since === null || note.seq > query.since) &&
-          (query.before === null || note.seq < query.before) &&
-          (wanted === null ||
-            note.memberId.toLowerCase() === wanted ||
-            sink.agentName(note.memberId).toLowerCase() === wanted),
+          !query.unreadOnly ||
+          (authorKey(note.memberId, note.conversationId) !== author &&
+            !seen.has(note.seq)),
       )
       .reverse();
+    const seenLeftOut = found.length - matching.length;
 
     const shown: TeamNoteEntry[] = [];
     let spent = 0;
@@ -269,7 +314,6 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
       spent += cost;
     }
 
-    const seen = this.shownTo(runId, author);
     for (const note of shown) {
       seen.add(note.seq);
     }
@@ -280,6 +324,8 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
       olderRemaining,
       nextBefore: olderRemaining > 0 ? (shown.at(-1)?.seq ?? null) : null,
       unread: this.unreadIn(index, runId, author),
+      unreadOnly: query.unreadOnly,
+      seenLeftOut,
     };
   }
 

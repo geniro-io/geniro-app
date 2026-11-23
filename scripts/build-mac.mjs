@@ -31,10 +31,13 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -62,6 +65,76 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { stdio: 'inherit', cwd: root, ...opts });
 }
 
+function packagedApp() {
+  const distDir = join(release, 'dist');
+  const appDirName = readdirSync(distDir).find((entry) => entry.startsWith('mac'));
+  if (appDirName === undefined) {
+    throw new Error(`no mac* bundle directory under ${distDir}`);
+  }
+  return join(distDir, appDirName, 'Geniro.app');
+}
+
+const THIN_MACH_O_MAGICS = new Set([0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe]);
+const FAT_MACH_O_MAGICS = new Set([0xcafebabe, 0xcafebabf]);
+
+function isMachO(path) {
+  const head = Buffer.alloc(8);
+  const fd = openSync(path, 'r');
+  try {
+    if (readSync(fd, head, 0, 8, 0) < 8) {
+      return false;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const magic = head.readUInt32BE(0);
+  // A Java class file shares the fat magic; its class-format version (>= 45)
+  // sits where a fat binary counts its slices, and lipo crashes on it.
+  return THIN_MACH_O_MAGICS.has(magic) || (FAT_MACH_O_MAGICS.has(magic) && head.readUInt32BE(4) < 20);
+}
+
+/**
+ * Every Mach-O file under `dir` that carries no arm64 slice: macOS warns that an
+ * app holding even one "will not open in macOS 28", though nothing loads it on
+ * Apple Silicon.
+ */
+function machOWithoutArm64(dir) {
+  const found = [];
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const path = join(entry.parentPath, entry.name);
+    if (!isMachO(path)) {
+      continue;
+    }
+    let archs;
+    try {
+      archs = execFileSync('/usr/bin/lipo', ['-archs', path], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim().split(/\s+/);
+    } catch (error) {
+      throw new Error(`lipo could not read ${path}: ${error.stderr || error.message}`);
+    }
+    if (!archs.some((arch) => arch.startsWith('arm64'))) {
+      found.push({ path, archs });
+    }
+  }
+  return found;
+}
+
+function assertEveryMachOHasArm64(app) {
+  const intelOnly = machOWithoutArm64(app);
+  if (intelOnly.length > 0) {
+    throw new Error(
+      `${app} holds Mach-O files with no arm64 slice, which macOS flags as ` +
+        `needing Rosetta:\n${intelOnly.map(({ path, archs }) => `  ${archs.join(' ')}  ${path}`).join('\n')}`,
+    );
+  }
+  console.log('\nEvery Mach-O in the bundle carries an arm64 slice.');
+}
+
 /**
  * Fail the build unless the packaged bundle's designated requirement matches
  * the signing arm that was taken.
@@ -78,12 +151,7 @@ function run(cmd, args, opts = {}) {
  * stop being ad-hoc if a stray CSC_* variable were exported in the shell.
  */
 function assertDesignatedRequirement(signIdentity) {
-  const distDir = join(release, 'dist');
-  const appDirName = readdirSync(distDir).find((entry) => entry.startsWith('mac'));
-  if (appDirName === undefined) {
-    throw new Error(`no mac* bundle directory under ${distDir}`);
-  }
-  const app = join(distDir, appDirName, 'Geniro.app');
+  const app = packagedApp();
   // codesign prints `Executable=…` on stderr and the requirement on stdout;
   // both are wanted in the message when this fails, so both are captured.
   const out = execFileSync('/usr/bin/codesign', ['-d', '-r-', app], {
@@ -200,6 +268,11 @@ try {
       '-prune', '-exec', 'rm', '-rf', '{}', '+']);
     run('find', [modules, '(', '-name', '*.o', '-o', '-name', '*.a', ')',
       '-type', 'f', '-delete']);
+    // The packages ship prebuilds for every platform, darwin-x64 among them.
+    for (const { path, archs } of machOWithoutArm64(modules)) {
+      console.log(`removing ${archs.join(' ')}-only ${path}`);
+      rmSync(path);
+    }
   }
 
   // 6. Package. electronVersion is injected because the --prod staging carries
@@ -262,6 +335,7 @@ try {
   // this release, and it is produced several layers down (electron-builder →
   // @electron/osx-sign → codesign), so it is asserted rather than assumed.
   assertDesignatedRequirement(signIdentity);
+  assertEveryMachOHasArm64(packagedApp());
 
   // 7. Checksums. The app is ad-hoc signed (no notarization ticket), so
   // Gatekeeper provides zero integrity between the GitHub release and an

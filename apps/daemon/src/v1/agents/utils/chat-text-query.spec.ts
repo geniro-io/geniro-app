@@ -82,11 +82,27 @@ describe('matchEveryWordElseAny', () => {
     ]);
   });
 
-  it('does not ask again for a lone word, nor count one-character pieces as words', async () => {
-    const { asked, match } = recording([[], ['never']]);
+  it('asks again without one-character words when they made the first query miss', async () => {
+    const { asked, match } = recording([[], ['partial']]);
 
-    expect(await matchEveryWordElseAny('alpha x', match)).toEqual([]);
-    expect(asked).toEqual(['"alpha"* AND "x"']);
+    expect(await matchEveryWordElseAny('alpha x', match)).toEqual(['partial']);
+    expect(asked).toEqual(['"alpha"* AND "x"', '"alpha"*']);
+  });
+
+  it('does not ask the same query twice', async () => {
+    const lone = recording([[], ['never']]);
+    expect(await matchEveryWordElseAny('alpha', lone.match)).toEqual([]);
+    expect(lone.asked).toEqual(['"alpha"*']);
+
+    const either = recording([[], ['never']]);
+    expect(await matchEveryWordElseAny('alpha OR beta', either.match)).toEqual(
+      [],
+    );
+    expect(either.asked).toEqual(['("alpha"* OR "beta"*)']);
+
+    const single = recording([[], ['never']]);
+    expect(await matchEveryWordElseAny('x', single.match)).toEqual([]);
+    expect(single.asked).toEqual(['"x"']);
   });
 
   it('asks nothing when no word is searchable', async () => {

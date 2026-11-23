@@ -86,8 +86,8 @@ export function chatTextMatchQuery(query: string): string | null {
 
 /**
  * What `match` finds for every word of `query`, or, when that finds nothing,
- * for any of its words — asked again only when more than one word longer
- * than one character is left, since a lone word was already asked alone.
+ * for any of its words longer than one character — asked again only when
+ * that query differs from the first.
  */
 export async function matchEveryWordElseAny<T>(
   query: string,
@@ -102,6 +102,6 @@ export async function matchEveryWordElseAny<T>(
     return found;
   }
   const terms = chatTextQueryTerms(query).filter((term) => term.length > 1);
-  const any = terms.length > 1 ? chatTextMatchQuery(terms.join(' OR ')) : null;
-  return any === null ? [] : match(any);
+  const any = chatTextMatchQuery(terms.join(' OR '));
+  return any === null || any === every ? [] : match(any);
 }

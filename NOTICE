@@ -7,3 +7,15 @@ This project reuses code from the Geniro project (by the same author), used
 under the Apache License 2.0. Third-party Apache-licensed components vendored
 in later milestones (e.g. the Omnigent CLI-agent layer, M2) will have their
 attribution notices added to this file.
+
+Search by meaning downloads, on the user's request, the text model of
+EmbeddingGemma 2 by Google (https://huggingface.co/google/embeddinggemma-2),
+licensed under the Apache License 2.0, in the ONNX export published by
+onnx-community (https://huggingface.co/onnx-community/embeddinggemma-2-ONNX).
+Deployments must adhere to the Gemma Prohibited Use Policy:
+https://ai.google.dev/gemma/prohibited_use_policy
+
+Search by meaning runs that model with ONNX Runtime (onnxruntime-node,
+Copyright Microsoft Corporation, MIT License), tokenizes with
+@huggingface/tokenizers (Apache License 2.0), and stores chat vectors with
+sqlite-vec by Alex Garcia (MIT License or Apache License 2.0).

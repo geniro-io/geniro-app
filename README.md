@@ -430,6 +430,16 @@ Every agent shares one memory, whatever its CLI. An agent searches it, reads an 
 
 The memory works from your phone as well: you can read, edit, forget, approve and clean up there. Import and export happen on the Mac.
 
+## 🔎 Search by meaning
+
+Word search finds an entry only when it shares your words. Turn on **Settings → Search → Search by meaning** and memory search, knowledge search and chat search also find what means the same in other words or in another language: a Russian question finds an English note. One switch covers all three, for your agents' searches and for your own (the chat search dialog and the Knowledge page).
+
+- **On your Mac, downloaded once.** Turning it on downloads the search model (EmbeddingGemma 2, about 346 MB) from Geniro's own release, checks every file against its published checksum and runs it on this Mac only; nothing you write leaves it. A row shows the download with **Cancel**; if it fails you get a notification, a plain reason and **Try again**, and search keeps matching words.
+- **Indexing.** Memory and knowledge are indexed at once. Your whole chat history is indexed in the background, newest first, at low priority, and waits while the Mac runs on battery. The page shows how far each of the three has got.
+- **Off and delete.** Turning it off brings word search back at once and keeps the model and the index on disk, so turning it on again is instant. **Delete model and index…** removes both; Settings → Storage lists and deletes them too.
+- **Updates.** When a later Geniro pins a newer model, the page offers **Update model** with its size; search keeps using the current one until the new index is built.
+- macOS 14 or later. The model is Google's EmbeddingGemma 2 under Apache-2.0; deployments must adhere to the [Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy).
+
 ## 💡 Lessons
 
 Agents repeat mistakes from one thread to the next. When you **archive** a thread, Geniro has a separate, hidden agent read what happened in it since its last reflection and file at most three lessons into the shared memory. A lesson needs evidence from outside the agent's own opinion: you correcting it after it said it was done, an approval you declined, a step that failed and then passed, a failed outcome, a goal closed not achieved or dropped, a trap the team recorded in a pitfall note, a reopened stage or a review finding. It quotes that message, and Geniro checks the quote. A thread with no such signal is not reflected on at all and costs nothing; zero lessons is the normal outcome.

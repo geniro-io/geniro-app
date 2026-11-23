@@ -32,3 +32,7 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 ## Recorded exception: pinning a query plan in a spec
 
 - A spec may prefix `EXPLAIN QUERY PLAN` to a statement a DAO method sent and read the plan, to pin which index the read takes: captured from the connection's `execute` with its bound values (`item.dao.spec.ts` → `planOf`), or, for a `getKysely()` read, which never passes the connection, recorded as better-sqlite3 prepared it (`db/__tests__/sent-statements.ts`, `item.dao.spec.ts` → `inCallRowsOfKind`), and run again through the connection with the same values. No builder expresses it, it runs only in specs, and it executes nothing but the DAO's own statement. Production code never sends it.
+
+## Recorded exception: the embedding child's own file
+
+- `v1/embeddings/worker/embedding-store.ts` opens `<userData>/embeddings.db` through `node:sqlite` in the embedding child, with a standalone Kysely instance over it (`worker/node-sqlite-dialect.ts`, Kysely's own `SqliteDialect`); every table, index and query goes through that builder. Hand-written are only what no builder expresses: the `vec0` virtual table's `CREATE VIRTUAL TABLE` (constants only), the sqlite-vec calls `vec_int8(?)` and `vec_distance_cosine(...)` and the KNN `k = ?` constraint (values bound), the connection's `journal_mode` / `busy_timeout` pragmas, and `VACUUM`. The daemon itself only appends to that file's `deletions` table, through the same builder.

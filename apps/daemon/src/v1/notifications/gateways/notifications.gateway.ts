@@ -33,6 +33,7 @@ import { BROWSER_REPLY_MAX_BYTES } from '../../browser/browser.types';
 import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { CommandCenterEventBus } from '../../command-center/services/command-center-events.bus';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { LessonsEventBus } from '../../lessons/services/lessons-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
@@ -162,6 +163,7 @@ export class NotificationsGateway
   private backgroundJobsSubscription?: Subscription;
   private systemAnalysesSubscription?: Subscription;
   private knowledgeSubscription?: Subscription;
+  private embeddingsSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
   private commandCenterSubscription?: Subscription;
   private commandCenterContactSubscription?: Subscription;
@@ -197,6 +199,7 @@ export class NotificationsGateway
     @Optional() private readonly commandCenter?: CommandCenterEventBus,
     @Optional() private readonly backgroundJobs?: BackgroundJobsRegistry,
     @Optional() private readonly systemAnalyses?: SystemAnalysisEventBus,
+    @Optional() private readonly embeddings?: EmbeddingIndexService,
   ) {}
 
   afterInit(server: Server): void {
@@ -442,6 +445,20 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`knowledge event bus errored: ${String(err)}`),
     });
+    // Settings → Search re-reads the status on it; it carries only why.
+    this.embeddingsSubscription = this.embeddings?.changes().subscribe({
+      next: (change) => {
+        try {
+          server.emit('embeddings_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast embeddings_changed (${change.reason}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`embeddings change bus errored: ${String(err)}`),
+    });
     // A project write goes to EVERY client, paired devices included, like a
     // task write: the Projects page, the board and the composer all read it.
     this.projectSubscription = this.projects.allChanges().subscribe({
@@ -584,6 +601,7 @@ export class NotificationsGateway
     this.backgroundJobsSubscription?.unsubscribe();
     this.systemAnalysesSubscription?.unsubscribe();
     this.knowledgeSubscription?.unsubscribe();
+    this.embeddingsSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
     this.commandCenterSubscription?.unsubscribe();
     this.commandCenterContactSubscription?.unsubscribe();

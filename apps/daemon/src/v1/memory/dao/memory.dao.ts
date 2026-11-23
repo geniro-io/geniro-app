@@ -207,6 +207,35 @@ export class MemoryDao extends BaseDao<Memory> {
         );
   }
 
+  /** The ids of every entry in a scope. */
+  async idsInScope(
+    scope: MemoryMatchScope,
+    em: EntityManager = this.em,
+  ): Promise<string[]> {
+    const rows = await this.scoped(scope, em).select('m.id').execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** What search by meaning embeds: the title and body of live entries with text, all of them or these ids. */
+  async embeddingTexts(
+    ids: readonly string[] | null,
+    em: EntityManager = this.em,
+  ): Promise<{ id: string; title: string; body: string }[]> {
+    if (ids !== null && ids.length === 0) {
+      return [];
+    }
+    let query = this.database(em)
+      .selectFrom('memories')
+      .select(['id', 'title', 'body'])
+      .where('deleted_at', 'is', null);
+    if (ids !== null) {
+      query = query.where('id', 'in', [...ids]);
+    }
+    return (await query.execute()).filter(
+      (row) => row.title.trim() !== '' || row.body.trim() !== '',
+    );
+  }
+
   /** The ids of the best `limit` entries matching a ready-made FTS5 query. */
   async matchIds(
     matchQuery: string,

@@ -119,7 +119,12 @@ export async function matchEveryWordElseAny<T>(
   if (found.length > 0) {
     return found;
   }
-  const terms = chatTextQueryTerms(query).filter((term) => term.length > 1);
-  const any = chatTextMatchQuery(terms.join(' OR '));
+  const any = anyWordMatchQuery(query);
   return any === null || any === every ? [] : match(any);
+}
+
+/** `query` as an FTS5 MATCH expression for any of its words longer than one character, or null. */
+export function anyWordMatchQuery(query: string): string | null {
+  const terms = chatTextQueryTerms(query).filter((term) => term.length > 1);
+  return chatTextMatchQuery(terms.join(' OR '));
 }

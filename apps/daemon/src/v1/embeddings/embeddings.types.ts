@@ -22,6 +22,9 @@ export const EMBEDDING_CHAT_KNN_PER_HIT = 10;
 /** Chat items embedded per indexing step, so a step never holds the child for long. */
 export const EMBEDDING_CHAT_STEP_ITEMS = 32;
 export const EMBEDDING_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
+/** How often new chat messages are looked for; the child starts only when there are some. */
+export const EMBEDDING_CHAT_POLL_MS = 10 * 60_000;
+export const EMBEDDING_CHANGED_THROTTLE_MS = 1_000;
 /** Deleted rows, as a share of all chat chunks, past which the child compacts the file. */
 export const EMBEDDING_VACUUM_SHARE = 0.1;
 
@@ -132,6 +135,31 @@ export interface ChatScore {
 }
 
 export type ModelSlot = 'active' | 'pending';
+
+/** A module whose rows are embedded: memory or knowledge. Registered at its module init. */
+export interface DocumentSourceProvider {
+  readonly source: DocumentSource;
+  /** Every live document's id and current text hash, for the backfill and the totals. */
+  inventory(): Promise<{ sourceId: string; textHash: string }[]>;
+  /** The current text of these ids; an id missing from the answer has no text any more. */
+  documents(sourceIds: readonly string[]): Promise<EmbedDocument[]>;
+}
+
+/** A chat message the index reads, with the `items` rowid its cursors walk. */
+export interface ChatSourceRow extends EmbedChatItem {
+  rowid: number;
+}
+
+/** Chat history, as the agents module reads it for the index. */
+export interface ChatSourceProvider {
+  total(): Promise<number>;
+  newestRowid(): Promise<number>;
+  /** Up to `limit` rows below `rowid`, newest first. */
+  before(rowid: number, limit: number): Promise<ChatSourceRow[]>;
+  /** Up to `limit` rows above `rowid`, oldest first. */
+  after(rowid: number, limit: number): Promise<ChatSourceRow[]>;
+  liveRunIds(): Promise<string[]>;
+}
 
 export interface EmbeddingCounts {
   memory: number;

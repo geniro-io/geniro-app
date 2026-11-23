@@ -1,0 +1,788 @@
+import { existsSync, rmSync, statSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { firstValueFrom, type Observable, Subject } from 'rxjs';
+import { filter, timeout } from 'rxjs/operators';
+
+import {
+  type ChatScore,
+  type ChatSourceProvider,
+  DEFAULT_EMBEDDING_CONFIG,
+  type DocumentSource,
+  type DocumentSourceProvider,
+  EMBEDDING_BATCH_TIMEOUT_MS,
+  EMBEDDING_CHANGED_THROTTLE_MS,
+  EMBEDDING_CHAT_POLL_MS,
+  EMBEDDING_CHAT_STEP_ITEMS,
+  EMBEDDING_CONTROL_TIMEOUT_MS,
+  EMBEDDING_QUERY_TIMEOUT_MS,
+  EMBEDDING_SWEEP_INTERVAL_MS,
+  type EmbeddingConfig,
+  type EmbeddingCounts,
+  type EmbeddingModelRef,
+  type EmbeddingsChangedEvent,
+  type EmbeddingsDatabase,
+  type EmbeddingStatus,
+  type ModelSlot,
+  type SourceScore,
+} from '../embeddings.types';
+import { kyselyOverNodeSqlite } from '../worker/node-sqlite-dialect';
+import { EmbeddingProcessService } from './embedding-process.service';
+
+const DOCUMENT_BATCH = 16;
+const DOCUMENT_SOURCES: readonly DocumentSource[] = ['memory', 'knowledge'];
+const SLOTS: readonly ModelSlot[] = ['active', 'pending'];
+const TOTALS_FRESH_MS = 5_000;
+
+function keyOf(model: Pick<EmbeddingModelRef, 'id' | 'revision'>): string {
+  return `${model.id}@${model.revision}`;
+}
+
+interface SlotProgress {
+  key: string;
+  backfilled: Set<DocumentSource>;
+  chatsDone: boolean;
+  forward: number | null;
+  back: number | null;
+  counts: EmbeddingCounts;
+}
+
+function emptyProgress(key: string): SlotProgress {
+  return {
+    key,
+    backfilled: new Set(),
+    chatsDone: false,
+    forward: null,
+    back: null,
+    counts: { memory: 0, knowledge: 0, chats: 0 },
+  };
+}
+
+/**
+ * What search by meaning knows and does: the config Electron main pushed, the
+ * queue of texts to embed (memory before knowledge before chats), the chat
+ * cursors, and the queries the three searches ask. Every query answers null
+ * when meaning search cannot answer in time, so its caller keeps its word
+ * search.
+ */
+@Injectable()
+export class EmbeddingIndexService implements OnApplicationShutdown {
+  private readonly logger = new Logger(EmbeddingIndexService.name);
+  private readonly changed = new Subject<EmbeddingsChangedEvent>();
+  private config: EmbeddingConfig = DEFAULT_EMBEDDING_CONFIG;
+  private readonly documentProviders = new Map<
+    DocumentSource,
+    DocumentSourceProvider
+  >();
+  private chatProvider: ChatSourceProvider | null = null;
+  private readonly jobs = new Map<DocumentSource, Set<string>>(
+    DOCUMENT_SOURCES.map((source) => [source, new Set<string>()]),
+  );
+  private progress: Record<ModelSlot, SlotProgress | null> = {
+    active: null,
+    pending: null,
+  };
+  private totals: EmbeddingCounts = { memory: 0, knowledge: 0, chats: 0 };
+  private running: Promise<void> | null = null;
+  private rerun = false;
+  private stopped = false;
+  private chatPoll: NodeJS.Timeout | null = null;
+  private sweep: NodeJS.Timeout | null = null;
+  private lastChanged = 0;
+  private totalsReadAt = 0;
+  private changedTimer: NodeJS.Timeout | null = null;
+
+  constructor(private readonly process: EmbeddingProcessService) {
+    this.process.changes().subscribe((event) => {
+      if (event.kind === 'crashed') {
+        this.emit('state');
+      }
+    });
+  }
+
+  registerDocuments(provider: DocumentSourceProvider): void {
+    this.documentProviders.set(provider.source, provider);
+    this.kick();
+  }
+
+  registerChats(provider: ChatSourceProvider): void {
+    this.chatProvider = provider;
+    this.kick();
+  }
+
+  changes(): Observable<EmbeddingsChangedEvent> {
+    return this.changed.asObservable();
+  }
+
+  get enabled(): boolean {
+    return this.config.enabled && this.config.model !== null;
+  }
+
+  async setConfig(next: EmbeddingConfig): Promise<EmbeddingConfig> {
+    const before = this.config;
+    this.config = { ...next };
+    this.process.forgiveFailures();
+    if (!this.enabled) {
+      this.stopTimers();
+      this.process.stop();
+      this.emit('config');
+      return this.config;
+    }
+    const promoted =
+      before.pendingModel !== null &&
+      next.model !== null &&
+      next.pendingModel === null &&
+      keyOf(before.pendingModel) === keyOf(next.model);
+    this.progress = {
+      active: this.carried(next.model),
+      pending: next.pendingModel ? this.carried(next.pendingModel) : null,
+    };
+    await this.process
+      .setModels(next.model, next.pendingModel)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `could not hand the embedding child its models: ${String(err)}`,
+        ),
+      );
+    if (promoted) {
+      await this.process
+        .request({ op: 'promote' }, EMBEDDING_CONTROL_TIMEOUT_MS)
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `could not drop the replaced model's vectors: ${String(err)}`,
+          ),
+        );
+    }
+    this.startTimers();
+    this.emit('config');
+    this.kick();
+    return this.config;
+  }
+
+  enqueue(source: DocumentSource, sourceIds: readonly string[]): void {
+    if (!this.enabled || sourceIds.length === 0) {
+      return;
+    }
+    const queue = this.jobs.get(source);
+    for (const id of sourceIds) {
+      queue?.add(id);
+    }
+    this.kick();
+  }
+
+  async deleteDocuments(
+    source: DocumentSource,
+    sourceIds: readonly string[],
+  ): Promise<void> {
+    if (sourceIds.length === 0) {
+      return;
+    }
+    for (const id of sourceIds) {
+      this.jobs.get(source)?.delete(id);
+    }
+    await this.deleteOrQueue(
+      () =>
+        this.process.request(
+          { op: 'delete', source, sourceIds: [...sourceIds] },
+          EMBEDDING_CONTROL_TIMEOUT_MS,
+        ),
+      sourceIds.map((sourceId) => ({
+        source,
+        source_id: sourceId,
+        run_id: null,
+      })),
+    );
+  }
+
+  async deleteRuns(runIds: readonly string[]): Promise<void> {
+    if (runIds.length === 0) {
+      return;
+    }
+    await this.deleteOrQueue(
+      () =>
+        this.process.request(
+          { op: 'deleteRuns', runIds: [...runIds] },
+          EMBEDDING_CONTROL_TIMEOUT_MS,
+        ),
+      runIds.map((runId) => ({
+        source: 'chats',
+        source_id: null,
+        run_id: runId,
+      })),
+    );
+  }
+
+  /**
+   * The meaning matches of `query` among `sourceIds` (all when null), best
+   * first, or null when meaning search cannot answer: off, no model, a
+   * crashed or busy child, or no answer within the query budget.
+   */
+  async scoreDocuments(
+    source: DocumentSource,
+    query: string,
+    sourceIds: readonly string[] | null,
+    limit: number,
+  ): Promise<SourceScore[] | null> {
+    if (!this.enabled || (sourceIds !== null && sourceIds.length === 0)) {
+      return null;
+    }
+    try {
+      return await this.process.request(
+        {
+          op: 'score',
+          source,
+          query,
+          sourceIds: sourceIds === null ? null : [...sourceIds],
+          limit,
+        },
+        EMBEDDING_QUERY_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.debug(
+        `meaning search for ${source} fell back to words: ${String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /** The nearest chat messages to `query`, restricted to `runIds` when given; null as above. */
+  async searchChats(
+    query: string,
+    k: number,
+    runIds: readonly string[] | null,
+  ): Promise<ChatScore[] | null> {
+    if (!this.enabled || (runIds !== null && runIds.length === 0)) {
+      return null;
+    }
+    try {
+      return await this.process.request(
+        {
+          op: 'searchChats',
+          query,
+          k,
+          runIds: runIds === null ? null : [...runIds],
+        },
+        EMBEDDING_QUERY_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.debug(
+        `meaning search for chats fell back to words: ${String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  async status(): Promise<EmbeddingStatus> {
+    if (this.enabled) {
+      await this.refreshTotals().catch(() => undefined);
+    }
+    const active = this.progress.active;
+    const pending = this.progress.pending;
+    const counts = active?.counts ?? { memory: 0, knowledge: 0, chats: 0 };
+    const chatsLeft = counts.chats < this.totals.chats;
+    const failure = this.process.failure;
+    const busy = this.running !== null || this.backlog() > 0;
+    return {
+      state: !this.enabled
+        ? 'off'
+        : failure
+          ? 'failed'
+          : busy || !this.slotComplete('active')
+            ? 'indexing'
+            : 'ready',
+      model: this.config.model
+        ? { id: this.config.model.id, revision: this.config.model.revision }
+        : null,
+      pendingModel: this.config.pendingModel
+        ? {
+            id: this.config.pendingModel.id,
+            revision: this.config.pendingModel.revision,
+            complete: pending !== null && this.slotComplete('pending'),
+          }
+        : null,
+      counts: {
+        memory: {
+          indexed: Math.min(counts.memory, this.totals.memory),
+          total: this.totals.memory,
+        },
+        knowledge: {
+          indexed: Math.min(counts.knowledge, this.totals.knowledge),
+          total: this.totals.knowledge,
+        },
+        chats: {
+          indexed: Math.min(counts.chats, this.totals.chats),
+          total: this.totals.chats,
+          paused:
+            this.config.onBattery && chatsLeft && this.enabled
+              ? 'battery'
+              : null,
+        },
+      },
+      indexBytes: this.indexBytes(),
+      failure,
+    };
+  }
+
+  /** Delete the whole index; with search by meaning on, it is built again. */
+  async clear(): Promise<void> {
+    if (this.process.alive) {
+      const stopped = firstValueFrom(
+        this.process.changes().pipe(
+          filter((event) => event.kind !== 'started'),
+          timeout(5_000),
+        ),
+      ).catch(() => undefined);
+      this.process.stop();
+      await stopped;
+    }
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      rmSync(this.process.dbPath + suffix, { force: true });
+    }
+    this.progress = {
+      active: this.config.model
+        ? emptyProgress(keyOf(this.config.model))
+        : null,
+      pending: this.config.pendingModel
+        ? emptyProgress(keyOf(this.config.pendingModel))
+        : null,
+    };
+    this.emit('cleared');
+    this.kick();
+  }
+
+  onApplicationShutdown(): void {
+    this.stopped = true;
+    this.stopTimers();
+  }
+
+  private carried(model: EmbeddingModelRef | null): SlotProgress | null {
+    if (!model) {
+      return null;
+    }
+    const key = keyOf(model);
+    for (const slot of SLOTS) {
+      const seen = this.progress[slot];
+      if (seen?.key === key) {
+        return seen;
+      }
+    }
+    return emptyProgress(key);
+  }
+
+  private kick(): void {
+    if (this.stopped || !this.enabled) {
+      return;
+    }
+    if (this.running) {
+      this.rerun = true;
+      return;
+    }
+    this.running = this.work()
+      .catch((err: unknown) =>
+        this.logger.warn(`embedding index work stopped: ${String(err)}`),
+      )
+      .finally(() => {
+        this.running = null;
+        this.emit('progress');
+        if (this.rerun) {
+          this.rerun = false;
+          this.kick();
+        }
+      });
+  }
+
+  private async work(): Promise<void> {
+    while (!this.stopped && this.enabled) {
+      let moved = false;
+      for (const slot of SLOTS) {
+        const progress = this.progress[slot];
+        if (!progress) {
+          continue;
+        }
+        moved = (await this.documentStep(slot, progress)) || moved;
+        if (moved) {
+          break;
+        }
+        if (!this.config.onBattery) {
+          moved = await this.chatStep(slot, progress);
+          if (moved) {
+            break;
+          }
+        }
+      }
+      if (!moved) {
+        return;
+      }
+      this.emit('progress');
+    }
+  }
+
+  private async documentStep(
+    slot: ModelSlot,
+    progress: SlotProgress,
+  ): Promise<boolean> {
+    for (const source of DOCUMENT_SOURCES) {
+      const provider = this.documentProviders.get(source);
+      if (!provider) {
+        continue;
+      }
+      if (!progress.backfilled.has(source)) {
+        const inventory = await provider.inventory();
+        this.totals[source] = inventory.length;
+        const missing = await this.process.request(
+          { op: 'missing', source, slot, items: inventory },
+          EMBEDDING_BATCH_TIMEOUT_MS,
+        );
+        progress.backfilled.add(source);
+        if (missing.length > 0) {
+          this.enqueueFor(source, missing);
+        }
+        await this.refreshCounts(slot, progress);
+        return true;
+      }
+      const queue = this.jobs.get(source);
+      if (!queue || queue.size === 0) {
+        continue;
+      }
+      const ids = [...queue].slice(0, DOCUMENT_BATCH);
+      const documents = await provider.documents(ids);
+      const found = new Set(documents.map((document) => document.sourceId));
+      const gone = ids.filter((id) => !found.has(id));
+      for (const target of SLOTS) {
+        if (!this.progress[target]) {
+          continue;
+        }
+        if (documents.length === 0) {
+          continue;
+        }
+        const stale = new Set(
+          await this.process.request(
+            {
+              op: 'missing',
+              source,
+              slot: target,
+              items: documents.map(({ sourceId, textHash }) => ({
+                sourceId,
+                textHash,
+              })),
+            },
+            EMBEDDING_CONTROL_TIMEOUT_MS,
+          ),
+        );
+        const changed = documents.filter((document) =>
+          stale.has(document.sourceId),
+        );
+        if (changed.length > 0) {
+          await this.process.request(
+            { op: 'index', source, slot: target, documents: changed },
+            EMBEDDING_BATCH_TIMEOUT_MS,
+          );
+        }
+      }
+      if (gone.length > 0) {
+        await this.process.request(
+          { op: 'delete', source, sourceIds: gone },
+          EMBEDDING_CONTROL_TIMEOUT_MS,
+        );
+      }
+      for (const id of ids) {
+        queue.delete(id);
+      }
+      await this.refreshCounts(slot, progress);
+      return true;
+    }
+    return false;
+  }
+
+  private async chatStep(
+    slot: ModelSlot,
+    progress: SlotProgress,
+  ): Promise<boolean> {
+    const chats = this.chatProvider;
+    if (!chats) {
+      return false;
+    }
+    await this.loadCursors(progress, chats);
+    const forward = progress.forward ?? 0;
+    const fresh = await chats.after(forward, EMBEDDING_CHAT_STEP_ITEMS);
+    if (fresh.length > 0) {
+      await this.indexChats(slot, fresh);
+      progress.forward = Math.max(...fresh.map((row) => row.rowid));
+      await this.saveCursor(progress, 'fwd', progress.forward);
+      await this.refreshCounts(slot, progress);
+      return true;
+    }
+    if (progress.chatsDone) {
+      return false;
+    }
+    const older = await chats.before(
+      progress.back ?? 0,
+      EMBEDDING_CHAT_STEP_ITEMS,
+    );
+    if (older.length === 0) {
+      progress.chatsDone = true;
+      await this.saveCursor(progress, 'back', 0);
+      return false;
+    }
+    await this.indexChats(slot, older);
+    progress.back = Math.min(...older.map((row) => row.rowid));
+    await this.saveCursor(progress, 'back', progress.back);
+    await this.refreshCounts(slot, progress);
+    return true;
+  }
+
+  private async indexChats(
+    slot: ModelSlot,
+    rows: readonly {
+      itemId: string;
+      runId: string;
+      createdAt: number;
+      textHash: string;
+      text: string;
+    }[],
+  ): Promise<void> {
+    await this.process.request(
+      {
+        op: 'indexChats',
+        slot,
+        items: rows.map(({ itemId, runId, createdAt, textHash, text }) => ({
+          itemId,
+          runId,
+          createdAt,
+          textHash,
+          text,
+        })),
+      },
+      EMBEDDING_BATCH_TIMEOUT_MS,
+    );
+  }
+
+  private async loadCursors(
+    progress: SlotProgress,
+    chats: ChatSourceProvider,
+  ): Promise<void> {
+    if (progress.forward !== null && progress.back !== null) {
+      return;
+    }
+    const [forward, back] = await Promise.all([
+      this.process.request(
+        { op: 'getMeta', key: `chats:${progress.key}:fwd` },
+        EMBEDDING_CONTROL_TIMEOUT_MS,
+      ),
+      this.process.request(
+        { op: 'getMeta', key: `chats:${progress.key}:back` },
+        EMBEDDING_CONTROL_TIMEOUT_MS,
+      ),
+    ]);
+    if (forward === null || back === null) {
+      const newest = await chats.newestRowid();
+      progress.forward = newest;
+      progress.back = newest + 1;
+      await this.saveCursor(progress, 'fwd', progress.forward);
+      await this.saveCursor(progress, 'back', progress.back);
+      return;
+    }
+    progress.forward = Number(forward);
+    progress.back = Number(back);
+    progress.chatsDone = progress.back === 0;
+  }
+
+  private async saveCursor(
+    progress: SlotProgress,
+    which: 'fwd' | 'back',
+    value: number,
+  ): Promise<void> {
+    await this.process.request(
+      {
+        op: 'setMeta',
+        key: `chats:${progress.key}:${which}`,
+        value: String(value),
+      },
+      EMBEDDING_CONTROL_TIMEOUT_MS,
+    );
+  }
+
+  private async refreshCounts(
+    slot: ModelSlot,
+    progress: SlotProgress,
+  ): Promise<void> {
+    const counts = await this.process.request(
+      { op: 'counts', slot },
+      EMBEDDING_CONTROL_TIMEOUT_MS,
+    );
+    progress.counts = {
+      memory: counts.memory,
+      knowledge: counts.knowledge,
+      chats: counts.chats,
+    };
+  }
+
+  private async refreshTotals(): Promise<void> {
+    if (Date.now() - this.totalsReadAt < TOTALS_FRESH_MS) {
+      return;
+    }
+    this.totalsReadAt = Date.now();
+    for (const source of DOCUMENT_SOURCES) {
+      const provider = this.documentProviders.get(source);
+      if (provider) {
+        this.totals[source] = (await provider.inventory()).length;
+      }
+    }
+    if (this.chatProvider) {
+      this.totals.chats = await this.chatProvider.total();
+    }
+  }
+
+  private slotComplete(slot: ModelSlot): boolean {
+    const progress = this.progress[slot];
+    if (!progress) {
+      return false;
+    }
+    const documentsDone = DOCUMENT_SOURCES.every(
+      (source) =>
+        !this.documentProviders.has(source) || progress.backfilled.has(source),
+    );
+    const chatsDone = this.chatProvider === null || progress.chatsDone;
+    return documentsDone && chatsDone && this.backlog() === 0;
+  }
+
+  private backlog(): number {
+    let size = 0;
+    for (const queue of this.jobs.values()) {
+      size += queue.size;
+    }
+    return size;
+  }
+
+  private enqueueFor(source: DocumentSource, ids: readonly string[]): void {
+    const queue = this.jobs.get(source);
+    for (const id of ids) {
+      queue?.add(id);
+    }
+  }
+
+  private async deleteOrQueue(
+    live: () => Promise<unknown>,
+    rows: { source: string; source_id: string | null; run_id: string | null }[],
+  ): Promise<void> {
+    if (this.process.alive) {
+      try {
+        await live();
+        return;
+      } catch (err) {
+        this.logger.warn(
+          `could not delete vectors in the embedding child, queueing: ${String(err)}`,
+        );
+      }
+    }
+    if (!existsSync(this.process.dbPath)) {
+      return;
+    }
+    const raw = new DatabaseSync(this.process.dbPath);
+    try {
+      raw.exec('PRAGMA busy_timeout = 5000;');
+      const db = kyselyOverNodeSqlite<EmbeddingsDatabase>(raw);
+      const queuedAt = Date.now();
+      await db
+        .insertInto('deletions')
+        .values(rows.map((row) => ({ ...row, queued_at: queuedAt })))
+        .execute();
+    } catch (err) {
+      this.logger.warn(`could not queue a vector deletion: ${String(err)}`);
+    } finally {
+      raw.close();
+    }
+  }
+
+  private indexBytes(): number {
+    return ['', '-wal', '-shm'].reduce((sum, suffix) => {
+      try {
+        return sum + statSync(this.process.dbPath + suffix).size;
+      } catch {
+        return sum;
+      }
+    }, 0);
+  }
+
+  private startTimers(): void {
+    if (!this.chatPoll) {
+      this.chatPoll = setInterval(
+        () => void this.pollChats(),
+        EMBEDDING_CHAT_POLL_MS,
+      );
+      this.chatPoll.unref();
+    }
+    if (!this.sweep) {
+      this.sweep = setInterval(
+        () => void this.sweepRuns(),
+        EMBEDDING_SWEEP_INTERVAL_MS,
+      );
+      this.sweep.unref();
+    }
+  }
+
+  private stopTimers(): void {
+    for (const timer of [this.chatPoll, this.sweep, this.changedTimer]) {
+      if (timer) {
+        clearInterval(timer);
+      }
+    }
+    this.chatPoll = null;
+    this.sweep = null;
+    this.changedTimer = null;
+  }
+
+  private async pollChats(): Promise<void> {
+    const chats = this.chatProvider;
+    const forward = this.progress.active?.forward;
+    if (
+      !chats ||
+      forward === null ||
+      forward === undefined ||
+      this.config.onBattery
+    ) {
+      return;
+    }
+    if ((await chats.after(forward, 1)).length > 0) {
+      this.kick();
+    }
+  }
+
+  private async sweepRuns(): Promise<void> {
+    const chats = this.chatProvider;
+    if (!chats || !this.enabled) {
+      return;
+    }
+    try {
+      await this.process.request(
+        { op: 'keepRuns', runIds: await chats.liveRunIds() },
+        EMBEDDING_BATCH_TIMEOUT_MS,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `the daily sweep of deleted chats' vectors failed: ${String(err)}`,
+      );
+    }
+  }
+
+  private emit(reason: EmbeddingsChangedEvent['reason']): void {
+    const now = Date.now();
+    if (
+      reason !== 'progress' ||
+      now - this.lastChanged >= EMBEDDING_CHANGED_THROTTLE_MS
+    ) {
+      this.lastChanged = now;
+      this.changed.next({ reason });
+      return;
+    }
+    if (!this.changedTimer) {
+      this.changedTimer = setTimeout(() => {
+        this.changedTimer = null;
+        this.lastChanged = Date.now();
+        this.changed.next({ reason: 'progress' });
+      }, EMBEDDING_CHANGED_THROTTLE_MS);
+      this.changedTimer.unref();
+    }
+  }
+}

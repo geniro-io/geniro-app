@@ -24,6 +24,7 @@ import {
   type EmbeddingModelRef,
   type WorkerMessage,
   type WorkerOp,
+  type WorkerRequest,
   type WorkerRequestOf,
   type WorkerResults,
 } from '../embeddings.types';
@@ -262,7 +263,7 @@ export class EmbeddingProcessService implements OnApplicationShutdown {
 
   private send(
     running: Running,
-    request: { op: WorkerOp },
+    request: WorkerRequest,
     timeoutMs: number,
   ): Promise<unknown> {
     this.clearIdle();

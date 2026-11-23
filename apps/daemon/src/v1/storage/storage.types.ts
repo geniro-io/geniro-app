@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const STORAGE_GROUP_IDS = [
   'database',
+  'searchIndex',
   'chatFiles',
   'agentSessions',
   'taskFiles',

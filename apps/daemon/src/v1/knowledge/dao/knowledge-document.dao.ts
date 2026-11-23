@@ -122,6 +122,26 @@ export class KnowledgeDocumentDao extends BaseDao<KnowledgeDocument> {
     return row ? toHead(row) : null;
   }
 
+  /** What search by meaning embeds: the text of live documents, all of them or these ids. */
+  async embeddingTexts(
+    ids: readonly string[] | null,
+    em: EntityManager = this.em,
+  ): Promise<
+    { id: string; title: string; when_to_read: string; body: string }[]
+  > {
+    if (ids !== null && ids.length === 0) {
+      return [];
+    }
+    let query = this.database(em)
+      .selectFrom('knowledge_documents')
+      .select(['id', 'title', 'when_to_read', 'body'])
+      .where('deleted_at', 'is', null);
+    if (ids !== null) {
+      query = query.where('id', 'in', [...ids]);
+    }
+    return query.execute();
+  }
+
   /** The ids among `ids` matching a ready-made FTS5 query, best first. */
   async matchIds(
     matchQuery: string,

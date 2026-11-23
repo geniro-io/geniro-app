@@ -15,6 +15,7 @@ import { AuthModule } from './v1/auth/auth.module';
 import { BackgroundJobsModule } from './v1/background-jobs/background-jobs.module';
 import { CommandCenterModule } from './v1/command-center/command-center.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
+import { EmbeddingsModule } from './v1/embeddings/embeddings.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { KnowledgeModule } from './v1/knowledge/knowledge.module';
 import { LessonsModule } from './v1/lessons/lessons.module';
@@ -67,6 +68,7 @@ export class AppModule {
         LessonsModule,
         BackgroundJobsModule,
         KnowledgeModule,
+        EmbeddingsModule,
         StorageModule,
         MigrationsModule,
         SystemAnalysisModule,

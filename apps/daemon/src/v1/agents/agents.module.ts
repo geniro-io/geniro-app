@@ -8,6 +8,7 @@ import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { BrowserModule } from '../browser/browser.module';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
+import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectDao } from '../projects/dao/project.dao';
@@ -72,6 +73,7 @@ import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatActionsService } from './services/chat-actions.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
+import { ChatEmbeddingSourceService } from './services/chat-embedding-source.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
@@ -205,7 +207,13 @@ import { defaultSpawn } from './utils/spawn-cli';
  * consumer reaches an adapter through `AgentAdapterRegistry`.
  */
 @Module({
-  imports: [BrowserModule, MemoryModule, KnowledgeModule, ProjectsModule],
+  imports: [
+    BrowserModule,
+    MemoryModule,
+    KnowledgeModule,
+    ProjectsModule,
+    EmbeddingsModule,
+  ],
   controllers: [
     AgentActivityController,
     ArtifactsController,
@@ -232,6 +240,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunNamedPathsService,
     ChatSearchIndexDao,
     ChatTextIndexService,
+    ChatEmbeddingSourceService,
     GlobalChatSearchService,
     ChatActionsService,
     ChatArtifactsService,

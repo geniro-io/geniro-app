@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
+import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { KnowledgeController } from './controllers/knowledge.controller';
@@ -21,7 +22,7 @@ import { KnowledgeTextIndexService } from './services/knowledge-text-index.servi
  * `McpModule` and `NotificationsModule` can import it without a cycle.
  */
 @Module({
-  imports: [MemoryModule, ProjectsModule],
+  imports: [MemoryModule, ProjectsModule, EmbeddingsModule],
   controllers: [KnowledgeConfigController, KnowledgeController],
   providers: [
     DesktopOnlyGuard,

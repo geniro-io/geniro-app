@@ -18,7 +18,7 @@ export const MemorySearchArgsSchema = z
       .min(2)
       .max(300)
       .describe(
-        'Words to find in titles and bodies (prefix match), title matches first; every word must match, and when none does, any word may. `OR` between words means either.',
+        'Words to find in titles and bodies (prefix match), title matches first; every word must match, and when none does, any word may. `OR` between words means either. When search by meaning is on in Settings → Search, entries that mean the same in other words are found too.',
       ),
     limit: z
       .number()

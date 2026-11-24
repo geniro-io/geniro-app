@@ -184,18 +184,49 @@ describe('ArchiveThreadDialog', () => {
     expect(container.textContent).toContain('Extract lessons from this thread');
   });
 
-  it('says what extracting does and what finished runs typically cost and took', () => {
+  it('lays the box and its title on one centred grid row, with the hint alone under the title', () => {
     renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
 
-    expect(container.textContent).toContain(
-      'a background agent (Haiku 5.5) reads the thread and saves up to 3 lessons to memory',
-    );
-    expect(container.textContent).toContain('Progress shows in the top bar');
+    const row = container.querySelector<HTMLLabelElement>(
+      '[data-slot="archive-extract-lessons"]',
+    )!;
+    expect(row.className).toContain('grid-cols-[auto_1fr]');
+    expect(row.className).toContain('items-center');
+    expect(row.className).not.toContain('items-start');
+    const [box, title, hint] = [...row.children];
+    expect(box).toBe(checkbox());
+    expect(box!.className).not.toContain('mt-0.5');
+    expect(title!.textContent).toBe('Extract lessons from this thread');
+    expect(hint!.getAttribute('data-slot')).toBe('archive-lessons-typical');
+    expect(hint!.className).toContain('col-start-2');
+    expect(row.children).toHaveLength(3);
+  });
+
+  it('shows one short line of what finished runs typically cost and took', () => {
+    renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
+
+    const row = container.querySelector(
+      '[data-slot="archive-extract-lessons"]',
+    )!;
     expect(
-      container.querySelector('[data-slot="archive-lessons-typical"]')
-        ?.textContent,
-    ).toBe('Usually ~$0.13 and ~2m — median of the last 14 runs on Haiku 5.5');
+      row.querySelector('[data-slot="archive-lessons-typical"]')?.textContent,
+    ).toBe('Usually ~$0.13 and ~2m on Haiku 5.5');
+    expect(row.textContent).toBe(
+      'Extract lessons from this threadUsually ~$0.13 and ~2m on Haiku 5.5',
+    );
     expect(container.textContent).not.toContain('$0.21');
+  });
+
+  it('keeps the whole explanation in the row tooltip', () => {
+    renderDialog({ lessons: LESSONS, lessonModel: 'Haiku 5.5' });
+
+    expect(
+      container
+        .querySelector('[data-slot="archive-extract-lessons"]')
+        ?.getAttribute('title'),
+    ).toBe(
+      'After archiving, a background agent (Haiku 5.5) reads the thread and saves up to 3 lessons to memory for future agents. Progress shows in the top bar. Usually ~$0.13 and ~2m — median of the last 14 runs on Haiku 5.5.',
+    );
   });
 
   it('says the cost is not measured yet before any extraction finished', () => {
@@ -204,7 +235,7 @@ describe('ArchiveThreadDialog', () => {
     expect(
       container.querySelector('[data-slot="archive-lessons-typical"]')
         ?.textContent,
-    ).toBe('Cost not measured yet — no extraction has finished so far');
+    ).toBe('Cost not measured yet');
   });
 
   it('reports the lessons choice when its box is toggled', () => {

@@ -508,7 +508,18 @@ export class RunDao extends BaseDao<Run> {
     since: Date | null,
     txEm?: EntityManager,
   ): Promise<
-    Pick<Run, 'id' | 'status' | 'title' | 'createdAt' | 'cwd' | 'archivedAt'>[]
+    Pick<
+      Run,
+      | 'id'
+      | 'status'
+      | 'title'
+      | 'createdAt'
+      | 'cwd'
+      | 'archivedAt'
+      | 'projectId'
+      | 'projectSource'
+      | 'taskId'
+    >[]
   > {
     return this.getRepo(txEm).find(
       {
@@ -518,7 +529,17 @@ export class RunDao extends BaseDao<Run> {
       {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         ...(limit === null ? {} : { limit }),
-        fields: ['id', 'status', 'title', 'createdAt', 'cwd', 'archivedAt'],
+        fields: [
+          'id',
+          'status',
+          'title',
+          'createdAt',
+          'cwd',
+          'archivedAt',
+          'projectId',
+          'projectSource',
+          'taskId',
+        ],
         disableIdentityMap: true,
       },
     );

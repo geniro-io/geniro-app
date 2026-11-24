@@ -243,6 +243,22 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
       this.getAnyAt(harvestKey(agent, cwd, configDir ?? '')),
     );
   }
+
+  /**
+   * {@link getStale} with the moment it was harvested — for a reading that
+   * states its date, never for answering a listing.
+   */
+  getStaleReading(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+  ): { servers: AgentMcpServer[]; harvestedAt: number } | null {
+    const record = this.recordAnyAt(harvestKey(agent, cwd, configDir ?? ''));
+    const servers = withoutHostServer(record?.entries ?? null);
+    return record === null || servers === null
+      ? null
+      : { servers, harvestedAt: record.harvestedAt };
+  }
 }
 
 /**

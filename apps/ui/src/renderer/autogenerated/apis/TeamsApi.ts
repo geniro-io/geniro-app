@@ -23,9 +23,11 @@ import type {
   CreateTeamDto,
   ExportTeamDto,
   ExportedDto,
+  FreshSessionBasesDto,
   ImportTeamDto,
   InstructionSizesDto,
   ItemDto,
+  MeasureFreshSessionBasesDto,
   MeasureInstructionSizesDto,
   MemberHealth,
   MoveTeamRunStageDto,
@@ -160,6 +162,11 @@ export interface TeamsApiListTeamRunsRequest {
     runId?: string;
     activeSince?: string;
     activeUntil?: string;
+}
+
+export interface TeamsApiMeasureFreshSessionBasesRequest {
+    slug: string;
+    measureFreshSessionBasesDto: MeasureFreshSessionBasesDto;
 }
 
 export interface TeamsApiMeasureInstructionSizesRequest {
@@ -1368,6 +1375,61 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async listTeams(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TeamSummaryDto>> {
         const response = await this.listTeamsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async measureFreshSessionBasesRaw(requestParameters: TeamsApiMeasureFreshSessionBasesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<FreshSessionBasesDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling measureFreshSessionBases().'
+            );
+        }
+
+        if (requestParameters['measureFreshSessionBasesDto'] == null) {
+            throw new runtime.RequiredError(
+                'measureFreshSessionBasesDto',
+                'Required parameter "measureFreshSessionBasesDto" was null or undefined when calling measureFreshSessionBases().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/fresh-session-bases`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['measureFreshSessionBasesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async measureFreshSessionBases(requestParameters: TeamsApiMeasureFreshSessionBasesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<FreshSessionBasesDto> {
+        const response = await this.measureFreshSessionBasesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

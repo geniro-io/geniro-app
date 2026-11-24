@@ -2100,6 +2100,93 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  it('reads every member turn ending of the runs named, with how it ended', async () => {
+    const turn = (
+      runId: string,
+      seq: number,
+      memberId: string | null,
+      payload: Record<string, unknown> | string,
+      kind: ItemKind = 'turn_complete',
+    ) =>
+      dao.create({
+        runId,
+        seq,
+        kind,
+        memberId,
+        payload:
+          typeof payload === 'string' ? payload : JSON.stringify(payload),
+      });
+    await turn('run-a', 11, 'manager', {
+      sessionId: 's1',
+      agentKind: 'claude',
+      agentModel: 'sonnet',
+      nodePoolMember: 2,
+      usage: { contextTokens: 144982, numTurns: 3 },
+    });
+    await turn('run-a', 2, 'manager', { sessionId: 's0', usage: {} });
+    await turn('run-a', 12, null, {
+      sessionId: 'chat',
+      usage: { contextTokens: 9 },
+    });
+    await turn('run-a', 13, 'manager', 'not json');
+    await turn('run-a', 14, 'manager', { sessionId: 's1' }, 'turn_cancelled');
+    await turn('run-b', 1, 'handyman', {
+      sessionId: 's9',
+      usage: { contextTokens: 119207, numTurns: 1 },
+    });
+    await turn('run-c', 1, 'manager', { sessionId: 'other' });
+
+    const readings = await dao.memberTurnReadings(['run-a', 'run-b']);
+
+    expect(
+      readings.map(({ createdAt, ...rest }) => ({
+        ...rest,
+        dated:
+          createdAt instanceof Date && Number.isFinite(createdAt.getTime()),
+      })),
+    ).toEqual([
+      {
+        runId: 'run-a',
+        seq: 2,
+        kind: 'turn_complete',
+        memberId: 'manager',
+        sessionId: 's0',
+        contextTokens: null,
+        numTurns: null,
+        agent: null,
+        model: null,
+        poolMember: null,
+        dated: true,
+      },
+      {
+        runId: 'run-a',
+        seq: 11,
+        kind: 'turn_complete',
+        memberId: 'manager',
+        sessionId: 's1',
+        contextTokens: 144982,
+        numTurns: 3,
+        agent: 'claude',
+        model: 'sonnet',
+        poolMember: 2,
+        dated: true,
+      },
+      expect.objectContaining({ runId: 'run-a', seq: 13, sessionId: null }),
+      expect.objectContaining({
+        runId: 'run-a',
+        seq: 14,
+        kind: 'turn_cancelled',
+        sessionId: 's1',
+      }),
+      expect.objectContaining({
+        runId: 'run-b',
+        memberId: 'handyman',
+        contextTokens: 119207,
+      }),
+    ]);
+    expect(await dao.memberTurnReadings([])).toEqual([]);
+  });
+
   it('counts each agent’s own tool calls per call, with the newest counted seq', async () => {
     const call = (
       seq: number,

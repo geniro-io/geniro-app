@@ -903,6 +903,18 @@ export class ClaudeAdapter extends AgentAdapter {
         homeDir: '.claude',
         fileName: 'CLAUDE.md',
       },
+      /**
+       * Probed on 2.1.331 through `/context`'s memory files in this
+       * repository: `CLAUDE.md` in the folder and above it, with the file its
+       * `@AGENTS.md` line imports listed as a file of its own; no rule under
+       * `.claude/rules` with `paths:` was loaded.
+       */
+      repoInstructions: {
+        kind: 'files',
+        fileNames: ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'],
+        rulesDir: '.claude/rules',
+        atImports: true,
+      },
       followUp: {
         /**
          * A stream-json stdin is a CONVERSATION: a second `{"type":"user"}`

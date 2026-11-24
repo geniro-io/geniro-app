@@ -1212,6 +1212,25 @@ export interface SystemRecommendationApply extends RecommendationApply {
   filed: { id: string; taskId: string; identifier: string | null }[];
 }
 
+/** One member's `turn_complete` row as the fresh-session base reads it (`ItemDao.memberTurnReadings`). */
+export interface MemberTurnReading {
+  runId: string;
+  seq: number;
+  /** How the turn ended. */
+  kind: 'turn_complete' | 'turn_cancelled' | 'error';
+  memberId: string;
+  createdAt: Date;
+  sessionId: string | null;
+  /** The prompt side of the turn's last request. */
+  contextTokens: number | null;
+  /** How many requests the turn made. */
+  numTurns: number | null;
+  agent: string | null;
+  model: string | null;
+  /** The pool member that ran the turn, 1-based; null for a member with no pool. */
+  poolMember: number | null;
+}
+
 /* Thread timeline — `utils/thread-timeline.ts` folds these. */
 
 /** One `tool_call` / `tool_result` row with none of its content. */

@@ -18,6 +18,7 @@ import {
   AnalysisJudgeQuerySchema,
   AnalysisRunsCountSchema,
   AnalysisRunsQuerySchema,
+  FreshSessionBasesWireSchema,
   InstructionSizesWireSchema,
   MemberHealthSchema,
   NodeStateWireSchema,
@@ -98,6 +99,19 @@ export class MeasureInstructionSizesDto extends createZodDto(
 
 export class InstructionSizesDto extends createZodDto(
   InstructionSizesWireSchema,
+) {}
+
+/** The run settings Geniro's instruction block is measured with, sent the way a run start sends them. */
+export const measureFreshSessionBasesSchema = z.object({
+  customInstructions: CustomInstructionsSchema.optional(),
+  replyLanguage: ReplyLanguageSchema.optional(),
+});
+export class MeasureFreshSessionBasesDto extends createZodDto(
+  measureFreshSessionBasesSchema,
+) {}
+
+export class FreshSessionBasesDto extends createZodDto(
+  FreshSessionBasesWireSchema,
 ) {}
 
 export const importTeamSchema = z.object({

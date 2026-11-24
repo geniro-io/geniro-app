@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { formatCount } from '../stats/stats-format';
+import { changedSpans, type DiffLineKind } from './diff-word-spans';
 import { isProposedChange, SAVE_PROJECT_INSTRUCTIONS } from './geniro-tool';
 
 /**
@@ -376,6 +377,13 @@ function unifiedLineClass(line: string): string {
   return 'text-foreground';
 }
 
+function kindOfClass(lineClass: string): DiffLineKind {
+  if (lineClass === REMOVED_CLASS) {
+    return 'removed';
+  }
+  return lineClass === ADDED_CLASS ? 'added' : 'other';
+}
+
 /**
  * A UNIFIED diff, as git prints one — the other shape a diff reaches this app in.
  *
@@ -401,7 +409,7 @@ export function UnifiedDiff({
   const lines = diff.split('\n');
   const classes = unifiedLineClasses(lines);
   const changed = wordLevel
-    ? changedSpans(lines, classes)
+    ? changedSpans(lines, classes.map(kindOfClass))
     : new Map<number, { start: number; end: number }>();
   return (
     <div
@@ -440,78 +448,4 @@ export function UnifiedDiff({
       })}
     </div>
   );
-}
-
-/**
- * For each removed line paired with the added line in the same place of the
- * run after it, the part of both that differs, widened to whole words.
- */
-function changedSpans(
-  lines: readonly string[],
-  classes: readonly string[],
-): Map<number, { start: number; end: number }> {
-  const spans = new Map<number, { start: number; end: number }>();
-  let index = 0;
-  while (index < lines.length) {
-    if (classes[index] !== REMOVED_CLASS) {
-      index += 1;
-      continue;
-    }
-    const removed: number[] = [];
-    while (classes[index] === REMOVED_CLASS) {
-      removed.push(index);
-      index += 1;
-    }
-    const added: number[] = [];
-    while (classes[index] === ADDED_CLASS) {
-      added.push(index);
-      index += 1;
-    }
-    for (
-      let pair = 0;
-      pair < Math.min(removed.length, added.length);
-      pair += 1
-    ) {
-      const [oldSpan, newSpan] = differingSpans(
-        lines[removed[pair]!]!,
-        lines[added[pair]!]!,
-      );
-      spans.set(removed[pair]!, oldSpan);
-      spans.set(added[pair]!, newSpan);
-    }
-  }
-  return spans;
-}
-
-/** Where two diff lines (sign included) differ, widened to word boundaries. */
-function differingSpans(
-  before: string,
-  after: string,
-): [{ start: number; end: number }, { start: number; end: number }] {
-  let start = 1;
-  while (
-    start < before.length &&
-    start < after.length &&
-    before[start] === after[start]
-  ) {
-    start += 1;
-  }
-  while (start > 1 && !/\s/.test(before[start - 1]!)) {
-    start -= 1;
-  }
-  let shared = 0;
-  while (
-    shared < before.length - start &&
-    shared < after.length - start &&
-    before[before.length - 1 - shared] === after[after.length - 1 - shared]
-  ) {
-    shared += 1;
-  }
-  while (shared > 0 && !/\s/.test(before[before.length - shared]!)) {
-    shared -= 1;
-  }
-  return [
-    { start, end: before.length - shared },
-    { start, end: after.length - shared },
-  ];
 }

@@ -4858,6 +4858,57 @@ export interface CreateProjectDto {
 /**
  * 
  * @export
+ * @interface CreateReviewCommentDto
+ */
+export interface CreateReviewCommentDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateReviewCommentDto
+     */
+    folder: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateReviewCommentDto
+     */
+    path: string;
+    /**
+     * 
+     * @type {ReviewCommentSide}
+     * @memberof CreateReviewCommentDto
+     */
+    side: ReviewCommentSide;
+    /**
+     * 
+     * @type {number}
+     * @memberof CreateReviewCommentDto
+     */
+    startLine?: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CreateReviewCommentDto
+     */
+    endLine?: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateReviewCommentDto
+     */
+    quote: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateReviewCommentDto
+     */
+    body: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface CreateRunGoalDto
  */
 export interface CreateRunGoalDto {
@@ -5655,6 +5706,36 @@ export interface EditLessonDto {
      */
     rule: string;
 }
+/**
+ * 
+ * @export
+ * @interface EditReviewCommentDto
+ */
+export interface EditReviewCommentDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof EditReviewCommentDto
+     */
+    body?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof EditReviewCommentDto
+     */
+    status?: EditReviewCommentDtoStatusEnum;
+}
+
+
+/**
+ * @export
+ */
+export const EditReviewCommentDtoStatusEnum = {
+    Resolved: 'resolved',
+    Sent: 'sent'
+} as const;
+export type EditReviewCommentDtoStatusEnum = typeof EditReviewCommentDtoStatusEnum[keyof typeof EditReviewCommentDtoStatusEnum];
+
 /**
  * 
  * @export
@@ -13495,6 +13576,190 @@ export interface RetriedDto {
      */
     retried: boolean;
 }
+
+/**
+ * 
+ * @export
+ */
+export const ReviewAgentStatus = {
+    Fixed: 'fixed',
+    NotFixed: 'not_fixed'
+} as const;
+export type ReviewAgentStatus = typeof ReviewAgentStatus[keyof typeof ReviewAgentStatus];
+
+/**
+ * 
+ * @export
+ * @interface ReviewComment
+ */
+export interface ReviewComment {
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    id: string;
+    /**
+     * The comment within its run, as the agent names it
+     * @type {number}
+     * @memberof ReviewComment
+     */
+    number: number;
+    /**
+     * The folder the comment was made in: the chat folder or one of its agent worktrees
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    folder: string;
+    /**
+     * The file, relative to its repository root
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    path: string;
+    /**
+     * new: lines of the file as it is now; old: removed lines; file: the whole file
+     * @type {ReviewCommentSide}
+     * @memberof ReviewComment
+     */
+    side: ReviewCommentSide;
+    /**
+     * 
+     * @type {number}
+     * @memberof ReviewComment
+     */
+    startLine: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ReviewComment
+     */
+    endLine: number | null;
+    /**
+     * The lines the comment was written on
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    quote: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    body: string;
+    /**
+     * 
+     * @type {ReviewCommentStatus}
+     * @memberof ReviewComment
+     */
+    status: ReviewCommentStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof ReviewComment
+     */
+    sentSeq: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    sentAt: string | null;
+    /**
+     * 
+     * @type {ReviewAgentStatus}
+     * @memberof ReviewComment
+     */
+    agentStatus: ReviewAgentStatus | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    agentReply: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    agentRepliedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    agentMemberId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ReviewComment
+     */
+    updatedAt: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const ReviewCommentSide = {
+    New: 'new',
+    Old: 'old',
+    File: 'file'
+} as const;
+export type ReviewCommentSide = typeof ReviewCommentSide[keyof typeof ReviewCommentSide];
+
+
+/**
+ * 
+ * @export
+ */
+export const ReviewCommentStatus = {
+    Draft: 'draft',
+    Sent: 'sent',
+    Resolved: 'resolved'
+} as const;
+export type ReviewCommentStatus = typeof ReviewCommentStatus[keyof typeof ReviewCommentStatus];
+
+/**
+ * 
+ * @export
+ * @interface ReviewCommentsDto
+ */
+export interface ReviewCommentsDto {
+    /**
+     * 
+     * @type {Array<ReviewComment>}
+     * @memberof ReviewCommentsDto
+     */
+    comments: Array<ReviewComment>;
+}
+/**
+ * 
+ * @export
+ * @interface ReviewSendDto
+ */
+export interface ReviewSendDto {
+    /**
+     * The transcript row the review was sent as
+     * @type {number}
+     * @memberof ReviewSendDto
+     */
+    seq: number;
+    /**
+     * How many comments it carried
+     * @type {number}
+     * @memberof ReviewSendDto
+     */
+    sent: number;
+}
 /**
  * 
  * @export
@@ -15896,6 +16161,25 @@ export interface SendMessageDtoImagesInner {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface SendReviewDto
+ */
+export interface SendReviewDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SendReviewDto
+     */
+    clientMessageId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SendReviewDto
+     */
+    note?: string | null;
+}
 /**
  * 
  * @export

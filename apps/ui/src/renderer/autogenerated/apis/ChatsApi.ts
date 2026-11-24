@@ -33,8 +33,10 @@ import type {
   ChatUploadDto,
   CloseRunGoalDto,
   CreateChatDto,
+  CreateReviewCommentDto,
   CreateRunGoalDto,
   DeliveredWaitingMessageDto,
+  EditReviewCommentDto,
   EditRunGoalDto,
   ForgottenInstructionsDto,
   GlobalChatSearchResultDto,
@@ -50,6 +52,8 @@ import type {
   ResourceAlertConfigDto,
   ResourceAlertsDto,
   RetriedDto,
+  ReviewCommentsDto,
+  ReviewSendDto,
   RunArtifactsDto,
   RunDto,
   RunGoalsDto,
@@ -62,6 +66,7 @@ import type {
   SaveArtifactAnswersDto,
   SaveSurfaceDraftsDto,
   SendMessageDto,
+  SendReviewDto,
   SetRunColorDto,
   SetRunGroupDto,
   SetRunNotesDto,
@@ -81,6 +86,11 @@ import type {
   UploadChatFileDto,
   WaitingMessageDto,
 } from '../models/index';
+
+export interface ChatsApiAddReviewCommentRequest {
+    runId: string;
+    createReviewCommentDto: CreateReviewCommentDto;
+}
 
 export interface ChatsApiAddRunGoalRequest {
     runId: string;
@@ -120,6 +130,11 @@ export interface ChatsApiDeleteChatRequest {
     runId: string;
 }
 
+export interface ChatsApiDeleteReviewCommentRequest {
+    runId: string;
+    commentId: string;
+}
+
 export interface ChatsApiDeliverWaitingMessageRequest {
     runId: string;
     messageId: string;
@@ -132,6 +147,12 @@ export interface ChatsApiDismissChatActionRequest {
 
 export interface ChatsApiDismissResourceAlertRequest {
     alertId: string;
+}
+
+export interface ChatsApiEditReviewCommentRequest {
+    runId: string;
+    commentId: string;
+    editReviewCommentDto: EditReviewCommentDto;
 }
 
 export interface ChatsApiEditRunGoalRequest {
@@ -167,6 +188,10 @@ export interface ChatsApiListChatsRequest {
     runId?: string;
     activeSince?: string;
     activeUntil?: string;
+}
+
+export interface ChatsApiListReviewCommentsRequest {
+    runId: string;
 }
 
 export interface ChatsApiListRunGoalsRequest {
@@ -340,6 +365,11 @@ export interface ChatsApiSendChatMessageRequest {
     sendMessageDto: SendMessageDto;
 }
 
+export interface ChatsApiSendChatReviewRequest {
+    runId: string;
+    sendReviewDto: SendReviewDto;
+}
+
 export interface ChatsApiSetResourceAlertConfigRequest {
     resourceAlertConfigDto: ResourceAlertConfigDto;
 }
@@ -394,6 +424,61 @@ export interface ChatsApiUploadChatFileRequest {
  * 
  */
 export class ChatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async addReviewCommentRaw(requestParameters: ChatsApiAddReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewCommentsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling addReviewComment().'
+            );
+        }
+
+        if (requestParameters['createReviewCommentDto'] == null) {
+            throw new runtime.RequiredError(
+                'createReviewCommentDto',
+                'Required parameter "createReviewCommentDto" was null or undefined when calling addReviewComment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/review-comments`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['createReviewCommentDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async addReviewComment(requestParameters: ChatsApiAddReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewCommentsDto> {
+        const response = await this.addReviewCommentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -812,6 +897,59 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async deleteReviewCommentRaw(requestParameters: ChatsApiDeleteReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewCommentsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling deleteReviewComment().'
+            );
+        }
+
+        if (requestParameters['commentId'] == null) {
+            throw new runtime.RequiredError(
+                'commentId',
+                'Required parameter "commentId" was null or undefined when calling deleteReviewComment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/review-comments/{commentId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"commentId"}}`, encodeURIComponent(String(requestParameters['commentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async deleteReviewComment(requestParameters: ChatsApiDeleteReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewCommentsDto> {
+        const response = await this.deleteReviewCommentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async deliverWaitingMessageRaw(requestParameters: ChatsApiDeliverWaitingMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeliveredWaitingMessageDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -957,6 +1095,69 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async dismissResourceAlert(requestParameters: ChatsApiDismissResourceAlertRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResourceAlertsDto> {
         const response = await this.dismissResourceAlertRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async editReviewCommentRaw(requestParameters: ChatsApiEditReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewCommentsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling editReviewComment().'
+            );
+        }
+
+        if (requestParameters['commentId'] == null) {
+            throw new runtime.RequiredError(
+                'commentId',
+                'Required parameter "commentId" was null or undefined when calling editReviewComment().'
+            );
+        }
+
+        if (requestParameters['editReviewCommentDto'] == null) {
+            throw new runtime.RequiredError(
+                'editReviewCommentDto',
+                'Required parameter "editReviewCommentDto" was null or undefined when calling editReviewComment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/review-comments/{commentId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"commentId"}}`, encodeURIComponent(String(requestParameters['commentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['editReviewCommentDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async editReviewComment(requestParameters: ChatsApiEditReviewCommentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewCommentsDto> {
+        const response = await this.editReviewCommentRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1369,6 +1570,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listResourceAlerts(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResourceAlertsDto> {
         const response = await this.listResourceAlertsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listReviewCommentsRaw(requestParameters: ChatsApiListReviewCommentsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewCommentsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling listReviewComments().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/review-comments`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listReviewComments(requestParameters: ChatsApiListReviewCommentsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewCommentsDto> {
+        const response = await this.listReviewCommentsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -3161,6 +3407,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async sendChatMessage(requestParameters: ChatsApiSendChatMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
         const response = await this.sendChatMessageRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async sendChatReviewRaw(requestParameters: ChatsApiSendChatReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewSendDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling sendChatReview().'
+            );
+        }
+
+        if (requestParameters['sendReviewDto'] == null) {
+            throw new runtime.RequiredError(
+                'sendReviewDto',
+                'Required parameter "sendReviewDto" was null or undefined when calling sendChatReview().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/review-comments/send`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['sendReviewDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async sendChatReview(requestParameters: ChatsApiSendChatReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewSendDto> {
+        const response = await this.sendChatReviewRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

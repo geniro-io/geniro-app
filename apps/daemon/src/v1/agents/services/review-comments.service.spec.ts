@@ -183,7 +183,7 @@ describe('ReviewCommentsService — sending the review', () => {
 
   beforeEach(async () => {
     db = await reviewCommentsDb();
-    await db.seedRun('run-1');
+    await db.seedRun('run-1', { cwd: '/work/shop' });
   });
 
   afterEach(async () => {

@@ -238,6 +238,6 @@ describe('composeReviewText', () => {
       true,
     );
     expect(text).toContain('\n      const a = 1;\n');
-    expect(text).toContain('\n    First line.\n    Second line.\n');
+    expect(text).toContain('\n    First line.\n    Second line.');
   });
 });

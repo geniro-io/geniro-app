@@ -64,6 +64,54 @@ describe('readMonitor', () => {
     ).toEqual({ error: expect.stringContaining('cwd') });
   });
 
+  it('cuts a description longer than 60 characters to its first 60, leaving the command and timeout as they were', () => {
+    expect(
+      readMonitor({
+        command: 'gh run watch 1',
+        description: 'y'.repeat(75),
+        timeout_ms: 1000,
+      }),
+    ).toEqual({
+      command: 'gh run watch 1',
+      description: 'y'.repeat(60),
+      timeoutMs: 1000,
+    });
+  });
+
+  it('trims the end of a description its cut leaves ending in a space', () => {
+    expect(
+      readMonitor({
+        command: 'true',
+        description: `${'a'.repeat(59)} bcd`,
+      }),
+    ).toMatchObject({ description: 'a'.repeat(59) });
+  });
+
+  it('cuts a description of emoji by code point, never splitting a surrogate pair', () => {
+    const { description } = readMonitor({
+      command: 'true',
+      description: '😀'.repeat(70),
+    }) as { description: string };
+    expect(description).toBe('😀'.repeat(60));
+    expect(description).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+  });
+
+  it('refuses an empty, control-character or two-line description, even one past the limit', () => {
+    expect(readMonitor({ command: 'true', description: '   ' })).toEqual({
+      error: expect.stringContaining('description is empty'),
+    });
+    expect(readMonitor({ command: 'true', description: 'x\u0007y' })).toEqual({
+      error: expect.stringContaining('description must be one line'),
+    });
+    expect(
+      readMonitor({ command: 'true', description: `${'a'.repeat(70)}\nb` }),
+    ).toEqual({
+      error: expect.stringContaining('description must be one line'),
+    });
+  });
+
   it('allows a multi-line command line', () => {
     expect(
       readMonitor({ command: 'echo a\necho b', description: 'x' }),

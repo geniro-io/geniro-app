@@ -5945,7 +5945,9 @@ export type MonitorStartOutcome =
 
 /** What a `stop_monitor` call came to. */
 export type MonitorStopOutcome =
-  { status: 'stopped' } | { status: 'refused'; reason: string };
+  | { status: 'stopped' }
+  | { status: 'ended'; end: string }
+  | { status: 'refused'; reason: string };
 
 /**
  * A `publish_action` call as its reader hands it over: the shape is checked,

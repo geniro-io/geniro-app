@@ -260,8 +260,47 @@ describe('MonitorRegistry', () => {
     expect(end.wake).toBe(true);
     expect(await groupGone(pgid)).toBe(true);
     expect(registry.stop(owner.runId, 'm1', 'user')).toEqual({
+      status: 'ended',
+      end: 'stopped',
+    });
+  });
+
+  it('answers a stop of a monitor that ended on its own with how it ended, and refuses an id it never ran', async () => {
+    const ended = endOf(registry);
+    registry.start({
+      owner,
+      command: 'exit 3',
+      description: 'quick',
+      timeoutMs: 10_000,
+    });
+    await ended;
+    expect(registry.stop(owner.runId, 'm1', 'agent', owner.caller)).toEqual({
+      status: 'ended',
+      end: 'exit code 3',
+    });
+    expect(registry.stop(owner.runId, 'm1', 'agent', 'someone-else')).toEqual({
       status: 'refused',
-      reason: 'already ended: stopped',
+      reason: 'no running monitor m1 of yours',
+    });
+    expect(registry.stop(owner.runId, 'm9', 'agent', owner.caller)).toEqual({
+      status: 'refused',
+      reason: 'no running monitor m9 of yours',
+    });
+  });
+
+  it('answers a second stop of a monitor already being stopped as stopping, not as refused', () => {
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'loop',
+      timeoutMs: 10_000,
+    });
+    expect(registry.stop(owner.runId, 'm1', 'agent', owner.caller)).toEqual({
+      status: 'stopped',
+    });
+    expect(registry.stop(owner.runId, 'm1', 'agent', owner.caller)).toEqual({
+      status: 'ended',
+      end: 'stopping',
     });
   });
 

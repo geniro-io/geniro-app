@@ -47,7 +47,7 @@ export function monitorInstructions(): string {
     `A thread runs at most ${MONITOR_RUN_MAX} monitors at once, and a command one of your monitors already runs ` +
     'is refused. A newer monitor does not end an older one: the answer names your others, so stop the one it ' +
     "replaces. It runs in this conversation's folder, under `/bin/sh`. Stop one early with stop_monitor; " +
-    `list_monitors names the ones still running. \`description\` (at most ${MONITOR_DESCRIPTION_MAX} characters) is ` +
-    'how the user and you will tell its messages apart, e.g. "CI run 4812".'
+    `list_monitors names the ones still running. \`description\` is ` +
+    `how the user and you will tell its messages apart, e.g. "CI run 4812"; a longer one is cut to its first ${MONITOR_DESCRIPTION_MAX} characters.`
   );
 }

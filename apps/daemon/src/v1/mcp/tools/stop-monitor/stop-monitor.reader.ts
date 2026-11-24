@@ -27,7 +27,11 @@ export function stopMonitorResultText(
     Exclude<MonitorStopOutcome, { status: 'refused' }> | HostSinkUnavailable,
   id: string,
 ): string {
-  return outcome.status === 'unavailable'
-    ? `Not stopped: ${outcome.reason}.`
-    : `Stopped monitor ${id}. Nothing more is sent from it.`;
+  if (outcome.status === 'unavailable') {
+    return `Not stopped: ${outcome.reason}.`;
+  }
+  if (outcome.status === 'ended') {
+    return `Monitor ${id} already ended: ${outcome.end}. Nothing more is sent from it.`;
+  }
+  return `Stopped monitor ${id}. Nothing more is sent from it.`;
 }

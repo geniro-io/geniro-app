@@ -1,6 +1,7 @@
 import type { MikroORM } from '@mikro-orm/sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { recordSentStatements } from '../../../db/__tests__/sent-statements';
 import { chatSearchDb, said } from '../__tests__/chat-search-db';
 
 const RUN_A = '00000000-0000-4000-8000-00000000000a';
@@ -121,7 +122,23 @@ describe('ChatSearchIndexDao embeddings reads', () => {
       run_id: RUN_A,
       text: `Billing question${ABOUT}`,
     });
-    expect(await db.dao().embeddableCount()).toBe(4);
+    expect(
+      await db.dao().embeddableCountBetween(0, Number.MAX_SAFE_INTEGER),
+    ).toBe(4);
+  });
+
+  it('counts the messages to embed within a window of item rowids, the upper bound included', async () => {
+    const dao = db.dao();
+    const rowids = (await dao.embeddableRows(0, 'after', 100)).map(
+      (row) => row.rowid,
+    );
+
+    expect(await dao.embeddableCountBetween(0, rowids[1]!)).toBe(2);
+    expect(await dao.embeddableCountBetween(rowids[0]!, rowids[1]!)).toBe(1);
+    expect(await dao.embeddableCountBetween(rowids[1]!, rowids[3]!)).toBe(2);
+    expect(
+      await dao.embeddableCountBetween(rowids[3]!, rowids[3]! + 1_000),
+    ).toBe(0);
   });
 
   it('leaves out messages too short to mean anything by meaning, counted or listed', async () => {
@@ -138,7 +155,9 @@ describe('ChatSearchIndexDao embeddings reads', () => {
 
     expect(ids).not.toContain('short-user');
     expect(ids).not.toContain('short-assistant');
-    expect(await dao.embeddableCount()).toBe(4);
+    expect(await dao.embeddableCountBetween(0, Number.MAX_SAFE_INTEGER)).toBe(
+      4,
+    );
     expect(hits.map((row) => row.id)).toEqual(['user-a']);
   });
 
@@ -186,5 +205,49 @@ describe('ChatSearchIndexDao embeddings reads', () => {
     expect(
       (await dao.reachableRunIds({ includeArchived: true })).sort(),
     ).toEqual([RUN_A, RUN_ARCHIVED, RUN_B].sort());
+  });
+
+  it('looks each row up in the text index by rowid, never walking the whole index per row', async () => {
+    const dao = db.dao();
+    const { sent, stop } = await recordSentStatements(orm);
+
+    await dao.embeddableRows(0, 'after', 32);
+    await dao.embeddableRows(Number.MAX_SAFE_INTEGER, 'before', 32);
+    await dao.embeddableCountBetween(0, 50_000);
+    await dao.meaningHitsAmong({ includeArchived: true }, ['user-a', 'user-b']);
+    await dao.reachableRunIds({ includeArchived: true, runId: RUN_A });
+    stop();
+
+    expect(sent).toHaveLength(5);
+    for (const { sql, params } of sent) {
+      const plan = await orm.em
+        .getConnection()
+        .execute<{ detail: string }[]>(`explain query plan ${sql}`, params);
+      const indexSteps = plan
+        .map((step) => step.detail)
+        .filter((detail) => detail.includes('chat_text'));
+      expect(indexSteps).toHaveLength(1);
+      expect(indexSteps[0]).toMatch(
+        /^SCAN chat_text VIRTUAL TABLE INDEX \d+:=$/,
+      );
+    }
+  });
+
+  it('runs a word search off the text index once and looks each hit’s item up by rowid', async () => {
+    const { sent, stop } = await recordSentStatements(orm);
+
+    const hits = await db.dao().match({ includeArchived: true }, 'invoice', 10);
+    stop();
+
+    expect(hits.length).toBeGreaterThan(0);
+    expect(sent).toHaveLength(1);
+    const { sql, params } = sent[0]!;
+    const plan = (
+      await orm.em
+        .getConnection()
+        .execute<{ detail: string }[]>(`explain query plan ${sql}`, params)
+    ).map((step) => step.detail);
+    expect(plan[0]).toMatch(/^SCAN chat_text VIRTUAL TABLE INDEX \d+:M/);
+    expect(plan).toContain('SEARCH i USING INTEGER PRIMARY KEY (rowid=?)');
   });
 });

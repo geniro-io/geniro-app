@@ -32,6 +32,10 @@ export const EMBEDDING_CHAT_KNN_MAX = 500;
 export const EMBEDDING_CHAT_KNN_PER_HIT = 10;
 /** Chat items embedded per indexing step, so a step never holds the child for long. */
 export const EMBEDDING_CHAT_STEP_ITEMS = 32;
+/** The `items` rowids one statement of the chat total counts across, so no statement holds the event loop for long. */
+export const EMBEDDING_CHAT_COUNT_WINDOW = 50_000;
+/** How long a read of the totals is reused before a status read counts them again. */
+export const EMBEDDING_TOTALS_FRESH_MS = 30_000;
 export const EMBEDDING_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 /** How often new chat messages are looked for; the child starts only when there are some. */
 export const EMBEDDING_CHAT_POLL_MS = 10 * 60_000;

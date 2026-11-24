@@ -3,15 +3,17 @@ import { createHash } from 'node:crypto';
 import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 import { filter } from 'rxjs/operators';
 
-import type {
-  ChatSourceProvider,
-  ChatSourceRow,
+import {
+  type ChatSourceProvider,
+  type ChatSourceRow,
+  EMBEDDING_CHAT_COUNT_WINDOW,
 } from '../../embeddings/embeddings.types';
 import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
 import {
   type ChatEmbeddableRow,
   ChatSearchIndexDao,
 } from '../dao/chat-search-index.dao';
+import { eventLoopSlicer } from '../utils/event-loop-slices';
 import { AgentEventBus } from './agent-events.bus';
 
 function sourceRowOf(row: ChatEmbeddableRow): ChatSourceRow {
@@ -43,7 +45,7 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
       return;
     }
     const provider: ChatSourceProvider = {
-      total: () => this.index.embeddableCount(),
+      total: () => this.embeddableTotal(),
       newestRowid: () => this.index.newestItemRowid(),
       before: async (rowid, limit) =>
         (await this.index.embeddableRows(rowid, 'before', limit)).map(
@@ -69,5 +71,19 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
         ),
       )
       .subscribe(() => embeddings.chatAdded());
+  }
+
+  private async embeddableTotal(): Promise<number> {
+    const newest = await this.index.newestItemRowid();
+    const yieldIfHeld = eventLoopSlicer();
+    let total = 0;
+    for (let after = 0; after < newest; after += EMBEDDING_CHAT_COUNT_WINDOW) {
+      await yieldIfHeld();
+      total += await this.index.embeddableCountBetween(
+        after,
+        Math.min(after + EMBEDDING_CHAT_COUNT_WINDOW, newest),
+      );
+    }
+    return total;
   }
 }

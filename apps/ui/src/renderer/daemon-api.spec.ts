@@ -6,9 +6,11 @@ import {
   daemonErrorCode,
   daemonErrorDetail,
   daemonErrorStatus,
+  describeDaemonError,
   isRunBusyError,
   MCP_ROUTE_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,
+  SYSTEM_ANALYSIS_TIMEOUT_MS,
 } from './daemon-api';
 
 const handle: DaemonHandle = {
@@ -219,6 +221,59 @@ describe('the MCP route budget', () => {
     // ...and it is genuinely an override, not the shared ceiling under a new
     // name — the shared one is what it exists to escape.
     expect(MCP_ROUTE_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe('the system-analysis budget', () => {
+  it('is an override above the shared ceiling, not the ceiling under a new name', () => {
+    expect(SYSTEM_ANALYSIS_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe('describeDaemonError on a request the client gave up on', () => {
+  it('says the daemon did not answer in time when the request timed out through the real client', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockRejectedValue(
+          new DOMException('signal timed out', 'TimeoutError'),
+        ),
+    );
+
+    const err = await createDaemonApis(handle)
+      .teams.listTeams()
+      .catch((caught: unknown) => caught);
+
+    expect(describeDaemonError(err)).toBe(
+      'The daemon did not answer in time — it may still finish the request.',
+    );
+  });
+
+  it('says the daemon could not be reached, with the transport’s own reason, for any other fetch failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new TypeError('Failed to fetch')),
+    );
+
+    const err = await createDaemonApis(handle)
+      .teams.listTeams()
+      .catch((caught: unknown) => caught);
+
+    expect(describeDaemonError(err)).toBe(
+      'Could not reach the daemon — Failed to fetch',
+    );
+  });
+
+  it('keeps the daemon’s own sentence and a plain error’s message as they were', () => {
+    expect(
+      describeDaemonError(
+        new Error(
+          'daemon POST /v1/system-analyses failed (409): {"code":"SYSTEM_ANALYSIS_NOTHING","message":"Nothing to analyse."}',
+        ),
+      ),
+    ).toBe('Nothing to analyse.');
+    expect(describeDaemonError(new Error('boom'))).toBe('boom');
   });
 });
 

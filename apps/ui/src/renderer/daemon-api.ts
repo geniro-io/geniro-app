@@ -9,6 +9,7 @@ import {
   Configuration,
   DiagnosticsApi,
   EmbeddingsApi,
+  FetchError,
   GroupsApi,
   HandoffApi,
   KnowledgeApi,
@@ -75,6 +76,26 @@ export const BULK_REVOKE_TIMEOUT_MS = 10 * 60_000;
  * `CODEX_ASK_TIMEOUT_MS`), so the request outlives it.
  */
 export const MEMORY_TRIAGE_TIMEOUT_MS = 4 * 60_000;
+
+/**
+ * The budget for Settings → System analysis's scope read and start. Both build
+ * the period's digest, which reads ledgers and transcripts across every thread
+ * of the period and takes tens of seconds on a large profile.
+ */
+export const SYSTEM_ANALYSIS_TIMEOUT_MS = 3 * 60_000;
+
+const DAEMON_TIMED_OUT =
+  'The daemon did not answer in time — it may still finish the request.';
+const DAEMON_UNREACHABLE = 'Could not reach the daemon';
+
+/**
+ * What the transport actually threw: the generated runtime re-throws every
+ * fetch rejection as a `FetchError` whose own message is boilerplate about
+ * interceptors, with the real error on `.cause`.
+ */
+export function transportCause(err: unknown): unknown {
+  return err instanceof FetchError ? err.cause : err;
+}
 
 /** `/v1/chats/r1/items?afterSeq=3` — what the uniform error names. */
 const routeOf = (url: string): string => {
@@ -157,9 +178,21 @@ export function daemonErrorDetail(err: unknown): string | null {
 
 /** The sentence to show for a failed call: the daemon's own, else the error's. */
 export function describeDaemonError(err: unknown): string {
-  return (
-    daemonErrorDetail(err) ?? (err instanceof Error ? err.message : String(err))
-  );
+  const detail = daemonErrorDetail(err);
+  if (detail !== null) {
+    return detail;
+  }
+  const cause = transportCause(err);
+  if (cause instanceof DOMException && cause.name === 'TimeoutError') {
+    return DAEMON_TIMED_OUT;
+  }
+  if (err instanceof FetchError) {
+    const reason = cause instanceof Error ? cause.message.trim() : '';
+    return reason
+      ? `${DAEMON_UNREACHABLE} — ${reason}`
+      : `${DAEMON_UNREACHABLE}.`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

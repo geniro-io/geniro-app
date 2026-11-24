@@ -1,11 +1,13 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { startTaskRunSchema } from '../../tasks/dto/task-run.dto';
 import {
   CommandCenterBoardSchema,
   CommandCenterChatsDiscardedSchema,
   CommandCenterInstructionsConfigSchema,
   CommandCenterStartsSchema,
+  CommandCenterThreadStartStateSchema,
   CommandCenterTimelineSchema,
   START_FAILURE_MAX_CHARS,
   StartCommandCenterChatSchema,
@@ -92,4 +94,22 @@ export class CommandCenterStartFailedDto extends createZodDto(
 
 export class CommandCenterInstructionsConfigDto extends createZodDto(
   CommandCenterInstructionsConfigSchema,
+) {}
+
+/**
+ * Start a cardless thread the drain took: the user's run settings and the
+ * folder's git stamp, which live in Electron main. No folder — it runs in its
+ * project's own folder, read by the daemon.
+ */
+export const startThreadRunSchema = startTaskRunSchema.pick({
+  startSha: true,
+  startDirty: true,
+  customInstructions: true,
+  replyLanguage: true,
+  agentOptions: true,
+});
+export class StartThreadRunDto extends createZodDto(startThreadRunSchema) {}
+
+export class CommandCenterThreadStartStateDto extends createZodDto(
+  CommandCenterThreadStartStateSchema,
 ) {}

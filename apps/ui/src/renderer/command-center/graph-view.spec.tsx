@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type * as xyflowReactModule from '@xyflow/react';
-import type { ReactFlowProps } from '@xyflow/react';
+import type { ReactFlowInstance, ReactFlowProps } from '@xyflow/react';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
@@ -15,7 +15,8 @@ import {
 } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
-import type { ContactState } from './contact-edge';
+import { BLOCK_ATTENTION_ORDER } from './card-view';
+import type { ContactPulse, ContactState } from './contact-edge';
 import {
   FIXTURE_NOW,
   FIXTURE_PROJECTS,
@@ -24,9 +25,10 @@ import {
 import type { GraphOpenCard, GraphThread } from './graph-view';
 import {
   cardBox,
-  graphRows,
+  graphBlocks,
   GraphView,
   MAX_THREAD_NODES,
+  NO_PROJECT_BLOCK,
   shownThreads,
   wholeFit,
   widthFit,
@@ -38,6 +40,7 @@ const seams = vi.hoisted(() => ({
   setViewport: [] as unknown[][],
   moveStart: null as (() => void) | null,
   flow: null as ReactFlowProps | null,
+  flowApi: null as ReactFlowInstance | null,
 }));
 
 vi.mock('@xyflow/react', async (importOriginal) => {
@@ -55,6 +58,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     },
     useReactFlow: () => {
       const flow = actual.useReactFlow();
+      seams.flowApi = flow;
       let wrapped = spied.get(flow);
       if (wrapped === undefined) {
         wrapped = {
@@ -208,6 +212,7 @@ describe('GraphView', () => {
     seams.setViewport.splice(0);
     seams.moveStart = null;
     seams.flow = null;
+    seams.flowApi = null;
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
     container = document.createElement('div');
@@ -249,6 +254,7 @@ describe('GraphView', () => {
           projects={[]}
           asking={new Map()}
           onAnswer={() => undefined}
+          onUnplaceNode={() => undefined}
           {...overrides}
         />,
       );
@@ -288,38 +294,38 @@ describe('GraphView', () => {
     return nodeAt(slot, id).y;
   }
 
-  it('heads the tree with the manager and hangs every thread under it as a card, wires going down', async () => {
-    await draw({ threads: graphThreadsOf(4) });
+  it('heads the tree with the manager and hangs every project block under it, wires going down', async () => {
+    await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
 
     expect(all('graph-manager')).toHaveLength(1);
     expect(all('graph-thread')).toHaveLength(4);
-    expect(all('contact-edge')).toHaveLength(4);
+    expect(
+      all('contact-edge')
+        .map((edge) => edge.dataset.edge)
+        .sort(),
+    ).toEqual(['contact:block:project-billing', 'contact:block:project-cache']);
     const managerY = nodeY('graph-manager');
     for (const id of ['thread-1', 'thread-2', 'thread-3', 'thread-4']) {
       expect(nodeY('graph-thread', id)).toBeGreaterThan(managerY);
     }
   });
 
-  it('stands the threads in bands by attention: blocked on top, then questions, working, quiet, inactive last', async () => {
-    const threads = graphThreadsOf(10);
+  it('stands each project’s working threads first in its block, the rest after them by attention', async () => {
+    const threads = graphThreadsOf(30);
     await draw({ threads });
 
-    const graph = all('command-center-graph')[0]!;
-    expect(graph.dataset.layout).toBe('bands');
-    const order = [
-      'blocked',
-      'question',
-      'working',
-      'quiet',
-      'inactive',
-    ] as const;
-    const bandY = (attention: (typeof order)[number]): number[] =>
-      threads
-        .filter((thread) => thread.view.attention === attention)
-        .map((thread) => nodeY('graph-thread', thread.id));
-    for (let band = 1; band < order.length; band += 1) {
-      expect(Math.min(...bandY(order[band]!))).toBeGreaterThan(
-        Math.max(...bandY(order[band - 1]!)),
+    expect(all('command-center-graph')[0]!.dataset.layout).toBe('blocks');
+    for (const block of graphBlocks(shownThreads(threads), FIXTURE_PROJECTS)) {
+      const reading = block.threads
+        .map((thread) => ({
+          working: thread.view.attention === 'working',
+          ...nodeAt('graph-thread', thread.id),
+        }))
+        .sort((a, b) => a.y - b.y || a.x - b.x);
+      const lastWorking = reading.map((card) => card.working).lastIndexOf(true);
+      const firstQuiet = reading.findIndex((card) => !card.working);
+      expect(lastWorking).toBeLessThan(
+        firstQuiet === -1 ? Infinity : firstQuiet,
       );
     }
   });
@@ -351,7 +357,7 @@ describe('GraphView', () => {
     expect(Math.min(...below)).toBeGreaterThanOrEqual(top + 400);
   });
 
-  it('keys the colours in a legend, with how many threads stand in each band', async () => {
+  it('keys the threads by attention in a legend, with how many stand in each', async () => {
     await draw({ threads: graphThreadsOf(10) });
 
     const items = all('graph-legend-item').map((item) => item.textContent);
@@ -409,11 +415,64 @@ describe('GraphView', () => {
     expect(manager.querySelector('button')).toBeNull();
   });
 
-  it('draws at most 24 thread cards and one "+N more" node for the rest', async () => {
-    await draw({ threads: graphThreadsOf(30) });
+  it('draws at most 24 thread cards, the rest as a "+N more" line inside their own project’s block, with one wire per block and none to a "+N more"', async () => {
+    const threads = graphThreadsOf(30);
+    await draw({ threads, projects: FIXTURE_PROJECTS });
 
     expect(all('graph-thread')).toHaveLength(MAX_THREAD_NODES);
-    expect(all('graph-more')[0]?.textContent).toBe('+6 more threads');
+    const blocks = graphBlocks(
+      shownThreads(threads),
+      FIXTURE_PROJECTS,
+      new Map(),
+      new Map(),
+      threads,
+    );
+    const left = blocks.filter((block) => block.footer !== undefined);
+    expect(left.length).toBeGreaterThan(0);
+    expect(
+      left.reduce((sum, block) => sum + block.total - block.threads.length, 0),
+    ).toBe(threads.length - MAX_THREAD_NODES);
+    expect(nodesOfType('more')).toHaveLength(left.length);
+    for (const block of left) {
+      const frame = flowNode(block.id);
+      const more = flowNode(block.footer!.id);
+      expect(more.position.x).toBeGreaterThan(frame.position.x);
+      expect(more.position.y + (more.height ?? 0)).toBeLessThan(
+        frame.position.y + (frame.height ?? 0),
+      );
+      expect(more.data).toEqual({ count: block.total - block.threads.length });
+    }
+    const edges = seams.flow?.edges ?? [];
+    expect(edges.map((edge) => edge.target).sort()).toEqual(
+      blocks.map((block) => block.id).sort(),
+    );
+  });
+
+  it('counts every thread of a project in its block’s header, those past the cap included', async () => {
+    const threads = graphThreadsOf(30);
+    await draw({ threads, projects: FIXTURE_PROJECTS });
+
+    const counted = new Map(
+      nodesOfType('block').map((node) => [node.id, node.data.threads]),
+    );
+    expect(counted).toEqual(
+      new Map([
+        [
+          'block:project-billing',
+          threads.filter((thread) => thread.projectId === 'project-billing')
+            .length,
+        ],
+        [
+          'block:project-cache',
+          threads.filter((thread) => thread.projectId === 'project-cache')
+            .length,
+        ],
+        [
+          NO_PROJECT_BLOCK,
+          threads.filter((thread) => thread.projectId === null).length,
+        ],
+      ]),
+    );
   });
 
   it('draws the 24 that need the user most, the still ones left to "+N more"', () => {
@@ -477,17 +536,11 @@ describe('GraphView', () => {
     expect(onOpenInChats).not.toHaveBeenCalled();
   });
 
-  it('keys each project on the graph to its colour in a corner legend, and marks each card with its project’s dot', async () => {
+  it('draws no project legend, on wide or narrow, and marks each card with its project’s dot', async () => {
     await draw({ threads: graphThreadsOf(3), projects: FIXTURE_PROJECTS });
 
-    const legend = all('graph-project').map((entry) => [
-      entry.textContent,
-      entry.dataset.color,
-    ]);
-    expect(legend).toEqual([
-      ['QA Billing', 'blue'],
-      ['QA Cache', 'purple'],
-    ]);
+    expect(all('graph-projects')).toHaveLength(0);
+    expect(all('graph-project')).toHaveLength(0);
     expect(
       threadCard('thread-1')
         .querySelector('[data-slot="thread-card-project-dot"]')!
@@ -498,12 +551,14 @@ describe('GraphView', () => {
         .querySelector('[data-slot="thread-card-project-dot"]')!
         .getAttribute('data-color'),
     ).toBe('purple');
-  });
 
-  it('draws no project legend when no thread on the graph has a project', async () => {
-    await draw({ threads: graphThreadsOf(2), projects: [] });
-
+    await draw({
+      threads: graphThreadsOf(3),
+      projects: FIXTURE_PROJECTS,
+      narrow: true,
+    });
     expect(all('graph-projects')).toHaveLength(0);
+    expect(all('graph-project')).toHaveLength(0);
   });
 
   it('offers Answer only on a thread holding a card for the user, and answers it here rather than opening it', async () => {
@@ -550,7 +605,7 @@ describe('GraphView', () => {
     expect(all('graph-task')).toHaveLength(0);
   });
 
-  it('names each card’s contact state for a screen reader, and paints its wire to match', async () => {
+  it('names each card’s contact state for a screen reader, and paints each block’s wire in its loudest thread’s state', async () => {
     const contacts: Record<string, ContactState> = {
       'thread-1': {
         lastAt: new Date(FIXTURE_NOW - 2 * MINUTE).toISOString(),
@@ -570,19 +625,33 @@ describe('GraphView', () => {
     expect(threadCard('thread-2').getAttribute('aria-label')).toBe(
       'Rebase billing on main, Waiting on you, Question, awaiting a reply, last contact 40m ago',
     );
-    expect(state('thread-1')).toBe('lit');
-    expect(state('thread-2')).toBe('awaiting');
-    expect(state('thread-3')).toBe('idle');
+    expect(state('block:project-billing')).toBe('lit');
+    expect(state('block:project-cache')).toBe('awaiting');
   });
 
-  it('keeps every wire drawn when a reply rebuilds the cards, its state moving from awaiting to lit', async () => {
+  it('gives each block’s wire the pulses of every thread in it that no pin takes out', async () => {
+    const pulse: ContactPulse = {
+      id: 'pulse-1',
+      threadId: 'thread-3',
+      at: new Date(FIXTURE_NOW).toISOString(),
+      direction: 'out',
+    };
+    await draw({ threads: graphThreadsOf(4), pulses: [pulse] });
+
+    const edge = (seams.flow?.edges ?? []).find(
+      (candidate) => candidate.id === 'contact:block:project-billing',
+    );
+    expect(edge?.data?.pulses).toEqual([pulse]);
+  });
+
+  it('keeps every block wire drawn when a reply rebuilds the cards, its state moving from awaiting to lit', async () => {
     const threads = graphThreadsOf(3);
     const sentAt = new Date(FIXTURE_NOW - MINUTE).toISOString();
     await draw({
       threads,
       contacts: { 'thread-1': { lastAt: sentAt, awaitingReply: true } },
     });
-    expect(all('contact-edge')).toHaveLength(3);
+    expect(all('contact-edge')).toHaveLength(2);
 
     await draw({
       threads: threads.map((thread) => ({ ...thread })),
@@ -594,38 +663,59 @@ describe('GraphView', () => {
       },
     });
 
-    expect(all('contact-edge')).toHaveLength(3);
+    expect(all('contact-edge')).toHaveLength(2);
     expect(
       container
-        .querySelector('[data-edge="contact:thread-1"]')
+        .querySelector('[data-edge="contact:block:project-billing"]')
         ?.getAttribute('data-state'),
     ).toBe('lit');
   });
 
-  it('lets the pointer reach every node, so a card answers the mouse', async () => {
-    await draw({ threads: graphThreadsOf(2) });
+  it('lets the pointer reach every card and node, while a block frame passes it through to the canvas', async () => {
+    await draw({ threads: graphThreadsOf(2), projects: FIXTURE_PROJECTS });
 
     const wrappers = Array.from(
       container.querySelectorAll<HTMLElement>('.react-flow__node'),
     );
     expect(wrappers.length).toBeGreaterThan(0);
     for (const wrapper of wrappers) {
-      expect(wrapper.style.pointerEvents).toBe('all');
+      const frame = wrapper.querySelector('[data-slot="project-block"]');
+      expect(wrapper.style.pointerEvents).toBe(frame === null ? 'all' : 'none');
     }
+    expect(all('project-block')).toHaveLength(2);
   });
 
-  it('lays a phone out as one column it scrolls, every card under the manager in attention order', async () => {
+  it('lays a phone out as one column it scrolls, every project’s cards under its heading in block order', async () => {
     const threads = graphThreadsOf(4);
-    await draw({ threads, narrow: true });
+    await draw({ threads, narrow: true, projects: FIXTURE_PROJECTS });
 
     const graph = all('command-center-graph')[0]!;
     expect(graph.dataset.layout).toBe('column');
-    const ys = shownThreads(threads).map((thread) =>
-      nodeY('graph-thread', thread.id),
-    );
+    const ys = graphBlocks(shownThreads(threads), FIXTURE_PROJECTS)
+      .flatMap((block) => block.threads)
+      .map((thread) => nodeY('graph-thread', thread.id));
     expect(ys).toEqual([...ys].sort((a, b) => a - b));
     expect(ys[0]).toBeGreaterThan(nodeY('graph-manager'));
     expect(all('contact-edge')).toHaveLength(4);
+  });
+
+  it('shows a heading over each project’s cards in the phone column, with no frame around them', async () => {
+    const threads = graphThreadsOf(4);
+    await draw({ threads, narrow: true, projects: FIXTURE_PROJECTS });
+
+    expect(all('project-block')).toHaveLength(0);
+    expect(
+      all('project-heading').map((heading) => heading.textContent),
+    ).toEqual([
+      expect.stringContaining('QA Billing'),
+      expect.stringContaining('QA Cache'),
+    ]);
+    for (const block of graphBlocks(shownThreads(threads), FIXTURE_PROJECTS)) {
+      const top = flowNode(`heading:${block.id}`).position.y;
+      for (const thread of block.threads) {
+        expect(nodeY('graph-thread', thread.id)).toBeGreaterThan(top);
+      }
+    }
   });
 
   it('puts the phone column’s flow pane under flow-touch-scroll, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
@@ -847,8 +937,8 @@ describe('GraphView', () => {
     expect(threadNodes.every((node) => node.draggable === true)).toBe(true);
     for (const type of ['manager', 'slot', 'more']) {
       const nodes = nodesOfType(type);
-      expect(nodes).toHaveLength(1);
-      expect(nodes[0]!.draggable).toBe(false);
+      expect(nodes.length).toBeGreaterThan(0);
+      expect(nodes.every((node) => node.draggable === false)).toBe(true);
     }
     expect(seams.flow?.nodeDragThreshold).toBe(5);
   });
@@ -861,23 +951,24 @@ describe('GraphView', () => {
     expect(nodes.every((node) => node.draggable === false)).toBe(true);
   });
 
-  it('moves a dragged thread node with the pointer, and on release places it at the drop, relative to the manager', async () => {
+  it('moves a dragged thread node with the pointer, and on release outside its block places it at the drop, relative to the manager', async () => {
     const onPlaceNode = vi.fn();
-    await draw({ threads: graphThreadsOf(3), onPlaceNode });
-    const start = flowNode('thread:thread-2').position;
-    const to = { x: start.x + 120, y: start.y + 40 };
+    const onUnplaceNode = vi.fn();
+    await draw({ threads: graphThreadsOf(3), onPlaceNode, onUnplaceNode });
+    const start = flowNode('thread:thread-1').position;
+    const to = { x: start.x + 1000, y: start.y };
 
     act(() => {
       seams.flow!.onNodesChange!([
         {
           type: 'position',
-          id: 'thread:thread-2',
+          id: 'thread:thread-1',
           position: to,
           dragging: true,
         },
       ]);
     });
-    const during = nodeAt('graph-thread', 'thread-2');
+    const during = nodeAt('graph-thread', 'thread-1');
     expect(during.x).toBeCloseTo(to.x, 5);
     expect(during.y).toBeCloseTo(to.y, 5);
     expect(onPlaceNode).not.toHaveBeenCalled();
@@ -885,16 +976,173 @@ describe('GraphView', () => {
     act(() => {
       seams.flow!.onNodeDragStop!(
         new MouseEvent('mouseup'),
-        flowNode('thread:thread-2'),
+        flowNode('thread:thread-1'),
         [],
       );
     });
     const manager = nodesOfType('manager')[0]!.position;
     expect(onPlaceNode).toHaveBeenCalledTimes(1);
-    expect(onPlaceNode).toHaveBeenCalledWith('thread-2', {
+    expect(onPlaceNode).toHaveBeenCalledWith('thread-1', {
       x: to.x - manager.x,
       y: to.y - manager.y,
     });
+    expect(onUnplaceNode).not.toHaveBeenCalled();
+  });
+
+  it('takes a card dropped back inside its own block off its pin, and places it nowhere', async () => {
+    const onPlaceNode = vi.fn();
+    const onUnplaceNode = vi.fn();
+    await draw({ threads: graphThreadsOf(4) });
+    const home = flowNode('block:project-billing').position;
+
+    await draw({
+      threads: graphThreadsOf(4),
+      positions: { 'thread-1': { x: 900, y: 600 } },
+      onPlaceNode,
+      onUnplaceNode,
+    });
+    const inside = { x: home.x + 16, y: home.y + 40 };
+    act(() => {
+      seams.flow!.onNodesChange!([
+        {
+          type: 'position',
+          id: 'thread:thread-1',
+          position: inside,
+          dragging: true,
+        },
+      ]);
+    });
+    act(() => {
+      seams.flow!.onNodeDragStop!(
+        new MouseEvent('mouseup'),
+        flowNode('thread:thread-1'),
+        [],
+      );
+    });
+
+    expect(onUnplaceNode).toHaveBeenCalledWith('thread-1');
+    expect(onPlaceNode).not.toHaveBeenCalled();
+  });
+
+  it('holds every block frame where and as big as it was drawn while a card is dragged, until the drop', async () => {
+    await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
+    const frames = () =>
+      nodesOfType('block').map((node) => ({
+        id: node.id,
+        position: node.position,
+        width: node.width,
+        height: node.height,
+      }));
+    const before = frames();
+    const start = flowNode('thread:thread-1').position;
+    const cache = flowNode('block:project-cache').position;
+    const dragTo = (position: { x: number; y: number }): void => {
+      act(() => {
+        seams.flow!.onNodesChange!([
+          { type: 'position', id: 'thread:thread-1', position, dragging: true },
+        ]);
+      });
+    };
+
+    dragTo({ x: start.x + 30, y: start.y + 20 });
+    expect(frames()).toEqual(before);
+    dragTo({ x: cache.x + 10, y: cache.y + 10 });
+    expect(frames()).toEqual(before);
+    expect(nodeAt('graph-thread', 'thread-1')).toEqual({
+      x: cache.x + 10,
+      y: cache.y + 10,
+    });
+  });
+
+  it('takes a pinned card dropped on its block’s frame where the frame is drawn off its pin', async () => {
+    const onPlaceNode = vi.fn();
+    const onUnplaceNode = vi.fn();
+    await draw({
+      threads: graphThreadsOf(4),
+      positions: { 'thread-1': { x: 900, y: 600 } },
+      onPlaceNode,
+      onUnplaceNode,
+    });
+    const card = flowNode('thread:thread-1');
+    const frameNow = () => flowNode('block:project-billing');
+    const dragTo = (position: { x: number; y: number }): void => {
+      act(() => {
+        seams.flow!.onNodesChange!([
+          { type: 'position', id: 'thread:thread-1', position, dragging: true },
+        ]);
+      });
+    };
+    const first = frameNow();
+    dragTo({
+      x: first.position.x + (first.width ?? 0) - 20,
+      y: first.position.y + 10,
+    });
+    const drawn = frameNow();
+    dragTo({
+      x: drawn.position.x + (drawn.width ?? 0) / 2 - (card.width ?? 0) / 2,
+      y: drawn.position.y + 40,
+    });
+    act(() => {
+      seams.flow!.onNodeDragStop!(
+        new MouseEvent('mouseup'),
+        flowNode('thread:thread-1'),
+        [],
+      );
+    });
+
+    expect(onUnplaceNode).toHaveBeenCalledWith('thread-1');
+    expect(onPlaceNode).not.toHaveBeenCalled();
+  });
+
+  it('gives a card dropped out of its block its own wire, and shrinks the block around the cards left in it', async () => {
+    await draw({ threads: graphThreadsOf(4) });
+    const whole = blockSize('block:project-billing');
+
+    await draw({
+      threads: graphThreadsOf(4),
+      positions: { 'thread-1': { x: 900, y: 600 } },
+    });
+    const shrunk = blockSize('block:project-billing');
+    expect(shrunk.width).toBeLessThan(whole.width);
+    expect(shrunk.height).toBeLessThanOrEqual(whole.height);
+    expect(
+      container.querySelector('[data-edge="contact:thread-1"]'),
+    ).not.toBeNull();
+    expect(all('contact-edge')).toHaveLength(3);
+
+    await draw({ threads: graphThreadsOf(4) });
+    expect(blockSize('block:project-billing')).toEqual(whole);
+  });
+
+  it('draws each project block behind its threads, with no pointer of its own', async () => {
+    await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
+
+    const blocks = nodesOfType('block');
+    expect(blocks.map((node) => node.id)).toEqual([
+      'block:project-billing',
+      'block:project-cache',
+    ]);
+    for (const node of blocks) {
+      expect(node.zIndex).toBe(-1);
+      expect(node.style?.pointerEvents).toBe('none');
+      expect(node.draggable).toBe(false);
+      expect(node.selectable).toBe(false);
+    }
+    expect(all('project-block').map((frame) => frame.dataset.color)).toEqual([
+      'blue',
+      'purple',
+    ]);
+  });
+
+  it('heads each project block with its name, its thread count and how many of its threads work', async () => {
+    await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
+
+    const header = (name: string) =>
+      all('project-block-header').find((element) =>
+        element.textContent?.includes(name),
+      )?.textContent;
+    expect(header('QA Billing')).toBe('QA Billing2 · 1 working');
+    expect(header('QA Cache')).toBe('QA Cache2');
   });
 
   it('draws a thread at the place it was left, offset from the manager node', async () => {
@@ -947,13 +1195,15 @@ describe('GraphView', () => {
     expect(nodeAt('graph-thread', 'thread-5')).toEqual(moved);
   });
 
-  it('moves an open card’s slot with its head, and on the drop places it relative to the manager', async () => {
+  it('moves an open card’s slot with its head, and on a drop outside its block places it relative to the manager', async () => {
     Element.prototype.setPointerCapture = vi.fn();
     const onPlaceNode = vi.fn();
+    const onUnplaceNode = vi.fn();
     await draw({
       threads: graphThreadsOf(3),
       openCards: [openCard('thread-2')],
       onPlaceNode,
+      onUnplaceNode,
     });
     const start = nodeAt('graph-slot', 'thread-2');
     const head = container.querySelector<HTMLElement>(
@@ -973,21 +1223,22 @@ describe('GraphView', () => {
     };
 
     press('pointerdown', 100, 100);
-    press('pointermove', 160, 140);
+    press('pointermove', 1000, 140);
     const during = nodeAt('graph-slot', 'thread-2');
-    expect(during.x).toBeCloseTo(start.x + 60, 5);
+    expect(during.x).toBeCloseTo(start.x + 900, 5);
     expect(during.y).toBeCloseTo(start.y + 40, 5);
     expect(onPlaceNode).not.toHaveBeenCalled();
 
-    press('pointerup', 160, 140);
+    press('pointerup', 1000, 140);
     const manager = nodeAt('graph-manager');
     expect(onPlaceNode).toHaveBeenCalledWith('thread-2', {
-      x: start.x + 60 - manager.x,
+      x: start.x + 900 - manager.x,
       y: start.y + 40 - manager.y,
     });
+    expect(onUnplaceNode).not.toHaveBeenCalled();
   });
 
-  it('moves a dragged thread’s wire with it at once, while every other wire keeps gliding', async () => {
+  it('moves a dragged card’s wire with it at once, while every other block wire keeps gliding', async () => {
     Element.prototype.setPointerCapture = vi.fn();
     await draw({
       threads: graphThreadsOf(3),
@@ -1019,13 +1270,14 @@ describe('GraphView', () => {
     expect(
       wire('thread-2').querySelector('path')!.getAttribute('class'),
     ).toMatch(/(^|\s)transition-none(\s|$)/);
-    expect(wire('thread-1').dataset.moving).toBeUndefined();
+    expect(wire('block:project-billing').dataset.moving).toBeUndefined();
     expect(
-      wire('thread-1').querySelector('path')!.getAttribute('class'),
+      wire('block:project-billing')
+        .querySelector('path')!
+        .getAttribute('class'),
     ).not.toMatch(/(^|\s)transition-none(\s|$)/);
 
     press('pointerup', 160, 140);
-    expect(wire('thread-2').dataset.moving).toBeUndefined();
   });
 
   it('keeps a two-finger pan that started on the graph moving the graph over an open card, and leaves a scroll that started on the card to the card', async () => {
@@ -1144,9 +1396,52 @@ describe('GraphView', () => {
       globalThis.ResizeObserver = previous;
     }
   });
+
+  it('lets the view pan far past the graph and keeps it there', async () => {
+    await draw({ threads: graphThreadsOf(3) });
+
+    act(() => {
+      void seams.flowApi!.setViewport({ x: -90_000, y: 90_000, zoom: 1 });
+    });
+    await settle();
+
+    expect(seams.flow).not.toHaveProperty('translateExtent');
+    expect(seams.flowApi!.getViewport()).toEqual({
+      x: -90_000,
+      y: 90_000,
+      zoom: 1,
+    });
+  });
+
+  it('brings the whole graph back into view from far off with Fit', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('reduce'),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    await draw({ threads: graphThreadsOf(3) });
+    act(() => {
+      void seams.flowApi!.setViewport({ x: -90_000, y: 90_000, zoom: 1 });
+    });
+    await settle();
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Fit the graph"]')!
+        .click();
+    });
+    await settle();
+
+    const view = seams.flowApi!.getViewport();
+    const manager = nodeAt('graph-manager');
+    expect(view.x).toBeGreaterThanOrEqual(0);
+    expect(view.y).toBeGreaterThanOrEqual(0);
+    expect(view.zoom).toBeLessThanOrEqual(1);
+    expect(manager.x * view.zoom + view.x).toBeGreaterThanOrEqual(0);
+  });
 });
 
-describe('graphRows', () => {
+describe('graphBlocks', () => {
   it('sizes an open thread’s box as its card, and every other thread as its node', () => {
     const threads = graphThreadsOf(3);
     const size = { width: 500, height: 300 };
@@ -1154,17 +1449,55 @@ describe('graphRows', () => {
       ['thread-2', openCard('thread-2', size)],
     ]);
 
-    const boxes = graphRows(shownThreads(threads, open), 0, 0, open).flat();
+    const items = graphBlocks(
+      shownThreads(threads, open),
+      FIXTURE_PROJECTS,
+      open,
+    ).flatMap((block) => block.items);
 
-    expect(boxes.find((box) => box.id === 'thread:thread-2')).toEqual({
+    expect(items.find((box) => box.id === 'thread:thread-2')).toEqual({
       id: 'thread:thread-2',
       ...cardBox(size),
     });
-    expect(boxes.find((box) => box.id === 'thread:thread-1')).toEqual({
+    expect(items.find((box) => box.id === 'thread:thread-1')).toEqual({
       id: 'thread:thread-1',
       width: THREAD_CARD_WIDTH,
       height: threadCardHeight(threads[0]!.view),
     });
+  });
+
+  it('gives one block per project in the order the projects stand, and the threads of no project a block last', () => {
+    const blocks = graphBlocks(graphThreadsOf(7), FIXTURE_PROJECTS);
+
+    expect(blocks.map((block) => block.id)).toEqual([
+      'block:project-billing',
+      'block:project-cache',
+      NO_PROJECT_BLOCK,
+    ]);
+    expect(blocks.at(-1)!.name).toBe('No project');
+    expect(blocks[0]!.name).toBe('QA Billing');
+  });
+
+  it('draws a project not in the list after the listed ones, and before the threads of no project', () => {
+    const blocks = graphBlocks(graphThreadsOf(7), [FIXTURE_PROJECTS[1]!]);
+
+    expect(blocks.map((block) => block.id)).toEqual([
+      'block:project-cache',
+      'block:project-billing',
+      NO_PROJECT_BLOCK,
+    ]);
+  });
+
+  it('stands working threads first in each block, then the rest in attention order', () => {
+    for (const block of graphBlocks(
+      shownThreads(graphThreadsOf(30)),
+      FIXTURE_PROJECTS,
+    )) {
+      const ranks = block.threads.map((thread) =>
+        BLOCK_ATTENTION_ORDER.indexOf(thread.view.attention),
+      );
+      expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    }
   });
 });
 
@@ -1180,6 +1513,11 @@ function flowNode(id: string): FlowNode {
     throw new Error(`no flow node ${id}`);
   }
   return node;
+}
+
+function blockSize(id: string): { width: number; height: number } {
+  const node = flowNode(id);
+  return { width: node.width ?? 0, height: node.height ?? 0 };
 }
 
 function openCard(

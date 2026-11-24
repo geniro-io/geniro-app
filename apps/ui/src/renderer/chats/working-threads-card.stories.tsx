@@ -43,14 +43,19 @@ const meta = {
   component: WorkingThreadsCard,
   decorators: [
     (story) => (
-      <div className="relative flex h-[520px] w-[720px] flex-col rounded-lg border border-border pb-10">
+      <div className="relative flex h-[520px] w-[720px] flex-col rounded-lg border border-border">
         <div className="min-h-0 flex-1" />
-        {story()}
+        <div className="pointer-events-none absolute right-4 bottom-4 z-20 flex h-11 items-center gap-2">
+          {story()}
+          <div
+            aria-hidden="true"
+            className="size-11 shrink-0 rounded-full border border-border bg-popover shadow-panel-md"
+          />
+        </div>
       </div>
     ),
   ],
   args: {
-    beside: false,
     onOpenThread: () => {},
     onOpenHere: () => {},
     threads: [
@@ -122,19 +127,4 @@ const MANY_THREADS: readonly WorkingThread[] = Array.from(
 export const ManyThreadsPinned: Story = {
   args: { threads: MANY_THREADS },
   play: pinPanel,
-};
-
-export const BesideAgentsCard: Story = {
-  args: { beside: true },
-  decorators: [
-    (story) => (
-      <>
-        {story()}
-        <div
-          aria-hidden="true"
-          className="absolute right-4 -bottom-2 size-8 rounded-full border border-border bg-popover shadow-panel-lg"
-        />
-      </>
-    ),
-  ],
 };

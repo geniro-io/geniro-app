@@ -1,11 +1,13 @@
 import type { DaemonHandle } from '../shared/contracts';
 import {
+  daemonPost,
   daemonRead,
   DaemonRefusal,
   mayGiveBack,
   messageOf,
   prepareRunWorktree,
   reportFailure,
+  runSnapshotOf,
   type RunStartDeps,
   startRunOn,
   workPlaceOf,
@@ -22,7 +24,11 @@ const TICK_INTERVAL_MS = 5_000;
 const APPROVED_STARTS_PATH = '/v1/command-center/starts?state=approved';
 
 /** One start the command center's manager filed and the user approved. */
-interface ApprovedStart {
+type ApprovedStart = ApprovedCardStart | ApprovedThreadStart;
+
+/** A start that files a board card: its worktree is cut from the card's folder. */
+interface ApprovedCardStart {
+  kind: 'card';
   taskId: string;
   projectId: string;
   title: string;
@@ -34,6 +40,20 @@ interface ApprovedStart {
   folder: string;
   /** Who the run is started for, as the daemon recorded the request. */
   startedBy: 'manager' | 'user';
+}
+
+/** A thread with no board card: it runs in its project's folder, as a chat does. */
+interface ApprovedThreadStart {
+  kind: 'thread';
+  startId: string;
+  projectId: string;
+  title: string;
+  folder: string;
+  startedBy: 'manager';
+}
+
+function startIdOf(start: ApprovedStart): string {
+  return start.kind === 'thread' ? start.startId : start.taskId;
 }
 
 export interface ThreadStartDeps extends RunStartDeps {
@@ -145,12 +165,16 @@ export class ThreadStartConductor {
     start: ApprovedStart,
   ): Promise<void> {
     if (typeof start.folder !== 'string' || start.folder.trim() === '') {
-      if (!this.foldless.has(start.taskId)) {
-        this.foldless.add(start.taskId);
+      if (!this.foldless.has(startIdOf(start))) {
+        this.foldless.add(startIdOf(start));
         this.deps.log(
           `thread start for "${start.title}" names no folder to cut its worktree from`,
         );
       }
+      return;
+    }
+    if (start.kind === 'thread') {
+      await this.startThread(handle, start);
       return;
     }
 
@@ -198,6 +222,37 @@ export class ThreadStartConductor {
   }
 
   /**
+   * Start a thread with no card in its folder. No worktree is made: the run
+   * is posted against the folder itself. A refusal that waiting will not
+   * change is reported, so the user is not left waiting; anything else is
+   * tried again on the next tick.
+   */
+  private async startThread(
+    handle: DaemonHandle,
+    start: ApprovedThreadStart,
+  ): Promise<void> {
+    try {
+      await daemonPost(
+        handle,
+        `/v1/command-center/starts/${encodeURIComponent(start.startId)}/runs`,
+        await runSnapshotOf(this.deps, start.folder),
+        this.deps.fetchTimeoutMs,
+      );
+      this.deps.log(`thread start began "${start.title}" in ${start.folder}`);
+    } catch (error) {
+      if (isTakenByAnotherDrain(error)) {
+        return;
+      }
+      this.deps.log(
+        `thread start did not begin "${start.title}": ${messageOf(error)}`,
+      );
+      if (isRefusedForGood(error)) {
+        await this.reportFailed(handle, start, messageOf(error));
+      }
+    }
+  }
+
+  /**
    * Report a start that cannot happen, so the daemon clears the request and
    * wakes the manager. A report that fails is logged, never thrown.
    */
@@ -210,7 +265,7 @@ export class ThreadStartConductor {
       await reportFailure(
         this.deps,
         handle,
-        `/v1/command-center/starts/${encodeURIComponent(start.taskId)}/failed`,
+        `/v1/command-center/starts/${encodeURIComponent(startIdOf(start))}/failed`,
         line,
       );
     } catch (error) {
@@ -219,6 +274,15 @@ export class ThreadStartConductor {
       );
     }
   }
+}
+
+/** The 409 a start gets when another drain of the command center holds it. */
+function isTakenByAnotherDrain(error: unknown): boolean {
+  return (
+    error instanceof DaemonRefusal &&
+    error.status === 409 &&
+    error.code === 'START_TAKEN'
+  );
 }
 
 /**

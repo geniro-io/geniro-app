@@ -34,9 +34,11 @@ describe('readThreadStart', () => {
     expect(readThreadStart(pair(ARGS, null))).toEqual({
       title: 'CI-1233: Case page slow',
       project: 'ManifestOS',
+      brief: 'Find why',
       agent: 'claude',
       team: null,
       taskId: null,
+      startId: null,
       identifier: null,
       answer: null,
       reason: null,
@@ -72,6 +74,21 @@ describe('readThreadStart', () => {
       taskId: 'task-2',
       identifier: null,
       answer: 'starting',
+    });
+  });
+
+  it('reads a thread filed with no card by its startId, and no identifier', () => {
+    const read = readThreadStart(
+      pair(ARGS, {
+        text: '{"status":"card_shown","startId":"start-1"}\nA Start card is on screen for the user; no board card was filed.',
+      }),
+    );
+    expect(read).toMatchObject({
+      taskId: null,
+      startId: 'start-1',
+      identifier: null,
+      answer: 'card_shown',
+      reason: null,
     });
   });
 

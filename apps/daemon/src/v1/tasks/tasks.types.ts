@@ -444,6 +444,23 @@ export const TASKS_AWAITING_MERGE_MAX = 100;
 export const TaskRunStarterSchema = z.enum(['user', 'autopilot', 'manager']);
 export type TaskRunStarter = z.infer<typeof TaskRunStarterSchema>;
 
+/** A thread started in a project's folder with no board card (`TaskRunsService.startProjectRun`). */
+export interface ProjectRunStart extends Pick<
+  StartTaskRun,
+  | 'customInstructions'
+  | 'replyLanguage'
+  | 'agentOptions'
+  | 'startSha'
+  | 'startDirty'
+> {
+  projectId: string;
+  title: string;
+  prompt: string;
+  /** The agent or team the request named, read before the project's default. */
+  target: { agentKind?: AgentKind | null; teamSlug?: string | null };
+  startedBy: TaskRunStarter;
+}
+
 export interface StartTaskRun {
   cwd: string;
   branch?: string;

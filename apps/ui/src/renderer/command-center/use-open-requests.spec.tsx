@@ -78,10 +78,11 @@ async function mount(
   apis: DaemonApis,
   client: DaemonClient,
   threads: AskingThread[],
+  onAnswered?: (runId: string) => void,
 ): Promise<{ current: OpenRequestsState }> {
   const state = { current: null as unknown as OpenRequestsState };
   function Probe(): null {
-    state.current = useOpenRequests(apis, client, threads);
+    state.current = useOpenRequests(apis, client, threads, onAnswered);
     return null;
   }
   container = document.createElement('div');
@@ -187,6 +188,36 @@ describe('useOpenRequests', () => {
       runId: 'run-2',
       sendMessageDto: { text: '', images },
     });
+  });
+
+  it('tells the caller which thread a verdict went out for', async () => {
+    const { apis, client } = fakes();
+    const onAnswered = vi.fn();
+    const state = await mount(apis, client, THREADS, onAnswered);
+
+    await act(async () => {
+      state.current.answer(state.current.requests[1]!, false);
+    });
+
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+    expect(onAnswered).toHaveBeenCalledWith('run-2');
+  });
+
+  it('tells the caller nothing when the verdict cannot be sent', async () => {
+    const { apis, client, sendVerdict } = fakes();
+    sendVerdict.mockImplementationOnce(() => {
+      throw new Error('socket closed');
+    });
+    const onAnswered = vi.fn();
+    const state = await mount(apis, client, THREADS, onAnswered);
+
+    act(() => {
+      expect(() =>
+        state.current.answer(state.current.requests[0]!, true),
+      ).toThrow('socket closed');
+    });
+
+    expect(onAnswered).not.toHaveBeenCalled();
   });
 });
 

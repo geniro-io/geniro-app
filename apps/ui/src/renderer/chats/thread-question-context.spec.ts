@@ -66,17 +66,115 @@ describe('messagesBefore', () => {
 });
 
 describe('threadContextReaderOf', () => {
-  it('reads the thread’s own flow and answers what led up to the question', async () => {
+  it('reads the root conversation once and answers what led up to a question raised there', async () => {
     const listRunItems = vi
       .fn()
       .mockResolvedValue({ items: ROWS, anchors: [] });
-    const read = threadContextReaderOf({ listRunItems });
+    const listCallMessages = vi.fn();
+    const read = threadContextReaderOf({ listRunItems, listCallMessages });
 
     const messages = await read('thread-1', 'req-1');
 
+    expect(listRunItems).toHaveBeenCalledTimes(1);
     expect(listRunItems).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'thread-1', conversation: 'root' }),
     );
+    expect(listCallMessages).not.toHaveBeenCalled();
+    expect(messages.map((message) => message.seq)).toEqual([2, 5, 6]);
+  });
+
+  it('reads the messages of the member call a question was raised inside, before the question', async () => {
+    const callRow = (seq: number, role: string, text: string): ItemDto => ({
+      ...row(seq, 'message', role, { text }),
+      inCall: 'call-1',
+    });
+    const asked = {
+      ...row(9, 'approval_request', null, {
+        id: 'req-2',
+        toolName: 'AskUserQuestion',
+      }),
+      inCall: 'call-1',
+    };
+    const listRunItems = vi.fn(async (request: { conversation?: string }) => ({
+      items: request.conversation === 'root' ? ROWS : [...ROWS, asked],
+      anchors: [],
+    }));
+    const listCallMessages = vi.fn().mockResolvedValue({
+      messages: [
+        callRow(7, 'assistant', 'Two caches in the call'),
+        callRow(10, 'assistant', 'Sent after the question'),
+      ],
+      hasOlder: false,
+    });
+    const read = threadContextReaderOf({ listRunItems, listCallMessages });
+
+    const messages = await read('thread-1', 'req-2');
+
+    expect(listCallMessages).toHaveBeenCalledWith({
+      runId: 'thread-1',
+      callId: 'call-1',
+      limit: 20,
+    });
+    expect(messages).toEqual([
+      { seq: 7, role: 'assistant', text: 'Two caches in the call' },
+    ]);
+  });
+
+  it('reads the brief and the member’s words of the call a card was raised in, though the card stands in the run’s own flow', async () => {
+    const rootRows: ItemDto[] = [
+      row(0, 'message', 'user', { text: 'Call the helper now' }),
+      row(4, 'call_started', null, {
+        callId: 'call-1',
+        message: 'Run your command',
+      }),
+      row(9, 'approval_request', null, {
+        id: 'thread-1::call:call-1#approval',
+        toolName: 'Bash',
+        callId: 'call-1',
+      }),
+    ];
+    const listRunItems = vi
+      .fn()
+      .mockResolvedValue({ items: rootRows, anchors: [] });
+    const listCallMessages = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          ...row(7, 'message', 'assistant', { text: 'Helper context' }),
+          inCall: 'call-1',
+        },
+        {
+          ...row(13, 'message', 'assistant', { text: 'Said after the card' }),
+          inCall: 'call-1',
+        },
+      ],
+      hasOlder: false,
+    });
+    const read = threadContextReaderOf({ listRunItems, listCallMessages });
+
+    const messages = await read('thread-1', 'thread-1::call:call-1#approval');
+
+    expect(listRunItems).toHaveBeenCalledTimes(1);
+    expect(listCallMessages).toHaveBeenCalledWith({
+      runId: 'thread-1',
+      callId: 'call-1',
+      limit: 20,
+    });
+    expect(messages).toEqual([
+      { seq: 4, role: 'user', text: 'Run your command' },
+      { seq: 7, role: 'assistant', text: 'Helper context' },
+    ]);
+  });
+
+  it('keeps the root messages when the question is found neither on the root page nor inside a call', async () => {
+    const listRunItems = vi
+      .fn()
+      .mockResolvedValue({ items: ROWS.slice(0, 6), anchors: [] });
+    const listCallMessages = vi.fn();
+    const read = threadContextReaderOf({ listRunItems, listCallMessages });
+
+    const messages = await read('thread-1', 'req-elsewhere');
+
+    expect(listCallMessages).not.toHaveBeenCalled();
     expect(messages.map((message) => message.seq)).toEqual([2, 5, 6]);
   });
 });

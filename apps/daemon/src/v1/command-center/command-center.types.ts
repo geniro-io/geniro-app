@@ -108,23 +108,42 @@ export const CommandCenterChatsDiscardedSchema = z.object({
 });
 
 /** One approved start Electron main's drain starts. */
+const StartedBySchema = z
+  .enum(['manager', 'user'])
+  .describe(
+    "Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away",
+  );
+
 export const CommandCenterStartSchema = z
-  .object({
-    taskId: z.string(),
-    projectId: z.string(),
-    title: z.string(),
-    status: TaskStatusSchema,
-    folder: z
-      .string()
-      .describe(
-        "The card's folder, else its project's — where the worktree is cut",
-      ),
-    startedBy: z
-      .enum(['manager', 'user'])
-      .describe(
-        "Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away",
-      ),
-  })
+  .discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('card'),
+      taskId: z.string(),
+      projectId: z.string(),
+      title: z.string(),
+      status: TaskStatusSchema,
+      folder: z
+        .string()
+        .describe(
+          "The card's folder, else its project's — where the worktree is cut",
+        ),
+      startedBy: StartedBySchema,
+    }),
+    z.object({
+      kind: z
+        .literal('thread')
+        .describe(
+          "A thread with no board card, started in its project's folder",
+        ),
+      startId: z.string(),
+      projectId: z.string(),
+      title: z.string(),
+      folder: z
+        .string()
+        .describe("The project's folder, where the thread runs"),
+      startedBy: StartedBySchema,
+    }),
+  ])
   .meta({ id: 'CommandCenterStart' });
 export type CommandCenterStart = z.infer<typeof CommandCenterStartSchema>;
 
@@ -135,6 +154,19 @@ export const CommandCenterStartsSchema = z.object({
 
 /** The longest failure reason a start drain reports. */
 export const START_FAILURE_MAX_CHARS = 1000;
+
+/** Where a cardless start stands, for its Start card. */
+export const CommandCenterThreadStartStateSchema = z
+  .object({
+    startId: z.string(),
+    state: z.enum(['waiting', 'approved', 'started', 'declined', 'failed']),
+    runId: z.string().nullable(),
+    failure: z.string().nullable(),
+  })
+  .meta({ id: 'CommandCenterThreadStartState' });
+export type CommandCenterThreadStartState = z.infer<
+  typeof CommandCenterThreadStartStateSchema
+>;
 
 export const TIMELINE_TEXT_MAX_CHARS = 200;
 export const TIMELINE_LIMIT_DEFAULT = 100;
@@ -208,7 +240,7 @@ export type RosterReason = z.infer<typeof RosterReasonSchema>;
  */
 export interface CommandCenterChangedEvent {
   runIds: string[];
-  reason: 'status' | 'items' | 'roster' | 'task' | 'refiled';
+  reason: 'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start';
 }
 
 /**

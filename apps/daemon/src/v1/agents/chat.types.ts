@@ -9413,6 +9413,12 @@ export const StartThreadSchema = z.object({
     .describe(
       'True only when the user asked you to watch the new thread or tell them when it finishes: its reaching done then wakes you. Otherwise leave it off; a finished thread then only gets a Done card in your chat, with no turn of yours.',
     ),
+  card: z
+    .boolean()
+    .default(false)
+    .describe(
+      "True only when the user asked in their own words for a card or task on the board: the thread then works a backlog card in its own worktree and branch. Otherwise leave it off; the thread runs in the project's folder like a normal chat, with no card.",
+    ),
 });
 export type StartThreadInput = z.infer<typeof StartThreadSchema>;
 
@@ -9422,6 +9428,7 @@ export type StartThreadAnswer =
       taskId: string;
       identifier: string | null;
     }
+  | { status: 'card_shown' | 'starting'; startId: string }
   | { status: 'refused'; code: string; reason: string };
 
 /** `read_command_center` takes no arguments. */

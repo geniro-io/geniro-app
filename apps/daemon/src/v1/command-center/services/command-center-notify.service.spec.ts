@@ -22,6 +22,7 @@ import { commandCenterDb } from '../__tests__/command-center-db';
 import type { CommandCenterChangedEvent } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import type { CommandCenterService } from './command-center.service';
+import type { CommandCenterChatService } from './command-center-chat.service';
 import type { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterNotifyService } from './command-center-notify.service';
 
@@ -99,10 +100,15 @@ describe('CommandCenterNotifyService', () => {
   let trackOwnedCard: ReturnType<typeof vi.fn<TrackOwnedCard>>;
   let recordOwnedCardVerdict: ReturnType<typeof vi.fn<RecordOwnedCardVerdict>>;
   let changes: Subject<CommandCenterChangedEvent>;
+  let boardThreads: Set<string>;
+  let syncRoster: ReturnType<
+    typeof vi.fn<(managerRunId: string) => Promise<RunWire[]>>
+  >;
   let service: CommandCenterNotifyService;
 
   beforeEach(async () => {
     changes = new Subject<CommandCenterChangedEvent>();
+    boardThreads = new Set();
     db = await commandCenterDb();
     await db.seedRun(MANAGER);
     runs = new Map();
@@ -123,6 +129,10 @@ describe('CommandCenterNotifyService', () => {
     recordOwnedCardVerdict = vi.fn<RecordOwnedCardVerdict>(() =>
       Promise.resolve(),
     );
+    syncRoster = vi.fn(async (managerRunId: string) => {
+      await roster.join(managerRunId, [...boardThreads], 'auto', new Date());
+      return [];
+    });
     const itemDao = new ItemDao(db.em);
     service = new CommandCenterNotifyService(
       db.em,
@@ -155,6 +165,7 @@ describe('CommandCenterNotifyService', () => {
       {
         allChanges: () => changes.asObservable(),
       } as unknown as CommandCenterEventBus,
+      { syncRoster } as unknown as CommandCenterChatService,
     );
   });
 
@@ -455,6 +466,34 @@ describe('CommandCenterNotifyService', () => {
       expect.any(Function),
     );
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('relays the question of a board thread the roster has not caught up with yet', async () => {
+    boardThreads.add(THREAD);
+    setThread({ id: THREAD, title: 'Billing cache', status: 'running' });
+    await openQuestion(
+      THREAD,
+      vi.fn<Responder>(() => true),
+    );
+
+    await service.review(THREAD);
+
+    expect(raiseOwnedCard).toHaveBeenCalledTimes(1);
+    expect(raiseOwnedCard.mock.calls[0]?.[2].input).toMatchObject({
+      threadRunId: THREAD,
+      threadRequestId: REQUEST,
+      handle: 't1',
+    });
+  });
+
+  it('leaves the roster alone for a thread off it that asks nothing', async () => {
+    boardThreads.add(THREAD);
+    setThread({ id: THREAD, status: 'running' });
+
+    await service.review(THREAD);
+
+    expect(syncRoster).not.toHaveBeenCalled();
+    expect(raiseOwnedCard).not.toHaveBeenCalled();
   });
 
   it("answers the thread's own request when the user answers the relayed card", async () => {

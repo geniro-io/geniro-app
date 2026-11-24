@@ -228,6 +228,26 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
     ).toBe('chat of a');
   });
 
+  it('gives the card of a working thread the running border, and no other attention one', () => {
+    drawLayer({
+      cards: [
+        card('a', 400, 300),
+        { ...card('b', 400, 300), attention: 'question' },
+      ],
+      slots: new Map([
+        ['a', box(0, 0)],
+        ['b', box(500, 0)],
+      ]),
+    });
+
+    const cardOf = (runId: string): HTMLElement =>
+      container.querySelector<HTMLElement>(
+        `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
+      )!;
+    expect(cardOf('a').classList.contains('cc-running-border')).toBe(true);
+    expect(cardOf('b').classList.contains('cc-running-border')).toBe(false);
+  });
+
   it('draws no layer when no open thread has a slot', () => {
     drawLayer({ slots: new Map() });
 

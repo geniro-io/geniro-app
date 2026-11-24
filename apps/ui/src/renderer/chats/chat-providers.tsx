@@ -74,6 +74,10 @@ import {
   type ThreadContextReader,
   ThreadContextReaderContext,
 } from './thread-question-context';
+import {
+  type ThreadStartReader,
+  ThreadStartReaderContext,
+} from './thread-start-card';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
@@ -161,6 +165,7 @@ export function ChatProviders({
   agentsApi = null,
   lessonsJump = null,
   taskReader = null,
+  threadStartReader = null,
   threadContext = null,
   surfaceHost = null,
   children,
@@ -263,6 +268,8 @@ export function ChatProviders({
   lessonsJump?: ((seq: number) => void) | null;
   /** A `start_thread` card's live board card — see `TaskReaderContext`. */
   taskReader?: TaskReader | null;
+  /** A cardless `start_thread` card's live start — see `ThreadStartReaderContext`. */
+  threadStartReader?: ThreadStartReader | null;
   /** The messages a relayed question's thread sent before it — see `ThreadContextReaderContext`. */
   threadContext?: ThreadContextReader | null;
   /** The open run's agent cards and how they reach the daemon — see `SurfaceHostContext`. */
@@ -312,7 +319,12 @@ export function ChatProviders({
                                                         value={threadContext}>
                                                         <SurfaceHostContext.Provider
                                                           value={surfaceHost}>
-                                                          {children}
+                                                          <ThreadStartReaderContext.Provider
+                                                            value={
+                                                              threadStartReader
+                                                            }>
+                                                            {children}
+                                                          </ThreadStartReaderContext.Provider>
                                                         </SurfaceHostContext.Provider>
                                                       </ThreadContextReaderContext.Provider>
                                                     </TaskReaderContext.Provider>

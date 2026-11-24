@@ -108,7 +108,7 @@ describe('readStartThreadArgs', () => {
   it('reads the project, the title and the brief, unwatched when watch is left out, and the optional agent, team, note and watch', () => {
     expect(readStartThreadArgs(ARGS)).toEqual({
       ok: true,
-      query: { ...ARGS, watch: false },
+      query: { ...ARGS, watch: false, card: false },
     });
     expect(
       readStartThreadArgs({
@@ -117,6 +117,7 @@ describe('readStartThreadArgs', () => {
         team: 'review',
         note: 'watch billing',
         watch: true,
+        card: true,
       }),
     ).toEqual({
       ok: true,
@@ -126,6 +127,7 @@ describe('readStartThreadArgs', () => {
         team: 'review',
         note: 'watch billing',
         watch: true,
+        card: true,
       },
     });
   });
@@ -218,6 +220,7 @@ describe('StartThreadTool', () => {
       ...ARGS,
       note: 'watch billing',
       watch: false,
+      card: false,
     });
     expect(result.isError).toBe(false);
     expect(textOf(result)).toBe(startThreadResultText(STARTING));

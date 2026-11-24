@@ -41,16 +41,19 @@ export function graphThreadsOf(count: number): GraphThread[] {
     const n = index + 1;
     const status = STATUSES[index % STATUSES.length]!;
     const still = index % 5 === 4;
+    const project =
+      index % 7 === 6 ? null : FIXTURE_PROJECTS[index % 2 === 0 ? 0 : 1]!;
     return {
       id: `thread-${n}`,
+      projectId: project?.id ?? null,
       createdAt: new Date(FIXTURE_NOW - (count - index) * 60_000).toISOString(),
       view: {
         title: TITLES[index % TITLES.length]!,
         status,
         statusText: THREAD_STATUS_TEXT[status],
         attention: still ? 'inactive' : ATTENTION_OF[status],
-        project: index % 2 === 0 ? 'QA Billing' : 'QA Cache',
-        projectColor: index % 2 === 0 ? 'blue' : 'purple',
+        project: project?.name ?? null,
+        projectColor: project?.color ?? null,
         agentLabel: index % 4 === 3 ? 'dev-team' : 'claude',
         isTeam: index % 4 === 3,
         face:

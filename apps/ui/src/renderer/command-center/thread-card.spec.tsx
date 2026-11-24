@@ -469,16 +469,25 @@ describe('ThreadCard — labels', () => {
 });
 
 describe('ThreadCard — motion', () => {
-  it('breathes while the thread works, and in warning while it waits on the user', () => {
-    expect(
-      render({ attention: 'working' }).classList.contains('cc-breathe-success'),
-    ).toBe(true);
+  it('runs a border around a working card, and breathes in warning while it waits on the user', () => {
+    const working = render({ attention: 'working' });
+    expect(working.classList.contains('cc-running-border')).toBe(true);
+    expect(working.classList.contains('cc-breathe-success')).toBe(false);
     const asking = render({ attention: 'question', onAnswer: vi.fn() });
     expect(asking.classList.contains('cc-breathe-warning')).toBe(true);
-    expect(asking.classList.contains('cc-breathe-success')).toBe(false);
-    expect(
-      render({ attention: 'quiet' }).className.includes('cc-breathe'),
-    ).toBe(false);
+    expect(asking.classList.contains('cc-running-border')).toBe(false);
+  });
+
+  it.each<ThreadAttention>([
+    'blocked',
+    'question',
+    'quiet',
+    'inactive',
+    'done',
+  ])('gives a %s card neither the running border nor a breath', (attention) => {
+    const el = render({ attention });
+    expect(el.classList.contains('cc-running-border')).toBe(false);
+    expect(el.className.includes('cc-breathe')).toBe(false);
   });
 });
 

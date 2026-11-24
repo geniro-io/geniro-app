@@ -10,6 +10,9 @@ export const QUESTION_CONTEXT_MESSAGES = 3;
 /** How many of the thread's newest rows are read to find what led up to its question. */
 const CONTEXT_PAGE = 200;
 
+/** The most of a call's words one read may ask for (the daemon's `CALL_MESSAGES_MAX`). */
+const CALL_MESSAGES_PAGE = 20;
+
 /** One message of the thread a relayed question came from. */
 export interface ThreadContextMessage {
   seq: number;
@@ -19,8 +22,8 @@ export interface ThreadContextMessage {
 
 /**
  * How a relayed question reads the messages its thread exchanged right
- * before asking. Provided by `Chats`, which holds the daemon handle; null
- * offers no context.
+ * before asking. Provided by `Chats` and by the command center, which hold the
+ * daemon handle; null offers no context.
  */
 export type ThreadContextReader = (
   threadRunId: string,
@@ -30,26 +33,54 @@ export type ThreadContextReader = (
 export const ThreadContextReaderContext =
   createContext<ThreadContextReader | null>(null);
 
-/**
- * The last `count` messages of `rows` before the question `requestId` asked,
- * oldest first; before the end of the page when the question is not on it.
- */
-export function messagesBefore(
+function isAskedBy(row: ItemDto, requestId: string): boolean {
+  return (
+    row.kind === 'approval_request' &&
+    payloadString(row.payload, 'id') === requestId
+  );
+}
+
+/** The member call a question was raised inside: its row stands in the run's own flow, so the call is named by its payload. */
+function callOf(asked: ItemDto): string | null {
+  return asked.inCall ?? payloadString(asked.payload, 'callId') ?? null;
+}
+
+/** The brief that opened call `callId` before `beforeSeq`, as the message sent to the member. */
+function briefOf(
   rows: readonly ItemDto[],
-  requestId: string | null,
+  callId: string,
+  beforeSeq: number,
+): ThreadContextMessage[] {
+  const started = rows
+    .filter(
+      (row) =>
+        row.kind === 'call_started' &&
+        row.seq < beforeSeq &&
+        payloadString(row.payload, 'callId') === callId,
+    )
+    .reduce<ItemDto | undefined>(
+      (newest, row) =>
+        newest === undefined || row.seq > newest.seq ? row : newest,
+      undefined,
+    );
+  const text = started && payloadString(started.payload, 'message')?.trim();
+  return started === undefined || !text
+    ? []
+    : [{ seq: started.seq, role: 'user', text }];
+}
+
+/**
+ * The last `count` messages of `rows` sent before `beforeSeq`, oldest first;
+ * of all of them when `beforeSeq` is undefined.
+ */
+function messagesUpTo(
+  rows: readonly ItemDto[],
+  beforeSeq: number | undefined,
   count = QUESTION_CONTEXT_MESSAGES,
 ): ThreadContextMessage[] {
-  const asked =
-    requestId === null
-      ? undefined
-      : rows.find(
-          (row) =>
-            row.kind === 'approval_request' &&
-            payloadString(row.payload, 'id') === requestId,
-        );
   const messages: ThreadContextMessage[] = [];
   for (const row of [...rows].sort((a, b) => a.seq - b.seq)) {
-    if (asked !== undefined && row.seq >= asked.seq) {
+    if (beforeSeq !== undefined && row.seq >= beforeSeq) {
       break;
     }
     const text = payloadString(row.payload, 'text')?.trim() ?? '';
@@ -64,16 +95,62 @@ export function messagesBefore(
   return messages.slice(-count);
 }
 
-/** The reader over the daemon's own page of a run's rows: a team run is read in its own flow. */
+/**
+ * The last `count` messages of `rows` before the question `requestId` asked,
+ * oldest first; before the end of the page when the question is not on it.
+ */
+export function messagesBefore(
+  rows: readonly ItemDto[],
+  requestId: string | null,
+  count = QUESTION_CONTEXT_MESSAGES,
+): ThreadContextMessage[] {
+  const asked =
+    requestId === null
+      ? undefined
+      : rows.find((row) => isAskedBy(row, requestId));
+  return messagesUpTo(rows, asked?.seq, count);
+}
+
+/**
+ * The reader over the daemon's pages of a run. A question raised inside a
+ * member call is answered from that call's own messages, cut at the question;
+ * any other from the root conversation's page.
+ */
 export function threadContextReaderOf(
-  chats: Pick<DaemonApis['chats'], 'listRunItems'>,
+  chats: Pick<DaemonApis['chats'], 'listRunItems' | 'listCallMessages'>,
 ): ThreadContextReader {
   return async (threadRunId, threadRequestId) => {
-    const { items } = await chats.listRunItems({
+    const { items: root } = await chats.listRunItems({
       runId: threadRunId,
       limit: CONTEXT_PAGE,
       conversation: ListRunItemsConversationEnum.Root,
     });
-    return messagesBefore(items, threadRequestId);
+    if (threadRequestId === null) {
+      return messagesBefore(root, null);
+    }
+    const onRoot = root.find((row) => isAskedBy(row, threadRequestId));
+    const rows =
+      onRoot === undefined
+        ? (
+            await chats.listRunItems({
+              runId: threadRunId,
+              limit: CONTEXT_PAGE,
+            })
+          ).items
+        : root;
+    const asked = onRoot ?? rows.find((row) => isAskedBy(row, threadRequestId));
+    const callId = asked === undefined ? null : callOf(asked);
+    if (asked === undefined || callId === null) {
+      return messagesBefore(root, threadRequestId);
+    }
+    const { messages } = await chats.listCallMessages({
+      runId: threadRunId,
+      callId,
+      limit: CALL_MESSAGES_PAGE,
+    });
+    return [
+      ...briefOf(rows, callId, asked.seq),
+      ...messagesUpTo(messages, asked.seq),
+    ].slice(-QUESTION_CONTEXT_MESSAGES);
   };
 }

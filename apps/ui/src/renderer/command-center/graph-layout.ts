@@ -50,20 +50,6 @@ export function perLineFor(
   return Math.max(1, Math.min(byCount, fits));
 }
 
-/** Each band on lines of its own, in band order, a band longer than `perLine` wrapped. */
-export function bandRows<T>(
-  bands: readonly (readonly T[])[],
-  perLine: number,
-): T[][] {
-  const rows: T[][] = [];
-  for (const band of bands) {
-    for (let start = 0; start < band.length; start += perLine) {
-      rows.push(band.slice(start, start + perLine));
-    }
-  }
-  return rows;
-}
-
 function withoutRepeats(points: readonly Point[]): Point[] {
   return points.filter(
     (point, index) =>
@@ -98,48 +84,137 @@ function overlaps(box: PlacedBox, obstacle: PlacedBox): boolean {
   );
 }
 
+/** One project's threads, laid out as one framed block. */
+export interface LayoutBlock {
+  id: string;
+  /** The block's threads in the order they stand, reading order. */
+  items: readonly GraphBox[];
+  /** A box on a line of its own under the items (the "+N more" of threads left off the graph); it is never pinned and has no wire. */
+  footer?: GraphBox;
+}
+
+export const BLOCK_HEAD = 40;
+export const BLOCK_PAD = 16;
+const BLOCK_GAP = 24;
+
+interface BlockShape {
+  id: string;
+  width: number;
+  height: number;
+  /** Each free item's place from the block's top-left. */
+  items: { box: GraphBox; x: number; y: number }[];
+}
+
+/** A block's frame around its free items, at most `columns` to a line, each line as tall as its tallest item. */
+function shapeOf(
+  block: LayoutBlock,
+  free: readonly GraphBox[],
+  columns: number,
+): BlockShape {
+  const items: BlockShape['items'] = [];
+  let y = BLOCK_HEAD;
+  let width = 0;
+  for (let start = 0; start < free.length; start += columns) {
+    const line = free.slice(start, start + columns);
+    let x = BLOCK_PAD;
+    for (const box of line) {
+      items.push({ box, x, y });
+      x += box.width + BLOCK_GAP;
+    }
+    width = Math.max(width, x - BLOCK_GAP + BLOCK_PAD);
+    y += Math.max(...line.map((box) => box.height)) + BLOCK_GAP;
+  }
+  if (block.footer !== undefined) {
+    items.push({ box: block.footer, x: BLOCK_PAD, y });
+    width = Math.max(width, block.footer.width + BLOCK_PAD * 2);
+    y += block.footer.height + BLOCK_GAP;
+  }
+  return {
+    id: block.id,
+    width: Math.max(width, MIN_BLOCK_WIDTH),
+    height: y - BLOCK_GAP + BLOCK_PAD,
+    items,
+  };
+}
+
+const MIN_BLOCK_WIDTH = 220;
+
 /**
- * The root centred on top and the rows under it, each centred and every
- * other one shifted half the widest box so it sits under the gaps of the row
- * above. Each box takes its own width in its row, and a row is as tall as its
- * tallest box. A wire leaves the root's bottom, runs
- * along the gap above the first row, passes each row above its own through
- * the nearest gap, and drops into its box's top — so no wire crosses a box.
+ * The root centred on top and the project blocks under it, left to right in
+ * the order given, a line wrapping once it is `perLine` cards wide; each line
+ * is centred under the root and as tall as its tallest block. Inside a block
+ * its items stand in reading order, at most `perLine` to a line, its footer
+ * on a line of its own under them.
  *
- * A box in `pinned` stands at the root's top-left plus its offset instead, and
- * a row that would touch it moves down past it. The width the root is centred
- * on still counts pinned boxes in their rows, and `frame`, when given, replaces
- * it, so neither a pin nor a box grown in place moves the root and with it
- * every pinned box.
+ * An item in `pinned` stands at the root's top-left plus its offset instead,
+ * out of its block, which shrinks around the rest from its own top-left; every
+ * block keeps the place it has with nothing pinned, and only a block a pinned
+ * box would touch moves along its line to the next free place past it — so a
+ * pin moves only what it overlaps. The root is centred on `frame` when given (the
+ * width with every card closed and none pinned), so neither a pin nor a card
+ * grown in place moves the root and with it every pinned box.
+ *
+ * One wire runs from the root to each block's top and to each pinned box; a
+ * wire to a lower line passes each line above it through the nearest gap.
  */
-export function layoutRows(
+export function layoutBlocks(
   root: GraphBox,
-  rows: readonly (readonly GraphBox[])[],
+  blocks: readonly LayoutBlock[],
+  perLine: number,
   pinned: ReadonlyMap<string, Point> = new Map(),
   frame?: number,
 ): GraphGeometry {
-  const filled = rows.filter((row) => row.length > 0);
-  const cell = Math.max(0, ...filled.flat().map((item) => item.width));
-  const stagger = filled.length > 1 ? (cell + COLUMN_GAP) / 2 : 0;
-  const spanOf = (row: readonly GraphBox[]): number =>
-    row.reduce((sum, item) => sum + item.width, 0) +
-    COLUMN_GAP * (row.length - 1);
-  const widest = Math.max(0, ...filled.map(spanOf)) + stagger;
+  const filled = blocks.filter(
+    (block) => block.items.length > 0 || block.footer !== undefined,
+  );
+  const cell = Math.max(
+    0,
+    ...filled.flatMap((block) => block.items.map((item) => item.width)),
+  );
+  const columns = Math.max(1, perLine);
+  const lineRoom = columns * (cell + BLOCK_PAD * 2 + COLUMN_GAP);
+  const natural = new Map(
+    filled.map((block) => [block.id, shapeOf(block, block.items, columns)]),
+  );
+  const shapes = new Map(
+    filled.map((block) => [
+      block.id,
+      shapeOf(
+        block,
+        block.items.filter((item) => !pinned.has(item.id)),
+        columns,
+      ),
+    ]),
+  );
+  const lines: BlockShape[][] = [];
+  for (const shape of natural.values()) {
+    const line = lines.at(-1);
+    const span =
+      line === undefined
+        ? Infinity
+        : line.reduce((sum, item) => sum + item.width + COLUMN_GAP, 0) +
+          shape.width;
+    if (line === undefined || span > lineRoom) {
+      lines.push([shape]);
+    } else {
+      line.push(shape);
+    }
+  }
+  const spanOf = (line: readonly BlockShape[]): number =>
+    line.reduce((sum, shape) => sum + shape.width, 0) +
+    COLUMN_GAP * (line.length - 1);
+  const widest = Math.max(0, ...lines.map(spanOf));
   const width = frame ?? Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
-  const placedRoot = {
-    ...root,
-    x: centre - root.width / 2,
-    y: MARGIN,
-  };
+  const placedRoot = { ...root, x: centre - root.width / 2, y: MARGIN };
   boxes.set(root.id, placedRoot);
   const rootBottom = MARGIN + root.height;
 
   const obstacles: PlacedBox[] = [];
-  for (const item of filled.flat()) {
+  for (const item of filled.flatMap((block) => block.items)) {
     const offset = pinned.get(item.id);
     if (offset !== undefined) {
       const placed = {
@@ -153,56 +228,79 @@ export function layoutRows(
   }
 
   let top = rootBottom + LINE_GAP;
-  let bottom = rootBottom;
-  const placedRows: PlacedBox[][] = [];
-  filled.forEach((row, rowIndex) => {
-    const free = row.filter((item) => !pinned.has(item.id));
-    if (free.length === 0) {
-      return;
+  const placedLines: PlacedBox[][] = [];
+  for (const line of lines) {
+    let left = centre - spanOf(line) / 2;
+    const slots = line.flatMap((slot) => {
+      const shape = shapes.get(slot.id);
+      const x = left;
+      left += slot.width + COLUMN_GAP;
+      return shape === undefined || shape.items.length === 0
+        ? []
+        : [
+            {
+              shape,
+              box: {
+                id: shape.id,
+                width: shape.width,
+                height: shape.height,
+                x,
+                y: top,
+              },
+            },
+          ];
+    });
+    if (slots.length === 0) {
+      continue;
     }
-    const start =
-      centre -
-      spanOf(free) / 2 +
-      (rowIndex % 2 === 1 ? stagger / 2 : -stagger / 2);
-    const at = (rowTop: number): PlacedBox[] => {
-      let x = start;
-      return free.map((item) => {
-        const placed = { ...item, x, y: rowTop };
-        x += item.width + COLUMN_GAP;
-        return placed;
-      });
-    };
-    let placed = at(top);
-    for (;;) {
-      const hit = obstacles.filter((obstacle) =>
-        placed.some((box) => overlaps(box, obstacle)),
-      );
-      if (hit.length === 0) {
-        break;
+    const placed: PlacedBox[] = [];
+    const displaced: PlacedBox[] = [];
+    for (const { box } of slots) {
+      (obstacles.some((obstacle) => overlaps(box, obstacle))
+        ? displaced
+        : placed
+      ).push(box);
+    }
+    for (const start of displaced) {
+      let box = start;
+      for (;;) {
+        const hit = [...obstacles, ...placed].filter((other) =>
+          overlaps(box, other),
+        );
+        if (hit.length === 0) {
+          break;
+        }
+        box = {
+          ...box,
+          x:
+            Math.max(...hit.map((other) => other.x + other.width)) + COLUMN_GAP,
+        };
       }
-      placed = at(
-        Math.max(...hit.map((obstacle) => obstacle.y + obstacle.height)) +
-          LINE_GAP,
-      );
+      placed.push(box);
     }
-    const rowTop = placed[0]!.y;
-    const tallest = Math.max(...free.map((item) => item.height));
-    top = rowTop + tallest + LINE_GAP;
-    bottom = rowTop + tallest;
     for (const box of placed) {
       boxes.set(box.id, box);
+      for (const item of shapes.get(box.id)!.items) {
+        boxes.set(item.box.id, {
+          ...item.box,
+          x: box.x + item.x,
+          y: box.y + item.y,
+        });
+      }
     }
-    placedRows.push(placed);
-  });
+    placed.sort((a, b) => a.x - b.x);
+    placedLines.push(placed);
+    top = Math.max(...placed.map((box) => box.y + box.height)) + LINE_GAP;
+  }
 
-  placedRows.forEach((row, lineIndex) => {
-    for (const box of row) {
+  placedLines.forEach((line, lineIndex) => {
+    for (const box of line) {
       const target = box.x + box.width / 2;
       const points: Point[] = [{ x: centre, y: rootBottom }];
       let x = centre;
       for (let above = 0; above < lineIndex; above += 1) {
-        const bus = placedRows[above]![0]!.y - LINE_GAP / 2;
-        const passage = passageNear(placedRows[above]!, target);
+        const bus = placedLines[above]![0]!.y - LINE_GAP / 2;
+        const passage = passageNear(placedLines[above]!, target);
         points.push({ x, y: bus }, { x: passage, y: bus });
         x = passage;
       }
@@ -216,19 +314,8 @@ export function layoutRows(
     }
   });
 
-  const bus = rootBottom + LINE_GAP / 2;
   for (const box of obstacles) {
-    const target = box.x + box.width / 2;
-    const end = box.y >= bus ? box.y : box.y + box.height;
-    routes.set(
-      box.id,
-      withoutRepeats([
-        { x: centre, y: rootBottom },
-        { x: centre, y: bus },
-        { x: target, y: bus },
-        { x: target, y: end },
-      ]),
-    );
+    routes.set(box.id, elbowFrom(placedRoot, box));
   }
 
   const placedBoxes = [...boxes.values()];
@@ -236,7 +323,10 @@ export function layoutRows(
     width - MARGIN,
     ...placedBoxes.map((b) => b.x + b.width),
   );
-  const lowest = Math.max(bottom, ...obstacles.map((b) => b.y + b.height));
+  const lowest = Math.max(
+    rootBottom,
+    ...placedBoxes.map((b) => b.y + b.height),
+  );
   return {
     width: right + MARGIN,
     height: lowest + MARGIN,
@@ -245,14 +335,55 @@ export function layoutRows(
   };
 }
 
+/** A pinned box's own wire: down from the root's bottom centre, along the bus under it, into the box's nearer edge. */
+function elbowFrom(root: PlacedBox, box: PlacedBox): Point[] {
+  const centre = root.x + root.width / 2;
+  const rootBottom = root.y + root.height;
+  const bus = rootBottom + LINE_GAP / 2;
+  const target = box.x + box.width / 2;
+  const end = box.y >= bus ? box.y : box.y + box.height;
+  return withoutRepeats([
+    { x: centre, y: rootBottom },
+    { x: centre, y: bus },
+    { x: target, y: bus },
+    { x: target, y: end },
+  ]);
+}
+
+/**
+ * `geometry` with one box standing at the root's top-left plus `offset` and
+ * wired as a pinned box, everything else where it was: a box being dragged,
+ * which lays nothing out again until it is dropped.
+ */
+export function withBoxAt(
+  geometry: GraphGeometry,
+  rootId: string,
+  id: string,
+  offset: Point,
+): GraphGeometry {
+  const root = geometry.boxes.get(rootId);
+  const box = geometry.boxes.get(id);
+  if (root === undefined || box === undefined) {
+    return geometry;
+  }
+  const moved = { ...box, x: root.x + offset.x, y: root.y + offset.y };
+  return {
+    ...geometry,
+    boxes: new Map(geometry.boxes).set(id, moved),
+    routes: new Map(geometry.routes).set(id, elbowFrom(root, moved)),
+  };
+}
+
 /**
  * The same tree as one column, for a narrow screen: the root on top, every
  * item below it in order, indented, and a wire running down the root's left
- * edge and turning into each box.
+ * edge and turning into each box. A box in `unwired` (a project's name over
+ * its threads, its "+N more") stands in the column with no wire.
  */
 export function layoutColumn(
   root: GraphBox,
   items: readonly GraphBox[],
+  unwired: ReadonlySet<string> = new Set(),
 ): GraphGeometry {
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
@@ -269,6 +400,9 @@ export function layoutColumn(
   const spine = top.x + STUB;
   for (const item of items) {
     const placed = place(item, MARGIN + INDENT);
+    if (unwired.has(item.id)) {
+      continue;
+    }
     const middle = placed.y + Math.min(placed.height / 2, 28);
     routes.set(item.id, [
       { x: spine, y: top.y + top.height },

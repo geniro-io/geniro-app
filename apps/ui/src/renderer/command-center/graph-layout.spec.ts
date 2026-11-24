@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  bandRows,
+  BLOCK_HEAD,
+  BLOCK_PAD,
   type GraphBox,
   type GraphGeometry,
+  type LayoutBlock,
+  layoutBlocks,
   layoutColumn,
-  layoutRows,
   perLineFor,
+  withBoxAt,
 } from './graph-layout';
 
 const ROOT: GraphBox = { id: 'root', width: 360, height: 112 };
+const CARD_WIDTH = 272;
+const CARD_HEIGHT = 150;
+const COLUMN_GAP = 40;
+const LINE_GAP = 72;
+const BLOCK_GAP = 24;
 
 function itemsOf(count: number): GraphBox[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -19,11 +27,46 @@ function itemsOf(count: number): GraphBox[] {
   }));
 }
 
-function overlaps(geometry: GraphGeometry): string[] {
+function cardsOf(
+  name: string,
+  count: number,
+  height = CARD_HEIGHT,
+): GraphBox[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${name}-${index + 1}`,
+    width: CARD_WIDTH,
+    height,
+  }));
+}
+
+function blockOf(
+  name: string,
+  count: number,
+  height = CARD_HEIGHT,
+): LayoutBlock {
+  return { id: `block:${name}`, items: cardsOf(name, count, height) };
+}
+
+function overlapping(
+  geometry: GraphGeometry,
+  blocks: readonly LayoutBlock[],
+  pinned: ReadonlySet<string> = new Set(),
+): string[] {
+  const owner = new Map<string, string>();
+  for (const block of blocks) {
+    for (const item of block.items) {
+      if (!pinned.has(item.id)) {
+        owner.set(item.id, block.id);
+      }
+    }
+  }
   const boxes = [...geometry.boxes.values()];
   const hits: string[] = [];
   boxes.forEach((one, index) => {
     for (const other of boxes.slice(index + 1)) {
+      if (owner.get(one.id) === other.id || owner.get(other.id) === one.id) {
+        continue;
+      }
       if (
         one.x < other.x + other.width &&
         other.x < one.x + one.width &&
@@ -62,16 +105,11 @@ function wiresThroughBoxes(geometry: GraphGeometry): string[] {
   return hits;
 }
 
-const linesOf = (geometry: GraphGeometry): number =>
-  new Set(
-    [...geometry.boxes.values()]
-      .filter((box) => box.id !== 'root')
-      .map((box) => box.y),
-  ).size;
-
-function rowsOf(count: number, perLine: number): GraphBox[][] {
-  return bandRows([itemsOf(count)], perLine);
-}
+const lineTopsOf = (
+  geometry: GraphGeometry,
+  blocks: readonly LayoutBlock[],
+): number =>
+  new Set(blocks.map((block) => geometry.boxes.get(block.id)!.y)).size;
 
 describe('perLineFor', () => {
   it('puts four to a line on a small board and at most six on a big one', () => {
@@ -83,81 +121,403 @@ describe('perLineFor', () => {
   });
 });
 
-describe('bandRows', () => {
-  it('starts every band on a line of its own, in band order, wrapping a long one', () => {
-    expect(bandRows([['a', 'b'], [], ['c', 'd', 'e', 'f', 'g']], 4)).toEqual([
-      ['a', 'b'],
-      ['c', 'd', 'e', 'f'],
-      ['g'],
-    ]);
-  });
-});
-
-describe('layoutRows', () => {
-  it('centres the root on top, every row below it in order, none overlapping', () => {
-    for (const [count, perLine, lines] of [
-      [3, 4, 1],
-      [8, 4, 2],
-      [24, 6, 4],
-    ] as const) {
-      const geometry = layoutRows(ROOT, rowsOf(count, perLine));
+describe('layoutBlocks', () => {
+  it('centres the root on top and every block under it, none overlapping', () => {
+    for (const counts of [[3], [2, 2, 2, 2], [6, 1, 4, 6]]) {
+      const blocks = counts.map((count, index) => blockOf(`B${index}`, count));
+      const geometry = layoutBlocks(ROOT, blocks, 4);
       const root = geometry.boxes.get('root')!;
 
-      expect(linesOf(geometry)).toBe(lines);
       expect(root.x + root.width / 2).toBeCloseTo(geometry.width / 2, 5);
+      for (const block of blocks) {
+        expect(geometry.boxes.get(block.id)!.y).toBeGreaterThan(
+          root.y + root.height,
+        );
+      }
       for (const box of geometry.boxes.values()) {
-        if (box.id !== 'root') {
-          expect(box.y).toBeGreaterThan(root.y + root.height);
-        }
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(geometry.width);
       }
-      expect(overlaps(geometry)).toEqual([]);
+      expect(overlapping(geometry, blocks)).toEqual([]);
     }
   });
 
-  it('makes each row as tall as its tallest box, with no row borrowing another’s height', () => {
-    const geometry = layoutRows(ROOT, [
-      [
-        { id: 'a', width: 272, height: 120 },
-        { id: 'b', width: 272, height: 90 },
+  it('stands a block’s footer inside the block on a line under its items, with one wire to the block and none to the footer', () => {
+    const more: GraphBox = { id: 'more:block:A', width: 160, height: 32 };
+    const blocks: LayoutBlock[] = [
+      { ...blockOf('A', 3), footer: more },
+      blockOf('B', 1),
+    ];
+    const geometry = layoutBlocks(ROOT, blocks, 4);
+    const frame = geometry.boxes.get('block:A')!;
+    const footer = geometry.boxes.get(more.id)!;
+    const lowestItem = Math.max(
+      ...blocks[0]!.items.map((item) => {
+        const box = geometry.boxes.get(item.id)!;
+        return box.y + box.height;
+      }),
+    );
+
+    expect(footer.x).toBe(frame.x + BLOCK_PAD);
+    expect(footer.y).toBe(lowestItem + BLOCK_GAP);
+    expect(footer.y + footer.height).toBe(frame.y + frame.height - BLOCK_PAD);
+    expect([...geometry.routes.keys()].sort()).toEqual(['block:A', 'block:B']);
+    expect(lineTopsOf(geometry, blocks)).toBe(1);
+  });
+
+  it('keeps a block whose every thread is past the cap, holding only its footer', () => {
+    const more: GraphBox = { id: 'more:block:A', width: 160, height: 32 };
+    const blocks: LayoutBlock[] = [{ id: 'block:A', items: [], footer: more }];
+    const geometry = layoutBlocks(ROOT, blocks, 4);
+    const frame = geometry.boxes.get('block:A')!;
+
+    expect(geometry.boxes.get(more.id)!.y).toBe(frame.y + BLOCK_HEAD);
+    expect([...geometry.routes.keys()]).toEqual(['block:A']);
+  });
+
+  it('lays blocks left to right on one line, and wraps a line once it is perLine cards wide', () => {
+    const row = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
+    const one = layoutBlocks(ROOT, row, 4);
+    const at = (geometry: GraphGeometry, id: string) => geometry.boxes.get(id)!;
+    expect(lineTopsOf(one, row)).toBe(1);
+    expect(at(one, 'block:B').x).toBe(
+      at(one, 'block:A').x + at(one, 'block:A').width + COLUMN_GAP,
+    );
+    expect(at(one, 'block:C').x).toBe(
+      at(one, 'block:B').x + at(one, 'block:B').width + COLUMN_GAP,
+    );
+
+    const wrapped = [blockOf('A', 2), blockOf('B', 1), blockOf('C', 1)];
+    const two = layoutBlocks(ROOT, wrapped, 2);
+    expect(lineTopsOf(two, wrapped)).toBe(2);
+    expect(at(two, 'block:A').y).toBeLessThan(at(two, 'block:B').y);
+    expect(at(two, 'block:B').y).toBe(at(two, 'block:C').y);
+    expect(at(two, 'block:C').x).toBe(
+      at(two, 'block:B').x + at(two, 'block:B').width + COLUMN_GAP,
+    );
+    const lineLeft = at(two, 'block:B').x;
+    const lineRight = at(two, 'block:C').x + at(two, 'block:C').width;
+    expect((lineLeft + lineRight) / 2).toBeCloseTo(two.width / 2, 5);
+  });
+
+  it('stands a block’s cards in reading order, at most perLine to a line, under its header', () => {
+    const block = blockOf('A', 5);
+    const geometry = layoutBlocks(ROOT, [block], 2);
+    const at = (id: string) => geometry.boxes.get(id)!;
+    const host = at(block.id);
+
+    expect(at('A-1').x).toBe(host.x + BLOCK_PAD);
+    expect(at('A-1').y).toBe(host.y + BLOCK_HEAD);
+    expect(at('A-2').y).toBe(at('A-1').y);
+    expect(at('A-2').x).toBe(at('A-1').x + CARD_WIDTH + BLOCK_GAP);
+    expect(at('A-3').x).toBe(at('A-1').x);
+    expect(at('A-3').y).toBe(at('A-1').y + CARD_HEIGHT + BLOCK_GAP);
+    expect(at('A-5').y).toBe(at('A-1').y + 2 * (CARD_HEIGHT + BLOCK_GAP));
+    expect(host.height).toBe(
+      BLOCK_HEAD + 3 * CARD_HEIGHT + 2 * BLOCK_GAP + BLOCK_PAD,
+    );
+  });
+
+  it('makes each line of cards as tall as its tallest card, and each line of blocks as tall as its tallest block', () => {
+    const tall = {
+      id: 'block:tall',
+      items: [
+        { id: 'tall-1', width: CARD_WIDTH, height: 150 },
+        { id: 'tall-2', width: CARD_WIDTH, height: 190 },
       ],
-      [{ id: 'c', width: 272, height: 90 }],
-    ]);
-    const y = (id: string) => geometry.boxes.get(id)!.y;
+    };
+    const blocks = [tall, blockOf('short', 1), blockOf('next', 4)];
+    const geometry = layoutBlocks(ROOT, blocks, 4);
+    const at = (id: string) => geometry.boxes.get(id)!;
 
-    expect(y('a')).toBe(y('b'));
-    expect(y('c') - y('a')).toBe(120 + 72);
-    expect(geometry.height).toBe(y('c') + 90 + 24);
+    expect(at('tall-1').y).toBe(at('tall-2').y);
+    expect(at(tall.id).height).toBe(BLOCK_HEAD + 190 + BLOCK_PAD);
+    expect(at('block:short').y).toBe(at(tall.id).y);
+    expect(at('block:next').y).toBe(
+      at(tall.id).y + at(tall.id).height + LINE_GAP,
+    );
   });
 
-  it('shifts every other row half a box, so it sits under the gaps above', () => {
-    const geometry = layoutRows(ROOT, rowsOf(8, 4));
-    const x = (id: string) => geometry.boxes.get(id)!.x;
-    const step = x('t1') - x('t0');
+  it('gives each block one wire from the root’s bottom into its top, and none to the cards inside it', () => {
+    const blocks = [
+      blockOf('A', 2),
+      blockOf('B', 1),
+      blockOf('C', 1),
+      blockOf('D', 3),
+    ];
+    const geometry = layoutBlocks(ROOT, blocks, 2);
+    const root = geometry.boxes.get('root')!;
 
-    expect(x('t4') - x('t0')).toBeCloseTo(step / 2, 5);
-  });
-
-  it('routes every wire from the root’s bottom into its box’s top, through no box', () => {
-    for (const [count, perLine] of [
-      [4, 4],
-      [9, 4],
-      [24, 6],
-    ] as const) {
-      const geometry = layoutRows(ROOT, rowsOf(count, perLine));
-      const root = geometry.boxes.get('root')!;
-
-      for (const box of itemsOf(count)) {
-        const route = geometry.routes.get(box.id)!;
-        expect(route[0]).toEqual({
-          x: root.x + root.width / 2,
-          y: root.y + root.height,
-        });
-        expect(route.at(-1)!.y).toBe(geometry.boxes.get(box.id)!.y);
+    for (const block of blocks) {
+      const box = geometry.boxes.get(block.id)!;
+      const route = geometry.routes.get(block.id)!;
+      expect(route[0]).toEqual({
+        x: root.x + root.width / 2,
+        y: root.y + root.height,
+      });
+      expect(route.at(-1)).toEqual({ x: box.x + box.width / 2, y: box.y });
+      for (const item of block.items) {
+        expect(geometry.routes.has(item.id)).toBe(false);
       }
-      expect(wiresThroughBoxes(geometry)).toEqual([]);
     }
+    expect(wiresThroughBoxes(geometry)).toEqual([]);
+  });
+
+  it('keeps a pinned card out of its block, gives it a wire of its own, and shrinks the block around the cards left in it', () => {
+    const blocks = [blockOf('A', 3)];
+    const whole = layoutBlocks(ROOT, blocks, 4).boxes.get('block:A')!;
+    const pinned = new Map([['A-2', { x: 500, y: 40 }]]);
+
+    const geometry = layoutBlocks(ROOT, blocks, 4, pinned);
+    const root = geometry.boxes.get('root')!;
+    const shrunk = geometry.boxes.get('block:A')!;
+
+    expect(shrunk.width).toBe(BLOCK_PAD * 2 + CARD_WIDTH * 2 + BLOCK_GAP);
+    expect(shrunk.height).toBe(whole.height);
+    expect(geometry.boxes.get('A-2')!.x).toBe(root.x + 500);
+    expect(geometry.routes.has('A-2')).toBe(true);
+    expect(geometry.routes.has('block:A')).toBe(true);
+    expect(overlapping(geometry, blocks, new Set(['A-2']))).toEqual([]);
+  });
+
+  it('keeps the block a card is dragged out of at its top-left, shrinking from its right and bottom', () => {
+    const blocks = [blockOf('A', 2), blockOf('B', 2)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-2', { x: 900, y: 0 }]]),
+      free.width,
+    );
+
+    expect(geometry.boxes.get('block:A')).toMatchObject({
+      x: free.boxes.get('block:A')!.x,
+      y: free.boxes.get('block:A')!.y,
+    });
+  });
+
+  it('leaves the blocks beside a block a card was dragged out of where they stood', () => {
+    const blocks = [blockOf('A', 2), blockOf('B', 2)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-2', { x: 900, y: 0 }]]),
+      free.width,
+    );
+
+    expect(geometry.boxes.get('block:B')).toMatchObject({
+      x: free.boxes.get('block:B')!.x,
+      y: free.boxes.get('block:B')!.y,
+    });
+  });
+
+  it('moves only the block a pinned card lies over, along its line, and leaves every other block where it stood', () => {
+    const blocks = [
+      blockOf('A', 2),
+      blockOf('B', 2),
+      blockOf('C', 4),
+      blockOf('D', 2),
+    ];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const root = free.boxes.get('root')!;
+    const spot = free.boxes.get('block:B')!;
+    const pinned = new Map([
+      ['C-4', { x: spot.x - root.x + 12, y: spot.y - root.y + 60 }],
+    ]);
+
+    const geometry = layoutBlocks(ROOT, blocks, 4, pinned, free.width);
+    const at = (id: string) => geometry.boxes.get(id)!;
+    const was = (id: string) => free.boxes.get(id)!;
+
+    expect(overlapping(geometry, blocks, new Set(['C-4']))).toEqual([]);
+    expect(at('block:B').x).toBeGreaterThanOrEqual(
+      at('C-4').x + at('C-4').width,
+    );
+    expect(at('block:B').x).toBeGreaterThan(was('block:B').x);
+    expect(at('block:B').y).toBe(was('block:B').y);
+    for (const id of ['block:A', 'block:D']) {
+      expect(at(id)).toMatchObject({ x: was(id).x, y: was(id).y });
+    }
+  });
+
+  it('stands a pinned card at the root’s top-left plus its offset', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4)];
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-2', { x: 300, y: 200 }]]),
+    );
+    const root = geometry.boxes.get('root')!;
+    const pinned = geometry.boxes.get('A-2')!;
+
+    expect(pinned.x).toBe(root.x + 300);
+    expect(pinned.y).toBe(root.y + 200);
+  });
+
+  it('does not move the root when a card is pinned, on the frame it is laid out on', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+
+    const pinned = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-1', { x: 0, y: 2000 }]]),
+      free.width,
+    );
+
+    expect(pinned.boxes.get('root')).toEqual(free.boxes.get('root'));
+    expect(pinned.width).toBe(free.width);
+  });
+
+  it('grows the graph to take in a card pinned far right or far below', () => {
+    const blocks = [blockOf('A', 2)];
+    const right = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-1', { x: 1500, y: 40 }]]),
+    );
+    const rightBox = right.boxes.get('A-1')!;
+    expect(right.width).toBe(rightBox.x + rightBox.width + 24);
+
+    const below = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-1', { x: 0, y: 900 }]]),
+    );
+    const belowBox = below.boxes.get('A-1')!;
+    expect(below.height).toBe(belowBox.y + belowBox.height + 24);
+  });
+
+  it('keeps a pinned card the same offset from the root whatever the width of the blocks', () => {
+    const offset = { x: 300, y: 200 };
+    const offsetFrom = (geometry: GraphGeometry, id: string) => {
+      const root = geometry.boxes.get('root')!;
+      const box = geometry.boxes.get(id)!;
+      return { x: box.x - root.x, y: box.y - root.y };
+    };
+
+    const narrow = layoutBlocks(
+      ROOT,
+      [blockOf('A', 2)],
+      4,
+      new Map([['A-1', offset]]),
+    );
+    const wide = layoutBlocks(
+      ROOT,
+      [blockOf('A', 2), blockOf('B', 2)],
+      4,
+      new Map([['A-1', offset]]),
+    );
+
+    expect(offsetFrom(narrow, 'A-1')).toEqual(offset);
+    expect(offsetFrom(wide, 'A-1')).toEqual(offset);
+    expect(wide.width).toBeGreaterThan(narrow.width);
+  });
+
+  it('starts a pinned wire at the root’s bottom centre and ends it at the top centre of the card', () => {
+    const geometry = layoutBlocks(
+      ROOT,
+      [blockOf('A', 4), blockOf('B', 4)],
+      4,
+      new Map([['A-2', { x: 700, y: 200 }]]),
+    );
+    const root = geometry.boxes.get('root')!;
+    const pinned = geometry.boxes.get('A-2')!;
+    const route = geometry.routes.get('A-2')!;
+
+    expect(route[0]).toEqual({
+      x: root.x + root.width / 2,
+      y: root.y + root.height,
+    });
+    expect(route.at(-1)).toEqual({
+      x: pinned.x + pinned.width / 2,
+      y: pinned.y,
+    });
+  });
+
+  it('ends a pinned wire at the bottom edge of a card that sits above the bus', () => {
+    const geometry = layoutBlocks(
+      ROOT,
+      [blockOf('A', 4), blockOf('B', 4)],
+      4,
+      new Map([['A-2', { x: 700, y: 0 }]]),
+    );
+    const pinned = geometry.boxes.get('A-2')!;
+
+    expect(geometry.routes.get('A-2')!.at(-1)).toEqual({
+      x: pinned.x + pinned.width / 2,
+      y: pinned.y + pinned.height,
+    });
+  });
+
+  it('lays out exactly as before when no card is pinned', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4), blockOf('C', 1)];
+    expect(layoutBlocks(ROOT, blocks, 4, new Map())).toEqual(
+      layoutBlocks(ROOT, blocks, 4),
+    );
+  });
+
+  it('centres the root on the frame it is given, however wide a block has grown', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4)];
+    const frame = layoutBlocks(ROOT, blocks, 4).width;
+    const grown = [
+      {
+        id: 'block:A',
+        items: [{ id: 'A-1', width: 900, height: CARD_HEIGHT }],
+      },
+      blockOf('B', 4),
+    ];
+
+    const geometry = layoutBlocks(ROOT, grown, 4, new Map(), frame);
+
+    expect(geometry.boxes.get('root')!.x).toBe(frame / 2 - ROOT.width / 2);
+    const rightmost = Math.max(
+      ...[...geometry.boxes.values()].map((box) => box.x + box.width),
+    );
+    expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
+  });
+});
+
+describe('withBoxAt', () => {
+  it('stands one box at the root plus its offset with a pinned wire, and leaves every block, box and wire where it was', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4)];
+    const laidOut = layoutBlocks(ROOT, blocks, 4);
+    const pinnedThere = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-2', { x: 700, y: 200 }]]),
+    );
+
+    const moved = withBoxAt(laidOut, 'root', 'A-2', { x: 700, y: 200 });
+
+    expect(moved.boxes.get('A-2')).toEqual(pinnedThere.boxes.get('A-2'));
+    expect(moved.routes.get('A-2')).toEqual(pinnedThere.routes.get('A-2'));
+    for (const [id, box] of laidOut.boxes) {
+      if (id !== 'A-2') {
+        expect(moved.boxes.get(id)).toEqual(box);
+      }
+    }
+    for (const [id, route] of laidOut.routes) {
+      expect(moved.routes.get(id)).toEqual(route);
+    }
+    expect([moved.width, moved.height]).toEqual([
+      laidOut.width,
+      laidOut.height,
+    ]);
+  });
+
+  it('gives the geometry back as it is for a box it does not hold', () => {
+    const laidOut = layoutBlocks(ROOT, [blockOf('A', 2)], 4);
+
+    expect(withBoxAt(laidOut, 'root', 'gone', { x: 10, y: 10 })).toBe(laidOut);
   });
 });
 
@@ -174,9 +534,23 @@ describe('layoutColumn', () => {
     expect(geometry.boxes.get('t0')!.x).toBeGreaterThan(
       geometry.boxes.get('root')!.x,
     );
-    expect(overlaps(geometry)).toEqual([]);
+    expect(overlapping(geometry, [])).toEqual([]);
     expect(wiresThroughBoxes(geometry)).toEqual([]);
     expect(geometry.width).toBeLessThanOrEqual(390);
+  });
+
+  it('gives a heading no wire, and the cards under it a wire each', () => {
+    const geometry = layoutColumn(
+      { id: 'root', width: 300, height: 112 },
+      [{ id: 'heading:p', width: 296, height: 28 }, ...itemsOf(2)],
+      new Set(['heading:p']),
+    );
+
+    expect(geometry.routes.has('heading:p')).toBe(false);
+    expect(geometry.routes.has('t0')).toBe(true);
+    expect(geometry.boxes.get('heading:p')!.y).toBeLessThan(
+      geometry.boxes.get('t0')!.y,
+    );
   });
 });
 
@@ -188,415 +562,5 @@ describe('perLineFor on a measured canvas', () => {
     expect(perLineFor(24, 430, 272)).toBe(1);
     expect(perLineFor(24, 900, 272)).toBe(3);
     expect(perLineFor(3, 2400, 272)).toBe(4);
-  });
-});
-
-describe('layoutRows golden picture', () => {
-  it('places equal thread boxes, a mixed-height row and the "+N more" pill exactly as before per-box cells', () => {
-    const thread = (id: string, height = 150): GraphBox => ({
-      id,
-      width: 272,
-      height,
-    });
-    const geometry = layoutRows({ id: 'manager', width: 380, height: 84 }, [
-      [thread('a'), thread('b', 182), thread('c')],
-      [thread('d'), thread('e')],
-      [{ id: 'more', width: 160, height: 32 }],
-    ]);
-    expect({
-      width: geometry.width,
-      height: geometry.height,
-      boxes: [...geometry.boxes.values()],
-      routes: Object.fromEntries(geometry.routes),
-    }).toMatchInlineSnapshot(`
-      {
-        "boxes": [
-          {
-            "height": 84,
-            "id": "manager",
-            "width": 380,
-            "x": 360,
-            "y": 24,
-          },
-          {
-            "height": 150,
-            "id": "a",
-            "width": 272,
-            "x": 24,
-            "y": 180,
-          },
-          {
-            "height": 182,
-            "id": "b",
-            "width": 272,
-            "x": 336,
-            "y": 180,
-          },
-          {
-            "height": 150,
-            "id": "c",
-            "width": 272,
-            "x": 648,
-            "y": 180,
-          },
-          {
-            "height": 150,
-            "id": "d",
-            "width": 272,
-            "x": 336,
-            "y": 434,
-          },
-          {
-            "height": 150,
-            "id": "e",
-            "width": 272,
-            "x": 648,
-            "y": 434,
-          },
-          {
-            "height": 32,
-            "id": "more",
-            "width": 160,
-            "x": 392,
-            "y": 656,
-          },
-        ],
-        "height": 712,
-        "routes": {
-          "a": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 160,
-              "y": 144,
-            },
-            {
-              "x": 160,
-              "y": 180,
-            },
-          ],
-          "b": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 472,
-              "y": 144,
-            },
-            {
-              "x": 472,
-              "y": 180,
-            },
-          ],
-          "c": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 784,
-              "y": 144,
-            },
-            {
-              "x": 784,
-              "y": 180,
-            },
-          ],
-          "d": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 316,
-              "y": 144,
-            },
-            {
-              "x": 316,
-              "y": 398,
-            },
-            {
-              "x": 472,
-              "y": 398,
-            },
-            {
-              "x": 472,
-              "y": 434,
-            },
-          ],
-          "e": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 628,
-              "y": 144,
-            },
-            {
-              "x": 628,
-              "y": 398,
-            },
-            {
-              "x": 784,
-              "y": 398,
-            },
-            {
-              "x": 784,
-              "y": 434,
-            },
-          ],
-          "more": [
-            {
-              "x": 550,
-              "y": 108,
-            },
-            {
-              "x": 550,
-              "y": 144,
-            },
-            {
-              "x": 316,
-              "y": 144,
-            },
-            {
-              "x": 316,
-              "y": 398,
-            },
-            {
-              "x": 316,
-              "y": 620,
-            },
-            {
-              "x": 472,
-              "y": 620,
-            },
-            {
-              "x": 472,
-              "y": 656,
-            },
-          ],
-        },
-        "width": 1100,
-      }
-    `);
-  });
-});
-
-describe('layoutRows per-box cells', () => {
-  it('gives a wide box its own width in its row, its neighbours a gap away and every wire into its own centre', () => {
-    const geometry = layoutRows(ROOT, [
-      [
-        { id: 'a', width: 272, height: 150 },
-        { id: 'open', width: 480, height: 520 },
-        { id: 'c', width: 272, height: 150 },
-      ],
-      [{ id: 'd', width: 272, height: 150 }],
-    ]);
-    const a = geometry.boxes.get('a')!;
-    const open = geometry.boxes.get('open')!;
-    const c = geometry.boxes.get('c')!;
-    const d = geometry.boxes.get('d')!;
-    expect(open.x - (a.x + a.width)).toBe(40);
-    expect(c.x - (open.x + open.width)).toBe(40);
-    expect(d.y).toBe(open.y + open.height + 72);
-    expect(geometry.routes.get('open')!.at(-1)).toEqual({
-      x: open.x + open.width / 2,
-      y: open.y,
-    });
-    expect(overlaps(geometry)).toEqual([]);
-    expect(wiresThroughBoxes(geometry)).toEqual([]);
-  });
-});
-
-describe('layoutRows with pinned boxes', () => {
-  const pin = (id: string, x: number, y: number) => new Map([[id, { x, y }]]);
-
-  const offsetFrom = (
-    geometry: GraphGeometry,
-    id: string,
-  ): { x: number; y: number } => {
-    const root = geometry.boxes.get('root')!;
-    const box = geometry.boxes.get(id)!;
-    return { x: box.x - root.x, y: box.y - root.y };
-  };
-
-  it('moves a row past every pinned box it would meet, one stacked under another', () => {
-    const rows = rowsOf(8, 4);
-    const free = layoutRows(ROOT, rows);
-    const spot = free.boxes.get('t0')!;
-    const root = free.boxes.get('root')!;
-    const upper = { x: spot.x - root.x, y: spot.y - root.y };
-    const lower = { x: upper.x, y: upper.y + spot.height + 72 };
-
-    const geometry = layoutRows(
-      ROOT,
-      rows,
-      new Map([
-        ['t7', upper],
-        ['t6', lower],
-      ]),
-    );
-
-    expect(overlaps(geometry)).toEqual([]);
-    const below = geometry.boxes.get('t6')!;
-    expect(geometry.boxes.get('t0')!.y).toBeGreaterThanOrEqual(
-      below.y + below.height,
-    );
-  });
-
-  it('keeps the rows under a wholly pinned row where they stood across the canvas', () => {
-    const rows = rowsOf(12, 4);
-    const free = layoutRows(ROOT, rows);
-    const firstRow = new Map(
-      rows[0]!.map((box, index) => [box.id, { x: 3000 + index * 400, y: 0 }]),
-    );
-
-    const geometry = layoutRows(ROOT, rows, firstRow);
-
-    for (const box of [...rows[1]!, ...rows[2]!]) {
-      expect(geometry.boxes.get(box.id)!.x).toBe(free.boxes.get(box.id)!.x);
-    }
-  });
-
-  it('centres the manager on the frame it is given, however wide a row has grown', () => {
-    const rows = rowsOf(8, 4);
-    const frame = layoutRows(ROOT, rows).width;
-    const grown = rows.map((row, index) =>
-      index === 0
-        ? row.map((box, at) => (at === 0 ? { ...box, width: 900 } : box))
-        : row,
-    );
-
-    const geometry = layoutRows(ROOT, grown, new Map(), frame);
-
-    expect(geometry.boxes.get('root')!.x).toBe(frame / 2 - ROOT.width / 2);
-    const rightmost = Math.max(
-      ...[...geometry.boxes.values()].map((box) => box.x + box.width),
-    );
-    expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
-  });
-
-  it('lays out exactly as before when no box is pinned', () => {
-    for (const rows of [rowsOf(9, 4), rowsOf(24, 6)]) {
-      expect(layoutRows(ROOT, rows, new Map())).toEqual(layoutRows(ROOT, rows));
-    }
-  });
-
-  it('stands a pinned box at the manager’s top-left plus its offset', () => {
-    const geometry = layoutRows(ROOT, rowsOf(8, 4), pin('t1', 300, 200));
-    const root = geometry.boxes.get('root')!;
-    const pinned = geometry.boxes.get('t1')!;
-
-    expect(pinned.x).toBe(root.x + 300);
-    expect(pinned.y).toBe(root.y + 200);
-  });
-
-  it('does not move the manager box when one is pinned, the rows still counting the pinned box', () => {
-    const rows = rowsOf(6, 4);
-    const free = layoutRows(ROOT, rows);
-
-    const pinned = layoutRows(ROOT, rows, pin('t0', 0, 200));
-
-    expect(pinned.boxes.get('root')).toEqual(free.boxes.get('root'));
-    expect(pinned.width).toBe(free.width);
-  });
-
-  it('keeps unpinned boxes off a pinned box, a row under it moved below, and the rows in order', () => {
-    const rows = rowsOf(8, 4);
-    const free = layoutRows(ROOT, rows);
-    const spot = free.boxes.get('t0')!;
-    const root = free.boxes.get('root')!;
-
-    const geometry = layoutRows(
-      ROOT,
-      rows,
-      pin('t5', spot.x - root.x, spot.y - root.y),
-    );
-
-    expect(overlaps(geometry)).toEqual([]);
-    const pinnedBox = geometry.boxes.get('t5')!;
-    expect(geometry.boxes.get('t0')!.y).toBeGreaterThanOrEqual(
-      pinnedBox.y + pinnedBox.height,
-    );
-    const ys = rows
-      .flat()
-      .filter((box) => box.id !== 't5')
-      .map((box) => geometry.boxes.get(box.id)!.y);
-    expect(ys).toEqual([...ys].sort((a, b) => a - b));
-  });
-
-  it('keeps a pinned box the same offset from the manager whatever the width of the rows', () => {
-    const offset = { x: 300, y: 200 };
-
-    const narrow = layoutRows(
-      ROOT,
-      rowsOf(4, 4),
-      pin('t1', offset.x, offset.y),
-    );
-    const wide = layoutRows(ROOT, rowsOf(24, 6), pin('t1', offset.x, offset.y));
-
-    expect(offsetFrom(narrow, 't1')).toEqual(offset);
-    expect(offsetFrom(wide, 't1')).toEqual(offset);
-    expect(wide.width).toBeGreaterThan(narrow.width);
-  });
-
-  it('starts a pinned wire at the manager’s bottom centre and ends it at the top centre of a box below the bus', () => {
-    const geometry = layoutRows(ROOT, rowsOf(8, 4), pin('t1', 700, 200));
-    const root = geometry.boxes.get('root')!;
-    const pinned = geometry.boxes.get('t1')!;
-    const route = geometry.routes.get('t1')!;
-
-    expect(route[0]).toEqual({
-      x: root.x + root.width / 2,
-      y: root.y + root.height,
-    });
-    expect(route.at(-1)).toEqual({
-      x: pinned.x + pinned.width / 2,
-      y: pinned.y,
-    });
-  });
-
-  it('ends a pinned wire at the bottom edge of a box that sits above the bus', () => {
-    const geometry = layoutRows(ROOT, rowsOf(8, 4), pin('t1', 700, 0));
-    const pinned = geometry.boxes.get('t1')!;
-
-    expect(geometry.routes.get('t1')!.at(-1)).toEqual({
-      x: pinned.x + pinned.width / 2,
-      y: pinned.y + pinned.height,
-    });
-  });
-
-  it('grows the graph to take in a pinned box placed far right or far below', () => {
-    const right = layoutRows(ROOT, rowsOf(4, 4), pin('t1', 1500, 40));
-    const rightBox = right.boxes.get('t1')!;
-    expect(right.width).toBe(rightBox.x + rightBox.width + 24);
-
-    const below = layoutRows(ROOT, rowsOf(4, 4), pin('t1', 0, 900));
-    const belowBox = below.boxes.get('t1')!;
-    expect(below.height).toBe(belowBox.y + belowBox.height + 24);
   });
 });

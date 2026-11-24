@@ -118,7 +118,7 @@ const cardVariants = cva(
     variants: {
       attention: {
         blocked: 'border-destructive/50',
-        working: 'border-success/50',
+        working: 'border-success/50 cc-running-border',
         question: 'border-warning/60',
         quiet: 'border-border-strong',
         inactive: 'border-border-strong',

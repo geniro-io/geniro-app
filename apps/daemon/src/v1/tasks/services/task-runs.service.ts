@@ -25,6 +25,7 @@ import { membersThatAsk } from '../../teams/utils/unattended';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
+  type ProjectRunStart,
   type ResolvedAgentTarget,
   type ResolvedRunTarget,
   type ResolvedTeamTarget,
@@ -46,6 +47,25 @@ import {
 } from '../utils/task-prompt';
 import { LabelInstructionsService } from './label-instructions.service';
 import { TasksService } from './tasks.service';
+
+/** What a new run is made with, whichever start makes it. */
+interface NewRunSpec {
+  cwd: string;
+  title: string;
+  prompt: string;
+  settings: Pick<
+    StartTaskRun,
+    | 'customInstructions'
+    | 'replyLanguage'
+    | 'agentOptions'
+    | 'startSha'
+    | 'startDirty'
+  >;
+  groupId: string | null;
+  taskInstructions: (kind: 'agent' | 'team') => string | undefined;
+  /** The card the run works, or the project a cardless run belongs to. */
+  owner: { taskId: string; taskIdentifier?: string } | { projectId: string };
+}
 
 /**
  * Starting an agent on a task.
@@ -262,87 +282,37 @@ export class TaskRunsService {
       return resumed;
     }
 
-    // Where the run is FILED in the sidebar. The project's group when it names
-    // one — a deliberate answer about where its runs belong. Otherwise the
-    // group whose rule claims the card's REAL folder: the run itself works in
-    // a worktree, a path no rule was ever written for, so leaving the choice
-    // to the run's own cwd filed every task run as Ungrouped — REPORTED
-    // against the autopilot as "tasks have no folder of their own … they land
-    // in UNGROUPED although they belong to the geniro folder".
-    // A project can still name a group deleted before the delete released
-    // its projects; that binding counts as none, so the folder rule decides.
-    const projectGroupId =
-      project.groupId !== null && (await this.groups.exists(project.groupId))
-        ? project.groupId
-        : null;
-    const groupId =
-      projectGroupId ??
-      (await this.groups.resolveAutoGroupId({
-        cwd: task.folder ?? project.folder,
-        teamId: target.kind === 'team' ? target.teamSlug : null,
-      }));
+    // Where the run is FILED in the sidebar: the project's group, else the
+    // group whose rule claims the card's REAL folder — never the worktree's.
+    const groupId = await this.groupFor(
+      project,
+      task.folder ?? project.folder,
+      target,
+    );
 
     // Held so `abandon` can take the run down with the rest. Without it a
     // failure after creation leaves a run whose `taskId` points at a card that
     // no longer names it, working directory already pruned by the caller.
     let runId: string | null = null;
     try {
-      if (target.kind === 'team') {
-        const run = await this.startTeamRun(target.teamSlug, {
-          task,
-          project,
-          input,
-          groupId,
-          labelInstructions,
-        });
-        runId = run.id;
-        // No `sendMessage` here, and that is the arm's whole difference: a
-        // team's seed prompt IS its opening message, persisted by the
-        // executor before the trigger member's first turn. A LATER press sends into this run instead
-        // — see `resumeTeam`.
-        return await this.recordRun(taskId, run.id, input);
-      }
-
       const brief = this.brief(task, input);
-      const run = await this.chats.createChat({
-        agentKind: target.agentKind,
+      const run = await this.newRun(target, {
         cwd: input.cwd,
-        firstMessage: brief,
-        startSha: input.startSha,
-        startDirty: input.startDirty,
-        model: target.model ?? undefined,
-        effort: target.effort ?? undefined,
-        contextWindow: target.contextWindow ?? undefined,
-        ...(Object.keys(target.modelParameters).length === 0
-          ? {}
-          : { modelParameters: target.modelParameters }),
-        approval: this.chats.offeredApproval(target.agentKind, target.approval),
-        configDir: target.configDir ?? undefined,
-        customInstructions: input.customInstructions,
-        replyLanguage: input.replyLanguage,
-        agentOptions: input.agentOptions,
-        taskInstructions: this.composeTaskInstructions(
-          labelInstructions,
-          'agent',
-        ),
-        // The card's own title, so the thread is findable in a sidebar that
-        // lists it beside every other conversation. `ChatTitleService` leaves
-        // a titled run alone, so this is not overwritten later.
         title: task.title,
-        taskId: task.id,
-        // And what that card is CALLED, written onto the run beside the id it
-        // belongs to. The chat list draws it as the thread's own label, which
-        // is the whole reason it is denormalized: the sidebar holds run rows
-        // and no board — see `Run.taskIdentifier`.
-        ...identifierOf(task, project),
-        // Resolved above from the project, else from the card's real folder —
-        // never from this worktree, a path nothing has ever been filed under.
+        prompt: brief,
+        settings: input,
         groupId,
+        taskInstructions: (kind) =>
+          this.composeTaskInstructions(labelInstructions, kind),
+        owner: { taskId: task.id, ...identifierOf(task, project) },
       });
-
       runId = run.id;
       const wire = await this.recordRun(taskId, run.id, input);
-      await this.chats.sendMessage(run.id, brief);
+      // A team's seed prompt IS its opening message, persisted by the
+      // executor; only a chat is sent its brief.
+      if (target.kind === 'agent') {
+        await this.chats.sendMessage(run.id, brief);
+      }
       return wire;
     } catch (error) {
       await this.abandon(taskId, input.from, runId, target.kind, found);
@@ -351,40 +321,102 @@ export class TaskRunsService {
   }
 
   /**
-   * Start the team arm.
-   *
-   * The three overrides it passes are the whole of what a task run needs the
-   * executor to do differently, and each is an answer the library route has no
-   * way to give: the card's `taskId` (so `TaskSettleService` can move it when
-   * the team run finishes), the card's own title (so the sidebar names the WORK
-   * rather than restating which team ran), and the group resolved for it
-   * in `startClaimed` (a worktree being a path no auto-file rule has ever
-   * seen).
+   * Start a thread in a project's folder with no board card — the command
+   * center's cardless start. Its target is the request's agent or team, else
+   * the project's default, resolved as a card's is.
    */
-  private startTeamRun(
-    slug: string,
-    context: {
-      task: Task;
-      project: Project;
-      input: StartTaskRun;
-      groupId: string | null;
-      labelInstructions: string | null;
-    },
+  async startProjectRun(input: ProjectRunStart): Promise<{ runId: string }> {
+    const em = this.em.fork();
+    const project = await this.requireProject(input.projectId, em);
+    const levels = [input.target, project];
+    const target = resolveRunTarget(
+      levels,
+      input.startedBy,
+      await this.unattendedTeam(levels, input.startedBy, project.id),
+    );
+    if (isRunTargetProblem(target)) {
+      throw new BadRequestException(
+        RUN_TARGET_PROBLEM_CODE[target.reason],
+        `${RUN_TARGET_PROBLEM_REASON[target.reason]} (${project.id})`,
+      );
+    }
+    const run = await this.newRun(target, {
+      cwd: project.folder,
+      title: input.title,
+      prompt: input.prompt,
+      settings: input,
+      groupId: await this.groupFor(project, project.folder, target),
+      taskInstructions: () => undefined,
+      owner: { projectId: project.id },
+    });
+    if (target.kind === 'agent') {
+      try {
+        await this.chats.sendMessage(run.id, input.prompt);
+      } catch (error) {
+        await this.discardRun(run.id, target.kind);
+        throw error;
+      }
+    }
+    return { runId: run.id };
+  }
+
+  /**
+   * The sidebar group a new run of `project` is filed in: the project's own
+   * group while it exists, else the group whose rule claims `folder`.
+   */
+  private async groupFor(
+    project: Project,
+    folder: string,
+    target: ResolvedRunTarget,
+  ): Promise<string | null> {
+    if (
+      project.groupId !== null &&
+      (await this.groups.exists(project.groupId))
+    ) {
+      return project.groupId;
+    }
+    return this.groups.resolveAutoGroupId({
+      cwd: folder,
+      teamId: target.kind === 'team' ? target.teamSlug : null,
+    });
+  }
+
+  /** Make a new chat or team run, the one place both a card's start and a cardless start create one. */
+  private newRun(
+    target: ResolvedRunTarget,
+    spec: NewRunSpec,
   ): Promise<{ id: string }> {
-    const { task, project, input, groupId, labelInstructions } = context;
-    return this.executor.startRunBySlug(slug, {
-      cwd: input.cwd,
-      prompt: this.brief(task, input),
-      customInstructions: input.customInstructions,
-      replyLanguage: input.replyLanguage,
-      agentOptions: input.agentOptions,
-      startSha: input.startSha,
-      startDirty: input.startDirty,
-      taskInstructions: this.composeTaskInstructions(labelInstructions, 'team'),
-      taskId: task.id,
-      ...identifierOf(task, project),
-      title: task.title,
-      groupId,
+    const common = {
+      cwd: spec.cwd,
+      title: spec.title,
+      startSha: spec.settings.startSha,
+      startDirty: spec.settings.startDirty,
+      customInstructions: spec.settings.customInstructions,
+      replyLanguage: spec.settings.replyLanguage,
+      agentOptions: spec.settings.agentOptions,
+      groupId: spec.groupId,
+      ...spec.owner,
+    };
+    if (target.kind === 'team') {
+      return this.executor.startRunBySlug(target.teamSlug, {
+        ...common,
+        prompt: spec.prompt,
+        taskInstructions: spec.taskInstructions('team'),
+      });
+    }
+    return this.chats.createChat({
+      ...common,
+      agentKind: target.agentKind,
+      firstMessage: spec.prompt,
+      model: target.model ?? undefined,
+      effort: target.effort ?? undefined,
+      contextWindow: target.contextWindow ?? undefined,
+      ...(Object.keys(target.modelParameters).length === 0
+        ? {}
+        : { modelParameters: target.modelParameters }),
+      approval: this.chats.offeredApproval(target.agentKind, target.approval),
+      configDir: target.configDir ?? undefined,
+      taskInstructions: spec.taskInstructions('agent'),
     });
   }
 
@@ -723,17 +755,25 @@ export class TaskRunsService {
     // the catch below, leaving exactly the orphaned run row this block exists
     // to prevent, and leaving it silently.
     if (runId !== null) {
-      try {
-        await (kind === 'team'
-          ? this.executor.deleteRun(runId)
-          : this.chats.delete(runId));
-      } catch (error) {
-        this.logger.warn(
-          `could not delete run ${runId} after a failed start: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+      await this.discardRun(runId, kind);
+    }
+  }
+
+  /** Delete a run a failed start made, best-effort: a failure is logged, never thrown. */
+  private async discardRun(
+    runId: string,
+    kind: ResolvedRunTarget['kind'],
+  ): Promise<void> {
+    try {
+      await (kind === 'team'
+        ? this.executor.deleteRun(runId)
+        : this.chats.delete(runId));
+    } catch (error) {
+      this.logger.warn(
+        `could not delete run ${runId} after a failed start: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 

@@ -1,3 +1,4 @@
+import { ConflictException, NotFoundException } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +8,7 @@ import {
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
 import type { RunNoticeWriter } from '../../agents/services/run-notice.writer';
@@ -15,16 +17,20 @@ import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
+import type { TaskRunsService } from '../../tasks/services/task-runs.service';
 import type { TasksService } from '../../tasks/services/tasks.service';
 import { commandCenterDb } from '../__tests__/command-center-db';
 import {
   type RosterReason,
   START_FAILURE_MAX_CHARS,
 } from '../command-center.types';
+import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
+import { CommandCenterThreadStart } from '../entity/command-center-thread-start.entity';
 import type {
   CommandCenterChatService,
   RosterThread,
 } from './command-center-chat.service';
+import type { CommandCenterEventBus } from './command-center-events.bus';
 import { CommandCenterStartsService } from './command-center-starts.service';
 
 const MANAGER = 'manager-1';
@@ -41,6 +47,9 @@ function taskIdOf(answer: StartThreadAnswer): string {
   if (answer.status === 'refused') {
     throw new Error(`refused: ${answer.code}`);
   }
+  if (!('taskId' in answer)) {
+    throw new Error('started with no card');
+  }
   return answer.taskId;
 }
 
@@ -50,6 +59,7 @@ function input(over: Partial<StartThreadInput> = {}): StartThreadInput {
     title: 'Billing cache',
     brief: 'Clear the cache',
     watch: false,
+    card: true,
     ...over,
   };
 }
@@ -61,6 +71,13 @@ describe('CommandCenterStartsService', () => {
   let createdIds: string[];
   let project: Project;
 
+  let startProjectRun: ReturnType<
+    typeof vi.fn<TaskRunsService['startProjectRun']>
+  >;
+  let agentEvents: AgentEventBus;
+  let publishChanged: ReturnType<
+    typeof vi.fn<CommandCenterEventBus['publishChanged']>
+  >;
   let raiseOwnedCard: ReturnType<
     typeof vi.fn<
       (
@@ -80,6 +97,16 @@ describe('CommandCenterStartsService', () => {
         message: string,
         answer?: string,
       ) => Promise<void>
+    >
+  >;
+  let trackOwnedCard: ReturnType<
+    typeof vi.fn<
+      (
+        runId: string,
+        requestId: string,
+        card: { toolName: string; input: unknown },
+        respond: Responder,
+      ) => void
     >
   >;
   let wakePublish: ReturnType<typeof vi.fn<(wake: Wake) => void>>;
@@ -167,6 +194,15 @@ describe('CommandCenterStartsService', () => {
 
     raiseOwnedCard = vi.fn(() => Promise.resolve());
     deliverOwnedCardVerdict = vi.fn(() => Promise.resolve());
+    trackOwnedCard =
+      vi.fn<
+        (
+          runId: string,
+          requestId: string,
+          card: { toolName: string; input: unknown },
+          respond: Responder,
+        ) => void
+      >();
     wakePublish = vi.fn<(wake: Wake) => void>();
     noticeInfo = vi.fn(() => Promise.resolve());
     addToRoster = vi.fn(() => Promise.resolve());
@@ -179,12 +215,19 @@ describe('CommandCenterStartsService', () => {
     });
     taskEvents = new TaskEventBus();
     announceInPlace = vi.fn();
+    startProjectRun = vi.fn(() => Promise.resolve({ runId: THREAD }));
+    agentEvents = new AgentEventBus();
+    publishChanged = vi.fn();
 
     service = new CommandCenterStartsService(
       db.em,
       new RunDao(db.em),
       new ItemDao(db.em),
-      { raiseOwnedCard, deliverOwnedCardVerdict } as unknown as ChatService,
+      {
+        raiseOwnedCard,
+        deliverOwnedCardVerdict,
+        trackOwnedCard,
+      } as unknown as ChatService,
       { publish: wakePublish } as unknown as HostWakeBus,
       { listAll } as unknown as ProjectDao,
       taskDao,
@@ -192,6 +235,10 @@ describe('CommandCenterStartsService', () => {
       taskEvents,
       { addToRoster, rosterThreads } as unknown as CommandCenterChatService,
       { info: noticeInfo } as unknown as RunNoticeWriter,
+      new CommandCenterThreadStartDao(db.em),
+      { startProjectRun } as unknown as TaskRunsService,
+      agentEvents,
+      { publishChanged } as unknown as CommandCenterEventBus,
     );
     service.onModuleInit();
   });
@@ -463,6 +510,7 @@ describe('CommandCenterStartsService', () => {
 
       expect(await service.approvedStarts()).toEqual([
         {
+          kind: 'card',
           taskId: queued.id,
           projectId: PROJECT_ID,
           title: 'First',
@@ -471,6 +519,7 @@ describe('CommandCenterStartsService', () => {
           startedBy: 'manager',
         },
         {
+          kind: 'card',
           taskId: withFolder.id,
           projectId: PROJECT_ID,
           title: 'Second',
@@ -660,6 +709,501 @@ describe('CommandCenterStartsService', () => {
       ]);
       expect(wakePublish).not.toHaveBeenCalled();
       expect((await taskOf(task.id)).startRequestedByRunId).toBeNull();
+    });
+  });
+
+  describe('a start with no card', () => {
+    type ThreadRequest = Parameters<CommandCenterThreadStartDao['create']>[0];
+
+    const RUN_SETTINGS = {
+      startSha: 'abc123',
+      startDirty: false,
+      customInstructions: 'Be brief.',
+      replyLanguage: 'en',
+    };
+
+    const threads = () => new CommandCenterThreadStartDao(db.em);
+
+    function cardId(startId: string): string {
+      return `command-center-start:thread:${startId}`;
+    }
+
+    function requestOf(over: Partial<ThreadRequest> = {}): ThreadRequest {
+      return {
+        managerRunId: MANAGER,
+        projectId: PROJECT_ID,
+        title: 'Billing cache',
+        brief: 'Clear the cache',
+        agentKind: null,
+        teamSlug: null,
+        note: null,
+        watch: false,
+        requestedAt: new Date(),
+        approvedAt: null,
+        ...over,
+      };
+    }
+
+    function seedRequest(over: Partial<ThreadRequest> = {}) {
+      return threads().create(requestOf(over));
+    }
+
+    describe('start', () => {
+      it('writes the request and raises its Start card in ask mode, filing no task', async () => {
+        const answer = await service.start(MANAGER, input({ card: false }));
+        const [row] = await threads().listWaiting(MANAGER);
+
+        expect(answer).toEqual({ status: 'card_shown', startId: row!.id });
+        expect(row).toMatchObject({
+          title: 'Billing cache',
+          brief: 'Clear the cache',
+          projectId: PROJECT_ID,
+          approvedAt: null,
+        });
+        expect(createTask).not.toHaveBeenCalled();
+        expect(raiseOwnedCard).toHaveBeenCalledTimes(1);
+        expect(raiseOwnedCard).toHaveBeenCalledWith(
+          MANAGER,
+          cardId(row!.id),
+          {
+            toolName: HOST_START_THREAD_TOOL,
+            input: {
+              startId: row!.id,
+              title: 'Billing cache',
+              project: 'Geniro',
+              brief: 'Clear the cache',
+            },
+          },
+          expect.any(Function),
+        );
+      });
+
+      it('approves the request at once in auto mode, with no Start card', async () => {
+        const answer = await service.start(
+          AUTO_MANAGER,
+          input({ card: false }),
+        );
+        const [row] = await threads().listApproved();
+
+        expect(answer).toEqual({ status: 'starting', startId: row!.id });
+        expect(row).toMatchObject({
+          managerRunId: AUTO_MANAGER,
+          approvedAt: expect.any(Date),
+        });
+        expect(raiseOwnedCard).not.toHaveBeenCalled();
+        expect(createTask).not.toHaveBeenCalled();
+      });
+
+      it('marks the request failed and refuses CARD_NOT_SHOWN when its Start card cannot be shown', async () => {
+        raiseOwnedCard.mockRejectedValueOnce(new Error('no window'));
+
+        const answer = await service.start(MANAGER, input({ card: false }));
+        const [row] = await db.em
+          .fork()
+          .find(CommandCenterThreadStart, { managerRunId: MANAGER });
+
+        expect(answer).toEqual({
+          status: 'refused',
+          code: 'CARD_NOT_SHOWN',
+          reason: expect.any(String),
+        });
+        expect(row).toMatchObject({
+          runId: null,
+          failedAt: expect.any(Date),
+          failure: 'its Start card could not be shown',
+        });
+        expect(createTask).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("the user's verdict on it", () => {
+      it('approves the request and tells the manager, carrying the note', async () => {
+        await service.start(MANAGER, input({ card: false }));
+        const [row] = await threads().listWaiting(MANAGER);
+
+        raiseOwnedCard.mock.calls[0]![3](true, 'go ahead');
+
+        await vi.waitFor(() =>
+          expect(deliverOwnedCardVerdict).toHaveBeenCalledWith(
+            MANAGER,
+            cardId(row!.id),
+            true,
+            expect.stringMatching(
+              /approved starting "Billing cache".*The user's note: go ahead/s,
+            ),
+            'go ahead',
+          ),
+        );
+        expect(await threads().read(row!.id)).toMatchObject({
+          approvedAt: expect.any(Date),
+          declinedAt: null,
+        });
+      });
+
+      it('declines the request and tells the manager that nothing started', async () => {
+        await service.start(MANAGER, input({ card: false }));
+        const [row] = await threads().listWaiting(MANAGER);
+
+        raiseOwnedCard.mock.calls[0]![3](false);
+
+        await vi.waitFor(() =>
+          expect(deliverOwnedCardVerdict).toHaveBeenCalledWith(
+            MANAGER,
+            cardId(row!.id),
+            false,
+            expect.stringContaining(
+              'The user declined to start "Billing cache". Nothing was started.',
+            ),
+            undefined,
+          ),
+        );
+        expect(await threads().read(row!.id)).toMatchObject({
+          approvedAt: null,
+          declinedAt: expect.any(Date),
+        });
+      });
+
+      it('answers a second Start card with no change, carrying nothing', async () => {
+        await service.start(MANAGER, input({ card: false }));
+        const [row] = await threads().listWaiting(MANAGER);
+        const respond = raiseOwnedCard.mock.calls[0]![3];
+
+        respond(true);
+        await vi.waitFor(() =>
+          expect(deliverOwnedCardVerdict).toHaveBeenCalledTimes(1),
+        );
+        respond(false, 'changed my mind');
+
+        await vi.waitFor(() =>
+          expect(deliverOwnedCardVerdict).toHaveBeenCalledTimes(2),
+        );
+        expect(deliverOwnedCardVerdict).toHaveBeenLastCalledWith(
+          MANAGER,
+          cardId(row!.id),
+          false,
+          expect.stringContaining('no longer asks to start'),
+          'changed my mind',
+        );
+        expect(await threads().read(row!.id)).toMatchObject({
+          approvedAt: expect.any(Date),
+          declinedAt: null,
+        });
+      });
+    });
+
+    describe('approvedStarts', () => {
+      it('lists an approved request not yet claimed beside card starts, and drops one whose project is gone', async () => {
+        const queued = await seedRequest({
+          title: 'Queued thread',
+          approvedAt: new Date(),
+        });
+        await seedRequest({ title: 'Waiting thread' });
+        await seedRequest({
+          title: 'Gone project',
+          projectId: 'project-gone',
+          approvedAt: new Date(),
+        });
+        const claimed = await seedRequest({
+          title: 'Claimed thread',
+          approvedAt: new Date(),
+        });
+        await threads().claim(claimed.id, new Date());
+        const card = await seedTask({
+          title: 'Card start',
+          startRequestedAt: new Date(),
+          startRequestedByRunId: MANAGER,
+          startApprovedAt: new Date(),
+        });
+
+        const starts = await service.approvedStarts();
+
+        expect(starts).toHaveLength(2);
+        expect(starts).toEqual(
+          expect.arrayContaining([
+            {
+              kind: 'card',
+              taskId: card.id,
+              projectId: PROJECT_ID,
+              title: 'Card start',
+              status: 'backlog',
+              folder: '/work/geniro',
+              startedBy: 'manager',
+            },
+            {
+              kind: 'thread',
+              startId: queued.id,
+              projectId: PROJECT_ID,
+              title: 'Queued thread',
+              folder: '/work/geniro',
+              startedBy: 'manager',
+            },
+          ]),
+        );
+      });
+    });
+
+    describe('startThreadRun', () => {
+      it('starts the thread in the project, rosters it with its note and watch, and tells the manager once', async () => {
+        const row = await seedRequest({
+          agentKind: 'claude',
+          note: 'watch billing',
+          watch: true,
+          approvedAt: new Date(),
+        });
+
+        const state = await service.startThreadRun(row.id, RUN_SETTINGS);
+
+        expect(startProjectRun).toHaveBeenCalledTimes(1);
+        expect(startProjectRun).toHaveBeenCalledWith({
+          ...RUN_SETTINGS,
+          projectId: PROJECT_ID,
+          title: 'Billing cache',
+          prompt: 'Clear the cache',
+          target: { agentKind: 'claude', teamSlug: null },
+          startedBy: 'manager',
+        });
+        expect(state).toEqual({
+          startId: row.id,
+          state: 'started',
+          runId: THREAD,
+          failure: null,
+        });
+        expect(addToRoster).toHaveBeenCalledWith(
+          MANAGER,
+          [THREAD],
+          'manager',
+          'watch billing',
+          true,
+        );
+        expect(noticeInfo).toHaveBeenCalledTimes(1);
+        expect(noticeInfo).toHaveBeenCalledWith(
+          MANAGER,
+          'Started "Billing cache"',
+        );
+        expect(await threads().read(row.id)).toMatchObject({
+          runId: THREAD,
+          reportedAt: expect.any(Date),
+        });
+      });
+
+      it('refuses a second start of the same request as START_TAKEN', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        await service.startThreadRun(row.id, RUN_SETTINGS);
+
+        await expect(
+          service.startThreadRun(row.id, RUN_SETTINGS),
+        ).rejects.toBeInstanceOf(ConflictException);
+        await expect(
+          service.startThreadRun(row.id, RUN_SETTINGS),
+        ).rejects.toMatchObject({ errorCode: 'START_TAKEN' });
+        expect(startProjectRun).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the claim and rethrows when the run cannot start, so the request is listed again', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        startProjectRun.mockRejectedValueOnce(new Error('no such folder'));
+
+        await expect(
+          service.startThreadRun(row.id, RUN_SETTINGS),
+        ).rejects.toThrow('no such folder');
+
+        expect(addToRoster).not.toHaveBeenCalled();
+        expect(noticeInfo).not.toHaveBeenCalled();
+        expect(await service.approvedStarts()).toEqual([
+          expect.objectContaining({ kind: 'thread', startId: row.id }),
+        ]);
+      });
+    });
+
+    describe('failed', () => {
+      it('fails the request with its reason cut to the limit, and wakes the manager once', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        const reason = 'x'.repeat(START_FAILURE_MAX_CHARS + 50);
+
+        await service.failed(row.id, reason);
+
+        expect(wakePublish).toHaveBeenCalledTimes(1);
+        expect(wakePublish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            key: `command-center:start-failed:${row.id}`,
+            owner: expect.objectContaining({ runId: MANAGER }),
+            prompt: expect.stringContaining(
+              `could not be started: ${'x'.repeat(START_FAILURE_MAX_CHARS)}. Nothing was started`,
+            ),
+          }),
+        );
+        expect(await service.threadStartState(row.id)).toEqual({
+          startId: row.id,
+          state: 'failed',
+          runId: null,
+          failure: 'x'.repeat(START_FAILURE_MAX_CHARS),
+        });
+      });
+
+      it('leaves a request that already started alone, and tells the manager nothing', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        await threads().recordRun(row.id, THREAD);
+
+        await service.failed(row.id, 'too late');
+
+        expect(wakePublish).not.toHaveBeenCalled();
+        expect(await service.threadStartState(row.id)).toMatchObject({
+          state: 'started',
+          failure: null,
+        });
+      });
+    });
+
+    describe('threadStartState', () => {
+      it('answers where each request stands, and refuses an unknown one', async () => {
+        const waiting = await seedRequest({ title: 'Waiting' });
+        const approved = await seedRequest({
+          title: 'Approved',
+          approvedAt: new Date(),
+        });
+        const started = await seedRequest({
+          title: 'Started',
+          approvedAt: new Date(),
+        });
+        const declined = await seedRequest({ title: 'Declined' });
+        const failed = await seedRequest({ title: 'Failed' });
+        await threads().recordRun(started.id, THREAD);
+        await threads().decline(declined.id, new Date());
+        await threads().fail(failed.id, new Date(), 'boom');
+
+        const states = await Promise.all(
+          [waiting, approved, started, declined, failed].map(
+            async (row) => (await service.threadStartState(row.id)).state,
+          ),
+        );
+
+        expect(states).toEqual([
+          'waiting',
+          'approved',
+          'started',
+          'declined',
+          'failed',
+        ]);
+        await expect(
+          service.threadStartState('no-such-start'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('the boot re-read', () => {
+      it('tracks a waiting Start card again under its own id', async () => {
+        const row = await seedRequest();
+
+        service.onApplicationBootstrap();
+
+        await vi.waitFor(() =>
+          expect(trackOwnedCard).toHaveBeenCalledWith(
+            MANAGER,
+            cardId(row.id),
+            {
+              toolName: HOST_START_THREAD_TOOL,
+              input: {
+                startId: row.id,
+                title: 'Billing cache',
+                project: 'Geniro',
+                brief: 'Clear the cache',
+              },
+            },
+            expect.any(Function),
+          ),
+        );
+      });
+
+      it('fails a waiting request whose Start card already holds a verdict', async () => {
+        const row = await seedRequest();
+        await db.seedItem(MANAGER, 1, new Date(), 'approval_verdict', {
+          id: cardId(row.id),
+        });
+
+        service.onApplicationBootstrap();
+
+        await vi.waitFor(async () =>
+          expect((await service.threadStartState(row.id)).state).toBe('failed'),
+        );
+        expect(await service.threadStartState(row.id)).toMatchObject({
+          failure: 'its Start card was closed before it was answered',
+        });
+        expect(trackOwnedCard).not.toHaveBeenCalled();
+      });
+
+      it('fails a request a drain claimed but never started, and wakes the manager', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        await threads().claim(row.id, new Date());
+
+        service.onApplicationBootstrap();
+
+        await vi.waitFor(async () =>
+          expect(await service.threadStartState(row.id)).toMatchObject({
+            state: 'failed',
+            failure: 'the app stopped while it was being started',
+          }),
+        );
+        expect(wakePublish).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves a claimed request that recorded its run alone', async () => {
+        const row = await seedRequest({ approvedAt: new Date() });
+        await threads().claim(row.id, new Date());
+        await threads().recordRun(row.id, THREAD);
+
+        service.onApplicationBootstrap();
+
+        await vi.waitFor(() =>
+          expect(noticeInfo).toHaveBeenCalledWith(
+            MANAGER,
+            'Started "Billing cache"',
+          ),
+        );
+        expect((await service.threadStartState(row.id)).state).toBe('started');
+        expect(wakePublish).not.toHaveBeenCalled();
+      });
+
+      it('reports a started request the manager was not told of', async () => {
+        const row = await seedRequest({
+          note: 'watch billing',
+          watch: true,
+          approvedAt: new Date(),
+        });
+        await threads().recordRun(row.id, THREAD);
+
+        service.onApplicationBootstrap();
+
+        await vi.waitFor(() =>
+          expect(noticeInfo).toHaveBeenCalledWith(
+            MANAGER,
+            'Started "Billing cache"',
+          ),
+        );
+        expect(addToRoster).toHaveBeenCalledWith(
+          MANAGER,
+          [THREAD],
+          'manager',
+          'watch billing',
+          true,
+        );
+        expect(await threads().read(row.id)).toMatchObject({
+          reportedAt: expect.any(Date),
+        });
+      });
+    });
+
+    describe("the manager's deletion", () => {
+      it('drops its cardless requests and keeps another manager’s', async () => {
+        const mine = await seedRequest({ managerRunId: MANAGER });
+        const theirs = await seedRequest({ managerRunId: AUTO_MANAGER });
+
+        agentEvents.publishRunDeleted(MANAGER);
+
+        await vi.waitFor(async () =>
+          expect(await threads().read(mine.id)).toBeNull(),
+        );
+        expect(await threads().read(theirs.id)).not.toBeNull();
+      });
     });
   });
 });

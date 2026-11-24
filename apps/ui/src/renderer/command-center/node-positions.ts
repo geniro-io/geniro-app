@@ -33,6 +33,8 @@ export function readNodePositions(): NodeOffsets {
 export interface NodePositions {
   offsets: NodeOffsets;
   place: (runId: string, offset: NodeOffset) => void;
+  /** Give one thread's node back to the automatic layout. */
+  forget: (runId: string) => void;
   /** Forget the places of threads that left the board. */
   keepOnly: (runIds: ReadonlySet<string>) => void;
   /** Forget every place, which gives the whole graph back to the automatic layout. */
@@ -56,6 +58,19 @@ export function useNodePositions(): NodePositions {
       }),
     [],
   );
+  const forget = useLatestCallback(
+    (runId: string): void =>
+      setOffsets((current) => {
+        if (current[runId] === undefined) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[runId];
+        writeRunRecords(NODE_POSITIONS_KEY, next);
+        return next;
+      }),
+    [],
+  );
   const keepOnly = useLatestCallback(
     (runIds: ReadonlySet<string>): void =>
       setOffsets((current) => {
@@ -71,5 +86,5 @@ export function useNodePositions(): NodePositions {
     writeRunRecords(NODE_POSITIONS_KEY, {});
     setOffsets({});
   }, []);
-  return { offsets, place, keepOnly, reset };
+  return { offsets, place, forget, keepOnly, reset };
 }

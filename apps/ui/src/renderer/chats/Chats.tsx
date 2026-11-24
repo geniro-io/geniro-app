@@ -366,6 +366,7 @@ import {
   threadQuestionRelayOfRow,
 } from './thread-question-card';
 import { threadContextReaderOf } from './thread-question-context';
+import type { ThreadStartReader } from './thread-start-card';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -482,7 +483,6 @@ import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 import { WaitingMessagesStrip } from './waiting-messages-strip';
 import { type WorkingAgentRow, workingAgentRows } from './working-agents';
 import { WorkingAgentsCard } from './working-agents-card';
-import { WorkingThreadsCard } from './working-threads-card';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -934,6 +934,20 @@ export function Chats({
     }),
     [apis, client],
   );
+  const threadStartReader = useMemo<ThreadStartReader>(
+    () => ({
+      read: (startId) =>
+        apis.commandCenter.readCommandCenterThreadStart({ startId }),
+      onStartChanged: (listener) =>
+        client.onCommandCenterChanged((event) => {
+          if (event.reason === 'start') {
+            listener(event.runIds);
+          }
+        }),
+      onReconnect: (listener) => client.onReconnect(() => listener()),
+    }),
+    [apis, client],
+  );
 
   /**
    * Whether the window is phone-width right now.
@@ -950,7 +964,6 @@ export function Chats({
   const hostedRef = useRef(hosted);
   hostedRef.current = hosted;
   const isHosted = hosted !== null;
-  const hostedWorkingThreads = hosted?.workingThreads ?? [];
   const narrowViewport = useNarrowViewport() && !isHosted;
   /**
    * Whether a phone shows the new-chat COMPOSER page rather than the chat
@@ -9899,6 +9912,7 @@ export function Chats({
         agentsApi={agentsApi}
         lessonsJump={jumpToSeq}
         taskReader={taskReader}
+        threadStartReader={threadStartReader}
         threadContext={threadContext}
         surfaceHost={surfaceHost}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
@@ -11076,29 +11090,19 @@ export function Chats({
                         <div ref={transcriptEndRef} />
                       </div>
                       {activeRun === null ? null : (
-                        <>
-                          {hostedWorkingThreads.length === 0 ? null : (
-                            <WorkingThreadsCard
-                              threads={hostedWorkingThreads}
-                              onOpenThread={hosted?.onOpenThread}
-                              onOpenHere={hosted?.onOpenThreadHere}
-                              beside={startedAgents.length > 0}
-                            />
-                          )}
-                          <WorkingAgentsCard
-                            key={activeRun.id}
-                            rows={startedAgents}
-                            runId={activeRun.id}
-                            api={chatApi}
-                            client={client}
-                            onShowInChat={openCall}
-                            nodes={nodeMeta}
-                            chatAgentName={activeRun.agentKind}
-                            delegateState={runState}
-                            collapseToolSteps={collapseToolSteps}
-                            work={startedAgentsWork}
-                          />
-                        </>
+                        <WorkingAgentsCard
+                          key={activeRun.id}
+                          rows={startedAgents}
+                          runId={activeRun.id}
+                          api={chatApi}
+                          client={client}
+                          onShowInChat={openCall}
+                          nodes={nodeMeta}
+                          chatAgentName={activeRun.agentKind}
+                          delegateState={runState}
+                          collapseToolSteps={collapseToolSteps}
+                          work={startedAgentsWork}
+                        />
                       )}
 
                       {/* Between the scroller and the composer, and drawn OVER

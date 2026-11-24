@@ -42,9 +42,6 @@ const GROUPS: readonly { status: ThreadStatus; title: string; rail: string }[] =
     { status: 'working', title: 'Working', rail: 'border-success/50' },
   ];
 
-const RIGHT_OF_AGENTS_CARD = 'right-14';
-const IN_THE_CORNER = 'right-4';
-
 /**
  * Marks the element the panel may rise to: the top of the page's body, under
  * its header. The panel's list never grows past it.
@@ -239,13 +236,11 @@ export function WorkingThreadsCard({
   threads,
   onOpenThread,
   onOpenHere,
-  beside,
 }: {
   threads: readonly WorkingThread[];
   onOpenThread?: (runId: string) => void;
   /** Open a thread in a window over the command center's graph. */
   onOpenHere?: (runId: string) => void;
-  beside: boolean;
 }): React.JSX.Element | null {
   const sectionRef = useRef<HTMLElement | null>(null);
   const [opened, setOpened] = useState({ room: LIST_MAX_PX, now: 0 });
@@ -262,100 +257,87 @@ export function WorkingThreadsCard({
   const summary = threadsSummary(threads);
   const anyWorking = threads.some((thread) => thread.status === 'working');
   return (
-    <div className="pointer-events-none relative z-20 h-0 w-full overflow-visible">
-      <section
-        ref={sectionRef}
-        data-slot="working-threads-card"
-        aria-label="Threads working"
-        className={cn(
-          popoverSurface,
-          'pointer-events-auto -bottom-2 z-20 flex flex-col',
-          beside ? RIGHT_OF_AGENTS_CARD : IN_THE_CORNER,
-        )}>
-        <HoverPopover
-          slot="working-threads-toggle"
-          label={`Threads working · ${summary}`}
-          panelLabel="Threads working"
-          side="top"
-          className="shrink-0"
-          triggerClassName={cn(
-            'group relative min-w-0 rounded-xl text-left font-normal',
-            CONTROL_HOVER,
-          )}
-          panelClassName="w-[26rem] p-0"
-          onOpenChange={onOpenChange}
-          trigger={
-            <span className="flex items-center gap-2 py-1 pr-2 pl-1">
-              <AgentsTile
-                face={tileFace(lead)}
-                others={threads.length - 1}
-                activity={anyWorking ? 'working' : 'waiting'}
-              />
-              <span
-                data-slot="working-threads-count"
-                className="text-xs whitespace-nowrap text-foreground tabular-nums">
-                {summary}
-              </span>
+    <section
+      ref={sectionRef}
+      data-slot="working-threads-card"
+      aria-label="Threads working"
+      className={cn(
+        popoverSurface,
+        'pointer-events-auto relative z-20 flex flex-col',
+      )}>
+      <HoverPopover
+        slot="working-threads-toggle"
+        label={`Threads working · ${summary}`}
+        panelLabel="Threads working"
+        side="top"
+        className="shrink-0"
+        triggerClassName={cn(
+          'group relative min-w-0 rounded-xl text-left font-normal',
+          CONTROL_HOVER,
+        )}
+        panelClassName="w-[26rem] p-0"
+        onOpenChange={onOpenChange}
+        trigger={
+          <AgentsTile
+            face={tileFace(lead)}
+            others={threads.length - 1}
+            activity={anyWorking ? 'working' : 'waiting'}
+          />
+        }>
+        <div className="flex flex-col">
+          <div className="flex h-11 min-w-0 items-center gap-2 px-3">
+            <CallGlyph
+              live={anyWorking}
+              className={cn('size-3.5 shrink-0', anyWorking && 'text-primary')}
+            />
+            <span className="shrink-0 text-sm font-semibold text-foreground">
+              Threads working
             </span>
-          }>
-          <div className="flex flex-col">
-            <div className="flex h-11 min-w-0 items-center gap-2 px-3">
-              <CallGlyph
-                live={anyWorking}
-                className={cn(
-                  'size-3.5 shrink-0',
-                  anyWorking && 'text-primary',
-                )}
-              />
-              <span className="shrink-0 text-sm font-semibold text-foreground">
-                Threads working
-              </span>
-              <span
-                data-slot="working-threads-panel-summary"
-                className="min-w-0 truncate text-xs text-muted-foreground">
-                {summary}
-              </span>
-            </div>
-            <div
-              data-slot="working-threads-list"
-              style={{ maxHeight: opened.room }}
-              className="flex flex-col gap-2 overflow-y-auto border-t border-border/60 p-1.5">
-              {GROUPS.map((group) => {
-                const members = threads.filter(
-                  (thread) => thread.status === group.status,
-                );
-                return members.length === 0 ? null : (
-                  <section
-                    key={group.status}
-                    data-slot="working-threads-group"
-                    data-status={group.status}
-                    aria-label={group.title}
-                    className="flex flex-col gap-0.5">
-                    <h3 className="flex items-center gap-1.5 px-2.5 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                      {group.title}
-                      <span className="tabular-nums">{members.length}</span>
-                    </h3>
-                    {members.map((thread) => (
-                      <ThreadRow
-                        key={thread.runId}
-                        thread={thread}
-                        rail={group.rail}
-                        now={
-                          opened.now === 0
-                            ? Date.parse(thread.lastAt)
-                            : opened.now
-                        }
-                        onOpenThread={onOpenThread}
-                        onOpenHere={onOpenHere}
-                      />
-                    ))}
-                  </section>
-                );
-              })}
-            </div>
+            <span
+              data-slot="working-threads-panel-summary"
+              className="min-w-0 truncate text-xs text-muted-foreground">
+              {summary}
+            </span>
           </div>
-        </HoverPopover>
-      </section>
-    </div>
+          <div
+            data-slot="working-threads-list"
+            style={{ maxHeight: opened.room }}
+            className="flex flex-col gap-2 overflow-y-auto border-t border-border/60 p-1.5">
+            {GROUPS.map((group) => {
+              const members = threads.filter(
+                (thread) => thread.status === group.status,
+              );
+              return members.length === 0 ? null : (
+                <section
+                  key={group.status}
+                  data-slot="working-threads-group"
+                  data-status={group.status}
+                  aria-label={group.title}
+                  className="flex flex-col gap-0.5">
+                  <h3 className="flex items-center gap-1.5 px-2.5 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                    {group.title}
+                    <span className="tabular-nums">{members.length}</span>
+                  </h3>
+                  {members.map((thread) => (
+                    <ThreadRow
+                      key={thread.runId}
+                      thread={thread}
+                      rail={group.rail}
+                      now={
+                        opened.now === 0
+                          ? Date.parse(thread.lastAt)
+                          : opened.now
+                      }
+                      onOpenThread={onOpenThread}
+                      onOpenHere={onOpenHere}
+                    />
+                  ))}
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      </HoverPopover>
+    </section>
   );
 }

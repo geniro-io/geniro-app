@@ -6,6 +6,7 @@ import { TasksModule } from '../tasks/tasks.module';
 import { TeamsModule } from '../teams/teams.module';
 import { CommandCenterController } from './controllers/command-center.controller';
 import { CommandCenterRosterDao } from './dao/command-center-roster.dao';
+import { CommandCenterThreadStartDao } from './dao/command-center-thread-start.dao';
 import { CommandCenterTimelineDao } from './dao/command-center-timeline.dao';
 import { CommandCenterService } from './services/command-center.service';
 import { CommandCenterChatService } from './services/command-center-chat.service';
@@ -32,6 +33,7 @@ import { CommandCenterTimelineService } from './services/command-center-timeline
   controllers: [CommandCenterController],
   providers: [
     CommandCenterRosterDao,
+    CommandCenterThreadStartDao,
     CommandCenterTimelineDao,
     CommandCenterEventBus,
     CommandCenterService,

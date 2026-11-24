@@ -16,7 +16,8 @@ const handle: DaemonHandle = {
 
 const START_SHA = 'b'.repeat(40);
 
-interface ApprovedRow {
+interface ApprovedCardRow {
+  kind: 'card';
   taskId: string;
   projectId: string;
   title: string;
@@ -25,8 +26,23 @@ interface ApprovedRow {
   startedBy?: 'manager' | 'user';
 }
 
-function row(taskId: string, over: Partial<ApprovedRow> = {}): ApprovedRow {
+interface ApprovedThreadRow {
+  kind: 'thread';
+  startId: string;
+  projectId: string;
+  title: string;
+  folder: string;
+  startedBy: 'manager';
+}
+
+type ApprovedRow = ApprovedCardRow | ApprovedThreadRow;
+
+function row(
+  taskId: string,
+  over: Partial<ApprovedCardRow> = {},
+): ApprovedCardRow {
   return {
+    kind: 'card',
     taskId,
     projectId: 'p1',
     title: `card ${taskId}`,
@@ -34,6 +50,25 @@ function row(taskId: string, over: Partial<ApprovedRow> = {}): ApprovedRow {
     folder: '/repo',
     ...over,
   };
+}
+
+function thread(
+  startId: string,
+  over: Partial<ApprovedThreadRow> = {},
+): ApprovedThreadRow {
+  return {
+    kind: 'thread',
+    startId,
+    projectId: 'p1',
+    title: `thread ${startId}`,
+    folder: '/projects/app',
+    startedBy: 'manager',
+    ...over,
+  };
+}
+
+function idOf(row: ApprovedRow): string {
+  return row.kind === 'thread' ? row.startId : row.taskId;
 }
 
 function reply(status: number, body = ''): Response {
@@ -72,10 +107,12 @@ function daemon(approved: ApprovedRow[]) {
         if (refusal !== undefined) {
           return reply(refusal.status, refusal.body);
         }
-        const run = /^\/v1\/tasks\/([^/]+)\/runs$/.exec(path);
+        const run =
+          /^\/v1\/tasks\/([^/]+)\/runs$/.exec(path) ??
+          /^\/v1\/command-center\/starts\/([^/]+)\/runs$/.exec(path);
         if (run?.[1] !== undefined) {
           starts.push({ path, body });
-          const index = approved.findIndex((r) => r.taskId === run[1]);
+          const index = approved.findIndex((r) => idOf(r) === run[1]);
           approved.splice(index, 1);
           return reply(201, '{}');
         }
@@ -359,5 +396,112 @@ describe('ThreadStartConductor', () => {
     expect(failures).toHaveLength(0);
     expect(d.prepareWorktree).not.toHaveBeenCalled();
     expect(d.log).toHaveBeenCalledTimes(1);
+  });
+
+  // A thread with no board card runs in its project's folder, which the daemon
+  // reads itself: there is no worktree to make, and the run takes the user's
+  // settings and the stamp of that folder, exactly as a card's run does.
+  it("starts an approved thread with no worktree, the user's settings and its folder's stamp, and names no folder", async () => {
+    const { fetchMock, starts } = daemon([thread('s1')]);
+    vi.stubGlobal('fetch', fetchMock);
+    const d = deps({
+      customInstructions: () => 'Keep it short',
+      replyLanguage: () => 'Russian',
+    });
+
+    await new ThreadStartConductor(d).tick();
+
+    expect(d.prepareWorktree).not.toHaveBeenCalled();
+    expect(d.discardWorktree).not.toHaveBeenCalled();
+    expect(d.gitStamp).toHaveBeenCalledWith('/projects/app');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.path).toBe('/v1/command-center/starts/s1/runs');
+    expect(starts[0]?.body).toMatchObject({
+      startSha: START_SHA,
+      startDirty: false,
+      customInstructions: 'Keep it short',
+      replyLanguage: 'Russian',
+      agentOptions: { claude: { browserTools: true } },
+    });
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
+    expect(starts[0]?.body).not.toHaveProperty('branch');
+    expect(starts[0]?.body).not.toHaveProperty('startedBy');
+  });
+
+  it('starts a thread without its stamp when the folder cannot be read as a repository', async () => {
+    const { fetchMock, starts } = daemon([thread('s1')]);
+    vi.stubGlobal('fetch', fetchMock);
+    const d = deps({
+      gitStamp: vi.fn(async (): Promise<GitStamp> => {
+        throw new Error('fatal: not a git repository');
+      }),
+    });
+
+    await new ThreadStartConductor(d).tick();
+
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
+    expect(starts[0]?.body).not.toHaveProperty('startSha');
+    expect(starts[0]?.body).not.toHaveProperty('startDirty');
+  });
+
+  it('reports a thread the daemon refuses for good, with the reason', async () => {
+    const { fetchMock, failures, refuseWith } = daemon([thread('s1')]);
+    refuseWith.set('/v1/command-center/starts/s1/runs', {
+      status: 400,
+      body: JSON.stringify({
+        code: 'NO_AGENT',
+        description: 'No agent is configured for this project',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new ThreadStartConductor(deps()).tick();
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.taskId).toBe('s1');
+    expect(String(failures[0]?.reason)).toContain(
+      'No agent is configured for this project',
+    );
+  });
+
+  it('leaves a thread start the daemon fails with a server error for the next tick', async () => {
+    const { fetchMock, failures, refuseWith } = daemon([thread('s1')]);
+    refuseWith.set('/v1/command-center/starts/s1/runs', {
+      status: 500,
+      body: JSON.stringify({
+        code: 'BOOM',
+        description: 'the run did not start',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const d = deps();
+
+    await new ThreadStartConductor(d).tick();
+
+    expect(failures).toHaveLength(0);
+    expect(d.log).toHaveBeenCalledWith(
+      expect.stringContaining('the run did not start'),
+    );
+  });
+
+  // START_TAKEN means another drain already holds the thread: it is not this
+  // start's failure, so nothing is reported and the drain that has it goes on.
+  it('leaves a thread another drain has taken alone: no failure reported', async () => {
+    const { fetchMock, failures, refuseWith } = daemon([thread('s1')]);
+    refuseWith.set('/v1/command-center/starts/s1/runs', {
+      status: 409,
+      body: JSON.stringify({
+        code: 'START_TAKEN',
+        description: 'Another drain took this start',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const d = deps();
+
+    await new ThreadStartConductor(d).tick();
+
+    expect(failures).toHaveLength(0);
+    expect(d.holdDaemon).toHaveBeenLastCalledWith(true);
   });
 });

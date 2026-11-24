@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type CommandCenterThreadStartState,
   type ItemDto as ChatItem,
   type TaskDto,
   TaskStatus,
@@ -11,7 +12,11 @@ import {
 import { aTask } from '../tasks/__tests__/fixtures';
 import { EntryCard } from './entry-card';
 import { RunSettledContext } from './live-row';
-import { ThreadStartCard } from './thread-start-card';
+import {
+  ThreadStartCard,
+  type ThreadStartReader,
+  ThreadStartReaderContext,
+} from './thread-start-card';
 import { ThreadOpenContext } from './thread-title';
 import {
   groupTranscript,
@@ -353,5 +358,178 @@ describe('ThreadStartCard', () => {
       container.querySelector('[data-slot="thread-start-card"]'),
     ).not.toBeNull();
     expect(container.textContent).toContain('MAN-16');
+  });
+});
+
+describe('ThreadStartCard — a thread filed with no board card', () => {
+  const STARTED_ANSWER = {
+    text: '{"status":"card_shown","startId":"start-1"}\nA Start card is on screen for the user; no board card was filed.',
+  };
+
+  function fakeThreadReader(
+    answer: () => Promise<CommandCenterThreadStartState>,
+  ): {
+    reader: ThreadStartReader;
+    read: ReturnType<
+      typeof vi.fn<(startId: string) => Promise<CommandCenterThreadStartState>>
+    >;
+    changed: (runIds: string[]) => void;
+    reconnect: () => void;
+  } {
+    const starts = new Set<(runIds: string[]) => void>();
+    const reconnects = new Set<() => void>();
+    const read = vi.fn<
+      (startId: string) => Promise<CommandCenterThreadStartState>
+    >(() => answer());
+    return {
+      reader: {
+        read,
+        onStartChanged: (listener) => {
+          starts.add(listener);
+          return () => starts.delete(listener);
+        },
+        onReconnect: (listener) => {
+          reconnects.add(listener);
+          return () => reconnects.delete(listener);
+        },
+      },
+      read,
+      changed: (runIds) => {
+        for (const listener of starts) {
+          listener(runIds);
+        }
+      },
+      reconnect: () => {
+        for (const listener of reconnects) {
+          listener();
+        }
+      },
+    };
+  }
+
+  function start(
+    state: CommandCenterThreadStartState['state'],
+    over: Partial<CommandCenterThreadStartState> = {},
+  ): CommandCenterThreadStartState {
+    return { startId: 'start-1', state, runId: null, failure: null, ...over };
+  }
+
+  async function renderThread(
+    reader: ThreadStartReader | null,
+    open: ((runId: string) => void) | null = null,
+  ): Promise<void> {
+    await act(async () => {
+      root.render(
+        <ThreadStartReaderContext.Provider value={reader}>
+          <ThreadOpenContext.Provider value={open}>
+            <ThreadStartCard pair={pair(STARTED_ANSWER, ARGS)} />
+          </ThreadOpenContext.Provider>
+        </ThreadStartReaderContext.Provider>,
+      );
+    });
+  }
+
+  it('shows its title, brief and project, with no board card', async () => {
+    const { reader, read } = fakeThreadReader(() =>
+      Promise.resolve(start('waiting')),
+    );
+    await renderThread(reader);
+
+    expect(read).toHaveBeenCalledWith('start-1');
+    expect(
+      container.querySelector('[data-slot="thread-start-title"]')?.textContent,
+    ).toBe('CI-1233: Case page slow');
+    expect(
+      container.querySelector('[data-slot="thread-start-brief"]')?.textContent,
+    ).toBe('Find why the case page is slow');
+    expect(
+      container.querySelector('[data-slot="thread-card-board-card"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="thread-start-card-id"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="thread-start-project"]')
+        ?.textContent,
+    ).toBe('ManifestOS');
+    expect(stateText()).toBe('Waiting for your Start');
+  });
+
+  it('reads an approved start as Starting and a declined one as Declined', async () => {
+    const approved = fakeThreadReader(() => Promise.resolve(start('approved')));
+    await renderThread(approved.reader);
+    expect(stateText()).toBe('Starting…');
+
+    const declined = fakeThreadReader(() => Promise.resolve(start('declined')));
+    await renderThread(declined.reader);
+    expect(stateText()).toBe('Declined');
+    expect(container.textContent).toContain('No thread was started.');
+  });
+
+  it('shows Could not start with the reason it failed', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(
+        start('failed', { failure: 'The project has no agent configured' }),
+      ),
+    );
+    await renderThread(reader);
+
+    expect(stateText()).toBe('Could not start');
+    expect(
+      container.querySelector('[data-slot="thread-start-note"]')?.textContent,
+    ).toBe('The project has no agent configured');
+  });
+
+  it('shows Started, and opens the thread that started', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('started', { runId: 'run-7' })),
+    );
+    const open = vi.fn<(runId: string) => void>();
+    await renderThread(reader, open);
+
+    expect(stateText()).toBe('Started');
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-card-go"]',
+    );
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(open).toHaveBeenCalledWith('run-7');
+  });
+
+  it('reads the start again when a start change names its manager run, and not another', async () => {
+    let current = start('waiting');
+    const { reader, read, changed } = fakeThreadReader(() =>
+      Promise.resolve(current),
+    );
+    await renderThread(reader);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      changed(['another-run']);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+
+    current = start('started', { runId: 'run-7' });
+    await act(async () => {
+      changed([RUN_ID]);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(stateText()).toBe('Started');
+  });
+
+  it('reads the start again after a reconnect', async () => {
+    const { reader, read, reconnect } = fakeThreadReader(() =>
+      Promise.resolve(start('waiting')),
+    );
+    await renderThread(reader);
+    await act(async () => {
+      reconnect();
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows Filed while there is no reader to read the start with', async () => {
+    await renderThread(null);
+    expect(stateText()).toBe('Filed');
   });
 });

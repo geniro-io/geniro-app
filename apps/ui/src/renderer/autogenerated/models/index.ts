@@ -3931,59 +3931,11 @@ export interface CommandCenterInstructionsConfig {
     instructions: string;
 }
 /**
+ * @type CommandCenterStart
  * 
  * @export
- * @interface CommandCenterStart
  */
-export interface CommandCenterStart {
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStart
-     */
-    taskId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStart
-     */
-    projectId: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof CommandCenterStart
-     */
-    title: string;
-    /**
-     * 
-     * @type {TaskStatus}
-     * @memberof CommandCenterStart
-     */
-    status: TaskStatus;
-    /**
-     * The card's folder, else its project's — where the worktree is cut
-     * @type {string}
-     * @memberof CommandCenterStart
-     */
-    folder: string;
-    /**
-     * Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away
-     * @type {string}
-     * @memberof CommandCenterStart
-     */
-    startedBy: CommandCenterStartStartedByEnum;
-}
-
-
-/**
- * @export
- */
-export const CommandCenterStartStartedByEnum = {
-    Manager: 'manager',
-    User: 'user'
-} as const;
-export type CommandCenterStartStartedByEnum = typeof CommandCenterStartStartedByEnum[keyof typeof CommandCenterStartStartedByEnum];
-
+export type CommandCenterStart = CommandCenterStartOneOf | CommandCenterStartOneOf1;
 /**
  * 
  * @export
@@ -3997,6 +3949,136 @@ export interface CommandCenterStartFailedDto {
      */
     reason: string;
 }
+/**
+ * 
+ * @export
+ * @interface CommandCenterStartOneOf
+ */
+export interface CommandCenterStartOneOf {
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    kind: CommandCenterStartOneOfKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    taskId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    title: string;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof CommandCenterStartOneOf
+     */
+    status: TaskStatus;
+    /**
+     * The card's folder, else its project's — where the worktree is cut
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    folder: string;
+    /**
+     * Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away
+     * @type {string}
+     * @memberof CommandCenterStartOneOf
+     */
+    startedBy: CommandCenterStartOneOfStartedByEnum;
+}
+
+
+/**
+ * @export
+ */
+export const CommandCenterStartOneOfKindEnum = {
+    Card: 'card'
+} as const;
+export type CommandCenterStartOneOfKindEnum = typeof CommandCenterStartOneOfKindEnum[keyof typeof CommandCenterStartOneOfKindEnum];
+
+/**
+ * @export
+ */
+export const CommandCenterStartOneOfStartedByEnum = {
+    Manager: 'manager',
+    User: 'user'
+} as const;
+export type CommandCenterStartOneOfStartedByEnum = typeof CommandCenterStartOneOfStartedByEnum[keyof typeof CommandCenterStartOneOfStartedByEnum];
+
+/**
+ * 
+ * @export
+ * @interface CommandCenterStartOneOf1
+ */
+export interface CommandCenterStartOneOf1 {
+    /**
+     * A thread with no board card, started in its project's folder
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    kind: CommandCenterStartOneOf1KindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    startId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    title: string;
+    /**
+     * The project's folder, where the thread runs
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    folder: string;
+    /**
+     * Who the run is started for: the command center's manager, or the user's own press of a system analysis's Implement right away
+     * @type {string}
+     * @memberof CommandCenterStartOneOf1
+     */
+    startedBy: CommandCenterStartOneOf1StartedByEnum;
+}
+
+
+/**
+ * @export
+ */
+export const CommandCenterStartOneOf1KindEnum = {
+    Thread: 'thread'
+} as const;
+export type CommandCenterStartOneOf1KindEnum = typeof CommandCenterStartOneOf1KindEnum[keyof typeof CommandCenterStartOneOf1KindEnum];
+
+/**
+ * @export
+ */
+export const CommandCenterStartOneOf1StartedByEnum = {
+    Manager: 'manager',
+    User: 'user'
+} as const;
+export type CommandCenterStartOneOf1StartedByEnum = typeof CommandCenterStartOneOf1StartedByEnum[keyof typeof CommandCenterStartOneOf1StartedByEnum];
+
 /**
  * 
  * @export
@@ -4042,6 +4124,51 @@ export interface CommandCenterTaskRef {
     status: TaskStatus;
 }
 
+
+/**
+ * 
+ * @export
+ * @interface CommandCenterThreadStartState
+ */
+export interface CommandCenterThreadStartState {
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterThreadStartState
+     */
+    startId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterThreadStartState
+     */
+    state: CommandCenterThreadStartStateStateEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterThreadStartState
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterThreadStartState
+     */
+    failure: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const CommandCenterThreadStartStateStateEnum = {
+    Waiting: 'waiting',
+    Approved: 'approved',
+    Started: 'started',
+    Declined: 'declined',
+    Failed: 'failed'
+} as const;
+export type CommandCenterThreadStartStateStateEnum = typeof CommandCenterThreadStartStateStateEnum[keyof typeof CommandCenterThreadStartStateStateEnum];
 
 /**
  * 
@@ -17232,6 +17359,43 @@ export interface StartTeamChatDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface StartThreadRunDto
+ */
+export interface StartThreadRunDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof StartThreadRunDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof StartThreadRunDto
+     */
+    startDirty?: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartThreadRunDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartThreadRunDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof StartThreadRunDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+}
 /**
  * 
  * @export

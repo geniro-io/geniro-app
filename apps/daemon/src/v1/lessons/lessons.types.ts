@@ -478,6 +478,17 @@ export const LessonsSpendSchema = z
         runId: z.string(),
         sourceTitle: z.string().nullable(),
         reason: z.string().nullable(),
+        cause: z
+          .enum(['limit', 'signed_out', 'other'])
+          .describe(
+            "Why the reflection failed, read from the CLI's own message: the account's usage limit, a lapsed sign-in, or anything else",
+          ),
+        resetsAt: z
+          .string()
+          .nullable()
+          .describe(
+            'When the spent usage window reopens, verbatim as the CLI wrote it; null unless cause is limit and the message named one',
+          ),
       }),
     ),
   })

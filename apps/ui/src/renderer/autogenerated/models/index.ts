@@ -8779,7 +8779,31 @@ export interface LessonsSpendDtoFailedInner {
      * @memberof LessonsSpendDtoFailedInner
      */
     reason: string | null;
+    /**
+     * Why the reflection failed, read from the CLI's own message: the account's usage limit, a lapsed sign-in, or anything else
+     * @type {string}
+     * @memberof LessonsSpendDtoFailedInner
+     */
+    cause: LessonsSpendDtoFailedInnerCauseEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonsSpendDtoFailedInner
+     */
+    resetsAt: string | null;
 }
+
+
+/**
+ * @export
+ */
+export const LessonsSpendDtoFailedInnerCauseEnum = {
+    Limit: 'limit',
+    SignedOut: 'signed_out',
+    Other: 'other'
+} as const;
+export type LessonsSpendDtoFailedInnerCauseEnum = typeof LessonsSpendDtoFailedInnerCauseEnum[keyof typeof LessonsSpendDtoFailedInnerCauseEnum];
+
 /**
  * 
  * @export

@@ -897,17 +897,20 @@ export function Memory({
   const sortedRows = mergeReviewRows(cleanup.rows, cleanup.everyRow).filter(
     (row) => cleanupSort.verdicts.has(row.entry.id),
   );
-  const unsorted = cleanup.rows.filter(
+  const unsortedListed = cleanup.rows.filter(
     (row) => !cleanupSort.verdicts.has(row.entry.id),
   );
-  const unsortedEvery = Math.max(0, cleanup.total - sortedRows.length);
+  const unsortedCount = Math.max(0, cleanup.total - sortedRows.length);
   const toForget = sortedRows.filter(
     (row) => cleanupSort.verdicts.get(row.entry.id)?.keep === false,
   );
-  const tickable = toForget.filter(
-    (row) => row.warning === null && !cleanup.selected.has(row.entry.id),
+  const suggestedBefore = [...cleanupSort.verdicts.values()].some(
+    (verdict) => !verdict.keep,
   );
-  const warnedPicks = toForget.filter((row) => row.warning !== null).length;
+  const recommendation =
+    sortedRows.length === 0 || (toForget.length === 0 && suggestedBefore)
+      ? null
+      : { sorted: sortedRows.length, forget: toForget };
 
   const sortNotes = (rows: readonly MemoryReviewRow[]): void => {
     cleanupSort.start(
@@ -930,6 +933,14 @@ export function Memory({
         (row) => !cleanupSort.verdicts.has(row.entry.id),
       ),
     );
+  };
+
+  const askAi = (): void => {
+    if (cleanup.total > cleanup.rows.length) {
+      void sortEvery();
+      return;
+    }
+    sortNotes(unsortedListed);
   };
 
   const previewWhere = (() => {
@@ -1696,23 +1707,21 @@ export function Memory({
         }}
         filters={cleanup.filters}
         onFilters={cleanup.setFilters}
-        scopeGroups={scopeGroups}
         rows={cleanup.rows}
         total={cleanup.total}
         younger={cleanup.younger}
         next={cleanup.next}
         loading={cleanup.loading}
         error={cleanup.error}
-        countedSince={cleanup.summary?.countedSince ?? null}
-        counting={cleanup.summary?.counting ?? false}
         selected={cleanup.selected}
-        warnedSelected={cleanup.warnedSelected}
         tickSkipped={cleanup.tickSkipped}
         ticking={cleanup.ticking}
+        forgetting={cleanup.forgetting}
         onToggle={cleanup.toggle}
-        onTickShown={cleanup.tickShown}
-        onUntickAll={cleanup.untickAll}
+        onSelectAll={cleanup.tickShown}
+        onClearPicks={cleanup.untickAll}
         onForget={cleanup.forget}
+        onForgetNow={cleanup.forgetNow}
         onKeep={cleanup.keep}
         onUnkeep={cleanup.unkeep}
         onRestore={cleanup.restore}
@@ -1748,16 +1757,18 @@ export function Memory({
           />
         }
         verdicts={cleanupSort.verdicts}
+        recommendation={remote ? null : recommendation}
         sortPanel={
-          remote ? null : (
+          remote || (unsortedCount === 0 && !cleanupSort.running) ? null : (
             <MemorySortPanel
               slot="memory-cleanup-sort"
+              title="Ask AI what to forget"
               sort={cleanupSort}
-              description="An agent reads the entries listed below and says which still hold and which to forget, with a reason for each. It only proposes: nothing is forgotten until you press Forget. Runs on your agent’s account."
+              description="AI reads these entries and suggests which to forget. Nothing is forgotten until you press Forget."
               settings={
                 checkChoice === null ? (
                   <span className="text-xs text-muted-foreground">
-                    No installed agent can sort. Claude and Codex can.
+                    No installed agent can do this. Claude and Codex can.
                   </span>
                 ) : (
                   <MemoryTriageSettings
@@ -1774,67 +1785,19 @@ export function Memory({
                 )
               }
               startLabel={
-                unsorted.length === 0
-                  ? 'All listed entries sorted'
-                  : `Sort ${unsorted.length.toLocaleString('en-US')} listed`
+                cleanup.readingEvery
+                  ? 'Reading entries…'
+                  : sortedRows.length === 0
+                    ? `Ask AI about ${unsortedCount.toLocaleString('en-US')} ${unsortedCount === 1 ? 'entry' : 'entries'}`
+                    : `Ask AI about ${unsortedCount.toLocaleString('en-US')} more`
               }
               startDisabled={
                 checkChoice === null ||
-                unsorted.length === 0 ||
+                unsortedCount === 0 ||
                 cleanup.readingEvery
               }
-              sorted={sortedRows.length > 0}
-              onStart={() => sortNotes(unsorted)}
-              moreActions={
-                cleanup.total > cleanup.rows.length ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      checkChoice === null ||
-                      cleanup.readingEvery ||
-                      unsortedEvery === 0
-                    }
-                    onClick={() => void sortEvery()}>
-                    {cleanup.readingEvery
-                      ? 'Reading entries…'
-                      : unsortedEvery === 0
-                        ? 'All entries sorted'
-                        : `Sort all ${unsortedEvery.toLocaleString('en-US')} unsorted`}
-                  </Button>
-                ) : null
-              }
-              summary={
-                sortedRows.length === 0 ? null : (
-                  <span
-                    data-slot="memory-cleanup-sort-summary"
-                    className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>
-                      {toForget.length.toLocaleString('en-US')} to forget ·{' '}
-                      {(sortedRows.length - toForget.length).toLocaleString(
-                        'en-US',
-                      )}{' '}
-                      to keep
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={tickable.length === 0}
-                      onClick={() => cleanup.tickRows(tickable)}>
-                      Tick the {tickable.length.toLocaleString('en-US')} to
-                      forget
-                    </Button>
-                    {warnedPicks > 0 ? (
-                      <span>
-                        {warnedPicks.toLocaleString('en-US')} with a warning
-                        left for you
-                      </span>
-                    ) : null}
-                  </span>
-                )
-              }
+              sorted={false}
+              onStart={askAi}
             />
           )
         }

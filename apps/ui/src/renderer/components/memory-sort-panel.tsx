@@ -41,9 +41,9 @@ export function MemorySortPanel({
   startDisabled,
   sorted,
   summary = null,
-  moreActions = null,
   onStart,
   slot,
+  title = 'Sort with AI',
 }: {
   sort: MemorySort;
   description: string;
@@ -54,14 +54,14 @@ export function MemorySortPanel({
   /** Whether some notes already have a verdict, which turns the start button secondary. */
   sorted: boolean;
   summary?: React.ReactNode;
-  moreActions?: React.ReactNode;
   onStart: () => void;
   slot: string;
+  title?: string;
 }): React.JSX.Element {
   return (
     <section
       data-slot={slot}
-      aria-label="Sort with AI"
+      aria-label={title}
       className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
       <div className="flex min-w-0 items-start gap-2">
         <Sparkles
@@ -69,7 +69,7 @@ export function MemorySortPanel({
           className="mt-0.5 size-4 shrink-0 text-primary"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-sm font-medium">Sort with AI</span>
+          <span className="text-sm font-medium">{title}</span>
           <span className="text-xs text-muted-foreground">{description}</span>
         </div>
       </div>
@@ -101,7 +101,6 @@ export function MemorySortPanel({
             onClick={onStart}>
             {startLabel}
           </Button>
-          {moreActions}
           {summary}
         </div>
       )}

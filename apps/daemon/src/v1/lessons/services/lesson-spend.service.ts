@@ -2,6 +2,8 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { type AgentKind } from '../../runs/runs.types';
 import { UsageEventDao } from '../../stats/dao/usage-event.dao';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
@@ -29,6 +31,7 @@ export class LessonSpendService {
     private readonly segments: LessonSegmentDao,
     private readonly proposals: LessonProposalDao,
     private readonly runDao: RunDao,
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   async spend(now = new Date()): Promise<LessonsSpend> {
@@ -78,9 +81,37 @@ export class LessonSpendService {
           sourceTitle:
             (await this.runDao.getById(segment.runId, em))?.title ?? null,
           reason: segment.failReason,
+          ...(await this.failureCauseOf(segment, em)),
         })),
       ),
     };
+  }
+
+  private async failureCauseOf(
+    segment: LessonSegment,
+    em: EntityManager,
+  ): Promise<Pick<LessonsSpend['failed'][number], 'cause' | 'resetsAt'>> {
+    const reason = segment.failReason;
+    if (reason === null) {
+      return { cause: 'other', resetsAt: null };
+    }
+    const reflection =
+      segment.reflectionRunId === null
+        ? null
+        : await this.runDao.getById(segment.reflectionRunId, em);
+    const agentKind: AgentKind | null = reflection?.agentKind ?? null;
+    const own =
+      agentKind === null ? undefined : this.adapters.all().get(agentKind);
+    const failures = (
+      own === undefined ? [...this.adapters.all().values()] : [own]
+    ).map((adapter) => adapter.failureFrom(reason));
+    const limit = failures.find((failure) => failure.class === 'rate_limited');
+    if (limit !== undefined) {
+      return { cause: 'limit', resetsAt: limit.resetsAt };
+    }
+    return failures.some((failure) => failure.class === 'auth_expired')
+      ? { cause: 'signed_out', resetsAt: null }
+      : { cause: 'other', resetsAt: null };
   }
 
   /** What a lessons run typically costs and takes, from finished runs, those on `model` when there are enough. */

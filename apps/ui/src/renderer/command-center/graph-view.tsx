@@ -1,8 +1,6 @@
 import '@xyflow/react/dist/style.css';
 
 import {
-  type Edge,
-  type EdgeProps,
   Handle,
   type Node,
   type NodeChange,
@@ -34,7 +32,6 @@ import {
   useState,
 } from 'react';
 
-import { type Point, roundedPath } from '../components/stage-graph-layout';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
@@ -55,7 +52,6 @@ import {
   type ContactState,
   type EdgeState,
   edgeStateOf,
-  pathStyle,
   usePrefersReducedMotion,
 } from './contact-edge';
 import {
@@ -172,7 +168,6 @@ export interface GraphViewProps {
 }
 
 const MANAGER_ID = 'manager';
-const MORE_ID = 'more';
 const MANAGER_WIDTH = 380;
 const MANAGER_WIDTH_NARROW = THREAD_CARD_WIDTH;
 const MANAGER_HEIGHT = 84;
@@ -183,6 +178,10 @@ const HEADING_HEIGHT = 28;
 
 function headingIdOf(blockId: string): string {
   return `heading:${blockId}`;
+}
+
+function moreIdOf(blockId: string): string {
+  return `more:${blockId}`;
 }
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 1.5;
@@ -232,10 +231,6 @@ interface BlockNodeData extends Record<string, unknown> {
   working: number;
 }
 
-interface LinkEdgeData extends Record<string, unknown> {
-  route: readonly Point[];
-}
-
 type ManagerFlowNode = Node<ManagerNodeData, 'manager'>;
 type ThreadFlowNode = Node<ThreadNodeData, 'thread'>;
 type SlotFlowNode = Node<ThreadNodeData, 'slot'>;
@@ -249,7 +244,6 @@ type GraphFlowNode =
   | MoreFlowNode
   | BlockFlowNode
   | HeadingFlowNode;
-type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
   openInChats: (threadId: string) => void;
@@ -501,16 +495,14 @@ function SlotNode({ data }: NodeProps<SlotFlowNode>): React.JSX.Element {
   );
 }
 
+/** The last line of a block whose threads passed the node cap: how many of them have no node. */
 function MoreNode({ data }: NodeProps<MoreFlowNode>): React.JSX.Element {
   return (
-    <>
-      <WireEnds />
-      <span
-        data-slot="graph-more"
-        className="flex size-full items-center justify-center rounded-pill border border-dashed border-border-strong bg-card text-xs text-muted-foreground">
-        +{data.count} more {data.count === 1 ? 'thread' : 'threads'}
-      </span>
-    </>
+    <span
+      data-slot="graph-more"
+      className="flex size-full items-center justify-center rounded-pill border border-dashed border-border-strong bg-card text-xs text-muted-foreground">
+      +{data.count} more {data.count === 1 ? 'thread' : 'threads'}
+    </span>
   );
 }
 
@@ -535,23 +527,6 @@ function HeadingNode({ data }: NodeProps<HeadingFlowNode>): React.JSX.Element {
   );
 }
 
-function LinkEdge({ id, data }: EdgeProps<LinkFlowEdge>): React.JSX.Element {
-  const path = roundedPath(data!.route, 10);
-  return (
-    <path
-      aria-hidden="true"
-      data-slot="graph-link"
-      data-edge={id}
-      d={path}
-      style={pathStyle(path)}
-      className="fill-none stroke-border-strong transition-[d] duration-300 ease-out motion-reduce:transition-none"
-      strokeWidth={1.25}
-      strokeDasharray="4 4"
-      strokeLinecap="round"
-    />
-  );
-}
-
 const NODE_TYPES = {
   manager: ManagerNode,
   thread: ThreadNode,
@@ -560,7 +535,7 @@ const NODE_TYPES = {
   block: BlockNode,
   heading: HeadingNode,
 };
-const EDGE_TYPES = { contact: ContactEdge, link: LinkEdge };
+const EDGE_TYPES = { contact: ContactEdge };
 
 function handlesFor(width: number, height: number): NodeHandle[] {
   return [
@@ -611,20 +586,25 @@ export function blockIdOf(thread: Pick<GraphThread, 'projectId'>): string {
 export interface GraphBlock extends LayoutBlock {
   name: string;
   color: ProjectColor['color'] | null;
+  /** The project's threads that have a node. */
   threads: readonly GraphThread[];
+  /** Every thread of the project, those past the node cap included. */
+  total: number;
 }
 
 /**
- * One block per project, in the order `projects` gives them, and one for the
- * threads of no project last; inside each, working threads first and the rest
- * by attention. A thread whose card is open stands where it stood when the
- * card opened, as big as its card.
+ * One block per project of `all`, in the order `projects` gives them, and one
+ * for the threads of no project last; inside each, its `shown` threads, working
+ * first and the rest by attention, and a "+N more" footer for those of `all`
+ * left without a node. A thread whose card is open stands where it stood when
+ * the card opened, as big as its card.
  */
 export function graphBlocks(
   shown: readonly GraphThread[],
   projects: readonly ProjectColor[],
   open: ReadonlyMap<string, GraphOpenCard> = new Map(),
   heights: ReadonlyMap<string, number> = new Map(),
+  all: readonly GraphThread[] = shown,
 ): GraphBlock[] {
   const boxOf = (thread: GraphThread): GraphBox => {
     const card = open.get(thread.id);
@@ -646,42 +626,45 @@ export function graphBlocks(
   const order = [
     ...projects.map((project) => project.id),
     ...new Set(
-      shown.flatMap((thread) =>
+      all.flatMap((thread) =>
         thread.projectId === null || known.has(thread.projectId)
           ? []
           : [thread.projectId],
       ),
     ),
   ];
-  const blockOf = (
-    projectId: string | null,
-    members: readonly GraphThread[],
-  ): GraphBlock => {
-    const threads = [...members].sort((a, b) => rank(a) - rank(b));
+  const blockOf = (projectId: string | null): GraphBlock => {
+    const ofProject = (thread: GraphThread): boolean =>
+      thread.projectId === projectId;
+    const threads = shown.filter(ofProject).sort((a, b) => rank(a) - rank(b));
+    const members = all.filter(ofProject);
+    const total = Math.max(members.length, threads.length);
     const project = projectId === null ? undefined : known.get(projectId);
+    const id = blockIdOf({ projectId });
     return {
-      id: blockIdOf({ projectId }),
+      id,
       name:
         projectId === null
           ? NO_PROJECT_NAME
           : (project?.name ?? members[0]?.view.project ?? projectId),
       color: project?.color ?? null,
       threads,
+      total,
       items: threads.map(boxOf),
+      ...(total > threads.length
+        ? {
+            footer: {
+              id: moreIdOf(id),
+              width: MORE_WIDTH,
+              height: MORE_HEIGHT,
+            },
+          }
+        : {}),
     };
   };
-  return [
-    ...order.map((projectId) =>
-      blockOf(
-        projectId,
-        shown.filter((thread) => thread.projectId === projectId),
-      ),
-    ),
-    blockOf(
-      null,
-      shown.filter((thread) => thread.projectId === null),
-    ),
-  ].filter((block) => block.items.length > 0);
+  return [...order.map(blockOf), blockOf(null)].filter(
+    (block) => block.total > 0,
+  );
 }
 
 /**
@@ -972,12 +955,9 @@ function GraphCanvas({
     ? new Map()
     : open;
   const shown = shownThreads(threads, open);
-  const hidden = threads.length - shown.length;
   const canvasWidth = narrow ? 0 : size.width;
-  const blocks = graphBlocks(shown, projects, onCanvas, heights);
+  const blocks = graphBlocks(shown, projects, onCanvas, heights, threads);
   const perLine = perLineFor(shown.length, canvasWidth, THREAD_CARD_WIDTH);
-  const extras: GraphBox[] =
-    hidden > 0 ? [{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }] : [];
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
@@ -1000,14 +980,11 @@ function GraphCanvas({
       ? null
       : layoutBlocks(
           root,
-          graphBlocks(shown, projects, new Map(), heights),
+          graphBlocks(shown, projects, new Map(), heights, threads),
           perLine,
-          new Map(),
-          undefined,
-          extras,
         );
   const layoutWith = (pins: ReadonlyMap<string, NodeOffset>): GraphGeometry =>
-    layoutBlocks(root, blocks, perLine, pins, unopened?.width, extras);
+    layoutBlocks(root, blocks, perLine, pins, unopened?.width);
   const drawn: GraphGeometry = narrow
     ? layoutColumn(
         root,
@@ -1019,10 +996,15 @@ function GraphCanvas({
               height: HEADING_HEIGHT,
             },
             ...block.items,
+            ...(block.footer === undefined ? [] : [block.footer]),
           ]),
-          ...extras,
         ],
-        new Set(blocks.map((block) => headingIdOf(block.id))),
+        new Set(
+          blocks.flatMap((block) => [
+            headingIdOf(block.id),
+            ...(block.footer === undefined ? [] : [block.footer.id]),
+          ]),
+        ),
       )
     : layoutWith(pinned);
   const automatic = unopened ?? drawn;
@@ -1250,7 +1232,6 @@ function GraphCanvas({
     },
   ];
   const contactEdges: ContactFlowEdge[] = [];
-  const linkEdges: LinkFlowEdge[] = [];
   for (const block of blocks) {
     const id = narrow ? headingIdOf(block.id) : block.id;
     if (!drawn.boxes.has(id)) {
@@ -1264,7 +1245,7 @@ function GraphCanvas({
       data: {
         name: block.name,
         color: block.color,
-        threads: block.threads.length,
+        threads: block.total,
         working: block.threads.filter(
           (thread) => thread.view.status === 'working',
         ).length,
@@ -1345,30 +1326,18 @@ function GraphCanvas({
       });
     }
   }
-  if (hidden > 0) {
-    nodes.push({ ...base(MORE_ID), type: 'more', data: { count: hidden } });
-    const route = drawn.routes.get(MORE_ID);
-    if (route !== undefined) {
-      linkEdges.push({
-        id: `link:${MORE_ID}`,
-        type: 'link',
-        source: MANAGER_ID,
-        sourceHandle: 'out',
-        target: MORE_ID,
-        targetHandle: 'in',
-        focusable: false,
-        selectable: false,
-        data: { route },
+  for (const block of blocks) {
+    if (block.footer !== undefined && drawn.boxes.has(block.footer.id)) {
+      nodes.push({
+        ...base(block.footer.id),
+        type: 'more',
+        data: { count: block.total - block.threads.length },
       });
     }
   }
-  const edges: (ContactFlowEdge | LinkFlowEdge)[] = [
-    ...linkEdges,
-    ...contactEdges.sort(
-      (a, b) =>
-        EDGE_PAINT_ORDER[a.data!.state] - EDGE_PAINT_ORDER[b.data!.state],
-    ),
-  ];
+  const edges = contactEdges.sort(
+    (a, b) => EDGE_PAINT_ORDER[a.data!.state] - EDGE_PAINT_ORDER[b.data!.state],
+  );
 
   const phoneCard = narrow ? openCards.at(-1) : undefined;
   const phoneThread =

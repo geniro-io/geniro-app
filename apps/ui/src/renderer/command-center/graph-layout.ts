@@ -89,6 +89,8 @@ export interface LayoutBlock {
   id: string;
   /** The block's threads in the order they stand, reading order. */
   items: readonly GraphBox[];
+  /** A box on a line of its own under the items (the "+N more" of threads left off the graph); it is never pinned and has no wire. */
+  footer?: GraphBox;
 }
 
 export const BLOCK_HEAD = 40;
@@ -122,6 +124,11 @@ function shapeOf(
     width = Math.max(width, x - BLOCK_GAP + BLOCK_PAD);
     y += Math.max(...line.map((box) => box.height)) + BLOCK_GAP;
   }
+  if (block.footer !== undefined) {
+    items.push({ box: block.footer, x: BLOCK_PAD, y });
+    width = Math.max(width, block.footer.width + BLOCK_PAD * 2);
+    y += block.footer.height + BLOCK_GAP;
+  }
   return {
     id: block.id,
     width: Math.max(width, MIN_BLOCK_WIDTH),
@@ -136,8 +143,8 @@ const MIN_BLOCK_WIDTH = 220;
  * The root centred on top and the project blocks under it, left to right in
  * the order given, a line wrapping once it is `perLine` cards wide; each line
  * is centred under the root and as tall as its tallest block. Inside a block
- * its items stand in reading order, at most `perLine` to a line. `extras` (the
- * "+N more" box) take a line of their own after the blocks.
+ * its items stand in reading order, at most `perLine` to a line, its footer
+ * on a line of its own under them.
  *
  * An item in `pinned` stands at the root's top-left plus its offset instead,
  * out of its block, which shrinks around the rest from its own top-left; every
@@ -156,9 +163,10 @@ export function layoutBlocks(
   perLine: number,
   pinned: ReadonlyMap<string, Point> = new Map(),
   frame?: number,
-  extras: readonly GraphBox[] = [],
 ): GraphGeometry {
-  const filled = blocks.filter((block) => block.items.length > 0);
+  const filled = blocks.filter(
+    (block) => block.items.length > 0 || block.footer !== undefined,
+  );
   const cell = Math.max(
     0,
     ...filled.flatMap((block) => block.items.map((item) => item.width)),
@@ -190,18 +198,6 @@ export function layoutBlocks(
       lines.push([shape]);
     } else {
       line.push(shape);
-    }
-  }
-  if (extras.length > 0) {
-    const shelf = extras.map((box) => ({
-      id: box.id,
-      width: box.width,
-      height: box.height,
-      items: [],
-    }));
-    lines.push(shelf);
-    for (const shape of shelf) {
-      shapes.set(shape.id, shape);
     }
   }
   const spanOf = (line: readonly BlockShape[]): number =>
@@ -239,8 +235,7 @@ export function layoutBlocks(
       const shape = shapes.get(slot.id);
       const x = left;
       left += slot.width + COLUMN_GAP;
-      return shape === undefined ||
-        (shape.items.length === 0 && !extras.some((box) => box.id === slot.id))
+      return shape === undefined || shape.items.length === 0
         ? []
         : [
             {
@@ -354,13 +349,13 @@ export function layoutBlocks(
 /**
  * The same tree as one column, for a narrow screen: the root on top, every
  * item below it in order, indented, and a wire running down the root's left
- * edge and turning into each box. A box in `headings` (a project's name over
- * its threads) stands in the column with no wire.
+ * edge and turning into each box. A box in `unwired` (a project's name over
+ * its threads, its "+N more") stands in the column with no wire.
  */
 export function layoutColumn(
   root: GraphBox,
   items: readonly GraphBox[],
-  headings: ReadonlySet<string> = new Set(),
+  unwired: ReadonlySet<string> = new Set(),
 ): GraphGeometry {
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
@@ -377,7 +372,7 @@ export function layoutColumn(
   const spine = top.x + STUB;
   for (const item of items) {
     const placed = place(item, MARGIN + INDENT);
-    if (headings.has(item.id)) {
+    if (unwired.has(item.id)) {
       continue;
     }
     const middle = placed.y + Math.min(placed.height / 2, 28);

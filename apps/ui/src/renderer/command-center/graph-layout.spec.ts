@@ -141,6 +141,39 @@ describe('layoutBlocks', () => {
     }
   });
 
+  it('stands a block’s footer inside the block on a line under its items, with one wire to the block and none to the footer', () => {
+    const more: GraphBox = { id: 'more:block:A', width: 160, height: 32 };
+    const blocks: LayoutBlock[] = [
+      { ...blockOf('A', 3), footer: more },
+      blockOf('B', 1),
+    ];
+    const geometry = layoutBlocks(ROOT, blocks, 4);
+    const frame = geometry.boxes.get('block:A')!;
+    const footer = geometry.boxes.get(more.id)!;
+    const lowestItem = Math.max(
+      ...blocks[0]!.items.map((item) => {
+        const box = geometry.boxes.get(item.id)!;
+        return box.y + box.height;
+      }),
+    );
+
+    expect(footer.x).toBe(frame.x + BLOCK_PAD);
+    expect(footer.y).toBe(lowestItem + BLOCK_GAP);
+    expect(footer.y + footer.height).toBe(frame.y + frame.height - BLOCK_PAD);
+    expect([...geometry.routes.keys()].sort()).toEqual(['block:A', 'block:B']);
+    expect(lineTopsOf(geometry, blocks)).toBe(1);
+  });
+
+  it('keeps a block whose every thread is past the cap, holding only its footer', () => {
+    const more: GraphBox = { id: 'more:block:A', width: 160, height: 32 };
+    const blocks: LayoutBlock[] = [{ id: 'block:A', items: [], footer: more }];
+    const geometry = layoutBlocks(ROOT, blocks, 4);
+    const frame = geometry.boxes.get('block:A')!;
+
+    expect(geometry.boxes.get(more.id)!.y).toBe(frame.y + BLOCK_HEAD);
+    expect([...geometry.routes.keys()]).toEqual(['block:A']);
+  });
+
   it('lays blocks left to right on one line, and wraps a line once it is perLine cards wide', () => {
     const row = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
     const one = layoutBlocks(ROOT, row, 4);
@@ -307,19 +340,6 @@ describe('layoutBlocks', () => {
     for (const id of ['block:A', 'block:D']) {
       expect(at(id)).toMatchObject({ x: was(id).x, y: was(id).y });
     }
-  });
-
-  it('keeps the "+N more" box on a line of its own after the blocks, with a wire of its own', () => {
-    const blocks = [blockOf('A', 2)];
-    const geometry = layoutBlocks(ROOT, blocks, 4, new Map(), undefined, [
-      { id: 'more', width: 160, height: 32 },
-    ]);
-    const block = geometry.boxes.get('block:A')!;
-
-    expect(geometry.boxes.get('more')!.y).toBe(
-      block.y + block.height + LINE_GAP,
-    );
-    expect(geometry.routes.has('more')).toBe(true);
   });
 
   it('stands a pinned card at the root’s top-left plus its offset', () => {

@@ -415,11 +415,64 @@ describe('GraphView', () => {
     expect(manager.querySelector('button')).toBeNull();
   });
 
-  it('draws at most 24 thread cards and one "+N more" node for the rest', async () => {
-    await draw({ threads: graphThreadsOf(30) });
+  it('draws at most 24 thread cards, the rest as a "+N more" line inside their own project’s block, with one wire per block and none to a "+N more"', async () => {
+    const threads = graphThreadsOf(30);
+    await draw({ threads, projects: FIXTURE_PROJECTS });
 
     expect(all('graph-thread')).toHaveLength(MAX_THREAD_NODES);
-    expect(all('graph-more')[0]?.textContent).toBe('+6 more threads');
+    const blocks = graphBlocks(
+      shownThreads(threads),
+      FIXTURE_PROJECTS,
+      new Map(),
+      new Map(),
+      threads,
+    );
+    const left = blocks.filter((block) => block.footer !== undefined);
+    expect(left.length).toBeGreaterThan(0);
+    expect(
+      left.reduce((sum, block) => sum + block.total - block.threads.length, 0),
+    ).toBe(threads.length - MAX_THREAD_NODES);
+    expect(nodesOfType('more')).toHaveLength(left.length);
+    for (const block of left) {
+      const frame = flowNode(block.id);
+      const more = flowNode(block.footer!.id);
+      expect(more.position.x).toBeGreaterThan(frame.position.x);
+      expect(more.position.y + (more.height ?? 0)).toBeLessThan(
+        frame.position.y + (frame.height ?? 0),
+      );
+      expect(more.data).toEqual({ count: block.total - block.threads.length });
+    }
+    const edges = seams.flow?.edges ?? [];
+    expect(edges.map((edge) => edge.target).sort()).toEqual(
+      blocks.map((block) => block.id).sort(),
+    );
+  });
+
+  it('counts every thread of a project in its block’s header, those past the cap included', async () => {
+    const threads = graphThreadsOf(30);
+    await draw({ threads, projects: FIXTURE_PROJECTS });
+
+    const counted = new Map(
+      nodesOfType('block').map((node) => [node.id, node.data.threads]),
+    );
+    expect(counted).toEqual(
+      new Map([
+        [
+          'block:project-billing',
+          threads.filter((thread) => thread.projectId === 'project-billing')
+            .length,
+        ],
+        [
+          'block:project-cache',
+          threads.filter((thread) => thread.projectId === 'project-cache')
+            .length,
+        ],
+        [
+          NO_PROJECT_BLOCK,
+          threads.filter((thread) => thread.projectId === null).length,
+        ],
+      ]),
+    );
   });
 
   it('draws the 24 that need the user most, the still ones left to "+N more"', () => {
@@ -884,8 +937,8 @@ describe('GraphView', () => {
     expect(threadNodes.every((node) => node.draggable === true)).toBe(true);
     for (const type of ['manager', 'slot', 'more']) {
       const nodes = nodesOfType(type);
-      expect(nodes).toHaveLength(1);
-      expect(nodes[0]!.draggable).toBe(false);
+      expect(nodes.length).toBeGreaterThan(0);
+      expect(nodes.every((node) => node.draggable === false)).toBe(true);
     }
     expect(seams.flow?.nodeDragThreshold).toBe(5);
   });

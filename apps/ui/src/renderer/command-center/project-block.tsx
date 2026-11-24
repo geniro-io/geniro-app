@@ -25,7 +25,7 @@ export interface ProjectBlockProps {
   working: number;
 }
 
-/** The project's name and how many of its threads stand on the graph and how many work. */
+/** The project's name, how many threads it has and how many of them work. */
 export function ProjectBlockHeader({
   name,
   color,

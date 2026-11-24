@@ -498,6 +498,7 @@ export function Settings({
   // and the switch below renders what that resolves to for this build.
   const [storedInspect, setStoredInspect] = useState<boolean | null>(null);
   const [isPackaged, setIsPackaged] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const checkForUpdatesDirtyRef = useRef(false);
@@ -661,7 +662,10 @@ export function Settings({
       setFastActions(s.fastActions ?? []);
       setConfigProfiles(s.configProfiles ?? []);
     });
-    void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
+    void window.geniro.getStatus().then((s) => {
+      setIsPackaged(s.isPackaged);
+      setAppVersion(s.appVersion);
+    });
     void window.geniro.detectClis().then(showClis);
   }, [showClis]);
 
@@ -1562,10 +1566,7 @@ export function Settings({
           ) : section === 'search' ? (
             <SearchSettings api={apis?.embeddings ?? null} events={client} />
           ) : section === 'changelog' ? (
-            <ChangelogPage
-              releases={CHANGELOG}
-              current={update.state?.currentVersion ?? null}
-            />
+            <ChangelogPage releases={CHANGELOG} current={appVersion} />
           ) : section === 'system-analysis' ? (
             <SystemAnalysisPage
               api={apis?.systemAnalyses ?? null}

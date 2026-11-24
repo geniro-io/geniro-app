@@ -1,10 +1,15 @@
 import { join } from 'node:path';
 
-import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
+import {
+  Injectable,
+  type OnApplicationShutdown,
+  Optional,
+} from '@nestjs/common';
 
 import { environment } from '../environments';
 import { AgentSessionRegistry } from '../v1/agents/services/agent-session.registry';
 import { ProcessRegistry } from '../v1/agents/services/process-registry';
+import { EmbeddingProcessService } from '../v1/embeddings/services/embedding-process.service';
 import { DAEMON_LOCK_FILE_NAME, releaseInstanceLock } from './instance-lock';
 
 /**
@@ -34,6 +39,7 @@ export class InstanceLockLifecycle implements OnApplicationShutdown {
   constructor(
     private readonly processes: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
+    @Optional() private readonly embeddings?: EmbeddingProcessService,
   ) {}
 
   async onApplicationShutdown(): Promise<void> {
@@ -42,6 +48,7 @@ export class InstanceLockLifecycle implements OnApplicationShutdown {
     // whole drain window, and keeps the close listeners suppressed.
     const drained = this.processes.drain();
     this.sessions.closeAll();
+    this.embeddings?.closeAll();
     await drained;
     releaseInstanceLock(join(environment.userDataDir, DAEMON_LOCK_FILE_NAME));
   }

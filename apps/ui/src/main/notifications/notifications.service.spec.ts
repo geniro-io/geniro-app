@@ -152,7 +152,7 @@ describe('NotificationService', () => {
     notifier.click();
 
     expect(window.calls).toEqual(['show', 'focus']);
-    expect(onActivate).toHaveBeenCalledWith('run-1');
+    expect(onActivate).toHaveBeenCalledWith({ kind: 'run', runId: 'run-1' });
   });
 
   it('un-minimizes first — show/focus alone leave a minimized window down', () => {
@@ -188,7 +188,7 @@ describe('NotificationService', () => {
     service.post(notification, { window, onActivate });
 
     expect(() => notifier.click()).not.toThrow();
-    expect(onActivate).toHaveBeenCalledWith('run-1');
+    expect(onActivate).toHaveBeenCalledWith({ kind: 'run', runId: 'run-1' });
   });
 
   it('reports the run when the sender has no window at all', () => {
@@ -202,7 +202,7 @@ describe('NotificationService', () => {
     service.post(notification, { window: null, onActivate });
     notifier.click();
 
-    expect(onActivate).toHaveBeenCalledWith('run-1');
+    expect(onActivate).toHaveBeenCalledWith({ kind: 'run', runId: 'run-1' });
   });
 
   it('swallows a banner the platform refused to construct', () => {
@@ -346,6 +346,85 @@ describe('the on-demand test banner', () => {
 
     expect(result).toMatchObject({ posted: false, shown: null });
     expect(result.reason).toContain('switched off');
+    expect(notifier.posted).toHaveLength(0);
+  });
+});
+
+describe('NotificationService: search model failure', () => {
+  it('posts the failure under the search model title with its plain sentence', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+
+    service.postSearchModelFailure('checksum', {
+      window: fakeWindow(),
+      onActivate: vi.fn(),
+    });
+
+    expect(notifier.posted).toEqual([
+      {
+        title: 'Search model download failed',
+        body: "The download didn't match its checksum.",
+      },
+    ]);
+  });
+
+  it('a click opens Settings → Search rather than a chat, and raises the window', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+    const win = fakeWindow();
+    const onActivate = vi.fn();
+
+    service.postSearchModelFailure('network', { window: win, onActivate });
+    notifier.click();
+
+    expect(onActivate).toHaveBeenCalledWith({
+      kind: 'settings',
+      section: 'search',
+    });
+    expect(win.calls).toEqual(['show', 'focus']);
+  });
+
+  it('gives the not-published and disk-full reasons their own sentences', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: true }),
+      notifier,
+    );
+
+    service.postSearchModelFailure('not-published', {
+      window: null,
+      onActivate: vi.fn(),
+    });
+    service.postSearchModelFailure('disk-full', {
+      window: null,
+      onActivate: vi.fn(),
+    });
+
+    expect(notifier.posted.map((banner) => banner.body)).toEqual([
+      "The search model isn't published yet.",
+      'Not enough disk space.',
+    ]);
+  });
+
+  it('posts nothing while notifications are switched off', () => {
+    const notifier = fakeNotifier();
+    const service = new NotificationService(
+      () => ({ notificationsEnabled: false }),
+      notifier,
+    );
+
+    const posted = service.postSearchModelFailure('unknown', {
+      window: fakeWindow(),
+      onActivate: vi.fn(),
+    });
+
+    expect(posted).toBe(false);
     expect(notifier.posted).toHaveLength(0);
   });
 });

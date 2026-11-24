@@ -1,3 +1,4 @@
+import type { SearchModelState } from '../../shared/contracts';
 import {
   type BranchCarryResult,
   type BranchPullResult,
@@ -67,6 +68,15 @@ const IDLE_UPDATE: UpdateState = {
   failedPhase: null,
   currentVersion: '0.0.0-storybook',
   canInstall: false,
+};
+
+const IDLE_SEARCH_MODEL: SearchModelState = {
+  phase: 'off',
+  receivedBytes: 0,
+  totalBytes: 0,
+  reason: null,
+  systemVersion: null,
+  modelBytes: 0,
 };
 
 const NO_GIT: GitInfo = {
@@ -236,6 +246,38 @@ export function createPreloadStub(
       return Promise.resolve(IDLE_UPDATE);
     },
     onUpdateState: () => noSubscription('onUpdateState'),
+    getSearchModelState: () => {
+      note('getSearchModelState');
+      return Promise.resolve(IDLE_SEARCH_MODEL);
+    },
+    onSearchModelState: () => noSubscription('onSearchModelState'),
+    setSearchByMeaning: (enabled) => {
+      note('setSearchByMeaning');
+      return Promise.resolve({
+        ...IDLE_SEARCH_MODEL,
+        phase: enabled ? 'downloading' : 'off',
+      });
+    },
+    cancelSearchModelDownload: () => {
+      note('cancelSearchModelDownload');
+      return Promise.resolve(IDLE_SEARCH_MODEL);
+    },
+    retrySearchModelDownload: () => {
+      note('retrySearchModelDownload');
+      return Promise.resolve(IDLE_SEARCH_MODEL);
+    },
+    updateSearchModel: () => {
+      note('updateSearchModel');
+      return Promise.resolve(IDLE_SEARCH_MODEL);
+    },
+    deleteSearchModel: () => {
+      note('deleteSearchModel');
+      return Promise.resolve(IDLE_SEARCH_MODEL);
+    },
+    notifySearchModelFailed: () => {
+      note('notifySearchModelFailed');
+      return Promise.resolve();
+    },
 
     getGitInfo: () => {
       note('getGitInfo');
@@ -386,7 +428,12 @@ export function createPreloadStub(
     },
     getAppStorage: () => {
       note('getAppStorage');
-      return Promise.resolve({ worktrees: [], browserCache: [], appData: [] });
+      return Promise.resolve({
+        worktrees: [],
+        browserCache: [],
+        appData: [],
+        searchModel: null,
+      });
     },
     removeStorageWorktree: () => {
       note('removeStorageWorktree');

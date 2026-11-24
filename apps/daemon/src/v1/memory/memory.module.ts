@@ -4,6 +4,7 @@ import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { ItemDao } from '../agents/dao/item.dao';
 import { NodeStateDao } from '../agents/dao/node-state.dao';
 import { RunDao } from '../agents/dao/run.dao';
+import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { MemoriesController } from './controllers/memories.controller';
 import { MemoryConfigController } from './controllers/memory-config.controller';
@@ -32,7 +33,7 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
  * a cycle.
  */
 @Module({
-  imports: [ProjectsModule],
+  imports: [ProjectsModule, EmbeddingsModule],
   controllers: [
     MemoryConfigController,
     MemoryPurgeController,

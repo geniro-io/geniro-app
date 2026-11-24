@@ -9,16 +9,19 @@ import {
   SearchSnippet,
 } from '../components/search-panel';
 import { Dialog } from '../components/ui/dialog';
+import { type SearchApi, useEmbeddingStatus } from '../settings/search';
 import { useDaemonSearch } from './use-chat-search';
 
 export function GlobalChatSearchDialog({
   open,
   chatApi,
+  embeddingsApi,
   onClose,
   onJump,
 }: {
   open: boolean;
   chatApi: ChatsApi;
+  embeddingsApi: SearchApi | null;
   onClose: () => void;
   onJump: (hit: GlobalChatSearchHit) => void;
 }): React.JSX.Element {
@@ -30,6 +33,8 @@ export function GlobalChatSearchDialog({
   );
   const { query, setQuery, hits, partialReason, loading, error, tooShort } =
     useDaemonSearch(ask, 'Could not search chats. Try again.');
+  const { status } = useEmbeddingStatus(open ? embeddingsApi : null, null);
+  const byMeaning = status !== null && status.state !== 'off';
   const term = query.trim();
   const answered = term.length > 0 && !tooShort && !loading && !error;
 
@@ -40,11 +45,20 @@ export function GlobalChatSearchDialog({
       title="Search all chats"
       className="h-[min(48rem,100%)] w-[min(48rem,calc(100vw-2rem))] max-w-none">
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <p className="shrink-0 text-sm text-muted-foreground">
-          Every word must appear, and each word also finds longer ones it begins
-          — <span className="text-foreground">платеж</span> finds платежей.
-          Searches every project, archived chats included.
-        </p>
+        {byMeaning ? (
+          <p className="shrink-0 text-sm text-muted-foreground">
+            Finds messages with every word —{' '}
+            <span className="text-foreground">платеж</span> also finds платежей
+            — and messages that mean the same thing in other words or another
+            language. Searches every project, archived chats included.
+          </p>
+        ) : (
+          <p className="shrink-0 text-sm text-muted-foreground">
+            Every word must appear, and each word also finds longer ones it
+            begins — <span className="text-foreground">платеж</span> finds
+            платежей. Searches every project, archived chats included.
+          </p>
+        )}
         <SearchField
           label="Search all chats"
           placeholder="Words you remember"

@@ -5,14 +5,20 @@ import {
   app,
   BrowserWindow,
   nativeImage,
+  powerMonitor,
   powerSaveBlocker,
   session,
   shell,
 } from 'electron';
 
 import { browserWindowHash } from '../shared/browser-window-route';
-import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import {
+  type DaemonHandle,
+  IPC,
+  TRAFFIC_LIGHT_INSET,
+} from '../shared/contracts';
 import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
+import { SEARCH_MODEL_DIR_NAME } from '../shared/search-model';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { guardArtifactFrameNavigations } from './artifact-frame-navigation';
@@ -59,7 +65,18 @@ import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { ResourceAlertsConfigPush } from './resource-alerts-config-push';
-import { onSettingsWritten, readSettings } from './settings';
+import {
+  type SearchConfig,
+  searchConfigOf,
+  SearchConfigPush,
+} from './search-config-push';
+import searchModelManifest from './search-model/search-model.manifest.json';
+import { SearchModelService } from './search-model/search-model.service';
+import {
+  releaseBaseUrl,
+  SearchModelDownloader,
+} from './search-model/search-model-downloader';
+import { onSettingsWritten, readSettings, updateSettings } from './settings';
 import { notifySettingsChanged } from './settings-changed-notify';
 import { migrateSettingsFile } from './settings-migrations';
 import { ShareConfigPush } from './share-config-push';
@@ -210,6 +227,15 @@ const memoryConfigPush = new MemoryConfigPush((message) => {
     source: 'memory-config',
   });
 });
+/**
+ * The search switch and the models it searches with, the same way: the daemon
+ * holds them in memory, so every daemon is told on start and after each change.
+ */
+const searchConfigPush = new SearchConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'search-config',
+  });
+});
 const lessonsConfigPush = new LessonsConfigPush((message) => {
   void reportMainLog(supervisor.getHandle(), 'warn', message, {
     source: 'lessons-config',
@@ -251,7 +277,44 @@ onSettingsWritten((settings) => {
     supervisor.getHandle(),
     settings.resourceAlerts,
   );
+  void pushSearchConfig();
   keepAwake.setEnabled(settings.preventSleepWhileWorking);
+});
+
+/**
+ * Search by meaning: the switch, the model download, and the model the daemon
+ * searches with. Built with the update service, and the folder and the release
+ * base are read when used, because the app's paths are not set yet here.
+ */
+const searchModel = new SearchModelService({
+  manifest: searchModelManifest,
+  modelsDir: () => join(app.getPath('userData'), SEARCH_MODEL_DIR_NAME),
+  systemVersion: process.getSystemVersion(),
+  readSwitch: () => readSettings().semanticSearch.enabled,
+  writeSwitch: (enabled) => {
+    updateSettings({ semanticSearch: { enabled } });
+  },
+  download: (manifest, input) =>
+    new SearchModelDownloader({
+      baseUrl: releaseBaseUrl(manifest, {
+        isPackaged: app.isPackaged,
+        override: process.env.GENIRO_SEARCH_MODEL_URL ?? null,
+      }),
+      modelsDir: join(app.getPath('userData'), SEARCH_MODEL_DIR_NAME),
+    }).download(manifest, input),
+  pendingIndexComplete: () =>
+    searchConfigPush.pendingIndexComplete(supervisor.getHandle()),
+  pushConfig: () => pushSearchConfig(),
+  broadcast: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC.onSearchModelState, state);
+      }
+    }
+  },
+  log: (level, message, context) => {
+    void reportMainLog(supervisor.getHandle(), level, message, context);
+  },
 });
 
 /**
@@ -763,6 +826,25 @@ function reapWorktrees(handle: DaemonHandle): void {
     });
 }
 
+/** What the daemon searches with right now: the switch, the models on disk and the power source. */
+function searchConfigNow(): SearchConfig {
+  const { model, pendingModel } = searchModel.daemonModels();
+  return searchConfigOf({
+    switchOn: readSettings().semanticSearch.enabled,
+    model,
+    pendingModel,
+    onBattery: app.isReady() && powerMonitor.isOnBatteryPower(),
+  });
+}
+
+/** Hands the daemon the search settings; resolves true once it holds them. */
+function pushSearchConfig(): Promise<boolean> {
+  return searchConfigPush.pushIfChanged(
+    supervisor.getHandle(),
+    searchConfigNow(),
+  );
+}
+
 /** Hand a daemon that just came up every setting it holds in memory only. */
 function pushDaemonConfig(handle: DaemonHandle): void {
   const settings = readSettings();
@@ -775,6 +857,7 @@ function pushDaemonConfig(handle: DaemonHandle): void {
     instructions: settings.commandCenterInstructions,
   });
   void memoryConfigPush.push(handle, memoryConfigOf(settings));
+  void searchConfigPush.push(handle, searchConfigNow());
   void lessonsConfigPush.push(handle, settings.lessons);
   void knowledgeConfigPush.push(handle, settings.knowledge);
   void resourceAlertsConfigPush.push(handle, settings.resourceAlerts);
@@ -930,6 +1013,7 @@ function main(): void {
     const ipcRegistry = registerIpc(
       supervisor,
       updates,
+      searchModel,
       terminals,
       () => {
         if (remoteAccess === null) {
@@ -965,6 +1049,16 @@ function main(): void {
     // service — launch is busy enough, and an update banner is worth nothing
     // before the window has painted.
     updates.start(readSettings().checkForUpdates);
+    powerMonitor.on('on-battery', () => void pushSearchConfig());
+    powerMonitor.on('on-ac', () => void pushSearchConfig());
+    searchModel.start().catch((err: unknown) => {
+      void reportMainLog(
+        supervisor.getHandle(),
+        'error',
+        `the search model could not be read: ${err instanceof Error ? err.message : String(err)}`,
+        { source: 'search-model' },
+      );
+    });
     // Debris from previous updates, cleared at the one moment nothing here is
     // running. Not gated on the auto-check setting: a user who switched checks
     // off still has whatever the last update left on their disk.

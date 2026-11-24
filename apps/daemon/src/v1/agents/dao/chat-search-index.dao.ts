@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
+import type { ExpressionBuilder } from 'kysely';
 
 import {
   CHAT_TEXT_KINDS,
@@ -9,6 +10,7 @@ import {
   DROP_CHAT_TEXT_TABLE,
   DROP_RETIRED_CHAT_TEXT_TRIGGERS,
 } from '../../../db/chat-text-index.ddl';
+import { EMBEDDING_CHAT_MIN_CHARS } from '../../embeddings/embeddings.types';
 import { Item } from '../../runs/entity/item.entity';
 import type {
   ChatContextRow,
@@ -18,8 +20,47 @@ import type {
   ChatTextMatch,
   GlobalChatSearchQuery,
 } from '../chat.types';
+
+/** The filters a chat search applies to the rows it may return. */
+export type ChatSearchReach = Pick<
+  GlobalChatSearchQuery,
+  'includeArchived' | 'runId' | 'cwd' | 'activeSince' | 'activeUntil'
+>;
+
+/** A message search by meaning embeds, with the `items` rowid its cursors walk. */
+export interface ChatEmbeddableRow {
+  rowid: number;
+  id: string;
+  run_id: string;
+  created_at: number;
+  text: string;
+}
+
+const HIT_COLUMNS = [
+  'i.id',
+  'i.run_id',
+  'i.member_id',
+  'i.seq',
+  'i.kind',
+  'i.role',
+  'i.created_at',
+  'r.title',
+  'r.cwd',
+  'r.archived_at',
+  'chat_text.text',
+] as const;
 import { activityWindowOf, runIdsActiveIn } from '../utils/run-activity';
 import { notSystemAnalysis } from '../utils/system-analysis-filter';
+
+function longEnoughToEmbed(
+  eb: ExpressionBuilder<ChatTextDatabase, 'chat_text'>,
+) {
+  return eb(
+    eb.fn<number>('length', [eb.fn<string>('trim', ['chat_text.text'])]),
+    '>=',
+    EMBEDDING_CHAT_MIN_CHARS,
+  );
+}
 
 @Injectable()
 export class ChatSearchIndexDao extends BaseDao<Item> {
@@ -29,29 +70,94 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
 
   /** The best `limit` rows matching a ready-made FTS5 query, best first. */
   match(
-    options: GlobalChatSearchQuery,
+    options: ChatSearchReach,
     matchQuery: string,
     limit: number,
   ): Promise<ChatTextMatch[]> {
+    return this.reachable(options)
+      .select(HIT_COLUMNS)
+      .select('chat_text.rank')
+      .where('chat_text', 'match', matchQuery)
+      .orderBy('chat_text.rank')
+      .orderBy('i.created_at', 'desc')
+      .limit(limit)
+      .execute();
+  }
+
+  /**
+   * Those of `itemIds` a search by meaning with `options` may return, as hits
+   * without a rank: a message too short to embed is left out even when an
+   * older index still holds its vector.
+   */
+  async meaningHitsAmong(
+    options: ChatSearchReach,
+    itemIds: readonly string[],
+  ): Promise<Omit<ChatTextMatch, 'rank'>[]> {
+    if (itemIds.length === 0) {
+      return [];
+    }
+    return this.reachable(options)
+      .select(HIT_COLUMNS)
+      .where('i.id', 'in', [...itemIds])
+      .where(longEnoughToEmbed)
+      .execute();
+  }
+
+  /** The runs a search with `options` may return messages of. */
+  async reachableRunIds(options: ChatSearchReach): Promise<string[]> {
+    const rows = await this.reachable(options)
+      .select('r.id')
+      .distinct()
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** How many messages search by meaning embeds: user and assistant messages long enough to mean something. */
+  async embeddableCount(): Promise<number> {
+    const row = await this.embeddable()
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirst();
+    return Number(row?.n ?? 0);
+  }
+
+  /** The highest `items` rowid, the point both embedding cursors start from. */
+  async newestItemRowid(): Promise<number> {
+    const row = await this.database()
+      .selectFrom('items')
+      .select((eb) => eb.fn.max<number | null>('rowid').as('newest'))
+      .executeTakeFirst();
+    return Number(row?.newest ?? 0);
+  }
+
+  /** Embeddable messages below `rowid` (newest first) or above it (oldest first). */
+  async embeddableRows(
+    from: number,
+    direction: 'before' | 'after',
+    limit: number,
+  ): Promise<ChatEmbeddableRow[]> {
+    return this.embeddable()
+      .select(['i.rowid', 'i.id', 'i.run_id', 'i.created_at', 'chat_text.text'])
+      .where('i.rowid', direction === 'before' ? '<' : '>', from)
+      .orderBy('i.rowid', direction === 'before' ? 'desc' : 'asc')
+      .limit(limit)
+      .execute();
+  }
+
+  async liveRunIds(): Promise<string[]> {
+    const rows = await this.database()
+      .selectFrom('runs')
+      .select('id')
+      .where('deleted_at', 'is', null)
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** Every indexed text row a search with `options` may return. */
+  private reachable(options: ChatSearchReach) {
     let query = this.database()
       .selectFrom('chat_text')
       .innerJoin('items as i', 'i.id', 'chat_text.item_id')
       .innerJoin('runs as r', 'r.id', 'i.run_id')
-      .select([
-        'i.id',
-        'i.run_id',
-        'i.member_id',
-        'i.seq',
-        'i.kind',
-        'i.role',
-        'i.created_at',
-        'r.title',
-        'r.cwd',
-        'r.archived_at',
-        'chat_text.rank',
-        'chat_text.text',
-      ])
-      .where('chat_text', 'match', matchQuery)
       .where('i.deleted_at', 'is', null)
       .where('r.deleted_at', 'is', null)
       // A team builder's own chat, and a thread's or a team's
@@ -78,11 +184,15 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
         runIdsActiveIn(this.database(), window),
       );
     }
-    return query
-      .orderBy('chat_text.rank')
-      .orderBy('i.created_at', 'desc')
-      .limit(limit)
-      .execute();
+    return query;
+  }
+
+  /** User and assistant messages, archived chats included: what search by meaning embeds. */
+  private embeddable() {
+    return this.reachable({ includeArchived: true })
+      .where('i.kind', '=', 'message')
+      .where('i.role', 'in', ['user', 'assistant'])
+      .where(longEnoughToEmbed);
   }
 
   /** The run a context read is about, or undefined when it is gone. */

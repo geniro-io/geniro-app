@@ -1,13 +1,28 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import { matchEveryWordElseAny } from '../../agents/utils/chat-text-query';
+import {
+  anyWordMatchQuery,
+  chatTextMatchQuery,
+  matchEveryWordElseAny,
+} from '../../agents/utils/chat-text-query';
 import {
   hasHiddenText,
   withoutHiddenText,
 } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import {
+  type DocumentSourceProvider,
+  EMBEDDING_MEANING_CANDIDATES,
+} from '../../embeddings/embeddings.types';
+import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
+import { fuseRanks } from '../../embeddings/utils/rrf';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type {
@@ -65,6 +80,10 @@ import {
   type KnowledgeSearchResult,
 } from '../knowledge.types';
 import {
+  knowledgeEmbeddingChunks,
+  knowledgeTextHash,
+} from '../utils/knowledge-embedding';
+import {
   knowledgeDiff,
   knowledgeExportMarkdown,
 } from '../utils/knowledge-export';
@@ -109,7 +128,7 @@ interface PlaceSettled {
  * {@link visibleHeads}, the one visibility rule.
  */
 @Injectable()
-export class KnowledgeService {
+export class KnowledgeService implements OnModuleInit {
   private readonly logger = new Logger(KnowledgeService.name);
   private config: KnowledgeConfig = DEFAULT_KNOWLEDGE_CONFIG;
   private configured = false;
@@ -124,7 +143,12 @@ export class KnowledgeService {
     private readonly scope: ProjectScopeService,
     private readonly memory: MemoryService,
     private readonly events: KnowledgeEventBus,
+    @Optional() private readonly embeddings?: EmbeddingIndexService,
   ) {}
+
+  onModuleInit(): void {
+    this.embeddings?.registerDocuments(this.embeddingSource());
+  }
 
   get enabled(): boolean {
     return this.config.enabled;
@@ -912,6 +936,7 @@ export class KnowledgeService {
       const ids = rows.map((row) => row.id);
       await this.revisionRows.deleteForDocuments(ids, tx);
       await this.documents.deleteIds(ids, tx);
+      await this.embeddings?.deleteDocuments('knowledge', ids);
       return { moved: 0, deleted: rows.length, renamed: [] };
     }
     const taken = await this.documents.handlesIn(GLOBAL_PLACE_KEY, tx);
@@ -1198,17 +1223,76 @@ export class KnowledgeService {
       await this.revisionRows.deleteForDocuments([id], tx);
       await this.documents.hardDeleteById(id, tx);
     });
+    await this.embeddings?.deleteDocuments('knowledge', [id]);
   }
 
+  /** Word matches fused with meaning matches when search by meaning answers, else the word matches alone. */
   private async matchingIds(
     text: string,
     heads: readonly KnowledgeHead[],
     em: EntityManager,
   ): Promise<string[]> {
     const ids = heads.map((head) => head.id);
+    const every = chatTextMatchQuery(text);
+    const meaning =
+      every === null || !this.embeddings?.enabled
+        ? null
+        : await this.embeddings
+            .scoreDocuments(
+              'knowledge',
+              text,
+              ids,
+              EMBEDDING_MEANING_CANDIDATES,
+            )
+            .catch(() => null);
+    if (every === null || meaning === null) {
+      return this.wordIds(text, ids, em);
+    }
+    const strict = await this.documents.matchIds(every, ids, em);
+    const anyQuery = anyWordMatchQuery(text);
+    const any =
+      anyQuery === null || anyQuery === every
+        ? []
+        : await this.documents.matchIds(anyQuery, ids, em);
+    const relevance = fuseRanks([
+      { ids: strict, weight: 1 },
+      { ids: meaning.map((hit) => hit.sourceId), weight: 1 },
+      { ids: any, weight: 0.5 },
+    ]);
+    return [...relevance.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([id]) => id);
+  }
+
+  private wordIds(
+    text: string,
+    ids: readonly string[],
+    em: EntityManager,
+  ): Promise<string[]> {
     return matchEveryWordElseAny(text, (query) =>
       this.documents.matchIds(query, ids, em),
     );
+  }
+
+  /** Knowledge as search by meaning reads it: every live document, a piece per section. */
+  private embeddingSource(): DocumentSourceProvider {
+    const documentsOf = (
+      rows: { id: string; title: string; when_to_read: string; body: string }[],
+    ) =>
+      rows.map((row) => ({
+        sourceId: row.id,
+        textHash: knowledgeTextHash(row.title, row.when_to_read, row.body),
+        chunks: knowledgeEmbeddingChunks(row.title, row.when_to_read, row.body),
+      }));
+    return {
+      source: 'knowledge',
+      inventory: async () =>
+        documentsOf(
+          await this.documents.embeddingTexts(null, this.em.fork()),
+        ).map(({ sourceId, textHash }) => ({ sourceId, textHash })),
+      documents: async (ids) =>
+        documentsOf(await this.documents.embeddingTexts(ids, this.em.fork())),
+    };
   }
 
   /** Up to three visible handles a mistaken read may have meant. */
@@ -1219,7 +1303,11 @@ export class KnowledgeService {
   ): Promise<string[]> {
     const byId = new Map(heads.map((head) => [head.id, head.handle]));
     const words = handle.replace(/-/g, ' ');
-    const ids = await this.matchingIds(words, heads, em);
+    const ids = await this.wordIds(
+      words,
+      heads.map((head) => head.id),
+      em,
+    );
     return ids
       .map((id) => byId.get(id))
       .filter((name): name is string => name !== undefined)
@@ -1247,6 +1335,7 @@ export class KnowledgeService {
   }
 
   private publish(row: KnowledgeDocument, change: KnowledgeChange): void {
+    this.embeddings?.enqueue('knowledge', [row.id]);
     this.events.publish({
       documentId: row.id,
       change,

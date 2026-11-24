@@ -12,6 +12,7 @@
  */
 
 import type { RemoteAccessState } from './remote';
+import type { SearchModelFailureReason } from './search-model';
 import { DEFAULT_THEME_PREFERENCE, type ThemePreference } from './themes';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -410,6 +411,20 @@ export const DEFAULT_MEMORY: MemorySettings = {
   nativeMemoryOff: false,
 };
 
+/**
+ * Whether memory, knowledge and chat search also match by meaning, through the
+ * built-in model main downloads on the user's press. Owned here (settings.json)
+ * and pushed to every daemon this app starts; the daemon keeps it in memory only.
+ * Desktop only: a paired device may not write it.
+ */
+export interface SemanticSearchSettings {
+  enabled: boolean;
+}
+
+export const DEFAULT_SEMANTIC_SEARCH: SemanticSearchSettings = {
+  enabled: false,
+};
+
 /** Whether a thread is reflected on when it is archived: never, or automatically. */
 export type LessonsMode = 'off' | 'auto';
 
@@ -653,6 +668,8 @@ export interface Settings {
    * daemon this app starts; the daemon keeps it in memory only.
    */
   knowledge: KnowledgeSettings;
+  /** Whether search also matches by meaning. See {@link SemanticSearchSettings}. */
+  semanticSearch: SemanticSearchSettings;
   /**
    * When the daemon warns about a thread's processes eating memory, the system
    * running short of memory, or the Data volume running short of space. Owned
@@ -953,6 +970,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memory: DEFAULT_MEMORY,
   lessons: DEFAULT_LESSONS,
   knowledge: DEFAULT_KNOWLEDGE,
+  semanticSearch: DEFAULT_SEMANTIC_SEARCH,
   resourceAlerts: DEFAULT_RESOURCE_ALERTS,
   archiveRetentionDays: null,
   memoryAutoForgetAfterDays: null,
@@ -1039,6 +1057,33 @@ export type UpdatePhase =
   | 'installing'
   | 'ready'
   | 'error';
+
+/**
+ * What the search model is doing, pushed at every window on every change.
+ *
+ * `receivedBytes` is set while bytes move; `totalBytes` is the pinned model's
+ * download size in every phase but `unsupported`; `reason` only in `failed`
+ * and a failed update; `systemVersion` only in `unsupported`; `modelBytes` is the ready
+ * model folder's size on disk, 0 when there is none.
+ */
+export type SearchModelPhase =
+  | 'off'
+  | 'unsupported'
+  | 'downloading'
+  | 'checking'
+  | 'ready'
+  | 'update-available'
+  | 'updating'
+  | 'failed';
+
+export interface SearchModelState {
+  phase: SearchModelPhase;
+  receivedBytes: number;
+  totalBytes: number;
+  reason: SearchModelFailureReason | null;
+  systemVersion: string | null;
+  modelBytes: number;
+}
 
 /** The whole of what main knows about updating, pushed on every change. */
 export interface UpdateState {
@@ -1175,6 +1220,13 @@ export const CHAT_LIST_WIDTH = 260;
  */
 export type RunNotificationKind =
   'question' | 'turn-end' | 'share-sign-in' | 'resource-alert' | 'lessons';
+
+/**
+ * Where a clicked notification leads. A run opens its chat; the search-model
+ * banner opens Settings → Search.
+ */
+export type NotificationActivation =
+  { kind: 'run'; runId: string } | { kind: 'settings'; section: 'search' };
 
 /** One notification the renderer asks main to post. */
 export interface RunNotification {
@@ -2013,6 +2065,22 @@ export interface GeniroApi {
   relaunchForUpdate(): Promise<UpdateState>;
   /** Subscribe to update-state changes (check progress, download progress). */
   onUpdateState(listener: (state: UpdateState) => void): () => void;
+  /** The search-model state (the switch's download, index and update), for a screen that just mounted. */
+  getSearchModelState(): Promise<SearchModelState>;
+  /** Subscribe to search-model state changes. */
+  onSearchModelState(listener: (state: SearchModelState) => void): () => void;
+  /** Turn search by meaning on or off. Off keeps the model and the index on disk. */
+  setSearchByMeaning(enabled: boolean): Promise<SearchModelState>;
+  /** Stop the download, delete its partial files and switch search by meaning off. */
+  cancelSearchModelDownload(): Promise<SearchModelState>;
+  /** Resume a failed download, switching search by meaning back on. */
+  retrySearchModelDownload(): Promise<SearchModelState>;
+  /** Download the pinned model while the one in use keeps serving. */
+  updateSearchModel(): Promise<SearchModelState>;
+  /** Delete the model folders and switch search by meaning off. */
+  deleteSearchModel(): Promise<SearchModelState>;
+  /** Post the banner for a failed download. Main shows it only if the user has notifications on. */
+  notifySearchModelFailed(reason: SearchModelFailureReason): Promise<void>;
   /** Read a folder's git state (repo? branch? branches? dirty?). */
   getGitInfo(dir: string): Promise<GitInfo>;
   /**
@@ -2322,7 +2390,9 @@ export interface GeniroApi {
    * looking. Main raises and focuses the window; this is what lets the app open
    * the thread the banner named.
    */
-  onNotificationActivated(listener: (runId: string) => void): () => void;
+  onNotificationActivated(
+    listener: (activation: NotificationActivation) => void,
+  ): () => void;
   /**
    * The LAN gateway's whole state — on/off, listening, the bound port, both
    * links, the live pairing code and its devices.
@@ -2480,6 +2550,8 @@ export interface AppStorageUsage {
   worktrees: StorageWorktree[];
   browserCache: AppStorageEntry[];
   appData: AppStorageEntry[];
+  /** The downloaded search model folder, or null when none is on disk. */
+  searchModel: AppStorageEntry | null;
 }
 
 /** What a Remove press did to one worktree. */
@@ -2519,6 +2591,14 @@ export const IPC = {
   installUpdate: 'geniro:installUpdate',
   relaunchForUpdate: 'geniro:relaunchForUpdate',
   onUpdateState: 'geniro:onUpdateState',
+  getSearchModelState: 'geniro:getSearchModelState',
+  onSearchModelState: 'geniro:onSearchModelState',
+  setSearchByMeaning: 'geniro:setSearchByMeaning',
+  cancelSearchModelDownload: 'geniro:cancelSearchModelDownload',
+  retrySearchModelDownload: 'geniro:retrySearchModelDownload',
+  updateSearchModel: 'geniro:updateSearchModel',
+  deleteSearchModel: 'geniro:deleteSearchModel',
+  notifySearchModelFailed: 'geniro:notifySearchModelFailed',
   getGitInfo: 'geniro:getGitInfo',
   getGitStamp: 'geniro:getGitStamp',
   getGitHead: 'geniro:getGitHead',

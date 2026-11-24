@@ -6,21 +6,29 @@ import {
   Logger,
   type OnApplicationShutdown,
   type OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isAnalysisRun } from '../../agents/utils/analysed-runs';
 import {
+  anyWordMatchQuery,
   chatTextMatchQuery,
   matchEveryWordElseAny,
 } from '../../agents/utils/chat-text-query';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import {
+  type DocumentSourceProvider,
+  EMBEDDING_MEANING_CANDIDATES,
+} from '../../embeddings/embeddings.types';
+import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
+import { fuseRanks } from '../../embeddings/utils/rrf';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { RunPlace, RunPlaceFacts } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
-import { MemoryDao } from '../dao/memory.dao';
+import { MemoryDao, type MemoryRankedMatch } from '../dao/memory.dao';
 import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import { Memory } from '../entity/memory.entity';
 import {
@@ -92,12 +100,14 @@ import {
   type MemoryMarkTally,
   promotesLesson,
 } from '../utils/memory-marks-fold';
+import { memoryTextHash } from '../utils/memory-pairs';
 import {
   referencedPathsOf,
   statesRule,
   storedPaths,
 } from '../utils/memory-references';
 import {
+  type MemorySearchCandidate,
   rankSearchCandidates,
   relevanceOfRanks,
 } from '../utils/memory-search-rank';
@@ -185,6 +195,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     private readonly usage: MemoryUsageService,
     private readonly findings: MemoryReviewFindingDao,
     private readonly marks: MemoryMarksService,
+    @Optional() private readonly embeddings?: EmbeddingIndexService,
   ) {}
 
   /**
@@ -201,6 +212,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
    * nothing in the same gesture.
    */
   onModuleInit(): void {
+    this.embeddings?.registerDocuments(this.embeddingSource());
     this.sweepFirst = setTimeout(() => {
       void this.sweepColdQuietly();
     }, AUTO_FORGET_FIRST_RUN_MS);
@@ -705,28 +717,16 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     limit: number,
   ): Promise<MemoryHit[]> {
     const em = this.em.fork();
-    const matches = await matchEveryWordElseAny(query, (match) =>
-      this.memories.matchRanked(
-        match,
-        { statuses: ['active'], places: { visibleTo: place } },
-        MEMORY_SEARCH_CANDIDATES,
-        em,
-      ),
-    );
-    const relevance = relevanceOfRanks(matches);
+    const candidates =
+      (await this.meaningCandidates(query, place, em)) ??
+      (await this.wordCandidates(query, place, em));
     const signals = await this.marks.searchSignals(
-      matches.map((match) => match.id),
+      candidates.map((candidate) => candidate.id),
       new Date(),
       em,
     );
     const ids = rankSearchCandidates(
-      matches.map((match, index) => ({
-        id: match.id,
-        handle: match.handle,
-        relevance: relevance[index] ?? 0,
-        projectId: match.projectId,
-        teamSlug: match.teamSlug,
-      })),
+      candidates,
       signals,
       Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
     );
@@ -741,6 +741,103 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
       'searchHits',
     );
     return found.map(toHit);
+  }
+
+  /** Today's word search: every word, else any word, ranked by bm25 relevance. */
+  private async wordCandidates(
+    query: string,
+    place: RunPlace,
+    em: EntityManager,
+  ): Promise<MemorySearchCandidate[]> {
+    const matches = await matchEveryWordElseAny(query, (match) =>
+      this.memories.matchRanked(
+        match,
+        { statuses: ['active'], places: { visibleTo: place } },
+        MEMORY_SEARCH_CANDIDATES,
+        em,
+      ),
+    );
+    const relevance = relevanceOfRanks(matches);
+    return matches.map((match, index) =>
+      candidateOf(match, relevance[index] ?? 0),
+    );
+  }
+
+  /**
+   * Word matches fused with meaning matches, or null when search by meaning
+   * is off or cannot answer — the caller then keeps {@link wordCandidates}.
+   */
+  private async meaningCandidates(
+    query: string,
+    place: RunPlace,
+    em: EntityManager,
+  ): Promise<MemorySearchCandidate[] | null> {
+    const every = chatTextMatchQuery(query);
+    if (!this.embeddings?.enabled || every === null) {
+      return null;
+    }
+    const scope = {
+      statuses: ['active'] as const,
+      places: { visibleTo: place },
+    };
+    const visible = await this.memories.idsInScope(scope, em);
+    const meaning = await this.embeddings
+      .scoreDocuments('memory', query, visible, EMBEDDING_MEANING_CANDIDATES)
+      .catch(() => null);
+    if (meaning === null) {
+      return null;
+    }
+    const strict = await this.memories.matchRanked(
+      every,
+      scope,
+      MEMORY_SEARCH_CANDIDATES,
+      em,
+    );
+    const anyQuery = anyWordMatchQuery(query);
+    const any =
+      anyQuery === null || anyQuery === every
+        ? []
+        : await this.memories.matchRanked(
+            anyQuery,
+            scope,
+            MEMORY_SEARCH_CANDIDATES,
+            em,
+          );
+    const relevance = fuseRanks([
+      { ids: strict.map((match) => match.id), weight: 1 },
+      { ids: meaning.map((hit) => hit.sourceId), weight: 1 },
+      { ids: any.map((match) => match.id), weight: 0.5 },
+    ]);
+    const known = new Map<string, Omit<MemoryRankedMatch, 'rank'>>(
+      [...strict, ...any].map((match) => [match.id, match]),
+    );
+    const unknown = [...relevance.keys()].filter((id) => !known.has(id));
+    for (const row of await this.memories.getByIds(unknown, em)) {
+      known.set(row.id, row);
+    }
+    return [...relevance].flatMap(([id, score]) => {
+      const match = known.get(id);
+      return match ? [candidateOf(match, score)] : [];
+    });
+  }
+
+  /** Memory as search by meaning reads it: every live entry with text. */
+  private embeddingSource(): DocumentSourceProvider {
+    const documentsOf = (rows: { id: string; title: string; body: string }[]) =>
+      rows.map((row) => ({
+        sourceId: row.id,
+        textHash: memoryTextHash(row.title, row.body),
+        chunks: [`${row.title}\n${row.body}`],
+      }));
+    return {
+      source: 'memory',
+      inventory: async () =>
+        documentsOf(
+          await this.memories.embeddingTexts(null, this.em.fork()),
+        ).map(({ sourceId, textHash }) => ({ sourceId, textHash })),
+      documents: async (ids) =>
+        documentsOf(await this.memories.embeddingTexts(ids, this.em.fork())),
+    };
   }
 
   /**
@@ -1392,6 +1489,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
       const now = new Date();
       let handle = await this.memories.nextHandle(em);
       let imported = 0;
+      const written: string[] = [];
       for (const note of notes) {
         const actor: MemoryActor = {
           kind: 'import',
@@ -1423,10 +1521,12 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         stampSource(row, actor);
         row.approvedAt = now;
         em.persist(row);
+        written.push(row.id);
         imported += 1;
       }
       if (imported > 0) {
         await em.flush();
+        this.embeddings?.enqueue('memory', written);
         this.events.publish({
           memoryId: null,
           change: 'bulk',
@@ -1563,6 +1663,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     stampSource(row, actor, lesson);
     em.persist(row);
     await em.flush();
+    this.embeddings?.enqueue('memory', [row.id]);
     if (announce) {
       this.publish(row, existing ? 'updated' : 'created');
     }
@@ -1903,6 +2004,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     if (!purged) {
       return 'not-forgotten';
     }
+    await this.embeddings?.deleteDocuments('memory', [id]);
     this.events.publish({
       memoryId: null,
       change: 'bulk',
@@ -2122,6 +2224,19 @@ export function entryOf(row: Memory, marksPurge: boolean): MemoryEntry {
     indexed: indexable(row),
     forgetReason: row.forgetReason,
     purgeAt: purgeAtOf(row, marksPurge),
+  };
+}
+
+function candidateOf(
+  match: Pick<Memory, 'id' | 'handle' | 'projectId' | 'teamSlug'>,
+  relevance: number,
+): MemorySearchCandidate {
+  return {
+    id: match.id,
+    handle: match.handle,
+    relevance,
+    projectId: match.projectId,
+    teamSlug: match.teamSlug,
   };
 }
 

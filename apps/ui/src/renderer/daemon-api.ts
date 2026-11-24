@@ -8,6 +8,7 @@ import {
   CommandCenterApi,
   Configuration,
   DiagnosticsApi,
+  EmbeddingsApi,
   GroupsApi,
   HandoffApi,
   KnowledgeApi,
@@ -264,6 +265,8 @@ export interface DaemonApis {
   memories: MemoriesApi;
   /** The documents agents read on demand (`/v1/knowledge`). */
   knowledge: KnowledgeApi;
+  /** Search by meaning's status and index (`/v1/embeddings`); its writes are desktop only. */
+  embeddings: EmbeddingsApi;
   /** Lessons reflections and the user's save or reject of their lessons (`/v1/lessons`). */
   lessons: LessonsApi;
   /** What the data folder holds and its clean-ups (`/v1/storage`) — desktop only. */
@@ -331,6 +334,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     shares: new SharesApi(config),
     memories: new MemoriesApi(config),
     knowledge: new KnowledgeApi(config),
+    embeddings: new EmbeddingsApi(config),
     lessons: new LessonsApi(config),
     storage: new StorageApi(config),
     backgroundJobs: new BackgroundJobsApi(config),

@@ -18,7 +18,7 @@ export const KnowledgeSearchArgsSchema = z
       .max(KNOWLEDGE_QUERY_MAX_CHARS)
       .optional()
       .describe(
-        'Words to find in titles, when-to-read lines and text; every word must match, and when none does, any word may. Leave it out to list what this run sees.',
+        'Words to find in titles, when-to-read lines and text; every word must match, and when none does, any word may. When search by meaning is on in Settings → Search, documents that mean the same in other words are found too. Leave it out to list what this run sees.',
       ),
     limit: z
       .number()

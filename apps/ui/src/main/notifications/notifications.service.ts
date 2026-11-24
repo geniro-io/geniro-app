@@ -1,6 +1,15 @@
 import type { BrowserWindow } from 'electron';
 
-import type { RunNotification, Settings } from '../../shared/contracts';
+import type {
+  NotificationActivation,
+  RunNotification,
+  Settings,
+} from '../../shared/contracts';
+import {
+  SEARCH_MODEL_FAILED_TITLE,
+  SEARCH_MODEL_FAILURE_SENTENCES,
+  type SearchModelFailureReason,
+} from '../../shared/search-model';
 import { electronNotifier, type Notifier, type PostedBanner } from './notifier';
 
 /**
@@ -42,9 +51,14 @@ const OUTCOME_POLL_MS = 50;
 export interface NotificationTarget {
   /** Null when the sender has no window — the banner still reports. */
   window: NotificationWindow | null;
-  /** Tell the renderer which run the user clicked through to. */
-  onActivate(runId: string): void;
+  /** Tell the renderer where the user clicked through to. */
+  onActivate(activation: NotificationActivation): void;
 }
+
+const SEARCH_MODEL_ACTIVATION: NotificationActivation = {
+  kind: 'settings',
+  section: 'search',
+};
 
 export class NotificationService {
   /**
@@ -79,6 +93,41 @@ export class NotificationService {
    * the platform refused.
    */
   post(notification: RunNotification, target: NotificationTarget): boolean {
+    return this.show(
+      notification.title,
+      notification.body,
+      { kind: 'run', runId: notification.runId },
+      target,
+      notification.retractable ? notification.runId : null,
+    );
+  }
+
+  /**
+   * The banner for a download that failed while Settings → Search was not on
+   * screen. A click opens that page, not a chat. Gated by the same switch as
+   * every other banner.
+   */
+  postSearchModelFailure(
+    reason: SearchModelFailureReason,
+    target: NotificationTarget,
+  ): boolean {
+    return this.show(
+      SEARCH_MODEL_FAILED_TITLE,
+      SEARCH_MODEL_FAILURE_SENTENCES[reason],
+      SEARCH_MODEL_ACTIVATION,
+      target,
+      null,
+    );
+  }
+
+  /** The one path every banner takes: the switch, the platform gate, the post and the withdrawable bookkeeping. */
+  private show(
+    title: string,
+    body: string,
+    activation: NotificationActivation,
+    target: NotificationTarget,
+    retractKey: string | null,
+  ): boolean {
     if (!this.readSettings().notificationsEnabled) {
       return false;
     }
@@ -87,13 +136,16 @@ export class NotificationService {
     }
     try {
       const banner = this.notifier.post(
-        { title: notification.title, body: notification.body },
+        { title, body },
         () => {
           // A clicked banner has left the screen: nothing is left to withdraw.
-          if (this.retractable.get(notification.runId) === banner) {
-            this.retractable.delete(notification.runId);
+          if (
+            retractKey !== null &&
+            this.retractable.get(retractKey) === banner
+          ) {
+            this.retractable.delete(retractKey);
           }
-          this.activate(notification.runId, target);
+          this.activate(activation, target);
         },
         (outcome) => {
           this.lastOutcome = outcome;
@@ -108,8 +160,8 @@ export class NotificationService {
           }
         },
       );
-      if (notification.retractable) {
-        this.retractable.set(notification.runId, banner);
+      if (retractKey !== null) {
+        this.retractable.set(retractKey, banner);
       }
       return true;
     } catch (err) {
@@ -236,7 +288,10 @@ export class NotificationService {
    * click is most likely to arrive precisely when the window is behind
    * something else or minimized.
    */
-  private activate(runId: string, target: NotificationTarget): void {
+  private activate(
+    activation: NotificationActivation,
+    target: NotificationTarget,
+  ): void {
     const { window } = target;
     if (window && !window.isDestroyed()) {
       // `restore` first: on macOS `show`/`focus` on a minimized window raise it
@@ -251,6 +306,6 @@ export class NotificationService {
     // delivered is the callback's own question, and it is the only side that
     // can answer it. Folding it in here would make a raise-the-window failure
     // silently swallow the run as well.
-    target.onActivate(runId);
+    target.onActivate(activation);
   }
 }

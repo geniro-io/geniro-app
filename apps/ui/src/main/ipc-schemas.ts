@@ -27,6 +27,7 @@ import {
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
 } from '../shared/contracts';
+import { SEARCH_MODEL_FAILURE_REASONS } from '../shared/search-model';
 import { THEME_PREFERENCES } from '../shared/themes';
 
 /**
@@ -326,6 +327,15 @@ export const memorySchema = z.strictObject({
   nativeMemoryOff: z.boolean(),
 });
 
+export const semanticSearchSchema = z.strictObject({
+  enabled: z.boolean(),
+});
+
+/** The one boolean `setSearchByMeaning` takes. */
+export const searchByMeaningSchema = z.boolean();
+
+export const searchModelFailureSchema = z.enum(SEARCH_MODEL_FAILURE_REASONS);
+
 /**
  * One CLI and everything it runs with for a lessons reflection or its check.
  * TWIN PARSER: `LessonModelChoiceSchema` in `apps/daemon/src/v1/lessons/lessons.types.ts`.
@@ -504,6 +514,7 @@ export const settingsPatchSchema = z.strictObject({
   memory: memorySchema.optional(),
   lessons: lessonsSchema.optional(),
   knowledge: knowledgeSchema.optional(),
+  semanticSearch: semanticSearchSchema.optional(),
   resourceAlerts: resourceAlertsSchema.optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can

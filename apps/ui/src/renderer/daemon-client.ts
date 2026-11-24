@@ -1198,6 +1198,38 @@ export function parseKnowledgeChanged(
 }
 
 /**
+ * A change to the search index that may have moved its status. Carries no
+ * figures: a reader asks `GET /v1/embeddings/status` for those.
+ */
+export interface EmbeddingsChangedEvent {
+  reason: 'config' | 'progress' | 'state' | 'cleared';
+}
+
+const EMBEDDINGS_CHANGE_REASONS: readonly EmbeddingsChangedEvent['reason'][] = [
+  'config',
+  'progress',
+  'state',
+  'cleared',
+];
+
+/**
+ * Read an `embeddings_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `EmbeddingsChangedEvent`
+ * (`apps/daemon/src/v1/embeddings/embeddings.types.ts`). Change one and change the other.
+ */
+export function parseEmbeddingsChanged(
+  data: unknown,
+): EmbeddingsChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { reason } = data as Record<string, unknown>;
+  const known = EMBEDDINGS_CHANGE_REASONS.find((name) => name === reason);
+  return known === undefined ? null : { reason: known };
+}
+
+/**
  * Read a `memory_changed` payload, or null when it is not one.
  *
  * TWIN PARSER: mirrors the daemon's `MemoryChangedEvent`
@@ -1515,6 +1547,9 @@ export class DaemonClient {
   private readonly knowledgeChangedListeners = new Set<
     (event: KnowledgeChangedEvent) => void
   >();
+  private readonly embeddingsChangedListeners = new Set<
+    (event: EmbeddingsChangedEvent) => void
+  >();
   private readonly threadMessagesChangedListeners = new Set<
     (event: ThreadMessagesChangedEvent) => void
   >();
@@ -1721,6 +1756,14 @@ export class DaemonClient {
         if (project) {
           for (const listener of this.projectsChangedListeners) {
             listener(project);
+          }
+        }
+      }
+      if (event === 'embeddings_changed') {
+        const embeddings = parseEmbeddingsChanged(data);
+        if (embeddings) {
+          for (const listener of this.embeddingsChangedListeners) {
+            listener(embeddings);
           }
         }
       }
@@ -1971,6 +2014,16 @@ export class DaemonClient {
     this.projectsChangedListeners.add(listener);
     return () => {
       this.projectsChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every change to the search index's status, client-wide. */
+  onEmbeddingsChanged(
+    listener: (event: EmbeddingsChangedEvent) => void,
+  ): () => void {
+    this.embeddingsChangedListeners.add(listener);
+    return () => {
+      this.embeddingsChangedListeners.delete(listener);
     };
   }
 

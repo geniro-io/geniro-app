@@ -42,7 +42,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -122,6 +122,56 @@ function machOWithoutArm64(dir) {
     }
   }
   return found;
+}
+
+/**
+ * The search model's runtime ships every platform's binaries, a second copy of
+ * its library under its versioned name, and two packages only its installer
+ * reads; the app runs on darwin-arm64 and loads `@rpath/libonnxruntime.1.dylib`.
+ */
+function pruneSearchRuntime(modules) {
+  const onnx = join(modules, 'onnxruntime-node', 'bin', 'napi-v6');
+  if (!existsSync(join(onnx, 'darwin', 'arm64', 'libonnxruntime.1.dylib'))) {
+    throw new Error(`onnxruntime-node's darwin-arm64 library is missing from ${onnx}`);
+  }
+  for (const platform of ['linux', 'win32']) {
+    rmSync(join(onnx, platform), { recursive: true, force: true });
+  }
+  rmSync(join(onnx, 'darwin', 'arm64', 'libonnxruntime.1.30.0.dylib'), { force: true });
+  for (const name of ['adm-zip', 'global-agent']) {
+    rmSync(join(modules, name), { recursive: true, force: true });
+  }
+  for (const name of readdirSync(modules)) {
+    if (name.startsWith('sqlite-vec-') && name !== 'sqlite-vec-darwin-arm64') {
+      rmSync(join(modules, name), { recursive: true, force: true });
+    }
+  }
+  if (!existsSync(join(modules, 'sqlite-vec-darwin-arm64', 'vec0.dylib'))) {
+    throw new Error(`sqlite-vec's darwin-arm64 extension is missing from ${modules}`);
+  }
+}
+
+const FOREIGN_NATIVE_EXTENSIONS = new Set(['.node', '.so', '.dll']);
+
+function isElfOrPe(path) {
+  const head = Buffer.alloc(4);
+  const fd = openSync(path, 'r');
+  try {
+    if (readSync(fd, head, 0, 4, 0) < 4) {
+      return false;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return head.readUInt32BE(0) === 0x7f454c46 || head.readUInt16BE(0) === 0x4d5a;
+}
+
+/** Linux and Windows native addons the packages ship as prebuilds; nothing on macOS loads them. */
+function foreignNativeBinaries(dir) {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && FOREIGN_NATIVE_EXTENSIONS.has(extname(entry.name)))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter(isElfOrPe);
 }
 
 function assertEveryMachOHasArm64(app) {
@@ -258,6 +308,7 @@ try {
     recursive: true,
     force: true,
   });
+  pruneSearchRuntime(join(daemonDir, 'node_modules'));
   for (const modules of [
     join(daemonDir, 'node_modules'),
     join(appDir, 'node_modules'),
@@ -271,6 +322,10 @@ try {
     // The packages ship prebuilds for every platform, darwin-x64 among them.
     for (const { path, archs } of machOWithoutArm64(modules)) {
       console.log(`removing ${archs.join(' ')}-only ${path}`);
+      rmSync(path);
+    }
+    for (const path of foreignNativeBinaries(modules)) {
+      console.log(`removing non-macOS ${path}`);
       rmSync(path);
     }
   }

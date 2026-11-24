@@ -79,6 +79,8 @@ import {
   pullRequestRefsSchema,
   retractNotificationSchema,
   revealPathSchema,
+  searchByMeaningSchema,
+  searchModelFailureSchema,
   settingsPatchSchema,
   storageEntryNameSchema,
   storageEntryNamesSchema,
@@ -99,7 +101,10 @@ import {
 } from './line-measurement-flush';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
-import { NotificationService } from './notifications/notifications.service';
+import {
+  NotificationService,
+  type NotificationTarget,
+} from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
 import type { RemoteAccess } from './remote/remote-access';
 import { revealPath } from './reveal-path';
@@ -107,6 +112,7 @@ import { saveArtifact } from './save-artifact';
 import { saveChatExport } from './save-chat-export';
 import { saveKnowledgeExport } from './save-knowledge-export';
 import { saveMemoryExport } from './save-memory-export';
+import type { SearchModelService } from './search-model/search-model.service';
 import { readSettings, updateSettings } from './settings';
 import { showInFinder } from './show-in-finder';
 import type { TerminalSessions } from './terminal-sessions';
@@ -220,6 +226,7 @@ function redactRemoteAccessForRemote(value: unknown): unknown {
 export function registerIpc(
   supervisor: DaemonSupervisor,
   updates: UpdateService,
+  searchModel: SearchModelService,
   terminals: TerminalSessions,
   remoteAccess?: () => RemoteAccess,
   /** Told after a restart from Settings, which the supervisor's `onStarted` does not cover. */
@@ -421,6 +428,7 @@ export function registerIpc(
       'memoryAutoForgetAfterDays',
       'memoryRemoveNotUseful',
       'resourceAlerts',
+      'semanticSearch',
       'sharing',
     ],
     'sets a field the desktop alone may set',
@@ -544,6 +552,46 @@ export function registerIpc(
     IPC.relaunchForUpdate,
     denyRemotely('quits and relaunches the app on the computer running geniro'),
     () => updates.relaunch(),
+  );
+
+  // Reads answer the same to every caller. Every write is the desktop's alone:
+  // the download and the files it leaves are main's own work on this computer.
+  handle(IPC.getSearchModelState, ALLOW_REMOTELY, () => searchModel.getState());
+  handle(
+    IPC.setSearchByMeaning,
+    denyRemotely(
+      'turns search by meaning on or off on the computer running geniro',
+    ),
+    (_event, enabled: unknown) =>
+      searchModel.setEnabled(searchByMeaningSchema.parse(enabled)),
+  );
+  handle(
+    IPC.cancelSearchModelDownload,
+    denyRemotely(
+      'cancels the search model download on the computer running geniro',
+    ),
+    () => searchModel.cancel(),
+  );
+  handle(
+    IPC.retrySearchModelDownload,
+    denyRemotely(
+      'retries the search model download on the computer running geniro',
+    ),
+    () => searchModel.retry(),
+  );
+  handle(
+    IPC.updateSearchModel,
+    denyRemotely(
+      'downloads a newer search model on the computer running geniro',
+    ),
+    () => searchModel.update(),
+  );
+  handle(
+    IPC.deleteSearchModel,
+    denyRemotely(
+      'deletes the search model and its index on the computer running geniro',
+    ),
+    () => searchModel.deleteModel(),
   );
 
   handle(IPC.getGitInfo, ALLOW_REMOTELY, (_event, dir: unknown) =>
@@ -867,23 +915,30 @@ export function registerIpc(
   // never the verdict. Acts on the SENDER's own window, like toggleDevTools: a
   // notification cannot be aimed at another window, and the click has to raise
   // the window whose renderer asked for it.
+  const notificationTargetOf = (
+    event: IpcMainInvokeEvent,
+  ): NotificationTarget => ({
+    window: BrowserWindow.fromWebContents(event.sender),
+    onActivate: (activation) => {
+      // Back into the same renderer, so it can open what the banner named.
+      // Guarded: the window can be gone by the time a banner posted minutes ago
+      // is clicked, and a send into that gap throws.
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(IPC.onNotificationActivated, activation);
+      }
+    },
+  });
+
   handle(
     IPC.notify,
     denyRemotely(
       "posts a notification owned by the calling window and reports its click back to that window's WebContents",
     ),
     (event, input: unknown) => {
-      notifications.post(notificationSchema.parse(input), {
-        window: BrowserWindow.fromWebContents(event.sender),
-        onActivate: (runId) => {
-          // Back into the same renderer, so it can open the thread the banner
-          // named. Guarded: the window can be gone by the time a banner posted
-          // minutes ago is clicked, and a send into that gap throws.
-          if (!event.sender.isDestroyed()) {
-            event.sender.send(IPC.onNotificationActivated, runId);
-          }
-        },
-      });
+      notifications.post(
+        notificationSchema.parse(input),
+        notificationTargetOf(event),
+      );
     },
   );
 
@@ -901,15 +956,20 @@ export function registerIpc(
     denyRemotely(
       "posts a notification owned by the calling window and reports its click back to that window's WebContents",
     ),
-    (event) =>
-      notifications.testPost({
-        window: BrowserWindow.fromWebContents(event.sender),
-        onActivate: (runId) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send(IPC.onNotificationActivated, runId);
-          }
-        },
-      }),
+    (event) => notifications.testPost(notificationTargetOf(event)),
+  );
+
+  handle(
+    IPC.notifySearchModelFailed,
+    denyRemotely(
+      "posts a notification owned by the calling window and reports its click back to that window's WebContents",
+    ),
+    (event, reason: unknown) => {
+      notifications.postSearchModelFailure(
+        searchModelFailureSchema.parse(reason),
+        notificationTargetOf(event),
+      );
+    },
   );
 
   // No input at all, and that is the point — see the module's own doc block.

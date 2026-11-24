@@ -19,6 +19,7 @@ A feature module (`apps/daemon/src/v1/<name>/`) keeps only `<name>.module.ts` an
 - `adapters/` — CLI adapters (see `agent-adapters.md`); a CLI's own services live in its adapter directory, not `services/`.
 - `gateways/` — Socket.IO gateways.
 - `tools/` — geniro's MCP tools, `v1/mcp/` only (see `mcp-tools.md`).
+- `worker/` — the entry and code of a child process the module runs, `v1/embeddings/` only (see `daemon-embeddings.md`); nothing in it is imported by the daemon's Nest graph except its types and the `node:sqlite` dialect.
 - `__tests__/` — test-only helpers (below); never the specs themselves.
 
 Rules:

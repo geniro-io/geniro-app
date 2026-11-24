@@ -178,6 +178,28 @@ describe('StorageService', () => {
     expect(usage.unclaimed).toEqual([]);
   });
 
+  it('files the search index and its database sidecar files under the search index, never as leftovers', async () => {
+    write(join(root, 'embeddings.db'), 4_000);
+    write(join(root, 'embeddings.db-wal'), 1_000);
+    write(join(root, 'embeddings.db-shm'), 1_000);
+    write(join(root, 'embeddings.db-journal'), 1_000);
+
+    const usage = await service.usage();
+
+    expect(
+      group(usage, 'searchIndex')
+        ?.entries.map((e) => e.name)
+        .sort(),
+    ).toEqual([
+      'embeddings.db',
+      'embeddings.db-journal',
+      'embeddings.db-shm',
+      'embeddings.db-wal',
+    ]);
+    expect(group(usage, 'leftovers')?.entries ?? []).toEqual([]);
+    expect(usage.unclaimed).toEqual([]);
+  });
+
   it('counts team backups apart from the teams and never twice', async () => {
     write(join(root, 'teams', 'a.team.yaml'), 100);
     write(join(root, 'teams', '.backups', 'a.2026.yaml'), 50_000);

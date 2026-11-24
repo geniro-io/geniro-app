@@ -9,6 +9,7 @@ import {
   parseCommandCenterChanged,
   parseCommandCenterContact,
   parseDeletedRunId,
+  parseEmbeddingsChanged,
   parseKnowledgeChanged,
   parseLessonsChanged,
   parseMemoryChanged,
@@ -1199,6 +1200,21 @@ describe('parseBackgroundJobsChanged — the background_jobs_changed twin', () =
     expect(parseBackgroundJobsChanged(null)).toBeNull();
     expect(parseBackgroundJobsChanged({})).toBeNull();
     expect(parseBackgroundJobsChanged({ kind: 3 })).toBeNull();
+  });
+});
+
+describe('parseEmbeddingsChanged — the embeddings_changed twin', () => {
+  it('reads each reason the index reports', () => {
+    for (const reason of ['config', 'progress', 'state', 'cleared']) {
+      expect(parseEmbeddingsChanged({ reason })).toEqual({ reason });
+    }
+  });
+
+  it('refuses a reason the daemon does not send, and anything that is not an object', () => {
+    expect(parseEmbeddingsChanged(null)).toBeNull();
+    expect(parseEmbeddingsChanged({})).toBeNull();
+    expect(parseEmbeddingsChanged({ reason: 'rebuilt' })).toBeNull();
+    expect(parseEmbeddingsChanged({ reason: 3 })).toBeNull();
   });
 });
 

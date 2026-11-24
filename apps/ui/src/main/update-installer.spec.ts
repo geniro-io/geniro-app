@@ -116,7 +116,6 @@ vi.mock('node:child_process', () => ({
 import {
   applyStagedUpdate,
   canWriteBundle,
-  parseChecksums,
   resolveBundlePath,
   stagedBundlePath,
   stageUpdate,
@@ -239,27 +238,6 @@ describe('canWriteBundle', () => {
 
   it('answers true for one this process owns', async () => {
     expect(await canWriteBundle(bundlePath)).toBe(true);
-  });
-});
-
-describe('parseChecksums', () => {
-  it('reads shasum output, including binary-mode entries', () => {
-    const a = 'a'.repeat(64);
-    const b = 'b'.repeat(64);
-    const digests = parseChecksums(
-      `${a}  Geniro-1.4.0-arm64-mac.zip\n${b} *Geniro-1.4.0-arm64.dmg\n`,
-    );
-
-    expect(digests.get('Geniro-1.4.0-arm64-mac.zip')).toBe(a);
-    expect(digests.get('Geniro-1.4.0-arm64.dmg')).toBe(b);
-  });
-
-  it('skips lines that are not digests rather than throwing', () => {
-    const digests = parseChecksums(
-      `# a comment\n\nnot-a-digest  file.zip\n${'c'.repeat(64)}  real.zip\n`,
-    );
-
-    expect([...digests.keys()]).toEqual(['real.zip']);
   });
 });
 

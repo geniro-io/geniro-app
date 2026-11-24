@@ -1,8 +1,13 @@
-import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
+import {
+  Injectable,
+  type OnApplicationShutdown,
+  Optional,
+} from '@nestjs/common';
 
 import { environment } from '../environments';
 import { AgentSessionRegistry } from '../v1/agents/services/agent-session.registry';
 import { ProcessRegistry } from '../v1/agents/services/process-registry';
+import { EmbeddingProcessService } from '../v1/embeddings/services/embedding-process.service';
 import { removePidfile } from './pidfile';
 
 /**
@@ -23,6 +28,7 @@ export class PidfileLifecycle implements OnApplicationShutdown {
   constructor(
     private readonly processes: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
+    @Optional() private readonly embeddings?: EmbeddingProcessService,
   ) {}
 
   async onApplicationShutdown(): Promise<void> {
@@ -31,6 +37,7 @@ export class PidfileLifecycle implements OnApplicationShutdown {
     // whole drain window, and keeps the close listeners suppressed.
     const drained = this.processes.drain();
     this.sessions.closeAll();
+    this.embeddings?.closeAll();
     await drained;
     removePidfile(environment.pidfilePath);
   }

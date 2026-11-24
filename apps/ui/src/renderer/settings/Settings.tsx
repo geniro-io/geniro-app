@@ -16,6 +16,7 @@ import {
   RadioTower,
   ScanSearch,
   ScrollText,
+  Search,
   Share2,
   SlidersHorizontal,
   Smartphone,
@@ -111,6 +112,7 @@ import {
   type NewConfigProfileRequest,
 } from './new-config-profile-dialog';
 import { RemoteAccess } from './remote-access';
+import { SearchSettings } from './search';
 import { Sharing } from './sharing';
 import { Storage } from './storage';
 import { SystemAnalysisPage } from './system-analysis';
@@ -249,6 +251,7 @@ export type SettingsSection =
   | 'sharing'
   | 'memory'
   | 'knowledge'
+  | 'search'
   | 'system-analysis'
   | 'storage'
   | 'changelog';
@@ -273,6 +276,7 @@ const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
   sharing: Share2,
   memory: Brain,
   knowledge: BookOpen,
+  search: Search,
   'system-analysis': ScanSearch,
   storage: HardDrive,
   changelog: Sparkles,
@@ -298,6 +302,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   sharing: 'Sharing',
   memory: 'Memory',
   knowledge: 'Knowledge',
+  search: 'Search',
   'system-analysis': 'System analysis',
   storage: 'Storage',
   changelog: 'What’s new',
@@ -319,6 +324,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'The notes every agent shares, whatever its CLI — saved by agents as they work, or by you. New chats list the ones you wrote, imported or approved.',
   knowledge:
     'The documents agents read and save, whatever their CLI. How they may save is set below.',
+  search:
+    'How agents find notes, knowledge documents and chats — by their words and by what they mean.',
   'system-analysis':
     'An agent reads the troubled threads of a period — flags agents raised, failed tools, unmet goals, Geniro’s own analyses — and proposes what to fix in Geniro, your agent instructions and memory.',
   sharing:
@@ -337,6 +344,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sharing',
   'memory',
   'knowledge',
+  'search',
   'system-analysis',
   'storage',
   'changelog',
@@ -1529,7 +1537,10 @@ export function Settings({
           ) : section === 'sharing' ? (
             <Sharing api={apis?.shares ?? null} />
           ) : section === 'storage' ? (
-            <Storage api={apis?.storage ?? null} />
+            <Storage
+              api={apis?.storage ?? null}
+              search={apis?.embeddings ?? null}
+            />
           ) : section === 'memory' ? (
             <Memory
               api={apis?.memories ?? null}
@@ -1548,6 +1559,8 @@ export function Settings({
             />
           ) : section === 'knowledge' ? (
             <Knowledge />
+          ) : section === 'search' ? (
+            <SearchSettings api={apis?.embeddings ?? null} events={client} />
           ) : section === 'changelog' ? (
             <ChangelogPage
               releases={CHANGELOG}

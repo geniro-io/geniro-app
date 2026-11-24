@@ -9429,9 +9429,9 @@ export function Chats({
     () =>
       isHosted
         ? undefined
-        : window.geniro.onNotificationActivated((runId) => {
-            if (runId !== '') {
-              handleActivateRun(runId);
+        : window.geniro.onNotificationActivated((activation) => {
+            if (activation.kind === 'run' && activation.runId !== '') {
+              handleActivateRun(activation.runId);
             }
           }),
     [handleActivateRun, isHosted],
@@ -12020,6 +12020,7 @@ export function Chats({
                 <GlobalChatSearchDialog
                   open={globalSearchOpen}
                   chatApi={chatApi}
+                  embeddingsApi={apis.embeddings}
                   onClose={() => setGlobalSearchOpen(false)}
                   onJump={openGlobalSearchHit}
                 />

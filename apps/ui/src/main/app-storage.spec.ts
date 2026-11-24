@@ -106,6 +106,39 @@ describe('readAppStorage', () => {
     ]);
     expect(usage.worktrees[1]!.bytes).toBeGreaterThanOrEqual(40_000);
   });
+
+  it('sizes the search model folder on its own, never among the window data', async () => {
+    write(
+      join(mocks.userData, 'models', 'embeddinggemma-2-daa72c5', 'model.bin'),
+      20_000,
+    );
+    write(join(mocks.userData, 'Cookies'), 10_000);
+
+    const usage = await readAppStorage(
+      mocks.userData,
+      ['models', 'Cookies'],
+      (ids) => Promise.resolve(new Set(ids)),
+    );
+
+    expect(usage.appData.map((entry) => entry.name)).toEqual(['Cookies']);
+    expect(usage.searchModel).toEqual({
+      name: 'models',
+      bytes: expect.any(Number),
+    });
+    expect(usage.searchModel!.bytes).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it('reports no search model when no models folder is on disk', async () => {
+    write(join(mocks.userData, 'Cookies'), 10_000);
+
+    const usage = await readAppStorage(
+      mocks.userData,
+      ['models', 'Cookies'],
+      (ids) => Promise.resolve(new Set(ids)),
+    );
+
+    expect(usage.searchModel).toBeNull();
+  });
 });
 
 describe('readAppStorage — browser jars', () => {

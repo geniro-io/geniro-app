@@ -1,7 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import {
+  EMBEDDING_CHAT_KNN_MAX,
+  EMBEDDING_CHAT_KNN_PER_HIT,
+} from '../../embeddings/embeddings.types';
+import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
+import { fuseRanks } from '../../embeddings/utils/rrf';
 import { snippetAround } from '../adapters/utils/session-search.utils';
 import {
   type ChatContextItem,
@@ -9,6 +15,7 @@ import {
   ChatContextQuerySchema,
   type ChatContextResult,
   type ChatContextRow,
+  type ChatTextMatch,
   type GlobalChatSearchQuery,
   GlobalChatSearchQuerySchema,
   type GlobalChatSearchResult,
@@ -29,11 +36,16 @@ import { messageText } from '../utils/message-preview';
  *
  * Matching is SQLite's own full-text index (`db/chat-text-index.ddl.ts`),
  * which the database keeps current inside every write: a message is
- * searchable the moment it is stored, with nothing to index later.
+ * searchable the moment it is stored, with nothing to index later. With search
+ * by meaning on, those word matches are fused with the nearest messages by
+ * meaning, and `score` becomes the fused relevance in (0, 1].
  */
 @Injectable()
 export class GlobalChatSearchService {
-  constructor(private readonly index: ChatSearchIndexDao) {}
+  constructor(
+    private readonly index: ChatSearchIndexDao,
+    @Optional() private readonly embeddings?: EmbeddingIndexService,
+  ) {}
 
   async search(input: GlobalChatSearchQuery): Promise<GlobalChatSearchResult> {
     const options = GlobalChatSearchQuerySchema.parse(input);
@@ -44,19 +56,22 @@ export class GlobalChatSearchService {
     // One more than asked for, only to learn whether there ARE more.
     const rows = await this.index.match(options, matchQuery, options.limit + 1);
     const terms = chatTextQueryTerms(options.query);
+    const fused = await this.fusedWithMeaning(options, rows);
+    if (fused !== null) {
+      return {
+        hits: fused.slice(0, options.limit).map(({ row, relevance }) => ({
+          ...hitOf(row, terms),
+          score: relevance,
+        })),
+        partialReason:
+          fused.length > options.limit
+            ? `Showing the best ${options.limit} matches — add a word to narrow it.`
+            : null,
+      };
+    }
     return {
       hits: rows.slice(0, options.limit).map((row) => ({
-        runId: row.run_id,
-        itemId: row.id,
-        memberId: row.member_id,
-        title: row.title,
-        cwd: row.cwd,
-        archived: row.archived_at !== null,
-        seq: row.seq,
-        kind: row.kind,
-        role: row.role,
-        snippet: snippetOf(row.text, terms),
-        createdAt: new Date(row.created_at).toISOString(),
+        ...hitOf(row, terms),
         // bm25 is negative and smaller is better; the wire says higher is.
         score: -row.rank,
       })),
@@ -65,6 +80,60 @@ export class GlobalChatSearchService {
           ? `Showing the best ${options.limit} matches — add a word to narrow it.`
           : null,
     };
+  }
+
+  /**
+   * The word matches fused with the nearest messages by meaning, best first,
+   * or null when search by meaning is off or cannot answer.
+   */
+  private async fusedWithMeaning(
+    options: GlobalChatSearchQuery,
+    rows: readonly ChatTextMatch[],
+  ): Promise<{ row: Omit<ChatTextMatch, 'rank'>; relevance: number }[] | null> {
+    if (!this.embeddings?.enabled) {
+      return null;
+    }
+    const k = Math.min(
+      EMBEDDING_CHAT_KNN_MAX,
+      EMBEDDING_CHAT_KNN_PER_HIT * options.limit,
+    );
+    const scoped = Boolean(options.runId) || Boolean(options.cwd);
+    const meaning = await this.embeddings
+      .searchChats(
+        options.query,
+        k,
+        scoped ? await this.index.reachableRunIds(options) : null,
+      )
+      .catch(() => null);
+    if (meaning === null) {
+      return null;
+    }
+    const known = new Map<string, Omit<ChatTextMatch, 'rank'>>(
+      rows.map((row) => [row.id, row]),
+    );
+    const reachable = await this.index.meaningHitsAmong(
+      options,
+      meaning.map((hit) => hit.itemId).filter((id) => !known.has(id)),
+    );
+    for (const row of reachable) {
+      known.set(row.id, row);
+    }
+    const relevance = fuseRanks([
+      { ids: rows.map((row) => row.id), weight: 1 },
+      {
+        ids: meaning.map((hit) => hit.itemId).filter((id) => known.has(id)),
+        weight: 1,
+      },
+    ]);
+    return [...relevance]
+      .flatMap(([id, score]) => {
+        const row = known.get(id);
+        return row ? [{ row, relevance: score }] : [];
+      })
+      .sort(
+        (a, b) =>
+          b.relevance - a.relevance || b.row.created_at - a.row.created_at,
+      );
   }
 
   /** The messages around one row of a conversation, in order. */
@@ -109,6 +178,22 @@ const SNIPPET_CHARS = 240;
  * BEFORE it is cut: a credential spans several words, so a window edge inside
  * one would leave a fragment `redactSecrets` no longer recognises.
  */
+function hitOf(row: Omit<ChatTextMatch, 'rank'>, terms: readonly string[]) {
+  return {
+    runId: row.run_id,
+    itemId: row.id,
+    memberId: row.member_id,
+    title: row.title,
+    cwd: row.cwd,
+    archived: row.archived_at !== null,
+    seq: row.seq,
+    kind: row.kind,
+    role: row.role,
+    snippet: snippetOf(row.text, terms),
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
 function snippetOf(text: string, terms: readonly string[]): string {
   const redacted = redactSecrets(text);
   // A plain lowercase search finds most words; the fold below walks the

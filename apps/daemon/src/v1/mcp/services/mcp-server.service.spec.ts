@@ -984,7 +984,7 @@ describe('McpServerService', () => {
         );
         expect(both.isError).toBe(true);
         expect(both.content[0]!.text).toBe(
-          'INVALID_ARGS: send ids (a list of handles) or id (one handle), not both',
+          'INVALID_ARGS: call memory_read({ids: ["m12"]}) — at most 3 handles.\nsend ids (a list of handles) or id (one handle), not both',
         );
 
         const { json } = await post(

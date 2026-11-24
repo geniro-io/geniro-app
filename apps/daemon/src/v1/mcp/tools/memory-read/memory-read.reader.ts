@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   MEMORY_HANDLE_PATTERN,
+  MEMORY_READ_CALL,
   MEMORY_READ_MAX,
   MEMORY_RESULT_PREFACE,
   type MemoryEntry,
@@ -41,6 +42,18 @@ export interface MemoryReadArgs {
  * handles a stored call asked for; a field accepted here is read there too.
  */
 export function readMemoryReadArgs(
+  args: Record<string, unknown>,
+): ToolArgs<MemoryReadArgs> {
+  const read = readHandleArgs(args);
+  return read.ok
+    ? read
+    : {
+        ok: false,
+        error: `call ${MEMORY_READ_CALL} — at most ${MEMORY_READ_MAX} handles.\n${read.error}`,
+      };
+}
+
+function readHandleArgs(
   args: Record<string, unknown>,
 ): ToolArgs<MemoryReadArgs> {
   const read = readToolArgs(MemoryReadArgsSchema, args);

@@ -84,6 +84,7 @@ export function callSurfaceText(
   questionToolName: string | null,
   /** Whether this turn answers a call — see `ANSWERING_WITH_CALLS_OUT`. */
   answeringACall: boolean,
+  serverName: string,
 ): string {
   const lines = callees.map(
     (callee) => `- ${calleeSummary(callee, CALLEE_DESCRIPTION_MAX)}`,
@@ -92,7 +93,7 @@ export function callSurfaceText(
     questionToolName !== null
       ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionToolName} tool and relay their answer. Then collect the final result with await_agent.`
       : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-  return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_WITH_CALLS_OUT}` : ''}`;
+  return `May call (via the call_agent tool of MCP server ${serverName}, listed as mcp__${serverName}__call_agent; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.\nWhen you learn something that changes a RUNNING call's work — the user corrects what they asked for — send it into that call at once with message_agent(call_id, message) instead of waiting for the call to finish.\nWhen a call has become POINTLESS — its premise refuted, its task withdrawn, or its own output showing it is building the wrong thing — stop it with cancel_agent(call_id, reason) and say so to the user. A slow callee is not that case: check in with await_agent(timeout_ms) instead.\nBefore continuing an earlier conversation with call_agent(thread), above all after a pause, check it with list_agent_threads. ${COLD_RESUME_RULE}${answeringACall ? `\n${ANSWERING_WITH_CALLS_OUT}` : ''}`;
 }
 
 /**
@@ -131,6 +132,7 @@ export function memberInstructionFields(
     /** The config of the CLI the member's turn runs on. */
     config: Pick<AdapterConfig, 'mcp' | 'questionToolName'>;
     stageMap: string | null;
+    serverName: string;
   },
 ): Pick<
   TurnInstructionInput,
@@ -141,7 +143,7 @@ export function memberInstructionFields(
   | 'answeringACallPrompt'
   | 'callSurfacePrompt'
 > {
-  const { callees, config, answeringACall } = context;
+  const { callees, config, answeringACall, serverName } = context;
   return {
     instructionBlocks: joinInstructionBlocks(context.blocks),
     stageMapPrompt: callToolsAdmitted(config) ? context.stageMap : null,
@@ -151,7 +153,12 @@ export function memberInstructionFields(
     // block to carry it.
     answeringACallPrompt: answeringACall ? ANSWERING_A_CALL : null,
     callSurfacePrompt: holdsCallTools(callees, config)
-      ? callSurfaceText(callees, config.questionToolName, answeringACall)
+      ? callSurfaceText(
+          callees,
+          config.questionToolName,
+          answeringACall,
+          serverName,
+        )
       : null,
   };
 }

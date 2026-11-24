@@ -7,6 +7,7 @@ import {
   approxInstructionTokens,
   joinTurnInstructionParts,
 } from '../../agents/utils/agent-instructions';
+import { hostMcpServerName } from '../../agents/utils/host-question';
 import type {
   AgentInstructionSize,
   ComposedInstructionBlock,
@@ -26,6 +27,9 @@ import {
 import { stageMapOf } from '../utils/stage-text';
 import { applyTeamOverlay } from '../utils/team-overlay';
 import { calleesOf, onDemandMemberIds } from '../utils/team-roster';
+
+// A run's server name is eight characters of its run id; a readout has no run, so it measures a name of that length.
+const READOUT_SERVER_NAME = hostMcpServerName('00000000');
 
 /** What every run in one project carries, whatever its CLI or team. */
 export interface ProjectInstructionSizesInput {
@@ -161,6 +165,7 @@ export class InstructionSizesService {
           answeringACall: context.answeringACall,
           config: adapter.getConfig(),
           stageMap: context.stageMap,
+          serverName: READOUT_SERVER_NAME,
         }),
       },
       // As if the CLI's delivery of the call tools succeeded — the turn the

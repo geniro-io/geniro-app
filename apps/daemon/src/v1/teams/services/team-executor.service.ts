@@ -6236,6 +6236,7 @@ export class TeamExecutorService
           answeringACall: callContext !== undefined,
           config: adapter.getConfig(),
           stageMap,
+          serverName: hostMcpServerName(runId),
         }),
         // A PEER of the member's instructions rather than something joined
         // into them: the two are composed by `AgentAdapter.composeSystemPrompt`,

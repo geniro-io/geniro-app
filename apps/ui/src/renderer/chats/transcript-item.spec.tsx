@@ -255,6 +255,76 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('draws a question its caller passed on to the user as its own card with no text or options, saying so', () => {
+    const question = item('call_question', {
+      callId: 'call-1',
+      callerNodeId: 'orch',
+      calleeNodeId: 'epilogue',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+    });
+    const callerCard = {
+      ...item('approval_request', {
+        id: 'req-1',
+        questions: [{ question: 'Which color?', options: [] }],
+      }),
+      id: 'approval-1',
+      seq: 2,
+    };
+    render(
+      <CallAnswerPairsContext.Provider
+        value={pairCallAnswers([question, callerCard])}>
+        <TranscriptItem item={question} nodes={NODES} />
+      </CallAnswerPairsContext.Provider>,
+    );
+    expect(slot('card')?.getAttribute('data-kind')).toBe('asked');
+    expect(slot('title')?.textContent).toBe('Epilogue');
+    expect(slot('text')).toBeNull();
+    expect(container.querySelectorAll('[role="group"] button')).toHaveLength(0);
+    expect(slot('outcome')?.textContent).toContain(
+      'Orchestrator passed this on to you as its own question.',
+    );
+  });
+
+  it('draws a passed-on question once answered with its answer, without its text', () => {
+    const question = item('call_question', {
+      callId: 'call-1',
+      callerNodeId: 'orch',
+      calleeNodeId: 'epilogue',
+      question: 'Which color?',
+      options: ['Red', 'Blue'],
+    });
+    const callerCard = {
+      ...item('approval_request', {
+        id: 'req-1',
+        questions: [{ question: 'Which color?', options: [] }],
+      }),
+      id: 'approval-1',
+      seq: 2,
+    };
+    const answer = {
+      ...item('call_answer', {
+        callId: 'call-1',
+        calleeNodeId: 'epilogue',
+        answer: 'Blue',
+        outcome: 'answered',
+      }),
+      seq: 3,
+    };
+    render(
+      <CallAnswerPairsContext.Provider
+        value={pairCallAnswers([question, callerCard, answer])}>
+        <TranscriptItem item={question} nodes={NODES} />
+      </CallAnswerPairsContext.Provider>,
+    );
+    expect(slot('card')?.getAttribute('data-kind')).toBe('answered');
+    expect(slot('text')).toBeNull();
+    expect(container.querySelectorAll('[role="group"] button')).toHaveLength(0);
+    expect(slot('outcome')?.textContent).toContain(
+      'Orchestrator answered: Blue',
+    );
+  });
+
   it('draws a question whose answer never came as no answer, in red', () => {
     const question = item('call_question', {
       callId: 'call-1',

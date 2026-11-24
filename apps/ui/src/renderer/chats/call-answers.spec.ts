@@ -190,3 +190,84 @@ describe('pairCallAnswers', () => {
     ).toBe(NO_CALL_ANSWER_PAIRS);
   });
 });
+
+describe('pairCallAnswers — a question its caller passed on', () => {
+  const question = row('q1', 1, 'call_question', {
+    callId: 'call-1',
+    callerNodeId: 'orch',
+  });
+  const questionCard = row('p1', 2, 'approval_request', {
+    id: 'req-1',
+    questions: [{ question: 'Which color?', options: [] }],
+  });
+
+  it('marks an open question its caller raised a question card for after it', () => {
+    const pairs = pairCallAnswers([question, questionCard]);
+    expect([...pairs.passedOn]).toEqual(['q1']);
+  });
+
+  it('does not mark a question its caller raised a card for before it was asked', () => {
+    const pairs = pairCallAnswers([
+      { ...questionCard, seq: 1 },
+      { ...question, seq: 2 },
+    ]);
+    expect(pairs.passedOn.size).toBe(0);
+  });
+
+  it('does not mark a question its caller had already answered when it raised a card', () => {
+    const pairs = pairCallAnswers([
+      question,
+      row('a1', 2, 'call_answer', {
+        callId: 'call-1',
+        outcome: 'answered',
+        answer: 'Red',
+      }),
+      row('p1', 3, 'approval_request', {
+        id: 'req-1',
+        questions: [{ question: 'Which color?', options: [] }],
+      }),
+    ]);
+    expect(pairs.passedOn.size).toBe(0);
+  });
+
+  it('does not mark a question when another member raised the card', () => {
+    const pairs = pairCallAnswers([
+      question,
+      { ...questionCard, memberId: 'other' },
+    ]);
+    expect(pairs.passedOn.size).toBe(0);
+  });
+
+  it('does not mark a question for a permission card, or a question card with no questions', () => {
+    expect(
+      pairCallAnswers([
+        question,
+        row('p1', 2, 'approval_request', { id: 'req-1', toolName: 'Write' }),
+      ]).passedOn.size,
+    ).toBe(0);
+    expect(
+      pairCallAnswers([
+        question,
+        row('p1', 2, 'approval_request', { id: 'req-1', questions: [] }),
+      ]).passedOn.size,
+    ).toBe(0);
+  });
+
+  it('keeps a passed-on question marked once its answer is loaded', () => {
+    const pairs = pairCallAnswers([
+      question,
+      questionCard,
+      row('a1', 3, 'call_answer', {
+        callId: 'call-1',
+        outcome: 'answered',
+        answer: 'Red',
+      }),
+    ]);
+    expect(pairs.byQuestion.get('q1')).toEqual({
+      outcome: 'answered',
+      answer: 'Red',
+      noAnswer: null,
+    });
+    expect([...pairs.passedOn]).toEqual(['q1']);
+  });
+});

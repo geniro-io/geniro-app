@@ -59,7 +59,8 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
  * nested work, a run is a conversation — but they share every glyph AND every
  * word, so the translation lives here once rather than as a second table that
  * drifts from `RUN_STATUS_META`. `stopped → cancelled` is the same reading
- * `subagentThreadsByAgent` makes: work that ended without finishing.
+ * `subagentThreadsByAgent` makes: work that ended without finishing. Only its
+ * word differs, in {@link BLOCK_WORD}.
  */
 const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
   queued: 'queued',
@@ -90,6 +91,11 @@ export function BlockStatusIcon({
   return <RunStatusIcon status={RUN_STATUS_OF[status]} className={className} />;
 }
 
+/** A block's word where it differs from its run reading: the agents panel calls a stopped call "stopped". */
+const BLOCK_WORD: Partial<Record<BlockStatus, string>> = {
+  stopped: 'stopped',
+};
+
 /**
  * The block vocabulary's own WORD for a status.
  *
@@ -99,7 +105,7 @@ export function BlockStatusIcon({
  * never spell one ending differently.
  */
 export function blockStatusLabel(status: BlockStatus): string {
-  return RUN_STATUS_META[RUN_STATUS_OF[status]].label;
+  return BLOCK_WORD[status] ?? RUN_STATUS_META[RUN_STATUS_OF[status]].label;
 }
 
 export function StatusBadge({
@@ -121,11 +127,6 @@ export function StatusBadge({
         'rounded px-1.5 py-0.5 text-[10px] font-medium',
         STATUS_BADGE_CLASS[status],
       )}>
-      {/* The RUN vocabulary's word, never this type's own key. A delegate cut
-          off by Stop wore a red `error` pill three lines under a header, a
-          sidebar row and an agent card all reading `cancelled` — one event
-          spelled two ways on one screen, which is what "давай стандартизируем
-          статусы" was reported against. */}
       {blockStatusLabel(status)}
     </span>
   );
@@ -170,12 +171,8 @@ function BlockStatusMark({
       )}
       {/* Both marks are `aria-hidden` glyphs, so the word has to be said
           somewhere: dropping the pill must not take the status off the page for
-          anyone reading it through a screen reader. The RUN vocabulary's word,
-          for the reason the pill uses it — a reader listening to `done` under a
-          header that says `completed` is the same divergence, unseen. */}
-      <span className="sr-only">
-        {RUN_STATUS_META[RUN_STATUS_OF[status]].label}
-      </span>
+          anyone reading it through a screen reader, in the pill's own word. */}
+      <span className="sr-only">{blockStatusLabel(status)}</span>
     </span>
   );
 }

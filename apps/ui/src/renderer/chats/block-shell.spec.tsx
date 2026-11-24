@@ -192,18 +192,17 @@ describe('BlockShell', () => {
     expect(container.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('keeps the WORD for the two statuses a glyph cannot carry, in the RUN vocabulary', () => {
+  it('keeps the WORD for the two statuses a glyph cannot carry', () => {
     // The pill did not go away, it narrowed to where it earns its ink: a
     // failed or abandoned block is what a reader scans a long transcript for,
     // and a red or grey glyph among a column of green checks is not enough to
     // stop on.
     //
-    // What it says is `RUN_STATUS_META`'s word, never this component's own
-    // lifecycle key — a delegate cut off by Stop showed a red `error` pill on
-    // a screen whose header, sidebar row and agent card all read `cancelled`.
+    // A failure says the run's word; a stop says "stopped", the word the
+    // agents panel uses for the same call.
     const word: Record<string, string> = {
       error: 'failed',
-      stopped: 'cancelled',
+      stopped: 'stopped',
     };
     for (const status of ['error', 'stopped'] as const) {
       act(() =>

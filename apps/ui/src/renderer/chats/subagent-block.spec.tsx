@@ -586,7 +586,7 @@ describe('SubagentBlock', () => {
     expect(container.textContent).not.toContain('running Agent');
   });
 
-  it('reports a daemon-confirmed stopped delegate as cancelled', () => {
+  it('reports a daemon-confirmed stopped delegate as stopped', () => {
     act(() =>
       root.render(
         <TranscriptEntryView
@@ -596,7 +596,7 @@ describe('SubagentBlock', () => {
       ),
     );
 
-    expect(badge()?.textContent).toBe('cancelled');
+    expect(badge()?.textContent).toBe('stopped');
     expect(container.querySelector('svg.animate-spin')).toBeNull();
 
     act(() => {
@@ -604,7 +604,7 @@ describe('SubagentBlock', () => {
     });
     // Opening the thread neither adds a second reading of the status nor
     // changes the one on the header.
-    expect(badge()?.textContent).toBe('cancelled');
+    expect(badge()?.textContent).toBe('stopped');
     expect(container.textContent).not.toContain('is working...');
   });
 

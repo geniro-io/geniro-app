@@ -19,6 +19,7 @@ import {
   callBlockSummary,
   callBlockTasks,
   callBlockUsage,
+  callResultStatus,
   collectCallBlocks,
   collectSubagentBlocks,
   countTools,
@@ -3382,8 +3383,9 @@ describe('groupTranscript — call blocks', () => {
     ]);
     expect((cancelled[0] as CallBlockEntry).status).toBe('cancelled');
 
-    // A turn whose running row survived a daemon kill, settled by the result.
-    const failed = groupTranscript([
+    // A turn whose running row survived a daemon kill, settled by the result:
+    // the daemon cut it off, so it reads stopped, not failed.
+    const interrupted = groupTranscript([
       startCall('call-2', 'poet'),
       tagged('status', { status: 'running' }, 'poet', 'call-2'),
       item(
@@ -3392,12 +3394,40 @@ describe('groupTranscript — call blocks', () => {
           callId: 'call-2',
           calleeNodeId: 'poet',
           status: 'error',
-          error: 'CALLEE_FAILED: interrupted',
+          error:
+            'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly before the call finished',
         },
         'orch',
       ),
     ]);
-    expect((failed[0] as CallBlockEntry).status).toBe('failed');
+    expect((interrupted[0] as CallBlockEntry).status).toBe('cancelled');
+  });
+
+  it('reads a call an app quit or a daemon stop cut off as cancelled, and every other callee failure as failed', () => {
+    const statusOf = (error: string) =>
+      callResultStatus({ status: 'error', error });
+
+    expect(callResultStatus({ status: 'ok' })).toBe('completed');
+    expect(statusOf('CALLEE_CANCELLED: stopped by manager')).toBe('cancelled');
+    expect(
+      statusOf(
+        'CALLEE_FAILED: interrupted — the app was quit before the call finished',
+      ),
+    ).toBe('cancelled');
+    expect(
+      statusOf(
+        'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly before the call finished',
+      ),
+    ).toBe('cancelled');
+    for (const error of [
+      'CALLEE_FAILED: exit 1',
+      'CALLEE_FAILED[crashed]: the process exited',
+      'CALLEE_FAILED[rate_limited]: usage limit reached',
+      'CALLEE_FAILED[auth_expired]: signed out',
+      'CALLEE_FAILED[daemon_restart]: the daemon stopped again (it restarted) while this call was being continued after an earlier restart',
+    ]) {
+      expect(statusOf(error)).toBe('failed');
+    }
   });
 
   it('an ERROR settle keeps its row inside the block', () => {

@@ -200,7 +200,7 @@ export class CommandCenterChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Bring the roster in line with the board's active set and answer that set. */
-  private async syncRoster(managerRunId: string): Promise<RunWire[]> {
+  async syncRoster(managerRunId: string): Promise<RunWire[]> {
     const { runs } = await this.board.activeThreads();
     const rows = await this.roster.listOf(managerRunId);
     const onRoster = new Set(

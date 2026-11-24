@@ -19,8 +19,8 @@ export interface ThreadContextMessage {
 
 /**
  * How a relayed question reads the messages its thread exchanged right
- * before asking. Provided by `Chats`, which holds the daemon handle; null
- * offers no context.
+ * before asking. Provided by `Chats` and by the command center, which hold the
+ * daemon handle; null offers no context.
  */
 export type ThreadContextReader = (
   threadRunId: string,
@@ -30,26 +30,25 @@ export type ThreadContextReader = (
 export const ThreadContextReaderContext =
   createContext<ThreadContextReader | null>(null);
 
+function isAskedBy(row: ItemDto, requestId: string): boolean {
+  return (
+    row.kind === 'approval_request' &&
+    payloadString(row.payload, 'id') === requestId
+  );
+}
+
 /**
- * The last `count` messages of `rows` before the question `requestId` asked,
- * oldest first; before the end of the page when the question is not on it.
+ * The last `count` messages of `rows` sent before `beforeSeq`, oldest first;
+ * of all of them when `beforeSeq` is undefined.
  */
-export function messagesBefore(
+function messagesUpTo(
   rows: readonly ItemDto[],
-  requestId: string | null,
+  beforeSeq: number | undefined,
   count = QUESTION_CONTEXT_MESSAGES,
 ): ThreadContextMessage[] {
-  const asked =
-    requestId === null
-      ? undefined
-      : rows.find(
-          (row) =>
-            row.kind === 'approval_request' &&
-            payloadString(row.payload, 'id') === requestId,
-        );
   const messages: ThreadContextMessage[] = [];
   for (const row of [...rows].sort((a, b) => a.seq - b.seq)) {
-    if (asked !== undefined && row.seq >= asked.seq) {
+    if (beforeSeq !== undefined && row.seq >= beforeSeq) {
       break;
     }
     const text = payloadString(row.payload, 'text')?.trim() ?? '';
@@ -64,16 +63,55 @@ export function messagesBefore(
   return messages.slice(-count);
 }
 
-/** The reader over the daemon's own page of a run's rows: a team run is read in its own flow. */
+/**
+ * The last `count` messages of `rows` before the question `requestId` asked,
+ * oldest first; before the end of the page when the question is not on it.
+ */
+export function messagesBefore(
+  rows: readonly ItemDto[],
+  requestId: string | null,
+  count = QUESTION_CONTEXT_MESSAGES,
+): ThreadContextMessage[] {
+  const asked =
+    requestId === null
+      ? undefined
+      : rows.find((row) => isAskedBy(row, requestId));
+  return messagesUpTo(rows, asked?.seq, count);
+}
+
+/**
+ * The reader over the daemon's pages of a run. A question on the root
+ * conversation's page is answered from that page; one raised inside a member
+ * call is answered from that call's own messages, cut at the question.
+ */
 export function threadContextReaderOf(
-  chats: Pick<DaemonApis['chats'], 'listRunItems'>,
+  chats: Pick<DaemonApis['chats'], 'listRunItems' | 'listCallMessages'>,
 ): ThreadContextReader {
   return async (threadRunId, threadRequestId) => {
-    const { items } = await chats.listRunItems({
+    const { items: root } = await chats.listRunItems({
       runId: threadRunId,
       limit: CONTEXT_PAGE,
       conversation: ListRunItemsConversationEnum.Root,
     });
-    return messagesBefore(items, threadRequestId);
+    if (
+      threadRequestId === null ||
+      root.some((row) => isAskedBy(row, threadRequestId))
+    ) {
+      return messagesBefore(root, threadRequestId);
+    }
+    const { items: run } = await chats.listRunItems({
+      runId: threadRunId,
+      limit: CONTEXT_PAGE,
+    });
+    const asked = run.find((row) => isAskedBy(row, threadRequestId));
+    if (!asked?.inCall) {
+      return messagesBefore(root, threadRequestId);
+    }
+    const { messages } = await chats.listCallMessages({
+      runId: threadRunId,
+      callId: asked.inCall,
+      limit: CONTEXT_PAGE,
+    });
+    return messagesUpTo(messages, asked.seq);
   };
 }

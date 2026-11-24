@@ -768,8 +768,9 @@
  * A wire carries a stream of dots that flows the way the talk goes: out from
  * the manager while the wire is lit after a message, back towards it while
  * the manager awaits that thread's reply. An idle wire only drifts. A node at
- * work breathes a soft glow in its own token, and a node waiting on the user
- * glows in the warning token, so the eye finds what moves without reading.
+ * work runs a bright segment round its border, the manager breathes a glow
+ * while it works, and a node waiting on the user glows in the warning token,
+ * so the eye finds what moves without reading.
  * Colours come from tokens through `color-mix`, so every theme keeps them.
  */
 @keyframes cc-wire-flow {
@@ -798,16 +799,6 @@
   animation: cc-wire-drift 6s linear infinite;
 }
 
-@keyframes cc-breathe-success {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 0%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in oklab, var(--success) 28%, transparent);
-  }
-}
-
 @keyframes cc-breathe-warning {
   0%,
   100% {
@@ -828,8 +819,39 @@
   }
 }
 
-.cc-breathe-success {
-  animation: cc-breathe-success 2.4s ease-in-out infinite;
+@property --cc-orbit-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes cc-running-orbit {
+  to {
+    --cc-orbit-angle: 360deg;
+  }
+}
+
+.cc-running-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--cc-orbit-angle),
+    transparent 0deg 260deg,
+    var(--success) 340deg,
+    transparent 360deg
+  );
+  /* The mask reads only alpha: the token stands in for an opaque layer. */
+  mask-image:
+    linear-gradient(var(--success) 0 0),
+    linear-gradient(var(--success) 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  animation: cc-running-orbit 2s linear infinite;
 }
 
 .cc-breathe-warning {
@@ -886,11 +908,15 @@
   .cc-wire-flow,
   .cc-wire-flow-back,
   .cc-wire-drift,
-  .cc-breathe-success,
   .cc-breathe-warning,
   .cc-breathe-primary,
   .cc-node-in,
-  .cc-flash {
+  .cc-flash,
+  .cc-running-border::before {
     animation: none;
+  }
+
+  .cc-running-border::before {
+    background: var(--success);
   }
 }

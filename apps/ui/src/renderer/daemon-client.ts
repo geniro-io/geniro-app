@@ -1415,6 +1415,7 @@ const COMMAND_CENTER_CHANGE_REASONS = [
   'roster',
   'task',
   'refiled',
+  'start',
 ] as const;
 
 /** Cards of the command center that moved: the board re-reads exactly these. */

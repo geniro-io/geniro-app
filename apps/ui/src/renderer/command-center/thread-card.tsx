@@ -171,7 +171,7 @@ const cardVariants = cva(
     variants: {
       attention: {
         blocked: 'border-destructive/50 bg-destructive/5',
-        working: 'border-success/50 bg-success/5',
+        working: 'border-success/50 bg-success/5 cc-running-border',
         question: 'border-warning/50 bg-warning/10',
         quiet: 'border-border bg-card',
         inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
@@ -313,7 +313,6 @@ export function ThreadCard({
       data-attention={attention}
       className={cn(
         cardVariants({ attention }),
-        attention === 'working' && 'cc-breathe-success',
         onAnswer !== undefined && 'cc-breathe-warning',
       )}
       style={{

@@ -8,6 +8,7 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
+import { BadRequestException } from '@packages/common';
 import {
   afterAll,
   beforeAll,
@@ -51,7 +52,11 @@ import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { startTaskRunSchema } from '../dto/task-run.dto';
 import { Task } from '../entity/task.entity';
-import type { LabelInstructionWire, StartTaskRun } from '../tasks.types';
+import type {
+  LabelInstructionWire,
+  ProjectRunStart,
+  StartTaskRun,
+} from '../tasks.types';
 import {
   AUTOPILOT_APPROVAL,
   RUN_TARGET_PROBLEM_CODE,
@@ -2025,5 +2030,87 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // Otherwise the chat survives naming a card that no longer names it back,
     // with its working directory already pruned by the caller.
     expect(deleteChat).toHaveBeenCalledWith('run-1');
+  });
+
+  describe('a cardless start in a project', () => {
+    const cardless = (
+      over: Partial<ProjectRunStart> = {},
+    ): ProjectRunStart => ({
+      projectId,
+      title: 'Ask the repo',
+      prompt: 'list the open PRs',
+      target: {},
+      cwd: worktree,
+      startedBy: 'user',
+      ...over,
+    });
+
+    it('starts an agent thread in the given folder, filed in the project group, owned by the project and not a card', async () => {
+      const started = await service.startProjectRun(cardless());
+
+      expect(started).toEqual({ runId: 'run-1' });
+      expect(createChat).toHaveBeenCalledTimes(1);
+      expect(createChat.mock.calls[0]![0]).toMatchObject({
+        agentKind: 'claude',
+        cwd: worktree,
+        groupId: 'group-7',
+        projectId,
+        firstMessage: 'list the open PRs',
+      });
+      expect(createChat.mock.calls[0]![0].taskId).toBeUndefined();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('run-1', 'list the open PRs');
+    });
+
+    it('starts a team run for the team the request names, and sends it no second message', async () => {
+      const started = await service.startProjectRun(
+        cardless({ target: { teamSlug: 'dev-team' } }),
+      );
+
+      expect(started).toEqual({ runId: 'wf-run-1' });
+      expect(startTeamRun).toHaveBeenCalledWith(
+        'dev-team',
+        expect.objectContaining({
+          cwd: worktree,
+          groupId: 'group-7',
+          prompt: 'list the open PRs',
+          projectId,
+        }),
+      );
+      expect(createChat).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('refuses a start that names no agent or team, and makes no run', async () => {
+      const bare = await projectDao.create({
+        name: 'No agent',
+        folder: '/tmp/geniro-task-runs-bare',
+      });
+
+      const failure = await service
+        .startProjectRun(cardless({ projectId: bare.id }))
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+
+      expect(failure).toBeInstanceOf(BadRequestException);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining('no agent or team'),
+      });
+      expect(createChat).not.toHaveBeenCalled();
+      expect(startTeamRun).not.toHaveBeenCalled();
+    });
+
+    it('deletes the run it made and rethrows when the opening message fails', async () => {
+      sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+      await expect(service.startProjectRun(cardless())).rejects.toThrow(
+        'agent refused',
+      );
+
+      expect(deleteChat).toHaveBeenCalledWith('run-1');
+      expect(await runDao.getById('run-1')).toBeNull();
+    });
   });
 });

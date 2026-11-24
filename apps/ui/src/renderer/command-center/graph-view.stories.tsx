@@ -51,6 +51,7 @@ const meta = {
     onResizeCard: () => {},
     positions: {},
     onPlaceNode: () => {},
+    onUnplaceNode: () => {},
     onResetLayout: () => {},
     renderCardChat: () => (
       <p className="p-4 text-sm text-muted-foreground">The thread's chat</p>
@@ -74,7 +75,7 @@ type Story = StoryObj<typeof meta>;
 export const Few: Story = {};
 
 /** Twelve threads in their attention bands, the still ones greyed at the bottom. */
-export const Bands: Story = { args: { threads: graphThreadsOf(12) } };
+export const Blocks: Story = { args: { threads: graphThreadsOf(12) } };
 
 /** Thirty threads: the 24 that need the user most, and one "+6 more". */
 export const Crowded: Story = {

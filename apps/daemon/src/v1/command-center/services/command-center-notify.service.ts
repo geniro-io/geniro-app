@@ -31,9 +31,11 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
 import type { CommandCenterColumn } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
+import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
 import { managerWake } from '../utils/manager-wake';
 import { CommandCenterService } from './command-center.service';
+import { CommandCenterChatService } from './command-center-chat.service';
 import { CommandCenterEventBus } from './command-center-events.bus';
 
 const OUTCOME_SUMMARY_MAX = 300;
@@ -117,6 +119,7 @@ export class CommandCenterNotifyService
     private readonly roster: CommandCenterRosterDao,
     private readonly board: CommandCenterService,
     private readonly events: CommandCenterEventBus,
+    private readonly managerChat: CommandCenterChatService,
   ) {}
 
   onModuleInit(): void {
@@ -248,9 +251,11 @@ export class CommandCenterNotifyService
       return;
     }
     const em = this.em.fork();
-    const entry = (await this.roster.listOf(managerRunId, em)).find(
-      (row) => row.threadRunId === runId && row.leftAt === null,
-    );
+    let entry = await this.rosterEntryOf(managerRunId, runId, em);
+    if (entry === undefined && this.approvals.listByRun(runId).length > 0) {
+      await this.managerChat.syncRoster(managerRunId);
+      entry = await this.rosterEntryOf(managerRunId, runId, em);
+    }
     const run = entry === undefined ? null : await this.runOf(runId);
     if (entry === undefined || run === null) {
       this.columns.delete(runId);
@@ -279,6 +284,16 @@ export class CommandCenterNotifyService
         message,
         fields,
       ),
+    );
+  }
+
+  private async rosterEntryOf(
+    managerRunId: string,
+    runId: string,
+    em: EntityManager,
+  ): Promise<CommandCenterRosterEntry | undefined> {
+    return (await this.roster.listOf(managerRunId, em)).find(
+      (row) => row.threadRunId === runId && row.leftAt === null,
     );
   }
 

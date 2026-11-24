@@ -11,6 +11,7 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
 import { commandCenterDb } from '../__tests__/command-center-db';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
+import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
 import { CommandCenterService } from './command-center.service';
 
 const HOUR = 60 * 60_000;
@@ -87,6 +88,7 @@ describe('CommandCenterService.board', () => {
       inbox,
       new TaskDao(db.em),
       new CommandCenterRosterDao(db.em),
+      new CommandCenterThreadStartDao(db.em),
     );
   });
 
@@ -239,6 +241,38 @@ describe('CommandCenterService.board', () => {
       runId: null,
       startRequestedAt: requested,
       startRequestedByRunId: 'someone-else',
+    });
+
+    expect((await service.board()).pendingStarts).toBe(1);
+  });
+
+  it('counts a cardless start the manager asked for that still waits on the user, and no one else’s', async () => {
+    await db.seedRun('manager', { commandCenter: true });
+    const requests = new CommandCenterThreadStartDao(db.em);
+    const cardless = {
+      projectId: 'project-1',
+      title: 'Billing cache',
+      brief: 'Clear the cache',
+      agentKind: null,
+      teamSlug: null,
+      note: null,
+      watch: false,
+      requestedAt: new Date(now - MINUTE),
+    };
+    await requests.create({
+      ...cardless,
+      managerRunId: 'manager',
+      approvedAt: null,
+    });
+    await requests.create({
+      ...cardless,
+      managerRunId: 'manager',
+      approvedAt: new Date(now - MINUTE),
+    });
+    await requests.create({
+      ...cardless,
+      managerRunId: 'someone-else',
+      approvedAt: null,
     });
 
     expect((await service.board()).pendingStarts).toBe(1);

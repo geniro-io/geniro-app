@@ -20,9 +20,11 @@ import type {
   CommandCenterInstructionsConfig,
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
+  CommandCenterThreadStartState,
   CommandCenterTimelineDto,
   RunDto,
   StartCommandCenterChatDto,
+  StartThreadRunDto,
 } from '../models/index';
 
 export interface CommandCenterApiListCommandCenterStartsRequest {
@@ -42,13 +44,22 @@ export interface CommandCenterApiReadCommandCenterBoardRequest {
     runIds?: string;
 }
 
+export interface CommandCenterApiReadCommandCenterThreadStartRequest {
+    startId: string;
+}
+
 export interface CommandCenterApiReportCommandCenterStartFailedRequest {
-    taskId: string;
+    startId: string;
     commandCenterStartFailedDto: CommandCenterStartFailedDto;
 }
 
 export interface CommandCenterApiSetCommandCenterInstructionsRequest {
     commandCenterInstructionsConfig: CommandCenterInstructionsConfig;
+}
+
+export interface CommandCenterApiStartCommandCenterThreadRunRequest {
+    startId: string;
+    startThreadRunDto: StartThreadRunDto;
 }
 
 /**
@@ -277,11 +288,56 @@ export class CommandCenterApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async reportCommandCenterStartFailedRaw(requestParameters: CommandCenterApiReportCommandCenterStartFailedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
-        if (requestParameters['taskId'] == null) {
+    async readCommandCenterThreadStartRaw(requestParameters: CommandCenterApiReadCommandCenterThreadStartRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CommandCenterThreadStartState>> {
+        if (requestParameters['startId'] == null) {
             throw new runtime.RequiredError(
-                'taskId',
-                'Required parameter "taskId" was null or undefined when calling reportCommandCenterStartFailed().'
+                'startId',
+                'Required parameter "startId" was null or undefined when calling readCommandCenterThreadStart().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/command-center/starts/{startId}`;
+        urlPath = urlPath.replace(`{${"startId"}}`, encodeURIComponent(String(requestParameters['startId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readCommandCenterThreadStart(requestParameters: CommandCenterApiReadCommandCenterThreadStartRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterThreadStartState> {
+        const response = await this.readCommandCenterThreadStartRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reportCommandCenterStartFailedRaw(requestParameters: CommandCenterApiReportCommandCenterStartFailedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
+        if (requestParameters['startId'] == null) {
+            throw new runtime.RequiredError(
+                'startId',
+                'Required parameter "startId" was null or undefined when calling reportCommandCenterStartFailed().'
             );
         }
 
@@ -307,8 +363,8 @@ export class CommandCenterApi extends runtime.BaseAPI {
             }
         }
 
-        let urlPath = `/v1/command-center/starts/{taskId}/failed`;
-        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+        let urlPath = `/v1/command-center/starts/{startId}/failed`;
+        urlPath = urlPath.replace(`{${"startId"}}`, encodeURIComponent(String(requestParameters['startId'])));
 
         const response = await this.request({
             path: urlPath,
@@ -372,6 +428,61 @@ export class CommandCenterApi extends runtime.BaseAPI {
      */
     async setCommandCenterInstructions(requestParameters: CommandCenterApiSetCommandCenterInstructionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterInstructionsConfig> {
         const response = await this.setCommandCenterInstructionsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async startCommandCenterThreadRunRaw(requestParameters: CommandCenterApiStartCommandCenterThreadRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CommandCenterThreadStartState>> {
+        if (requestParameters['startId'] == null) {
+            throw new runtime.RequiredError(
+                'startId',
+                'Required parameter "startId" was null or undefined when calling startCommandCenterThreadRun().'
+            );
+        }
+
+        if (requestParameters['startThreadRunDto'] == null) {
+            throw new runtime.RequiredError(
+                'startThreadRunDto',
+                'Required parameter "startThreadRunDto" was null or undefined when calling startCommandCenterThreadRun().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/command-center/starts/{startId}/runs`;
+        urlPath = urlPath.replace(`{${"startId"}}`, encodeURIComponent(String(requestParameters['startId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['startThreadRunDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async startCommandCenterThreadRun(requestParameters: CommandCenterApiStartCommandCenterThreadRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CommandCenterThreadStartState> {
+        const response = await this.startCommandCenterThreadRunRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

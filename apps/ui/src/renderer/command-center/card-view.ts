@@ -41,6 +41,12 @@ export const ATTENTION_ORDER: readonly ThreadAttention[] = [
   'done',
 ];
 
+/** Inside a project's block: what works first, then the rest as {@link ATTENTION_ORDER} stands it. */
+export const BLOCK_ATTENTION_ORDER: readonly ThreadAttention[] = [
+  'working',
+  ...ATTENTION_ORDER.filter((attention) => attention !== 'working'),
+];
+
 /** Whole days since the thread last moved, once that reaches {@link IDLE_AFTER_DAYS}; else null. */
 export function idleDaysOf(lastAt: string, now: number): number | null {
   const days = Math.floor((now - Date.parse(lastAt)) / DAY_MS);

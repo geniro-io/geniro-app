@@ -37,13 +37,13 @@ import {
 import { type Point, roundedPath } from '../components/stage-graph-layout';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
-import { PaletteDot } from '../components/ui/palette-dot';
 import { cn } from '../components/ui/utils';
 import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
 import {
   ATTENTION_ORDER,
+  BLOCK_ATTENTION_ORDER,
   MANAGER_TITLE,
   orderByAttention,
   type ThreadCardView,
@@ -59,16 +59,21 @@ import {
   usePrefersReducedMotion,
 } from './contact-edge';
 import {
-  bandRows,
   type GraphBox,
   type GraphGeometry,
+  type LayoutBlock,
+  layoutBlocks,
   layoutColumn,
-  layoutRows,
   perLineFor,
   type PlacedBox,
 } from './graph-layout';
 import type { NodeOffset, NodeOffsets } from './node-positions';
 import type { CardBand, CardSize } from './open-cards';
+import {
+  NO_PROJECT_NAME,
+  ProjectBlock,
+  ProjectBlockHeader,
+} from './project-block';
 import type { ProjectColor } from './project-colors';
 import {
   ATTENTION_TEXT,
@@ -93,6 +98,8 @@ export const MAX_THREAD_NODES = 24;
 
 export interface GraphThread {
   id: string;
+  /** The thread's project, whose block it stands in; null for no project. */
+  projectId: string | null;
   createdAt: string;
   view: ThreadCardView;
 }
@@ -143,6 +150,8 @@ export interface GraphViewProps {
   positions: NodeOffsets;
   /** A thread's node or card was dropped at `offset` from the manager node's top-left. */
   onPlaceNode: (threadId: string, offset: NodeOffset) => void;
+  /** A thread's node or card was dropped back inside its own block, which takes it back. */
+  onUnplaceNode: (threadId: string) => void;
   /** Give every moved node back to the automatic layout. */
   onResetLayout: () => void;
   /** The chat a card holds under its head. */
@@ -151,7 +160,7 @@ export interface GraphViewProps {
   focus: GraphFocus | null;
   /** The focus of this `seq` was handled, so it is never replayed on a later mount. */
   onFocused: (seq: number) => void;
-  /** The projects of the threads on the graph, each with its colour, for the legend. */
+  /** The projects of the threads on the graph, each with its colour, in the order their blocks stand. */
   projects: readonly ProjectColor[];
   /** Threads holding a question or an approval the user can answer here, by what they hold. */
   asking: ReadonlyMap<string, 'question' | 'approval'>;
@@ -170,11 +179,15 @@ const MANAGER_HEIGHT = 84;
 const MANAGER_HEIGHT_NARROW = 112;
 const MORE_WIDTH = 160;
 const MORE_HEIGHT = 32;
+const HEADING_HEIGHT = 28;
+
+function headingIdOf(blockId: string): string {
+  return `heading:${blockId}`;
+}
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 1.5;
 const FIT_MARGIN = 16;
 const FIT_MS = 400;
-const PAN_ROOM = 160;
 const FLASH_MS = 1200;
 /** How long after a move of the view's own a start of motion is still that move, not the user's. */
 const QUIET_MOVE_SLACK_MS = 120;
@@ -212,6 +225,13 @@ interface MoreNodeData extends Record<string, unknown> {
   count: number;
 }
 
+interface BlockNodeData extends Record<string, unknown> {
+  name: string;
+  color: ProjectColor['color'] | null;
+  threads: number;
+  working: number;
+}
+
 interface LinkEdgeData extends Record<string, unknown> {
   route: readonly Point[];
 }
@@ -220,8 +240,15 @@ type ManagerFlowNode = Node<ManagerNodeData, 'manager'>;
 type ThreadFlowNode = Node<ThreadNodeData, 'thread'>;
 type SlotFlowNode = Node<ThreadNodeData, 'slot'>;
 type MoreFlowNode = Node<MoreNodeData, 'more'>;
+type BlockFlowNode = Node<BlockNodeData, 'block'>;
+type HeadingFlowNode = Node<BlockNodeData, 'heading'>;
 type GraphFlowNode =
-  ManagerFlowNode | ThreadFlowNode | SlotFlowNode | MoreFlowNode;
+  | ManagerFlowNode
+  | ThreadFlowNode
+  | SlotFlowNode
+  | MoreFlowNode
+  | BlockFlowNode
+  | HeadingFlowNode;
 type LinkFlowEdge = Edge<LinkEdgeData, 'link'>;
 
 interface GraphActions {
@@ -487,6 +514,27 @@ function MoreNode({ data }: NodeProps<MoreFlowNode>): React.JSX.Element {
   );
 }
 
+/** One project's frame behind its threads, wired from the manager at its top; the pointer passes through it to the canvas. */
+const BlockNode = memo(function BlockNode({
+  data,
+}: NodeProps<BlockFlowNode>): React.JSX.Element {
+  return (
+    <>
+      <WireEnds />
+      <ProjectBlock {...data} />
+    </>
+  );
+}, sameData);
+
+/** A project's name over its threads in the phone column. */
+function HeadingNode({ data }: NodeProps<HeadingFlowNode>): React.JSX.Element {
+  return (
+    <div data-slot="project-heading" className="flex h-full items-end pb-1">
+      <ProjectBlockHeader {...data} />
+    </div>
+  );
+}
+
 function LinkEdge({ id, data }: EdgeProps<LinkFlowEdge>): React.JSX.Element {
   const path = roundedPath(data!.route, 10);
   return (
@@ -509,6 +557,8 @@ const NODE_TYPES = {
   thread: ThreadNode,
   slot: SlotNode,
   more: MoreNode,
+  block: BlockNode,
+  heading: HeadingNode,
 };
 const EDGE_TYPES = { contact: ContactEdge, link: LinkEdge };
 
@@ -548,18 +598,34 @@ export function cardBox(size: CardSize): { width: number; height: number } {
   return { width: size.width, height: CARD_HEAD_HEIGHT + size.height };
 }
 
+export const NO_PROJECT_BLOCK = 'block:none';
+
+/** The block a thread stands in, by its project. */
+export function blockIdOf(thread: Pick<GraphThread, 'projectId'>): string {
+  return thread.projectId === null
+    ? NO_PROJECT_BLOCK
+    : `block:${thread.projectId}`;
+}
+
+/** The threads of one project's block, and what its header says. */
+export interface GraphBlock extends LayoutBlock {
+  name: string;
+  color: ProjectColor['color'] | null;
+  threads: readonly GraphThread[];
+}
+
 /**
- * The threads in bands by attention, each band on lines of its own, then
- * "+N more" alone. A thread whose card is open stands in the band it had when
- * the card opened, as big as its card.
+ * One block per project, in the order `projects` gives them, and one for the
+ * threads of no project last; inside each, working threads first and the rest
+ * by attention. A thread whose card is open stands where it stood when the
+ * card opened, as big as its card.
  */
-export function graphRows(
+export function graphBlocks(
   shown: readonly GraphThread[],
-  hidden: number,
-  canvasWidth = 0,
+  projects: readonly ProjectColor[],
   open: ReadonlyMap<string, GraphOpenCard> = new Map(),
   heights: ReadonlyMap<string, number> = new Map(),
-): GraphBox[][] {
+): GraphBlock[] {
   const boxOf = (thread: GraphThread): GraphBox => {
     const card = open.get(thread.id);
     return {
@@ -572,20 +638,50 @@ export function graphRows(
         : cardBox(card.size)),
     };
   };
-  const bandOf = (thread: GraphThread): ThreadAttention =>
-    open.get(thread.id)?.band.attention ?? thread.view.attention;
-  const bands = ATTENTION_ORDER.map((attention) =>
-    shown.filter((thread) => bandOf(thread) === attention).map(boxOf),
-  );
-  return [
-    ...bandRows(
-      bands,
-      perLineFor(shown.length, canvasWidth, THREAD_CARD_WIDTH),
+  const rank = (thread: GraphThread): number =>
+    BLOCK_ATTENTION_ORDER.indexOf(
+      open.get(thread.id)?.band.attention ?? thread.view.attention,
+    );
+  const known = new Map(projects.map((project) => [project.id, project]));
+  const order = [
+    ...projects.map((project) => project.id),
+    ...new Set(
+      shown.flatMap((thread) =>
+        thread.projectId === null || known.has(thread.projectId)
+          ? []
+          : [thread.projectId],
+      ),
     ),
-    ...(hidden > 0
-      ? [[{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }]]
-      : []),
   ];
+  const blockOf = (
+    projectId: string | null,
+    members: readonly GraphThread[],
+  ): GraphBlock => {
+    const threads = [...members].sort((a, b) => rank(a) - rank(b));
+    const project = projectId === null ? undefined : known.get(projectId);
+    return {
+      id: blockIdOf({ projectId }),
+      name:
+        projectId === null
+          ? NO_PROJECT_NAME
+          : (project?.name ?? members[0]?.view.project ?? projectId),
+      color: project?.color ?? null,
+      threads,
+      items: threads.map(boxOf),
+    };
+  };
+  return [
+    ...order.map((projectId) =>
+      blockOf(
+        projectId,
+        shown.filter((thread) => thread.projectId === projectId),
+      ),
+    ),
+    blockOf(
+      null,
+      shown.filter((thread) => thread.projectId === null),
+    ),
+  ].filter((block) => block.items.length > 0);
 }
 
 /**
@@ -649,39 +745,6 @@ function AttentionLegend({
           <span className="font-semibold text-foreground tabular-nums">
             {counts.get(attention)}
           </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ProjectLegend({
-  projects,
-  className,
-}: {
-  projects: readonly ProjectColor[];
-  className?: string;
-}): React.JSX.Element | null {
-  if (projects.length === 0) {
-    return null;
-  }
-  return (
-    <ul
-      aria-label="Projects"
-      data-slot="graph-projects"
-      className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs',
-        className,
-      )}>
-      {projects.map((project) => (
-        <li
-          key={project.id}
-          data-slot="graph-project"
-          data-color={project.color}
-          title={`Project ${project.name}`}
-          className="flex max-w-40 min-w-0 items-center gap-1.5 text-muted-foreground">
-          <PaletteDot color={project.color} size="md" />
-          <span className="truncate">{project.name}</span>
         </li>
       ))}
     </ul>
@@ -862,6 +925,7 @@ function GraphCanvas({
   projects,
   asking,
   onAnswer,
+  onUnplaceNode,
   onViewportMove,
   className,
 }: GraphViewProps): React.JSX.Element {
@@ -910,7 +974,10 @@ function GraphCanvas({
   const shown = shownThreads(threads, open);
   const hidden = threads.length - shown.length;
   const canvasWidth = narrow ? 0 : size.width;
-  const rows = graphRows(shown, hidden, canvasWidth, onCanvas, heights);
+  const blocks = graphBlocks(shown, projects, onCanvas, heights);
+  const perLine = perLineFor(shown.length, canvasWidth, THREAD_CARD_WIDTH);
+  const extras: GraphBox[] =
+    hidden > 0 ? [{ id: MORE_ID, width: MORE_WIDTH, height: MORE_HEIGHT }] : [];
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
@@ -931,13 +998,33 @@ function GraphCanvas({
   const unopened =
     onCanvas.size === 0 && pinned.size === 0
       ? null
-      : layoutRows(
+      : layoutBlocks(
           root,
-          graphRows(shown, hidden, canvasWidth, new Map(), heights),
+          graphBlocks(shown, projects, new Map(), heights),
+          perLine,
+          new Map(),
+          undefined,
+          extras,
         );
+  const layoutWith = (pins: ReadonlyMap<string, NodeOffset>): GraphGeometry =>
+    layoutBlocks(root, blocks, perLine, pins, unopened?.width, extras);
   const drawn: GraphGeometry = narrow
-    ? layoutColumn(root, rows.flat())
-    : layoutRows(root, rows, pinned, unopened?.width);
+    ? layoutColumn(
+        root,
+        [
+          ...blocks.flatMap((block) => [
+            {
+              id: headingIdOf(block.id),
+              width: THREAD_CARD_WIDTH,
+              height: HEADING_HEIGHT,
+            },
+            ...block.items,
+          ]),
+          ...extras,
+        ],
+        new Set(blocks.map((block) => headingIdOf(block.id))),
+      )
+    : layoutWith(pinned);
   const automatic = unopened ?? drawn;
   const dragGone =
     drag !== null &&
@@ -1064,10 +1151,36 @@ function GraphCanvas({
     },
     [],
   );
+  const place = (runId: string, to: { x: number; y: number }): void => {
+    const thread = shown.find((candidate) => candidate.id === runId);
+    const id = `thread:${runId}`;
+    const own = drawn.boxes.get(id);
+    const rest = new Map(pinned);
+    rest.delete(id);
+    const home =
+      thread === undefined
+        ? undefined
+        : layoutWith(rest).boxes.get(blockIdOf(thread));
+    const centre =
+      own === undefined
+        ? to
+        : { x: to.x + own.width / 2, y: to.y + Math.min(own.height / 2, 60) };
+    if (
+      home !== undefined &&
+      centre.x >= home.x &&
+      centre.x <= home.x + home.width &&
+      centre.y >= home.y &&
+      centre.y <= home.y + home.height
+    ) {
+      onUnplaceNode(runId);
+    } else {
+      onPlaceNode(runId, offsetOf(to));
+    }
+  };
   const nodeDropped = useLatestCallback(
     (_event: unknown, node: GraphFlowNode) => {
       if (node.type === 'thread') {
-        onPlaceNode(node.data.thread.id, offsetOf(node.position));
+        place(node.data.thread.id, node.position);
       }
       setDrag(null);
     },
@@ -1076,7 +1189,7 @@ function GraphCanvas({
   const cardMoved = useLatestCallback(
     (runId: string, to: { x: number; y: number }, done: boolean) => {
       if (done) {
-        onPlaceNode(runId, offsetOf(to));
+        place(runId, to);
         setDrag(null);
       } else {
         setDrag({ id: `thread:${runId}`, offset: offsetOf(to) });
@@ -1138,6 +1251,51 @@ function GraphCanvas({
   ];
   const contactEdges: ContactFlowEdge[] = [];
   const linkEdges: LinkFlowEdge[] = [];
+  for (const block of blocks) {
+    const id = narrow ? headingIdOf(block.id) : block.id;
+    if (!drawn.boxes.has(id)) {
+      continue;
+    }
+    nodes.push({
+      ...base(id),
+      type: narrow ? 'heading' : 'block',
+      zIndex: -1,
+      style: { pointerEvents: 'none' },
+      data: {
+        name: block.name,
+        color: block.color,
+        threads: block.threads.length,
+        working: block.threads.filter(
+          (thread) => thread.view.status === 'working',
+        ).length,
+      },
+    });
+    const route = drawn.routes.get(id);
+    if (route === undefined) {
+      continue;
+    }
+    const inside = block.threads.filter(
+      (thread) => !drawn.routes.has(`thread:${thread.id}`),
+    );
+    const blockPulses = inside.flatMap(
+      (thread) => states.get(thread.id)?.pulses ?? [],
+    );
+    const state = inside.reduce<EdgeState>((loudest, thread) => {
+      const own = states.get(thread.id)?.state ?? 'idle';
+      return EDGE_PAINT_ORDER[own] > EDGE_PAINT_ORDER[loudest] ? own : loudest;
+    }, 'idle');
+    contactEdges.push({
+      id: `contact:${id}`,
+      type: 'contact',
+      source: MANAGER_ID,
+      sourceHandle: 'out',
+      target: id,
+      targetHandle: 'in',
+      focusable: false,
+      selectable: false,
+      data: { route, state, pulses: blockPulses, now, moving: false },
+    });
+  }
   const slots = new Map<string, PlacedBox>();
   const canvasCards: CanvasCard[] = [];
   for (const thread of shown) {
@@ -1211,17 +1369,6 @@ function GraphCanvas({
         EDGE_PAINT_ORDER[a.data!.state] - EDGE_PAINT_ORDER[b.data!.state],
     ),
   ];
-  const overhang = canvasCards.reduce(
-    (most, card) => ({
-      x: Math.max(most.x, card.size.width),
-      y: Math.max(most.y, cardBox(card.size).height),
-    }),
-    { x: 0, y: 0 },
-  );
-  const stretch = 1 / MIN_ZOOM - 1;
-  const placedBoxes = [...drawn.boxes.values()];
-  const leftmost = Math.min(0, ...placedBoxes.map((box) => box.x));
-  const topmost = Math.min(0, ...placedBoxes.map((box) => box.y));
 
   const phoneCard = narrow ? openCards.at(-1) : undefined;
   const phoneThread =
@@ -1264,7 +1411,6 @@ function GraphCanvas({
           className={cn('relative flex flex-col', className)}>
           <div className="min-h-0 flex-1 overflow-y-auto">
             <AttentionLegend threads={threads} />
-            <ProjectLegend projects={projects} className="px-4 pt-1.5" />
             <div
               className="flow-touch-scroll mx-auto"
               style={{ width: drawn.width, height: drawn.height }}>
@@ -1300,8 +1446,8 @@ function GraphCanvas({
           role="group"
           aria-label={label}
           data-slot="command-center-graph"
-          data-layout="bands"
-          data-rows={rows.length}
+          data-layout="blocks"
+          data-blocks={blocks.length}
           className={cn('flex flex-col', className)}>
           <AttentionLegend threads={threads} />
           <div
@@ -1317,23 +1463,12 @@ function GraphCanvas({
                   defaultViewport={widthFit(automatic, size)}
                   minZoom={MIN_ZOOM}
                   maxZoom={MAX_ZOOM}
-                  translateExtent={[
-                    [leftmost - PAN_ROOM, topmost - PAN_ROOM],
-                    [
-                      drawn.width + PAN_ROOM + overhang.x * stretch,
-                      drawn.height + PAN_ROOM + overhang.y * stretch,
-                    ],
-                  ]}
                   panOnDrag
                   panOnScroll
                   zoomOnScroll={false}
                   zoomOnPinch
                   zoomOnDoubleClick={false}
                   onMoveStart={viewportMoved}
-                />
-                <ProjectLegend
-                  projects={projects}
-                  className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-5rem)] rounded-control border border-border bg-card/95 px-2.5 py-1.5 shadow-sm"
                 />
                 <ZoomControls
                   onFit={() =>

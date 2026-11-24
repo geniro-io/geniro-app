@@ -51,7 +51,6 @@ function thread(
 function render(
   threads: readonly WorkingThread[],
   options: {
-    beside?: boolean;
     onOpenThread?: (runId: string) => void;
     onOpenHere?: (runId: string) => void;
   } = {},
@@ -63,7 +62,6 @@ function render(
     root.render(
       <WorkingThreadsCard
         threads={threads}
-        beside={options.beside ?? false}
         onOpenThread={options.onOpenThread}
         onOpenHere={options.onOpenHere}
       />,
@@ -75,6 +73,9 @@ function render(
 const slot = (el: Element, name: string): HTMLElement | null =>
   el.querySelector<HTMLElement>(`[data-slot="${name}"]`);
 
+const trigger = (el: Element): HTMLButtonElement =>
+  slot(el, 'working-threads-toggle')!.querySelector('button')!;
+
 const rowsOf = (el: Element): HTMLElement[] =>
   Array.from(
     el.querySelectorAll<HTMLElement>('[data-slot="working-thread-row"]'),
@@ -82,9 +83,7 @@ const rowsOf = (el: Element): HTMLElement[] =>
 
 async function openPanel(el: Element): Promise<void> {
   await act(async () => {
-    slot(el, 'working-threads-toggle')!
-      .querySelector('button')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    trigger(el).dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
 
@@ -101,46 +100,56 @@ describe('WorkingThreadsCard', () => {
     expect(slot(el, 'working-threads-card')).toBeNull();
   });
 
-  it('counts the working threads and the ones waiting on the user', () => {
+  it('names the working and the waiting threads in the trigger’s label', () => {
     const el = render([
       thread({ runId: 'a' }),
       thread({ runId: 'b' }),
       thread({ runId: 'c', status: 'waiting' }),
     ]);
 
-    expect(slot(el, 'working-threads-count')!.textContent).toBe(
-      '2 working · 1 waiting on you',
+    expect(trigger(el).getAttribute('aria-label')).toBe(
+      'Threads working · 2 working · 1 waiting on you',
     );
   });
 
-  it('leaves out the waiting count when nobody waits', () => {
+  it('draws the tile alone, with no count of the threads beside it', () => {
+    const el = render([
+      thread({ runId: 'a' }),
+      thread({ runId: 'b' }),
+      thread({ runId: 'c', status: 'waiting' }),
+    ]);
+
+    expect(slot(el, 'working-threads-count')).toBeNull();
+    expect(trigger(el).textContent).not.toMatch(/working|waiting/);
+  });
+
+  it('leaves out the waiting count in the label when nobody waits', () => {
     const el = render([thread({ runId: 'a' }), thread({ runId: 'b' })]);
 
-    expect(slot(el, 'working-threads-count')!.textContent).toBe('2 working');
-  });
-
-  it('leaves out the working count when every thread waits', () => {
-    const el = render([thread({ status: 'waiting' })]);
-
-    expect(slot(el, 'working-threads-count')!.textContent).toBe(
-      '1 waiting on you',
+    expect(trigger(el).getAttribute('aria-label')).toBe(
+      'Threads working · 2 working',
     );
   });
 
-  it('sits in the corner alone', () => {
-    const el = render([thread({})]);
+  it('leaves out the working count in the label when every thread waits', () => {
+    const el = render([thread({ status: 'waiting' })]);
 
-    const card = slot(el, 'working-threads-card')!;
-    expect(card.className).toContain('right-4');
-    expect(card.className).toContain('-bottom-2');
+    expect(trigger(el).getAttribute('aria-label')).toBe(
+      'Threads working · 1 waiting on you',
+    );
   });
 
-  it('sits left of the agents card beside it', () => {
-    const el = render([thread({})], { beside: true });
+  it('repeats the counts in the panel head once it is open', async () => {
+    const el = render([
+      thread({ runId: 'a' }),
+      thread({ runId: 'b', status: 'waiting' }),
+    ]);
 
-    const card = slot(el, 'working-threads-card')!;
-    expect(card.className).toContain('right-14');
-    expect(card.className).not.toContain('right-4');
+    await openPanel(el);
+
+    expect(slot(el, 'working-threads-panel-summary')!.textContent).toBe(
+      '1 working · 1 waiting on you',
+    );
   });
 
   it('lists the threads waiting on the user first, then the working ones, each group under its name and count', async () => {
@@ -348,9 +357,7 @@ describe('WorkingThreadsCard', () => {
       document.body.append(container);
       root = createRoot(container);
       act(() => {
-        root.render(
-          <WorkingThreadsCard threads={[thread({})]} beside={false} />,
-        );
+        root.render(<WorkingThreadsCard threads={[thread({})]} />);
       });
       tops.set(container, 100);
       tops.set(slot(container, 'working-threads-card')!, 500);

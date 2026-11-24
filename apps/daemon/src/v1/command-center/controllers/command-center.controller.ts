@@ -20,6 +20,7 @@ import type {
   CommandCenterBoard,
   CommandCenterInstructionsConfig,
   CommandCenterStart,
+  CommandCenterThreadStartState,
   CommandCenterTimeline,
 } from '../command-center.types';
 import {
@@ -30,9 +31,11 @@ import {
   CommandCenterStartFailedDto,
   CommandCenterStartsDto,
   CommandCenterStartsQueryDto,
+  CommandCenterThreadStartStateDto,
   CommandCenterTimelineDto,
   CommandCenterTimelineQueryDto,
   StartCommandCenterChatDto,
+  StartThreadRunDto,
 } from '../dto/command-center.dto';
 import { CommandCenterService } from '../services/command-center.service';
 import { CommandCenterChatService } from '../services/command-center-chat.service';
@@ -112,14 +115,35 @@ export class CommandCenterController {
     return { starts: await this.starts.approvedStarts() };
   }
 
-  /** The drain could not start this card: its request ends and the manager is told. */
-  @Post('starts/:taskId/failed')
+  /** Where a cardless start stands, for its Start card. */
+  @Get('starts/:startId')
+  @ApiOperation({ operationId: 'readCommandCenterThreadStart' })
+  @ZodResponse({ status: 200, type: CommandCenterThreadStartStateDto })
+  readStart(
+    @Param('startId') startId: string,
+  ): Promise<CommandCenterThreadStartState> {
+    return this.starts.threadStartState(startId);
+  }
+
+  /** The drain starts an approved cardless thread in its project's folder. */
+  @Post('starts/:startId/runs')
+  @ApiOperation({ operationId: 'startCommandCenterThreadRun' })
+  @ZodResponse({ status: 201, type: CommandCenterThreadStartStateDto })
+  startRun(
+    @Param('startId') startId: string,
+    @Body() dto: StartThreadRunDto,
+  ): Promise<CommandCenterThreadStartState> {
+    return this.starts.startThreadRun(startId, dto);
+  }
+
+  /** The drain could not start it (a card's start, or a cardless one): the request ends and the manager is told. */
+  @Post('starts/:startId/failed')
   @HttpCode(204)
   @ApiOperation({ operationId: 'reportCommandCenterStartFailed' })
   failed(
-    @Param('taskId') taskId: string,
+    @Param('startId') startId: string,
     @Body() dto: CommandCenterStartFailedDto,
   ): Promise<void> {
-    return this.starts.failed(taskId, dto.reason);
+    return this.starts.failed(startId, dto.reason);
   }
 }

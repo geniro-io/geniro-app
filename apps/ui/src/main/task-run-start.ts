@@ -1,6 +1,7 @@
 import {
   type DaemonHandle,
   type GitStamp,
+  type RunSettings,
   runSettingsOf,
   type Settings,
 } from '../shared/contracts';
@@ -125,6 +126,34 @@ export async function prepareRunWorktree(
 }
 
 /**
+ * What a run starts with, read fresh per start: the user's run settings and
+ * the git stamp of the folder it starts in. The stamp is what gives the run its
+ * "changed since this chat started" view; a reading that fails costs the run
+ * that view, never its start.
+ */
+export interface RunSnapshot extends RunSettings {
+  startSha?: string;
+  startDirty?: boolean;
+}
+
+export async function runSnapshotOf(
+  deps: RunStartDeps,
+  dir: string,
+): Promise<RunSnapshot> {
+  const runSettings = runSettingsOf({
+    customInstructions: deps.customInstructions(),
+    replyLanguage: deps.replyLanguage(),
+    agentOptions: deps.agentOptions(),
+  });
+  const stamp = await deps.gitStamp(dir).catch(() => null);
+  return {
+    ...runSettings,
+    startSha: stamp?.sha ?? undefined,
+    startDirty: stamp?.dirty ?? undefined,
+  };
+}
+
+/**
  * Post the run that starts the card in its prepared worktree. Throws the
  * daemon's refusal as a {@link DaemonRefusal}.
  */
@@ -135,13 +164,6 @@ export async function startRunOn(
   worktree: Worktree,
   starter: RunStarter,
 ): Promise<void> {
-  const runSettings = runSettingsOf({
-    customInstructions: deps.customInstructions(),
-    replyLanguage: deps.replyLanguage(),
-    agentOptions: deps.agentOptions(),
-  });
-  // A reading that fails costs the run its changes view, never its start.
-  const stamp = await deps.gitStamp(worktree.path).catch(() => null);
   await daemonPost(
     handle,
     `/v1/tasks/${encodeURIComponent(task.taskId)}/runs`,
@@ -152,9 +174,7 @@ export async function startRunOn(
       ...(starter.approval === undefined ? {} : { approval: starter.approval }),
       startedBy: starter.startedBy,
       // The same snapshot a hand-pressed Run takes.
-      ...runSettings,
-      startSha: stamp?.sha ?? undefined,
-      startDirty: stamp?.dirty ?? undefined,
+      ...(await runSnapshotOf(deps, worktree.path)),
     },
     deps.fetchTimeoutMs,
   );

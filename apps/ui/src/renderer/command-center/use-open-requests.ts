@@ -90,6 +90,8 @@ export function useOpenRequests(
   apis: DaemonApis,
   client: DaemonClient | null,
   threads: readonly AskingThread[],
+  /** A verdict for this thread went out. */
+  onAnswered?: (runId: string) => void,
 ): OpenRequestsState {
   const [requests, setRequests] = useState<OpenRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -163,6 +165,7 @@ export function useOpenRequests(
       setSettled(
         (held) => new Set([...held, `${request.runId}:${request.requestId}`]),
       );
+      onAnswered?.(request.runId);
       if (!images?.length) {
         return;
       }
@@ -176,7 +179,7 @@ export function useOpenRequests(
           : apis.chats.sendChatMessage(message)
       ).catch((err: unknown) => setError(describeDaemonError(err)));
     },
-    [apis, client],
+    [apis, client, onAnswered],
   );
 
   return {

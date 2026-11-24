@@ -1227,6 +1227,12 @@ describe('parseCommandCenterChanged — the command_center_changed twin', () => 
     ).toEqual({ runIds: ['a'], reason: 'refiled' });
   });
 
+  it('reads the manager runs of a thread start that moved', () => {
+    expect(
+      parseCommandCenterChanged({ runIds: ['manager'], reason: 'start' }),
+    ).toEqual({ runIds: ['manager'], reason: 'start' });
+  });
+
   it('refuses an unknown reason, a non-string id and a missing list', () => {
     expect(
       parseCommandCenterChanged({ runIds: ['a'], reason: 'x' }),

@@ -15,6 +15,7 @@ import {
   CONTACT_LOOKBACK_MS,
 } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
+import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
 
@@ -60,6 +61,7 @@ export class CommandCenterService {
     private readonly inbox: ThreadInboxService,
     private readonly taskDao: TaskDao,
     private readonly roster: CommandCenterRosterDao,
+    private readonly threadStarts: CommandCenterThreadStartDao,
   ) {}
 
   /** The manager chat's run id, or null while there is none. */
@@ -109,11 +111,13 @@ export class CommandCenterService {
 
   async board(runIds?: readonly string[]): Promise<CommandCenterBoard> {
     const now = Date.now();
-    const [{ managerRunId, runs }, manager, pendingStarts] = await Promise.all([
-      this.activeThreads(runIds),
-      this.chats.findCommandCenterChat(),
-      this.taskDao.listPendingStartRequests(this.em.fork()),
-    ]);
+    const [{ managerRunId, runs }, manager, pendingStarts, waitingThreads] =
+      await Promise.all([
+        this.activeThreads(runIds),
+        this.chats.findCommandCenterChat(),
+        this.taskDao.listPendingStartRequests(this.em.fork()),
+        this.threadStarts.listWaiting(),
+      ]);
     return {
       generatedAt: new Date(now).toISOString(),
       manager,
@@ -122,7 +126,9 @@ export class CommandCenterService {
           ? 0
           : pendingStarts.filter(
               (task) => task.startRequestedByRunId === managerRunId,
-            ).length,
+            ).length +
+            waitingThreads.filter((row) => row.managerRunId === managerRunId)
+              .length,
       cards: await this.cardsOf(managerRunId, runs, now),
     };
   }

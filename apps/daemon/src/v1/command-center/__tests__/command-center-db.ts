@@ -14,6 +14,7 @@ import { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import { UsageActivity } from '../../stats/entity/usage-activity.entity';
 import { Task } from '../../tasks/entity/task.entity';
 import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
+import { CommandCenterThreadStart } from '../entity/command-center-thread-start.entity';
 
 /** The tables the command center reads, on an in-memory database with the production schema generator. */
 export async function commandCenterDb() {
@@ -28,6 +29,7 @@ export async function commandCenterDb() {
         ThreadMessage,
         UsageActivity,
         CommandCenterRosterEntry,
+        CommandCenterThreadStart,
       ],
       allowGlobalContext: true,
       namingStrategy: UnderscoreNamingStrategy,

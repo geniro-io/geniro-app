@@ -1,7 +1,8 @@
 import { MessageSquareText } from 'lucide-react';
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 
 import type { ProfileColor } from '../../shared/contracts';
+import { QuestionContextMessages } from '../chats/question-context-messages';
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
 import { PaletteDot } from '../components/ui/palette-dot';
@@ -81,11 +82,13 @@ export function AnswerPopover({
           </ErrorText>
         )}
         {requests.map((request) => (
-          <RequestCard
-            key={request.requestId}
-            request={request}
-            onAnswer={onAnswer}
-          />
+          <Fragment key={request.requestId}>
+            <QuestionContextMessages
+              threadRunId={request.runId}
+              threadRequestId={request.requestId}
+            />
+            <RequestCard request={request} onAnswer={onAnswer} />
+          </Fragment>
         ))}
       </div>
     </Popover>

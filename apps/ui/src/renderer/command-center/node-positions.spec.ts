@@ -117,6 +117,29 @@ describe('useNodePositions — the places nodes were dragged to', () => {
     expect(localStorage.getItem(NODE_POSITIONS_KEY)).toBe(stored);
   });
 
+  it('gives one thread’s node back to the automatic layout, and keeps the rest on this device', () => {
+    mount();
+    act(() => latest.place('a', OFFSET));
+    act(() => latest.place('b', OTHER));
+
+    act(() => latest.forget('a'));
+
+    expect(latest.offsets).toEqual({ b: OTHER });
+    expect(storedPositions()).toEqual({ b: OTHER });
+  });
+
+  it('leaves the places as they are when the thread has none', () => {
+    const stored = '{ "a": { "x": 120, "y": 240 } }';
+    localStorage.setItem(NODE_POSITIONS_KEY, stored);
+    mount();
+    const before = latest.offsets;
+
+    act(() => latest.forget('unknown'));
+
+    expect(latest.offsets).toBe(before);
+    expect(localStorage.getItem(NODE_POSITIONS_KEY)).toBe(stored);
+  });
+
   it('gives every node back to the automatic layout on reset, and stores no place', () => {
     mount();
     act(() => latest.place('a', OFFSET));

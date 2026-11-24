@@ -6,6 +6,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import {
@@ -15,6 +16,7 @@ import {
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
@@ -25,14 +27,35 @@ import type { AgentKind } from '../../runs/runs.types';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import type { Task } from '../../tasks/entity/task.entity';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
+import { TaskRunsService } from '../../tasks/services/task-runs.service';
 import { TasksService } from '../../tasks/services/tasks.service';
-import type { CommandCenterStart } from '../command-center.types';
+import type { ProjectRunStart } from '../../tasks/tasks.types';
+import type {
+  CommandCenterStart,
+  CommandCenterThreadStartState,
+} from '../command-center.types';
 import { START_FAILURE_MAX_CHARS } from '../command-center.types';
+import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
+import type { CommandCenterThreadStart } from '../entity/command-center-thread-start.entity';
 import { managerWake } from '../utils/manager-wake';
 import { CommandCenterChatService } from './command-center-chat.service';
+import { CommandCenterEventBus } from './command-center-events.bus';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The card id of one cardless start request, derivable from its row. */
+function threadStartCardId(startId: string): string {
+  return `command-center-start:thread:${startId}`;
+}
+
+/** What a cardless start's Start card is drawn from. */
+export interface ThreadStartCardInput {
+  startId: string;
+  title: string;
+  project: string;
+  brief: string;
 }
 
 /** The card id of one start request, derivable from the task's own columns. */
@@ -72,11 +95,24 @@ export class CommandCenterStartsService
     private readonly taskEvents: TaskEventBus,
     private readonly managers: CommandCenterChatService,
     private readonly notices: RunNoticeWriter,
+    private readonly threadStarts: CommandCenterThreadStartDao,
+    private readonly taskRuns: TaskRunsService,
+    private readonly agents: AgentEventBus,
+    private readonly events: CommandCenterEventBus,
   ) {}
+
+  private deletions: Subscription | null = null;
 
   onModuleInit(): void {
     this.subscription = this.taskEvents.allChanges().subscribe(() => {
       void this.reportStarted();
+    });
+    this.deletions = this.agents.allDeleted().subscribe((runId) => {
+      void this.threadStarts.deleteOf(runId).catch((error: unknown) => {
+        this.logger.warn(
+          `cardless starts of ${runId} not dropped with it: ${messageOf(error)}`,
+        );
+      });
     });
   }
 
@@ -86,9 +122,14 @@ export class CommandCenterStartsService
 
   onModuleDestroy(): void {
     this.subscription?.unsubscribe();
+    this.deletions?.unsubscribe();
   }
 
-  /** `start_thread`: file the card and put its start to the user, or approve it in `auto`. */
+  /**
+   * `start_thread`: put the start to the user, or approve it in `auto`. With
+   * `card` it files a backlog card first and the start lives on the card;
+   * without, it is a row of its own and the thread runs in the project's folder.
+   */
   async start(
     managerRunId: string,
     input: StartThreadInput,
@@ -112,6 +153,14 @@ export class CommandCenterStartsService
         code: 'PROJECT_NOT_FOUND',
         reason: `no project has the id or name "${input.project}"`,
       };
+    }
+    if (!input.card) {
+      return this.startWithoutCard(
+        managerRunId,
+        manager.approval === 'auto',
+        project,
+        input,
+      );
     }
     const task = await this.tasks.create({
       projectId: project.id,
@@ -166,8 +215,11 @@ export class CommandCenterStartsService
   /** Every approved start not yet started, for Electron main's drain. */
   async approvedStarts(): Promise<CommandCenterStart[]> {
     const em = this.em.fork();
-    const tasks = await this.taskDao.listApprovedStarts(em);
-    if (tasks.length === 0) {
+    const [tasks, threads] = await Promise.all([
+      this.taskDao.listApprovedStarts(em),
+      this.threadStarts.listApproved(),
+    ]);
+    if (tasks.length === 0 && threads.length === 0) {
       return [];
     }
     const projects = new Map(
@@ -176,29 +228,123 @@ export class CommandCenterStartsService
         project,
       ]),
     );
-    return tasks.flatMap((task) => {
-      const project = projects.get(task.projectId);
+    const cardless = threads.flatMap((row): CommandCenterStart[] => {
+      const project = projects.get(row.projectId);
       return project === undefined
         ? []
         : [
             {
-              taskId: task.id,
-              projectId: task.projectId,
-              title: task.title,
-              status: task.status,
-              folder: task.folder ?? project.folder,
-              startedBy:
-                task.startRequestKind === 'analysis' ? 'user' : 'manager',
+              kind: 'thread',
+              startId: row.id,
+              projectId: row.projectId,
+              title: row.title,
+              folder: project.folder,
+              startedBy: 'manager',
             },
           ];
     });
+    return tasks
+      .flatMap((task): CommandCenterStart[] => {
+        const project = projects.get(task.projectId);
+        return project === undefined
+          ? []
+          : [
+              {
+                kind: 'card',
+                taskId: task.id,
+                projectId: task.projectId,
+                title: task.title,
+                status: task.status,
+                folder: task.folder ?? project.folder,
+                startedBy:
+                  task.startRequestKind === 'analysis' ? 'user' : 'manager',
+              },
+            ];
+      })
+      .concat(cardless);
+  }
+
+  /** Where a cardless start stands, for its Start card. */
+  async threadStartState(
+    startId: string,
+  ): Promise<CommandCenterThreadStartState> {
+    const row = await this.threadStarts.read(startId);
+    if (row === null) {
+      throw new NotFoundException('START_NOT_FOUND', `no start ${startId}`);
+    }
+    return {
+      startId,
+      state:
+        row.runId !== null
+          ? 'started'
+          : row.failedAt !== null
+            ? 'failed'
+            : row.declinedAt !== null
+              ? 'declined'
+              : row.approvedAt !== null
+                ? 'approved'
+                : 'waiting',
+      runId: row.runId,
+      failure: row.failure,
+    };
+  }
+
+  /**
+   * The drain starts an approved cardless request: a chat or team run in the
+   * project's folder with the user's run settings, then the manager hears it
+   * started and the thread joins its roster. A request another drain took, or
+   * one not approved, is refused `START_TAKEN`.
+   */
+  async startThreadRun(
+    startId: string,
+    settings: Omit<
+      ProjectRunStart,
+      'projectId' | 'title' | 'prompt' | 'target' | 'startedBy'
+    >,
+  ): Promise<CommandCenterThreadStartState> {
+    const row = await this.threadStarts.read(startId);
+    if (row === null) {
+      throw new NotFoundException('START_NOT_FOUND', `no start ${startId}`);
+    }
+    if (!(await this.threadStarts.claim(startId, new Date()))) {
+      throw new ConflictException(
+        'START_TAKEN',
+        `start ${startId} is not waiting to be started`,
+      );
+    }
+    let runId: string;
+    try {
+      ({ runId } = await this.taskRuns.startProjectRun({
+        ...settings,
+        projectId: row.projectId,
+        title: row.title,
+        prompt: row.brief,
+        target: {
+          agentKind: row.agentKind as AgentKind | null,
+          teamSlug: row.teamSlug,
+        },
+        startedBy: 'manager',
+      }));
+    } catch (error) {
+      await this.threadStarts.release(startId);
+      throw error;
+    }
+    await this.threadStarts.recordRun(startId, runId);
+    this.events.publishChanged([row.managerRunId], 'start');
+    await this.reportThread({ ...row, runId });
+    return this.threadStartState(startId);
   }
 
   /** The drain could not start it: the request ends and the manager is told why. */
-  async failed(taskId: string, reason: string): Promise<void> {
+  async failed(startId: string, reason: string): Promise<void> {
     const em = this.em.fork();
-    const task = await this.taskDao.getById(taskId, em);
-    if (task === null || task.startRequestedByRunId === null) {
+    const task = await this.taskDao.getById(startId, em);
+    if (task === null) {
+      await this.threadFailed(startId, reason);
+      return;
+    }
+    const taskId = startId;
+    if (task.startRequestedByRunId === null) {
       return;
     }
     const managerRunId = task.startRequestedByRunId;
@@ -223,6 +369,156 @@ export class CommandCenterStartsService
         `Could not start "${task.title}"`,
       ),
     );
+  }
+
+  private async threadFailed(startId: string, reason: string): Promise<void> {
+    const row = await this.threadStarts.read(startId);
+    const said = reason.slice(0, START_FAILURE_MAX_CHARS);
+    if (
+      row === null ||
+      !(await this.threadStarts.fail(startId, new Date(), said))
+    ) {
+      return;
+    }
+    this.events.publishChanged([row.managerRunId], 'start');
+    this.wakes.publish(
+      managerWake(
+        row.managerRunId,
+        `start-failed:${startId}`,
+        `[command center] The thread "${row.title}" could not be started: ${said}. Nothing was started; tell the user, or try again with start_thread once the cause is fixed.`,
+        `Could not start "${row.title}"`,
+      ),
+    );
+  }
+
+  private async startWithoutCard(
+    managerRunId: string,
+    auto: boolean,
+    project: Project,
+    input: StartThreadInput,
+  ): Promise<StartThreadAnswer> {
+    const requestedAt = new Date();
+    const row = await this.threadStarts.create({
+      managerRunId,
+      projectId: project.id,
+      title: input.title,
+      brief: input.brief,
+      agentKind: input.agent ?? null,
+      teamSlug: input.team ?? null,
+      note: input.note?.trim() ? input.note.trim() : null,
+      watch: input.watch,
+      requestedAt,
+      approvedAt: auto ? requestedAt : null,
+    });
+    this.events.publishChanged([managerRunId], 'start');
+    if (auto) {
+      return { status: 'starting', startId: row.id };
+    }
+    try {
+      await this.chats.raiseOwnedCard(
+        managerRunId,
+        threadStartCardId(row.id),
+        this.threadCardOf(row, project.name),
+        this.threadResponderFor(managerRunId, row.id, row.title),
+      );
+    } catch (error) {
+      this.logger.error(
+        `run ${managerRunId} could not put a Start card on screen: ${messageOf(error)}`,
+      );
+      await this.threadStarts.fail(
+        row.id,
+        new Date(),
+        'its Start card could not be shown',
+      );
+      this.events.publishChanged([managerRunId], 'start');
+      return {
+        status: 'refused',
+        code: 'CARD_NOT_SHOWN',
+        reason: 'the Start card could not be shown; nothing was started',
+      };
+    }
+    return { status: 'card_shown', startId: row.id };
+  }
+
+  private threadCardOf(
+    row: Pick<CommandCenterThreadStart, 'id' | 'title' | 'brief'>,
+    project: string,
+  ): { toolName: string; input: ThreadStartCardInput } {
+    return {
+      toolName: HOST_START_THREAD_TOOL,
+      input: { startId: row.id, title: row.title, project, brief: row.brief },
+    };
+  }
+
+  private threadResponderFor(
+    managerRunId: string,
+    startId: string,
+    title: string,
+  ) {
+    return (allow: boolean, answer?: string): void => {
+      this.carryOutThreadVerdict(
+        managerRunId,
+        startId,
+        title,
+        allow,
+        answer,
+      ).catch((error: unknown) => {
+        this.logger.error(
+          `run ${managerRunId} Start card verdict for ${startId} not carried out: ${messageOf(error)}`,
+        );
+      });
+    };
+  }
+
+  private async carryOutThreadVerdict(
+    managerRunId: string,
+    startId: string,
+    title: string,
+    allow: boolean,
+    answer: string | undefined,
+  ): Promise<void> {
+    const now = new Date();
+    const carried = allow
+      ? await this.threadStarts.approve(startId, now)
+      : await this.threadStarts.decline(startId, now);
+    this.events.publishChanged([managerRunId], 'start');
+    const message = !carried
+      ? `[command center] The Start card for "${title}" was answered, but it no longer asks to start; nothing was started.`
+      : allow
+        ? `[command center] The user approved starting "${title}". It is starting now; you are told when it has.`
+        : `[command center] The user declined to start "${title}". Nothing was started.`;
+    const note = answer?.trim() ?? '';
+    try {
+      await this.chats.deliverOwnedCardVerdict(
+        managerRunId,
+        threadStartCardId(startId),
+        allow && carried,
+        note === '' ? message : `${message}\nThe user's note: ${note}`,
+        answer,
+      );
+    } catch (error) {
+      this.logger.error(
+        `run ${managerRunId} Start card verdict not delivered: ${messageOf(error)}`,
+      );
+    }
+  }
+
+  /** Put a started cardless thread on its manager's roster and tell the manager, once. */
+  private async reportThread(
+    row: Pick<
+      CommandCenterThreadStart,
+      'id' | 'managerRunId' | 'title' | 'note' | 'watch'
+    > & { runId: string },
+  ): Promise<void> {
+    await this.managers.addToRoster(
+      row.managerRunId,
+      [row.runId],
+      'manager',
+      row.note,
+      row.watch,
+    );
+    await this.threadStarts.markReported(row.id, new Date());
+    await this.notices.info(row.managerRunId, `Started "${row.title}"`);
   }
 
   private projectNamed(
@@ -384,9 +680,58 @@ export class CommandCenterStartsService
           this.responderFor(managerRunId, task.id, task.title),
         );
       }
+      await this.rehydrateThreadStarts();
       await this.reportStarted();
     } catch (error) {
       this.logger.error(`Start card rehydration failed: ${messageOf(error)}`);
+    }
+  }
+
+  private async rehydrateThreadStarts(): Promise<void> {
+    const em = this.em.fork();
+    const projects = new Map(
+      (await this.projectDao.listAll(em)).map((project) => [
+        project.id,
+        project,
+      ]),
+    );
+    for (const row of await this.threadStarts.listWaiting()) {
+      const cardId = threadStartCardId(row.id);
+      const closed =
+        (
+          await this.itemDao.rowsByPayloadId(
+            row.managerRunId,
+            ['approval_verdict', 'unanswerable'],
+            [cardId],
+            undefined,
+            em,
+          )
+        ).length > 0;
+      if (closed) {
+        await this.threadStarts.fail(
+          row.id,
+          new Date(),
+          'its Start card was closed before it was answered',
+        );
+        continue;
+      }
+      this.chats.trackOwnedCard(
+        row.managerRunId,
+        cardId,
+        this.threadCardOf(row, projects.get(row.projectId)?.name ?? ''),
+        this.threadResponderFor(row.managerRunId, row.id, row.title),
+      );
+    }
+    for (const row of await this.threadStarts.listInterrupted()) {
+      await this.threadFailed(
+        row.id,
+        'the app stopped while it was being started',
+      );
+    }
+    for (const row of await this.threadStarts.listUnreported()) {
+      if (row.runId !== null) {
+        await this.reportThread({ ...row, runId: row.runId });
+      }
     }
   }
 }

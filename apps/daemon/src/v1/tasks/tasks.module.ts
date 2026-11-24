@@ -74,6 +74,6 @@ import { TasksService } from './services/tasks.service';
     TaskMergeService,
     TaskQueueService,
   ],
-  exports: [TaskDao, TaskEventBus, TasksService],
+  exports: [TaskDao, TaskEventBus, TasksService, TaskRunsService],
 })
 export class TasksModule {}

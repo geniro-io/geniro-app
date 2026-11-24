@@ -124,7 +124,7 @@ const NOW_ISO = new Date().toISOString();
 function cardOf(
   runId: string,
   projectId: string,
-  column: 'idle' | 'done' = 'idle',
+  column: 'idle' | 'done' | 'working' | 'waiting' = 'idle',
 ): unknown {
   return {
     run: {
@@ -401,23 +401,6 @@ describe('CommandCenter — showing a thread on the canvas', () => {
 });
 
 describe('CommandCenter — the phone sidebar and the focus', () => {
-  function stubMatchMedia(matches: boolean): void {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        matches,
-        media: query,
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined,
-      }),
-    });
-  }
-
-  afterEach(() => {
-    delete (window as { matchMedia?: unknown }).matchMedia;
-  });
-
   it.each([
     ['command-center-needs-toggle'],
     ['command-center-timeline-toggle'],
@@ -709,6 +692,23 @@ function clickOn(el: Element | null): void {
   });
 }
 
+function stubMatchMedia(matches: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
+  });
+}
+
+afterEach(() => {
+  delete (window as { matchMedia?: unknown }).matchMedia;
+});
+
 function timelineToggle(): HTMLButtonElement {
   return container.querySelector<HTMLButtonElement>(
     '[data-slot="command-center-timeline-toggle"]',
@@ -912,6 +912,81 @@ describe('CommandCenter — showing a timeline row on the canvas', () => {
 
     expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
       'run-b',
+    ]);
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('CommandCenter — the working tile on the canvas', () => {
+  function workingBoard(): void {
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'working'),
+      cardOf('run-a', 'p1'),
+    ]);
+  }
+
+  it('draws the working tile on the canvas in the box of the chat button, left of it', async () => {
+    workingBoard();
+    await renderPage();
+
+    const tile = container.querySelector<HTMLElement>(
+      '[data-slot="working-threads-card"]',
+    )!;
+    const toggle = container.querySelector<HTMLElement>(
+      '[data-slot="command-center-chat-toggle"]',
+    )!;
+    const box = tile.parentElement!;
+    expect(box.parentElement).toBe(toggle.parentElement);
+    expect(box.className).toContain('bottom-4');
+    expect(box.className).toContain('right-17');
+  });
+
+  it('draws no working tile when no thread is working', async () => {
+    await renderPage();
+
+    expect(
+      container.querySelector('[data-slot="working-threads-card"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    ).not.toBeNull();
+  });
+
+  it('hides the working tile with the chat button on a phone once a thread card is open', async () => {
+    stubMatchMedia(true);
+    workingBoard();
+    await renderPage();
+    expect(
+      container.querySelector('[data-slot="working-threads-card"]'),
+    ).not.toBeNull();
+
+    act(() => {
+      probes.dock!.onOpenThread('run-a');
+    });
+
+    expect(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="working-threads-card"]'),
+    ).toBeNull();
+  });
+
+  it('opens a working thread from the tile as its card on the canvas', async () => {
+    workingBoard();
+    await renderPage();
+
+    clickOn(
+      container.querySelector('[data-slot="working-threads-toggle"] button'),
+    );
+    clickOn(
+      container.querySelector(
+        '[data-slot="working-thread-row"][data-run="run-w"]',
+      ),
+    );
+
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-w',
     ]);
     expect(onOpenThread).not.toHaveBeenCalled();
   });

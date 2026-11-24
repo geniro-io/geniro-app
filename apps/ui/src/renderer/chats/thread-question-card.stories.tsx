@@ -7,6 +7,10 @@ import {
 } from '../components/thread-head';
 import { ApprovalCard } from './approval-card';
 import { ThreadQuestionCard } from './thread-question-card';
+import {
+  type ThreadContextReader,
+  ThreadContextReaderContext,
+} from './thread-question-context';
 import { ThreadIdentityContext } from './thread-title';
 
 const IDENTITIES = new Map<string, ThreadIdentity>([
@@ -44,6 +48,16 @@ const RELAY = {
   ],
 };
 
+const READER: ThreadContextReader = () =>
+  Promise.resolve([
+    { seq: 3, role: 'user', text: 'Clear the billing cache before the deploy' },
+    {
+      seq: 4,
+      role: 'assistant',
+      text: 'Two caches could be meant: Redis and the local copy.',
+    },
+  ]);
+
 const meta = {
   title: 'Chats/ThreadQuestionCard',
   component: ThreadQuestionCard,
@@ -66,9 +80,11 @@ const meta = {
   decorators: [
     (story) => (
       <div className="w-[560px] bg-background p-4">
-        <ThreadIdentityContext.Provider value={IDENTITIES}>
-          {story()}
-        </ThreadIdentityContext.Provider>
+        <ThreadContextReaderContext.Provider value={READER}>
+          <ThreadIdentityContext.Provider value={IDENTITIES}>
+            {story()}
+          </ThreadIdentityContext.Provider>
+        </ThreadContextReaderContext.Provider>
       </div>
     ),
   ],

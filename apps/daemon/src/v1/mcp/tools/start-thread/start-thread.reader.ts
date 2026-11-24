@@ -17,6 +17,11 @@ export function startThreadResultText(answer: StartThreadAnswer): string {
   if (answer.status === 'refused') {
     return `${answer.code}: ${answer.reason}`;
   }
+  if ('startId' in answer) {
+    return answer.status === 'starting'
+      ? `${JSON.stringify(answer)}\nThe thread is starting now in its project's folder, with no board card. You are told when it has started; end your turn rather than wait.`
+      : `${JSON.stringify(answer)}\nA Start card is on screen for the user; no board card was filed. You are told when they answer and when the thread starts; end your turn rather than wait.`;
+  }
   const card = answer.identifier ?? answer.taskId;
   return answer.status === 'starting'
     ? `${JSON.stringify(answer)}\nCard ${card} is starting now. You are told when the thread has started; end your turn rather than wait.`

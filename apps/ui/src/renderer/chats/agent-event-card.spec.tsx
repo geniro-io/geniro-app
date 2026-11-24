@@ -12,7 +12,6 @@ import {
   MemberEventCard,
   monitorEndText,
   MonitorEventCard,
-  monitorMetaParts,
   monitorStatusOf,
 } from './agent-event-card';
 import { RevealCallContext } from './call-block';
@@ -484,10 +483,20 @@ describe('MemberEventCard', () => {
 });
 
 describe('MonitorEventCard', () => {
-  it('draws a batch that woke the agent as a reported monitor, headed by the monitor', () => {
+  function line(el: HTMLElement): HTMLButtonElement {
+    const found = el.querySelector<HTMLButtonElement>(
+      '[data-slot="monitor-event-line"]',
+    );
+    if (found === null) {
+      throw new Error('no monitor line');
+    }
+    return found;
+  }
+
+  it('folds a reported monitor to one line: its title, state, id, agent and output size', () => {
     const el = render(
       <MonitorEventCard
-        entry={monitor()}
+        entry={monitor({ command: 'pnpm dev' })}
         woke
         agent="Manager"
         memoryKey="monitor-test"
@@ -496,29 +505,61 @@ describe('MonitorEventCard', () => {
     const article = card(el, 'monitor-event');
     expect(article.dataset.kind).toBe('monitor-reported');
     expect(article.dataset.monitor).toBe('m1');
-    expect(
-      el.querySelector<HTMLElement>('[data-slot="monitor-event-face"]')?.dataset
-        .face,
-    ).toBe('monitor');
+    expect(article.children).toHaveLength(1);
+    expect(line(el).getAttribute('aria-expanded')).toBe('false');
+    expect(line(el).title).toBe('Monitor reported: dev server log\npnpm dev');
     expect(slotText(el, 'monitor-event-title')).toBe('dev server log');
+    expect(slotText(el, 'monitor-event-status')).toBe('running');
     expect(slotText(el, 'monitor-event-handle')).toBe('m1');
-    expect(slotText(el, 'monitor-event-label')).toBe('Monitor reported');
+    expect(slotText(el, 'monitor-event-member')).toBe('Manager');
+    expect(slotText(el, 'monitor-event-size')).toBe('2 lines');
+    expect(el.querySelector('[data-slot="monitor-event-face"]')).toBeNull();
   });
 
-  it('shows the delivered output without a press, and names the lines cut before delivery', () => {
+  it('shows no output, command or timeout until the line is opened', () => {
     const el = render(
       <MonitorEventCard
-        entry={monitor({ omitted: 3 })}
+        entry={monitor({ command: 'pnpm dev', timeoutMs: 600_000 })}
         woke
         agent={null}
         memoryKey="monitor-test"
       />,
     );
-    const output = slotText(el, 'monitor-output');
-    expect(output).toContain('compiled');
-    expect(output).toContain('ready');
+    expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
+    expect(el.querySelector('[data-slot="monitor-event-details"]')).toBeNull();
+    expect(el.textContent).not.toContain('compiled');
+  });
+
+  it('opens onto the command, the timeout and the whole output, and folds again', () => {
+    const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`);
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({
+          lines,
+          omitted: 3,
+          command: 'gh run watch 42',
+          timeoutMs: 1_800_000,
+        })}
+        woke
+        agent={null}
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(slotText(el, 'monitor-event-size')).toBe('15 lines');
+
+    act(() => line(el).click());
+
+    expect(line(el).getAttribute('aria-expanded')).toBe('true');
+    expect(slotText(el, 'monitor-event-command')).toContain('gh run watch 42');
+    expect(slotText(el, 'monitor-event-timeout')).toBe('timeout 30m');
+    const output = slotText(el, 'monitor-output') ?? '';
+    expect(output).toContain('line 1\n');
+    expect(output).toContain('line 12');
     expect(output).toContain('… 3 more lines not delivered');
-    expect(el.querySelector('[data-slot="monitor-output-toggle"]')).toBeNull();
+
+    act(() => line(el).click());
+
+    expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
   });
 
   it('says a single cut line in the singular', () => {
@@ -530,59 +571,14 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
+    expect(slotText(el, 'monitor-event-size')).toBe('1 line');
+    act(() => line(el).click());
     expect(slotText(el, 'monitor-output')).toContain(
       '… 1 more line not delivered',
     );
   });
 
-  it('shows the last lines of a long output, and all of them on Show all', () => {
-    const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`);
-    const el = render(
-      <MonitorEventCard
-        entry={monitor({ lines })}
-        woke
-        agent={null}
-        memoryKey="monitor-test"
-      />,
-    );
-    const output = () => slotText(el, 'monitor-output') ?? '';
-    expect(output()).not.toContain('line 4\n');
-    expect(output()).toContain('line 5');
-    expect(output()).toContain('line 12');
-    expect(slotText(el, 'monitor-output-hidden')).toBe('… 4 earlier lines');
-    const toggle = el.querySelector<HTMLButtonElement>(
-      '[data-slot="monitor-output-toggle"]',
-    )!;
-    expect(toggle.textContent).toContain('Show all 12 lines');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-
-    act(() => toggle.click());
-
-    expect(output()).toContain('line 1\n');
-    expect(el.querySelector('[data-slot="monitor-output-hidden"]')).toBeNull();
-    expect(toggle.textContent).toContain('Show less');
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-
-    act(() => toggle.click());
-
-    expect(output()).not.toContain('line 1\n');
-  });
-
-  it('shows exactly eight lines with no Show all', () => {
-    const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`);
-    const el = render(
-      <MonitorEventCard
-        entry={monitor({ lines })}
-        woke
-        agent={null}
-        memoryKey="monitor-test"
-      />,
-    );
-    expect(slotText(el, 'monitor-output')).toContain('line 1\n');
-    expect(el.querySelector('[data-slot="monitor-output-toggle"]')).toBeNull();
-  });
-
-  it('says there was no new output, never a lone label, when nothing was delivered or cut', () => {
+  it('says "no output" on the line, and "No new output" only once opened', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor({ lines: [], omitted: 0 })}
@@ -591,76 +587,28 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
+    expect(slotText(el, 'monitor-event-size')).toBe('no output');
+    expect(el.querySelector('[data-slot="monitor-no-output"]')).toBeNull();
+
+    act(() => line(el).click());
+
     expect(slotText(el, 'monitor-no-output')).toBe('No new output');
     expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
-    expect(el.querySelector('button')).toBeNull();
   });
 
-  it('shows the command, how long it had run and its timeout', () => {
-    const el = render(
-      <MonitorEventCard
-        entry={monitor({
-          event: 'end',
-          end: { kind: 'exit', code: 0 },
-          command: 'gh run watch 42 --exit-status',
-          startedAt: '2026-11-24T10:00:00.000Z',
-          timeoutMs: 1_800_000,
-        })}
-        woke
-        agent={null}
-        at="2026-11-24T10:04:12.000Z"
-        memoryKey="monitor-test"
-      />,
-    );
-    const command = el.querySelector<HTMLElement>(
-      '[data-slot="monitor-event-command"]',
-    );
-    expect(command?.textContent).toContain('gh run watch 42 --exit-status');
-    expect(command?.title).toBe('gh run watch 42 --exit-status');
-    expect(slotText(el, 'monitor-event-meta')).toBe(
-      '2 lines · ran 4m 12s · timeout 30m',
-    );
-  });
-
-  it('says a batch has been running, rather than ran', () => {
-    const el = render(
-      <MonitorEventCard
-        entry={monitor({ startedAt: '2026-11-24T10:00:00.000Z' })}
-        woke
-        agent={null}
-        at="2026-11-24T10:00:45.000Z"
-        memoryKey="monitor-test"
-      />,
-    );
-    expect(slotText(el, 'monitor-event-meta')).toBe(
-      '2 lines · running for 45s',
-    );
-  });
-
-  it('draws a row written before the command was recorded without command, time or timeout', () => {
+  it('opens a row written before command and timeout were recorded onto its output alone', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor()}
         woke
         agent={null}
-        at="2026-11-24T10:00:45.000Z"
         memoryKey="monitor-test"
       />,
     );
+    expect(line(el).title).toBe('Monitor reported: dev server log');
+    act(() => line(el).click());
     expect(el.querySelector('[data-slot="monitor-event-command"]')).toBeNull();
-    expect(slotText(el, 'monitor-event-meta')).toBe('2 lines');
-  });
-
-  it('draws no details at all for an old row with no output', () => {
-    const el = render(
-      <MonitorEventCard
-        entry={monitor({ lines: [], event: 'end', end: { kind: 'stopped' } })}
-        woke={false}
-        agent={null}
-        memoryKey="monitor-test"
-      />,
-    );
-    expect(el.querySelector('[data-slot="monitor-event-details"]')).toBeNull();
+    expect(slotText(el, 'monitor-output')).toContain('compiled');
   });
 
   it('draws an ending that was only a stop as a stopped monitor, its chip muted', () => {
@@ -679,18 +627,6 @@ describe('MonitorEventCard', () => {
     expect(chip?.textContent).toBe('stopped');
     expect(chip?.className).toContain('text-muted-foreground');
     expect(el.querySelector('[data-slot="monitor-event-outcome"]')).toBeNull();
-  });
-
-  it('marks a batch as running', () => {
-    const el = render(
-      <MonitorEventCard
-        entry={monitor()}
-        woke
-        agent={null}
-        memoryKey="monitor-test"
-      />,
-    );
-    expect(slotText(el, 'monitor-event-status')).toBe('running');
   });
 
   it('draws a batch delivered without a turn of its own as a report, never as a stop', () => {
@@ -715,6 +651,7 @@ describe('MonitorEventCard', () => {
       />,
     );
     expect(card(el, 'monitor-event').dataset.kind).toBe('monitor-ended');
+    expect(line(el).title).toContain('Monitor ended: dev server log');
     const chip = el.querySelector<HTMLElement>(
       '[data-slot="monitor-event-status"]',
     );
@@ -753,32 +690,6 @@ describe('MonitorEventCard', () => {
       el.querySelector<HTMLElement>('[data-slot="monitor-event-status"]')
         ?.className,
     ).toContain('text-destructive');
-  });
-});
-
-describe('monitorMetaParts', () => {
-  const started = '2026-11-24T10:00:00.000Z';
-  it.each<[Partial<MonitorEntry>, string | null, string[]]>([
-    [{ startedAt: started }, null, ['2 lines']],
-    [{ startedAt: started }, 'not a time', ['2 lines']],
-    [
-      { startedAt: started },
-      '2026-11-24T09:59:57.000Z',
-      ['2 lines', 'running for 0s'],
-    ],
-    [
-      {
-        startedAt: started,
-        event: 'end',
-        end: { kind: 'interrupted' },
-        lines: [],
-      },
-      '2026-11-25T08:00:00.000Z',
-      [],
-    ],
-    [{ lines: [], omitted: 0, timeoutMs: 5_400_000 }, null, ['timeout 1h 30m']],
-  ])('says %j written at %s as %j', (over, at, parts) => {
-    expect(monitorMetaParts(monitor(over), at)).toEqual(parts);
   });
 });
 

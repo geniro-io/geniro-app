@@ -2,7 +2,7 @@ import {
   Activity,
   Ban,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
   CircleCheck,
   CircleMinus,
   CircleSlash,
@@ -26,14 +26,16 @@ import {
   ThreadHead,
   type ThreadIdentity,
 } from '../components/thread-head';
-import type { ThreadLabelsView } from '../components/thread-labels';
+import {
+  type ThreadLabelsView,
+  ThreadStatusChip,
+} from '../components/thread-labels';
 import { AnsiText } from '../components/ui/ansi-text';
 import { OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { formatDuration } from '../stats/stats-format';
 import { RevealCallContext } from './call-block';
 import { ClampedMarkdown } from './clamped-markdown';
-import { formatElapsed } from './live-row';
 import type { MonitorEnd, MonitorEntry } from './monitor-payload';
 import { useThreadFlag } from './thread-ui-memory';
 import type { TranscriptNodeMeta } from './transcript-payload';
@@ -238,7 +240,9 @@ export interface AgentEventCardProps {
   kind: AgentEventKind;
   /** The prefix of every slot the card draws. */
   slot: string;
-  identity: ThreadIdentity;
+  identity?: ThreadIdentity;
+  /** Drawn in place of the event line and the head: a card folded to one line. */
+  line?: React.ReactNode;
   /** Overrides the kind's own label. */
   label?: string;
   handle?: string | null;
@@ -270,6 +274,7 @@ export function AgentEventCard({
   kind,
   slot,
   identity,
+  line,
   label,
   handle = null,
   member = null,
@@ -291,22 +296,31 @@ export function AgentEventCard({
       data-slot={`${slot}-card`}
       data-kind={kind}
       {...data}
-      className="flex w-full min-w-0 flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-sm">
-      <EventLine
-        icon={meta.icon}
-        tone={meta.tone}
-        label={label ?? meta.label}
-        slot={slot}
-        handle={handle}
-        member={member}
-        waiting={waiting}
-      />
-      <ThreadHead
-        identity={identity}
-        slot={slot}
-        onOpen={onOpen}
-        aside={headAside}
-      />
+      className={cn(
+        'flex w-full min-w-0 flex-col gap-2 rounded-lg border border-border/70 bg-card px-3 text-sm',
+        line === undefined ? 'py-2.5' : 'py-1.5',
+      )}>
+      {line ?? (
+        <>
+          <EventLine
+            icon={meta.icon}
+            tone={meta.tone}
+            label={label ?? meta.label}
+            slot={slot}
+            handle={handle}
+            member={member}
+            waiting={waiting}
+          />
+          {identity === undefined ? null : (
+            <ThreadHead
+              identity={identity}
+              slot={slot}
+              onOpen={onOpen}
+              aside={headAside}
+            />
+          )}
+        </>
+      )}
       {lead}
       {text === null || text === '' ? null : (
         <div className={cn('border-l-2 pl-3', RAIL_TONE[meta.rail])}>
@@ -529,154 +543,141 @@ export function monitorStatusOf(end: MonitorEnd | null): ThreadStatusView {
   }
 }
 
-/** Lines the output shows before Show all. */
-export const MONITOR_OUTPUT_PREVIEW_LINES = 8;
-
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
 
-/** What the card says of the monitor under its head: lines, how long it had run, its timeout. */
-export function monitorMetaParts(
-  entry: MonitorEntry,
-  at: string | null,
-): string[] {
-  const parts: string[] = [];
+/** What the folded line says after the state: how much it printed. */
+export function monitorOutputSize(entry: MonitorEntry): string {
   const count = entry.lines.length + entry.omitted;
-  if (count > 0) {
-    parts.push(plural(count, 'line'));
-  }
-  const started =
-    entry.startedAt === null ? Number.NaN : Date.parse(entry.startedAt);
-  const written = at === null ? Number.NaN : Date.parse(at);
-  if (
-    !Number.isNaN(started) &&
-    !Number.isNaN(written) &&
-    entry.end?.kind !== 'interrupted'
-  ) {
-    const elapsed = formatElapsed(written - started);
-    parts.push(
-      entry.end === null ? `running for ${elapsed}` : `ran ${elapsed}`,
-    );
-  }
-  if (entry.timeoutMs !== null) {
-    parts.push(`timeout ${formatDuration(entry.timeoutMs)}`);
-  }
-  return parts;
+  return count === 0 ? 'no output' : plural(count, 'line');
 }
 
-function MonitorDetails({
+function MonitorLine({
   entry,
-  at,
+  kind,
+  agent,
+  open,
+  onToggle,
 }: {
   entry: MonitorEntry;
-  at: string | null;
-}): React.JSX.Element | null {
-  const meta = monitorMetaParts(entry, at);
-  if (entry.command === null && meta.length === 0) {
-    return null;
-  }
+  kind: MemberEventKind;
+  agent: string | null;
+  open: boolean;
+  onToggle: () => void;
+}): React.JSX.Element {
+  const meta = KIND_META[kind];
+  const Icon = meta.icon;
+  const status = monitorStatusOf(entry.end);
+  const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <div
-      data-slot="monitor-event-details"
-      className="flex min-w-0 flex-col gap-0.5 text-[11px] leading-4 text-muted-foreground">
-      {entry.command === null ? null : (
-        <p
-          data-slot="monitor-event-command"
-          title={entry.command}
-          className="min-w-0 truncate font-mono text-foreground/80">
-          <span
-            aria-hidden="true"
-            className="text-muted-foreground select-none">
-            ${' '}
-          </span>
-          {entry.command}
-        </p>
+    <button
+      type="button"
+      data-slot="monitor-event-line"
+      aria-expanded={open}
+      title={[`${meta.label}: ${entry.description}`, entry.command ?? '']
+        .filter((part) => part !== '')
+        .join('\n')}
+      onClick={onToggle}
+      className="-mx-1 flex min-w-0 items-center gap-1.5 rounded-sm px-1 text-left text-xs leading-5 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11">
+      <Chevron
+        aria-hidden="true"
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+      <Icon
+        aria-hidden="true"
+        className={cn('size-3.5 shrink-0', ICON_TONE[meta.tone])}
+      />
+      <span
+        data-slot="monitor-event-title"
+        className="min-w-0 truncate font-medium text-foreground">
+        {entry.description}
+      </span>
+      <ThreadStatusChip
+        attention={status.attention}
+        slot="monitor-event-status">
+        {status.text}
+      </ThreadStatusChip>
+      <span
+        data-slot="monitor-event-handle"
+        className="shrink-0 rounded-sm bg-muted px-1 font-mono text-[11px] text-foreground/80">
+        {entry.id}
+      </span>
+      {agent === null ? null : (
+        <span
+          data-slot="monitor-event-member"
+          className="min-w-0 shrink-[2] truncate text-muted-foreground">
+          {agent}
+        </span>
       )}
-      {meta.length === 0 ? null : (
-        <p data-slot="monitor-event-meta" className="tabular-nums">
-          {meta.join(' · ')}
-        </p>
-      )}
-    </div>
+      <span
+        data-slot="monitor-event-size"
+        className="ml-auto shrink-0 pl-1 text-muted-foreground tabular-nums">
+        {monitorOutputSize(entry)}
+      </span>
+    </button>
   );
 }
 
-function MonitorOutput({
-  entry,
-  memoryKey,
-}: {
-  entry: MonitorEntry;
-  memoryKey: string;
-}): React.JSX.Element {
-  const [open, setOpen] = useThreadFlag(memoryKey, false);
-  if (entry.lines.length + entry.omitted === 0) {
-    return (
-      <p
-        data-slot="monitor-no-output"
-        className="text-xs text-muted-foreground italic">
-        No new output
-      </p>
-    );
-  }
-  const long = entry.lines.length > MONITOR_OUTPUT_PREVIEW_LINES;
-  const hidden =
-    long && !open ? entry.lines.length - MONITOR_OUTPUT_PREVIEW_LINES : 0;
+function MonitorDetails({ entry }: { entry: MonitorEntry }): React.JSX.Element {
+  const empty = entry.lines.length + entry.omitted === 0;
   return (
     <div
-      data-slot="monitor-output-block"
-      className="flex w-full min-w-0 flex-col overflow-hidden rounded-md border border-border/60 bg-muted/60">
-      <pre
-        data-slot="monitor-output"
-        className="max-h-80 w-full overflow-auto px-2.5 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
-        {hidden > 0 ? (
-          <span
-            data-slot="monitor-output-hidden"
-            className="block text-muted-foreground">
-            … {plural(hidden, 'earlier line')}
-          </span>
-        ) : null}
-        <AnsiText text={entry.lines.slice(hidden).join('\n')} />
-        {entry.omitted > 0 ? (
-          <span className="block text-muted-foreground">
-            … {entry.omitted} more {entry.omitted === 1 ? 'line' : 'lines'} not
-            delivered
-          </span>
-        ) : null}
-      </pre>
-      {long ? (
-        <button
-          type="button"
-          data-slot="monitor-output-toggle"
-          aria-expanded={open}
-          className="flex items-center gap-0.5 border-t border-border/60 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground max-sm:min-h-11"
-          onClick={() => setOpen((current) => !current)}>
-          {open ? (
-            <>
-              <ChevronUp aria-hidden="true" className="size-3" /> Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown aria-hidden="true" className="size-3" /> Show all{' '}
-              {plural(entry.lines.length, 'line')}
-            </>
+      data-slot="monitor-event-details"
+      className="flex min-w-0 flex-col gap-1.5">
+      {entry.command === null && entry.timeoutMs === null ? null : (
+        <p
+          data-slot="monitor-event-command"
+          className="flex min-w-0 items-baseline gap-1.5 text-[11px] leading-4 text-muted-foreground">
+          {entry.command === null ? null : (
+            <span className="min-w-0 font-mono break-all text-foreground/80">
+              <span aria-hidden="true" className="select-none">
+                ${' '}
+              </span>
+              {entry.command}
+            </span>
           )}
-        </button>
-      ) : null}
+          {entry.timeoutMs === null ? null : (
+            <span
+              data-slot="monitor-event-timeout"
+              className="ml-auto shrink-0">
+              timeout {formatDuration(entry.timeoutMs)}
+            </span>
+          )}
+        </p>
+      )}
+      {empty ? (
+        <p
+          data-slot="monitor-no-output"
+          className="text-xs text-muted-foreground italic">
+          No new output
+        </p>
+      ) : (
+        <pre
+          data-slot="monitor-output"
+          className="max-h-80 w-full overflow-auto rounded-md border border-border/60 bg-muted/60 px-2.5 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
+          <AnsiText text={entry.lines.join('\n')} />
+          {entry.omitted > 0 ? (
+            <span className="block text-muted-foreground">
+              … {entry.omitted} more {entry.omitted === 1 ? 'line' : 'lines'}{' '}
+              not delivered
+            </span>
+          ) : null}
+        </pre>
+      )}
     </div>
   );
 }
 
 /**
- * A monitor's batch that started a turn of the agent's own, or its end: headed
- * by the monitor and where it stands, its command and how long it ran, the
- * delivered output's last lines under it.
+ * A monitor's batch that started a turn of the agent's own, or its end, folded
+ * to one line — the monitor, where it stands, whose it is and how much it
+ * printed — that opens onto its command and output.
  */
 export function MonitorEventCard({
   entry,
   woke,
   agent,
-  at = null,
   memoryKey,
 }: {
   entry: MonitorEntry;
@@ -684,23 +685,24 @@ export function MonitorEventCard({
   woke: boolean;
   /** The agent the monitor reports to. */
   agent: string | null;
-  /** When the row was written. */
-  at?: string | null;
   memoryKey: string;
 }): React.JSX.Element {
+  const [open, setOpen] = useThreadFlag(memoryKey, false);
+  const kind = monitorKindOf(entry, woke);
   return (
     <AgentEventCard
-      kind={monitorKindOf(entry, woke)}
+      kind={kind}
       slot="monitor-event"
-      identity={{
-        ...bareThreadIdentity(entry.description),
-        face: { kind: 'monitor' },
-        status: monitorStatusOf(entry.end),
-      }}
-      handle={entry.id}
-      member={agent}
-      lead={<MonitorDetails entry={entry} at={at} />}
-      body={<MonitorOutput entry={entry} memoryKey={memoryKey} />}
+      line={
+        <MonitorLine
+          entry={entry}
+          kind={kind}
+          agent={agent}
+          open={open}
+          onToggle={() => setOpen((current) => !current)}
+        />
+      }
+      body={open ? <MonitorDetails entry={entry} /> : null}
       data={{ 'data-monitor': entry.id }}
     />
   );

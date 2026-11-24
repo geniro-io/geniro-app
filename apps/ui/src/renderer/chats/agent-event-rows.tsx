@@ -114,13 +114,10 @@ export function AgentCallEventRow({
 export function MonitorEventRow({
   notice,
   agent,
-  at = null,
   memoryKey,
 }: {
   notice: MonitorNotice;
   agent: string | null;
-  /** When the row was written. */
-  at?: string | null;
   memoryKey: string;
 }): React.JSX.Element | null {
   const shown = drawnMonitorEntries(notice);
@@ -135,7 +132,6 @@ export function MonitorEventRow({
           entry={entry}
           woke={notice.woke}
           agent={agent}
-          at={at}
           memoryKey={`${memoryKey}:${index}`}
         />
       ))}

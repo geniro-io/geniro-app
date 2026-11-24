@@ -593,7 +593,6 @@ export const TranscriptItem = memo(function TranscriptItem({
           <MonitorEventRow
             notice={monitor}
             agent={nodeName(item.memberId)}
-            at={item.createdAt}
             memoryKey={`monitor:${item.id}`}
           />
         );

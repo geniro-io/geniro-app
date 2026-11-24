@@ -154,7 +154,6 @@ export const MonitorReportedWithOutput: Story = {
       entry={DEV_SERVER}
       woke
       agent="Manager"
-      at="2026-11-24T10:02:31.000Z"
       memoryKey="story-monitor-reported"
     />
   ),
@@ -174,7 +173,6 @@ export const MonitorFinishedLongOutput: Story = {
       }}
       woke
       agent="Nick Fury · Manager"
-      at="2026-11-24T10:04:12.000Z"
       memoryKey="story-monitor-long"
     />
   ),
@@ -186,7 +184,6 @@ export const MonitorNoNewOutput: Story = {
       entry={{ ...DEV_SERVER, lines: [], omitted: 0 }}
       woke
       agent="Manager"
-      at="2026-11-24T10:30:00.000Z"
       memoryKey="story-monitor-empty"
     />
   ),
@@ -204,7 +201,6 @@ export const MonitorTimedOut: Story = {
       }}
       woke
       agent="Manager"
-      at="2026-11-24T10:30:00.000Z"
       memoryKey="story-monitor-timeout"
     />
   ),
@@ -222,7 +218,6 @@ export const MonitorStopped: Story = {
       }}
       woke={false}
       agent="Manager"
-      at="2026-11-24T10:12:09.000Z"
       memoryKey="story-monitor-stopped"
     />
   ),
@@ -240,7 +235,6 @@ export const MonitorEndedExit1: Story = {
       }}
       woke={false}
       agent="Manager"
-      at="2026-11-24T10:00:03.000Z"
       memoryKey="story-monitor-ended"
     />
   ),

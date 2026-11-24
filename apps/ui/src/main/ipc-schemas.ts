@@ -691,6 +691,19 @@ export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 /** `getChangesSince`'s optional third argument — see `readChangesSince`. */
 export const workFolderFlagSchema = z.boolean().optional();
 
+/**
+ * `readFileLines`' request. Its shape only: a path outside the repository, a
+ * range too long and a sha that is not one are answered by the reader with a
+ * reason, not thrown.
+ */
+export const fileLinesRequestSchema = z.object({
+  dir: gitDirSchema,
+  path: z.string(),
+  at: z.union([z.literal('worktree'), z.object({ sha: z.string() })]),
+  from: z.number().int(),
+  to: z.number().int(),
+});
+
 /** An instant as epoch milliseconds — `listWorktrees`' thread start. */
 export const epochMsSchema = z.number().int().nonnegative();
 

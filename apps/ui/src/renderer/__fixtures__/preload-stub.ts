@@ -305,6 +305,15 @@ export function createPreloadStub(
         unavailableReason: 'Not a git repository.',
         movedOffStart: false,
         upstreamBase: null,
+        baseSha: null,
+      });
+    },
+    readFileLines: () => {
+      note('readFileLines');
+      return Promise.resolve({
+        lines: [],
+        total: 0,
+        unavailableReason: 'Not a git repository.',
       });
     },
     listWorktrees: () => {

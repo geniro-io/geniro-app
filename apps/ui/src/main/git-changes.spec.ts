@@ -59,6 +59,7 @@ describe('readChangesSince', () => {
       unavailableReason: null,
       movedOffStart: false,
       upstreamBase: null,
+      baseSha: sha,
     });
   });
 
@@ -73,6 +74,7 @@ describe('readChangesSince', () => {
 
     const notes = changes.find((change) => change.path === 'notes.md');
     expect(notes?.status).toBe('untracked');
+    expect(notes?.oldPath).toBeNull();
     // With its contents, rendered read-only: `git add -N` would make it appear
     // in an ordinary diff and would write to the user's own index.
     expect(notes?.diff).toContain('a new file');
@@ -88,6 +90,7 @@ describe('readChangesSince', () => {
 
     expect(changes).toHaveLength(1);
     expect(changes[0]!.status).toBe('modified');
+    expect(changes[0]!.oldPath).toBeNull();
     expect(changes[0]!.diff).toContain('-hello');
     expect(changes[0]!.diff).toContain('+hello again');
   });
@@ -391,7 +394,11 @@ describe('readChangesSince', () => {
     const { changes } = await readChangesSince(dir, sha);
 
     expect(changes).toEqual([
-      expect.objectContaining({ path: 'GUIDE.md', status: 'renamed' }),
+      expect.objectContaining({
+        path: 'GUIDE.md',
+        status: 'renamed',
+        oldPath: 'README.md',
+      }),
     ]);
   });
 
@@ -464,6 +471,7 @@ describe('readChangesSince', () => {
     const result = await readChangesSince(dir, started);
 
     expect(result.movedOffStart).toBe(true);
+    expect(result.baseSha).toBe(run(['rev-parse', 'HEAD']));
     // The branch difference is NOT listed; the uncommitted edit is.
     expect(result.changes.map((change) => change.path)).toEqual(['README.md']);
   });
@@ -490,6 +498,7 @@ describe('readChangesSince', () => {
       // Named by the ref it came through — this repository has no
       // `origin/HEAD`, so the fallback to `origin/main` is what answered.
       expect(result.upstreamBase).toEqual({ sha: shared, ref: 'origin/main' });
+      expect(result.baseSha).toBe(shared);
       expect(result.movedOffStart).toBe(false);
       // `upstream.txt` is NOT listed; the chat's own commit and edit are.
       expect(result.changes.map((change) => change.path)).toEqual([

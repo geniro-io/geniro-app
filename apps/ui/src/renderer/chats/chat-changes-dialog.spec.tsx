@@ -90,6 +90,7 @@ describe('ChatChangesDialog — the thread’s other work folders', () => {
   const file = (path: string) => ({
     path,
     status: 'modified' as const,
+    oldPath: null,
     diff: null,
     added: 1,
     removed: 1,

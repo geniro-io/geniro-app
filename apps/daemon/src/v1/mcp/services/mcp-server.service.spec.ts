@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { chatSearchDb } from '../../agents/__tests__/chat-search-db';
 import { goalsDb } from '../../agents/__tests__/goals-db';
+import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   type AnalysisTurn,
@@ -304,6 +305,7 @@ function service(
       milestones,
       goals,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages,
       plans,
       notices,
@@ -4539,6 +4541,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     });
     const listing = tools.flatMap((tool) =>
@@ -4645,6 +4648,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     });
   };
@@ -4983,6 +4987,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     }).find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
 
@@ -5107,6 +5112,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
+        reviewComments: {} as ReviewCommentsService,
         stages: stageService(),
       }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
       return {
@@ -5345,6 +5351,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
+        reviewComments: {} as ReviewCommentsService,
         stages: stageService(),
       });
     type ToolCallContext = Parameters<

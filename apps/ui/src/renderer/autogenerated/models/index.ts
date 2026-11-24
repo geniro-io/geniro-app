@@ -4490,6 +4490,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     projectId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    firstMessage?: string;
 }
 
 

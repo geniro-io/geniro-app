@@ -303,9 +303,11 @@ export class TaskRunsService {
         return await this.recordRun(taskId, run.id, input);
       }
 
+      const brief = this.brief(task, input);
       const run = await this.chats.createChat({
         agentKind: target.agentKind,
         cwd: input.cwd,
+        firstMessage: brief,
         startSha: input.startSha,
         startDirty: input.startDirty,
         model: target.model ?? undefined,
@@ -340,7 +342,7 @@ export class TaskRunsService {
 
       runId = run.id;
       const wire = await this.recordRun(taskId, run.id, input);
-      await this.chats.sendMessage(run.id, this.brief(task, input));
+      await this.chats.sendMessage(run.id, brief);
       return wire;
     } catch (error) {
       await this.abandon(taskId, input.from, runId, target.kind, found);

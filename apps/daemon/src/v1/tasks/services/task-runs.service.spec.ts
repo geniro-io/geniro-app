@@ -846,6 +846,19 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     );
   });
 
+  it('hands the chat the card brief as its first message, the same text it then sends', async () => {
+    const task = await seed({
+      title: 'Fix the cap',
+      description: 'It is off by one.',
+    });
+
+    await service.start(task.id, start());
+
+    const [passed] = createChat.mock.calls[0] as [{ firstMessage?: string }];
+    expect(passed.firstMessage).toBe('Fix the cap\n\nIt is off by one.');
+    expect(sendMessage).toHaveBeenCalledWith('run-1', passed.firstMessage);
+  });
+
   it('keeps the user’s own instructions apart from the report ask', async () => {
     // The user's text is theirs to purge (`forget-custom-instructions`); the
     // ask is geniro's, so it travels in the card's own field.

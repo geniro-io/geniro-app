@@ -31,6 +31,7 @@ import {
   MEMORY_FEEDBACK_REASON_MAX_CHARS,
   MEMORY_FORGET_BATCH_MAX,
   MEMORY_FORGET_REASON_MAX_CHARS,
+  MEMORY_INDEX_MATCH_CANDIDATES,
   MEMORY_LESSON_EXPIRY_DAYS,
   MEMORY_LIST_LIMIT_DEFAULT,
   MEMORY_MARKS_BATCH_PREFIX,
@@ -94,7 +95,9 @@ import {
   excerptOf,
   importedText,
   importedTextHash,
+  indexMatchQuery,
   memoryIndexOf,
+  relevantFirst,
   similarTitles,
   titleCandidatesQuery,
 } from '../utils/memory-text';
@@ -571,8 +574,14 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
    * off only while the shared memory is on and the user switched it off (a
    * successful import does), so an agent keeps one memory without the CLIs'
    * notes being hidden before they are brought over.
+   *
+   * `firstMessage` is the text the run opens with, when it has one: the index
+   * then lists first the entries that match its words, within half its room.
    */
-  async runSnapshot(facts: RunPlaceFacts): Promise<MemoryRunSnapshot> {
+  async runSnapshot(
+    facts: RunPlaceFacts,
+    firstMessage?: string | null,
+  ): Promise<MemoryRunSnapshot> {
     const none: MemoryRunSnapshot = {
       nativeMemoryOff: false,
       memoryIndex: null,
@@ -583,17 +592,51 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     }
     const shared = { ...none, nativeMemoryOff: this.config.nativeMemoryOff };
     try {
-      const entries = await this.listVisible(await this.scopeFor(facts));
-      const index = memoryIndexOf(
-        entries.filter((entry) => entry.indexed),
-        new Date(),
+      const place = await this.scopeFor(facts);
+      const eligible = (await this.listVisible(place)).filter(
+        (entry) => entry.indexed,
       );
+      const now = new Date();
+      const matched = await this.firstMessageMatches(place, firstMessage);
+      const index = memoryIndexOf(relevantFirst(eligible, matched, now), now);
       return { ...shared, memoryIndex: index.text, indexIds: index.ids };
     } catch (error) {
       this.logger.warn(
         `memory index not read: ${error instanceof Error ? error.message : String(error)}`,
       );
       return shared;
+    }
+  }
+
+  /**
+   * The ids of the best matches of a run's first message among the entries
+   * `place` may see, best first. None when the message has no word to search
+   * for or the search fails, so the run keeps today's order.
+   */
+  private async firstMessageMatches(
+    place: RunPlace,
+    firstMessage: string | null | undefined,
+  ): Promise<string[]> {
+    const query = firstMessage ? indexMatchQuery(firstMessage) : null;
+    if (query === null) {
+      return [];
+    }
+    try {
+      return await this.memories.matchIds(
+        query,
+        {
+          statuses: ['active'],
+          places: { visibleTo: place },
+          reach: 'index',
+        },
+        MEMORY_INDEX_MATCH_CANDIDATES,
+        this.em.fork(),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `memory index matches not read: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
     }
   }
 
@@ -822,7 +865,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
 
   /**
    * How many of the entries a new run in `place` may list fit in its memory
-   * index, cut exactly as {@link runSnapshot} cuts it.
+   * index, cut as {@link runSnapshot} cuts it for a run with no first message.
    */
   async indexPreview(place: RunPlace): Promise<MemoryIndexPreview> {
     const eligible = (await this.listVisible(place)).filter(

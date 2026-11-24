@@ -29,7 +29,7 @@ import {
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
-import { importedTextHash } from '../utils/memory-text';
+import { importedTextHash, indexHandlesOf } from '../utils/memory-text';
 import type { MemoryService } from './memory.service';
 import { MemoryReviewService } from './memory-review.service';
 
@@ -697,9 +697,9 @@ describe('MemoryService', () => {
       return (index ?? '').split('\n');
     }
 
-    it('caps the index at 2 KB on whole lines and ends with the +N more footer', async () => {
+    it('caps the index at 4 KB on whole lines and ends with the +N more footer', async () => {
       const titles = Array.from(
-        { length: 30 },
+        { length: 40 },
         (_, n) => `Note ${n} ${'word '.repeat(20)}end`,
       );
       const em = db.em.fork();
@@ -721,16 +721,189 @@ describe('MemoryService', () => {
 
       const lines = indexLines(memoryIndex);
       const listed = lines.slice(1, -1);
-      expect(Buffer.byteLength(memoryIndex ?? '')).toBeLessThanOrEqual(2048);
+      expect(Buffer.byteLength(memoryIndex ?? '')).toBeLessThanOrEqual(4096);
       expect(lines[0]).toBe(MEMORY_INDEX_PREFACE);
       expect(listed.length).toBeGreaterThan(0);
-      expect(listed.length).toBeLessThan(30);
+      expect(listed.length).toBeLessThan(40);
       for (const line of listed) {
         expect(titles.some((title) => line.includes(` ${title} (`))).toBe(true);
       }
       expect(lines.at(-1)).toBe(
-        `(+${30 - listed.length} more — memory_search)`,
+        `(+${40 - listed.length} more — memory_search)`,
       );
+    });
+
+    /** Forty entries no run has used, enough to fill a 4 KB index past its cap. */
+    async function fillIndex(): Promise<void> {
+      const em = db.em.fork();
+      for (let n = 0; n < 40; n += 1) {
+        em.persist(
+          make(Memory, {
+            handle: n + 1,
+            title: `Note ${n} ${'word '.repeat(20)}end`,
+            body: 'x',
+            type: 'project',
+            status: 'active',
+            sourceActor: 'user',
+          }),
+        );
+      }
+      await em.flush();
+    }
+
+    it('lists first the entries the first message matches, though the cap would cut them', async () => {
+      await fillIndex();
+      const target = make(Memory, {
+        handle: 100,
+        title: 'Invoice export format',
+        body: 'x',
+        type: 'project',
+        status: 'active',
+        sourceActor: 'user',
+      });
+      const em = db.em.fork();
+      em.persist(target);
+      await em.flush();
+      await db.em
+        .fork()
+        .nativeUpdate(
+          Memory,
+          { id: target.id },
+          { updatedAt: new Date('2020-01-01T00:00:00Z') },
+        );
+
+      const without = await db.service.runSnapshot(FACTS);
+      const { memoryIndex, indexIds } = await db.service.runSnapshot(
+        FACTS,
+        'How do I fix the invoice export?',
+      );
+
+      expect(indexHandlesOf(without.memoryIndex ?? '')).not.toContain('m100');
+      expect(indexHandlesOf(memoryIndex ?? '')[0]).toBe('m100');
+      expect(indexIds[0]).toBe(target.id);
+      expect(indexIds).toHaveLength(indexHandlesOf(memoryIndex ?? '').length);
+    });
+
+    it('lists an indexable match first though sixty unindexed ones match it more strongly', async () => {
+      await fillIndex();
+      const em = db.em.fork();
+      for (let n = 0; n < 60; n += 1) {
+        em.persist(
+          make(Memory, {
+            handle: 200 + n,
+            title: `Invoice export invoice export invoice export ${n}`,
+            body: 'x',
+            type: 'project',
+            status: 'active',
+            sourceActor: 'agent',
+          }),
+        );
+      }
+      const target = make(Memory, {
+        handle: 100,
+        title: 'Invoice export format',
+        body: 'x',
+        type: 'project',
+        status: 'active',
+        sourceActor: 'user',
+      });
+      em.persist(target);
+      await em.flush();
+      await db.em
+        .fork()
+        .nativeUpdate(
+          Memory,
+          { id: target.id },
+          { updatedAt: new Date('2020-01-01T00:00:00Z') },
+        );
+
+      const { memoryIndex, indexIds } = await db.service.runSnapshot(
+        FACTS,
+        'invoice export',
+      );
+
+      expect(indexHandlesOf(memoryIndex ?? '')[0]).toBe('m100');
+      expect(indexIds[0]).toBe(target.id);
+      expect(memoryIndex).not.toContain('Invoice export invoice export');
+    });
+
+    it('leaves out an agent’s unreviewed entry that matches the first message', async () => {
+      const kept = created(
+        await db.service.save(USER, { title: 'Kept note', body: 'x' }, NONE),
+      );
+      await db.service.save(
+        AGENT,
+        { title: 'Invoice export retry', body: 'x' },
+        NONE,
+      );
+
+      const { memoryIndex, indexIds } = await db.service.runSnapshot(
+        FACTS,
+        'invoice export retry',
+      );
+
+      expect(indexLines(memoryIndex).slice(1)).toEqual([
+        `- ${kept.handle} [project] Kept note (global)`,
+      ]);
+      expect(indexIds).toEqual([kept.id]);
+    });
+
+    it('leaves out another project’s entry that matches, and lists this project’s first', async () => {
+      await project();
+      const kept = created(
+        await db.service.save(USER, { title: 'Kept note', body: 'x' }, NONE),
+      );
+      const own = created(
+        await db.service.save(
+          USER,
+          { title: 'Invoice export rules', body: 'x' },
+          inProject('p1'),
+        ),
+      );
+      await db.service.save(
+        USER,
+        { title: 'Invoice export for the other app', body: 'x' },
+        inProject('p2'),
+      );
+
+      const { memoryIndex } = await db.service.runSnapshot(
+        FACTS,
+        'invoice export',
+      );
+
+      expect(indexLines(memoryIndex).slice(1)).toEqual([
+        `- ${own.handle} [project] Invoice export rules (project)`,
+        `- ${kept.handle} [project] Kept note (global)`,
+      ]);
+    });
+
+    it('gives today’s index with no usable first message, or one that matches nothing', async () => {
+      await fillIndex();
+      const plain = await db.service.runSnapshot(FACTS);
+
+      for (const message of [
+        undefined,
+        null,
+        '',
+        '   ',
+        'a b',
+        'zebra quartz',
+      ]) {
+        expect(await db.service.runSnapshot(FACTS, message)).toEqual(plain);
+      }
+    });
+
+    it('falls back to today’s order when the relevance query fails, and keeps its index', async () => {
+      await fillIndex();
+      const plain = await db.service.runSnapshot(FACTS);
+      vi.spyOn(MemoryDao.prototype, 'matchIds').mockRejectedValueOnce(
+        new Error('fts unavailable'),
+      );
+
+      const snapshot = await db.service.runSnapshot(FACTS, 'invoice export');
+
+      expect(snapshot).toEqual(plain);
+      expect(snapshot.memoryIndex).not.toBeNull();
     });
 
     it('orders project entries before global, most recently used first', async () => {

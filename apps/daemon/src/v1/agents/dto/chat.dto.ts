@@ -189,6 +189,11 @@ export const createChatSchema = z.object({
    * over as omitted.
    */
   projectId: z.string().min(1).nullable().optional(),
+  /**
+   * The message the client is about to send as this chat's first: read only to
+   * pick the memory index's entries, never stored.
+   */
+  firstMessage: z.string().max(16000).optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 

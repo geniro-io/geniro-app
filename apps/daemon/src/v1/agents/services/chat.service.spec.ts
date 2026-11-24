@@ -9467,6 +9467,28 @@ describe('ChatService', () => {
     }
   });
 
+  it('hands the index snapshot the first message the client is sending, and none when it sends none', async () => {
+    const asked: (string | null | undefined)[] = [];
+    const { service } = setup({
+      memory: {
+        runSnapshot: async (_facts, firstMessage) => {
+          asked.push(firstMessage);
+          return { nativeMemoryOff: false, memoryIndex: null, indexIds: [] };
+        },
+        countIndexShows: async () => undefined,
+      },
+    });
+
+    await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      firstMessage: 'Fix the export',
+    });
+    await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    expect(asked).toEqual(['Fix the export', undefined]);
+  });
+
   it('counts the index’s entries as shown once the run row exists, and keeps their ids off the row', async () => {
     const shown: { ids: readonly string[]; runRows: number }[] = [];
     const { service, runDao } = setup({

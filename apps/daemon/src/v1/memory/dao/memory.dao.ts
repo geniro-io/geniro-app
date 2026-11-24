@@ -104,12 +104,13 @@ export interface MemoryMatchScope {
    * `any`: every scope — the user's own view.
    */
   places: { visibleTo: RunPlace } | { exactly: RunPlace } | { any: true };
+  /** `index`: only what a run's memory index may list; `search`: the rest. Absent: both. */
+  reach?: MemoryReach;
 }
 
 /** One page of the user's list, newest edit first. */
 export interface MemoryPageFilter extends MemoryMatchScope {
   type?: MemoryType;
-  reach?: MemoryReach;
   handle?: number;
   /** A ready-made FTS5 query. */
   match?: string;
@@ -219,15 +220,10 @@ export class MemoryDao extends BaseDao<Memory> {
     filter: MemoryPageFilter,
     em: EntityManager = this.em,
   ): Promise<Memory[]> {
-    const { type, reach, handle, match, before } = filter;
+    const { type, handle, match, before } = filter;
     let query = this.scoped(filter, em).select('m.id');
     if (type !== undefined) {
       query = query.where('m.type', '=', type);
-    }
-    if (reach !== undefined) {
-      query = query.where((eb) =>
-        reach === 'index' ? reachExpression(eb) : eb.not(reachExpression(eb)),
-      );
     }
     if (handle !== undefined) {
       query = query.where('m.handle', '=', handle);
@@ -1123,19 +1119,16 @@ export class MemoryDao extends BaseDao<Memory> {
     }
   }
 
-  /** Live rows of the given statuses in the given scope. */
+  /** Live rows of the given statuses, in the given places and, when asked, of the given reach. */
   private scoped(scope: MemoryMatchScope, em: EntityManager) {
-    const query = this.database(em)
+    let query = this.database(em)
       .selectFrom('memories as m')
       .where('m.deleted_at', 'is', null)
       .where('m.status', 'in', [...scope.statuses]);
-    const { places } = scope;
-    if ('any' in places) {
-      return query;
-    }
+    const { places, reach } = scope;
     if ('visibleTo' in places) {
       const { projectId, teamSlug } = places.visibleTo;
-      return query.where((eb) =>
+      query = query.where((eb) =>
         eb.or([
           eb.and([
             eb('m.project_id', 'is', null),
@@ -1152,11 +1145,18 @@ export class MemoryDao extends BaseDao<Memory> {
           ...(teamSlug === null ? [] : [eb('m.team_slug', '=', teamSlug)]),
         ]),
       );
+    } else if ('exactly' in places) {
+      const { projectId, teamSlug } = places.exactly;
+      query = query
+        .where('m.project_id', projectId === null ? 'is' : '=', projectId)
+        .where('m.team_slug', teamSlug === null ? 'is' : '=', teamSlug);
     }
-    const { projectId, teamSlug } = places.exactly;
-    return query
-      .where('m.project_id', projectId === null ? 'is' : '=', projectId)
-      .where('m.team_slug', teamSlug === null ? 'is' : '=', teamSlug);
+    if (reach !== undefined) {
+      query = query.where((eb) =>
+        reach === 'index' ? reachExpression(eb) : eb.not(reachExpression(eb)),
+      );
+    }
+    return query;
   }
 
   /**

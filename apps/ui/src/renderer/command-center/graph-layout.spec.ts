@@ -9,6 +9,7 @@ import {
   layoutBlocks,
   layoutColumn,
   perLineFor,
+  withBoxAt,
 } from './graph-layout';
 
 const ROOT: GraphBox = { id: 'root', width: 360, height: 112 };
@@ -481,6 +482,42 @@ describe('layoutBlocks', () => {
       ...[...geometry.boxes.values()].map((box) => box.x + box.width),
     );
     expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
+  });
+});
+
+describe('withBoxAt', () => {
+  it('stands one box at the root plus its offset with a pinned wire, and leaves every block, box and wire where it was', () => {
+    const blocks = [blockOf('A', 4), blockOf('B', 4)];
+    const laidOut = layoutBlocks(ROOT, blocks, 4);
+    const pinnedThere = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['A-2', { x: 700, y: 200 }]]),
+    );
+
+    const moved = withBoxAt(laidOut, 'root', 'A-2', { x: 700, y: 200 });
+
+    expect(moved.boxes.get('A-2')).toEqual(pinnedThere.boxes.get('A-2'));
+    expect(moved.routes.get('A-2')).toEqual(pinnedThere.routes.get('A-2'));
+    for (const [id, box] of laidOut.boxes) {
+      if (id !== 'A-2') {
+        expect(moved.boxes.get(id)).toEqual(box);
+      }
+    }
+    for (const [id, route] of laidOut.routes) {
+      expect(moved.routes.get(id)).toEqual(route);
+    }
+    expect([moved.width, moved.height]).toEqual([
+      laidOut.width,
+      laidOut.height,
+    ]);
+  });
+
+  it('gives the geometry back as it is for a box it does not hold', () => {
+    const laidOut = layoutBlocks(ROOT, [blockOf('A', 2)], 4);
+
+    expect(withBoxAt(laidOut, 'root', 'gone', { x: 10, y: 10 })).toBe(laidOut);
   });
 });
 

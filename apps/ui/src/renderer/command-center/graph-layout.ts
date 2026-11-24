@@ -314,19 +314,8 @@ export function layoutBlocks(
     }
   });
 
-  const bus = rootBottom + LINE_GAP / 2;
   for (const box of obstacles) {
-    const target = box.x + box.width / 2;
-    const end = box.y >= bus ? box.y : box.y + box.height;
-    routes.set(
-      box.id,
-      withoutRepeats([
-        { x: centre, y: rootBottom },
-        { x: centre, y: bus },
-        { x: target, y: bus },
-        { x: target, y: end },
-      ]),
-    );
+    routes.set(box.id, elbowFrom(placedRoot, box));
   }
 
   const placedBoxes = [...boxes.values()];
@@ -343,6 +332,45 @@ export function layoutBlocks(
     height: lowest + MARGIN,
     boxes,
     routes,
+  };
+}
+
+/** A pinned box's own wire: down from the root's bottom centre, along the bus under it, into the box's nearer edge. */
+function elbowFrom(root: PlacedBox, box: PlacedBox): Point[] {
+  const centre = root.x + root.width / 2;
+  const rootBottom = root.y + root.height;
+  const bus = rootBottom + LINE_GAP / 2;
+  const target = box.x + box.width / 2;
+  const end = box.y >= bus ? box.y : box.y + box.height;
+  return withoutRepeats([
+    { x: centre, y: rootBottom },
+    { x: centre, y: bus },
+    { x: target, y: bus },
+    { x: target, y: end },
+  ]);
+}
+
+/**
+ * `geometry` with one box standing at the root's top-left plus `offset` and
+ * wired as a pinned box, everything else where it was: a box being dragged,
+ * which lays nothing out again until it is dropped.
+ */
+export function withBoxAt(
+  geometry: GraphGeometry,
+  rootId: string,
+  id: string,
+  offset: Point,
+): GraphGeometry {
+  const root = geometry.boxes.get(rootId);
+  const box = geometry.boxes.get(id);
+  if (root === undefined || box === undefined) {
+    return geometry;
+  }
+  const moved = { ...box, x: root.x + offset.x, y: root.y + offset.y };
+  return {
+    ...geometry,
+    boxes: new Map(geometry.boxes).set(id, moved),
+    routes: new Map(geometry.routes).set(id, elbowFrom(root, moved)),
   };
 }
 

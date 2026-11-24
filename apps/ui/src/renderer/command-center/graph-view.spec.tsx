@@ -1024,6 +1024,76 @@ describe('GraphView', () => {
     expect(onPlaceNode).not.toHaveBeenCalled();
   });
 
+  it('holds every block frame where and as big as it was drawn while a card is dragged, until the drop', async () => {
+    await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
+    const frames = () =>
+      nodesOfType('block').map((node) => ({
+        id: node.id,
+        position: node.position,
+        width: node.width,
+        height: node.height,
+      }));
+    const before = frames();
+    const start = flowNode('thread:thread-1').position;
+    const cache = flowNode('block:project-cache').position;
+    const dragTo = (position: { x: number; y: number }): void => {
+      act(() => {
+        seams.flow!.onNodesChange!([
+          { type: 'position', id: 'thread:thread-1', position, dragging: true },
+        ]);
+      });
+    };
+
+    dragTo({ x: start.x + 30, y: start.y + 20 });
+    expect(frames()).toEqual(before);
+    dragTo({ x: cache.x + 10, y: cache.y + 10 });
+    expect(frames()).toEqual(before);
+    expect(nodeAt('graph-thread', 'thread-1')).toEqual({
+      x: cache.x + 10,
+      y: cache.y + 10,
+    });
+  });
+
+  it('takes a pinned card dropped on its block’s frame where the frame is drawn off its pin', async () => {
+    const onPlaceNode = vi.fn();
+    const onUnplaceNode = vi.fn();
+    await draw({
+      threads: graphThreadsOf(4),
+      positions: { 'thread-1': { x: 900, y: 600 } },
+      onPlaceNode,
+      onUnplaceNode,
+    });
+    const card = flowNode('thread:thread-1');
+    const frameNow = () => flowNode('block:project-billing');
+    const dragTo = (position: { x: number; y: number }): void => {
+      act(() => {
+        seams.flow!.onNodesChange!([
+          { type: 'position', id: 'thread:thread-1', position, dragging: true },
+        ]);
+      });
+    };
+    const first = frameNow();
+    dragTo({
+      x: first.position.x + (first.width ?? 0) - 20,
+      y: first.position.y + 10,
+    });
+    const drawn = frameNow();
+    dragTo({
+      x: drawn.position.x + (drawn.width ?? 0) / 2 - (card.width ?? 0) / 2,
+      y: drawn.position.y + 40,
+    });
+    act(() => {
+      seams.flow!.onNodeDragStop!(
+        new MouseEvent('mouseup'),
+        flowNode('thread:thread-1'),
+        [],
+      );
+    });
+
+    expect(onUnplaceNode).toHaveBeenCalledWith('thread-1');
+    expect(onPlaceNode).not.toHaveBeenCalled();
+  });
+
   it('gives a card dropped out of its block its own wire, and shrinks the block around the cards left in it', async () => {
     await draw({ threads: graphThreadsOf(4) });
     const whole = blockSize('block:project-billing');

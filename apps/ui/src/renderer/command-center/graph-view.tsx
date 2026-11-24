@@ -62,6 +62,7 @@ import {
   layoutColumn,
   perLineFor,
   type PlacedBox,
+  withBoxAt,
 } from './graph-layout';
 import type { NodeOffset, NodeOffsets } from './node-positions';
 import type { CardBand, CardSize } from './open-cards';
@@ -971,9 +972,6 @@ function GraphCanvas({
         pinned.set(`thread:${thread.id}`, offset);
       }
     }
-    if (drag !== null) {
-      pinned.set(drag.id, drag.offset);
-    }
   }
   const unopened =
     onCanvas.size === 0 && pinned.size === 0
@@ -983,9 +981,7 @@ function GraphCanvas({
           graphBlocks(shown, projects, new Map(), heights, threads),
           perLine,
         );
-  const layoutWith = (pins: ReadonlyMap<string, NodeOffset>): GraphGeometry =>
-    layoutBlocks(root, blocks, perLine, pins, unopened?.width);
-  const drawn: GraphGeometry = narrow
+  const laidOut: GraphGeometry = narrow
     ? layoutColumn(
         root,
         [
@@ -1006,7 +1002,11 @@ function GraphCanvas({
           ]),
         ),
       )
-    : layoutWith(pinned);
+    : layoutBlocks(root, blocks, perLine, pinned, unopened?.width);
+  const drawn =
+    drag === null || narrow
+      ? laidOut
+      : withBoxAt(laidOut, MANAGER_ID, drag.id, drag.offset);
   const automatic = unopened ?? drawn;
   const dragGone =
     drag !== null &&
@@ -1137,12 +1137,8 @@ function GraphCanvas({
     const thread = shown.find((candidate) => candidate.id === runId);
     const id = `thread:${runId}`;
     const own = drawn.boxes.get(id);
-    const rest = new Map(pinned);
-    rest.delete(id);
     const home =
-      thread === undefined
-        ? undefined
-        : layoutWith(rest).boxes.get(blockIdOf(thread));
+      thread === undefined ? undefined : drawn.boxes.get(blockIdOf(thread));
     const centre =
       own === undefined
         ? to

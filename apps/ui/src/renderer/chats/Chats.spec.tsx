@@ -13982,11 +13982,13 @@ describe('Chats sidebar list', () => {
       expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
       expect(boxOf(container)!.checked).toBe(true);
       const text = container.querySelector('[role="dialog"]')!.textContent;
-      expect(text).toContain('a background agent (Haiku 5.5) reads the thread');
-      expect(text).toContain(
-        'Usually ~$0.13 and ~2m — median of the last 14 runs on Haiku 5.5',
-      );
+      expect(text).toContain('Usually ~$0.13 and ~2m on Haiku 5.5');
       expect(text).not.toContain('$0.50');
+      expect(
+        container
+          .querySelector('[data-slot="archive-extract-lessons"]')!
+          .getAttribute('title'),
+      ).toContain('a background agent (Haiku 5.5) reads the thread');
 
       await press(container, 'Archive');
 
@@ -14044,9 +14046,11 @@ describe('Chats sidebar list', () => {
       });
       const container = await openArchiveDialog();
 
-      expect(container.querySelector('[role="dialog"]')!.textContent).toContain(
-        'A second model checks each lesson it finds.',
-      );
+      expect(
+        container
+          .querySelector('[data-slot="archive-extract-lessons"]')!
+          .getAttribute('title'),
+      ).toContain('A second model checks each lesson it finds.');
     });
 
     it('shows no box and leaves the choice to the settings when the thread has nothing to learn from', async () => {

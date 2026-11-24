@@ -106,7 +106,12 @@ describe('MemoryFindingsService', () => {
   it('a global entry and one of a project with the same text are paired', async () => {
     await addProject('p1');
     const global = await save('Pnpm workspace rule', NONE);
-    const scoped = await save('Pnpm workspace rule', inProject('p1'));
+    const scoped = await save(
+      'Pnpm workspace rule',
+      inProject('p1'),
+      undefined,
+      global,
+    );
 
     expectOnePairOf(await db.findings.candidatePairs(), global, scoped);
   });
@@ -141,7 +146,12 @@ describe('MemoryFindingsService', () => {
 
   it('a team entry and a global entry with the same text are paired', async () => {
     const global = await save('Pnpm workspace rule', NONE);
-    const team = await save('Pnpm workspace rule', inTeam('t1'));
+    const team = await save(
+      'Pnpm workspace rule',
+      inTeam('t1'),
+      undefined,
+      global,
+    );
 
     expectOnePairOf(await db.findings.candidatePairs(), global, team);
   });

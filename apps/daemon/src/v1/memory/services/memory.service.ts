@@ -78,6 +78,11 @@ import {
   type TeamMemoryFate,
 } from '../memory.types';
 import { autoForgetFilterOf } from '../utils/memory-auto-forget';
+import {
+  nearDuplicate,
+  nearDuplicateCandidatesQuery,
+  type NoteText,
+} from '../utils/memory-duplicates';
 import { memoryExportMarkdown } from '../utils/memory-export';
 import { markForgotten, markRestored } from '../utils/memory-forget-stamp';
 import {
@@ -98,8 +103,6 @@ import {
   indexMatchQuery,
   memoryIndexOf,
   relevantFirst,
-  similarTitles,
-  titleCandidatesQuery,
 } from '../utils/memory-text';
 import { DAY_MS } from '../utils/memory-usage-day';
 import { MemoryEventBus } from './memory-events.bus';
@@ -109,7 +112,7 @@ import {
   MemoryUsageService,
 } from './memory-usage.service';
 
-/** Near-duplicate candidates read per write before the title comparison. */
+/** Near-duplicate candidates read per write before their text is compared. */
 const DUPLICATE_CANDIDATES = 20;
 
 const AUTO_FORGET_FIRST_RUN_MS = 5 * 60 * 1000;
@@ -133,6 +136,13 @@ type MemoryText = Pick<
   MemorySaveInput,
   'title' | 'body' | 'type' | 'notDuplicateOf'
 >;
+
+interface WriteOptions {
+  /** The place whose view bounds the near-duplicate check; null for the user, who sees every scope. */
+  viewer: RunPlace | null;
+  announce?: boolean;
+  lesson?: MemoryLessonSource;
+}
 
 const USER: MemoryActor = { kind: 'user' };
 
@@ -983,7 +993,10 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         (await this.refuseUnknownTeam(input.teamSlug ?? null, null));
       return (
         unknown ??
-        this.writeRow(USER, input, placeOfInput(input), null, em, true, lesson)
+        this.writeRow(USER, input, placeOfInput(input), null, em, {
+          viewer: null,
+          lesson,
+        })
       );
     });
   }
@@ -992,28 +1005,25 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
    * A lesson a reflection filed with no human press, written into `place` as
    * an agent write: searchable at once, kept out of the memory index until
    * the user approves it, and pending while the user reviews agent writes. A
-   * near duplicate of an active entry writes nothing.
+   * near duplicate of an active entry its thread could see (`viewer`) writes
+   * nothing.
    */
   fileLesson(
     actor: Extract<MemoryActor, { kind: 'lesson' }>,
     input: MemoryText & { type: NonNullable<MemoryText['type']> },
     place: RunPlace,
     lesson: MemoryLessonSource,
+    viewer: RunPlace,
   ): Promise<MemorySaveOutcome> {
     return this.serialize(async () => {
       const invalid = this.refuseInvalid(actor, input);
       if (invalid) {
         return invalid;
       }
-      return this.writeRow(
-        actor,
-        input,
-        place,
-        null,
-        this.em.fork(),
-        true,
+      return this.writeRow(actor, input, place, null, this.em.fork(), {
+        viewer,
         lesson,
-      );
+      });
     });
   }
 
@@ -1043,7 +1053,10 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         (await this.refuseUnknownProject(input.projectId, em)) ??
         (await this.refuseUnknownTeam(input.teamSlug ?? null, row.teamSlug));
       return (
-        unknown ?? this.writeRow(USER, input, placeOfInput(input), row, em)
+        unknown ??
+        this.writeRow(USER, input, placeOfInput(input), row, em, {
+          viewer: null,
+        })
       );
     });
   }
@@ -1204,7 +1217,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
             placeOfInput(input),
             null,
             tx,
-            false,
+            { viewer: null, announce: false },
           );
           if (outcome.kind === 'updated') {
             throw new MergeRefused(
@@ -1299,14 +1312,9 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     return this.refuseInvalid(IMPORT_CHECK, note)?.reason ?? null;
   }
 
-  /** Active and pending entries filed in `place` whose title says the same. */
-  async similarTo(title: string, place: RunPlace): Promise<Memory[]> {
-    return this.nearDuplicates(
-      { title, body: '' },
-      place,
-      null,
-      this.em.fork(),
-    );
+  /** Active and pending entries a run would see beside a note filed in `place` that say the same. */
+  async similarTo(note: NoteText, place: RunPlace): Promise<Memory[]> {
+    return this.nearDuplicates(note, [], place, null, null, this.em.fork());
   }
 
   /** What the active and pending imported entries say, each as `importedText`. */
@@ -1481,7 +1489,9 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
             'this run works in no project, so the entry can only be global — save it with scope: global',
           );
     }
-    return this.writeRow(actor, input, target, existing, em);
+    return this.writeRow(actor, input, target, existing, em, {
+      viewer: place,
+    });
   }
 
   private async writeRow(
@@ -1490,10 +1500,16 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     target: RunPlace,
     existing: Memory | null,
     em: EntityManager,
-    announce = true,
-    lesson?: MemoryLessonSource,
+    { viewer, announce = true, lesson }: WriteOptions,
   ): Promise<MemorySaveOutcome> {
-    const duplicates = await this.nearDuplicates(input, target, existing, em);
+    const duplicates = await this.nearDuplicates(
+      input,
+      input.notDuplicateOf ?? [],
+      target,
+      viewer,
+      existing,
+      em,
+    );
     const live = duplicates.filter((row) => row.status === 'active');
     // The user is the reviewer: an entry waiting on them never blocks them.
     const pending = isAgent(actor)
@@ -1657,27 +1673,36 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
-   * Live entries in the target scope whose title says the same thing, minus
-   * the entry being updated and the ones the writer vouched for.
+   * Live entries that say the same as `text` among those a run sees beside an
+   * entry filed in `target` — every scope for a global one, else global plus
+   * that project or that team — within what `viewer` may see, minus the entry
+   * being updated and the ones the writer vouched for.
    */
   private async nearDuplicates(
-    input: MemoryText,
+    text: NoteText,
+    notDuplicateOf: readonly string[],
     target: RunPlace,
+    viewer: RunPlace | null,
     existing: Memory | null,
     em: EntityManager,
   ): Promise<Memory[]> {
-    const query = titleCandidatesQuery(input.title);
+    const query = nearDuplicateCandidatesQuery(text);
     if (query === null) {
       return [];
     }
     const vouched = new Set(
-      (input.notDuplicateOf ?? [])
+      notDuplicateOf
         .map(parseMemoryHandle)
         .filter((n): n is number => n !== null),
     );
+    const global = target.projectId === null && target.teamSlug === null;
+    const seenBy = global ? viewer : target;
     const ids = await this.memories.matchIds(
       query,
-      { statuses: ['active', 'pending'], places: { exactly: target } },
+      {
+        statuses: ['active', 'pending'],
+        places: seenBy === null ? { any: true } : { visibleTo: seenBy },
+      },
       DUPLICATE_CANDIDATES,
       em,
     );
@@ -1685,7 +1710,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
       (row) =>
         row.id !== existing?.id &&
         !vouched.has(row.handle) &&
-        similarTitles(row.title, input.title),
+        nearDuplicate(row, text),
     );
   }
 

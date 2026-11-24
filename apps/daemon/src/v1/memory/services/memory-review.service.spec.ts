@@ -724,6 +724,7 @@ describe('MemoryReviewService', () => {
         { title: 'Check before retrying', body: 'x', type: 'feedback' },
         { projectId: null, teamSlug: null },
         { sourceRunId: 'src-1', proposalId: 'lp-1' },
+        { projectId: null, teamSlug: null },
       ),
     );
     const purgeAt = new Date(NOW.getTime() + 30 * DAY).toISOString();

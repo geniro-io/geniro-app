@@ -85,6 +85,24 @@ export function chatTextMatchQuery(query: string): string | null {
 }
 
 /**
+ * An FTS5 MATCH expression for any one of `terms`: each becomes its own
+ * `chatTextMatchQuery` and the results are joined with OR. Only the first
+ * `limit` terms are used. The join happens here, not inside
+ * `chatTextMatchQuery`, which reads only thirty words of one query. Null when
+ * no term is searchable.
+ */
+export function anyTermMatchQuery(
+  terms: readonly string[],
+  limit: number,
+): string | null {
+  const matches = terms
+    .slice(0, limit)
+    .map((term) => chatTextMatchQuery(term))
+    .filter((match): match is string => match !== null);
+  return matches.length === 0 ? null : matches.join(' OR ');
+}
+
+/**
  * What `match` finds for every word of `query`, or, when that finds nothing,
  * for any of its words longer than one character — asked again only when
  * that query differs from the first.

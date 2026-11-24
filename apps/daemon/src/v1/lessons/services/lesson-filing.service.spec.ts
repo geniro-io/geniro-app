@@ -6,6 +6,7 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
+import { memoryBodyOf } from '../../memory/utils/lesson-body';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
@@ -109,7 +110,7 @@ function build(
     } | null;
     project?: { id: string } | null;
     documents?: { id: string }[];
-    visible?: { id: string; handle: string; title: string }[];
+    visible?: { id: string; handle: string; title: string; body?: string }[];
     seen?: { id: string; handle: string; title: string }[];
     items?: Item[];
     closedBy?: 'manual' | 'archive' | 'delete';
@@ -180,7 +181,11 @@ function build(
     ),
   };
   const memory = {
-    listVisible: vi.fn(() => Promise.resolve(options.visible ?? [])),
+    listVisible: vi.fn(() =>
+      Promise.resolve(
+        (options.visible ?? []).map((entry) => ({ body: '', ...entry })),
+      ),
+    ),
     seenEntries: vi.fn(() => Promise.resolve(options.seen ?? [])),
     markByReflection: vi.fn(() => Promise.resolve()),
     fileLesson: vi.fn(() =>
@@ -427,44 +432,90 @@ describe('LessonFilingService.file', () => {
     expectNothingWritten(fixture);
   });
 
-  it('refuses a new lesson whose title a visible entry already carries', async () => {
+  it('refuses a new lesson whose title and rule a visible entry already says', async () => {
     const fixture = build({
-      visible: [{ id: 'id-m3', handle: 'm3', title: 'Use pnpm, not npm!' }],
+      visible: [
+        {
+          id: 'id-m3',
+          handle: 'm3',
+          title: 'Use pnpm, not npm!',
+          body: 'Install workspace packages with pnpm, never with npm.',
+        },
+      ],
     });
+    const same = {
+      title: 'use pnpm not npm',
+      rule: 'Install workspace packages with pnpm, never with npm.',
+    };
 
     const duplicate = await fixture.service.file(fixture.turn, [
-      lesson({
-        title: 'use pnpm not npm',
-        dedup: { verdict: 'new', handle: null },
-      }),
+      lesson({ ...same, dedup: { verdict: 'new', handle: null } }),
     ]);
     const refining = await fixture.service.file(fixture.turn, [
-      lesson({
-        title: 'use pnpm not npm',
-        dedup: { verdict: 'refines', handle: 'm3' },
-      }),
+      lesson({ ...same, dedup: { verdict: 'refines', handle: 'm3' } }),
     ]);
 
     expect(codesOf(duplicate)).toEqual(['NEAR_DUPLICATE']);
     expect(refining).toEqual({ status: 'recorded', count: 1 });
   });
 
-  it('refuses a new lesson that says a visible entry in other words, and records one that says another thing', async () => {
+  it('refuses a new lesson that says a visible entry in other words, and records one with that title over another rule', async () => {
     const fixture = build({
       visible: [
-        { id: 'id-m3', handle: 'm3', title: 'Run pnpm test before a commit' },
+        {
+          id: 'id-m3',
+          handle: 'm3',
+          title: 'Run pnpm test before a commit',
+          body: 'Run the affected unit tests with pnpm before every commit.',
+        },
       ],
     });
 
     const similar = await fixture.service.file(fixture.turn, [
-      lesson({ title: 'Run pnpm test before any commit' }),
+      lesson({
+        title: 'Test with pnpm before committing',
+        rule: 'Before every commit, run the affected unit tests through pnpm.',
+      }),
     ]);
-    const unrelated = await fixture.service.file(fixture.turn, [
-      lesson({ title: 'Keep cache keys free of run ids' }),
+    const otherRule = await fixture.service.file(fixture.turn, [
+      lesson({
+        title: 'Run pnpm test before a commit',
+        rule: 'Keep the cache keys free of identifiers, so a retried job reads its own cache again and again.',
+      }),
     ]);
 
     expect(codesOf(similar)).toEqual(['NEAR_DUPLICATE']);
-    expect(unrelated).toEqual({ status: 'recorded', count: 1 });
+    expect(otherRule).toEqual({ status: 'recorded', count: 1 });
+  });
+
+  it('refuses a new lesson that rewords a stored lesson, reading only the stored rule past its trailer', async () => {
+    const fixture = build({
+      visible: [
+        {
+          id: 'id-m4',
+          handle: 'm4',
+          title: 'WHEN a release stays draft → inspect the failed release job',
+          body: memoryBodyOf(
+            {
+              why: 'Three agents kept polling GitHub every minute while nobody looked at the broken signing certificate step, burning tokens, quota and patience across several unrelated worktrees overnight.',
+              sourceTitle: 'Release review thread',
+              evidenceSeq: 12,
+              evidenceQuote: 'polling again, still nothing from the pipeline',
+            },
+            'Open the failed release workflow run, read its error and rerun that job instead of waiting for the draft to publish.',
+          ),
+        },
+      ],
+    });
+
+    const rewording = await fixture.service.file(fixture.turn, [
+      lesson({
+        title: 'WHEN the release draft never publishes → rerun the failed job',
+        rule: 'Read the error of the failed release workflow run and rerun that job; never wait for the draft to publish.',
+      }),
+    ]);
+
+    expect(codesOf(rewording)).toEqual(['NEAR_DUPLICATE']);
   });
 
   it.each([
@@ -688,6 +739,7 @@ describe('LessonFilingService.file', () => {
       }),
       { projectId: null, teamSlug: null },
       { sourceRunId: 'src', proposalId: persistedOf(fixture)[0]!.id },
+      { projectId: null, teamSlug: null },
     );
     expect(fixture.rows.write).toHaveBeenCalledWith('src', {
       kind: 'lesson_outcome',
@@ -1019,6 +1071,7 @@ describe('LessonFilingService.file', () => {
       expect(fixture.memory.fileLesson).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ title: 'Keep cache keys free of run ids' }),
+        expect.anything(),
         expect.anything(),
         expect.anything(),
       );

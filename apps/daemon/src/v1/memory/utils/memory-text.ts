@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { HOST_MEMORY_SEARCH_TOOL } from '../../agents/chat.types';
 import {
-  chatTextMatchQuery,
+  anyTermMatchQuery,
   chatTextQueryTerms,
 } from '../../agents/utils/chat-text-query';
 import { redactSecrets } from '../../diagnostics/utils/redact';
@@ -14,49 +14,12 @@ import {
   type MemoryEntry,
 } from '../memory.types';
 
-/** Below this share of words in common, two titles are different notes. */
-const DUPLICATE_TITLE_OVERLAP = 0.6;
-
 /** A shorter word of a first message matches nearly every note, so it is not searched for. */
 const MATCH_TERM_MIN_CHARS = 3;
 
 const EXCERPT_CHARS = 160;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** A title's distinct words, lowercased, split the way the FTS tokenizer splits. */
-export function titleWords(title: string): Set<string> {
-  return new Set(chatTextQueryTerms(title).filter((word) => word.length > 1));
-}
-
-/**
- * An FTS5 query for entries whose TITLE shares any word with `title`, or null
- * when it has none — the candidate set {@link similarTitles} then narrows.
- */
-export function titleCandidatesQuery(title: string): string | null {
-  const words = [...titleWords(title)];
-  if (words.length === 0) {
-    return null;
-  }
-  const any = chatTextMatchQuery(words.join(' OR '));
-  return any === null ? null : `title : (${any})`;
-}
-
-/** Whether two titles say the same thing: most of their words in common. */
-export function similarTitles(a: string, b: string): boolean {
-  const left = titleWords(a);
-  const right = titleWords(b);
-  if (left.size === 0 || right.size === 0) {
-    return false;
-  }
-  let common = 0;
-  for (const word of left) {
-    if (right.has(word)) {
-      common += 1;
-    }
-  }
-  return common / new Set([...left, ...right]).size >= DUPLICATE_TITLE_OVERLAP;
-}
 
 /**
  * A run's memory index: one line per entry, in the order given, cut on whole
@@ -94,17 +57,15 @@ export function memoryIndexOf(
 
 /**
  * An FTS5 query matching any one of a first message's words, or null when the
- * message has none worth searching for. Each word goes through
- * `chatTextMatchQuery` alone: that helper reads only thirty words of a query,
- * so the words are joined here, not inside it.
+ * message has none worth searching for.
  */
 export function indexMatchQuery(message: string): string | null {
-  const matches = [...new Set(chatTextQueryTerms(message))]
-    .filter((term) => term.length >= MATCH_TERM_MIN_CHARS)
-    .slice(0, MEMORY_INDEX_MATCH_TERMS)
-    .map((term) => chatTextMatchQuery(term))
-    .filter((match): match is string => match !== null);
-  return matches.length === 0 ? null : matches.join(' OR ');
+  return anyTermMatchQuery(
+    [...new Set(chatTextQueryTerms(message))].filter(
+      (term) => term.length >= MATCH_TERM_MIN_CHARS,
+    ),
+    MEMORY_INDEX_MATCH_TERMS,
+  );
 }
 
 /**

@@ -45,6 +45,18 @@ describe('highlightLines', () => {
     expect(highlightLines(['a', 'b'], null)).toEqual(['a', 'b']);
   });
 
+  it('draws each run of text through renderText, inside its token spans and without a grammar', () => {
+    const mark = (text: string): ReactNode =>
+      createElement('mark', null, text.toUpperCase());
+    const [lit] = highlightLines(['const a = 1;'], 'typescript', mark);
+    expect(markupOf(lit)).toContain(
+      '<span class="token keyword"><mark>CONST</mark></span>',
+    );
+    expect(markupOf(highlightLines(['b'], null, mark)[0])).toBe(
+      '<mark>B</mark>',
+    );
+  });
+
   it('returns no nodes for no lines', () => {
     expect(highlightLines([], 'typescript')).toEqual([]);
   });

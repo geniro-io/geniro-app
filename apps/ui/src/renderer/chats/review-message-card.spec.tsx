@@ -90,4 +90,21 @@ describe('ReviewMessageCard', () => {
 
     expect(open).toHaveBeenCalledWith(2);
   });
+
+  it('wraps a long quoted line inside the card and keeps the way back to the review', async () => {
+    await mount(vi.fn());
+
+    const quote = [...container!.querySelectorAll('pre')].find(
+      (el) => el.textContent === 'const total = 0;',
+    )!;
+    expect(quote.className).toContain('whitespace-pre-wrap');
+    expect(quote.className).toContain('break-words');
+    expect(quote.className).not.toContain('whitespace-pre ');
+    expect(quote.className).not.toContain('overflow-x-auto');
+    expect(
+      [...container!.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Open in review',
+      ),
+    ).toBe(true);
+  });
 });

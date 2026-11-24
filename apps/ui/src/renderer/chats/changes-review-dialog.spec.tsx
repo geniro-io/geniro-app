@@ -1037,6 +1037,80 @@ describe('ChangesReviewDialog — comments outside the diff', () => {
   });
 });
 
+describe('ChangesReviewDialog — hidden characters', () => {
+  const HIDDEN = change({
+    path: 'src/c.ts',
+    diff: [
+      'diff --git a/src/c.ts b/src/c.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/c.ts',
+      '+++ b/src/c.ts',
+      '@@ -10,1 +10,1 @@',
+      '-export const c10 = 10;',
+      '+export const c10 = "a\u200Bb\u202Ec";',
+    ].join('\n'),
+    added: 1,
+    removed: 1,
+  });
+
+  it('shows them in a diff row as marks, and a comment stored without them still sits at its line', async () => {
+    await mount(
+      screen({
+        changes: [HIDDEN],
+        review: review({
+          comments: [
+            comment({
+              path: 'src/c.ts',
+              startLine: 10,
+              endLine: 10,
+              quote: 'export const c10 = "abc";',
+              body: 'Hidden characters here',
+            }),
+          ],
+        }),
+      }),
+    );
+
+    const marks = [
+      ...document.querySelectorAll<HTMLElement>('[data-hidden-char]'),
+    ].map((el) => el.dataset.hiddenChar);
+    expect(marks).toEqual(['U+200B', 'U+202E']);
+    expect(text()).toContain('"a<U+200B>b<U+202E>c";');
+    expect(text()).not.toMatch(/[\u200B\u202E]/);
+    expect(text()).toContain('Hidden characters here');
+    expect(text()).not.toContain('Outdated');
+  });
+
+  it('shows them in lines read around a hunk and in an outdated comment’s quote', async () => {
+    const readFileLines = vi.fn(
+      async (request: ReadFileLinesRequest): Promise<FileLines> => ({
+        lines: Array.from({ length: request.to - request.from + 1 }, (_, i) =>
+          request.from + i === 7 ? 'x\u202Ey' : 'plain',
+        ),
+        total: 40,
+        unavailableReason: null,
+      }),
+    );
+    await mount(
+      screen({
+        changes: [FILE_A],
+        readFileLines,
+        review: review({
+          comments: [
+            sent({ quote: 'gone\u200Bline', body: 'On code that went' }),
+          ],
+        }),
+      }),
+    );
+
+    await press(must('Show 19 more lines above'));
+
+    expect(text()).toContain('x<U+202E>y');
+    expect(text()).toContain('gone<U+200B>line');
+    expect(text()).not.toMatch(/[\u200B\u202E]/);
+  });
+});
+
 describe('ChangesReviewDialog — opened from the transcript', () => {
   it('says a comment it was opened at no longer exists', async () => {
     await mount(screen({ changes: [FILE_A], focusComment: 4 }));

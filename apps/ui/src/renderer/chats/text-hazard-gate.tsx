@@ -5,24 +5,10 @@ import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import {
-  type HazardClass,
-  type HazardHit,
+  hazardHitLabel,
   type HazardScanResult,
   scanTextHazards,
 } from './text-hazards';
-
-/** A short, human-readable name for a hazard class — never the character itself. */
-const HAZARD_CLASS_LABEL: Record<HazardClass, string> = {
-  bidi: 'Bidirectional override',
-  invisible: 'Invisible character',
-  mixedScript: 'Look-alike character from another script',
-};
-
-/** `Bidirectional override — U+202E` — the codepoint, never the character. */
-function hazardHitLabel(hit: HazardHit): string {
-  const hex = hit.codePoint.toString(16).toUpperCase().padStart(4, '0');
-  return `${HAZARD_CLASS_LABEL[hit.class]} — U+${hex}`;
-}
 
 /**
  * The Approve gate an approval card puts in front of text it is about to act

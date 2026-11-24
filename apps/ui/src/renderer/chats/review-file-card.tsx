@@ -23,6 +23,7 @@ import { languageForPath } from '../components/ui/code-language';
 import { highlightLines } from '../components/ui/highlight-lines';
 import { cn } from '../components/ui/utils';
 import { DIFF_ROW_LIMIT } from './diff-view';
+import { markHiddenChars } from './hidden-char-marks';
 import {
   ReviewCommentEditor,
   ReviewCommentThread,
@@ -100,16 +101,20 @@ function withMarks(
   let at = 0;
   for (const [index, span] of spans.entries()) {
     if (span.start > at) {
-      parts.push(text.slice(at, span.start));
+      parts.push(
+        <Fragment key={`t${index}`}>
+          {markHiddenChars(text.slice(at, span.start))}
+        </Fragment>,
+      );
     }
     parts.push(
       <span key={index} className={cn('rounded-sm', tone)}>
-        {text.slice(span.start, span.end)}
+        {markHiddenChars(text.slice(span.start, span.end))}
       </span>,
     );
     at = span.end;
   }
-  parts.push(text.slice(at));
+  parts.push(<Fragment key="rest">{markHiddenChars(text.slice(at))}</Fragment>);
   return parts;
 }
 
@@ -121,11 +126,12 @@ function highlightedHunk(hunk: DiffHunk, language: string | null): ReactNode[] {
   const oldSide = hunk.rows.flatMap((row, index) =>
     row.kind === 'removed' ? [index] : [],
   );
-  const code: ReactNode[] = hunk.rows.map((row) => row.text);
+  const code: ReactNode[] = hunk.rows.map((row) => markHiddenChars(row.text));
   for (const indexes of [newSide, oldSide]) {
     const lit = highlightLines(
       indexes.map((index) => hunk.rows[index]!.text),
       language,
+      markHiddenChars,
     );
     indexes.forEach((index, at) => {
       code[index] = lit[at];
@@ -570,6 +576,7 @@ function FileBody({
   const revealedLit = highlightLines(
     revealedText.map((entry) => String(entry.row.code)),
     language,
+    markHiddenChars,
   );
   revealedText.forEach((entry, index) => {
     entry.row.code = revealedLit[index];

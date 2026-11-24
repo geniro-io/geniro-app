@@ -4,6 +4,7 @@ import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import { markHiddenChars } from './hidden-char-marks';
 import type { ReviewComment } from './use-review-comments';
 
 export function reviewLineLabel(
@@ -18,6 +19,15 @@ export function reviewLineLabel(
   const lines =
     end === startLine ? `Line ${startLine}` : `Lines ${startLine}–${end}`;
   return side === 'old' ? `${lines} (removed)` : lines;
+}
+
+/** The code a comment quoted, wrapped to its container's width, hidden characters shown as marks. */
+export function ReviewQuote({ quote }: { quote: string }): React.JSX.Element {
+  return (
+    <pre className="m-0 rounded-md bg-muted/50 px-2 py-1 font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
+      {markHiddenChars(quote)}
+    </pre>
+  );
 }
 
 /** The field a comment is written in: Cmd/Ctrl+Enter adds it, Esc closes it. */
@@ -181,9 +191,7 @@ export function ReviewCommentThread({
         ) : null}
       </div>
       {outdated && comment.quote !== '' ? (
-        <pre className="overflow-x-auto rounded-md bg-muted/50 px-2 py-1 font-mono text-xs whitespace-pre text-muted-foreground">
-          {comment.quote}
-        </pre>
+        <ReviewQuote quote={comment.quote} />
       ) : null}
       <p className="break-words whitespace-pre-wrap text-foreground">
         {comment.body}

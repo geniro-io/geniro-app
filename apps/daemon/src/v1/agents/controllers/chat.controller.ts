@@ -47,6 +47,8 @@ import type {
   ShellKillWire,
   ShellOutputWire,
   StoppedDetachedProcesses,
+  SurfaceMediaData,
+  SurfaceWire,
   ThreadAnalysisWire,
   ThreadOverviewWire,
 } from '../chat.types';
@@ -80,6 +82,7 @@ import {
   NamedPathsDto,
   NamedPathsResultDto,
   PressActionDto,
+  PressSurfaceDto,
   RenameRunDto,
   RetriedDto,
   RunArtifactsDto,
@@ -91,6 +94,7 @@ import {
   RunTeamNotesDto,
   RunWaterfallDto,
   SaveArtifactAnswersDto,
+  SaveSurfaceDraftsDto,
   SearchChatQueryDto,
   SendMessageDto,
   SetRunNotesDto,
@@ -100,6 +104,8 @@ import {
   ShellOutputQueryDto,
   StopDetachedProcessesDto,
   StoppedDetachedProcessesDto,
+  SurfaceDto,
+  SurfaceMediaDataDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -131,6 +137,7 @@ import { RunNamedPathsService } from '../services/run-named-paths.service';
 import { RunProcessesService } from '../services/run-processes.service';
 import { RunStateService } from '../services/run-state.service';
 import { ShellOutputService } from '../services/shell-output.service';
+import { SurfaceService } from '../services/surface.service';
 import { ThreadAnalysisService } from '../services/thread-analysis.service';
 import { ThreadOverviewService } from '../services/thread-overview.service';
 import { historyConversationOf } from '../utils/history-conversation';
@@ -170,6 +177,7 @@ export class ChatController {
     private readonly overview: ThreadOverviewService,
     private readonly recommendations: RecommendationsApplyService,
     private readonly actionPresses: ActionPressService,
+    private readonly surfaces: SurfaceService,
     @Optional()
     private readonly archiveLessons?: ArchiveLessonsRegistry,
   ) {}
@@ -518,6 +526,56 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunArtifactsDto })
   readArtifacts(@Param('runId') runId: string): Promise<RunArtifactsWire> {
     return this.artifacts.read(runId);
+  }
+
+  @Get(':runId/surfaces/media/:file')
+  @ApiOperation({ operationId: 'readSurfaceMedia' })
+  @ZodResponse({ status: 200, type: SurfaceMediaDataDto })
+  readSurfaceMedia(
+    @Param('runId') runId: string,
+    @Param('file') file: string,
+  ): SurfaceMediaData {
+    return this.surfaces.readMedia(runId, file);
+  }
+
+  @Get(':runId/surfaces/:surfaceId')
+  @ApiOperation({ operationId: 'readSurface' })
+  @ZodResponse({ status: 200, type: SurfaceDto })
+  readSurface(
+    @Param('runId') runId: string,
+    @Param('surfaceId') surfaceId: string,
+  ): Promise<SurfaceWire> {
+    return this.surfaces.read(runId, surfaceId);
+  }
+
+  /** Values typed into a card and not sent yet; 409 `UI_SURFACE_CHANGED` once the agent changed the card. */
+  @Put(':runId/surfaces/:surfaceId/drafts')
+  @ApiOperation({ operationId: 'saveSurfaceDrafts' })
+  @ZodResponse({ status: 200, type: SurfaceDto })
+  saveSurfaceDrafts(
+    @Param('runId') runId: string,
+    @Param('surfaceId') surfaceId: string,
+    @Body() dto: SaveSurfaceDraftsDto,
+  ): Promise<SurfaceWire> {
+    return this.surfaces.saveDrafts(runId, surfaceId, dto.version, dto.changes);
+  }
+
+  /** A card button in a chat; the chat's own `RUN_BUSY` may be repeated with the same `clientMessageId`. */
+  @Post(':runId/surfaces/:surfaceId/press')
+  @ApiOperation({ operationId: 'pressChatSurface' })
+  @ZodResponse({ status: 201, type: SurfaceDto })
+  async pressSurface(
+    @Param('runId') runId: string,
+    @Param('surfaceId') surfaceId: string,
+    @Body() dto: PressSurfaceDto,
+  ): Promise<SurfaceWire> {
+    await this.actionPresses.assertPressable(runId, 'chat');
+    return this.surfaces.press(runId, surfaceId, dto, async (message) => {
+      await this.chatService.sendMessage(runId, message.text, [], {
+        clientMessageId: message.clientMessageId,
+        storedText: message.storedText,
+      });
+    });
   }
 
   /** What the user picked on one of this run's pages, for the page's host to restore. */

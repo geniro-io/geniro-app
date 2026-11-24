@@ -23,6 +23,7 @@ import type {
   ActionPressWire,
   ItemWire,
   RunWire,
+  SurfaceWire,
   ThreadAnalysisWire,
 } from '../../agents/chat.types';
 import {
@@ -32,8 +33,10 @@ import {
   ItemDto,
   ListChatsQueryDto,
   PressActionDto,
+  PressSurfaceDto,
   RunDto,
   SendMessageDto,
+  SurfaceDto,
   ThreadAnalysisDto,
 } from '../../agents/dto/chat.dto';
 import { runListPageOf } from '../../agents/utils/run-list-page';
@@ -275,6 +278,18 @@ export class TeamsController {
       dto.clientMessageId,
       cameViaRemote(headers) ? 'remote' : 'desktop',
     );
+  }
+
+  /** A card button in a team run: into the call that drew the card while it runs, else to the lead. */
+  @Post('runs/:runId/surfaces/:surfaceId/press')
+  @ApiOperation({ operationId: 'pressTeamSurface' })
+  @ZodResponse({ status: 201, type: SurfaceDto })
+  pressSurface(
+    @Param('runId') runId: string,
+    @Param('surfaceId') surfaceId: string,
+    @Body() dto: PressSurfaceDto,
+  ): Promise<SurfaceWire> {
+    return this.actions.pressSurface(runId, surfaceId, dto);
   }
 
   /** Takes an agent's button off a team run; no agent is told. */

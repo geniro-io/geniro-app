@@ -265,20 +265,28 @@ describe('the pinned ACP schema release', () => {
 });
 
 describe('the validator this file runs on', () => {
-  it('is imported by no production file', () => {
-    // `@cfworker/json-schema` is a devDependency, so `pnpm deploy --prod`
-    // strips it from the packaged daemon. It ALSO satisfies an optional peer of
-    // `@modelcontextprotocol/sdk`, which is a real dependency — so a production
-    // import would resolve here, resolve in CI, and be missing on the user's
-    // machine, with every suite green throughout. Nothing else would notice.
+  it('is a production dependency, imported by the A2UI validator alone', () => {
+    // It also satisfies an optional peer of `@modelcontextprotocol/sdk`, so a
+    // production import would resolve in CI even as a devDependency and be
+    // missing from the packaged daemon, which `pnpm deploy --prod` strips.
     const src = join(__dirname, '..', '..', '..', '..');
-    const offenders = readdirSync(src, { recursive: true, encoding: 'utf8' })
+    const importers = readdirSync(src, { recursive: true, encoding: 'utf8' })
       .filter((name) => name.endsWith('.ts') && !name.endsWith('.spec.ts'))
       .filter((name) =>
         readFileSync(join(src, name), 'utf8').includes(VALIDATOR_PACKAGE),
       );
+    const manifest = JSON.parse(
+      readFileSync(join(src, '..', 'package.json'), 'utf8'),
+    ) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
 
-    expect(offenders).toEqual([]);
+    expect(importers).toEqual([
+      join('v1', 'agents', 'utils', 'a2ui', 'a2ui-validate.ts'),
+    ]);
+    expect(manifest.dependencies[VALIDATOR_PACKAGE]).toBeDefined();
+    expect(manifest.devDependencies[VALIDATOR_PACKAGE]).toBeUndefined();
   });
 });
 

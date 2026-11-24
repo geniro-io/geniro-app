@@ -30,6 +30,10 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
 import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
+import type {
+  SurfacePressMessage,
+  SurfaceService,
+} from '../../agents/services/surface.service';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -45,7 +49,20 @@ describe('TeamActionsService (in-memory sqlite)', () => {
   let publisher: ActionPublishService;
   let sendMessage: ReturnType<typeof vi.fn>;
   let chatSend: ReturnType<typeof vi.fn>;
+  let sendCallMessage: ReturnType<typeof vi.fn>;
+  let pressMessage: SurfacePressMessage;
   let service: TeamActionsService;
+  const surfaces = {
+    press: async (
+      _runId: string,
+      _surfaceId: string,
+      _body: unknown,
+      deliver: (message: SurfacePressMessage) => Promise<void>,
+    ) => {
+      await deliver(pressMessage);
+      return {};
+    },
+  } as unknown as SurfaceService;
 
   /** A callee's button: it says who it is. */
   const engineer: ActionPublishContext = {
@@ -98,6 +115,19 @@ describe('TeamActionsService (in-memory sqlite)', () => {
     publisher = new ActionPublishService(actions, NO_STOPS, NO_COMMANDS);
     sendMessage = vi.fn(() => Promise.resolve({ seq: 99 }));
     chatSend = vi.fn();
+    sendCallMessage = vi.fn(() => Promise.resolve({ seq: 98 }));
+    pressMessage = {
+      text: 'Release\n<payload secret=hunter22>',
+      storedText: 'Release\n<payload secret=••••>',
+      clientMessageId: 'press-1',
+      title: 'Release',
+      publisher: {
+        memberId: 'engineer',
+        conversationId: 'call-1',
+        callId: 'call-1',
+        agentLabel: 'Engineer',
+      },
+    };
     service = new TeamActionsService(
       new ActionPressService(
         orm.em,
@@ -108,7 +138,8 @@ describe('TeamActionsService (in-memory sqlite)', () => {
         NO_COMMANDS,
         new ActionCommandRegistry(),
       ),
-      { sendMessage } as unknown as TeamExecutorService,
+      { sendMessage, sendCallMessage } as unknown as TeamExecutorService,
+      surfaces,
     );
     await runs.create({ id: 'run-w', status: 'running', teamId: 'team' });
     await runs.create({ id: 'run-c', status: 'completed', teamId: null });
@@ -204,5 +235,89 @@ describe('TeamActionsService (in-memory sqlite)', () => {
       service.dismiss('run-c', seq, 'desktop'),
     ).rejects.toMatchObject({ errorCode: 'NOT_A_TEAM_RUN' });
     expect(await actions.live('run-c')).toHaveLength(1);
+  });
+
+  describe('a card press', () => {
+    const body = {
+      sourceComponentId: 'go',
+      changes: {},
+      userMessage: null,
+      context: {},
+      clientMessageId: 'press-1',
+    };
+
+    it('goes into the call that drew the card while it runs, keeping the masked text for the row', async () => {
+      await service.pressSurface('run-w', 'form', body);
+
+      expect(sendCallMessage).toHaveBeenCalledWith(
+        'run-w',
+        'engineer',
+        'call-1',
+        'Release\n<payload secret=hunter22>',
+        [],
+        'press-1',
+        'Release\n<payload secret=••••>',
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('goes to the lead, saying who drew the card, once that call has ended', async () => {
+      sendCallMessage.mockRejectedValueOnce(
+        new ConflictException('CALL_NOT_RUNNING', 'gone'),
+      );
+
+      await service.pressSurface('run-w', 'form', body);
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        'run-w',
+        'From Engineer (card "Release"):\nRelease\n<payload secret=hunter22>',
+        [],
+        'press-1',
+        undefined,
+        'From Engineer (card "Release"):\nRelease\n<payload secret=••••>',
+      );
+    });
+
+    it("sends the lead's own card to the lead unprefixed", async () => {
+      pressMessage = {
+        ...pressMessage,
+        publisher: {
+          memberId: 'manager',
+          conversationId: null,
+          callId: null,
+          agentLabel: null,
+        },
+      };
+
+      await service.pressSurface('run-w', 'form', body);
+
+      expect(sendCallMessage).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledWith(
+        'run-w',
+        'Release\n<payload secret=hunter22>',
+        [],
+        'press-1',
+        undefined,
+        'Release\n<payload secret=••••>',
+      );
+    });
+
+    it('passes a busy call back to the press instead of the lead', async () => {
+      sendCallMessage.mockRejectedValueOnce(
+        new ConflictException('RUN_BUSY', 'busy'),
+      );
+
+      await expect(service.pressSurface('run-w', 'form', body)).rejects.toThrow(
+        'busy',
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('refuses a chat run', async () => {
+      await expect(
+        service.pressSurface('run-c', 'form', body),
+      ).rejects.toThrow();
+      expect(sendCallMessage).not.toHaveBeenCalled();
+    });
   });
 });

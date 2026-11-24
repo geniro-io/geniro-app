@@ -42,6 +42,7 @@ import {
   HOST_READ_TEAMS_TOOL,
   HOST_RECORD_OUTCOME_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_UI_TOOL,
   type HostBoardTool,
 } from '../chat.types';
 import {
@@ -192,6 +193,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       HOST_METRICS_TOOL,
       HOST_COMPARISON_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_UI_TOOL,
       HOST_ARTIFACT_TOOL,
       HOST_ARTIFACT_ANSWERS_TOOL,
       HOST_BROWSER_OPEN_TOOL,

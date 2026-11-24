@@ -13,6 +13,7 @@ import {
   RemoteImageError,
 } from '../utils/remote-image';
 import { AttachmentStoreService } from './attachment-store.service';
+import { RunDownloadBudget } from './run-download-budget.service';
 
 const DOWNLOAD_CONCURRENCY = 4;
 
@@ -22,9 +23,6 @@ const DOWNLOAD_CONCURRENCY = 4;
  */
 export const GALLERY_DOWNLOAD_BUDGET_MS = 45_000;
 
-/** What one run may download in all, so an unattended agent cannot fill the disk. */
-export const MAX_GALLERY_RUN_DOWNLOAD_BYTES = 200 * 1024 * 1024;
-
 const OUT_OF_TIME = "the gallery's download time ran out";
 
 /** Constructor options — test seams, not user config. */
@@ -32,6 +30,7 @@ export interface GalleryImageOptions {
   download?: typeof downloadRemoteImage;
   budgetMs?: number;
   maxRunBytes?: number;
+  runBudget?: RunDownloadBudget;
 }
 
 /**
@@ -45,9 +44,7 @@ export class GalleryImageService {
   private readonly logger = new Logger(GalleryImageService.name);
   private readonly download: typeof downloadRemoteImage;
   private readonly budgetMs: number;
-  private readonly maxRunBytes: number;
-  /** Bytes each run has downloaded since this daemon started; a number per run, never pruned. */
-  private readonly runBytes = new Map<string, number>();
+  private readonly runBudget: RunDownloadBudget;
 
   constructor(
     private readonly attachments: AttachmentStoreService,
@@ -55,7 +52,8 @@ export class GalleryImageService {
   ) {
     this.download = options.download ?? downloadRemoteImage;
     this.budgetMs = options.budgetMs ?? GALLERY_DOWNLOAD_BUDGET_MS;
-    this.maxRunBytes = options.maxRunBytes ?? MAX_GALLERY_RUN_DOWNLOAD_BYTES;
+    this.runBudget =
+      options.runBudget ?? new RunDownloadBudget(options.maxRunBytes);
   }
 
   /**
@@ -135,11 +133,11 @@ export class GalleryImageService {
     if (signal.aborted) {
       return { url, reason: OUT_OF_TIME };
     }
-    const budget = `${megabytes(this.maxRunBytes)}MB`;
+    const budget = `${megabytes(this.runBudget.limit)}MB`;
     // Only what has landed counts: downloads still in flight are not charged
     // ahead, so the run can end past the budget by what was in flight at once
     // (at most DOWNLOAD_CONCURRENCY pictures) rather than refuse one that fits.
-    const left = this.maxRunBytes - (this.runBytes.get(runId) ?? 0);
+    const left = this.runBudget.left(runId);
     if (left <= 0) {
       return {
         url,
@@ -154,7 +152,7 @@ export class GalleryImageService {
         maxBytes,
       });
       const path = this.attachments.saveDownloaded(runId, mediaType, bytes);
-      this.runBytes.set(runId, (this.runBytes.get(runId) ?? 0) + bytes.length);
+      this.runBudget.charge(runId, bytes.length);
       return { ...image, path, source: url };
     } catch (error) {
       if (error instanceof RemoteImageError) {

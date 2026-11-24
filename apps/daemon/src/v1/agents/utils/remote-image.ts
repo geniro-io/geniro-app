@@ -22,6 +22,19 @@ export interface RemoteImage {
   readonly bytes: Buffer;
 }
 
+export interface RemoteFileKind<T> {
+  readonly accept: string;
+  readonly maxBytes: number;
+  readonly sniff: (bytes: Buffer) => T | null;
+  readonly unknownType: string;
+  readonly tooLarge: (megabytes: string) => string;
+}
+
+export interface RemoteFile<T> {
+  readonly mediaType: T;
+  readonly bytes: Buffer;
+}
+
 /**
  * Why a download was refused or failed. The message is shown to the agent and
  * names only the URL it sent, never anything about this machine.
@@ -159,8 +172,30 @@ export async function downloadRemoteImage(
   url: string,
   options: RemoteImageOptions = {},
 ): Promise<RemoteImage> {
+  return downloadRemoteFile(url, REMOTE_IMAGE_KIND, options);
+}
+
+const REMOTE_IMAGE_KIND: RemoteFileKind<AttachmentMediaType> = {
+  accept: 'image/*',
+  maxBytes: MAX_REMOTE_IMAGE_BYTES,
+  sniff: (bytes) => {
+    const extension = sniffImageExtension(bytes);
+    return extension === null || extension === 'avif'
+      ? null
+      : REMOTE_IMAGE_MEDIA_TYPE[extension];
+  },
+  unknownType: 'not a png, jpeg, gif or webp image',
+  tooLarge: (size) => `larger than the ${size}MB a gallery downloads`,
+};
+
+/** {@link downloadRemoteImage}'s guarded download for any kind of file the caller sniffs. */
+export async function downloadRemoteFile<T>(
+  url: string,
+  kind: RemoteFileKind<T>,
+  options: RemoteImageOptions = {},
+): Promise<RemoteFile<T>> {
   const isAllowed = options.isAllowedAddress ?? isPublicAddress;
-  const maxBytes = options.maxBytes ?? MAX_REMOTE_IMAGE_BYTES;
+  const maxBytes = options.maxBytes ?? kind.maxBytes;
   const deadline = AbortSignal.timeout(
     options.timeoutMs ?? REMOTE_IMAGE_TIMEOUT_MS,
   );
@@ -172,7 +207,7 @@ export async function downloadRemoteImage(
   try {
     let target = remoteTarget(url, isAllowed);
     for (let hop = 0; ; hop += 1) {
-      const response = await get(target, lookup, signal);
+      const response = await get(target, lookup, signal, kind.accept);
       const status = response.statusCode ?? 0;
       const location = response.headers.location;
       if (status >= 300 && status < 400 && location !== undefined) {
@@ -187,14 +222,10 @@ export async function downloadRemoteImage(
         response.destroy();
         throw new RemoteImageError(`the server answered HTTP ${status}`);
       }
-      const bytes = await readCapped(response, maxBytes);
-      const extension = sniffImageExtension(bytes);
-      const mediaType =
-        extension === null || extension === 'avif'
-          ? null
-          : REMOTE_IMAGE_MEDIA_TYPE[extension];
+      const bytes = await readCapped(response, maxBytes, kind.tooLarge);
+      const mediaType = kind.sniff(bytes);
       if (mediaType === null) {
-        throw new RemoteImageError('not a png, jpeg, gif or webp image');
+        throw new RemoteImageError(kind.unknownType);
       }
       return { mediaType, bytes };
     }
@@ -255,11 +286,12 @@ function get(
   target: URL,
   lookup: LookupFunction,
   signal: AbortSignal,
+  accept: string,
 ): Promise<IncomingMessage> {
   const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
   const options: RequestOptions = {
     method: 'GET',
-    headers: { accept: 'image/*', 'user-agent': 'Geniro' },
+    headers: { accept, 'user-agent': 'Geniro' },
     lookup,
     signal,
     agent: false,
@@ -274,11 +306,10 @@ function get(
 async function readCapped(
   response: IncomingMessage,
   maxBytes: number,
+  wording: (megabytes: string) => string,
 ): Promise<Buffer> {
   const tooLarge = (): RemoteImageError =>
-    new RemoteImageError(
-      `larger than the ${megabytes(maxBytes)}MB a gallery downloads`,
-    );
+    new RemoteImageError(wording(String(megabytes(maxBytes))));
   const declared = Number(response.headers['content-length']);
   if (Number.isFinite(declared) && declared > maxBytes) {
     response.destroy();

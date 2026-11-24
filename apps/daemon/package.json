@@ -23,6 +23,7 @@
     "test:graph": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run src/v1/teams"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@huggingface/tokenizers": "0.2.0",
     "@mikro-orm/core": "^7.2.3",
     "@mikro-orm/decorators": "^7.2.3",
@@ -52,7 +53,6 @@
     "zod": "~4.4.3"
   },
   "devDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
     "@mikro-orm/seeder": "^7.2.3",
     "@swc-node/register": "^1.12.1",
     "@swc/cli": "^0.8.1",

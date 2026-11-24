@@ -97,6 +97,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@huggingface/tokenizers':
         specifier: 0.2.0
         version: 0.2.0
@@ -179,9 +182,6 @@ importers:
         specifier: ~4.4.3
         version: 4.4.3
     devDependencies:
-      '@cfworker/json-schema':
-        specifier: ^4.1.1
-        version: 4.1.1
       '@mikro-orm/seeder':
         specifier: ^7.2.3
         version: 7.2.3(@mikro-orm/core@7.2.3)

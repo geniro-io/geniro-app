@@ -11,6 +11,7 @@ export function emptyRunState(): RunStateDto {
     shells: [],
     monitors: [],
     actions: [],
+    surfaces: [],
     openToolCalls: [],
     throughSeq: -1,
     turnStartedAt: null,

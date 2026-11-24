@@ -50,6 +50,10 @@ import {
   ShellOutputWireSchema,
   StopDetachedProcessesSchema,
   StoppedDetachedProcessesSchema,
+  SurfaceDraftsBodySchema,
+  SurfaceMediaDataSchema,
+  SurfacePressBodySchema,
+  SurfaceWireSchema,
   THREAD_OVERVIEW_PARTS,
   ThreadAnalysisWireSchema,
   ThreadOverviewWireSchema,
@@ -861,6 +865,16 @@ export class ArtifactAnswersDto extends createZodDto(
 export class SaveArtifactAnswersDto extends createZodDto(
   SaveArtifactAnswersSchema,
 ) {}
+
+export class SurfaceDto extends createZodDto(SurfaceWireSchema) {}
+
+export class SaveSurfaceDraftsDto extends createZodDto(
+  SurfaceDraftsBodySchema,
+) {}
+
+export class PressSurfaceDto extends createZodDto(SurfacePressBodySchema) {}
+
+export class SurfaceMediaDataDto extends createZodDto(SurfaceMediaDataSchema) {}
 
 /** Every team note of one run — see `RunTeamNotesWireSchema`. */
 export class RunTeamNotesDto extends createZodDto(RunTeamNotesWireSchema) {}

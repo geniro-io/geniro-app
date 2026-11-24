@@ -7,6 +7,7 @@ import {
   LayoutTemplate,
   ListChecks,
   ListPlus,
+  PanelsTopLeft,
   Sparkles,
   Table2,
   UsersRound as TeamIcon,
@@ -54,6 +55,7 @@ const KIND_META: Record<
   metrics: { icon: Gauge, noun: 'a scorecard', label: 'Figures' },
   comparison: { icon: Table2, noun: 'a comparison', label: 'Comparison' },
   gallery: { icon: Images, noun: 'a gallery', label: 'Gallery' },
+  surface: { icon: PanelsTopLeft, noun: 'a card', label: 'Card' },
   screenshot: { icon: Camera, noun: 'a screenshot', label: 'Screenshot' },
   recommendations: {
     icon: Sparkles,
@@ -185,6 +187,15 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
           {[0, 1, 2, 3].map((index) => (
             <Bar key={index} className="aspect-4/3" delay={index * 130} />
           ))}
+        </div>
+      );
+    case 'surface':
+      return (
+        <div className="flex flex-col gap-1.5">
+          <Bar className="h-3 w-1/3" />
+          <Bar className="h-8" delay={120} />
+          <Bar className="h-8" delay={240} />
+          <Bar className="h-7 w-24" delay={360} />
         </div>
       );
     case 'screenshot':

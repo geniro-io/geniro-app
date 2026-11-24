@@ -40,6 +40,7 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
 import { ThreadMessageDao } from './dao/thread-message.dao';
+import { UiSurfaceDao } from './dao/ui-surface.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
 import { AccountSignIns } from './services/account-sign-ins.service';
 import { ActionBroker } from './services/action.broker';
@@ -146,6 +147,7 @@ import { ResourceAlertEventBus } from './services/resource-alert-events.bus';
 import { ResourceWatchService } from './services/resource-watch.service';
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
+import { RunDownloadBudget } from './services/run-download-budget.service';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunHoldRegistry } from './services/run-hold.registry';
 import { RunIdleReapService } from './services/run-idle-reap.service';
@@ -175,6 +177,9 @@ import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { StrandedWorkReconcileService } from './services/stranded-work-reconcile.service';
 import { SubagentRecoveryService } from './services/subagent-recovery.service';
+import { SurfaceBroker } from './services/surface.broker';
+import { SurfaceService } from './services/surface.service';
+import { SurfaceMediaService } from './services/surface-media.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { TeamBuilderBroker } from './services/team-builder.broker';
 import { TeamNoteBroker } from './services/team-note.broker';
@@ -366,9 +371,15 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     {
       provide: GalleryImageService,
-      useFactory: (attachments: AttachmentStoreService) =>
-        new GalleryImageService(attachments),
-      inject: [AttachmentStoreService],
+      useFactory: (
+        attachments: AttachmentStoreService,
+        runBudget: RunDownloadBudget,
+      ) => new GalleryImageService(attachments, { runBudget }),
+      inject: [AttachmentStoreService, RunDownloadBudget],
+    },
+    {
+      provide: RunDownloadBudget,
+      useFactory: () => new RunDownloadBudget(),
     },
     {
       provide: ChatUploadStoreService,
@@ -620,6 +631,18 @@ import { defaultSpawn } from './utils/spawn-cli';
     ItemDao,
     NodeStateDao,
     WallTurnDao,
+    UiSurfaceDao,
+    SurfaceBroker,
+    SurfaceService,
+    {
+      provide: SurfaceMediaService,
+      useFactory: (
+        attachments: AttachmentStoreService,
+        runBudget: RunDownloadBudget,
+        runs: RunDao,
+      ) => new SurfaceMediaService(attachments, runBudget, runs),
+      inject: [AttachmentStoreService, RunDownloadBudget, RunDao],
+    },
     CallContextDao,
     ThreadMessageDao,
     ThreadInboxService,
@@ -711,6 +734,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     BrowserBroker,
     // For show_gallery, which downloads the pictures a call names by URL.
     GalleryImageService,
+    SurfaceBroker,
+    SurfaceService,
     ArtifactBroker,
     ActionBroker,
     // For the MCP host's monitor tools and the team executor, which registers

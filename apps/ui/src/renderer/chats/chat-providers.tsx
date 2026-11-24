@@ -86,6 +86,7 @@ import {
   type DelegateConversationLoader,
 } from './use-delegate-pages';
 import { type TaskReader, TaskReaderContext } from './use-live-task';
+import { type SurfaceHost, SurfaceHostContext } from './use-surface';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
@@ -161,6 +162,7 @@ export function ChatProviders({
   lessonsJump = null,
   taskReader = null,
   threadContext = null,
+  surfaceHost = null,
   children,
 }: {
   /**
@@ -263,6 +265,8 @@ export function ChatProviders({
   taskReader?: TaskReader | null;
   /** The messages a relayed question's thread sent before it — see `ThreadContextReaderContext`. */
   threadContext?: ThreadContextReader | null;
+  /** The open run's agent cards and how they reach the daemon — see `SurfaceHostContext`. */
+  surfaceHost?: SurfaceHost | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   const liveDelegates = useLiveDelegates(liveText);
@@ -306,7 +310,10 @@ export function ChatProviders({
                                                       value={taskReader}>
                                                       <ThreadContextReaderContext.Provider
                                                         value={threadContext}>
-                                                        {children}
+                                                        <SurfaceHostContext.Provider
+                                                          value={surfaceHost}>
+                                                          {children}
+                                                        </SurfaceHostContext.Provider>
                                                       </ThreadContextReaderContext.Provider>
                                                     </TaskReaderContext.Provider>
                                                   </LessonsJumpContext.Provider>

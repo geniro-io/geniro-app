@@ -6882,6 +6882,7 @@ export const ItemKind = {
     ShowMetrics: 'show_metrics',
     ShowComparison: 'show_comparison',
     ShowGallery: 'show_gallery',
+    ShowUi: 'show_ui',
     ShowArtifact: 'show_artifact',
     Recommendations: 'recommendations',
     RecommendationOutcome: 'recommendation_outcome',
@@ -12129,6 +12130,43 @@ export interface PressActionDto {
      */
     clientMessageId: string;
 }
+/**
+ * 
+ * @export
+ * @interface PressSurfaceDto
+ */
+export interface PressSurfaceDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof PressSurfaceDto
+     */
+    sourceComponentId: string;
+    /**
+     * 
+     * @type {{ [key: string]: any; }}
+     * @memberof PressSurfaceDto
+     */
+    changes: { [key: string]: any; };
+    /**
+     * 
+     * @type {string}
+     * @memberof PressSurfaceDto
+     */
+    userMessage: string | null;
+    /**
+     * 
+     * @type {{ [key: string]: any; }}
+     * @memberof PressSurfaceDto
+     */
+    context: { [key: string]: any; };
+    /**
+     * 
+     * @type {string}
+     * @memberof PressSurfaceDto
+     */
+    clientMessageId: string;
+}
 
 /**
  * 
@@ -14777,6 +14815,12 @@ export interface RunStateDto {
      */
     actions: Array<LiveAction>;
     /**
+     * every card agents drew with show_ui, in the order they were placed, with each one's newest version
+     * @type {Array<SurfaceIndexEntry>}
+     * @memberof RunStateDto
+     */
+    surfaces: Array<SurfaceIndexEntry>;
+    /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}
      * @memberof RunStateDto
@@ -15596,6 +15640,25 @@ export interface SaveLessonDto {
      * @memberof SaveLessonDto
      */
     target?: LessonTarget;
+}
+/**
+ * 
+ * @export
+ * @interface SaveSurfaceDraftsDto
+ */
+export interface SaveSurfaceDraftsDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof SaveSurfaceDraftsDto
+     */
+    version: number;
+    /**
+     * 
+     * @type {{ [key: string]: any; }}
+     * @memberof SaveSurfaceDraftsDto
+     */
+    changes: { [key: string]: any; };
 }
 /**
  * 
@@ -17523,6 +17586,185 @@ export interface StorageUsageDtoChats {
      * @memberof StorageUsageDtoChats
      */
     archivedPeriods: Array<StorageArchivedPeriod>;
+}
+/**
+ * 
+ * @export
+ * @interface SurfaceDto
+ */
+export interface SurfaceDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceDto
+     */
+    surfaceId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof SurfaceDto
+     */
+    version: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceDto
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {Array<{ [key: string]: any; }>}
+     * @memberof SurfaceDto
+     */
+    components: Array<{ [key: string]: any; }>;
+    /**
+     * 
+     * @type {{ [key: string]: any; }}
+     * @memberof SurfaceDto
+     */
+    dataModel: { [key: string]: any; };
+    /**
+     * 
+     * @type {{ [key: string]: any; }}
+     * @memberof SurfaceDto
+     */
+    drafts: { [key: string]: any; };
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SurfaceDto
+     */
+    agentWrites: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SurfaceDto
+     */
+    overriddenDrafts: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SurfaceDto
+     */
+    oneShotPressed: Array<string>;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof SurfaceDto
+     */
+    removed: boolean;
+    /**
+     * 
+     * @type {SurfacePublisher}
+     * @memberof SurfaceDto
+     */
+    publisher: SurfacePublisher;
+    /**
+     * 
+     * @type {{ [key: string]: SurfaceMedia; }}
+     * @memberof SurfaceDto
+     */
+    media: { [key: string]: SurfaceMedia; };
+}
+/**
+ * 
+ * @export
+ * @interface SurfaceIndexEntry
+ */
+export interface SurfaceIndexEntry {
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceIndexEntry
+     */
+    surfaceId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof SurfaceIndexEntry
+     */
+    version: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SurfaceIndexEntry
+     */
+    firstSeq: number;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof SurfaceIndexEntry
+     */
+    removed: boolean;
+    /**
+     * 
+     * @type {SurfacePublisher}
+     * @memberof SurfaceIndexEntry
+     */
+    publisher: SurfacePublisher;
+}
+/**
+ * 
+ * @export
+ * @interface SurfaceMedia
+ */
+export interface SurfaceMedia {
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceMedia
+     */
+    mediaType: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceMedia
+     */
+    source: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface SurfaceMediaDataDto
+ */
+export interface SurfaceMediaDataDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceMediaDataDto
+     */
+    file: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceMediaDataDto
+     */
+    mediaType: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfaceMediaDataDto
+     */
+    data: string;
+}
+/**
+ * 
+ * @export
+ * @interface SurfacePublisher
+ */
+export interface SurfacePublisher {
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfacePublisher
+     */
+    memberId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof SurfacePublisher
+     */
+    agentLabel: string | null;
 }
 /**
  * 
@@ -20323,6 +20565,12 @@ export interface ThreadOverviewDtoState {
      * @memberof ThreadOverviewDtoState
      */
     actions: Array<LiveAction>;
+    /**
+     * every card agents drew with show_ui, in the order they were placed, with each one's newest version
+     * @type {Array<SurfaceIndexEntry>}
+     * @memberof ThreadOverviewDtoState
+     */
+    surfaces: Array<SurfaceIndexEntry>;
     /**
      * the unanswered tool calls of every conversation's open turn — the commands running in the foreground, whatever page a client holds
      * @type {Array<ChatHistoryDtoItemsInner>}

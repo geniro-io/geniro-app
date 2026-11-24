@@ -33,6 +33,7 @@ import type {
   MoveTeamRunStageDto,
   NodeStateDto,
   PressActionDto,
+  PressSurfaceDto,
   ProjectTeamOverlaysDto,
   ResetWakesCancelledDto,
   RunDto,
@@ -45,6 +46,7 @@ import type {
   SetTeamRunPoolMemberDto,
   StageMoveResultDto,
   StartTeamChatDto,
+  SurfaceDto,
   TeamAvatarDataDto,
   TeamAvatarIdDto,
   TeamChatsDiscardedDto,
@@ -187,6 +189,12 @@ export interface TeamsApiPressTeamActionRequest {
     runId: string;
     seq: number;
     pressActionDto: PressActionDto;
+}
+
+export interface TeamsApiPressTeamSurfaceRequest {
+    runId: string;
+    surfaceId: string;
+    pressSurfaceDto: PressSurfaceDto;
 }
 
 export interface TeamsApiReadMemberHealthRequest {
@@ -1650,6 +1658,69 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async pressTeamAction(requestParameters: TeamsApiPressTeamActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
         const response = await this.pressTeamActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async pressTeamSurfaceRaw(requestParameters: TeamsApiPressTeamSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SurfaceDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling pressTeamSurface().'
+            );
+        }
+
+        if (requestParameters['surfaceId'] == null) {
+            throw new runtime.RequiredError(
+                'surfaceId',
+                'Required parameter "surfaceId" was null or undefined when calling pressTeamSurface().'
+            );
+        }
+
+        if (requestParameters['pressSurfaceDto'] == null) {
+            throw new runtime.RequiredError(
+                'pressSurfaceDto',
+                'Required parameter "pressSurfaceDto" was null or undefined when calling pressTeamSurface().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/runs/{runId}/surfaces/{surfaceId}/press`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"surfaceId"}}`, encodeURIComponent(String(requestParameters['surfaceId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pressSurfaceDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async pressTeamSurface(requestParameters: TeamsApiPressTeamSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SurfaceDto> {
+        const response = await this.pressTeamSurfaceRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

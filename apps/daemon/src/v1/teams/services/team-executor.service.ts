@@ -119,6 +119,8 @@ import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { SurfaceBroker } from '../../agents/services/surface.broker';
+import { SurfaceService } from '../../agents/services/surface.service';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
@@ -696,6 +698,7 @@ interface LiveRunControl {
     text: string,
     images: SendMessageImage[],
     backgroundWork?: FollowUpBackgroundWork,
+    storedText?: string,
   ): Promise<ItemWire | null>;
   /** Hand the message to the callee of ONE running call — see `deliverToCall`. */
   deliverToCall(
@@ -703,6 +706,7 @@ interface LiveRunControl {
     callId: string,
     text: string,
     images: SendMessageImage[],
+    storedText?: string,
   ): Promise<ItemWire>;
   /** Hand a message from another thread to the lead's running turn. */
   joinThreadMessage(join: ThreadMessageJoin): Promise<ThreadMessageJoinAnswer>;
@@ -1043,6 +1047,9 @@ export class TeamExecutorService
     @Optional() private readonly flags?: FlagBroker,
     /** `milestone`, optional on `artifacts`' terms. */
     @Optional() private readonly milestones?: MilestoneBroker,
+    /** `show_ui`, optional on `artifacts`' terms. */
+    @Optional() private readonly surfaceSinks?: SurfaceBroker,
+    @Optional() private readonly surfaces?: SurfaceService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1099,6 +1106,7 @@ export class TeamExecutorService
 
   /** Each run's artifact publishers, disposed when the run is deleted. */
   private readonly artifactDisposers = new Map<string, (() => void)[]>();
+  private readonly surfaceDisposers = new Map<string, (() => void)[]>();
 
   /** Each run's button publishers, on the same terms. */
   private readonly actionDisposers = new Map<string, (() => void)[]>();
@@ -2419,23 +2427,43 @@ export class TeamExecutorService
     images: SendMessageImage[] = [],
     clientMessageId?: string,
     backgroundWork?: FollowUpBackgroundWork,
+    /** What the user's row keeps when it must not hold `text` itself (a card's hidden field). */
+    storedText?: string,
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
     this.commandEndWakes?.userSpoke(runId);
-    return this.messageSends.send(runId, text, clientMessageId, async () => {
-      // Not awaited: the message must reach the run in this same tick, ahead
-      // of any wake already scheduled for it.
-      void this.memberQuestionCards?.retireForUserMessage(runId);
-      const live = this.liveRuns.get(runId);
-      if (live) {
-        const item = await live.deliver(text, images, backgroundWork);
-        if (item !== null) {
-          return item;
+    return this.messageSends.send(
+      runId,
+      storedText ?? text,
+      clientMessageId,
+      async () => {
+        // Not awaited: the message must reach the run in this same tick, ahead
+        // of any wake already scheduled for it.
+        void this.memberQuestionCards?.retireForUserMessage(runId);
+        const live = this.liveRuns.get(runId);
+        if (live) {
+          const item = await live.deliver(
+            text,
+            images,
+            backgroundWork,
+            storedText,
+          );
+          if (item !== null) {
+            return item;
+          }
         }
-      }
-      return this.walkAgain(em, run, text, images);
-    });
+        return this.walkAgain(
+          em,
+          run,
+          text,
+          images,
+          null,
+          undefined,
+          storedText,
+        );
+      },
+    );
   }
 
   /** A user retry can replay its row after the addressed call has settled. */
@@ -2446,15 +2474,21 @@ export class TeamExecutorService
     text: string,
     images: SendMessageImage[] = [],
     clientMessageId?: string,
+    storedText?: string,
   ): Promise<ItemWire> {
     await this.assertRunTakesMessage(this.em.fork(), runId, text, images);
-    return this.messageSends.send(runId, text, clientMessageId, async () => {
-      const live = this.liveRuns.get(runId);
-      if (!live) {
-        throw callNotRunning();
-      }
-      return live.deliverToCall(memberId, callId, text, images);
-    });
+    return this.messageSends.send(
+      runId,
+      storedText ?? text,
+      clientMessageId,
+      async () => {
+        const live = this.liveRuns.get(runId);
+        if (!live) {
+          throw callNotRunning();
+        }
+        return live.deliverToCall(memberId, callId, text, images, storedText);
+      },
+    );
   }
 
   /** The refusals every message into a team run shares, whatever it targets. */
@@ -2495,6 +2529,7 @@ export class TeamExecutorService
     images: SendMessageImage[],
     seedRow: Record<string, unknown> | null = null,
     restart?: RestartPass,
+    storedText?: string,
   ): Promise<ItemWire> {
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException(
@@ -2511,6 +2546,7 @@ export class TeamExecutorService
         images,
         seedRow,
         restart,
+        storedText,
       );
     } catch (err) {
       this.registry.release(run.id);
@@ -2552,6 +2588,7 @@ export class TeamExecutorService
      */
     seedRow: Record<string, unknown> | null = null,
     restart?: RestartPass,
+    storedText?: string,
   ): Promise<{
     team: Team;
     dropped: DroppedNodeSetting[];
@@ -2632,7 +2669,7 @@ export class TeamExecutorService
       await this.seqs.reserve(run.id),
       seedRow === null ? 'message' : 'system',
       seedRow === null ? 'user' : null,
-      seedRow ?? messagePayload(text, storedImages),
+      seedRow ?? messagePayload(storedText ?? text, storedImages),
     );
     if (leadTurn) {
       this.markRootsStarting(run.id, lead);
@@ -2737,6 +2774,7 @@ export class TeamExecutorService
     this.poolChoices.delete(runId);
     for (const disposers of [
       this.artifactDisposers,
+      this.surfaceDisposers,
       this.actionDisposers,
       this.monitorDisposers,
       this.teamNoteDisposers,
@@ -2863,6 +2901,65 @@ export class TeamExecutorService
       );
     }
     this.artifactDisposers.set(runId, disposers);
+  }
+
+  /**
+   * `show_ui` for each member of this pass, on {@link registerArtifactPublishers}'
+   * terms and with {@link registerActionPublishers}' labels. A member's card is
+   * filed under the call its conversation answers, so it is drawn inside that
+   * call's card; a press reaches that call while it runs, else the lead.
+   */
+  private registerSurfacePublishers(
+    runId: string,
+    nodes: readonly TeamMember[],
+    roots: ReadonlySet<string>,
+    persistItem: (
+      memberId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+  ): void {
+    const broker = this.surfaceSinks;
+    const surfaces = this.surfaces;
+    if (broker === undefined || surfaces === undefined) {
+      return;
+    }
+    for (const dispose of this.surfaceDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const disposers: (() => void)[] = [];
+    for (const node of nodes) {
+      disposers.push(
+        broker.register(runId, node.id, (call, caller, stop) => {
+          const conversationId = callerConversationOf(caller) ?? '';
+          const callId = this.callBroker.callAnsweredBy(runId, caller);
+          const unattributed =
+            conversationId === '' && roots.size === 1 && roots.has(node.id);
+          return surfaces.draw(
+            runId,
+            {
+              memberId: node.id,
+              conversationId: conversationId === '' ? null : conversationId,
+              callId,
+              agentLabel: unattributed ? null : (node.name ?? node.id),
+            },
+            call,
+            async (payload) =>
+              (
+                await persistItem(
+                  node.id,
+                  'show_ui',
+                  null,
+                  callId === null ? payload : { ...payload, callId },
+                )
+              ).seq,
+            stop,
+          );
+        }),
+      );
+    }
+    this.surfaceDisposers.set(runId, disposers);
   }
 
   /**
@@ -9622,6 +9719,7 @@ export class TeamExecutorService
       text: string,
       images: SendMessageImage[],
       backgroundWork?: FollowUpBackgroundWork,
+      storedText?: string,
     ): Promise<ItemWire | null> => {
       // A pass that is over hands the message back to be walked from the
       // trigger — unless the run is AWAKE for work its own agents started
@@ -9719,7 +9817,7 @@ export class TeamExecutorService
       let persisted = false;
       try {
         item = await persistUserMessage(null, {
-          ...messagePayload(text, stored),
+          ...messagePayload(storedText ?? text, stored),
           deliveryId,
         });
         persisted = true;
@@ -9768,6 +9866,7 @@ export class TeamExecutorService
       callId: string,
       text: string,
       images: SendMessageImage[],
+      storedText?: string,
     ): Promise<ItemWire> => {
       const subTurn = subTurns.get(callId);
       const waiting = waitingCalls.get(callId);
@@ -9791,9 +9890,9 @@ export class TeamExecutorService
         if (!this.callBroker.messageHeldCall(runId, callId, text)) {
           waiting.messages.push(text);
         }
-        noteCallMessage(callId, text);
+        noteCallMessage(callId, storedText ?? text);
         return persistUserMessage(node.id, {
-          ...messagePayload(text, []),
+          ...messagePayload(storedText ?? text, []),
           nodeId: node.id,
           callId,
         });
@@ -9818,12 +9917,12 @@ export class TeamExecutorService
           `${callee.name ?? callee.id} can't take a message while it works — its CLI accepts none mid-turn, or the turn is ending`,
         );
       }
-      noteCallMessage(callId, text);
+      noteCallMessage(callId, storedText ?? text);
       // A callee that is itself a caller may be waiting on ITS callees — in
       // the conversation this call speaks in.
       releaseWaitsFor(callee, conversationId);
       return persistUserMessage(callee.id, {
-        ...messagePayload(text, stored),
+        ...messagePayload(storedText ?? text, stored),
         nodeId: callee.id,
         callId,
         deliveryId,
@@ -9902,6 +10001,12 @@ export class TeamExecutorService
       runId,
       hostToolNodes,
       team.mode === 'relay' ? new Set() : leadIds,
+    );
+    this.registerSurfacePublishers(
+      runId,
+      hostToolNodes,
+      team.mode === 'relay' ? new Set() : leadIds,
+      persistItem,
     );
     const watchLead = (lead: string): void => {
       if (leadIds.has(lead) || !nodesById.has(lead)) {

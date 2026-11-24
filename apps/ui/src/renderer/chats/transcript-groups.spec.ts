@@ -7395,3 +7395,22 @@ describe('groupTranscript — lessons cards', () => {
     expect(groupTranscript([outcome('saved')])).toEqual([]);
   });
 });
+
+describe('show_ui rows', () => {
+  it('folds a create row into one surface card', () => {
+    const entries = groupTranscript([
+      item('show_ui', { surfaceId: 'f', version: 1, op: 'create', title: 'T' }),
+    ]);
+
+    expect(entries.map((entry) => entry.type)).toEqual(['surface']);
+    expect(isCardEntry(entries[0]!)).toBe(true);
+  });
+
+  it.each(['update', 'remove'])('draws no card for a %s row', (op) => {
+    const entries = groupTranscript([
+      item('show_ui', { surfaceId: 'f', version: 2, op, title: 'T' }),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+});

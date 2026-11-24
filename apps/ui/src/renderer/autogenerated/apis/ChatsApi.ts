@@ -43,6 +43,7 @@ import type {
   NamedPathsDto,
   NamedPathsResultDto,
   PressActionDto,
+  PressSurfaceDto,
   RenameRunDto,
   ReorderPinnedDto,
   ResourceAlertConfigAckDto,
@@ -59,6 +60,7 @@ import type {
   RunTeamNotesDto,
   RunWaterfallDto,
   SaveArtifactAnswersDto,
+  SaveSurfaceDraftsDto,
   SendMessageDto,
   SetRunColorDto,
   SetRunGroupDto,
@@ -69,6 +71,8 @@ import type {
   StopDetachedProcessesDto,
   StoppedDetachedProcessesDto,
   StoppedResourceAlertCommandDto,
+  SurfaceDto,
+  SurfaceMediaDataDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -195,6 +199,12 @@ export interface ChatsApiPressChatActionRequest {
     pressActionDto: PressActionDto;
 }
 
+export interface ChatsApiPressChatSurfaceRequest {
+    runId: string;
+    surfaceId: string;
+    pressSurfaceDto: PressSurfaceDto;
+}
+
 export interface ChatsApiReadArtifactAnswersRequest {
     runId: string;
     artifactId: string;
@@ -259,6 +269,16 @@ export interface ChatsApiReadShellOutputRequest {
     callId: string;
 }
 
+export interface ChatsApiReadSurfaceRequest {
+    runId: string;
+    surfaceId: string;
+}
+
+export interface ChatsApiReadSurfaceMediaRequest {
+    runId: string;
+    file: string;
+}
+
 export interface ChatsApiReadThreadOverviewRequest {
     runId: string;
     parts: string;
@@ -291,6 +311,12 @@ export interface ChatsApiSaveArtifactAnswersRequest {
     runId: string;
     artifactId: string;
     saveArtifactAnswersDto: SaveArtifactAnswersDto;
+}
+
+export interface ChatsApiSaveSurfaceDraftsRequest {
+    runId: string;
+    surfaceId: string;
+    saveSurfaceDraftsDto: SaveSurfaceDraftsDto;
 }
 
 export interface ChatsApiSearchAllChatsRequest {
@@ -1624,6 +1650,69 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async pressChatSurfaceRaw(requestParameters: ChatsApiPressChatSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SurfaceDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling pressChatSurface().'
+            );
+        }
+
+        if (requestParameters['surfaceId'] == null) {
+            throw new runtime.RequiredError(
+                'surfaceId',
+                'Required parameter "surfaceId" was null or undefined when calling pressChatSurface().'
+            );
+        }
+
+        if (requestParameters['pressSurfaceDto'] == null) {
+            throw new runtime.RequiredError(
+                'pressSurfaceDto',
+                'Required parameter "pressSurfaceDto" was null or undefined when calling pressChatSurface().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/surfaces/{surfaceId}/press`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"surfaceId"}}`, encodeURIComponent(String(requestParameters['surfaceId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pressSurfaceDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async pressChatSurface(requestParameters: ChatsApiPressChatSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SurfaceDto> {
+        const response = await this.pressChatSurfaceRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async readAppProcessesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AppProcessesDto>> {
         const queryParameters: any = {};
 
@@ -2351,6 +2440,112 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async readSurfaceRaw(requestParameters: ChatsApiReadSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SurfaceDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readSurface().'
+            );
+        }
+
+        if (requestParameters['surfaceId'] == null) {
+            throw new runtime.RequiredError(
+                'surfaceId',
+                'Required parameter "surfaceId" was null or undefined when calling readSurface().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/surfaces/{surfaceId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"surfaceId"}}`, encodeURIComponent(String(requestParameters['surfaceId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readSurface(requestParameters: ChatsApiReadSurfaceRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SurfaceDto> {
+        const response = await this.readSurfaceRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readSurfaceMediaRaw(requestParameters: ChatsApiReadSurfaceMediaRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SurfaceMediaDataDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readSurfaceMedia().'
+            );
+        }
+
+        if (requestParameters['file'] == null) {
+            throw new runtime.RequiredError(
+                'file',
+                'Required parameter "file" was null or undefined when calling readSurfaceMedia().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/surfaces/media/{file}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"file"}}`, encodeURIComponent(String(requestParameters['file'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readSurfaceMedia(requestParameters: ChatsApiReadSurfaceMediaRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SurfaceMediaDataDto> {
+        const response = await this.readSurfaceMediaRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async readThreadOverviewRaw(requestParameters: ChatsApiReadThreadOverviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ThreadOverviewDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -2716,6 +2911,69 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async saveArtifactAnswers(requestParameters: ChatsApiSaveArtifactAnswersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ArtifactAnswersDto> {
         const response = await this.saveArtifactAnswersRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async saveSurfaceDraftsRaw(requestParameters: ChatsApiSaveSurfaceDraftsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SurfaceDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling saveSurfaceDrafts().'
+            );
+        }
+
+        if (requestParameters['surfaceId'] == null) {
+            throw new runtime.RequiredError(
+                'surfaceId',
+                'Required parameter "surfaceId" was null or undefined when calling saveSurfaceDrafts().'
+            );
+        }
+
+        if (requestParameters['saveSurfaceDraftsDto'] == null) {
+            throw new runtime.RequiredError(
+                'saveSurfaceDraftsDto',
+                'Required parameter "saveSurfaceDraftsDto" was null or undefined when calling saveSurfaceDrafts().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/surfaces/{surfaceId}/drafts`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"surfaceId"}}`, encodeURIComponent(String(requestParameters['surfaceId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['saveSurfaceDraftsDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async saveSurfaceDrafts(requestParameters: ChatsApiSaveSurfaceDraftsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SurfaceDto> {
+        const response = await this.saveSurfaceDraftsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

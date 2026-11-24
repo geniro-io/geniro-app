@@ -32,6 +32,7 @@ import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { UiSurface } from '../../runs/entity/ui-surface.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { ArtifactShareDao } from '../../shares/dao/artifact-share.dao';
@@ -49,6 +50,7 @@ import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { UiSurfaceDao } from '../dao/ui-surface.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { ActionCommandRegistry } from './action-command.registry';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -83,6 +85,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let nodeStateDao: NodeStateDao;
   let callContextDao: CallContextDao;
   let wallTurnDao: WallTurnDao;
+  let surfaceDao: UiSurfaceDao;
   let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
@@ -113,6 +116,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           NodeState,
           CallContext,
           WallTurn,
+          UiSurface,
           ArtifactShare,
           Goal,
           AgentFlag,
@@ -161,6 +165,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     nodeStateDao = new NodeStateDao(em);
     callContextDao = new CallContextDao(em);
     wallTurnDao = new WallTurnDao(em);
+    surfaceDao = new UiSurfaceDao(em);
     const threadInbox = {
       cancelFor: async (runId: string, why: string) => {
         inboxCancels.push({
@@ -225,6 +230,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       monitors,
       browserBridge,
       browserApprovals,
+      surfaceDao,
     );
   });
 
@@ -524,6 +530,29 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect((await wallTurnDao.nodeSums('run-a')).size).toBe(0);
     expect((await wallTurnDao.chatSums(['run-b'])).get('run-b')).toBe(700);
+  });
+
+  it('destroys the run’s agent cards, and only that run’s', async () => {
+    await seedRun('run-a');
+    await seedRun('run-b');
+    for (const runId of ['run-a', 'run-b']) {
+      const em = orm.em.fork();
+      const surface = new UiSurface();
+      Object.assign(surface, {
+        runId,
+        surfaceId: 'form',
+        version: 1,
+        snapshot: '{"components":[],"dataModel":{}}',
+        memberId: 'agent',
+        firstSeq: 4,
+      });
+      await surfaceDao.save(surface, em);
+    }
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(await surfaceDao.find('run-a', 'form')).toBeNull();
+    expect(await surfaceDao.find('run-b', 'form')).not.toBeNull();
   });
 
   it('drops the run’s published artifacts, which nothing else would reach', async () => {

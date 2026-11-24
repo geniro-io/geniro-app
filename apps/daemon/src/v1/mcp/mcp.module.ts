@@ -27,6 +27,7 @@ import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
+import { SurfaceBroker } from '../agents/services/surface.broker';
 import { TeamBuilderBroker } from '../agents/services/team-builder.broker';
 import { TeamNoteBroker } from '../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../agents/services/team-proposal.broker';
@@ -134,6 +135,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         artifactAnswers: ChatArtifactsService,
         commandCenters: CommandCenterBroker,
         commandCenterOps: CommandCenterOpsBroker,
+        surfaces: SurfaceBroker,
       ) =>
         createMcpTools({
           calls,
@@ -182,6 +184,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           lessonChecks,
           commandCenters,
           commandCenterOps,
+          surfaces,
         }),
       inject: [
         CallBroker,
@@ -230,6 +233,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ChatArtifactsService,
         CommandCenterBroker,
         CommandCenterOpsBroker,
+        SurfaceBroker,
       ],
     },
     McpServerService,

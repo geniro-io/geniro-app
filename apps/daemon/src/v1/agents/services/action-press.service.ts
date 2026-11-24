@@ -347,10 +347,7 @@ export class ActionPressService {
    * The run is of the kind its route serves, and not archived — an archived
    * chat is inert: its buttons are neither pressed nor dismissed.
    */
-  private async assertPressable(
-    runId: string,
-    kind: ActionRunKind,
-  ): Promise<void> {
+  async assertPressable(runId: string, kind: ActionRunKind): Promise<void> {
     const found = await this.runDao.getById(runId, this.em.fork());
     const run =
       kind === 'chat'

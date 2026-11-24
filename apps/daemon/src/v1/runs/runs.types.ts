@@ -227,6 +227,7 @@ export const ItemKindSchema = z
     'show_metrics',
     'show_comparison',
     'show_gallery',
+    'show_ui',
     'show_artifact',
     'recommendations',
     'recommendation_outcome',

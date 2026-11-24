@@ -97,12 +97,11 @@ export class CommandCenterInstructionsConfigDto extends createZodDto(
 ) {}
 
 /**
- * Start a cardless thread the drain took: where it runs and the user's run
- * settings, which live in Electron main. No branch — it works in the project's
- * folder.
+ * Start a cardless thread the drain took: the user's run settings and the
+ * folder's git stamp, which live in Electron main. No folder — it runs in its
+ * project's own folder, read by the daemon.
  */
 export const startThreadRunSchema = startTaskRunSchema.pick({
-  cwd: true,
   startSha: true,
   startDirty: true,
   customInstructions: true,

@@ -235,10 +235,7 @@ export class ThreadStartConductor {
       await daemonPost(
         handle,
         `/v1/command-center/starts/${encodeURIComponent(start.startId)}/runs`,
-        {
-          cwd: start.folder,
-          ...(await runSnapshotOf(this.deps, start.folder)),
-        },
+        await runSnapshotOf(this.deps, start.folder),
         this.deps.fetchTimeoutMs,
       );
       this.deps.log(`thread start began "${start.title}" in ${start.folder}`);

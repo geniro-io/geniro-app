@@ -716,7 +716,6 @@ describe('CommandCenterStartsService', () => {
     type ThreadRequest = Parameters<CommandCenterThreadStartDao['create']>[0];
 
     const RUN_SETTINGS = {
-      cwd: '/work/geniro',
       startSha: 'abc123',
       startDirty: false,
       customInstructions: 'Be brief.',

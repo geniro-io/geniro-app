@@ -341,7 +341,7 @@ export class TaskRunsService {
       );
     }
     const run = await this.newRun(target, {
-      cwd: input.cwd,
+      cwd: project.folder,
       title: input.title,
       prompt: input.prompt,
       settings: input,

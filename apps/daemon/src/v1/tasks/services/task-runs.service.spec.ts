@@ -2040,19 +2040,18 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       title: 'Ask the repo',
       prompt: 'list the open PRs',
       target: {},
-      cwd: worktree,
       startedBy: 'user',
       ...over,
     });
 
-    it('starts an agent thread in the given folder, filed in the project group, owned by the project and not a card', async () => {
+    it("starts an agent thread in the project's folder, filed in the project group, owned by the project and not a card", async () => {
       const started = await service.startProjectRun(cardless());
 
       expect(started).toEqual({ runId: 'run-1' });
       expect(createChat).toHaveBeenCalledTimes(1);
       expect(createChat.mock.calls[0]![0]).toMatchObject({
         agentKind: 'claude',
-        cwd: worktree,
+        cwd: '/tmp/geniro-task-runs-spec',
         groupId: 'group-7',
         projectId,
         firstMessage: 'list the open PRs',
@@ -2071,7 +2070,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(startTeamRun).toHaveBeenCalledWith(
         'dev-team',
         expect.objectContaining({
-          cwd: worktree,
+          cwd: '/tmp/geniro-task-runs-spec',
           groupId: 'group-7',
           prompt: 'list the open PRs',
           projectId,
@@ -2079,6 +2078,18 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
       expect(createChat).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('never runs in a folder the caller names: a smuggled cwd is ignored for the project folder', async () => {
+      await service.startProjectRun({
+        ...cardless(),
+        cwd: worktree,
+      } as ProjectRunStart);
+
+      expect(createChat).toHaveBeenCalledTimes(1);
+      expect(createChat.mock.calls[0]![0]).toMatchObject({
+        cwd: '/tmp/geniro-task-runs-spec',
+      });
     });
 
     it('refuses a start that names no agent or team, and makes no run', async () => {

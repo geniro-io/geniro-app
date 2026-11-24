@@ -398,10 +398,10 @@ describe('ThreadStartConductor', () => {
     expect(d.log).toHaveBeenCalledTimes(1);
   });
 
-  // A thread with no board card runs in its project's folder: there is no
-  // worktree to make, and the run takes the user's settings and the stamp of
-  // that folder, exactly as a card's run does.
-  it("starts an approved thread in its folder, with no worktree and the user's settings and stamp", async () => {
+  // A thread with no board card runs in its project's folder, which the daemon
+  // reads itself: there is no worktree to make, and the run takes the user's
+  // settings and the stamp of that folder, exactly as a card's run does.
+  it("starts an approved thread with no worktree, the user's settings and its folder's stamp, and names no folder", async () => {
     const { fetchMock, starts } = daemon([thread('s1')]);
     vi.stubGlobal('fetch', fetchMock);
     const d = deps({
@@ -417,13 +417,13 @@ describe('ThreadStartConductor', () => {
     expect(starts).toHaveLength(1);
     expect(starts[0]?.path).toBe('/v1/command-center/starts/s1/runs');
     expect(starts[0]?.body).toMatchObject({
-      cwd: '/projects/app',
       startSha: START_SHA,
       startDirty: false,
       customInstructions: 'Keep it short',
       replyLanguage: 'Russian',
       agentOptions: { claude: { browserTools: true } },
     });
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
     expect(starts[0]?.body).not.toHaveProperty('branch');
     expect(starts[0]?.body).not.toHaveProperty('startedBy');
   });
@@ -440,7 +440,7 @@ describe('ThreadStartConductor', () => {
     await new ThreadStartConductor(d).tick();
 
     expect(starts).toHaveLength(1);
-    expect(starts[0]?.body).toMatchObject({ cwd: '/projects/app' });
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
     expect(starts[0]?.body).not.toHaveProperty('startSha');
     expect(starts[0]?.body).not.toHaveProperty('startDirty');
   });

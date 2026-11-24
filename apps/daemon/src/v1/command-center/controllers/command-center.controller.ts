@@ -125,8 +125,9 @@ export class CommandCenterController {
     return this.starts.threadStartState(startId);
   }
 
-  /** The drain starts an approved cardless thread in its project's folder. */
+  /** The drain starts an approved cardless thread in its project's folder — desktop only: only Electron main's drain starts one. */
   @Post('starts/:startId/runs')
+  @UseGuards(DesktopOnlyGuard)
   @ApiOperation({ operationId: 'startCommandCenterThreadRun' })
   @ZodResponse({ status: 201, type: CommandCenterThreadStartStateDto })
   startRun(

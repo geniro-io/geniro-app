@@ -17366,12 +17366,6 @@ export interface StartTeamChatDto {
  */
 export interface StartThreadRunDto {
     /**
-     * The worktree the agent works in — already created by the caller — or the task's own folder when that is in no git repository; validated here only as a real directory
-     * @type {string}
-     * @memberof StartThreadRunDto
-     */
-    cwd: string;
-    /**
      * 
      * @type {string}
      * @memberof StartThreadRunDto

@@ -458,7 +458,6 @@ export interface ProjectRunStart extends Pick<
   prompt: string;
   /** The agent or team the request named, read before the project's default. */
   target: { agentKind?: AgentKind | null; teamSlug?: string | null };
-  cwd: string;
   startedBy: TaskRunStarter;
 }
 

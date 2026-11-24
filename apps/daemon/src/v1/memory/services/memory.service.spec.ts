@@ -24,6 +24,7 @@ import {
   MEMORY_INDEX_PREFACE,
   type MemoryActor,
   type MemoryChangedEvent,
+  type MemoryMarkVerdict,
   type MemoryMergeRequest,
   type MemorySaveOutcome,
   type MemoryStatusOutcome,
@@ -31,6 +32,7 @@ import {
 } from '../memory.types';
 import { memoryBodyOf } from '../utils/lesson-body';
 import { importedTextHash, indexHandlesOf } from '../utils/memory-text';
+import { usageDay } from '../utils/memory-usage-day';
 import type { MemoryService } from './memory.service';
 import { MemoryReviewService } from './memory-review.service';
 
@@ -1670,6 +1672,249 @@ describe('MemoryService', () => {
       await db.em.getConnection().execute(drop, [], 'run');
     }
   }
+
+  describe('search ranking', () => {
+    const TEAM_A: RunPlace = { projectId: null, teamSlug: 'a' };
+    const RUN_IN_A: RunPlace = { projectId: 'p1', teamSlug: 'a' };
+
+    async function markEntry(
+      memoryId: string,
+      verdict: MemoryMarkVerdict,
+      threads: number,
+    ): Promise<void> {
+      const em = db.em.fork();
+      for (let n = 0; n < threads; n += 1) {
+        await db.marks.record(
+          {
+            memoryId,
+            threadId: `thread-${verdict}-${n}`,
+            runId: `run-${verdict}-${n}`,
+            memberId: null,
+            source: 'agent',
+            verdict,
+            reason: `${verdict} ${n}`,
+            evidenceSeq: null,
+            agentKind: 'claude',
+            model: null,
+          },
+          new Date(),
+          em,
+        );
+      }
+    }
+
+    async function readToday(memoryId: string, count: number): Promise<void> {
+      await db.usageDao.add([
+        {
+          memoryId,
+          day: usageDay(new Date()),
+          reads: count,
+          searchHits: 0,
+          indexShows: 0,
+        },
+      ]);
+    }
+
+    it('lifts an entry agents marked helped above an equal match nobody marked', async () => {
+      const plain = created(
+        await db.service.save(
+          USER,
+          { title: 'Shelf life notes', body: 'mango' },
+          NONE,
+        ),
+      );
+      const helped = created(
+        await db.service.save(
+          USER,
+          { title: 'Storage notes page', body: 'mango' },
+          NONE,
+        ),
+      );
+      await markEntry(helped.id, 'helped', 2);
+
+      const hits = await db.service.search('mango', NONE, 10);
+
+      expect(hits.map((hit) => hit.handle)).toEqual([
+        helped.handle,
+        plain.handle,
+      ]);
+    });
+
+    it('drops an entry agents marked not useful below an equal match', async () => {
+      const unhelpful = created(
+        await db.service.save(
+          USER,
+          { title: 'Shelf life notes', body: 'mango' },
+          NONE,
+        ),
+      );
+      const plain = created(
+        await db.service.save(
+          USER,
+          { title: 'Storage notes page', body: 'mango' },
+          NONE,
+        ),
+      );
+      await markEntry(unhelpful.id, 'not_useful', 2);
+
+      const hits = await db.service.search('mango', NONE, 10);
+
+      expect(hits.map((hit) => hit.handle)).toEqual([
+        plain.handle,
+        unhelpful.handle,
+      ]);
+    });
+
+    it('lifts an entry read recently above an equal match never read', async () => {
+      const never = created(
+        await db.service.save(
+          USER,
+          { title: 'Shelf life notes', body: 'mango' },
+          NONE,
+        ),
+      );
+      const read = created(
+        await db.service.save(
+          USER,
+          { title: 'Storage notes page', body: 'mango' },
+          NONE,
+        ),
+      );
+      await readToday(read.id, 3);
+
+      const hits = await db.service.search('mango', NONE, 10);
+
+      expect(hits.map((hit) => hit.handle)).toEqual([
+        read.handle,
+        never.handle,
+      ]);
+    });
+
+    it('ranks a team entry above a project one above a global one for the same words', async () => {
+      const global = created(
+        await db.service.save(
+          USER,
+          { title: 'Shelf life notes', body: 'mango' },
+          NONE,
+        ),
+      );
+      const project = created(
+        await db.service.save(
+          USER,
+          { title: 'Storage notes page', body: 'mango' },
+          inProject('p1'),
+        ),
+      );
+      const team = created(
+        await db.service.save(
+          USER,
+          { title: 'Cold room notes', body: 'mango', scope: 'team' },
+          TEAM_A,
+        ),
+      );
+
+      const hits = await db.service.search('mango', RUN_IN_A, 10);
+
+      expect(hits.map((hit) => hit.handle)).toEqual([
+        team.handle,
+        project.handle,
+        global.handle,
+      ]);
+    });
+
+    it('lets a close body match with helped marks, reads and a team scope pass a title match it trails without them', async () => {
+      const titled = created(
+        await db.service.save(
+          USER,
+          {
+            title: 'Guava ripeness guide',
+            body: 'press the skin gently, look for a yellow colour, smell the stem end and wait two more days when it is still firm',
+          },
+          NONE,
+        ),
+      );
+      const close = created(
+        await db.service.save(
+          USER,
+          { title: 'Kitchen note', body: 'guava', scope: 'team' },
+          TEAM_A,
+        ),
+      );
+
+      const before = await db.service.search('guava', RUN_IN_A, 10);
+      await markEntry(close.id, 'helped', 3);
+      await readToday(close.id, 3);
+      const after = await db.service.search('guava', RUN_IN_A, 10);
+
+      expect(before.map((hit) => hit.handle)).toEqual([
+        titled.handle,
+        close.handle,
+      ]);
+      expect(after.map((hit) => hit.handle)).toEqual([
+        close.handle,
+        titled.handle,
+      ]);
+    });
+
+    it('keeps a title match above a far weaker body match over real text search, even with helped marks, reads and a team scope', async () => {
+      const strong = created(
+        await db.service.save(
+          USER,
+          {
+            title: 'Papaya ripeness guide',
+            body: 'press the skin gently, look for a yellow colour, smell the stem end and wait two more days when it is still firm',
+          },
+          NONE,
+        ),
+      );
+      const weak = created(
+        await db.service.save(
+          USER,
+          {
+            title: 'Kitchen note',
+            body: 'papaya bought from the market on sunday, peeled at home with lime juice, a pinch of salt and a spoon of honey after lunch',
+            scope: 'team',
+          },
+          TEAM_A,
+        ),
+      );
+      await markEntry(weak.id, 'helped', 3);
+      await readToday(weak.id, 3);
+
+      const hits = await db.service.search('papaya', RUN_IN_A, 10);
+
+      expect(hits.map((hit) => hit.handle)).toEqual([
+        strong.handle,
+        weak.handle,
+      ]);
+    });
+
+    it('counts a search hit only for the entries it returns', async () => {
+      const jam = created(
+        await db.service.save(
+          USER,
+          { title: 'Quince jam', body: 'quince' },
+          NONE,
+        ),
+      );
+      const tart = created(
+        await db.service.save(
+          USER,
+          { title: 'Plum tart', body: 'quince' },
+          NONE,
+        ),
+      );
+
+      const hits = await db.service.search('quince', NONE, 1);
+      const counted = await db.usageDao.daysOf([jam.id, tart.id]);
+
+      expect(hits).toHaveLength(1);
+      expect(counted.map((day) => day.memoryId)).toEqual(
+        hits.map((hit) => hit.id),
+      );
+      expect(counted.map((day) => day.searchHits)).toEqual([1]);
+    });
+  });
 
   describe('team memory', () => {
     const TEAM_A: RunPlace = { projectId: null, teamSlug: 'a' };

@@ -108,6 +108,14 @@ export interface MemoryMatchScope {
   reach?: MemoryReach;
 }
 
+export interface MemoryRankedMatch {
+  id: string;
+  handle: number;
+  projectId: string | null;
+  teamSlug: string | null;
+  rank: number;
+}
+
 /** One page of the user's list, newest edit first. */
 export interface MemoryPageFilter extends MemoryMatchScope {
   type?: MemoryType;
@@ -206,14 +214,50 @@ export class MemoryDao extends BaseDao<Memory> {
     limit: number,
     em: EntityManager = this.em,
   ): Promise<string[]> {
-    const rows = await this.scoped(scope, em)
-      .innerJoin('memories_fts', 'memories_fts.memory_id', 'm.id')
+    const rows = await this.matched(matchQuery, scope, em)
       .select('m.id')
-      .where('memories_fts', 'match', matchQuery)
       .orderBy('memories_fts.rank')
       .limit(limit)
       .execute();
     return rows.map((row) => row.id);
+  }
+
+  /** The best `limit` entries matching a ready-made FTS5 query, with what a search ranks them by. */
+  async matchRanked(
+    matchQuery: string,
+    scope: MemoryMatchScope,
+    limit: number,
+    em: EntityManager = this.em,
+  ): Promise<MemoryRankedMatch[]> {
+    const rows = await this.matched(matchQuery, scope, em)
+      .select([
+        'm.id',
+        'm.handle',
+        'm.project_id',
+        'm.team_slug',
+        'memories_fts.rank',
+      ])
+      .orderBy('memories_fts.rank')
+      .orderBy('m.handle')
+      .limit(limit)
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      projectId: row.project_id,
+      teamSlug: row.team_slug,
+      rank: row.rank,
+    }));
+  }
+
+  private matched(
+    matchQuery: string,
+    scope: MemoryMatchScope,
+    em: EntityManager,
+  ) {
+    return this.scoped(scope, em)
+      .innerJoin('memories_fts', 'memories_fts.memory_id', 'm.id')
+      .where('memories_fts', 'match', matchQuery);
   }
 
   async page(

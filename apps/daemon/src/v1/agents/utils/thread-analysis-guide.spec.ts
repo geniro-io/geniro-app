@@ -411,6 +411,9 @@ describe('teamAnalysisGuide', () => {
     expect(guide).toContain('10. Instruction size. Read view=team');
     expect(guide).toContain('`instructionSizes`');
     expect(guide).toContain('`inThisRun`');
+    expect(guide).toContain('`freshSessionBase`');
+    expect(guide).toContain('`cliRemainderTokens`');
+    expect(guide).toContain('unknown, never zero');
     expect(guide).toContain('11. Instruction quality.');
     for (const mark of [
       'clear (',

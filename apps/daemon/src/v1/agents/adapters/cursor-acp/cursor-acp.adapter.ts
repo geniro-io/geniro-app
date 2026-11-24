@@ -1052,6 +1052,11 @@ export class CursorAcpAdapter extends AgentAdapter {
         reason:
           "cursor-agent's user rules are a Cursor account setting with no local file — edit them in Cursor's settings",
       },
+      repoInstructions: {
+        kind: 'unavailable',
+        reason:
+          "cursor-agent picks its rules per request by their globs, so which of a repository's files a session starts with is not known",
+      },
       followUp: {
         /**
          * This said "ACP has no channel for a message mid-turn" for two

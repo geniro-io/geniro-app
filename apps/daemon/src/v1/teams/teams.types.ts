@@ -2283,6 +2283,129 @@ export type ProjectInstructionSizesWire = z.infer<
   typeof ProjectInstructionSizesWireSchema
 >;
 
+export const FRESH_SESSION_UNMEASURED_PARTS = [
+  'plugins',
+  'skills',
+  'builtInTools',
+] as const;
+
+/** One repository file a fresh session of the member's CLI loads, as it stands now. */
+export const FreshSessionRepoFileSchema = z
+  .object({
+    path: z.string(),
+    importedFrom: z
+      .string()
+      .nullable()
+      .describe(
+        'The file whose @-import pulls it in; null for one loaded by its name or folder',
+      ),
+    chars: z.number().int().nonnegative().nullable(),
+    approxTokens: z.number().int().nonnegative().nullable(),
+  })
+  .meta({ id: 'FreshSessionRepoFile' });
+
+/** What one member's fresh CLI session starts with, and what of it is known. */
+export const FreshSessionBaseSchema = z
+  .object({
+    memberId: z.string(),
+    poolMember: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'The pool member that ran these starts, 1-based; null for a member with no pool',
+      ),
+    agent: z.string().nullable().describe('The CLI the starts ran on'),
+    model: z.string().nullable(),
+    project: z
+      .object({ projectId: z.string().nullable(), name: z.string() })
+      .nullable()
+      .describe(
+        "The project the starts ran in, else the folder's last segment (projectId null); null when the member has no start",
+      ),
+    starts: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('Fresh starts the base is the median of'),
+    baseTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'Median context of those starts: the last request of the turn that opened each CLI session; null when not measured',
+      ),
+    minTokens: z.number().int().nullable(),
+    maxTokens: z.number().int().nullable(),
+    medianRequests: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'Median requests the opening turn made — the base carries what those added on top of the first',
+      ),
+    firstStartAt: z.string().nullable(),
+    lastStartAt: z.string().nullable(),
+    teamBlockTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "Geniro's always-on instruction block for the member, approximate; null for a member no longer in the team",
+      ),
+    teamBlockShare: z.number().nullable(),
+    teamBlockUnavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why the team block was not measured; null when it was'),
+    repoFiles: z
+      .object({
+        measuredAt: z.string(),
+        root: z.string(),
+        chars: z.number().int().nonnegative(),
+        approxTokens: z.number().int().nonnegative(),
+        share: z.number().nullable(),
+        files: z.array(FreshSessionRepoFileSchema),
+      })
+      .nullable(),
+    repoFilesUnavailableReason: z.string().nullable(),
+    cliRemainderTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'The base less the team block and the repository files; it holds the repository files too when they were not measured, is null when the team block was not, and is never clamped, so it can be negative',
+      ),
+    cliRemainderShare: z.number().nullable(),
+    cliRemainderUnavailableReason: z
+      .string()
+      .nullable()
+      .describe("Why the CLI's remainder was not measured; null when it was"),
+    mcpServers: z
+      .object({ harvestedAt: z.string(), names: z.array(z.string()) })
+      .nullable()
+      .describe(
+        'The MCP servers the CLI last reported in that folder, with when',
+      ),
+    mcpServersUnavailableReason: z.string().nullable(),
+    notMeasured: z.array(
+      z.object({
+        part: z.enum(FRESH_SESSION_UNMEASURED_PARTS),
+        reason: z.string(),
+      }),
+    ),
+  })
+  .meta({ id: 'FreshSessionBase' });
+export type FreshSessionBase = z.infer<typeof FreshSessionBaseSchema>;
+
+/** POST /v1/teams/:slug/fresh-session-bases — one entry per member and project its fresh starts ran in. */
+export const FreshSessionBasesWireSchema = z.object({
+  runsRead: z.number().int().nonnegative(),
+  measuredAt: z.string(),
+  members: z.array(FreshSessionBaseSchema),
+});
+export type FreshSessionBasesWire = z.infer<typeof FreshSessionBasesWireSchema>;
+
 export const HEALTH_PROBLEM_KINDS = [
   'cli_missing',
   'cli_unknown',

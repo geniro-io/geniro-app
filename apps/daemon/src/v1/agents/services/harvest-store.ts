@@ -147,6 +147,16 @@ export abstract class HarvestStore<T> {
     return this.load().get(key)?.entries ?? null;
   }
 
+  /** {@link getAnyAt} with when the report was harvested (epoch ms). */
+  protected recordAnyAt(
+    key: string,
+  ): { entries: T[]; harvestedAt: number } | null {
+    const record = this.load().get(key);
+    return record === undefined
+      ? null
+      : { entries: record.entries, harvestedAt: record.harvestedAt };
+  }
+
   /**
    * Rewrite the entries of ONE record in place, keeping its `harvestedAt` — a
    * correction to what a turn reported, not a new report. Saves only when

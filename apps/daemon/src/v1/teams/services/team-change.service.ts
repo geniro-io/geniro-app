@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import type {
@@ -30,7 +30,11 @@ import { diffTeams } from '../utils/team-diff';
 import type { TeamEdit } from '../utils/team-edits';
 import { parseTeamSnapshot } from '../utils/team-snapshot';
 import { parseTeamYaml } from '../utils/team-yaml';
-import { InstructionSizesService } from './instruction-sizes.service';
+import { FreshSessionBaseService } from './fresh-session-base.service';
+import {
+  type InstructionSizesInput,
+  InstructionSizesService,
+} from './instruction-sizes.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamOverlayService } from './team-overlay.service';
 import { TeamStoreService } from './team-store.service';
@@ -119,6 +123,20 @@ function readOverlaySnapshot(raw: string | null): TeamOverlaySnapshot | null {
   }
 }
 
+/** What a run's turns were composed with beside the team, as the instruction measure takes it. */
+function instructionSettingsOf(
+  instructions: AnalysedTeamRef['instructions'],
+): Omit<InstructionSizesInput, 'team'> {
+  return {
+    customInstructions: instructions?.customInstructions ?? undefined,
+    replyLanguage: instructions?.replyLanguage ?? undefined,
+    taskInstructions: instructions?.taskInstructions ?? undefined,
+    projectInstructions: instructions?.projectInstructions ?? undefined,
+    memoryIndex: instructions?.memoryIndex ?? undefined,
+    knowledgeIndex: instructions?.knowledgeIndex ?? undefined,
+  };
+}
+
 /** Every (agent, profile) a member or one of its pool members runs under. */
 function runnersOf(
   team: Team,
@@ -144,6 +162,8 @@ function runnersOf(
  */
 @Injectable()
 export class TeamChangeService {
+  private readonly logger = new Logger(TeamChangeService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly store: TeamStoreService,
@@ -152,6 +172,7 @@ export class TeamChangeService {
     private readonly instructionSizes: InstructionSizesService,
     private readonly changeLog: TeamChangeLogService,
     private readonly overlays: TeamOverlayService,
+    private readonly freshSessionBases: FreshSessionBaseService,
   ) {}
 
   /**
@@ -194,6 +215,12 @@ export class TeamChangeService {
       userInstructions: await sizedUserInstructionFiles(
         this.adapters,
         runnersOf(started.state === 'readable' ? started.team : current.team),
+      ),
+      freshSessionBase: await this.freshSessionBaseOf(
+        slug,
+        current.team,
+        instructions,
+        overlay.projectId,
       ),
       changedSinceThisRun:
         startedBase.state === 'readable'
@@ -362,6 +389,35 @@ export class TeamChangeService {
   }
 
   /**
+   * What each member's fresh sessions started with in the team's newest runs
+   * — in the read run's project when it has one — beside the parts of it that
+   * can be measured. A failed read costs view=team only this part.
+   */
+  private async freshSessionBaseOf(
+    slug: string,
+    team: Team,
+    instructions: AnalysedTeamRef['instructions'],
+    projectId: string | null,
+  ): Promise<Answer> {
+    try {
+      return await this.freshSessionBases.measure({
+        slug,
+        team,
+        settings: instructionSettingsOf(instructions),
+        projectId,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `fresh-session base of ${slug} not measured: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {
+        error: 'NOT_MEASURED',
+        message: 'the fresh-session base could not be read',
+      };
+    }
+  }
+
+  /**
    * Each member's always-on block as the library's copy composes it, with
    * the run's own custom instructions, memory index, card instructions and
    * reply language,
@@ -372,14 +428,7 @@ export class TeamChangeService {
     started: Team | null,
     instructions: AnalysedTeamRef['instructions'],
   ): Answer[] {
-    const settings = {
-      customInstructions: instructions?.customInstructions ?? undefined,
-      replyLanguage: instructions?.replyLanguage ?? undefined,
-      taskInstructions: instructions?.taskInstructions ?? undefined,
-      projectInstructions: instructions?.projectInstructions ?? undefined,
-      memoryIndex: instructions?.memoryIndex ?? undefined,
-      knowledgeIndex: instructions?.knowledgeIndex ?? undefined,
-    };
+    const settings = instructionSettingsOf(instructions);
     const inThisRun = new Map(
       (started === null
         ? []

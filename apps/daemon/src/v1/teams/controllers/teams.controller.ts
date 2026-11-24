@@ -48,8 +48,10 @@ import {
   DeleteTeamQueryDto,
   ExportedDto,
   ExportTeamDto,
+  FreshSessionBasesDto,
   ImportTeamDto,
   InstructionSizesDto,
+  MeasureFreshSessionBasesDto,
   MeasureInstructionSizesDto,
   MemberHealthDto,
   MoveTeamRunStageDto,
@@ -79,6 +81,7 @@ import {
 } from '../dto/teams.dto';
 import { AnalysisJudgeService } from '../services/analysis-judge.service';
 import { AvatarStoreService } from '../services/avatar-store.service';
+import { FreshSessionBaseService } from '../services/fresh-session-base.service';
 import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunTeamService } from '../services/run-team.service';
 import { StageWakeService } from '../services/stage-wake.service';
@@ -92,6 +95,7 @@ import { TeamStoreService } from '../services/team-store.service';
 import type {
   AnalysisJudgeCheckWire,
   AnalysisRunsCountWire,
+  FreshSessionBasesWire,
   InstructionSizesWire,
   MemberHealth,
   NodeStateWire,
@@ -133,6 +137,7 @@ export class TeamsController {
     private readonly avatars: AvatarStoreService,
     private readonly health: TeamHealthService,
     private readonly overlays: TeamOverlayService,
+    private readonly freshSessionBases: FreshSessionBaseService,
   ) {}
 
   /**
@@ -401,6 +406,17 @@ export class TeamsController {
       query.probe === 'true',
       query.projectId ?? null,
     );
+  }
+
+  @Post(':slug/fresh-session-bases')
+  @ApiOperation({ operationId: 'measureFreshSessionBases' })
+  @ZodResponse({ status: 200, type: FreshSessionBasesDto })
+  async measureFreshSessionBases(
+    @Param('slug') slug: string,
+    @Body() dto: MeasureFreshSessionBasesDto,
+  ): Promise<FreshSessionBasesWire> {
+    const { team } = await this.store.get(slug);
+    return this.freshSessionBases.measure({ slug, team, settings: dto });
   }
 
   @Get(':slug/members/:memberId/health')

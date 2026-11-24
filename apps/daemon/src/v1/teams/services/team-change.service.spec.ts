@@ -26,6 +26,7 @@ import { configDirToken } from '../utils/config-dir-redaction';
 import { TEAM_BACKUP_DIR } from '../utils/team-backup';
 import { teamSnapshotOf } from '../utils/team-snapshot';
 import { teamVersionOf } from '../utils/team-version';
+import type { FreshSessionBaseService } from './fresh-session-base.service';
 import { InstructionSizesService } from './instruction-sizes.service';
 import {
   type TeamChange,
@@ -82,6 +83,8 @@ describe('TeamChangeService', () => {
   let logged: TeamChangeLogRecord[];
   let overlayStore: TeamOverlayStoreService;
   let service: TeamChangeService;
+  let measured: unknown[];
+  let freshSessionBases: Pick<FreshSessionBaseService, 'measure'>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'geniro-change-'));
@@ -90,6 +93,17 @@ describe('TeamChangeService', () => {
     applies = [{ cardSeq: 3, ids: ['W-1', 'W-2'] }];
     logged = [];
     overlayStore = new TeamOverlayStoreService({ teamsDir: dir });
+    measured = [];
+    freshSessionBases = {
+      measure: (input) => {
+        measured.push(input);
+        return Promise.resolve({
+          runsRead: 2,
+          measuredAt: '2026-11-24T00:00:00.000Z',
+          members: [],
+        });
+      },
+    };
     service = new TeamChangeService(
       { fork: () => ({}) } as unknown as EntityManager,
       store,
@@ -144,6 +158,7 @@ describe('TeamChangeService', () => {
         } as unknown as ProjectDao,
         { fork: () => ({}) } as never,
       ),
+      freshSessionBases as unknown as FreshSessionBaseService,
     );
   });
 
@@ -276,6 +291,7 @@ describe('TeamChangeService', () => {
         append: () => Promise.reject(new Error('SQLITE_BUSY')),
       } as unknown as TeamChangeLogDao),
       {} as TeamOverlayService,
+      {} as FreshSessionBaseService,
     );
 
     await expect(
@@ -946,12 +962,43 @@ describe('TeamChangeService', () => {
       ),
       new TeamChangeLogService({} as TeamChangeLogDao),
       {} as TeamOverlayService,
+      {
+        measure: () => Promise.reject(new Error('SQLITE_BUSY')),
+      } as unknown as FreshSessionBaseService,
     );
 
     const described = await sized.describe('dev-team', null);
 
     expect(described.userInstructions).toEqual([
       expect.objectContaining({ exists: true, chars: 41, approxTokens: 11 }),
+    ]);
+    expect(described.freshSessionBase).toEqual({
+      error: 'NOT_MEASURED',
+      message: 'the fresh-session base could not be read',
+    });
+  });
+
+  it("answers view=team with the fresh-session base measured with the run's settings", async () => {
+    const described = await service.describe('dev-team', null, {
+      customInstructions: 'Be brief.',
+      replyLanguage: null,
+      taskInstructions: null,
+      projectInstructions: null,
+      memoryIndex: null,
+      knowledgeIndex: null,
+    });
+
+    expect(described.freshSessionBase).toEqual({
+      runsRead: 2,
+      measuredAt: '2026-11-24T00:00:00.000Z',
+      members: [],
+    });
+    expect(measured).toEqual([
+      expect.objectContaining({
+        slug: 'dev-team',
+        projectId: null,
+        settings: expect.objectContaining({ customInstructions: 'Be brief.' }),
+      }),
     ]);
   });
 });

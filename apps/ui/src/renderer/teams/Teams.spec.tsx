@@ -72,6 +72,7 @@ const {
   getCapabilities,
   listAgentMcpServers,
   measureInstructionSizes,
+  measureFreshSessionBases,
   readTeamVersions,
   restoreTeamVersion,
   getTeamAnalysis,
@@ -92,6 +93,7 @@ const {
   getTeamAnalysis: vi.fn(),
   analyzeTeam: vi.fn(),
   measureInstructionSizes: vi.fn(),
+  measureFreshSessionBases: vi.fn(),
   readTeamVersions: vi.fn(),
   restoreTeamVersion: vi.fn(),
   listAgentMcpServers: vi.fn(),
@@ -125,6 +127,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       listTeamRuns: vi.fn(async () => []),
       deleteTeam,
       measureInstructionSizes,
+      measureFreshSessionBases,
       getTeamAnalysis,
       analyzeTeam,
       checkTeamAnalysisJudge: vi.fn(async () => ({
@@ -327,6 +330,11 @@ beforeEach(() => {
   measureInstructionSizes
     .mockReset()
     .mockImplementation(async () => ({ members: [] }));
+  measureFreshSessionBases.mockReset().mockImplementation(async () => ({
+    runsRead: 0,
+    measuredAt: '2026-11-24T00:00:00.000Z',
+    members: [],
+  }));
   listAgentMcpServers.mockReset().mockImplementation(async () => ({
     servers: [],
     plugins: [],
@@ -1997,12 +2005,12 @@ describe('Teams — a member’s always-on instruction size', () => {
   });
 
   it('measures again when main announces a settings write, with the Settings as they now stand', async () => {
-    let announce: (() => void) | null = null;
+    const listeners = new Set<() => void>();
     window.geniro = createPreloadStub({
       onSettingsChanged: (listener) => {
-        announce = listener;
+        listeners.add(listener);
         return () => {
-          announce = null;
+          listeners.delete(listener);
         };
       },
     });
@@ -2012,7 +2020,9 @@ describe('Teams — a member’s always-on instruction size', () => {
     await window.geniro.updateSettings({ replyLanguage: 'Russian' });
 
     await act(async () => {
-      announce?.();
+      for (const listener of listeners) {
+        listener();
+      }
     });
     await wait(700);
 
@@ -2054,6 +2064,193 @@ describe('Teams — a member’s always-on instruction size', () => {
     await wait(700);
 
     expect(measureInstructionSizes).not.toHaveBeenCalled();
+    expect(measureFreshSessionBases).not.toHaveBeenCalled();
+  });
+
+  it('shows on the Team tab what each member’s fresh session starts with, per project', async () => {
+    measureFreshSessionBases.mockImplementation(async () => ({
+      runsRead: 12,
+      measuredAt: '2026-11-24T00:00:00.000Z',
+      members: [
+        {
+          memberId: 'manager',
+          poolMember: null,
+          agent: 'claude',
+          model: 'sonnet',
+          project: { projectId: 'p1', name: 'Geniro' },
+          starts: 4,
+          baseTokens: 144_982,
+          minTokens: 140_000,
+          maxTokens: 150_000,
+          medianRequests: 3,
+          firstStartAt: '2026-11-22T10:00:00.000Z',
+          lastStartAt: '2026-11-24T10:00:00.000Z',
+          teamBlockTokens: 36_000,
+          teamBlockShare: 0.248,
+          repoFiles: {
+            measuredAt: '2026-11-24T00:00:00.000Z',
+            root: '/repos/geniro-app',
+            chars: 71_660,
+            approxTokens: 17_915,
+            share: 0.124,
+            files: [],
+          },
+          repoFilesUnavailableReason: null,
+          cliRemainderTokens: 91_067,
+          cliRemainderShare: 0.628,
+          mcpServers: {
+            harvestedAt: '2026-11-23T09:30:00.000Z',
+            names: ['codegraph', 'blender'],
+          },
+          mcpServersUnavailableReason: null,
+          notMeasured: [
+            { part: 'plugins', reason: 'not measured: PLUGINS-REASON' },
+            { part: 'builtInTools', reason: 'not measured: TOOLS-REASON' },
+          ],
+        },
+        {
+          memberId: 'manager',
+          poolMember: 2,
+          agent: 'cursor-agent',
+          model: 'gpt-5',
+          project: { projectId: 'p1', name: 'Geniro' },
+          starts: 1,
+          baseTokens: 40_000,
+          minTokens: 40_000,
+          maxTokens: 40_000,
+          medianRequests: 1,
+          firstStartAt: '2026-11-23T10:00:00.000Z',
+          lastStartAt: '2026-11-23T10:00:00.000Z',
+          teamBlockTokens: 36_000,
+          teamBlockShare: 0.9,
+          repoFiles: null,
+          repoFilesUnavailableReason: 'REPO-REASON',
+          cliRemainderTokens: 4_000,
+          cliRemainderShare: 0.1,
+          mcpServers: null,
+          mcpServersUnavailableReason: 'MCP-REASON',
+          notMeasured: [],
+        },
+        {
+          memberId: 'retired',
+          poolMember: null,
+          agent: 'claude',
+          model: 'sonnet',
+          project: { projectId: 'p1', name: 'Geniro' },
+          starts: 1,
+          baseTokens: 150_000,
+          minTokens: 150_000,
+          maxTokens: 150_000,
+          medianRequests: 1,
+          firstStartAt: '2026-11-23T10:00:00.000Z',
+          lastStartAt: '2026-11-23T10:00:00.000Z',
+          teamBlockTokens: null,
+          teamBlockShare: null,
+          teamBlockUnavailableReason: 'BLOCK-REASON',
+          repoFiles: {
+            measuredAt: '2026-11-24T00:00:00.000Z',
+            root: '/repos/geniro-app',
+            chars: 400,
+            approxTokens: 1_500,
+            share: 0.01,
+            files: [],
+          },
+          repoFilesUnavailableReason: null,
+          cliRemainderTokens: null,
+          cliRemainderShare: null,
+          cliRemainderUnavailableReason: 'REMAINDER-REASON',
+          mcpServers: null,
+          mcpServersUnavailableReason: 'MCP-REASON',
+          notMeasured: [],
+        },
+        {
+          memberId: 'lead',
+          poolMember: null,
+          agent: 'claude',
+          model: null,
+          project: null,
+          starts: 0,
+          baseTokens: null,
+          minTokens: null,
+          maxTokens: null,
+          medianRequests: null,
+          firstStartAt: null,
+          lastStartAt: null,
+          teamBlockTokens: 1_200,
+          teamBlockShare: null,
+          repoFiles: null,
+          repoFilesUnavailableReason:
+            'no fresh session of this member in the runs read',
+          cliRemainderTokens: null,
+          cliRemainderShare: null,
+          mcpServers: null,
+          mcpServersUnavailableReason:
+            'no fresh session of this member in the runs read',
+          notMeasured: [],
+        },
+      ],
+    }));
+    await openBuilder();
+    await wait(700);
+
+    expect(measureFreshSessionBases).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: 'dev-team' }),
+    );
+    const block = container.querySelector(
+      '[data-slot="team-fresh-session-bases"]',
+    );
+    expect(block?.textContent).toContain('In Geniro');
+    expect(
+      block?.querySelector('[data-slot="fresh-session-base-total"]')
+        ?.textContent,
+    ).toBe('≈145k tokens');
+    expect(block?.textContent).toContain('Geniro instructions~36k25%');
+    expect(block?.textContent).toContain('Repository files~17.9k12%');
+    expect(block?.textContent).toContain('Added by the CLI~91.1k63%');
+    expect(block?.textContent).toContain('3 requests');
+    expect(
+      block?.querySelector('[data-slot="fresh-session-mcp"]')?.textContent,
+    ).toContain('codegraph, blender');
+    const [primary, pooled, retired] = [
+      ...(block?.querySelectorAll('[data-slot="fresh-session-base"]') ?? []),
+    ];
+    expect(
+      [
+        ...(primary?.querySelectorAll(
+          '[data-slot="fresh-session-not-measured"]',
+        ) ?? []),
+      ].map((row) => row.textContent),
+    ).toEqual([
+      'Plugins — not measured: PLUGINS-REASON.',
+      'Built-in tools — not measured: TOOLS-REASON.',
+    ]);
+    expect(pooled?.textContent).toContain('pool member 2');
+    expect(pooled?.textContent).toContain(
+      'Repository files: not measured — REPO-REASON.',
+    );
+    expect(pooled?.textContent).toContain(
+      'MCP servers: not measured — MCP-REASON.',
+    );
+    expect(pooled?.textContent).toContain(
+      'Added by the CLI, repository files included',
+    );
+    expect(
+      [
+        ...(retired?.querySelectorAll(
+          '[data-slot="fresh-session-part-unmeasured"]',
+        ) ?? []),
+      ].map((row) => row.textContent),
+    ).toEqual([
+      'Geniro instructions: not measured — BLOCK-REASON.',
+      'Added by the CLI: not measured — REMAINDER-REASON.',
+    ]);
+    expect(
+      primary?.querySelector('[data-slot="fresh-session-part-unmeasured"]'),
+    ).toBeNull();
+    expect(
+      block?.querySelector('[data-slot="fresh-session-unstarted"]')
+        ?.textContent,
+    ).toContain('Lead');
   });
 });
 

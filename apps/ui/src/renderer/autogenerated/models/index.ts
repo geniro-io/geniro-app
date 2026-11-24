@@ -5933,6 +5933,319 @@ export interface ForgottenInstructionsDto {
 /**
  * 
  * @export
+ * @interface FreshSessionBase
+ */
+export interface FreshSessionBase {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    memberId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    poolMember: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    agent: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {FreshSessionBaseProject}
+     * @memberof FreshSessionBase
+     */
+    project: FreshSessionBaseProject | null;
+    /**
+     * Fresh starts the base is the median of
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    starts: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    baseTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    minTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    maxTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    medianRequests: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    firstStartAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    lastStartAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    teamBlockTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    teamBlockShare: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    teamBlockUnavailableReason: string | null;
+    /**
+     * 
+     * @type {FreshSessionBaseRepoFiles}
+     * @memberof FreshSessionBase
+     */
+    repoFiles: FreshSessionBaseRepoFiles | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    repoFilesUnavailableReason: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    cliRemainderTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBase
+     */
+    cliRemainderShare: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    cliRemainderUnavailableReason: string | null;
+    /**
+     * 
+     * @type {FreshSessionBaseMcpServers}
+     * @memberof FreshSessionBase
+     */
+    mcpServers: FreshSessionBaseMcpServers | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    mcpServersUnavailableReason: string | null;
+    /**
+     * 
+     * @type {Array<FreshSessionBaseNotMeasuredInner>}
+     * @memberof FreshSessionBase
+     */
+    notMeasured: Array<FreshSessionBaseNotMeasuredInner>;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionBaseMcpServers
+ */
+export interface FreshSessionBaseMcpServers {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseMcpServers
+     */
+    harvestedAt: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof FreshSessionBaseMcpServers
+     */
+    names: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionBaseNotMeasuredInner
+ */
+export interface FreshSessionBaseNotMeasuredInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseNotMeasuredInner
+     */
+    part: FreshSessionBaseNotMeasuredInnerPartEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseNotMeasuredInner
+     */
+    reason: string;
+}
+
+
+/**
+ * @export
+ */
+export const FreshSessionBaseNotMeasuredInnerPartEnum = {
+    Plugins: 'plugins',
+    Skills: 'skills',
+    BuiltInTools: 'builtInTools'
+} as const;
+export type FreshSessionBaseNotMeasuredInnerPartEnum = typeof FreshSessionBaseNotMeasuredInnerPartEnum[keyof typeof FreshSessionBaseNotMeasuredInnerPartEnum];
+
+/**
+ * 
+ * @export
+ * @interface FreshSessionBaseProject
+ */
+export interface FreshSessionBaseProject {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseProject
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseProject
+     */
+    name: string;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionBaseRepoFiles
+ */
+export interface FreshSessionBaseRepoFiles {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    measuredAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    root: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    chars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    approxTokens: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    share: number | null;
+    /**
+     * 
+     * @type {Array<FreshSessionRepoFile>}
+     * @memberof FreshSessionBaseRepoFiles
+     */
+    files: Array<FreshSessionRepoFile>;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionBasesDto
+ */
+export interface FreshSessionBasesDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionBasesDto
+     */
+    runsRead: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBasesDto
+     */
+    measuredAt: string;
+    /**
+     * 
+     * @type {Array<FreshSessionBase>}
+     * @memberof FreshSessionBasesDto
+     */
+    members: Array<FreshSessionBase>;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionRepoFile
+ */
+export interface FreshSessionRepoFile {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionRepoFile
+     */
+    path: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionRepoFile
+     */
+    importedFrom: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionRepoFile
+     */
+    chars: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionRepoFile
+     */
+    approxTokens: number | null;
+}
+/**
+ * 
+ * @export
  * @interface GlobalChatSearchHit
  */
 export interface GlobalChatSearchHit {
@@ -8811,6 +9124,25 @@ export interface McpServerUse {
      * @memberof McpServerUse
      */
     tools: number;
+}
+/**
+ * 
+ * @export
+ * @interface MeasureFreshSessionBasesDto
+ */
+export interface MeasureFreshSessionBasesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureFreshSessionBasesDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureFreshSessionBasesDto
+     */
+    replyLanguage?: string;
 }
 /**
  * 

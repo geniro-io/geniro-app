@@ -93,6 +93,7 @@ import {
   withoutMember,
   withTriggerMember,
 } from './team-doc';
+import { TeamFreshSessionBases } from './team-fresh-session-bases';
 import { teamFiguresOf, TeamHero } from './team-hero';
 import { TeamMemoryTab, TeamStatsTab } from './team-insights';
 import { TeamInstructionSizes } from './team-instruction-sizes';
@@ -107,6 +108,7 @@ import { TeamVersionsDialog } from './team-versions-dialog';
 import { TeamsLibrary } from './teams-library';
 import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
+import { useFreshSessionBases } from './use-fresh-session-bases';
 import { useInstructionSizes } from './use-instruction-sizes';
 import { useMemberFixes } from './use-member-fixes';
 import { useMemberProfileSources } from './use-member-profile-sources';
@@ -1189,6 +1191,11 @@ export function Teams({
     liveSnapshot,
     active && (selected !== null || tab === 'team'),
   );
+  const freshSessionBases = useFreshSessionBases(
+    api,
+    activeSlug ?? null,
+    active && tab === 'team',
+  );
   const blockName = useLatestCallback(
     (blockId: string): string => {
       const block = team?.instructionBlocks.find((b) => b.id === blockId);
@@ -1679,6 +1686,19 @@ export function Teams({
             sizes={instructionSizes.sizes}
             loading={instructionSizes.loading}
             error={instructionSizes.error}
+          />
+        </TeamSection>
+
+        <TeamSection
+          slot="team-fresh-session-base"
+          title="Fresh session"
+          hint="What a member’s new CLI session already holds before any work, in the team’s newest runs: Geniro’s instructions, the repository’s instruction files and what the CLI adds itself — its system prompt, tools, MCP servers, plugins and skills.">
+          <TeamFreshSessionBases
+            members={members}
+            labels={labels}
+            bases={freshSessionBases.bases?.members ?? null}
+            loading={freshSessionBases.loading}
+            error={freshSessionBases.error}
           />
         </TeamSection>
       </div>

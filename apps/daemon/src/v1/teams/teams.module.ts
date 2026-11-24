@@ -17,6 +17,7 @@ import { AnalysisJudgeService } from './services/analysis-judge.service';
 import { AvatarStoreService } from './services/avatar-store.service';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
+import { FreshSessionBaseService } from './services/fresh-session-base.service';
 import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
 import { InstructionSizesService } from './services/instruction-sizes.service';
 import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
@@ -85,6 +86,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamOverlayService,
     CapabilitiesService,
     InstructionSizesService,
+    FreshSessionBaseService,
     ProjectInstructionSizesService,
     MonitorGraphDelivery,
     HostWakeGraphDelivery,

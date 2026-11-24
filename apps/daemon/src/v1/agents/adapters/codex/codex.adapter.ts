@@ -394,6 +394,11 @@ export class CodexAdapter extends AgentAdapter {
         homeDir: '.codex',
         fileName: 'AGENTS.md',
       },
+      repoInstructions: {
+        kind: 'unavailable',
+        reason:
+          "codex names the files a thread loaded only in that thread's start, which geniro does not keep",
+      },
       followUp: {
         unavailableReason: null,
         // `turn/steer` adds to the running turn; codex answers it before the

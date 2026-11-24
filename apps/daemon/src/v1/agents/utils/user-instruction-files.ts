@@ -81,31 +81,43 @@ async function sizeOfFile(
 ): Promise<
   Pick<SizedUserInstructionFile, 'exists' | 'chars' | 'approxTokens'>
 > {
-  const unmeasured = { chars: null, approxTokens: null };
+  const { exists, text } = await readInstructionFile(path);
+  return text === null
+    ? { exists, chars: null, approxTokens: null }
+    : {
+        exists,
+        chars: text.length,
+        approxTokens: approxInstructionTokens(text.length),
+      };
+}
+
+/**
+ * An instruction file's text, or null when it is not there, is not a file, is
+ * past {@link MAX_MEASURED_FILE_BYTES} or cannot be read; `exists` is null when
+ * that could not be told.
+ */
+export async function readInstructionFile(
+  path: string,
+): Promise<{ exists: boolean | null; text: string | null }> {
   let size: number;
   try {
     const stats = await stat(path);
     if (!stats.isFile()) {
-      return { exists: false, ...unmeasured };
+      return { exists: false, text: null };
     }
     size = stats.size;
   } catch (error) {
     return {
       exists: (error as NodeJS.ErrnoException).code === 'ENOENT' ? false : null,
-      ...unmeasured,
+      text: null,
     };
   }
   if (size > MAX_MEASURED_FILE_BYTES) {
-    return { exists: true, ...unmeasured };
+    return { exists: true, text: null };
   }
   try {
-    const chars = (await readFile(path, 'utf8')).length;
-    return {
-      exists: true,
-      chars,
-      approxTokens: approxInstructionTokens(chars),
-    };
+    return { exists: true, text: await readFile(path, 'utf8') };
   } catch {
-    return { exists: true, ...unmeasured };
+    return { exists: true, text: null };
   }
 }

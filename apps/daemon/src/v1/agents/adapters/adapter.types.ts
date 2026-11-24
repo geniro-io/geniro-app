@@ -385,6 +385,19 @@ export type AgentUserInstructions =
     }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
+/** Which files in a repository a CLI loads into every session started there — see `AdapterConfig.repoInstructions`. */
+export type AgentRepoInstructions =
+  | {
+      readonly kind: 'files';
+      /** Names looked up in the session's folder and every folder above it up to the repository root (`CLAUDE.md`). */
+      readonly fileNames: readonly string[];
+      /** A folder under the repository root whose `*.md` files load unless their frontmatter names `paths:`; null for none. */
+      readonly rulesDir: string | null;
+      /** Whether `@path` in a loaded file pulls that file in too. */
+      readonly atImports: boolean;
+    }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
 /** One file the agent loaded as standing instructions, and what it costs. */
 export interface AgentContextMemoryFile {
   path: string;
@@ -5372,6 +5385,13 @@ export interface AdapterConfig {
    * `configDir` when one is set, else under `homeDir` in the user's home.
    */
   readonly userInstructions: AgentUserInstructions;
+
+  /**
+   * The repository files this CLI loads into a session started in a folder,
+   * or why they are not measured. Measured from disk for a team's fresh-session
+   * base, so the names must be the ones the CLI really reads.
+   */
+  readonly repoInstructions: AgentRepoInstructions;
 
   // ── A message into a turn that is already running ───────────────────────
   /**

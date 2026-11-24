@@ -19,6 +19,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type {
   ChatTextDatabase,
   HistoryWindow,
+  MemberTurnReading,
   NewestKindPick,
   OwnToolCallCount,
   RunPreview,
@@ -70,6 +71,12 @@ import {
  * the message before it — the safe direction, and far cheaper than the failure
  * it prevents.
  */
+const MEMBER_TURN_ENDINGS = [
+  'turn_complete',
+  'turn_cancelled',
+  'error',
+] as const;
+
 const NOT_A_DELEGATE = {
   $not: { payload: { $like: '%parentToolUseId%' } },
 } as const;
@@ -1465,6 +1472,59 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * Every member turn's ending over `runIds` — completed, cancelled or failed
+   * — in seq order per run: the session it ran in, the last request's context,
+   * how many requests the turn made, and who ran it. Read off the payload
+   * inside the engine, so no payload leaves it.
+   */
+  async memberTurnReadings(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<MemberTurnReading[]> {
+    if (runIds.length === 0) {
+      return [];
+    }
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select((eb) => [
+        'run_id',
+        'seq',
+        'kind',
+        'member_id',
+        'created_at',
+        payloadField(eb, '$.sessionId').as('session_id'),
+        payloadField<number | null>(eb, '$.usage.contextTokens').as(
+          'context_tokens',
+        ),
+        payloadField<number | null>(eb, '$.usage.numTurns').as('num_turns'),
+        payloadField(eb, '$.agentKind').as('agent_kind'),
+        payloadField(eb, '$.agentModel').as('agent_model'),
+        payloadField<number | null>(eb, '$.nodePoolMember').as('pool_member'),
+      ])
+      .where('run_id', 'in', [...runIds])
+      .where('kind', 'in', [...MEMBER_TURN_ENDINGS])
+      .where('member_id', 'is not', null)
+      .where('deleted_at', 'is', null)
+      .orderBy('run_id')
+      .orderBy('seq')
+      .execute();
+    return rows.map((row) => ({
+      runId: row.run_id,
+      seq: row.seq,
+      kind: row.kind as MemberTurnReading['kind'],
+      memberId: row.member_id!,
+      createdAt: new Date(row.created_at),
+      sessionId: row.session_id,
+      contextTokens: row.context_tokens,
+      numTurns: row.num_turns,
+      agent: row.agent_kind,
+      model: row.agent_model,
+      poolMember: row.pool_member,
+    }));
   }
 
   /**

@@ -108,6 +108,25 @@ describe('McpHarvestStore', () => {
     expect(store.get('claude', '/proj', null)).toEqual([server('linear')]);
   });
 
+  it('reads a set whatever its age with the moment it was harvested', () => {
+    let clock = 1_000_000;
+    const store = new McpHarvestStore({
+      file: cacheFile(),
+      now: () => clock,
+    });
+    expect(store.getStaleReading('claude', '/proj', null)).toBeNull();
+    store.record('claude', '/proj', '/profiles/a', [server('codegraph')]);
+
+    clock += 24 * 60 * 60 * 1000;
+
+    expect(store.get('claude', '/proj', '/profiles/a')).toBeNull();
+    expect(store.getStaleReading('claude', '/proj', '/profiles/a')).toEqual({
+      servers: [server('codegraph')],
+      harvestedAt: 1_000_000,
+    });
+    expect(store.getStaleReading('claude', '/proj', null)).toBeNull();
+  });
+
   it('keys by plugin directory, because a plugin ships its own servers', () => {
     // The failure this prevents: two team members on one CLI in one folder,
     // pointed at different plugin directories, genuinely load different sets.

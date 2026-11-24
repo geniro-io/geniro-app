@@ -56,9 +56,6 @@ function counted(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-const SAME_AS_THREAD_WORDS =
-  'Each chat is read by the same agent and model it ran on.';
-
 function lessonsDescription(agentWrites: MemoryAgentWrites | null): string {
   const reads =
     'When you archive a chat, a model reads it and notes up to three lessons from what went wrong.';
@@ -321,13 +318,7 @@ export function LessonsSettingsPanel({
                 }
               }}
             />
-            {current.reflector === null ? (
-              <p
-                data-slot="lessons-default-reflector"
-                className="text-xs text-muted-foreground">
-                {SAME_AS_THREAD_WORDS}
-              </p>
-            ) : (
+            {current.reflector === null ? null : (
               <div className="flex min-w-0 flex-wrap items-center gap-1">
                 <TargetSelect
                   value={current.reflector.agent}
@@ -357,7 +348,7 @@ export function LessonsSettingsPanel({
           label="Check found lessons with"
           hint="Turn it on to have a second model double-check each lesson before it is saved. It catches weak or wrong lessons but adds a small cost per lesson. Leave it off if you review lessons yourself anyway."
           htmlFor="settings-lessons-check"
-          description="A second model double-checks each lesson before it is saved. It costs a little more.">
+          description="A second model checks each lesson before it is saved.">
           <Switch
             id="settings-lessons-check"
             checked={checkOn}

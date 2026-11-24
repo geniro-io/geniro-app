@@ -222,9 +222,9 @@ describe('Lessons settings', () => {
 
     expect(text()).toContain('Memory model');
     expect(text()).toContain('Same as the thread');
-    expect(text()).toContain(
-      'Each chat is read by the same agent and model it ran on.',
-    );
+    expect(text()).toContain('The agent that reads chats for lessons.');
+    expect(text()).not.toContain('Each chat is read by the same agent');
+    expect(picker('Memory model agent')).toBeNull();
     expect(text()).not.toMatch(/its light model|haiku|gpt-6-luna/);
   });
 
@@ -279,7 +279,7 @@ describe('Lessons settings', () => {
     expect(writes).toEqual([
       { lessons: { ...DEFAULT_SETTINGS.lessons, reflector: null } },
     ]);
-    expect(text()).toContain('Each chat is read by the same agent');
+    expect(picker('Memory model agent')).toBeNull();
   });
 
   it('a new CLI for the reflection starts from its own default, not the last model', async () => {
@@ -311,8 +311,9 @@ describe('Lessons settings', () => {
     await render();
 
     expect(text()).toContain(
-      'A second model double-checks each lesson before it is saved.',
+      'A second model checks each lesson before it is saved.',
     );
+    expect(text()).not.toContain('It costs a little more.');
     expect(picker('Check agent')).toBeNull();
     const toggle = container.querySelector<HTMLButtonElement>(
       'button[role="switch"]',

@@ -31,6 +31,7 @@ import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
+import { ReviewComment } from '../../runs/entity/review-comment.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { UiSurface } from '../../runs/entity/ui-surface.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
@@ -49,6 +50,7 @@ import { CallContextDao } from '../dao/call-context.dao';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
+import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
 import { UiSurfaceDao } from '../dao/ui-surface.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
@@ -86,6 +88,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let callContextDao: CallContextDao;
   let wallTurnDao: WallTurnDao;
   let surfaceDao: UiSurfaceDao;
+  let reviewDao: ReviewCommentDao;
   let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
@@ -119,6 +122,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           UiSurface,
           ArtifactShare,
           Goal,
+          ReviewComment,
           AgentFlag,
           ToolCallEvent,
           UsageActivity,
@@ -166,6 +170,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     callContextDao = new CallContextDao(em);
     wallTurnDao = new WallTurnDao(em);
     surfaceDao = new UiSurfaceDao(em);
+    reviewDao = new ReviewCommentDao(em);
     const threadInbox = {
       cancelFor: async (runId: string, why: string) => {
         inboxCancels.push({
@@ -231,6 +236,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       browserBridge,
       browserApprovals,
       surfaceDao,
+      reviewDao,
     );
   });
 
@@ -739,6 +745,35 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     expect(await ledger.toolCalls({})).toHaveLength(1);
     expect(await ledger.calls({})).toHaveLength(1);
     expect(await ledger.stages({})).toHaveLength(1);
+  });
+
+  it('destroys the run’s review comments, and only that run’s', async () => {
+    await seedRun('run-a');
+    await seedRun('run-b');
+    for (const runId of ['run-a', 'run-b']) {
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new ReviewComment(), {
+          runId,
+          number: 1,
+          folder: '/work',
+          path: 'src/a.ts',
+          side: 'new',
+          startLine: 1,
+          endLine: 1,
+          quote: 'const a = 1;',
+          body: 'Why one?',
+          status: 'sent',
+          sentSeq: 3,
+        }),
+      );
+      await em.flush();
+    }
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(await reviewDao.listByRun('run-a', orm.em.fork())).toHaveLength(0);
+    expect(await reviewDao.listByRun('run-b', orm.em.fork())).toHaveLength(1);
   });
 
   it('keeps the run’s flags, which every later analysis of its period reads', async () => {

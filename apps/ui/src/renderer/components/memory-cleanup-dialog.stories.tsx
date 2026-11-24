@@ -204,35 +204,21 @@ const meta = {
     },
     filters: FILTERS,
     onFilters: () => undefined,
-    scopeGroups: [
-      {
-        label: 'Scope',
-        items: [
-          { value: 'all', label: 'Every scope' },
-          { value: 'global', label: 'Global' },
-          ...MEMORY_PROJECTS.map((project) => ({
-            value: project.id,
-            label: project.name,
-          })),
-        ],
-      },
-    ],
     rows: COLD,
     total: COLD.length,
     younger: 0,
     next: null,
     loading: false,
     error: null,
-    countedSince: '2026-10-29',
-    counting: false,
     selected: new Set<string>(),
-    warnedSelected: 0,
     tickSkipped: null,
     ticking: false,
+    forgetting: false,
     onToggle: () => undefined,
-    onTickShown: () => undefined,
-    onUntickAll: () => undefined,
+    onSelectAll: () => undefined,
+    onClearPicks: () => undefined,
     onForget: async () => undefined,
+    onForgetNow: () => undefined,
     onKeep: () => undefined,
     onUnkeep: () => undefined,
     onRestore: () => undefined,
@@ -315,7 +301,7 @@ const meta = {
             return after;
           })
         }
-        onUntickAll={() => setSelected(new Set())}
+        onClearPicks={() => setSelected(new Set())}
       />
     );
   },
@@ -336,37 +322,54 @@ const SORT: MemorySort = {
   cancel: () => undefined,
 };
 
-export const SortedWithAi: Story = {
+const VERDICTS = new Map(
+  COLD.map((row, n) => [
+    row.entry.id,
+    n % 2 === 0
+      ? { keep: false, reason: 'Describes one sprint; nothing reads it now.' }
+      : { keep: true, reason: 'A lasting convention with its reason.' },
+  ]),
+);
+
+export const AskAi: Story = {
   args: {
-    verdicts: new Map(
-      COLD.map((row, n) => [
-        row.entry.id,
-        n % 2 === 0
-          ? { keep: false, reason: 'the state of one sprint' }
-          : { keep: true, reason: 'a lasting convention with its reason' },
-      ]),
-    ),
     sortPanel: (
       <MemorySortPanel
         slot="memory-cleanup-sort"
+        title="Ask AI what to forget"
         sort={SORT}
-        description="An agent reads the entries listed below and says which still hold and which to forget, with a reason for each. It only proposes: nothing is forgotten until you press Forget. Runs on your agent’s account."
+        description="AI reads these entries and suggests which to forget. Nothing is forgotten until you press Forget."
         settings={
           <span className="text-xs text-muted-foreground">Claude · Sonnet</span>
         }
-        startLabel="All listed entries sorted"
-        startDisabled
-        sorted
+        startLabel={`Ask AI about ${COLD.length} entries`}
+        startDisabled={false}
+        sorted={false}
         onStart={() => undefined}
       />
     ),
   },
 };
 
+export const AiSuggestions: Story = {
+  args: {
+    verdicts: VERDICTS,
+    recommendation: {
+      sorted: COLD.length,
+      forget: COLD.filter((row) => VERDICTS.get(row.entry.id)?.keep === false),
+    },
+  },
+};
+
+export const AiKeepsAll: Story = {
+  args: {
+    recommendation: { sorted: COLD.length, forget: [] },
+  },
+};
+
 export const Picked: Story = {
   args: {
     selected: new Set(['memory-212', 'memory-388', 'memory-55']),
-    warnedSelected: 1,
     tickSkipped: 2,
   },
 };

@@ -68,7 +68,25 @@ const SPEND: LessonsSpendDto = {
       segmentId: 'segment-1',
       runId: 'run-1',
       sourceTitle: 'Refactor the parser',
-      reason: 'claude is signed out',
+      reason: 'Failed to authenticate: run claude auth login',
+      cause: 'signed_out',
+      resetsAt: null,
+    },
+    {
+      segmentId: 'segment-2',
+      runId: 'run-2',
+      sourceTitle: 'Board grouping',
+      reason: "You've hit your weekly limit · resets 4pm (Asia/Almaty)",
+      cause: 'limit',
+      resetsAt: '4pm (Asia/Almaty)',
+    },
+    {
+      segmentId: 'segment-3',
+      runId: 'run-3',
+      sourceTitle: 'Mentions',
+      reason: "You've hit your weekly limit",
+      cause: 'limit',
+      resetsAt: null,
     },
   ],
 };
@@ -205,7 +223,7 @@ describe('Lessons settings', () => {
     expect(text()).toContain('Memory model');
     expect(text()).toContain('Same as the thread');
     expect(text()).toContain(
-      "Each reflection runs on the thread's own CLI, profile, model and effort — exactly what the thread ran.",
+      'Each chat is read by the same agent and model it ran on.',
     );
     expect(text()).not.toMatch(/its light model|haiku|gpt-6-luna/);
   });
@@ -215,7 +233,7 @@ describe('Lessons settings', () => {
     await render({ agentWrites: 'active' });
 
     expect(text()).toContain(
-      'A lesson for memory is saved at once, as Agent notes above says: agents find it by search right away',
+      'Lessons for memory are saved at once; the rest wait for your review.',
     );
   });
 
@@ -223,9 +241,7 @@ describe('Lessons settings', () => {
     install(DEFAULT_SETTINGS.lessons);
     await render({ agentWrites: 'pending' });
 
-    expect(text()).toContain(
-      'A lesson for memory waits for your review, as Agent notes above says',
-    );
+    expect(text()).toContain('Every lesson waits for your review.');
     expect(text()).not.toContain('saved at once');
   });
 
@@ -263,7 +279,7 @@ describe('Lessons settings', () => {
     expect(writes).toEqual([
       { lessons: { ...DEFAULT_SETTINGS.lessons, reflector: null } },
     ]);
-    expect(text()).toContain("Each reflection runs on the thread's own CLI");
+    expect(text()).toContain('Each chat is read by the same agent');
   });
 
   it('a new CLI for the reflection starts from its own default, not the last model', async () => {
@@ -295,7 +311,7 @@ describe('Lessons settings', () => {
     await render();
 
     expect(text()).toContain(
-      'A second model re-checks each lesson before it is saved',
+      'A second model double-checks each lesson before it is saved.',
     );
     expect(picker('Check agent')).toBeNull();
     const toggle = container.querySelector<HTMLButtonElement>(
@@ -326,7 +342,7 @@ describe('Lessons settings', () => {
     expect(picker('Model and its settings')).not.toBeNull();
   });
 
-  it('reads the spend today and this month, its split, and each failed run with its reason', async () => {
+  it('reads the spend today and this month, its split, and says plainly why runs failed, never the raw CLI error', async () => {
     install(DEFAULT_SETTINGS.lessons);
     const spend = spendApi();
     await render({ lessonsApi: spend.api });
@@ -334,11 +350,62 @@ describe('Lessons settings', () => {
     expect(spend.read).toHaveBeenCalled();
     const readout = container.querySelector('[data-slot="lessons-spend"]');
     expect(readout?.textContent).toContain(
-      'Today $0.31 · this month $4.12 (reflect $1.02 · check $3.10) · 14 threads reflected · 3 lessons saved · 2 runs reported no cost',
+      'Today $0.31 · this month $4.12 (reflect $1.02 · check $3.10) · 14 chats read today · 3 lessons saved today · 2 runs reported no cost',
     );
-    expect(readout?.textContent).toContain(
-      'Refactor the parser — claude is signed out',
+    const failed = [
+      ...container.querySelectorAll('[data-slot="lessons-spend-failed"] li'),
+    ];
+    expect(failed.map((item) => item.firstElementChild?.textContent)).toEqual([
+      "Couldn't read 2 chats: your agent's usage limit was reached — it resets 4pm (Asia/Almaty).",
+      "Couldn't read 1 chat: your agent needs you to sign in again.",
+    ]);
+    expect(failed[0]?.textContent).toContain('Board grouping · Mentions');
+    expect(failed[1]?.textContent).toContain('Refactor the parser');
+    expect(readout?.textContent).not.toContain('weekly limit');
+    expect(readout?.textContent).not.toContain('Failed to authenticate');
+    expect(failed[1]?.getAttribute('title')).toBe(
+      'Failed to authenticate: run claude auth login',
     );
+  });
+
+  it('says a limit with no reset time and any other failure in plain words, the raw reason only in the tooltip', async () => {
+    install(DEFAULT_SETTINGS.lessons);
+    const read = vi.fn(() =>
+      Promise.resolve({
+        ...SPEND,
+        failed: [
+          {
+            segmentId: 'segment-4',
+            runId: 'run-4',
+            sourceTitle: 'Release notes',
+            reason: 'spawn ENOENT',
+            cause: 'other' as const,
+            resetsAt: null,
+          },
+          {
+            segmentId: 'segment-5',
+            runId: 'run-5',
+            sourceTitle: 'Billing',
+            reason: "You've hit your session limit",
+            cause: 'limit' as const,
+            resetsAt: null,
+          },
+        ],
+      }),
+    );
+    await render({
+      lessonsApi: { getLessonsSpend: read } as unknown as DaemonApis['lessons'],
+    });
+
+    const failed = [
+      ...container.querySelectorAll('[data-slot="lessons-spend-failed"] li'),
+    ];
+    expect(failed.map((item) => item.firstElementChild?.textContent)).toEqual([
+      "Couldn't read 1 chat: your agent's usage limit was reached.",
+      "Couldn't read 1 chat: something went wrong.",
+    ]);
+    expect(failed[1]?.textContent).not.toContain('ENOENT');
+    expect(failed[1]?.getAttribute('title')).toBe('spawn ENOENT');
   });
 
   it('re-reads the spend when the daemon reports a lessons change', async () => {

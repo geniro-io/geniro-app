@@ -145,6 +145,7 @@ export function useMemoryCleanup(
   const [batches, setBatches] = useState<MemoryForgetBatch[]>([]);
   const [notice, setNotice] = useState<MemoryCleanupNotice | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState(false);
   const [everyRow, setEveryRow] = useState<readonly MemoryReviewRow[] | null>(
     null,
   );
@@ -365,25 +366,6 @@ export function useMemoryCleanup(
     });
   };
 
-  const tickRows = (picked: readonly MemoryReviewRow[]): void => {
-    setSelected((before) => {
-      const after = new Set(before);
-      for (const row of picked) {
-        after.add(row.entry.id);
-      }
-      return after;
-    });
-    setWarned((before) => {
-      const after = new Set(before);
-      for (const row of picked) {
-        if (row.warning !== null) {
-          after.add(row.entry.id);
-        }
-      }
-      return after;
-    });
-  };
-
   const tickShown = (): void => {
     if (api === null || tab === 'checks') {
       return;
@@ -433,6 +415,17 @@ export function useMemoryCleanup(
       return after;
     });
     refresh();
+  };
+
+  const forgetNow = (ids: readonly string[]): void => {
+    if (forgetting || ids.length === 0) {
+      return;
+    }
+    setForgetting(true);
+    setError(null);
+    void forget(ids)
+      .catch((err: unknown) => setError(describeDaemonError(err)))
+      .finally(() => setForgetting(false));
   };
 
   const undoPass = (batchIds: readonly string[]): void => {
@@ -555,15 +548,15 @@ export function useMemoryCleanup(
     loading,
     error,
     selected,
-    warnedSelected: warned.size,
     tickSkipped:
       tickSkipped === null ? null : Math.max(0, tickSkipped - warned.size),
     ticking,
     toggle,
-    tickRows,
     tickShown,
     untickAll: clearPicks,
     forget,
+    forgetNow,
+    forgetting,
     undo,
     undoPass,
     keep,

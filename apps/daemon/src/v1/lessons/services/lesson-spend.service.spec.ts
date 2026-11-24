@@ -1,7 +1,10 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { AgentKind } from '../../runs/runs.types';
 import type { UsageEventDao } from '../../stats/dao/usage-event.dao';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
@@ -28,11 +31,42 @@ function row(overrides: Partial<Row> = {}): Row {
   };
 }
 
+type FakeFailure = {
+  class: 'rate_limited' | 'auth_expired' | 'crashed';
+  resetsAt: string | null;
+};
+
+function fakeAdapter(
+  recognise: (message: string) => FakeFailure | null,
+): AgentAdapter & { failureFrom: ReturnType<typeof vi.fn> } {
+  return {
+    failureFrom: vi.fn(
+      (message: string): FakeFailure =>
+        recognise(message) ?? { class: 'crashed', resetsAt: null },
+    ),
+  } as unknown as AgentAdapter & { failureFrom: ReturnType<typeof vi.fn> };
+}
+
+const claudeLike = fakeAdapter((message) =>
+  message.includes('weekly limit')
+    ? { class: 'rate_limited', resetsAt: '4pm' }
+    : message.includes('Failed to authenticate')
+      ? { class: 'auth_expired', resetsAt: null }
+      : null,
+);
+
 function build(
   options: {
     usage?: Row[];
     ended?: { runId: string }[];
-    failed?: { id: string; runId: string; failReason: string | null }[];
+    failed?: {
+      id: string;
+      runId: string;
+      failReason: string | null;
+      reflectionRunId?: string | null;
+    }[];
+    reflectionKinds?: Record<string, AgentKind | null>;
+    adapters?: Partial<Record<AgentKind, AgentAdapter>>;
     saved?: number;
     titles?: Record<string, string>;
     finished?: {
@@ -68,11 +102,18 @@ function build(
   const runDao = {
     getById: vi.fn((id: string) =>
       Promise.resolve(
-        options.titles?.[id] === undefined
-          ? null
-          : { id, title: options.titles[id] },
+        options.reflectionKinds?.[id] !== undefined
+          ? { id, title: null, agentKind: options.reflectionKinds[id] }
+          : options.titles?.[id] === undefined
+            ? null
+            : { id, title: options.titles[id], agentKind: null },
       ),
     ),
+  };
+  const adapterMap = options.adapters ?? { claude: claudeLike };
+  const registry = {
+    for: vi.fn((kind: AgentKind) => adapterMap[kind]),
+    all: vi.fn(() => new Map(Object.entries(adapterMap))),
   };
   const service = new LessonSpendService(
     em,
@@ -80,6 +121,7 @@ function build(
     segments as unknown as LessonSegmentDao,
     proposals as unknown as LessonProposalDao,
     runDao as unknown as RunDao,
+    registry as unknown as AgentAdapterRegistry,
   );
   return { service, usage, segments, proposals };
 }
@@ -188,9 +230,126 @@ describe('LessonSpendService.spend', () => {
         runId: 'a',
         sourceTitle: 'Migrate the cache',
         reason: 'the CLI timed out',
+        cause: 'other',
+        resetsAt: null,
       },
-      { segmentId: 's2', runId: 'gone', sourceTitle: null, reason: null },
+      {
+        segmentId: 's2',
+        runId: 'gone',
+        sourceTitle: null,
+        reason: null,
+        cause: 'other',
+        resetsAt: null,
+      },
     ]);
+  });
+
+  it('classifies a usage-limit message as limit and keeps the reset as written', async () => {
+    const { service } = build({
+      failed: [
+        {
+          id: 's1',
+          runId: 'a',
+          failReason: "You've hit your weekly limit · resets 4pm (Asia/Almaty)",
+        },
+      ],
+    });
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'limit', resetsAt: '4pm' });
+  });
+
+  it('classifies a lapsed sign-in as signed_out with no reset', async () => {
+    const { service } = build({
+      failed: [
+        {
+          id: 's1',
+          runId: 'a',
+          failReason: 'Failed to authenticate. Run `claude auth login`',
+        },
+      ],
+    });
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'signed_out', resetsAt: null });
+  });
+
+  it('classifies an unrecognised message as other', async () => {
+    const { service } = build({
+      failed: [{ id: 's1', runId: 'a', failReason: 'segfault' }],
+    });
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'other', resetsAt: null });
+  });
+
+  it('asks only the reflection run’s own adapter when its agent is known', async () => {
+    const codexLike = fakeAdapter(() => ({
+      class: 'rate_limited',
+      resetsAt: 'tomorrow',
+    }));
+    const { service } = build({
+      adapters: { claude: claudeLike, codex: codexLike },
+      reflectionKinds: { refl: 'claude' },
+      failed: [
+        {
+          id: 's1',
+          runId: 'a',
+          reflectionRunId: 'refl',
+          failReason: 'segfault',
+        },
+      ],
+    });
+    codexLike.failureFrom.mockClear();
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'other', resetsAt: null });
+    expect(codexLike.failureFrom).not.toHaveBeenCalled();
+  });
+
+  it('asks every adapter when the reflection run is unknown', async () => {
+    const codexLike = fakeAdapter(() => ({
+      class: 'rate_limited',
+      resetsAt: 'tomorrow',
+    }));
+    const { service } = build({
+      adapters: { claude: claudeLike, codex: codexLike },
+      failed: [
+        {
+          id: 's1',
+          runId: 'a',
+          reflectionRunId: 'missing',
+          failReason: 'segfault',
+        },
+      ],
+    });
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'limit', resetsAt: 'tomorrow' });
+  });
+
+  it('asks every adapter when the reflection run’s agent has no adapter any more', async () => {
+    const { service } = build({
+      adapters: { claude: claudeLike },
+      reflectionKinds: { refl: 'cursor-agent' },
+      failed: [
+        {
+          id: 's1',
+          runId: 'a',
+          reflectionRunId: 'refl',
+          failReason: "You've hit your weekly limit · resets 4pm",
+        },
+      ],
+    });
+
+    const [item] = (await service.spend(NOW)).failed;
+
+    expect(item).toMatchObject({ cause: 'limit', resetsAt: '4pm' });
   });
 
   it('names at most five failed segments', async () => {

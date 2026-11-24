@@ -1480,6 +1480,50 @@ describe('Memory clean up', () => {
     return found;
   }
 
+  function sortPanel(): HTMLElement {
+    const panel = inDialog().querySelector<HTMLElement>(
+      '[data-slot="memory-cleanup-sort"]',
+    );
+    if (!panel) {
+      throw new Error('no Ask AI panel in the cleanup dialog');
+    }
+    return panel;
+  }
+
+  function suggestions(): HTMLElement {
+    const block = inDialog().querySelector<HTMLElement>(
+      '[data-slot="memory-cleanup-suggestions"]',
+    );
+    if (!block) {
+      throw new Error('no AI suggestions in the cleanup dialog');
+    }
+    return block;
+  }
+
+  function suggestionsTitle(): string | undefined {
+    return (
+      suggestions().querySelector(
+        '[data-slot="memory-cleanup-suggestions-title"]',
+      )?.textContent ?? undefined
+    );
+  }
+
+  function suggestionTick(handle: string): HTMLButtonElement {
+    const found = suggestions().querySelector<HTMLButtonElement>(
+      `button[aria-label="Forget ${handle}"]`,
+    );
+    if (!found) {
+      throw new Error(`no suggestion for ${handle}`);
+    }
+    return found;
+  }
+
+  function lastQuestion(): Element | undefined {
+    return [
+      ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+    ].at(-1);
+  }
+
   it('shows the daemon’s figures in the panel and opens the review dialog on Least used', async () => {
     const api = await renderOpen({
       api: fakeApi(undefined, () => ({
@@ -1503,12 +1547,55 @@ describe('Memory clean up', () => {
       limit: 30,
     });
     expect(inDialog().textContent).toContain('Sprint 41 retro notes');
-    expect(inDialog().textContent).toContain(
-      'Looks like a rule: a correction you gave',
+    const ruleRow = dialogRow('m22').closest(
+      '[data-slot="memory-cleanup-row"]',
     );
+    expect(
+      ruleRow?.querySelector('[data-slot="memory-cleanup-why"]')?.textContent,
+    ).toBe('Never readLooks like a rule');
+    expect(
+      ruleRow
+        ?.querySelector('[data-slot="memory-cleanup-why"] [title]')
+        ?.getAttribute('title'),
+    ).toBe('It reads like a correction you gave.');
+    expect(inDialog().textContent).not.toContain('search hit');
+    expect(inDialog().textContent).not.toContain('Counted over every entry');
   });
 
-  it('sorts the least used entries with AI for a cleanup, shows each verdict, and ticks only the unwarned ones it says to forget', async () => {
+  it('draws no filters over Least used and lists with the daemon defaults', async () => {
+    const api = await renderOpen({
+      api: fakeApi(undefined, () => ({
+        rows: [COLD],
+        total: 1,
+        younger: 0,
+        next: null,
+      })),
+    });
+    await press(button(container, 'Review…'));
+
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-filters"]'),
+    ).toBeNull();
+    for (const label of [
+      'Sort',
+      'Age',
+      'Review scope',
+      'Review type',
+      'Warnings',
+    ]) {
+      expect(inDialog().querySelector(`[aria-label="${label}"]`)).toBeNull();
+    }
+    expect(inDialog().textContent).not.toContain('Reference gone');
+    expect(api.listMemoryReview).toHaveBeenLastCalledWith({
+      tab: 'cold',
+      sort: 'leastUsed',
+      minAgeDays: 14,
+      warnings: 'any',
+      limit: 30,
+    });
+  });
+
+  it('asks AI about the least used entries, then suggests what to forget with its reasons, ticking only the ones that are not rules', async () => {
     const third = reviewRow(
       memoryEntry({ id: 'c3', handle: 'm23', title: 'Deploys go on Tuesday' }),
     );
@@ -1529,16 +1616,12 @@ describe('Memory clean up', () => {
     await press(button(container, 'Review…'));
     await settle();
 
-    const panel = inDialog().querySelector<HTMLElement>(
-      '[data-slot="memory-cleanup-sort"]',
-    )!;
-    expect(panel.textContent).toContain(
-      'nothing is forgotten until you press Forget',
+    expect(sortPanel().textContent).toContain(
+      'Nothing is forgotten until you press Forget.',
     );
-    await press(button(panel, 'Sort 3 listed'));
+    await press(button(sortPanel(), 'Ask AI about 3 entries'));
     await settle();
 
-    expect(api.listMemoryTriageAgents).toHaveBeenCalled();
     expect(api.triageMemoryImport).toHaveBeenCalledWith(
       {
         memoryImportTriageRequestDto: expect.objectContaining({
@@ -1556,24 +1639,165 @@ describe('Memory clean up', () => {
       },
       expect.anything(),
     );
+    expect(suggestionsTitle()).toBe('AI suggests forgetting 2 of 3 entries');
+    expect(suggestionTick('m21').getAttribute('aria-pressed')).toBe('true');
+    expect(suggestionTick('m22').getAttribute('aria-pressed')).toBe('false');
+    expect(suggestions().textContent).toContain('one sprint’s status');
+    expect(suggestions().textContent).not.toContain('Deploys go on Tuesday');
+    expect(inDialog().textContent).not.toContain('AI: keep');
     expect(
-      pick('m21')
-        .closest('[data-slot="memory-cleanup-row"]')
-        ?.querySelector('[data-slot="memory-cleanup-verdict"]')?.textContent,
-    ).toBe('AI: forgetone sprint’s status');
-    expect(
-      inDialog().querySelector('[data-slot="memory-cleanup-sort-summary"]')
-        ?.textContent,
-    ).toContain('2 to forget · 1 to keep');
-    expect(pick('m21').getAttribute('aria-pressed')).toBe('false');
-
-    await press(button(inDialog(), 'Tick the 1 to forget'));
-
-    expect(pick('m21').getAttribute('aria-pressed')).toBe('true');
-    expect(pick('m22').getAttribute('aria-pressed')).toBe('false');
-    expect(pick('m23').getAttribute('aria-pressed')).toBe('false');
-    expect(inDialog().textContent).toContain('1 with a warning left for you');
+      inDialog().querySelector('[data-slot="memory-cleanup-sort"]'),
+    ).toBeNull();
     expect(api.forgetMemoryBatch).not.toHaveBeenCalled();
+
+    await press(button(suggestions(), 'Forget 1'));
+
+    expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
+      forgetMemoryBatchDto: { ids: ['c1'] },
+    });
+    expect(lastQuestion()?.textContent ?? '').not.toContain('Forget 1 entry?');
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-notice"]')
+        ?.textContent,
+    ).toContain('Forgot 1 entry.');
+  });
+
+  it('drops the suggestion once every entry it named is forgotten, rather than claiming the AI keeps the rest', async () => {
+    let listed = [COLD, COLD_RULE];
+    const api = fakeApi(undefined, () => ({
+      rows: listed,
+      total: listed.length,
+      younger: 0,
+      next: null,
+    }));
+    api.triageMemoryImport.mockResolvedValue({
+      verdicts: [
+        { key: 'c1', keep: false, reason: 'stale' },
+        { key: 'c2', keep: true, reason: 'a rule' },
+      ],
+    });
+    api.forgetMemoryBatch.mockImplementation(() => {
+      listed = [COLD_RULE];
+      return Promise.resolve({ batchId: 'batch-1', forgotten: 1, skipped: [] });
+    });
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+    await settle();
+    await press(button(sortPanel(), 'Ask AI about 2 entries'));
+    await settle();
+
+    await press(button(suggestions(), 'Forget 1'));
+    await settle();
+
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-suggestions"]'),
+    ).toBeNull();
+    expect(inDialog().textContent).not.toContain('AI suggests keeping all');
+  });
+
+  it('keeps a suggestion unticked by hand while the AI is asked about more entries', async () => {
+    let listed = [COLD, COLD_RULE];
+    const api = fakeApi(undefined, () => ({
+      rows: listed,
+      total: listed.length,
+      younger: 0,
+      next: null,
+    }));
+    api.triageMemoryImport.mockResolvedValueOnce({
+      verdicts: [
+        { key: 'c1', keep: false, reason: 'stale' },
+        { key: 'c2', keep: true, reason: 'a rule' },
+      ],
+    });
+    let answer: (value: {
+      verdicts: { key: string; keep: boolean; reason: string }[];
+    }) => void = () => undefined;
+    api.triageMemoryImport.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+    await settle();
+    await press(button(sortPanel(), 'Ask AI about 2 entries'));
+    await settle();
+    await press(suggestionTick('m21'));
+
+    listed = [
+      COLD,
+      COLD_RULE,
+      reviewRow(memoryEntry({ id: 'c3', handle: 'm23', title: 'New one' })),
+    ];
+    await press(tab(inDialog(), 'Kept', '1'));
+    await press(
+      [...inDialog().querySelectorAll('button')].find((candidate) =>
+        candidate.textContent?.startsWith('Least used'),
+      ) as HTMLButtonElement,
+    );
+    await settle();
+    await press(button(sortPanel(), 'Ask AI about 1 more'));
+    await act(async () => {
+      answer({ verdicts: [{ key: 'c3', keep: false, reason: 'one-off' }] });
+    });
+    await settle();
+
+    expect(suggestionTick('m21').getAttribute('aria-pressed')).toBe('false');
+    expect(suggestionTick('m23').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('says plainly when the AI would keep every entry', async () => {
+    const api = fakeApi(undefined, () => ({
+      rows: [COLD],
+      total: 1,
+      younger: 0,
+      next: null,
+    }));
+    api.triageMemoryImport.mockResolvedValue({
+      verdicts: [{ key: 'c1', keep: true, reason: 'still true' }],
+    });
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+    await settle();
+    await press(button(sortPanel(), 'Ask AI about 1 entry'));
+    await settle();
+
+    expect(suggestionsTitle()).toBe(
+      'AI suggests keeping all 1 entry — nothing to forget.',
+    );
+    expect(
+      [...suggestions().querySelectorAll('button')].map(
+        (found) => found.textContent,
+      ),
+    ).toEqual([]);
+  });
+
+  it('forgets a rule the AI suggested only once it is ticked by hand', async () => {
+    const api = fakeApi(undefined, () => ({
+      rows: [COLD, COLD_RULE],
+      total: 2,
+      younger: 0,
+      next: null,
+    }));
+    api.triageMemoryImport.mockResolvedValue({
+      verdicts: [
+        { key: 'c1', keep: false, reason: 'stale' },
+        { key: 'c2', keep: false, reason: 'stale too' },
+      ],
+    });
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+    await settle();
+    await press(button(sortPanel(), 'Ask AI about 2 entries'));
+    await settle();
+
+    await press(suggestionTick('m22'));
+    await press(suggestionTick('m21'));
+    await press(button(suggestions(), 'Forget 1'));
+
+    expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
+      forgetMemoryBatchDto: { ids: ['c2'] },
+    });
   });
 
   const PAGE_TWO_A = reviewRow(
@@ -1591,49 +1815,25 @@ describe('Memory clean up', () => {
       : { rows: [COLD, COLD_RULE], total: 4, younger: 0, next: 'page-2' };
   }
 
-  function sortPanel(): HTMLElement {
-    const panel = inDialog().querySelector<HTMLElement>(
-      '[data-slot="memory-cleanup-sort"]',
-    );
-    if (!panel) {
-      throw new Error('no Sort with AI panel in the cleanup dialog');
-    }
-    return panel;
-  }
-
-  function sortSummary(): string | undefined {
-    return (
-      sortPanel().querySelector('[data-slot="memory-cleanup-sort-summary"]')
-        ?.textContent ?? undefined
-    );
-  }
-
   async function sortEveryMatch(): Promise<ReturnType<typeof fakeApi>> {
     const api = fakeApi(undefined, twoPages);
-    api.triageMemoryImport
-      .mockResolvedValueOnce({
-        verdicts: [
-          { key: 'c1', keep: false, reason: 'one sprint’s status' },
-          { key: 'c2', keep: false, reason: 'stale' },
-        ],
-      })
-      .mockResolvedValueOnce({
-        verdicts: [
-          { key: 'c3', keep: false, reason: 'a one-off date' },
-          { key: 'c4', keep: true, reason: 'a durable rule' },
-        ],
-      });
+    api.triageMemoryImport.mockResolvedValueOnce({
+      verdicts: [
+        { key: 'c1', keep: false, reason: 'one sprint’s status' },
+        { key: 'c2', keep: false, reason: 'stale' },
+        { key: 'c3', keep: false, reason: 'a one-off date' },
+        { key: 'c4', keep: true, reason: 'a durable rule' },
+      ],
+    });
     await renderOpen({ api });
     await press(button(container, 'Review…'));
     await settle();
-    await press(button(sortPanel(), 'Sort 2 listed'));
-    await settle();
-    await press(button(sortPanel(), 'Sort all 2 unsorted'));
+    await press(button(sortPanel(), 'Ask AI about 4 entries'));
     await settle();
     return api;
   }
 
-  it('sorts every entry the cleanup matches, not only the loaded page, and sends no entry already judged', async () => {
+  it('asks AI about every entry the cleanup matches, not only the loaded page, in one press', async () => {
     const api = await sortEveryMatch();
 
     expect(api.listMemoryReview).toHaveBeenCalledWith({
@@ -1644,12 +1844,14 @@ describe('Memory clean up', () => {
       limit: 100,
       cursor: 'page-2',
     });
-    expect(api.triageMemoryImport).toHaveBeenCalledTimes(2);
+    expect(api.triageMemoryImport).toHaveBeenCalledTimes(1);
     expect(api.triageMemoryImport).toHaveBeenLastCalledWith(
       {
         memoryImportTriageRequestDto: expect.objectContaining({
           purpose: 'cleanup',
           notes: [
+            expect.objectContaining({ key: 'c1' }),
+            expect.objectContaining({ key: 'c2' }),
             expect.objectContaining({
               key: 'c3',
               title: 'Deploys go on Tuesday',
@@ -1662,52 +1864,42 @@ describe('Memory clean up', () => {
     );
   });
 
-  it('counts and ticks every sorted entry, including the ones off the page, and skips the warned ones', async () => {
+  it('suggests the sorted entries off the page too, and forgets the unwarned ones in one press', async () => {
     const api = await sortEveryMatch();
 
-    expect(sortSummary()).toContain('3 to forget · 1 to keep');
-    await press(button(inDialog(), 'Tick the 2 to forget'));
+    expect(suggestionsTitle()).toBe('AI suggests forgetting 3 of 4 entries');
+    expect(suggestionTick('m23').getAttribute('aria-pressed')).toBe('true');
+    expect(suggestionTick('m22').getAttribute('aria-pressed')).toBe('false');
 
-    expect(pick('m21').getAttribute('aria-pressed')).toBe('true');
-    expect(pick('m22').getAttribute('aria-pressed')).toBe('false');
-    expect(inDialog().textContent).toContain('1 with a warning left for you');
-
-    await press(button(inDialog(), 'Forget 2…'));
-    expect(lastQuestion()?.textContent).toContain('Forget 2 entries?');
-    await press(confirmInDialog('Forget 2'));
+    await press(button(suggestions(), 'Forget 2'));
 
     expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
       forgetMemoryBatchDto: { ids: ['c1', 'c3'] },
     });
   });
 
-  it('offers no sort-all button once every matching entry is loaded', async () => {
+  it('asks AI about the listed entries without reading further pages once every entry is loaded', async () => {
     const api = fakeApi(undefined, () => ({
       rows: [COLD, COLD_RULE],
       total: 2,
       younger: 0,
       next: null,
     }));
+    api.triageMemoryImport.mockResolvedValue({ verdicts: [] });
     await renderOpen({ api });
     await press(button(container, 'Review…'));
     await settle();
 
-    expect(sortPanel().textContent).toContain('Sort 2 listed');
-    expect(sortPanel().textContent).not.toContain('Sort all');
-  });
-
-  it('drops the every-entry read when the filters change', async () => {
-    await sortEveryMatch();
-    expect(sortSummary()).toContain('3 to forget · 1 to keep');
-
-    await choose('Warnings', 'Hide warnings');
+    await press(button(sortPanel(), 'Ask AI about 2 entries'));
     await settle();
 
-    expect(sortSummary()).toContain('2 to forget · 0 to keep');
-    expect(sortPanel().textContent).toContain('Sort all 2 unsorted');
+    expect(api.listMemoryReview).not.toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100 }),
+    );
+    expect(api.triageMemoryImport).toHaveBeenCalledTimes(1);
   });
 
-  it('Tick shown skips warned rows and the confirm names the count', async () => {
+  it('Select all leaves out the rules, and Forget acts at once with an Undo', async () => {
     const api = await renderOpen({
       api: fakeApi(undefined, () => ({
         rows: [COLD, COLD_RULE],
@@ -1718,22 +1910,25 @@ describe('Memory clean up', () => {
     });
     await press(button(container, 'Review…'));
 
-    await press(button(inDialog(), 'Tick shown'));
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-picked"]'),
+    ).toBeNull();
+    await press(button(inDialog(), 'Select all'));
     expect(pick('m21').getAttribute('aria-pressed')).toBe('true');
     expect(pick('m22').getAttribute('aria-pressed')).toBe('false');
     expect(
       inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
         ?.textContent,
-    ).toBe('1 selected · Tick shown skipped 1 entry with a warning');
+    ).toBe('1 selected');
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-list-head"]')
+        ?.textContent,
+    ).toBe(
+      '2 entries nobody has read lately · Select all left out 1 that looks like a rule',
+    );
 
     await press(pick('m22'));
-    await press(button(inDialog(), 'Forget 2…'));
-    const question = [
-      ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
-    ].at(-1);
-    expect(question?.textContent).toContain('Forget 2 entries?');
-    expect(question?.textContent).toContain('1 of them looks like a rule.');
-    await press(confirmInDialog('Forget 2'));
+    await press(button(inDialog(), 'Forget 2'));
 
     expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
       forgetMemoryBatchDto: { ids: ['c1', 'c2'] },
@@ -1745,6 +1940,24 @@ describe('Memory clean up', () => {
 
     await press(button(notice as HTMLElement, 'Undo'));
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-1' });
+  });
+
+  it('shows a refused bulk Forget as an error and keeps the ticks', async () => {
+    const api = fakeApi(undefined, () => ({
+      rows: [COLD],
+      total: 1,
+      younger: 0,
+      next: null,
+    }));
+    api.forgetMemoryBatch.mockRejectedValue(new Error('database is busy'));
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+
+    await press(pick('m21'));
+    await press(button(inDialog(), 'Forget 1'));
+
+    expect(inDialog().textContent).toContain('database is busy');
+    expect(pick('m21').getAttribute('aria-pressed')).toBe('true');
   });
 
   it('the empty list offers younger entries', async () => {
@@ -1788,34 +2001,6 @@ describe('Memory clean up', () => {
     });
     await press(tab(inDialog(), 'Forgotten', '3'));
     expect(api.listMemoryBatches).toHaveBeenCalled();
-  });
-
-  it('narrows Least used by the filters it offers, over every row on the daemon', async () => {
-    const api = await renderOpen({
-      api: fakeApi(undefined, () => ({
-        rows: [COLD],
-        total: 1,
-        younger: 0,
-        next: null,
-      })),
-    });
-    await press(button(container, 'Review…'));
-
-    await choose('Sort', 'Largest');
-    await choose('Warnings', 'Hide warnings');
-    await choose('Review scope', 'Billing');
-    await press(button(inDialog(), 'Reference gone'));
-
-    expect(api.listMemoryReview).toHaveBeenLastCalledWith({
-      tab: 'cold',
-      sort: 'largest',
-      minAgeDays: 14,
-      warnings: 'hide',
-      referenceGone: 'true',
-      scope: 'project',
-      projectId: 'project-billing',
-      limit: 30,
-    });
   });
 
   it('undoes the last cleanup from the panel, wherever it was made', async () => {
@@ -2032,7 +2217,7 @@ describe('Memory clean up', () => {
     expect(inDialog().textContent).not.toContain('Nothing older than');
   });
 
-  it('stops counting a warned row as skipped once it is ticked by hand', async () => {
+  it('stops counting a rule as left out once it is ticked by hand', async () => {
     await renderOpen({
       api: fakeApi(undefined, () => ({
         rows: [COLD, COLD_RULE],
@@ -2043,16 +2228,42 @@ describe('Memory clean up', () => {
     });
     await press(button(container, 'Review…'));
 
-    await press(button(inDialog(), 'Tick shown'));
+    await press(button(inDialog(), 'Select all'));
     await press(pick('m22'));
 
     expect(
       inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
         ?.textContent,
     ).toBe('2 selected');
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-list-head"]')
+        ?.textContent,
+    ).toBe('2 entries nobody has read lately');
   });
 
-  it('drops a Tick shown answer that lands after the filters changed', async () => {
+  it('says what Select all left out even when it ticked nothing', async () => {
+    const api = fakeApi(undefined, () => ({
+      rows: [COLD_RULE],
+      total: 1,
+      younger: 0,
+      next: null,
+    }));
+    api.listMemoryReviewIds.mockResolvedValue({ ids: [], warnedSkipped: 1 });
+    await renderOpen({ api });
+    await press(button(container, 'Review…'));
+
+    await press(button(inDialog(), 'Select all'));
+
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-picked"]'),
+    ).toBeNull();
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-list-head"]')
+        ?.textContent,
+    ).toContain('Select all left out 1 that looks like a rule');
+  });
+
+  it('drops a Select all answer that lands after the tab changed', async () => {
     let answer: (value: {
       ids: string[];
       warnedSkipped: number;
@@ -2071,24 +2282,18 @@ describe('Memory clean up', () => {
     await renderOpen({ api });
     await press(button(container, 'Review…'));
 
-    await press(button(inDialog(), 'Tick shown'));
-    await choose('Warnings', 'Hide warnings');
+    await press(button(inDialog(), 'Select all'));
+    await press(tab(inDialog(), 'Kept', '1'));
+    await press(tab(inDialog(), 'Least used', '2'));
     await act(async () => {
       answer({ ids: ['c1'], warnedSkipped: 1 });
     });
     await settle();
 
     expect(
-      inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
-        ?.textContent,
-    ).toBe('0 selected');
+      inDialog().querySelector('[data-slot="memory-cleanup-picked"]'),
+    ).toBeNull();
   });
-
-  function lastQuestion(): Element | undefined {
-    return [
-      ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
-    ].at(-1);
-  }
 
   const FORGOTTEN_ONLY = () => ({
     rows: [reviewRow(GONE, { forgottenAt: '2026-11-01T00:00:00.000Z' })],
@@ -2131,7 +2336,7 @@ describe('Memory clean up', () => {
     expect(lastQuestion()?.textContent).toContain('only a forgotten memory');
   });
 
-  it('offers neither the permanent delete, the automatic sweep nor Sort with AI on a paired device', async () => {
+  it('offers neither the permanent delete, the automatic sweep nor Ask AI on a paired device', async () => {
     const api = await renderOpen({
       api: fakeApi(undefined, FORGOTTEN_ONLY),
       remote: true,

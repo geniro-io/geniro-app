@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -5,6 +8,8 @@ import {
   type DiffHunk,
   pairedWordSpans,
   parseFileDiff,
+  quoteMatches,
+  withoutHiddenText,
 } from './review-diff-model';
 
 const MODIFIED = [
@@ -316,5 +321,84 @@ describe('anchorComment', () => {
         repeated,
       ),
     ).toEqual({ kind: 'line', side: 'new', startLine: 2, endLine: 2 });
+  });
+
+  it('anchors a quote whose line holds hidden characters, which the stored quote lost', () => {
+    const hidden = hunksOf(
+      [
+        '@@ -9,1 +9,2 @@',
+        ' keep();',
+        '+export const c10 = "a\u200Bb\u202Ec";',
+      ].join('\n'),
+    );
+    expect(
+      anchorComment(
+        {
+          side: 'new',
+          startLine: 10,
+          endLine: 10,
+          quote: 'export const c10 = "abc";',
+        },
+        hidden,
+      ),
+    ).toEqual({ kind: 'line', side: 'new', startLine: 10, endLine: 10 });
+  });
+
+  it('anchors a range that starts in lines read around a hunk and ends inside it', () => {
+    const hunk = hunksOf(
+      ['@@ -3,2 +3,2 @@', ' three', '-four', '+FOUR'].join('\n'),
+    )[0]!;
+    const revealed: DiffHunk = {
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 0,
+      newLines: 0,
+      context: '',
+      rows: [
+        { kind: 'context', oldLine: 1, newLine: 1, text: 'one' },
+        { kind: 'context', oldLine: 2, newLine: 2, text: 'two' },
+      ],
+    };
+    expect(
+      anchorComment(
+        {
+          side: 'new',
+          startLine: 1,
+          endLine: 4,
+          quote: 'one\ntwo\nthree\nFOUR',
+        },
+        [hunk, revealed],
+      ),
+    ).toEqual({ kind: 'line', side: 'new', startLine: 1, endLine: 4 });
+  });
+});
+
+describe('quoteMatches', () => {
+  it('compares the file’s lines with a quote the way the daemon stored it', () => {
+    expect(quoteMatches(['a\u200Bb  ', '\tc'], 'ab\n\tc')).toBe(true);
+    expect(quoteMatches(['ab', 'd'], 'ab\nc')).toBe(false);
+    expect(quoteMatches(['ab'], 'ab\nc')).toBe(false);
+  });
+});
+
+describe('withoutHiddenText', () => {
+  it('takes out what the daemon takes out of a quote, keeping tabs and emoji', () => {
+    expect(withoutHiddenText('a\u200B\u202Eb\tc 👩\u200D💻')).toBe(
+      'ab\tc 👩\u200D💻',
+    );
+  });
+
+  it('is the twin of the daemon’s own rule', () => {
+    const daemon = readFileSync(
+      join(__dirname, '../../../../daemon/src/v1/agents/utils/hidden-text.ts'),
+      'utf8',
+    );
+    const mine = readFileSync(join(__dirname, 'review-diff-model.ts'), 'utf8');
+    for (const name of ['HIDDEN_TEXT', 'EMOJI_JOINER', 'EMOJI_PRESENTATION']) {
+      const pattern = new RegExp(`const ${name} =\\s*(/.*/[a-z]*);`);
+      const theirs = pattern.exec(daemon)?.[1];
+      expect(theirs).toBeDefined();
+      expect(pattern.exec(mine)?.[1]).toBe(theirs);
+    }
   });
 });

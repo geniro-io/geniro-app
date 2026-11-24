@@ -155,7 +155,7 @@ export function ReviewCommentThread({
       data-slot="review-comment-thread"
       data-comment-number={comment.number}
       className={cn(
-        'flex flex-col gap-2 rounded-lg border bg-card p-3 font-sans text-sm',
+        'flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 font-sans text-sm',
         draft ? 'border-primary/40' : 'border-border',
       )}>
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -185,11 +185,13 @@ export function ReviewCommentThread({
           {comment.quote}
         </pre>
       ) : null}
-      <p className="whitespace-pre-wrap text-foreground">{comment.body}</p>
+      <p className="break-words whitespace-pre-wrap text-foreground">
+        {comment.body}
+      </p>
       {comment.agentReply === null ? null : (
-        <div className="rounded-md border-l-2 border-primary/50 bg-muted/40 px-2 py-1.5">
+        <div className="min-w-0 rounded-md border-l-2 border-primary/50 bg-muted/40 px-2 py-1.5">
           <p className="text-xs font-medium text-muted-foreground">Agent</p>
-          <p className="whitespace-pre-wrap text-foreground">
+          <p className="break-words whitespace-pre-wrap text-foreground">
             {comment.agentReply}
           </p>
         </div>

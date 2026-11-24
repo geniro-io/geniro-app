@@ -690,6 +690,12 @@ interface RestartPass {
   afterRegister: () => void;
 }
 
+/** A review sent to a team run: kept on the user's row, and refused `RUN_BUSY` while a lead's turn runs. */
+interface ReviewDelivery {
+  payload: ReviewPayload;
+  ownTurn: true;
+}
+
 /** How a follow-up reaches a team run that is still being walked. */
 interface LiveRunControl {
   /**
@@ -701,7 +707,7 @@ interface LiveRunControl {
     images: SendMessageImage[],
     backgroundWork?: FollowUpBackgroundWork,
     storedText?: string,
-    review?: ReviewPayload,
+    review?: ReviewDelivery,
   ): Promise<ItemWire | null>;
   /** Hand the message to the callee of ONE running call — see `deliverToCall`. */
   deliverToCall(
@@ -2434,8 +2440,8 @@ export class TeamExecutorService
     backgroundWork?: FollowUpBackgroundWork,
     /** What the user's row keeps when it must not hold `text` itself (a card's hidden field). */
     storedText?: string,
-    /** The review this message sends, kept on the user's row for its transcript card. */
-    review?: ReviewPayload,
+    /** The review this message sends, which waits for the lead's turn to end. */
+    review?: ReviewDelivery,
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
@@ -2469,7 +2475,7 @@ export class TeamExecutorService
           null,
           undefined,
           storedText,
-          review,
+          review?.payload,
         );
       },
     );
@@ -9740,7 +9746,7 @@ export class TeamExecutorService
       images: SendMessageImage[],
       backgroundWork?: FollowUpBackgroundWork,
       storedText?: string,
-      review?: ReviewPayload,
+      review?: ReviewDelivery,
     ): Promise<ItemWire | null> => {
       // A pass that is over hands the message back to be walked from the
       // trigger — unless the run is AWAKE for work its own agents started
@@ -9762,6 +9768,15 @@ export class TeamExecutorService
       const notReady = whyRootsNotReady(roots);
       if (notReady !== null) {
         throw busy(notReady);
+      }
+      const working = review?.ownTurn
+        ? roots.find(
+            (root) =>
+              runningHandles.has(root.id) || continuationHandles.has(root.id),
+          )
+        : undefined;
+      if (working !== undefined) {
+        throw busy(`${working.name ?? working.id} is in a turn`);
       }
       if (backgroundWork === 'ask') {
         const cancels = roots.reduce(
@@ -9838,7 +9853,7 @@ export class TeamExecutorService
       let persisted = false;
       try {
         item = await persistUserMessage(null, {
-          ...messagePayload(storedText ?? text, stored, review),
+          ...messagePayload(storedText ?? text, stored, review?.payload),
           deliveryId,
         });
         persisted = true;

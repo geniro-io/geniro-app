@@ -195,6 +195,48 @@ interface SideRow {
   text: string;
 }
 
+/** TWIN of the daemon's `hidden-text.ts`: a stored quote has these taken out, so a line is compared without them. */
+const HIDDEN_TEXT =
+  /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/u;
+const EMOJI_JOINER =
+  /(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})/gu;
+const EMOJI_PRESENTATION = /(?<=\p{Emoji}\p{Emoji_Modifier}?)[\uFE0E\uFE0F]/gu;
+const HIDDEN_TEXT_EVERYWHERE = new RegExp(HIDDEN_TEXT.source, 'gu');
+const EMOJI_MARKS = new RegExp(
+  `${EMOJI_JOINER.source}|${EMOJI_PRESENTATION.source}`,
+  'gu',
+);
+
+/** `value` as the daemon stores a quote: hidden characters out, tabs and line breaks kept. */
+export function withoutHiddenText(value: string): string {
+  const clean = (part: string): string =>
+    part.replace(HIDDEN_TEXT_EVERYWHERE, (hidden) =>
+      /[\t\n\r]/.test(hidden) ? hidden : '',
+    );
+  let kept = '';
+  let from = 0;
+  for (const mark of value.matchAll(EMOJI_MARKS)) {
+    kept += clean(value.slice(from, mark.index)) + mark[0];
+    from = mark.index + mark[0].length;
+  }
+  return kept + clean(value.slice(from));
+}
+
+function comparable(line: string): string {
+  return withoutHiddenText(line).trimEnd();
+}
+
+/** Whether `lines`, read from the file, are the lines a comment quoted. */
+export function quoteMatches(lines: readonly string[], quote: string): boolean {
+  const wanted = quote.split('\n');
+  return (
+    lines.length === wanted.length &&
+    lines.every(
+      (line, index) => comparable(line) === comparable(wanted[index]!),
+    )
+  );
+}
+
 export function anchorComment(
   comment: CommentAnchorInput,
   hunks: readonly DiffHunk[],
@@ -203,7 +245,7 @@ export function anchorComment(
     return { kind: 'file' };
   }
   const rows = sideRows(hunks, comment.side);
-  const wanted = comment.quote.split('\n').map((line) => line.trimEnd());
+  const wanted = comment.quote.split('\n').map(comparable);
   const matches: number[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     if (matchesAt(rows, index, wanted)) {
@@ -223,16 +265,18 @@ export function anchorComment(
 }
 
 function sideRows(hunks: readonly DiffHunk[], side: 'new' | 'old'): SideRow[] {
-  const rows: SideRow[] = [];
+  const byNumber = new Map<number, string>();
   for (const hunk of hunks) {
     for (const row of hunk.rows) {
       const number = side === 'new' ? row.newLine : row.oldLine;
-      if (number !== null) {
-        rows.push({ number, text: row.text.trimEnd() });
+      if (number !== null && !byNumber.has(number)) {
+        byNumber.set(number, comparable(row.text));
       }
     }
   }
-  return rows;
+  return [...byNumber]
+    .sort(([a], [b]) => a - b)
+    .map(([number, text]) => ({ number, text }));
 }
 
 function matchesAt(

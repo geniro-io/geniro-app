@@ -333,6 +333,49 @@ async function keyDown(el: Element, init: KeyboardEventInit): Promise<void> {
 }
 
 describe('ChangesReviewDialog — the screen', () => {
+  it('reads the folder again when it opens and each time the window comes back into focus, and stops once closed', async () => {
+    const onRefresh = vi.fn();
+    await mount(screen({ onRefresh }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+
+    await unmount();
+    window.dispatchEvent(new Event('focus'));
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('wraps long code and long comments inside the card instead of scrolling it sideways', async () => {
+    const long = 'word'.repeat(400);
+    await mount(
+      screen({
+        changes: [FILE_A],
+        review: review({
+          comments: [
+            sent({ body: long, agentReply: long, agentStatus: 'fixed' }),
+          ],
+        }),
+      }),
+    );
+
+    const diff = document.querySelector('[data-slot="review-diff"]')!;
+    expect(diff.querySelector('.min-w-max, .overflow-x-auto')).toBeNull();
+    const code = [...diff.querySelectorAll('span')].find(
+      (el) => el.textContent === 'const b = 3;' && el.children.length === 0,
+    );
+    expect(code?.closest('.whitespace-pre-wrap')).not.toBeNull();
+    const texts = [...diff.querySelectorAll('p')].filter(
+      (el) => el.textContent === long,
+    );
+    expect(texts).toHaveLength(2);
+    for (const el of texts) {
+      expect(el.className).toContain('break-words');
+    }
+  });
+
   it('opens as "Review changes" and lists every changed file, in the tree and as a card, with its +N −M', async () => {
     await mount(screen());
 
@@ -689,6 +732,21 @@ describe('ChangesReviewDialog — more lines', () => {
     expect(leaf('7')).toBe(true);
   });
 
+  it('labels the rows below with how many the file has left, not a full step', async () => {
+    const readFileLines = vi.fn(async (): Promise<FileLines> => ({
+      lines: ['const c = 5;'],
+      total: 30,
+      unavailableReason: null,
+    }));
+    await mount(screen({ changes: [FILE_A], readFileLines }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(control('Show 7 more lines below')).not.toBeNull();
+    expect(control('Show 20 more lines below')).toBeNull();
+  });
+
   it('offers no way to show more lines without readFileLines', async () => {
     await mount(screen({ changes: [FILE_A] }));
 
@@ -924,6 +982,45 @@ describe('ChangesReviewDialog — comments outside the diff', () => {
       expect.objectContaining({ path: 'src/a.ts', from: 30, to: 30 }),
     );
     expect(text()).toContain('Far below');
+    expect(text()).not.toContain('Outdated');
+  });
+
+  it('keeps a range that starts above the hunk at its line, read from disk before the rows above are shown', async () => {
+    const onDisk = (n: number): string =>
+      ({
+        20: 'const a = 1;',
+        21: 'const b = 3;',
+        22: 'const extra = 4;',
+        23: 'const c = 5;',
+      })[n] ?? 'const line' + n + ' = 0;';
+    const readFileLines = vi.fn(
+      async (request: ReadFileLinesRequest): Promise<FileLines> => ({
+        lines: linesFrom(request.from, request.to, onDisk),
+        total: 40,
+        unavailableReason: null,
+      }),
+    );
+    const ctl = review({
+      comments: [
+        comment({
+          startLine: 18,
+          endLine: 21,
+          quote: [18, 19, 20, 21].map(onDisk).join('\n'),
+          body: 'Across the hunk edge',
+        }),
+      ],
+    });
+    await mount(screen({ changes: [FILE_A], review: ctl, readFileLines }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(text()).toContain('Across the hunk edge');
+    expect(text()).not.toContain('Outdated');
+
+    await press(must('Show 19 more lines above'));
+
+    expect(text()).toContain('Across the hunk edge');
     expect(text()).not.toContain('Outdated');
   });
 

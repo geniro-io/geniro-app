@@ -6,7 +6,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reviewCommentsDb } from '../__tests__/review-comments-db';
-import type { ReviewCommentsOutcome } from '../chat.types';
+import {
+  ReviewCommentCreateSchema,
+  ReviewCommentEditSchema,
+  type ReviewCommentsOutcome,
+} from '../chat.types';
 import { composeReviewText } from '../utils/review-message';
 
 type Db = Awaited<ReturnType<typeof reviewCommentsDb>>;
@@ -121,8 +125,11 @@ describe('ReviewCommentsService — the comments of a review', () => {
     expect(
       refusal(
         await db.service.add('run-1', { ...DRAFT, body: 'x'.repeat(4001) }),
-      ).code,
-    ).toBe('REVIEW_COMMENT_TOO_LONG');
+      ),
+    ).toMatchObject({
+      code: 'REVIEW_COMMENT_TOO_LONG',
+      reason: 'the comment is too long — at most 4000 characters',
+    });
     expect(
       ok(await db.service.add('run-1', { ...DRAFT, body: 'x'.repeat(4000) }))
         .changed[0],
@@ -151,6 +158,17 @@ describe('ReviewCommentsService — the comments of a review', () => {
       endLine: null,
       quote: '',
     });
+  });
+
+  it('lets an over-long body and quote through the wire schema, so the refusal carries its own code and sentence', () => {
+    const long = 'x'.repeat(4001);
+    expect(
+      ReviewCommentCreateSchema.safeParse({ ...DRAFT, body: long, quote: long })
+        .success,
+    ).toBe(true);
+    expect(ReviewCommentEditSchema.safeParse({ body: long }).success).toBe(
+      true,
+    );
   });
 
   it('refuses quoted code over 4000 characters', async () => {

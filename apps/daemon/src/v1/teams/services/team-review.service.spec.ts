@@ -13,7 +13,7 @@ const MESSAGE: ReviewMessage = {
 };
 
 describe('TeamReviewService', () => {
-  it('sends the review to the run the way a typed message goes, with the review on the user’s row', async () => {
+  it('sends the review to the run as a turn of its own, with the review on the user’s row', async () => {
     const row = { seq: 4 } as ItemWire;
     const sendMessage = vi.fn(async () => row);
     const send = vi.fn(
@@ -46,7 +46,7 @@ describe('TeamReviewService', () => {
       'm-1',
       undefined,
       MESSAGE.storedText,
-      MESSAGE.review,
+      { payload: MESSAGE.review, ownTurn: true },
     );
   });
 });

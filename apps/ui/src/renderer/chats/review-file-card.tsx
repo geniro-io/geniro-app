@@ -34,6 +34,7 @@ import {
   type DiffRow,
   pairedWordSpans,
   parseFileDiff,
+  quoteMatches,
   type WordSpan,
 } from './review-diff-model';
 import type {
@@ -343,24 +344,21 @@ function FileBody({
   const [readError, setReadError] = useState<string | null>(null);
   const [onDisk, setOnDisk] = useState<ReadonlyMap<string, boolean>>(new Map());
   const asked = useRef(new Set<string>());
-  const outsideDiff = useMemo(
+  const unanchored = useMemo(
     () =>
-      comments.filter((comment) => {
-        if (comment.side !== 'new' || comment.startLine === null) {
-          return false;
-        }
-        const end = comment.endLine ?? comment.startLine;
-        return !parsed.hunks.some(
-          (hunk) => comment.startLine! <= newEnd(hunk) && end >= hunk.newStart,
-        );
-      }),
+      comments.filter(
+        (comment) =>
+          comment.side === 'new' &&
+          comment.startLine !== null &&
+          anchorComment(comment, parsed.hunks).kind === 'outdated',
+      ),
     [comments, parsed],
   );
   useEffect(() => {
     if (readFileLines === undefined) {
       return;
     }
-    for (const comment of outsideDiff) {
+    for (const comment of unanchored) {
       const key = `${comment.id}:${comment.quote}`;
       if (asked.current.has(key) || comment.startLine === null) {
         continue;
@@ -378,22 +376,45 @@ function FileBody({
         .then((read) => {
           const same =
             read.unavailableReason === null &&
-            read.lines.map((line) => line.trimEnd()).join('\n') ===
-              comment.quote
-                .split('\n')
-                .map((line) => line.trimEnd())
-                .join('\n');
+            quoteMatches(read.lines, comment.quote);
           setOnDisk((current) => new Map(current).set(comment.id, same));
         })
         .catch(() => undefined);
     }
-  }, [outsideDiff, readFileLines, folder, change.path]);
+  }, [unanchored, readFileLines, folder, change.path]);
   const expandable =
     readFileLines !== undefined &&
     parsed.hunks.length > 0 &&
     (change.status === 'modified' ||
       change.status === 'renamed' ||
       change.status === 'copied');
+  const lastHunk = parsed.hunks[parsed.hunks.length - 1];
+  const lastLine =
+    lastHunk === undefined ? null : Math.max(1, newEnd(lastHunk));
+  const measured = useRef<string | null>(null);
+  useEffect(() => {
+    if (!expandable || lastLine === null || readFileLines === undefined) {
+      return;
+    }
+    const key = `${lastLine}\0${change.diff ?? ''}`;
+    if (measured.current === key) {
+      return;
+    }
+    measured.current = key;
+    void readFileLines({
+      dir: folder,
+      path: change.path,
+      at: 'worktree',
+      from: lastLine,
+      to: lastLine,
+    })
+      .then((read) => {
+        if (read.unavailableReason === null) {
+          setTotal(read.total);
+        }
+      })
+      .catch(() => undefined);
+  }, [expandable, lastLine, readFileLines, folder, change.path, change.diff]);
 
   const reveal = async (
     from: number,
@@ -586,11 +607,15 @@ function FileBody({
   const loose: { comment: ReviewComment; outdated: boolean }[] = [];
   for (const comment of comments) {
     const where = anchorComment(comment, anchorHunks);
-    if (
-      where.kind === 'line' &&
-      shown.has(lineKey(where.side, where.endLine))
-    ) {
-      const key = lineKey(where.side, where.endLine);
+    const key =
+      where.kind === 'line'
+        ? lineKey(where.side, where.endLine)
+        : where.kind === 'outdated' &&
+            onDisk.get(comment.id) === true &&
+            comment.startLine !== null
+          ? lineKey('new', comment.endLine ?? comment.startLine)
+          : null;
+    if (key !== null && shown.has(key)) {
       placed.set(key, [
         ...(placed.get(key) ?? []),
         { comment, outdated: false },
@@ -716,15 +741,14 @@ function FileBody({
   };
 
   const belowButton = (): ReactNode => {
-    if (!expandable || last === undefined || hidden > 0) {
+    if (!expandable || last === undefined || hidden > 0 || total === null) {
       return null;
     }
     const from = newEnd(last) + 1 + revealedBelow;
-    if (total !== null && from > total) {
+    if (from > total) {
       return null;
     }
-    const count =
-      total === null ? EXPAND_STEP : Math.min(EXPAND_STEP, total - from + 1);
+    const count = Math.min(EXPAND_STEP, total - from + 1);
     return (
       <div className="border-t border-border px-3 py-1">
         <button
@@ -783,66 +807,62 @@ function FileBody({
         <p className="px-3 py-3 text-sm text-muted-foreground">{message}</p>
       )}
       {parsed.hunks.length > 0 ? (
-        <div className="overflow-x-auto">
-          <div className="min-w-max">
-            {rows.map(({ hunkIndex, band, row }) => {
-              if (band) {
-                const hunk = parsed.hunks[hunkIndex]!;
-                return (
-                  <div
-                    key={row.key}
-                    className="flex items-center gap-3 border-y border-border/60 bg-muted/50 px-3 py-0.5 font-mono text-xs text-muted-foreground">
-                    <span>
-                      {`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}{' '}
-                      {hunk.context.trim()}
-                    </span>
-                    {bandButton(hunkIndex)}
-                  </div>
-                );
-              }
-              const newSide = row.kind !== 'removed' && row.kind !== 'note';
-              const after: ReactNode[] = [];
-              if (row.newLine !== null && newSide) {
-                after.push(
-                  ...(placed.get(lineKey('new', row.newLine)) ?? []).map(
-                    thread,
-                  ),
-                  editorFor('new', row.newLine),
-                );
-              }
-              if (row.kind === 'removed' && row.oldLine !== null) {
-                after.push(
-                  ...(placed.get(lineKey('old', row.oldLine)) ?? []).map(
-                    thread,
-                  ),
-                  editorFor('old', row.oldLine),
-                );
-              }
-              const extras = after.filter((node) => node !== null);
+        <div data-slot="review-diff-rows" className="min-w-0">
+          {rows.map(({ hunkIndex, band, row }) => {
+            if (band) {
+              const hunk = parsed.hunks[hunkIndex]!;
               return (
-                <Fragment key={row.key}>
-                  <div className={cn(ROW_GRID, ROW_TINT[row.kind])}>
-                    {numberCell('old', row.oldLine, row.kind === 'removed')}
-                    {numberCell('new', row.newLine, newSide)}
-                    <span
-                      className={cn(
-                        'select-none',
-                        row.kind === 'added' && 'text-success',
-                        row.kind === 'removed' && 'text-destructive',
-                      )}>
-                      {SIGN[row.kind]}
-                    </span>
-                    <span className="pr-4 whitespace-pre">{row.code}</span>
-                  </div>
-                  {extras.length > 0 ? (
-                    <div className="flex flex-col gap-2 border-y border-border/60 bg-background px-3 py-2 sm:pl-[7.75rem]">
-                      {extras}
-                    </div>
-                  ) : null}
-                </Fragment>
+                <div
+                  key={row.key}
+                  className="flex flex-wrap items-center gap-x-3 border-y border-border/60 bg-muted/50 px-3 py-0.5 font-mono text-xs text-muted-foreground">
+                  <span className="min-w-0 break-words">
+                    {`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}{' '}
+                    {hunk.context.trim()}
+                  </span>
+                  {bandButton(hunkIndex)}
+                </div>
               );
-            })}
-          </div>
+            }
+            const newSide = row.kind !== 'removed' && row.kind !== 'note';
+            const after: ReactNode[] = [];
+            if (row.newLine !== null && newSide) {
+              after.push(
+                ...(placed.get(lineKey('new', row.newLine)) ?? []).map(thread),
+                editorFor('new', row.newLine),
+              );
+            }
+            if (row.kind === 'removed' && row.oldLine !== null) {
+              after.push(
+                ...(placed.get(lineKey('old', row.oldLine)) ?? []).map(thread),
+                editorFor('old', row.oldLine),
+              );
+            }
+            const extras = after.filter((node) => node !== null);
+            return (
+              <Fragment key={row.key}>
+                <div className={cn(ROW_GRID, ROW_TINT[row.kind])}>
+                  {numberCell('old', row.oldLine, row.kind === 'removed')}
+                  {numberCell('new', row.newLine, newSide)}
+                  <span
+                    className={cn(
+                      'select-none',
+                      row.kind === 'added' && 'text-success',
+                      row.kind === 'removed' && 'text-destructive',
+                    )}>
+                    {SIGN[row.kind]}
+                  </span>
+                  <span className="min-w-0 pr-4 break-words whitespace-pre-wrap">
+                    {row.code}
+                  </span>
+                </div>
+                {extras.length > 0 ? (
+                  <div className="flex min-w-0 flex-col gap-2 border-y border-border/60 bg-background px-3 py-2 sm:pl-[7.75rem]">
+                    {extras}
+                  </div>
+                ) : null}
+              </Fragment>
+            );
+          })}
         </div>
       ) : null}
       {hidden > 0 ? (

@@ -28,7 +28,7 @@ export function ReviewMessageCard({
         {`Review · ${count} ${count === 1 ? 'comment' : 'comments'} in ${files} ${files === 1 ? 'file' : 'files'}`}
       </p>
       {review.note === null ? null : (
-        <p className="text-sm whitespace-pre-wrap">{review.note}</p>
+        <p className="text-sm break-words whitespace-pre-wrap">{review.note}</p>
       )}
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {review.comments.map((comment) => (
@@ -55,7 +55,9 @@ export function ReviewMessageCard({
                 {comment.quote}
               </pre>
             )}
-            <p className="text-sm whitespace-pre-wrap">{comment.body}</p>
+            <p className="text-sm break-words whitespace-pre-wrap">
+              {comment.body}
+            </p>
           </li>
         ))}
       </ul>

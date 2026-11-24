@@ -388,7 +388,7 @@ function textProblem(text: string, what: string): Refusal | null {
 function tooLong(what: string): Refusal {
   return refuse(
     'REVIEW_COMMENT_TOO_LONG',
-    `${what} is over ${REVIEW_COMMENT_MAX_CHARS} characters`,
+    `${what} is too long — at most ${REVIEW_COMMENT_MAX_CHARS} characters`,
   );
 }
 

@@ -135,9 +135,12 @@ export function ChangesReviewDialog({
   onClose: () => void;
 }): React.JSX.Element {
   useEffect(() => {
-    if (open) {
-      onRefresh();
+    if (!open) {
+      return;
     }
+    onRefresh();
+    window.addEventListener('focus', onRefresh);
+    return () => window.removeEventListener('focus', onRefresh);
   }, [open, onRefresh]);
 
   const narrow = useNarrowViewport();
@@ -615,10 +618,10 @@ function SendReviewDialog({
             <li
               key={draft.id}
               className="rounded-md border border-border px-3 py-2 text-sm">
-              <p className="font-mono text-xs text-muted-foreground">
+              <p className="font-mono text-xs break-all text-muted-foreground">
                 {`#${draft.number} · ${draft.path} · ${reviewLineLabel(draft.side, draft.startLine, draft.endLine)}`}
               </p>
-              <p className="whitespace-pre-wrap">{draft.body}</p>
+              <p className="break-words whitespace-pre-wrap">{draft.body}</p>
             </li>
           ))}
         </ul>

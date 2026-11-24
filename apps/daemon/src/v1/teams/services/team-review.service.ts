@@ -6,8 +6,9 @@ import { TeamExecutorService } from './team-executor.service';
 
 /**
  * The review screen's send in a TEAM run: the chat's send, delivered to the
- * run's lead the way a typed message is. Here rather than in `v1/agents`,
- * because only this side can reach the executor.
+ * run's lead the way a typed message is, but only into a turn of its own —
+ * `RUN_BUSY` while a lead's turn runs, as the chat's send. Here rather than in
+ * `v1/agents`, because only this side can reach the executor.
  */
 @Injectable()
 export class TeamReviewService {
@@ -28,7 +29,7 @@ export class TeamReviewService {
         message.clientMessageId,
         undefined,
         message.storedText,
-        message.review,
+        { payload: message.review, ownTurn: true },
       ),
     );
   }

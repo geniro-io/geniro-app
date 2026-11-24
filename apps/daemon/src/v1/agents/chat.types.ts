@@ -5514,7 +5514,6 @@ export type ReviewCommentsWire = z.infer<typeof ReviewCommentsWireSchema>;
 
 const ReviewCommentTextSchema = z
   .string()
-  .max(REVIEW_COMMENT_MAX_CHARS)
   .refine(
     (text) => !hasHiddenText(text, true),
     'holds a control or format character',
@@ -5535,7 +5534,7 @@ export const ReviewCommentCreateSchema = z.object({
   side: ReviewCommentSideSchema,
   startLine: z.number().int().min(1).nullable().optional(),
   endLine: z.number().int().min(1).nullable().optional(),
-  quote: z.string().max(REVIEW_COMMENT_MAX_CHARS),
+  quote: z.string(),
   body: ReviewCommentTextSchema.pipe(z.string().trim().min(1)),
 });
 export type ReviewCommentCreate = z.infer<typeof ReviewCommentCreateSchema>;

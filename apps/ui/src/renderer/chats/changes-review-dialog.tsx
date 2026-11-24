@@ -226,6 +226,7 @@ export function ChangesReviewDialog({
       <ReviewFileCard
         key={file.key}
         folder={file.folder}
+        place={file.folder === folder ? null : folderName(file.folder)}
         change={file.change}
         comments={commentsByFile.get(`${file.folder}\0${file.change.path}`) ?? []}
         review={review}
@@ -318,7 +319,14 @@ export function ChangesReviewDialog({
                 <div key={section.folder} className="flex flex-col">
                   {section.primary ? null : (
                     <p className="px-1 pt-2 pb-1 text-xs text-muted-foreground" title={section.folder}>
-                      In <span className="font-mono text-foreground">{folderName(section.folder)}</span>
+                      In <span className="font-mono text-foreground">{folderName(section.folder)}</span>{' '}
+                      — a worktree this chat’s agents worked in
+                      {section.upstreamBase === null ? null : (
+                        <>
+                          , against{' '}
+                          <span className="font-mono text-foreground">{section.upstreamBase.ref}</span>
+                        </>
+                      )}
                     </p>
                   )}
                   <ul className="m-0 flex list-none flex-col p-0">

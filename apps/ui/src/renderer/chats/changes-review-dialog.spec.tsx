@@ -725,3 +725,109 @@ describe('ChangesReviewDialog — a phone-width screen', () => {
     expect(ctl.send).toHaveBeenCalledWith(null);
   });
 });
+
+describe('ChangesReviewDialog — what the list is measured against', () => {
+  it('names the base it measured against and the ref it came from, not the start', async () => {
+    await mount(
+      screen({ upstreamBase: { sha: 'c'.repeat(40), ref: 'origin/master' } }),
+    );
+
+    expect(text()).toContain('Working tree against ' + 'c'.repeat(12));
+    expect(text()).toContain('origin/master');
+    expect(text()).toContain('This chat started at ' + 'a'.repeat(12));
+    expect(text()).not.toContain('Working tree against ' + 'a'.repeat(12));
+    expect(text()).not.toMatch(/pulled/i);
+  });
+
+  it('measures against the start when nothing newer is shared', async () => {
+    await mount(screen({ upstreamBase: null }));
+
+    expect(text()).toContain('Working tree against ' + 'a'.repeat(12));
+  });
+
+  it('says the checkout moved off the start, which outranks a shared base', async () => {
+    await mount(
+      screen({
+        movedOffStart: true,
+        upstreamBase: { sha: 'c'.repeat(40), ref: 'origin/main' },
+      }),
+    );
+
+    expect(text()).toContain('moved off ' + 'a'.repeat(12));
+    expect(text()).not.toContain('Working tree against ' + 'c'.repeat(12));
+  });
+});
+
+describe('ChangesReviewDialog — the thread’s other work folders', () => {
+  const WORKTREE = '/repo/.claude/worktrees/cw-1256-padding';
+  const elsewhereFile = change({ path: 'src/a.ts', diff: TS_BODY, added: 2, removed: 1 });
+
+  it('lists a worktree’s files under the worktree’s name, apart from the folder’s own', async () => {
+    await mount(
+      screen({
+        changes: [FILE_A],
+        elsewhere: [
+          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+        ],
+      }),
+    );
+
+    expect(text()).toContain('cw-1256-padding');
+    expect(text()).toContain('a worktree this chat’s agents worked in');
+    expect(text()).toContain('0 of 2 viewed');
+  });
+
+  it('names the ref a worktree is measured against', async () => {
+    await mount(
+      screen({
+        elsewhere: [
+          {
+            folder: WORKTREE,
+            changes: [elsewhereFile],
+            upstreamBase: { sha: 'd'.repeat(40), ref: 'origin/feature/stack' },
+            baseSha: null,
+          },
+        ],
+      }),
+    );
+
+    expect(text()).toContain('worked in, against origin/feature/stack');
+  });
+
+  it('still lists a worktree when the thread’s own folder could not be read, and says why', async () => {
+    await mount(
+      screen({
+        changes: [],
+        unavailableReason: 'The commit this chat started at is no longer here.',
+        elsewhere: [
+          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+        ],
+      }),
+    );
+
+    expect(text()).toContain('The commit this chat started at is no longer here.');
+    expect(text()).toContain('src/a.ts');
+    expect(text()).not.toContain('Nothing has changed in this folder');
+  });
+
+  it('makes a comment in a worktree’s file in that worktree’s folder', async () => {
+    const ctl = review();
+    await mount(
+      screen({
+        changes: [],
+        review: ctl,
+        elsewhere: [
+          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+        ],
+      }),
+    );
+
+    await press(must('Comment on new line 21'));
+    await typeInto(editor(), 'In the worktree');
+    await press(must('Add to review'));
+
+    expect(ctl.add).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: WORKTREE, path: 'src/a.ts', startLine: 21 }),
+    );
+  });
+});

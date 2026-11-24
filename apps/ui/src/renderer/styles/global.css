@@ -339,62 +339,95 @@
    Unlayered on purpose, mirroring the .md-editor-surface retint above: these
    must win over any vendor stylesheet that ships its own Prism theme, and
    refractor emits plain `token <type>` class names with no colours of its own.
-   Scoped to [data-slot='code-block'] so nothing else can pick them up. */
+   Scoped to [data-slot='code-block'] and the review screen's diff
+   ([data-slot='review-diff']) so nothing else can pick them up. */
 [data-slot='code-block'] .token.comment,
+[data-slot='review-diff'] .token.comment,
 [data-slot='code-block'] .token.prolog,
+[data-slot='review-diff'] .token.prolog,
 [data-slot='code-block'] .token.doctype,
-[data-slot='code-block'] .token.cdata {
+[data-slot='review-diff'] .token.doctype,
+[data-slot='code-block'] .token.cdata,
+[data-slot='review-diff'] .token.cdata {
   color: var(--code-comment);
   font-style: italic;
 }
-[data-slot='code-block'] .token.punctuation {
+[data-slot='code-block'] .token.punctuation,
+[data-slot='review-diff'] .token.punctuation {
   color: var(--code-punctuation);
 }
 [data-slot='code-block'] .token.keyword,
+[data-slot='review-diff'] .token.keyword,
 [data-slot='code-block'] .token.atrule,
+[data-slot='review-diff'] .token.atrule,
 [data-slot='code-block'] .token.rule,
+[data-slot='review-diff'] .token.rule,
 [data-slot='code-block'] .token.important,
-[data-slot='code-block'] .token.selector {
+[data-slot='review-diff'] .token.important,
+[data-slot='code-block'] .token.selector,
+[data-slot='review-diff'] .token.selector {
   color: var(--code-keyword);
 }
 [data-slot='code-block'] .token.string,
+[data-slot='review-diff'] .token.string,
 [data-slot='code-block'] .token.char,
+[data-slot='review-diff'] .token.char,
 [data-slot='code-block'] .token.attr-value,
-[data-slot='code-block'] .token.regex {
+[data-slot='review-diff'] .token.attr-value,
+[data-slot='code-block'] .token.regex,
+[data-slot='review-diff'] .token.regex {
   color: var(--code-string);
 }
 [data-slot='code-block'] .token.number,
+[data-slot='review-diff'] .token.number,
 [data-slot='code-block'] .token.boolean,
+[data-slot='review-diff'] .token.boolean,
 [data-slot='code-block'] .token.constant,
-[data-slot='code-block'] .token.symbol {
+[data-slot='review-diff'] .token.constant,
+[data-slot='code-block'] .token.symbol,
+[data-slot='review-diff'] .token.symbol {
   color: var(--code-number);
 }
 [data-slot='code-block'] .token.function,
+[data-slot='review-diff'] .token.function,
 [data-slot='code-block'] .token.class-name,
-[data-slot='code-block'] .token.tag {
+[data-slot='review-diff'] .token.class-name,
+[data-slot='code-block'] .token.tag,
+[data-slot='review-diff'] .token.tag {
   color: var(--code-function);
 }
 [data-slot='code-block'] .token.operator,
+[data-slot='review-diff'] .token.operator,
 [data-slot='code-block'] .token.entity,
-[data-slot='code-block'] .token.url {
+[data-slot='review-diff'] .token.entity,
+[data-slot='code-block'] .token.url,
+[data-slot='review-diff'] .token.url {
   color: var(--code-operator);
 }
 [data-slot='code-block'] .token.property,
+[data-slot='review-diff'] .token.property,
 [data-slot='code-block'] .token.attr-name,
+[data-slot='review-diff'] .token.attr-name,
 [data-slot='code-block'] .token.variable,
-[data-slot='code-block'] .token.parameter {
+[data-slot='review-diff'] .token.variable,
+[data-slot='code-block'] .token.parameter,
+[data-slot='review-diff'] .token.parameter {
   color: var(--code-variable);
 }
-[data-slot='code-block'] .token.deleted {
+[data-slot='code-block'] .token.deleted,
+[data-slot='review-diff'] .token.deleted {
   color: var(--destructive);
 }
-[data-slot='code-block'] .token.inserted {
+[data-slot='code-block'] .token.inserted,
+[data-slot='review-diff'] .token.inserted {
   color: var(--success);
 }
-[data-slot='code-block'] .token.bold {
+[data-slot='code-block'] .token.bold,
+[data-slot='review-diff'] .token.bold {
   font-weight: 600;
 }
-[data-slot='code-block'] .token.italic {
+[data-slot='code-block'] .token.italic,
+[data-slot='review-diff'] .token.italic {
   font-style: italic;
 }
 

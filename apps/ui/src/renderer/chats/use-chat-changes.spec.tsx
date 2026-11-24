@@ -225,6 +225,7 @@ describe('useChatChanges', () => {
         folder: AGENT_WORKTREE,
         changes: [change('apps/web/card-padding.ts', 2, 2)],
         upstreamBase: null,
+        baseSha: START_SHA,
       },
     ]);
   });

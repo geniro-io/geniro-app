@@ -143,6 +143,7 @@ function newEnd(hunk: DiffHunk): number {
  */
 export function ReviewFileCard({
   folder,
+  place,
   change,
   comments,
   review,
@@ -154,6 +155,8 @@ export function ReviewFileCard({
   onViewedChange,
 }: {
   folder: string;
+  /** The worktree's name, for a file outside the thread's own folder. */
+  place: string | null;
   change: GitChange;
   comments: readonly ReviewComment[];
   review: ReviewController;
@@ -193,6 +196,11 @@ export function ReviewFileCard({
           <Chevron className="size-4" aria-hidden />
         </button>
         <span className="min-w-0 font-mono text-xs break-all text-foreground">
+          {place === null ? null : (
+            <span className="text-muted-foreground" title={folder}>
+              {place}:{' '}
+            </span>
+          )}
           {change.oldPath === null ? null : (
             <span className="text-muted-foreground">{change.oldPath} → </span>
           )}

@@ -73,6 +73,8 @@ import { ThreadEventRow } from './thread-event-card';
 import { readThreadMessageRow } from './thread-message-payload';
 import { readThreadOutcomePayload } from './thread-outcome-payload';
 import { ThreadOutcomeRow } from './thread-outcome-row';
+import { ReviewMessageCard } from './review-message-card';
+import { readReviewPayload } from './review-payload';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
 import {
@@ -241,6 +243,8 @@ export const TranscriptItem = memo(function TranscriptItem({
       const attachments = messageAttachments(item.payload);
       const deliveryId =
         item.role === 'user' ? payloadString(item.payload, 'deliveryId') : null;
+      const review =
+        item.role === 'user' ? readReviewPayload(item.payload) : null;
       const bubble = (
         <MessageBubble
           variant={item.role === 'user' ? 'user' : 'assistant'}
@@ -256,7 +260,9 @@ export const TranscriptItem = memo(function TranscriptItem({
           <MessageAttachments runId={item.runId} attachments={attachments} />
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
-          {text ? (
+          {review !== null ? (
+            <ReviewMessageCard review={review} />
+          ) : text ? (
             <MarkdownContent content={text} className={MESSAGE_TEXT_CLASS} />
           ) : null}
         </MessageBubble>

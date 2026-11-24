@@ -165,6 +165,7 @@ import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
 import { memberCallWaits } from './call-waits';
 import { ChangesReviewDialog } from './changes-review-dialog';
+import { OpenReviewCommentContext } from './review-message-card';
 import {
   chatContextFigures,
   type ContextFigures,
@@ -9903,6 +9904,7 @@ export function Chats({
 
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
+      <OpenReviewCommentContext.Provider value={isHosted ? null : openReviewComment}>
       <ChatProviders
         jumpMark={mark}
         signIn={resolveSignIn}
@@ -12198,6 +12200,7 @@ export function Chats({
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
       </ChatProviders>
+      </OpenReviewCommentContext.Provider>
     </CardBackedRequestsContext.Provider>
   );
 }

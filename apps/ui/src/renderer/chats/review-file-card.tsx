@@ -16,6 +16,11 @@ import { highlightLines } from '../components/ui/highlight-lines';
 import { cn } from '../components/ui/utils';
 import { DIFF_ROW_LIMIT } from './diff-view';
 import {
+  ReviewCommentEditor,
+  ReviewCommentThread,
+  reviewLineLabel,
+} from './review-comment-thread';
+import {
   anchorComment,
   type DiffHunk,
   type DiffRow,
@@ -23,11 +28,6 @@ import {
   parseFileDiff,
   type WordSpan,
 } from './review-diff-model';
-import {
-  ReviewCommentEditor,
-  ReviewCommentThread,
-  reviewLineLabel,
-} from './review-comment-thread';
 import type {
   ReviewComment,
   ReviewCommentInput,
@@ -68,8 +68,7 @@ const SIGN: Record<DiffRow['kind'], string> = {
 type Side = 'new' | 'old';
 
 type Target =
-  | { kind: 'file' }
-  | { kind: 'lines'; side: Side; start: number; end: number };
+  { kind: 'file' } | { kind: 'lines'; side: Side; start: number; end: number };
 
 interface PlacedRow {
   key: string;
@@ -83,7 +82,11 @@ function lineKey(side: Side, line: number): string {
   return `${side}:${line}`;
 }
 
-function withMarks(text: string, spans: readonly WordSpan[], tone: string): ReactNode {
+function withMarks(
+  text: string,
+  spans: readonly WordSpan[],
+  tone: string,
+): ReactNode {
   const parts: ReactNode[] = [];
   let at = 0;
   for (const [index, span] of spans.entries()) {
@@ -215,7 +218,9 @@ export function ReviewFileCard({
           </span>
         ) : null}
         {changedSinceViewed ? (
-          <span className="text-xs text-warning">Changed since you viewed it</span>
+          <span className="text-xs text-warning">
+            Changed since you viewed it
+          </span>
         ) : null}
         <span className="ml-auto flex items-center gap-2">
           <Button
@@ -287,9 +292,9 @@ function FileBody({
     [parsed, language],
   );
   const [showAll, setShowAll] = useState(false);
-  const [revealedAbove, setRevealedAbove] = useState<ReadonlyMap<number, number>>(
-    new Map(),
-  );
+  const [revealedAbove, setRevealedAbove] = useState<
+    ReadonlyMap<number, number>
+  >(new Map());
   const [revealedBelow, setRevealedBelow] = useState(0);
   const [extra, setExtra] = useState<ReadonlyMap<number, string>>(new Map());
   const [total, setTotal] = useState<number | null>(null);
@@ -331,7 +336,10 @@ function FileBody({
   };
 
   const lineText = useMemo(() => {
-    const sides = { new: new Map<number, string>(), old: new Map<number, string>() };
+    const sides = {
+      new: new Map<number, string>(),
+      old: new Map<number, string>(),
+    };
     for (const hunk of parsed.hunks) {
       for (const row of hunk.rows) {
         if (row.newLine !== null && row.kind !== 'removed') {
@@ -382,7 +390,13 @@ function FileBody({
     rows.push({
       hunkIndex,
       band: true,
-      row: { key: `band:${hunkIndex}`, kind: 'note', oldLine: null, newLine: null, code: null },
+      row: {
+        key: `band:${hunkIndex}`,
+        kind: 'note',
+        oldLine: null,
+        newLine: null,
+        code: null,
+      },
     });
     const above = revealedAbove.get(hunkIndex) ?? 0;
     const offset = hunk.oldStart - hunk.newStart;
@@ -392,7 +406,13 @@ function FileBody({
         rows.push({
           hunkIndex,
           band: false,
-          row: { key: `x:${line}`, kind: 'context', oldLine: line + offset, newLine: line, code: text },
+          row: {
+            key: `x:${line}`,
+            kind: 'context',
+            oldLine: line + offset,
+            newLine: line,
+            code: text,
+          },
         });
       }
     }
@@ -425,7 +445,13 @@ function FileBody({
         rows.push({
           hunkIndex: parsed.hunks.length,
           band: false,
-          row: { key: `x:${line}`, kind: 'context', oldLine: line + offset, newLine: line, code: text },
+          row: {
+            key: `x:${line}`,
+            kind: 'context',
+            oldLine: line + offset,
+            newLine: line,
+            code: text,
+          },
         });
       }
     }
@@ -448,19 +474,34 @@ function FileBody({
       shown.add(lineKey('old', row.oldLine));
     }
   }
-  const placed = new Map<string, { comment: ReviewComment; outdated: boolean }[]>();
+  const placed = new Map<
+    string,
+    { comment: ReviewComment; outdated: boolean }[]
+  >();
   const loose: { comment: ReviewComment; outdated: boolean }[] = [];
   for (const comment of comments) {
     const where = anchorComment(comment, parsed.hunks);
-    if (where.kind === 'line' && shown.has(lineKey(where.side, where.endLine))) {
+    if (
+      where.kind === 'line' &&
+      shown.has(lineKey(where.side, where.endLine))
+    ) {
       const key = lineKey(where.side, where.endLine);
-      placed.set(key, [...(placed.get(key) ?? []), { comment, outdated: false }]);
+      placed.set(key, [
+        ...(placed.get(key) ?? []),
+        { comment, outdated: false },
+      ]);
     } else {
       loose.push({ comment, outdated: where.kind === 'outdated' });
     }
   }
 
-  const thread = ({ comment, outdated }: { comment: ReviewComment; outdated: boolean }) => (
+  const thread = ({
+    comment,
+    outdated,
+  }: {
+    comment: ReviewComment;
+    outdated: boolean;
+  }) => (
     <ReviewCommentThread
       key={comment.id}
       comment={comment}
@@ -472,7 +513,11 @@ function FileBody({
   );
 
   const editorFor = (side: Side, line: number): ReactNode => {
-    if (target?.kind !== 'lines' || target.side !== side || target.end !== line) {
+    if (
+      target?.kind !== 'lines' ||
+      target.side !== side ||
+      target.end !== line
+    ) {
       return null;
     }
     const { start, end } = target;
@@ -481,7 +526,13 @@ function FileBody({
         key={`editor:${side}:${start}:${end}`}
         heading={reviewLineLabel(side, start, end)}
         onSubmit={(body) =>
-          add({ side, startLine: start, endLine: end, quote: quoteOf(side, start, end), body })
+          add({
+            side,
+            startLine: start,
+            endLine: end,
+            quote: quoteOf(side, start, end),
+            body,
+          })
         }
         onCancel={() => {
           setTarget(null);
@@ -491,15 +542,26 @@ function FileBody({
     );
   };
 
-  const numberCell = (side: Side, line: number | null, commentable: boolean): ReactNode => {
+  const numberCell = (
+    side: Side,
+    line: number | null,
+    commentable: boolean,
+  ): ReactNode => {
     if (line === null) {
       return <span />;
     }
     if (!commentable) {
-      return <span className="pr-2 text-right text-muted-foreground select-none">{line}</span>;
+      return (
+        <span className="pr-2 text-right text-muted-foreground select-none">
+          {line}
+        </span>
+      );
     }
     const picked =
-      target?.kind === 'lines' && target.side === side && line >= target.start && line <= target.end;
+      target?.kind === 'lines' &&
+      target.side === side &&
+      line >= target.start &&
+      line <= target.end;
     return (
       <button
         type="button"
@@ -532,7 +594,7 @@ function FileBody({
     return (
       <button
         type="button"
-        className="cursor-pointer rounded px-1.5 text-primary hover:bg-primary/10"
+        className="cursor-pointer rounded px-1.5 font-mono text-xs text-primary hover:bg-primary/10"
         onClick={() =>
           void reveal(to - count + 1, to, (got) =>
             setRevealedAbove((current) =>
@@ -553,12 +615,13 @@ function FileBody({
     if (total !== null && from > total) {
       return null;
     }
-    const count = total === null ? EXPAND_STEP : Math.min(EXPAND_STEP, total - from + 1);
+    const count =
+      total === null ? EXPAND_STEP : Math.min(EXPAND_STEP, total - from + 1);
     return (
-      <div className="border-t border-border px-3 py-1 font-mono text-xs">
+      <div className="border-t border-border px-3 py-1">
         <button
           type="button"
-          className="cursor-pointer rounded px-1.5 text-primary hover:bg-primary/10"
+          className="cursor-pointer rounded px-1.5 font-mono text-xs text-primary hover:bg-primary/10"
           onClick={() =>
             void reveal(from, from + count - 1, (got) => {
               setRevealedBelow((current) => current + got);
@@ -586,14 +649,22 @@ function FileBody({
           ))}
         </ul>
       ) : null}
-      {fileComments.length > 0 || otherLoose.length > 0 || target?.kind === 'file' ? (
+      {fileComments.length > 0 ||
+      otherLoose.length > 0 ||
+      target?.kind === 'file' ? (
         <div className="flex flex-col gap-2 border-b border-border p-3">
           {[...fileComments, ...otherLoose].map(thread)}
           {target?.kind === 'file' ? (
             <ReviewCommentEditor
               heading="Whole file"
               onSubmit={(body) =>
-                add({ side: 'file', startLine: null, endLine: null, quote: '', body })
+                add({
+                  side: 'file',
+                  startLine: null,
+                  endLine: null,
+                  quote: '',
+                  body,
+                })
               }
               onCancel={() => setTarget(null)}
             />
@@ -625,13 +696,17 @@ function FileBody({
               const after: ReactNode[] = [];
               if (row.newLine !== null && newSide) {
                 after.push(
-                  ...(placed.get(lineKey('new', row.newLine)) ?? []).map(thread),
+                  ...(placed.get(lineKey('new', row.newLine)) ?? []).map(
+                    thread,
+                  ),
                   editorFor('new', row.newLine),
                 );
               }
               if (row.kind === 'removed' && row.oldLine !== null) {
                 after.push(
-                  ...(placed.get(lineKey('old', row.oldLine)) ?? []).map(thread),
+                  ...(placed.get(lineKey('old', row.oldLine)) ?? []).map(
+                    thread,
+                  ),
                   editorFor('old', row.oldLine),
                 );
               }
@@ -664,7 +739,11 @@ function FileBody({
       ) : null}
       {hidden > 0 ? (
         <div className="border-t border-border px-3 py-2">
-          <Button type="button" variant="ghost" size="sm" onClick={() => setShowAll(true)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAll(true)}>
             {`Show all ${hidden + DIFF_ROW_LIMIT} lines`}
           </Button>
         </div>

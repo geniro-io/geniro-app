@@ -38,6 +38,8 @@ import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
 import { formatClockTime } from './relative-time';
 import { RetryContext } from './retry-context';
+import { ReviewMessageCard } from './review-message-card';
+import { readReviewPayload } from './review-payload';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
@@ -73,8 +75,6 @@ import { ThreadEventRow } from './thread-event-card';
 import { readThreadMessageRow } from './thread-message-payload';
 import { readThreadOutcomePayload } from './thread-outcome-payload';
 import { ThreadOutcomeRow } from './thread-outcome-row';
-import { ReviewMessageCard } from './review-message-card';
-import { readReviewPayload } from './review-payload';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
 import {

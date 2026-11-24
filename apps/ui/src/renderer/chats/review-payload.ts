@@ -48,7 +48,16 @@ function readSnapshot(value: unknown): ReviewSnapshotView | null {
   ) {
     return null;
   }
-  return { number, folder, path, side, startLine: start, endLine: end, quote, body };
+  return {
+    number,
+    folder,
+    path,
+    side,
+    startLine: start,
+    endLine: end,
+    quote,
+    body,
+  };
 }
 
 /** The review a user message sent, or null when the row is an ordinary message. */

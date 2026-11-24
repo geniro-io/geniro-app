@@ -23,8 +23,8 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
-import { KeyedChain } from '../utils/keyed-chain';
 import { itemToWire } from '../utils/item-wire';
+import { KeyedChain } from '../utils/keyed-chain';
 import { composeReviewText, snapshotOf } from '../utils/review-message';
 import { AgentEventBus } from './agent-events.bus';
 
@@ -70,7 +70,10 @@ export class ReviewCommentsService implements OnModuleInit {
     return (await this.comments.listByRun(runId, em)).map(toWire);
   }
 
-  add(runId: string, draft: ReviewCommentDraft): Promise<ReviewCommentsOutcome> {
+  add(
+    runId: string,
+    draft: ReviewCommentDraft,
+  ): Promise<ReviewCommentsOutcome> {
     return this.write(runId, async (_comments, em) => {
       const body = draft.body.trim();
       const problem =

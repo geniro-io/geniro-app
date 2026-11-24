@@ -523,6 +523,7 @@ function makeClient(): {
     },
     onSharesChanged: () => () => undefined,
     onThreadMessagesChanged: () => () => undefined,
+    onReviewCommentsChanged: () => () => undefined,
     onProjectsChanged: (
       l: (event: { projectId: string; textsOnly: boolean }) => void,
     ) => {

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 
+import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { ExpandableTextarea } from '../components/expandable-textarea';
 import { cn } from '../components/ui/utils';
 import type { ReviewComment } from './use-review-comments';
 
@@ -15,7 +15,8 @@ export function reviewLineLabel(
     return 'Whole file';
   }
   const end = endLine ?? startLine;
-  const lines = end === startLine ? `Line ${startLine}` : `Lines ${startLine}–${end}`;
+  const lines =
+    end === startLine ? `Line ${startLine}` : `Lines ${startLine}–${end}`;
   return side === 'old' ? `${lines} (removed)` : lines;
 }
 
@@ -137,7 +138,11 @@ export function ReviewCommentThread({
   if (editing) {
     return (
       <ReviewCommentEditor
-        heading={reviewLineLabel(comment.side, comment.startLine, comment.endLine)}
+        heading={reviewLineLabel(
+          comment.side,
+          comment.startLine,
+          comment.endLine,
+        )}
         initial={comment.body}
         onSubmit={onEdit}
         onCancel={() => setEditing(false)}
@@ -164,9 +169,7 @@ export function ReviewCommentThread({
           <Badge
             variant="outline"
             className={cn(
-              comment.agentStatus === 'fixed'
-                ? 'text-success'
-                : 'text-warning',
+              comment.agentStatus === 'fixed' ? 'text-success' : 'text-warning',
             )}>
             {AGENT_BADGE[comment.agentStatus]}
           </Badge>
@@ -210,7 +213,8 @@ export function ReviewCommentThread({
             Resolve
           </Button>
         ) : null}
-        {resolved || (comment.status === 'sent' && comment.agentStatus !== null) ? (
+        {resolved ||
+        (comment.status === 'sent' && comment.agentStatus !== null) ? (
           <Button
             type="button"
             variant="ghost"

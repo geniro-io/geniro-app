@@ -171,7 +171,6 @@ import {
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-background-work';
 import { isHostArtifactAnswersCall } from '../../agents/utils/host-artifact';
-import { isHostAnswerReviewCommentCall } from '../../agents/utils/host-review-comments';
 import { isHostBrowserCall } from '../../agents/utils/host-browser';
 import { hostEndpointPath } from '../../agents/utils/host-endpoint';
 import { isHostFlagIssueCall } from '../../agents/utils/host-flag-issue';
@@ -185,6 +184,7 @@ import {
   hostQuestionCardInput,
   isHostQuestionCall,
 } from '../../agents/utils/host-question';
+import { isHostAnswerReviewCommentCall } from '../../agents/utils/host-review-comments';
 import {
   isHostTeamProposalCall,
   standingProposalCardId,

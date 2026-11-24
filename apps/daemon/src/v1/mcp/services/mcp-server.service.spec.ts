@@ -13,7 +13,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { chatSearchDb } from '../../agents/__tests__/chat-search-db';
 import { goalsDb } from '../../agents/__tests__/goals-db';
-import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   type AnalysisTurn,
@@ -101,6 +100,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { SurfaceBroker } from '../../agents/services/surface.broker';
 import { TeamBuilderBroker } from '../../agents/services/team-builder.broker';

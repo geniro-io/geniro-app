@@ -760,14 +760,24 @@ describe('ChangesReviewDialog — what the list is measured against', () => {
 
 describe('ChangesReviewDialog — the thread’s other work folders', () => {
   const WORKTREE = '/repo/.claude/worktrees/cw-1256-padding';
-  const elsewhereFile = change({ path: 'src/a.ts', diff: TS_BODY, added: 2, removed: 1 });
+  const elsewhereFile = change({
+    path: 'src/a.ts',
+    diff: TS_BODY,
+    added: 2,
+    removed: 1,
+  });
 
   it('lists a worktree’s files under the worktree’s name, apart from the folder’s own', async () => {
     await mount(
       screen({
         changes: [FILE_A],
         elsewhere: [
-          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+          {
+            folder: WORKTREE,
+            changes: [elsewhereFile],
+            upstreamBase: null,
+            baseSha: null,
+          },
         ],
       }),
     );
@@ -800,12 +810,19 @@ describe('ChangesReviewDialog — the thread’s other work folders', () => {
         changes: [],
         unavailableReason: 'The commit this chat started at is no longer here.',
         elsewhere: [
-          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+          {
+            folder: WORKTREE,
+            changes: [elsewhereFile],
+            upstreamBase: null,
+            baseSha: null,
+          },
         ],
       }),
     );
 
-    expect(text()).toContain('The commit this chat started at is no longer here.');
+    expect(text()).toContain(
+      'The commit this chat started at is no longer here.',
+    );
     expect(text()).toContain('src/a.ts');
     expect(text()).not.toContain('Nothing has changed in this folder');
   });
@@ -817,7 +834,12 @@ describe('ChangesReviewDialog — the thread’s other work folders', () => {
         changes: [],
         review: ctl,
         elsewhere: [
-          { folder: WORKTREE, changes: [elsewhereFile], upstreamBase: null, baseSha: null },
+          {
+            folder: WORKTREE,
+            changes: [elsewhereFile],
+            upstreamBase: null,
+            baseSha: null,
+          },
         ],
       }),
     );
@@ -827,7 +849,11 @@ describe('ChangesReviewDialog — the thread’s other work folders', () => {
     await press(must('Add to review'));
 
     expect(ctl.add).toHaveBeenCalledWith(
-      expect.objectContaining({ folder: WORKTREE, path: 'src/a.ts', startLine: 21 }),
+      expect.objectContaining({
+        folder: WORKTREE,
+        path: 'src/a.ts',
+        startLine: 21,
+      }),
     );
   });
 });

@@ -16,15 +16,24 @@ const COMMENT = {
 describe('readReviewPayload', () => {
   it('reads the review a user message carried', () => {
     expect(
-      readReviewPayload({ text: 'Review…', review: { note: 'Hi', comments: [COMMENT] } }),
+      readReviewPayload({
+        text: 'Review…',
+        review: { note: 'Hi', comments: [COMMENT] },
+      }),
     ).toEqual({ note: 'Hi', comments: [COMMENT] });
   });
 
   it('reads a whole-file comment with no lines', () => {
-    const file = { ...COMMENT, side: 'file', startLine: null, endLine: null, quote: '' };
-    expect(readReviewPayload({ review: { note: null, comments: [file] } })?.comments).toEqual([
-      file,
-    ]);
+    const file = {
+      ...COMMENT,
+      side: 'file',
+      startLine: null,
+      endLine: null,
+      quote: '',
+    };
+    expect(
+      readReviewPayload({ review: { note: null, comments: [file] } })?.comments,
+    ).toEqual([file]);
   });
 
   it('is null for an ordinary message', () => {
@@ -34,7 +43,10 @@ describe('readReviewPayload', () => {
   it('is null when one comment is not the shape the daemon writes', () => {
     expect(
       readReviewPayload({
-        review: { note: null, comments: [COMMENT, { ...COMMENT, side: 'left' }] },
+        review: {
+          note: null,
+          comments: [COMMENT, { ...COMMENT, side: 'left' }],
+        },
       }),
     ).toBeNull();
   });

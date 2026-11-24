@@ -164,9 +164,13 @@ export function ChangesReviewDialog({
     ],
     [folder, changes, elsewhere, upstreamBase],
   );
-  const files = useMemo(() => sections.flatMap((section) => section.files), [sections]);
+  const files = useMemo(
+    () => sections.flatMap((section) => section.files),
+    [sections],
+  );
 
-  const viewedOf = (file: ReviewFile): boolean => flags.get(file.bodyKey) === true;
+  const viewedOf = (file: ReviewFile): boolean =>
+    flags.get(file.bodyKey) === true;
   const setViewed = (file: ReviewFile, viewed: boolean): void => {
     flags.set(file.bodyKey, viewed);
     flags.set(file.anyKey, viewed);
@@ -198,15 +202,23 @@ export function ChangesReviewDialog({
     }
     return byFile;
   }, [review.comments]);
-  const listed = new Set(files.map((file) => `${file.folder}\0${file.change.path}`));
+  const listed = new Set(
+    files.map((file) => `${file.folder}\0${file.change.path}`),
+  );
   const gone = review.comments.filter(
     (comment) =>
       comment.status !== 'draft' &&
       !listed.has(`${comment.folder}\0${comment.path}`),
   );
-  const drafts = review.comments.filter((comment) => comment.status === 'draft');
-  const openComments = review.comments.filter((comment) => comment.status === 'sent').length;
-  const resolved = review.comments.filter((comment) => comment.status === 'resolved').length;
+  const drafts = review.comments.filter(
+    (comment) => comment.status === 'draft',
+  );
+  const openComments = review.comments.filter(
+    (comment) => comment.status === 'sent',
+  ).length;
+  const resolved = review.comments.filter(
+    (comment) => comment.status === 'resolved',
+  ).length;
 
   useEffect(() => {
     if (!open || focusComment === null) {
@@ -217,7 +229,8 @@ export function ChangesReviewDialog({
       ?.scrollIntoView({ block: 'center' });
   }, [open, focusComment, review.comments]);
 
-  const selected = files.find((file) => file.key === current) ?? files[0] ?? null;
+  const selected =
+    files.find((file) => file.key === current) ?? files[0] ?? null;
   const selectedIndex = selected === null ? -1 : files.indexOf(selected);
 
   const card = (file: ReviewFile): React.JSX.Element => {
@@ -228,11 +241,18 @@ export function ChangesReviewDialog({
         folder={file.folder}
         place={file.folder === folder ? null : folderName(file.folder)}
         change={file.change}
-        comments={commentsByFile.get(`${file.folder}\0${file.change.path}`) ?? []}
+        comments={
+          commentsByFile.get(`${file.folder}\0${file.change.path}`) ?? []
+        }
         review={review}
         readFileLines={readFileLines}
-        open={folds.get(file.key) ?? (!viewed && (narrow || startsOpen.has(file.key)))}
-        onToggleOpen={(next) => setFolds((was) => new Map(was).set(file.key, next))}
+        open={
+          folds.get(file.key) ??
+          (!viewed && (narrow || startsOpen.has(file.key)))
+        }
+        onToggleOpen={(next) =>
+          setFolds((was) => new Map(was).set(file.key, next))
+        }
         viewed={viewed}
         changedSinceViewed={!viewed && flags.get(file.anyKey) === true}
         onViewedChange={(next) => setViewed(file, next)}
@@ -277,7 +297,11 @@ export function ChangesReviewDialog({
             <span className="text-xs font-normal text-muted-foreground">
               Waiting for the turn to end
             </span>
-            <Button type="button" variant="ghost" size="sm" onClick={review.cancelWaiting}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={review.cancelWaiting}>
               Cancel
             </Button>
           </>
@@ -300,7 +324,9 @@ export function ChangesReviewDialog({
         <p className="shrink-0 border-b border-border px-5 py-2 text-xs text-muted-foreground">
           {baseLine({ startSha, movedOffStart, upstreamBase })}
         </p>
-        {error ? <ErrorText className="shrink-0 px-5 py-2">{error}</ErrorText> : null}
+        {error ? (
+          <ErrorText className="shrink-0 px-5 py-2">{error}</ErrorText>
+        ) : null}
         {review.error ? (
           <ErrorText className="shrink-0 px-5 py-2">{review.error}</ErrorText>
         ) : null}
@@ -318,24 +344,39 @@ export function ChangesReviewDialog({
               {sections.map((section) => (
                 <div key={section.folder} className="flex flex-col">
                   {section.primary ? null : (
-                    <p className="px-1 pt-2 pb-1 text-xs text-muted-foreground" title={section.folder}>
-                      In <span className="font-mono text-foreground">{folderName(section.folder)}</span>{' '}
+                    <p
+                      className="px-1 pt-2 pb-1 text-xs text-muted-foreground"
+                      title={section.folder}>
+                      In{' '}
+                      <span className="font-mono text-foreground">
+                        {folderName(section.folder)}
+                      </span>{' '}
                       — a worktree this chat’s agents worked in
                       {section.upstreamBase === null ? null : (
                         <>
                           , against{' '}
-                          <span className="font-mono text-foreground">{section.upstreamBase.ref}</span>
+                          <span className="font-mono text-foreground">
+                            {section.upstreamBase.ref}
+                          </span>
                         </>
                       )}
                     </p>
                   )}
                   <ul className="m-0 flex list-none flex-col p-0">
                     {section.files
-                      .filter((file) => needle === '' || file.change.path.toLowerCase().includes(needle))
+                      .filter(
+                        (file) =>
+                          needle === '' ||
+                          file.change.path.toLowerCase().includes(needle),
+                      )
                       .map((file) => {
                         const count = (
-                          commentsByFile.get(`${file.folder}\0${file.change.path}`) ?? []
-                        ).filter((comment) => comment.status !== 'resolved').length;
+                          commentsByFile.get(
+                            `${file.folder}\0${file.change.path}`,
+                          ) ?? []
+                        ).filter(
+                          (comment) => comment.status !== 'resolved',
+                        ).length;
                         return (
                           <li key={file.key}>
                             <button
@@ -348,16 +389,25 @@ export function ChangesReviewDialog({
                               onClick={() => jumpTo(file)}>
                               <span
                                 aria-hidden
-                                className={cn('text-[10px]', STATUS_META[file.change.status].className)}>
+                                className={cn(
+                                  'text-[10px]',
+                                  STATUS_META[file.change.status].className,
+                                )}>
                                 ●
                               </span>
                               <span className="min-w-0 flex-1 font-mono text-xs break-all">
                                 {file.change.path}
                               </span>
                               {count > 0 ? (
-                                <span className="text-xs text-primary tabular-nums">{count}</span>
+                                <span className="text-xs text-primary tabular-nums">
+                                  {count}
+                                </span>
                               ) : null}
-                              <DiffFigures added={file.change.added} removed={file.change.removed} className="text-[11px]" />
+                              <DiffFigures
+                                added={file.change.added}
+                                removed={file.change.removed}
+                                className="text-[11px]"
+                              />
                             </button>
                           </li>
                         );
@@ -367,7 +417,9 @@ export function ChangesReviewDialog({
               ))}
             </nav>
           )}
-          <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+          <div
+            ref={scroller}
+            className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
             {narrow && files.length > 0 && selected !== null ? (
               <div className="mb-3 flex items-center gap-2">
                 <Button
@@ -383,7 +435,10 @@ export function ChangesReviewDialog({
                   aria-label="File"
                   groups={[
                     {
-                      items: files.map((file) => ({ value: file.key, label: file.change.path })),
+                      items: files.map((file) => ({
+                        value: file.key,
+                        label: file.change.path,
+                      })),
                     },
                   ]}
                   value={selected.key}
@@ -411,26 +466,38 @@ export function ChangesReviewDialog({
                   : null
               }
               isEmpty={files.length === 0 && gone.length === 0}
-              empty={<EmptyState>Nothing has changed in this folder since the chat started.</EmptyState>}>
+              empty={
+                <EmptyState>
+                  Nothing has changed in this folder since the chat started.
+                </EmptyState>
+              }>
               <div className="flex flex-col gap-3">
-                {reason && elsewhere.length > 0 ? <EmptyState>{reason}</EmptyState> : null}
-                {(narrow ? (selected === null ? [] : [selected]) : files).map((file) => (
-                  <div key={file.key} data-review-key={file.key}>
-                    {card(file)}
-                  </div>
-                ))}
+                {reason && elsewhere.length > 0 ? (
+                  <EmptyState>{reason}</EmptyState>
+                ) : null}
+                {(narrow ? (selected === null ? [] : [selected]) : files).map(
+                  (file) => (
+                    <div key={file.key} data-review-key={file.key}>
+                      {card(file)}
+                    </div>
+                  ),
+                )}
                 {gone.length > 0 ? (
                   <section className="flex flex-col gap-2 rounded-lg border border-border p-3">
                     <h3 className="text-sm font-medium">No longer changed</h3>
                     {gone.map((comment) => (
                       <div key={comment.id} className="flex flex-col gap-1">
-                        <p className="font-mono text-xs text-muted-foreground">{comment.path}</p>
+                        <p className="font-mono text-xs text-muted-foreground">
+                          {comment.path}
+                        </p>
                         <ReviewCommentThread
                           comment={comment}
                           outdated
                           onEdit={(body) => review.edit(comment.id, body)}
                           onDelete={() => review.remove(comment.id)}
-                          onStatus={(status) => review.setStatus(comment.id, status)}
+                          onStatus={(status) =>
+                            review.setStatus(comment.id, status)
+                          }
                         />
                       </div>
                     ))}
@@ -467,14 +534,24 @@ function SendReviewDialog({
 }): React.JSX.Element {
   const [note, setNote] = useState('');
   return (
-    <Dialog open={open} onClose={onClose} title="Send the review to the agent" className="max-w-xl">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Send the review to the agent"
+      className="max-w-xl">
       <div className="flex flex-col gap-3">
         <p className="text-sm text-muted-foreground">
-          {drafts.length === 1 ? 'One comment goes' : `${drafts.length} comments go`} to the agent as one message. If it is working, the review waits for its turn to end.
+          {drafts.length === 1
+            ? 'One comment goes'
+            : `${drafts.length} comments go`}{' '}
+          to the agent as one message. If it is working, the review waits for
+          its turn to end.
         </p>
         <ul className="m-0 flex max-h-72 list-none flex-col gap-2 overflow-y-auto p-0">
           {drafts.map((draft) => (
-            <li key={draft.id} className="rounded-md border border-border px-3 py-2 text-sm">
+            <li
+              key={draft.id}
+              className="rounded-md border border-border px-3 py-2 text-sm">
               <p className="font-mono text-xs text-muted-foreground">
                 {`#${draft.number} · ${draft.path} · ${reviewLineLabel(draft.side, draft.startLine, draft.endLine)}`}
               </p>

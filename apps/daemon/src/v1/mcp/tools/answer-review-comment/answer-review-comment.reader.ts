@@ -40,9 +40,10 @@ export function readAnswerReviewComment(
 }
 
 /** The receipt the agent reads back. */
-export function answerReviewCommentResultText(
-  outcome: ReviewCommentsOutcome,
-): { text: string; isError: boolean } {
+export function answerReviewCommentResultText(outcome: ReviewCommentsOutcome): {
+  text: string;
+  isError: boolean;
+} {
   if (outcome.status === 'refused') {
     return {
       text: `Not answered (${outcome.code}): ${outcome.reason}.`,

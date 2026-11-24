@@ -5475,7 +5475,9 @@ export const ReviewCommentWireSchema = z
       .describe('The comment within its run, as the agent names it'),
     folder: z
       .string()
-      .describe('The folder the comment was made in: the chat folder or one of its agent worktrees'),
+      .describe(
+        'The folder the comment was made in: the chat folder or one of its agent worktrees',
+      ),
     path: z.string().describe('The file, relative to its repository root'),
     side: ReviewCommentSideSchema.describe(
       'new: lines of the file as it is now; old: removed lines; file: the whole file',

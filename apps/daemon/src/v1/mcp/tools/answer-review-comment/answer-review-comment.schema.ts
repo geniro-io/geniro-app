@@ -6,7 +6,7 @@ export function answerReviewCommentSchema(): Record<string, unknown> {
   return toolInputSchema(
     AnswerReviewCommentArgsSchema.extend({
       comment: AnswerReviewCommentArgsSchema.shape.comment.describe(
-        'The comment\'s number, as the review message names it (#3 → 3).',
+        "The comment's number, as the review message names it (#3 → 3).",
       ),
       reply: AnswerReviewCommentArgsSchema.shape.reply.describe(
         'What you did about it, or why you did not, in a sentence or two; shown under the comment.',

@@ -35,8 +35,42 @@ describe('readMonitorNotice', () => {
           end: null,
           lines: ['ready on :3000'],
           omitted: 4,
+          command: null,
+          startedAt: null,
+          timeoutMs: null,
         },
       ],
+    });
+  });
+
+  it('reads the command, start and timeout a row carries', () => {
+    const [read] =
+      readMonitorNotice(
+        notice([
+          entry({
+            command: 'gh run watch 42',
+            startedAt: '2026-11-24T10:00:00.000Z',
+            timeoutMs: 600_000,
+          }),
+        ]),
+      )?.monitors ?? [];
+    expect(read).toMatchObject({
+      command: 'gh run watch 42',
+      startedAt: '2026-11-24T10:00:00.000Z',
+      timeoutMs: 600_000,
+    });
+  });
+
+  it('keeps an entry whose command, start or timeout is malformed, without them', () => {
+    const [read] =
+      readMonitorNotice(
+        notice([entry({ command: 7, startedAt: 'yesterday', timeoutMs: -1 })]),
+      )?.monitors ?? [];
+    expect(read).toMatchObject({
+      id: 'm1',
+      command: null,
+      startedAt: null,
+      timeoutMs: null,
     });
   });
 

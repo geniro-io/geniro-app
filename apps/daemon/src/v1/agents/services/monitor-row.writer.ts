@@ -6,6 +6,7 @@ import type { MonitorEvent, MonitorOwner } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import {
+  monitorFactsOf,
   type MonitorMessage,
   monitorMessageOf,
   monitorRowEntry,
@@ -131,6 +132,7 @@ function rowEntryOf(event: MonitorEvent): MonitorRowPayload | null {
       {
         id: event.monitor.id,
         description: event.monitor.description,
+        ...monitorFactsOf(event.monitor),
         batch: { lines: [], omitted: 0 },
       },
       'start',

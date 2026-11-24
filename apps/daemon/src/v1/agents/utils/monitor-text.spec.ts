@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { HostRowWire, MonitorRowPayload } from '../chat.types';
 import {
+  holdMonitorMessage,
+  monitorFactsOf,
   type MonitorMessage,
+  monitorMessageOf,
   monitorMessageText,
+  monitorRowEntry,
   promptNamingRunning,
   type StoppedMonitor,
   stoppedMonitorLine,
@@ -165,5 +170,106 @@ describe('monitorMessageText for a monitor a restart stopped', () => {
     expect(monitorMessageText(interrupted())).not.toContain(
       'not started again',
     );
+  });
+});
+
+describe('monitorRowEntry', () => {
+  const snapshot = {
+    id: 'm4',
+    description: 'CI run',
+    command: 'gh run watch 42',
+    startedAt: '2026-11-24T10:00:00.000Z',
+    endsAt: '2026-11-24T10:30:00.000Z',
+    timeoutMs: 1_800_000,
+    events: 1,
+    pid: 123,
+    owner: {
+      runId: 'run-1',
+      memberId: 'lead',
+      caller: 'lead',
+      conversationId: null,
+      callId: null,
+      target: 'chat' as const,
+    },
+  };
+
+  it('carries the command, start and timeout of the monitor a batch came from', () => {
+    const entry = monitorRowEntry(
+      monitorMessageOf({
+        type: 'batch',
+        monitor: snapshot,
+        batch: { lines: ['ok'], omitted: 0 },
+      }),
+      'batch',
+    );
+    expect(entry).toEqual({
+      id: 'm4',
+      description: 'CI run',
+      event: 'batch',
+      lines: ['ok'],
+      omitted: 0,
+      command: 'gh run watch 42',
+      startedAt: '2026-11-24T10:00:00.000Z',
+      timeoutMs: 1_800_000,
+    });
+  });
+
+  it('keeps them on an end merged into a batch still held', () => {
+    const held = new Map<string, MonitorMessage>();
+    holdMonitorMessage(
+      held,
+      monitorMessageOf({
+        type: 'batch',
+        monitor: snapshot,
+        batch: { lines: ['a'], omitted: 0 },
+      }),
+    );
+    holdMonitorMessage(
+      held,
+      monitorMessageOf({
+        type: 'end',
+        monitor: snapshot,
+        end: { kind: 'exit', code: 1 },
+        batch: { lines: ['b'], omitted: 0 },
+        wake: true,
+        stoppedBy: null,
+      }),
+    );
+    const entry = monitorRowEntry(held.get('m4')!, 'end');
+    expect(entry).toMatchObject({
+      lines: ['a', 'b'],
+      end: { kind: 'exit', code: 1 },
+      command: 'gh run watch 42',
+      startedAt: '2026-11-24T10:00:00.000Z',
+      timeoutMs: 1_800_000,
+    });
+  });
+
+  it('writes none of them for a message that knows none', () => {
+    const entry = monitorRowEntry(
+      { id: 'm1', description: 'x', batch: { lines: [], omitted: 0 } },
+      'start',
+    );
+    expect(Object.keys(entry).sort()).toEqual(
+      ['description', 'event', 'id', 'lines', 'omitted'].sort(),
+    );
+  });
+});
+
+describe('monitorFactsOf', () => {
+  it('masks a registered secret in the command it writes into a row', () => {
+    const secret = 'tok-monitor-0123456789abcdef';
+    registerSecret(secret, 'test');
+    try {
+      const facts = monitorFactsOf({
+        command: `curl -H "Authorization: ${secret}" localhost`,
+        startedAt: '2026-11-24T10:00:00.000Z',
+        timeoutMs: 60_000,
+      });
+      expect(facts.command).toContain('curl -H');
+      expect(facts.command).not.toContain(secret);
+    } finally {
+      clearSecrets();
+    }
   });
 });

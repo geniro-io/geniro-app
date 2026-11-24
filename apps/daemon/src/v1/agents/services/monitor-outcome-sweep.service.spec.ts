@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InterruptCause } from '../../../utils/stop-cause';
 import type { Item } from '../../runs/entity/item.entity';
+import type { MonitorRowPayload } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { monitorRowEntry, monitorRowPayload } from '../utils/monitor-text';
@@ -340,6 +341,8 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
           id: 'm1',
           event: 'end',
           end: { kind: 'interrupted' },
+          command: 'npm run watch',
+          startedAt: STARTED_AT.toISOString(),
         }),
         true,
       );
@@ -475,6 +478,54 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
         },
       ],
     });
+    const [, entry] = h.write.mock.calls[0] as unknown as [
+      unknown,
+      MonitorRowPayload,
+    ];
+    expect(entry).not.toHaveProperty('command');
+    expect(entry.startedAt).toBe(STARTED_AT.toISOString());
+  });
+
+  it('writes the interrupted end with the command, start and timeout its own start row carries', async () => {
+    const started = {
+      ...row(3, 'm1', 'start'),
+      payload: JSON.stringify(
+        monitorRowPayload(
+          [
+            monitorRowEntry(
+              {
+                id: 'm1',
+                description: 'CI',
+                command: 'gh run watch 7',
+                startedAt: '2026-11-20T08:00:00.000Z',
+                timeoutMs: 900_000,
+                batch: { lines: [], omitted: 0 },
+              },
+              'start',
+            ),
+          ],
+          null,
+          false,
+        ),
+      ),
+    };
+    const h = harness(
+      { teamId: 'wf', archivedAt: null, status: 'running' },
+      [started],
+      [monitorCall(2, { command: 'an older call' })],
+    );
+    await h.sweep.sweep('self-update', ['run-1']);
+    expect(h.write).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        id: 'm1',
+        end: { kind: 'interrupted' },
+        command: 'gh run watch 7',
+        startedAt: '2026-11-20T08:00:00.000Z',
+        timeoutMs: 900_000,
+      }),
+      true,
+    );
   });
 
   it('takes the command only from a call of the same description made before its start', async () => {

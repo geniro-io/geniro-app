@@ -127,7 +127,26 @@ const DEV_SERVER: MonitorEntry = {
   end: null,
   lines: ['compiled in 1.2s', 'listening on port 3000'],
   omitted: 4,
+  command: 'pnpm dev 2>&1 | grep --line-buffered -E "ready|error"',
+  startedAt: '2026-11-24T10:00:00.000Z',
+  timeoutMs: 1_800_000,
 };
+
+const CI_LOG = [
+  'Refreshing run status every 3 seconds.',
+  'X main CI · 45348014240',
+  'Triggered via push about 4 minutes ago',
+  '',
+  'JOBS',
+  '✓ lint in 1m12s',
+  '✓ check-types in 1m40s',
+  '✓ build-storybook in 2m03s',
+  '✓ test:unit (daemon) in 3m31s',
+  '✓ test:unit (ui) in 2m58s',
+  '✓ CI Pass in 4s',
+  '',
+  '✓ Run CI (45348014240) completed with success',
+];
 
 export const MonitorReportedWithOutput: Story = {
   render: () => (
@@ -135,7 +154,58 @@ export const MonitorReportedWithOutput: Story = {
       entry={DEV_SERVER}
       woke
       agent="Manager"
+      at="2026-11-24T10:02:31.000Z"
       memoryKey="story-monitor-reported"
+    />
+  ),
+};
+
+export const MonitorFinishedLongOutput: Story = {
+  render: () => (
+    <MonitorEventCard
+      entry={{
+        ...DEV_SERVER,
+        description: 'Model assets run 45348014240',
+        command: 'gh run watch 45348014240 --exit-status',
+        event: 'end',
+        end: { kind: 'exit', code: 0 },
+        lines: CI_LOG,
+        omitted: 0,
+      }}
+      woke
+      agent="Nick Fury · Manager"
+      at="2026-11-24T10:04:12.000Z"
+      memoryKey="story-monitor-long"
+    />
+  ),
+};
+
+export const MonitorNoNewOutput: Story = {
+  render: () => (
+    <MonitorEventCard
+      entry={{ ...DEV_SERVER, lines: [], omitted: 0 }}
+      woke
+      agent="Manager"
+      at="2026-11-24T10:30:00.000Z"
+      memoryKey="story-monitor-empty"
+    />
+  ),
+};
+
+export const MonitorTimedOut: Story = {
+  render: () => (
+    <MonitorEventCard
+      entry={{
+        ...DEV_SERVER,
+        event: 'end',
+        end: { kind: 'timeout' },
+        lines: [],
+        omitted: 0,
+      }}
+      woke
+      agent="Manager"
+      at="2026-11-24T10:30:00.000Z"
+      memoryKey="story-monitor-timeout"
     />
   ),
 };
@@ -152,6 +222,7 @@ export const MonitorStopped: Story = {
       }}
       woke={false}
       agent="Manager"
+      at="2026-11-24T10:12:09.000Z"
       memoryKey="story-monitor-stopped"
     />
   ),
@@ -169,7 +240,24 @@ export const MonitorEndedExit1: Story = {
       }}
       woke={false}
       agent="Manager"
+      at="2026-11-24T10:00:03.000Z"
       memoryKey="story-monitor-ended"
+    />
+  ),
+};
+
+export const MonitorRecordedBeforeDetails: Story = {
+  render: () => (
+    <MonitorEventCard
+      entry={{
+        ...DEV_SERVER,
+        command: null,
+        startedAt: null,
+        timeoutMs: null,
+      }}
+      woke
+      agent="Manager"
+      memoryKey="story-monitor-legacy"
     />
   ),
 };

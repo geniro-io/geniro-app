@@ -5417,6 +5417,10 @@ export interface MonitorRowPayload {
   end?: MonitorEnd;
   lines: string[];
   omitted: number;
+  /** Absent on an older row, and on an interrupted end whose `monitor` call was not found. */
+  command?: string;
+  startedAt?: string;
+  timeoutMs?: number;
 }
 
 /**

@@ -12,6 +12,8 @@ import {
   MemberEventCard,
   monitorEndText,
   MonitorEventCard,
+  monitorMetaParts,
+  monitorStatusOf,
 } from './agent-event-card';
 import { RevealCallContext } from './call-block';
 import type { MonitorEnd, MonitorEntry } from './monitor-payload';
@@ -53,18 +55,15 @@ function monitor(over: Partial<MonitorEntry> = {}): MonitorEntry {
     end: null,
     lines: ['compiled', 'ready'],
     omitted: 0,
+    command: null,
+    startedAt: null,
+    timeoutMs: null,
     ...over,
   };
 }
 
-function outputButton(el: HTMLElement): HTMLButtonElement {
-  const found = [...el.querySelectorAll<HTMLButtonElement>('button')].find(
-    (button) => button.textContent === 'Output',
-  );
-  if (found === undefined) {
-    throw new Error('no Output button');
-  }
-  return found;
+function slotText(el: HTMLElement, slot: string): string | null | undefined {
+  return el.querySelector(`[data-slot="${slot}"]`)?.textContent;
 }
 
 describe('AgentEventCard', () => {
@@ -501,18 +500,12 @@ describe('MonitorEventCard', () => {
       el.querySelector<HTMLElement>('[data-slot="monitor-event-face"]')?.dataset
         .face,
     ).toBe('monitor');
-    expect(
-      el.querySelector('[data-slot="monitor-event-title"]')?.textContent,
-    ).toBe('dev server log');
-    expect(
-      el.querySelector('[data-slot="monitor-event-handle"]')?.textContent,
-    ).toBe('m1');
-    expect(
-      el.querySelector('[data-slot="monitor-event-label"]')?.textContent,
-    ).toBe('Monitor reported');
+    expect(slotText(el, 'monitor-event-title')).toBe('dev server log');
+    expect(slotText(el, 'monitor-event-handle')).toBe('m1');
+    expect(slotText(el, 'monitor-event-label')).toBe('Monitor reported');
   });
 
-  it('folds the delivered output behind Output, and names the lines cut before delivery', () => {
+  it('shows the delivered output without a press, and names the lines cut before delivery', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor({ omitted: 3 })}
@@ -521,20 +514,11 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
-    expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
-    const toggle = outputButton(el);
-
-    act(() => toggle.click());
-
-    const output = el.querySelector('[data-slot="monitor-output"]');
-    expect(output?.textContent).toContain('compiled');
-    expect(output?.textContent).toContain('ready');
-    expect(output?.textContent).toContain('… 3 more lines not delivered');
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-
-    act(() => toggle.click());
-
-    expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
+    const output = slotText(el, 'monitor-output');
+    expect(output).toContain('compiled');
+    expect(output).toContain('ready');
+    expect(output).toContain('… 3 more lines not delivered');
+    expect(el.querySelector('[data-slot="monitor-output-toggle"]')).toBeNull();
   });
 
   it('says a single cut line in the singular', () => {
@@ -546,13 +530,59 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
-    act(() => outputButton(el).click());
-    expect(
-      el.querySelector('[data-slot="monitor-output"]')?.textContent,
-    ).toContain('… 1 more line not delivered');
+    expect(slotText(el, 'monitor-output')).toContain(
+      '… 1 more line not delivered',
+    );
   });
 
-  it('draws no Output fold when nothing was delivered or cut', () => {
+  it('shows the last lines of a long output, and all of them on Show all', () => {
+    const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`);
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({ lines })}
+        woke
+        agent={null}
+        memoryKey="monitor-test"
+      />,
+    );
+    const output = () => slotText(el, 'monitor-output') ?? '';
+    expect(output()).not.toContain('line 4\n');
+    expect(output()).toContain('line 5');
+    expect(output()).toContain('line 12');
+    expect(slotText(el, 'monitor-output-hidden')).toBe('… 4 earlier lines');
+    const toggle = el.querySelector<HTMLButtonElement>(
+      '[data-slot="monitor-output-toggle"]',
+    )!;
+    expect(toggle.textContent).toContain('Show all 12 lines');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => toggle.click());
+
+    expect(output()).toContain('line 1\n');
+    expect(el.querySelector('[data-slot="monitor-output-hidden"]')).toBeNull();
+    expect(toggle.textContent).toContain('Show less');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+    act(() => toggle.click());
+
+    expect(output()).not.toContain('line 1\n');
+  });
+
+  it('shows exactly eight lines with no Show all', () => {
+    const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`);
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({ lines })}
+        woke
+        agent={null}
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(slotText(el, 'monitor-output')).toContain('line 1\n');
+    expect(el.querySelector('[data-slot="monitor-output-toggle"]')).toBeNull();
+  });
+
+  it('says there was no new output, never a lone label, when nothing was delivered or cut', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor({ lines: [], omitted: 0 })}
@@ -561,10 +591,79 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
+    expect(slotText(el, 'monitor-no-output')).toBe('No new output');
+    expect(el.querySelector('[data-slot="monitor-output"]')).toBeNull();
     expect(el.querySelector('button')).toBeNull();
   });
 
-  it('draws an ending that was only a stop as a stopped monitor, with no outcome line', () => {
+  it('shows the command, how long it had run and its timeout', () => {
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({
+          event: 'end',
+          end: { kind: 'exit', code: 0 },
+          command: 'gh run watch 42 --exit-status',
+          startedAt: '2026-11-24T10:00:00.000Z',
+          timeoutMs: 1_800_000,
+        })}
+        woke
+        agent={null}
+        at="2026-11-24T10:04:12.000Z"
+        memoryKey="monitor-test"
+      />,
+    );
+    const command = el.querySelector<HTMLElement>(
+      '[data-slot="monitor-event-command"]',
+    );
+    expect(command?.textContent).toContain('gh run watch 42 --exit-status');
+    expect(command?.title).toBe('gh run watch 42 --exit-status');
+    expect(slotText(el, 'monitor-event-meta')).toBe(
+      '2 lines · ran 4m 12s · timeout 30m',
+    );
+  });
+
+  it('says a batch has been running, rather than ran', () => {
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({ startedAt: '2026-11-24T10:00:00.000Z' })}
+        woke
+        agent={null}
+        at="2026-11-24T10:00:45.000Z"
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(slotText(el, 'monitor-event-meta')).toBe(
+      '2 lines · running for 45s',
+    );
+  });
+
+  it('draws a row written before the command was recorded without command, time or timeout', () => {
+    const el = render(
+      <MonitorEventCard
+        entry={monitor()}
+        woke
+        agent={null}
+        at="2026-11-24T10:00:45.000Z"
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(el.querySelector('[data-slot="monitor-event-command"]')).toBeNull();
+    expect(slotText(el, 'monitor-event-meta')).toBe('2 lines');
+  });
+
+  it('draws no details at all for an old row with no output', () => {
+    const el = render(
+      <MonitorEventCard
+        entry={monitor({ lines: [], event: 'end', end: { kind: 'stopped' } })}
+        woke={false}
+        agent={null}
+        memoryKey="monitor-test"
+      />,
+    );
+    expect(el.querySelector('[data-slot="monitor-event-details"]')).toBeNull();
+  });
+
+  it('draws an ending that was only a stop as a stopped monitor, its chip muted', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor({ event: 'end', end: { kind: 'stopped' } })}
@@ -574,10 +673,15 @@ describe('MonitorEventCard', () => {
       />,
     );
     expect(card(el, 'monitor-event').dataset.kind).toBe('monitor-stopped');
+    const chip = el.querySelector<HTMLElement>(
+      '[data-slot="monitor-event-status"]',
+    );
+    expect(chip?.textContent).toBe('stopped');
+    expect(chip?.className).toContain('text-muted-foreground');
     expect(el.querySelector('[data-slot="monitor-event-outcome"]')).toBeNull();
   });
 
-  it('draws no call status chip on a monitor event', () => {
+  it('marks a batch as running', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor()}
@@ -586,7 +690,7 @@ describe('MonitorEventCard', () => {
         memoryKey="monitor-test"
       />,
     );
-    expect(el.querySelector('[data-slot="monitor-event-status"]')).toBeNull();
+    expect(slotText(el, 'monitor-event-status')).toBe('running');
   });
 
   it('draws a batch delivered without a turn of its own as a report, never as a stop', () => {
@@ -611,14 +715,14 @@ describe('MonitorEventCard', () => {
       />,
     );
     expect(card(el, 'monitor-event').dataset.kind).toBe('monitor-ended');
-    const outcome = el.querySelector<HTMLElement>(
-      '[data-slot="monitor-event-outcome"]',
+    const chip = el.querySelector<HTMLElement>(
+      '[data-slot="monitor-event-status"]',
     );
-    expect(outcome?.textContent).toBe('exit code 1');
-    expect(outcome?.className).toContain('text-destructive');
+    expect(chip?.textContent).toBe('exit code 1');
+    expect(chip?.className).toContain('text-destructive');
   });
 
-  it('draws a monitor that exited cleanly as stopped, its exit code muted', () => {
+  it('draws a monitor that exited cleanly as finished, in green', () => {
     const el = render(
       <MonitorEventCard
         entry={monitor({ event: 'end', end: { kind: 'exit', code: 0 } })}
@@ -628,12 +732,11 @@ describe('MonitorEventCard', () => {
       />,
     );
     expect(card(el, 'monitor-event').dataset.kind).toBe('monitor-stopped');
-    const outcome = el.querySelector<HTMLElement>(
-      '[data-slot="monitor-event-outcome"]',
+    const chip = el.querySelector<HTMLElement>(
+      '[data-slot="monitor-event-status"]',
     );
-    expect(outcome?.textContent).toBe('exit code 0');
-    expect(outcome?.className).toContain('text-muted-foreground');
-    expect(outcome?.className).not.toContain('text-destructive');
+    expect(chip?.textContent).toBe('finished');
+    expect(chip?.className).toContain('text-success');
   });
 
   it('colours a bad ending red on a batch that woke the agent too', () => {
@@ -646,11 +749,51 @@ describe('MonitorEventCard', () => {
       />,
     );
     expect(card(el, 'monitor-event').dataset.kind).toBe('monitor-reported');
-    const outcome = el.querySelector<HTMLElement>(
-      '[data-slot="monitor-event-outcome"]',
-    );
-    expect(outcome?.textContent).toBe('exit code 2');
-    expect(outcome?.className).toContain('text-destructive');
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="monitor-event-status"]')
+        ?.className,
+    ).toContain('text-destructive');
+  });
+});
+
+describe('monitorMetaParts', () => {
+  const started = '2026-11-24T10:00:00.000Z';
+  it.each<[Partial<MonitorEntry>, string | null, string[]]>([
+    [{ startedAt: started }, null, ['2 lines']],
+    [{ startedAt: started }, 'not a time', ['2 lines']],
+    [
+      { startedAt: started },
+      '2026-11-24T09:59:57.000Z',
+      ['2 lines', 'running for 0s'],
+    ],
+    [
+      {
+        startedAt: started,
+        event: 'end',
+        end: { kind: 'interrupted' },
+        lines: [],
+      },
+      '2026-11-25T08:00:00.000Z',
+      [],
+    ],
+    [{ lines: [], omitted: 0, timeoutMs: 5_400_000 }, null, ['timeout 1h 30m']],
+  ])('says %j written at %s as %j', (over, at, parts) => {
+    expect(monitorMetaParts(monitor(over), at)).toEqual(parts);
+  });
+});
+
+describe('monitorStatusOf', () => {
+  it.each<[MonitorEnd | null, string, string]>([
+    [null, 'running', 'working'],
+    [{ kind: 'exit', code: 0 }, 'finished', 'done'],
+    [{ kind: 'exit', code: 3 }, 'exit code 3', 'blocked'],
+    [{ kind: 'signal', signal: 'SIGKILL' }, 'killed by SIGKILL', 'blocked'],
+    [{ kind: 'timeout' }, 'timed out', 'question'],
+    [{ kind: 'flooded' }, 'flooded', 'question'],
+    [{ kind: 'interrupted' }, 'interrupted', 'question'],
+    [{ kind: 'stopped' }, 'stopped', 'quiet'],
+  ])('says %j as "%s"', (end, text, attention) => {
+    expect(monitorStatusOf(end)).toEqual({ text, attention });
   });
 });
 

@@ -1,6 +1,8 @@
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import type {
   HostRowWire,
   MonitorEnd,
+  MonitorListing,
   MonitorNamed,
   MonitorRowPayload,
 } from '../chat.types';
@@ -63,8 +65,24 @@ export function describeMonitorEnd(end: MonitorEnd): string {
   }
 }
 
+/** What a row says of the monitor itself, beside the output it delivers. */
+export type MonitorFacts = Pick<
+  MonitorRowPayload,
+  'command' | 'startedAt' | 'timeoutMs'
+>;
+
+export function monitorFactsOf(
+  monitor: Pick<MonitorListing, 'command' | 'startedAt' | 'timeoutMs'>,
+): MonitorFacts {
+  return {
+    command: redactSecrets(monitor.command),
+    startedAt: monitor.startedAt,
+    timeoutMs: monitor.timeoutMs,
+  };
+}
+
 /** One monitor message, ready to be joined with others into a turn. */
-export interface MonitorMessage {
+export interface MonitorMessage extends MonitorFacts {
   id: string;
   description: string;
   batch: MonitorBatch;
@@ -178,6 +196,13 @@ export function monitorRowEntry(
     ...(message.end === undefined ? {} : { end: message.end }),
     lines: message.batch.lines,
     omitted: message.batch.omitted,
+    ...(message.command === undefined ? {} : { command: message.command }),
+    ...(message.startedAt === undefined
+      ? {}
+      : { startedAt: message.startedAt }),
+    ...(message.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: message.timeoutMs }),
   };
 }
 
@@ -299,6 +324,7 @@ export function monitorMessageOf(
   return {
     id: event.monitor.id,
     description: event.monitor.description,
+    ...monitorFactsOf(event.monitor),
     batch:
       event.type === 'batch'
         ? event.batch

@@ -23,6 +23,7 @@ import {
 } from '../utils/json-util';
 import { bareToolName } from '../utils/mcp-tool-name';
 import {
+  type MonitorFacts,
   type MonitorMessage,
   monitorRowEntry,
   monitorRowOf,
@@ -54,6 +55,8 @@ interface CutOff {
   /** The seq and time of its start row. */
   startSeq: number;
   startedAt: number;
+  /** What its start row says of it; none on a row written before rows carried it. */
+  facts: MonitorFacts;
 }
 
 /**
@@ -79,6 +82,18 @@ interface CutOff {
  * counter is per launch, so a new monitor never reuses one; `MonitorBroker`
  * reads the ids of any other run before its first monitor of the launch.
  */
+function factsOfEntry(entry: MonitorRowPayload): MonitorFacts {
+  return {
+    ...(typeof entry.command === 'string' ? { command: entry.command } : {}),
+    ...(typeof entry.startedAt === 'string'
+      ? { startedAt: entry.startedAt }
+      : {}),
+    ...(typeof entry.timeoutMs === 'number'
+      ? { timeoutMs: entry.timeoutMs }
+      : {}),
+  };
+}
+
 /** A monitor's command as its agent is shown it again: registered secrets masked. */
 function commandOf(value: unknown): string | null {
   const command = asString(value);
@@ -164,6 +179,7 @@ export class MonitorOutcomeSweep {
             conversationId: payload.conversationId,
             startSeq: row.seq,
             startedAt: row.createdAt.getTime(),
+            facts: factsOfEntry(entry),
           },
         });
       }
@@ -209,13 +225,21 @@ export class MonitorOutcomeSweep {
     }
     const isChat = run.teamId === null || run.teamId === undefined;
     const stopped = await this.stoppedOf(runId, cutOff);
-    const message = (monitor: CutOff): MonitorMessage => ({
-      id: monitor.id,
-      description: monitor.description,
-      batch: { lines: [], omitted: 0 },
-      end: INTERRUPTED,
-      stopped: stopped.get(monitor.id),
-    });
+    const message = (monitor: CutOff): MonitorMessage => {
+      const named = stopped.get(monitor.id);
+      const command = monitor.facts.command ?? named?.command ?? null;
+      return {
+        id: monitor.id,
+        description: monitor.description,
+        ...monitor.facts,
+        ...(command === null ? {} : { command }),
+        startedAt:
+          monitor.facts.startedAt ?? new Date(monitor.startedAt).toISOString(),
+        batch: { lines: [], omitted: 0 },
+        end: INTERRUPTED,
+        stopped: named,
+      };
+    };
     const live = run.archivedAt === null && run.status !== 'cancelled';
     const owed = readRestartContinuation(run.restartContinuation ?? null);
     const continued =

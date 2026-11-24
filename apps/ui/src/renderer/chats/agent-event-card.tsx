@@ -1,6 +1,8 @@
 import {
   Activity,
   Ban,
+  ChevronDown,
+  ChevronUp,
   CircleCheck,
   CircleMinus,
   CircleSlash,
@@ -26,11 +28,12 @@ import {
 } from '../components/thread-head';
 import type { ThreadLabelsView } from '../components/thread-labels';
 import { AnsiText } from '../components/ui/ansi-text';
-import { Button } from '../components/ui/button';
 import { OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
+import { formatDuration } from '../stats/stats-format';
 import { RevealCallContext } from './call-block';
 import { ClampedMarkdown } from './clamped-markdown';
+import { formatElapsed } from './live-row';
 import type { MonitorEnd, MonitorEntry } from './monitor-payload';
 import { useThreadFlag } from './thread-ui-memory';
 import type { TranscriptNodeMeta } from './transcript-payload';
@@ -505,6 +508,100 @@ function monitorKindOf(entry: MonitorEntry, woke: boolean): MemberEventKind {
     : 'monitor-stopped';
 }
 
+/** Where the monitor stood when this row was written, as its card's status chip says it. */
+export function monitorStatusOf(end: MonitorEnd | null): ThreadStatusView {
+  if (end === null) {
+    return { attention: 'working', text: 'running' };
+  }
+  switch (end.kind) {
+    case 'exit':
+      return end.code === 0
+        ? { attention: 'done', text: 'finished' }
+        : { attention: 'blocked', text: monitorEndText(end) };
+    case 'signal':
+      return { attention: 'blocked', text: monitorEndText(end) };
+    case 'timeout':
+    case 'flooded':
+    case 'interrupted':
+      return { attention: 'question', text: monitorEndText(end) };
+    case 'stopped':
+      return { attention: 'quiet', text: monitorEndText(end) };
+  }
+}
+
+/** Lines the output shows before Show all. */
+export const MONITOR_OUTPUT_PREVIEW_LINES = 8;
+
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`;
+}
+
+/** What the card says of the monitor under its head: lines, how long it had run, its timeout. */
+export function monitorMetaParts(
+  entry: MonitorEntry,
+  at: string | null,
+): string[] {
+  const parts: string[] = [];
+  const count = entry.lines.length + entry.omitted;
+  if (count > 0) {
+    parts.push(plural(count, 'line'));
+  }
+  const started =
+    entry.startedAt === null ? Number.NaN : Date.parse(entry.startedAt);
+  const written = at === null ? Number.NaN : Date.parse(at);
+  if (
+    !Number.isNaN(started) &&
+    !Number.isNaN(written) &&
+    entry.end?.kind !== 'interrupted'
+  ) {
+    const elapsed = formatElapsed(written - started);
+    parts.push(
+      entry.end === null ? `running for ${elapsed}` : `ran ${elapsed}`,
+    );
+  }
+  if (entry.timeoutMs !== null) {
+    parts.push(`timeout ${formatDuration(entry.timeoutMs)}`);
+  }
+  return parts;
+}
+
+function MonitorDetails({
+  entry,
+  at,
+}: {
+  entry: MonitorEntry;
+  at: string | null;
+}): React.JSX.Element | null {
+  const meta = monitorMetaParts(entry, at);
+  if (entry.command === null && meta.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      data-slot="monitor-event-details"
+      className="flex min-w-0 flex-col gap-0.5 text-[11px] leading-4 text-muted-foreground">
+      {entry.command === null ? null : (
+        <p
+          data-slot="monitor-event-command"
+          title={entry.command}
+          className="min-w-0 truncate font-mono text-foreground/80">
+          <span
+            aria-hidden="true"
+            className="text-muted-foreground select-none">
+            ${' '}
+          </span>
+          {entry.command}
+        </p>
+      )}
+      {meta.length === 0 ? null : (
+        <p data-slot="monitor-event-meta" className="tabular-nums">
+          {meta.join(' · ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function MonitorOutput({
   entry,
   memoryKey,
@@ -513,28 +610,58 @@ function MonitorOutput({
   memoryKey: string;
 }): React.JSX.Element {
   const [open, setOpen] = useThreadFlag(memoryKey, false);
+  if (entry.lines.length + entry.omitted === 0) {
+    return (
+      <p
+        data-slot="monitor-no-output"
+        className="text-xs text-muted-foreground italic">
+        No new output
+      </p>
+    );
+  }
+  const long = entry.lines.length > MONITOR_OUTPUT_PREVIEW_LINES;
+  const hidden =
+    long && !open ? entry.lines.length - MONITOR_OUTPUT_PREVIEW_LINES : 0;
   return (
-    <div className="flex w-full flex-col gap-1">
-      <Button
-        type="button"
-        variant="link"
-        className="h-auto self-start p-0 text-xs max-sm:min-h-11"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}>
-        Output
-      </Button>
-      {open ? (
-        <pre
-          data-slot="monitor-output"
-          className="max-h-60 w-full overflow-auto rounded-md bg-muted px-2 py-1.5 font-mono text-xs whitespace-pre-wrap text-foreground">
-          <AnsiText text={entry.lines.join('\n')} />
-          {entry.omitted > 0 ? (
-            <span className="block text-muted-foreground">
-              … {entry.omitted} more {entry.omitted === 1 ? 'line' : 'lines'}{' '}
-              not delivered
-            </span>
-          ) : null}
-        </pre>
+    <div
+      data-slot="monitor-output-block"
+      className="flex w-full min-w-0 flex-col overflow-hidden rounded-md border border-border/60 bg-muted/60">
+      <pre
+        data-slot="monitor-output"
+        className="max-h-80 w-full overflow-auto px-2.5 py-2 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground">
+        {hidden > 0 ? (
+          <span
+            data-slot="monitor-output-hidden"
+            className="block text-muted-foreground">
+            … {plural(hidden, 'earlier line')}
+          </span>
+        ) : null}
+        <AnsiText text={entry.lines.slice(hidden).join('\n')} />
+        {entry.omitted > 0 ? (
+          <span className="block text-muted-foreground">
+            … {entry.omitted} more {entry.omitted === 1 ? 'line' : 'lines'} not
+            delivered
+          </span>
+        ) : null}
+      </pre>
+      {long ? (
+        <button
+          type="button"
+          data-slot="monitor-output-toggle"
+          aria-expanded={open}
+          className="flex items-center gap-0.5 border-t border-border/60 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground max-sm:min-h-11"
+          onClick={() => setOpen((current) => !current)}>
+          {open ? (
+            <>
+              <ChevronUp aria-hidden="true" className="size-3" /> Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown aria-hidden="true" className="size-3" /> Show all{' '}
+              {plural(entry.lines.length, 'line')}
+            </>
+          )}
+        </button>
       ) : null}
     </div>
   );
@@ -542,12 +669,14 @@ function MonitorOutput({
 
 /**
  * A monitor's batch that started a turn of the agent's own, or its end: headed
- * by the monitor, the delivered output folded under it.
+ * by the monitor and where it stands, its command and how long it ran, the
+ * delivered output's last lines under it.
  */
 export function MonitorEventCard({
   entry,
   woke,
   agent,
+  at = null,
   memoryKey,
 }: {
   entry: MonitorEntry;
@@ -555,33 +684,23 @@ export function MonitorEventCard({
   woke: boolean;
   /** The agent the monitor reports to. */
   agent: string | null;
+  /** When the row was written. */
+  at?: string | null;
   memoryKey: string;
 }): React.JSX.Element {
-  const kind = monitorKindOf(entry, woke);
-  const end = entry.end;
   return (
     <AgentEventCard
-      kind={kind}
+      kind={monitorKindOf(entry, woke)}
       slot="monitor-event"
       identity={{
         ...bareThreadIdentity(entry.description),
         face: { kind: 'monitor' },
+        status: monitorStatusOf(entry.end),
       }}
       handle={entry.id}
       member={agent}
-      body={
-        entry.lines.length + entry.omitted > 0 ? (
-          <MonitorOutput entry={entry} memoryKey={memoryKey} />
-        ) : null
-      }
-      outcome={
-        end === null || (kind === 'monitor-stopped' && end.kind === 'stopped')
-          ? null
-          : {
-              text: monitorEndText(end),
-              tone: isBadEnd(end) ? 'destructive' : 'muted',
-            }
-      }
+      lead={<MonitorDetails entry={entry} at={at} />}
+      body={<MonitorOutput entry={entry} memoryKey={memoryKey} />}
       data={{ 'data-monitor': entry.id }}
     />
   );

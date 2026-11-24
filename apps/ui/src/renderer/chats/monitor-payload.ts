@@ -28,6 +28,10 @@ export interface MonitorEntry {
   lines: string[];
   /** Lines that were cut before delivery. */
   omitted: number;
+  /** Null on a row that does not carry it. */
+  command: string | null;
+  startedAt: string | null;
+  timeoutMs: number | null;
 }
 
 export interface MonitorNotice {
@@ -68,10 +72,17 @@ function readEntry(value: unknown): MonitorEntry | null {
   if (!value || typeof value !== 'object') {
     return null;
   }
-  const { id, description, event, end, lines, omitted } = value as Record<
-    string,
-    unknown
-  >;
+  const {
+    id,
+    description,
+    event,
+    end,
+    lines,
+    omitted,
+    command,
+    startedAt,
+    timeoutMs,
+  } = value as Record<string, unknown>;
   const readEnding = readEnd(end);
   if (
     typeof id !== 'string' ||
@@ -94,6 +105,17 @@ function readEntry(value: unknown): MonitorEntry | null {
     end: readEnding,
     lines: lines as string[],
     omitted,
+    command: typeof command === 'string' && command !== '' ? command : null,
+    startedAt:
+      typeof startedAt === 'string' && !Number.isNaN(Date.parse(startedAt))
+        ? startedAt
+        : null,
+    timeoutMs:
+      typeof timeoutMs === 'number' &&
+      Number.isFinite(timeoutMs) &&
+      timeoutMs > 0
+        ? timeoutMs
+        : null,
   };
 }
 

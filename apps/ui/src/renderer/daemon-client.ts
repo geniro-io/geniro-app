@@ -1490,7 +1490,7 @@ const JOIN_TIMEOUT_MS = 5_000;
 interface JoinWaiter {
   resolve: () => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 /**
@@ -1606,11 +1606,15 @@ export class DaemonClient {
       // Re-join every run room so live items resume after a reconnect. The
       // reconnect listeners wait for all of them: a replay fired while one
       // room is still joining would miss exactly the items that room owes it.
+      // On the desktop they wait for as long as the daemon is busy: no second
+      // reconnect follows a slow re-join there, so a timed-out wait would skip
+      // the replay for good.
       let joined: Promise<unknown> | null = null;
       if (this.joinedRunIds.size > 0) {
+        const timesOut = isRemoteRuntime();
         const waits = isReconnect
           ? [...this.joinedRunIds.keys()].map((runId) =>
-              this.waitForJoin(runId),
+              this.waitForJoin(runId, { timesOut }),
             )
           : [];
         for (const runId of this.joinedRunIds.keys()) {
@@ -2244,16 +2248,21 @@ export class DaemonClient {
     this.socket = null;
   }
 
-  private waitForJoin(runId: string): Promise<void> {
+  private waitForJoin(
+    runId: string,
+    { timesOut }: { timesOut: boolean } = { timesOut: true },
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const waiter: JoinWaiter = {
         resolve,
         reject,
-        timer: setTimeout(() => {
-          this.removeJoinWaiter(runId, waiter);
-          this.dropStaleTransport();
-          reject(new Error(`timed out joining run ${runId}`));
-        }, JOIN_TIMEOUT_MS),
+        timer: timesOut
+          ? setTimeout(() => {
+              this.removeJoinWaiter(runId, waiter);
+              this.dropStaleTransport();
+              reject(new Error(`timed out joining run ${runId}`));
+            }, JOIN_TIMEOUT_MS)
+          : undefined,
       };
       const waiters = this.joinWaiters.get(runId) ?? new Set<JoinWaiter>();
       waiters.add(waiter);
@@ -2269,6 +2278,11 @@ export class DaemonClient {
    * seconds in which every `join` goes into the void. REPORTED as `timed out
    * joining run` on a phone driving the app through a tunnel.
    *
+   * Remote only: on the desktop's loopback socket a daemon that dies closes the
+   * connection at once and one that hangs is caught by the ping timeout, so an
+   * unanswered join there means a busy daemon, and dropping the transport would
+   * only pile a reconnect and a replay of every room onto it.
+   *
    * Closing the ENGINE rather than calling `disconnect()` is the point: the
    * manager reads it as a lost transport and reconnects under its own backoff,
    * and the `connect` handler then re-joins every room in `joinedRunIds` and
@@ -2276,7 +2290,7 @@ export class DaemonClient {
    * which switches reconnection off.
    */
   private dropStaleTransport(): void {
-    if (this.socket?.connected) {
+    if (isRemoteRuntime() && this.socket?.connected) {
       this.socket.io.engine.close();
     }
   }

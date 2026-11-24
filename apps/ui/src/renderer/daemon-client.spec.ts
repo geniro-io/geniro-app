@@ -157,6 +157,53 @@ describe('DaemonClient', () => {
     expect(reconnects).toHaveLength(1);
   });
 
+  it('on the desktop, holds the replay until a slow re-join lands instead of giving up on it', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new DaemonClient(handle, {});
+      const reconnects: (Error | undefined)[] = [];
+      client.onReconnect((error) => reconnects.push(error));
+      client.connect();
+      const first = client.joinRun('r1');
+      fireConnect();
+      fireJoined('r1');
+      await first;
+
+      fireConnect();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reconnects).toHaveLength(0);
+      expect(mocks.engineClose).not.toHaveBeenCalled();
+
+      fireJoined('r1');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reconnects).toEqual([undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('on a paired device, reports a re-join nobody answered and drops the transport', async () => {
+    remote.paired = true;
+    vi.useFakeTimers();
+    try {
+      const client = new DaemonClient(handle, {});
+      const reconnects: (Error | undefined)[] = [];
+      client.onReconnect((error) => reconnects.push(error));
+      client.connect();
+      const first = client.joinRun('r1');
+      fireConnect();
+      fireJoined('r1');
+      await first;
+
+      fireConnect();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reconnects).toEqual([new Error('timed out joining run r1')]);
+      expect(mocks.engineClose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stops re-joining a room that was left', async () => {
     const client = new DaemonClient(handle, {});
     client.connect();
@@ -273,6 +320,7 @@ describe('DaemonClient', () => {
   // the void until Socket.IO's own ping timeout. REPORTED as `timed out
   // joining run` through a tunnel.
   it('drops a transport that leaves a join unanswered, so the room is restored', async () => {
+    remote.paired = true;
     vi.useFakeTimers();
     try {
       const client = new DaemonClient(handle, {});
@@ -299,7 +347,29 @@ describe('DaemonClient', () => {
     }
   });
 
+  it('keeps the desktop socket when a join is slow, since loopback only lags while the daemon is busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      const client = new DaemonClient(handle, { onClose });
+      client.connect();
+      fireConnect();
+
+      const settled = client.joinRun('r1').catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(await settled).toEqual(new Error('timed out joining run r1'));
+      expect(mocks.engineClose).not.toHaveBeenCalled();
+      expect(mocks.close).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(mocks.socket.connected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves a transport that is already down to its own reconnection', async () => {
+    remote.paired = true;
     vi.useFakeTimers();
     try {
       const client = new DaemonClient(handle, {});

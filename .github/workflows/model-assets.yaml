@@ -2,8 +2,9 @@ name: Model assets
 
 # Publishes the search model's files to the pre-release tag the manifest names;
 # the app downloads the model from that tag. Runs by itself when a push to main
-# changes the manifest or this file, and by hand from main. A pre-release that
-# already holds every file of the manifest, uploaded whole, is left as it is.
+# changes the manifest or this file, and by hand from main. Only files missing
+# or not fully uploaded are published; a file already uploaded whole is never
+# replaced, since installed apps pin its hash, so a different one fails the run.
 on:
   push:
     branches:
@@ -37,47 +38,78 @@ jobs:
           MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
         run: |
           set -euo pipefail
-          tag="$(jq -r '.tag' "$MANIFEST")"
+          tag="$(jq -er '.tag' "$MANIFEST")"
+          jq -er '.files | if type == "array" and length > 0 then .[] | [.name, .source, (.bytes | tostring), .sha256] | @tsv else error("the manifest lists no files") end' "$MANIFEST" > "$RUNNER_TEMP/files.tsv"
+          jq -er '.files[] | "\(.sha256)  \(.name)"' "$MANIFEST" > "$RUNNER_TEMP/SHA256SUMS.txt"
+          sums_digest="sha256:$(shasum -a 256 "$RUNNER_TEMP/SHA256SUMS.txt" | cut -d' ' -f1)"
+          plan="$RUNNER_TEMP/upload.tsv"
+          : > "$plan"
           release="$RUNNER_TEMP/release.json"
           if ! gh api "repos/$REPO_SLUG/releases/tags/$tag" > "$release" 2> "$RUNNER_TEMP/release.err"; then
             if grep -q 'HTTP 404' "$RUNNER_TEMP/release.err"; then
-              echo "No release for $tag yet: publishing it."
+              cut -f1 "$RUNNER_TEMP/files.tsv" > "$plan"
+              echo "SHA256SUMS.txt" >> "$plan"
+              echo "No release for $tag yet: creating it with every file of the manifest."
               echo "publish=true" >> "$GITHUB_OUTPUT"
+              echo "create=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             cat "$RUNNER_TEMP/release.err" >&2
             exit 1
           fi
           if [[ "$(jq -r '.prerelease' "$release")" != "true" ]]; then
-            echo "error: the release $tag exists but is not a pre-release; the model must never be a regular release" >&2
+            echo "::error::The release $tag exists but is not a pre-release; the model must never be a regular release."
+            exit 1
+          fi
+          extra="$(jq -r --slurpfile manifest "$MANIFEST" '(($manifest[0].files | map(.name)) + ["SHA256SUMS.txt"]) as $known | .assets[].name | select(. as $name | $known | index($name) | not)' "$release")"
+          if [[ -n "$extra" ]]; then
+            echo "::error::The pre-release $tag holds files the manifest does not list: $(echo "$extra" | paste -sd, -). Published files are never removed, because installed versions of the app may still download them. Give the manifest a new tag."
             exit 1
           fi
           asset_of() {
-            jq -r --arg name "$1" '[.assets[] | select(.name == $name)][0] // {} | [(.state // "absent"), ((.size // 0) | tostring), (.digest // "")] | @tsv' "$release"
+            jq -r --arg name "$1" '[.assets[] | select(.name == $name)][0] // {} | [(.state // "absent"), ((.size // 0) | tostring), ((.id // "") | tostring), (.digest // "")] | @tsv' "$release"
           }
-          stale=()
-          while IFS=$'\t' read -r name bytes sha256; do
-            IFS=$'\t' read -r state size digest < <(asset_of "$name")
-            if [[ "$state" != "uploaded" ]]; then
-              stale+=("$name is $state")
+          conflicts=()
+          reasons=()
+          while IFS=$'\t' read -r name _ bytes sha256; do
+            asset="$(asset_of "$name")"
+            IFS=$'\t' read -r state size id digest <<< "$asset"
+            if [[ "$state" == "absent" ]]; then
+              printf '%s\t\n' "$name" >> "$plan"
+              reasons+=("$name is missing")
+            elif [[ "$state" != "uploaded" ]]; then
+              printf '%s\t%s\n' "$name" "$id" >> "$plan"
+              reasons+=("$name is not fully uploaded ($state, $size bytes)")
             elif [[ "$size" != "$bytes" ]]; then
-              stale+=("$name is $size bytes, the manifest says $bytes")
+              conflicts+=("$name is $size bytes, the manifest says $bytes")
             elif [[ -n "$digest" && "$digest" != "sha256:$sha256" ]]; then
-              stale+=("$name has $digest, the manifest says sha256:$sha256")
+              conflicts+=("$name has $digest, the manifest says sha256:$sha256")
             fi
-          done < <(jq -r '.files[] | [.name, (.bytes | tostring), .sha256] | @tsv' "$MANIFEST")
-          IFS=$'\t' read -r state size _ < <(asset_of SHA256SUMS.txt)
-          if [[ "$state" != "uploaded" || "$size" == "0" ]]; then
-            stale+=("SHA256SUMS.txt is $state")
+          done < "$RUNNER_TEMP/files.tsv"
+          if (( ${#conflicts[@]} > 0 )); then
+            echo "::error::The pre-release $tag already holds files that differ from the manifest. A published file is never replaced, because installed versions of the app check it against the hash they pin. Give the manifest a new tag; a changed source under the same revision keeps the old one."
+            printf '  %s\n' "${conflicts[@]}" >&2
+            exit 1
           fi
-          if (( ${#stale[@]} == 0 )); then
+          asset="$(asset_of SHA256SUMS.txt)"
+          IFS=$'\t' read -r state _ id digest <<< "$asset"
+          if [[ "$state" == "absent" ]]; then
+            printf '%s\t\n' SHA256SUMS.txt >> "$plan"
+            reasons+=("SHA256SUMS.txt is missing")
+          elif [[ "$state" != "uploaded" || "$digest" != "$sums_digest" ]]; then
+            printf '%s\t%s\n' SHA256SUMS.txt "$id" >> "$plan"
+            reasons+=("SHA256SUMS.txt does not list the manifest's files ($state, ${digest:-no digest})")
+          fi
+          if (( ${#reasons[@]} == 0 )); then
             echo "The pre-release $tag already holds every file of the manifest: nothing to publish."
             echo "Nothing to publish: \`$tag\` already holds every file of the manifest." >> "$GITHUB_STEP_SUMMARY"
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf 'Publishing %s: %s\n' "$tag" "${stale[@]}"
+          echo "Publishing to $tag:"
+          printf '  %s\n' "${reasons[@]}"
           echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "create=false" >> "$GITHUB_OUTPUT"
 
       - name: Download the files and check them against the manifest
         if: steps.published.outputs.publish == 'true'
@@ -85,11 +117,15 @@ jobs:
           MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
         run: |
           set -euo pipefail
-          repo="$(jq -r '.repo' "$MANIFEST")"
-          revision="$(jq -r '.revision' "$MANIFEST")"
-          jq -r '.files[] | [.name, .source, (.bytes | tostring), .sha256] | @tsv' "$MANIFEST" > "$RUNNER_TEMP/files.tsv"
+          repo="$(jq -er '.repo' "$MANIFEST")"
+          revision="$(jq -er '.revision' "$MANIFEST")"
+          cut -f1 "$RUNNER_TEMP/upload.tsv" > "$RUNNER_TEMP/upload.names"
           mkdir dist
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" dist/SHA256SUMS.txt
           while IFS=$'\t' read -r name source bytes sha256; do
+            if ! grep -qxF -- "$name" "$RUNNER_TEMP/upload.names"; then
+              continue
+            fi
             curl -fL --retry 3 -o "dist/$name" "https://huggingface.co/$repo/resolve/$revision/$source"
             size="$(stat -c %s "dist/$name")"
             if [[ "$size" != "$bytes" ]]; then
@@ -102,8 +138,6 @@ jobs:
               exit 1
             fi
           done < "$RUNNER_TEMP/files.tsv"
-          mapfile -t names < <(cut -f1 "$RUNNER_TEMP/files.tsv")
-          (cd dist && shasum -a 256 "${names[@]}" > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
       - name: Publish the pre-release
@@ -112,24 +146,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_SLUG: ${{ github.repository }}
           MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
+          CREATE: ${{ steps.published.outputs.create }}
         run: |
           set -euo pipefail
-          tag="$(jq -r '.tag' "$MANIFEST")"
-          revision="$(jq -r '.revision' "$MANIFEST")"
+          tag="$(jq -er '.tag' "$MANIFEST")"
+          revision="$(jq -er '.revision' "$MANIFEST")"
           title="Search model: EmbeddingGemma 2 (${revision:0:7})"
-          mapfile -t names < <(jq -r '.files[].name' "$MANIFEST")
+          if [[ "$CREATE" != "true" ]]; then
+            while IFS=$'\t' read -r -u 3 name id; do
+              if [[ -n "$id" ]]; then
+                echo "Deleting the earlier $name (asset $id) before uploading it again."
+                gh api -X DELETE "repos/$REPO_SLUG/releases/assets/$id"
+              fi
+              gh release upload "$tag" "dist/$name" -R "$REPO_SLUG"
+            done 3< "$RUNNER_TEMP/upload.tsv"
+            exit 0
+          fi
           assets=()
-          for name in "${names[@]}"; do
+          while IFS=$'\t' read -r name _; do
             assets+=("dist/$name")
-          done
-          assets+=("dist/SHA256SUMS.txt")
+          done < "$RUNNER_TEMP/upload.tsv"
           notes="EmbeddingGemma 2 (text part) for Geniro's \"Search by meaning\", ONNX export by onnx-community from google/embeddinggemma-2 at revision ${revision}.
           Model card: https://huggingface.co/google/embeddinggemma-2
           Licence: Apache-2.0
           Deployments must adhere to the Gemma Prohibited Use Policy: https://ai.google.dev/gemma/prohibited_use_policy
           The app checks each file against SHA256SUMS.txt before it uses it."
-          if gh release view "$tag" -R "$REPO_SLUG" > /dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" -R "$REPO_SLUG" --clobber
-          else
-            gh release create "$tag" "${assets[@]}" -R "$REPO_SLUG" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
-          fi
+          gh release create "$tag" "${assets[@]}" -R "$REPO_SLUG" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"

@@ -187,6 +187,12 @@ In-app terminal tabs. Or reopen a conversation in your own terminal with its mod
 After an update, Geniro opens a page over nearly the whole window with the versions you moved between and every change since the one you last saw, as one list, each new feature with a short description. The full changelog, with search and a jump to any version, is in Settings → What's new, and works offline.
 
 </td>
+<td valign="top">
+
+<b>🔍 Review changes</b><br>
+Press a thread's changes chip to read everything it changed as a GitHub-style diff with line numbers and highlighting. Tick files Viewed, comment on a line, a range or a whole file, and send the comments to the agent as one review; it answers under each one. Comments stay in Geniro, never in git.
+
+</td>
 </tr>
 </table>
 

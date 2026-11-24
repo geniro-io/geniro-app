@@ -2354,6 +2354,10 @@ export const FreshSessionBaseSchema = z
         "Geniro's always-on instruction block for the member, approximate; null for a member no longer in the team",
       ),
     teamBlockShare: z.number().nullable(),
+    teamBlockUnavailableReason: z
+      .string()
+      .nullable()
+      .describe('Why the team block was not measured; null when it was'),
     repoFiles: z
       .object({
         measuredAt: z.string(),
@@ -2373,6 +2377,10 @@ export const FreshSessionBaseSchema = z
         'The base less the team block and the repository files; it holds the repository files too when they were not measured, is null when the team block was not, and is never clamped, so it can be negative',
       ),
     cliRemainderShare: z.number().nullable(),
+    cliRemainderUnavailableReason: z
+      .string()
+      .nullable()
+      .describe("Why the CLI's remainder was not measured; null when it was"),
     mcpServers: z
       .object({ harvestedAt: z.string(), names: z.array(z.string()) })
       .nullable()

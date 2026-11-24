@@ -106,12 +106,14 @@ function MemberBase({
       label: 'Geniro instructions',
       tokens: entry.teamBlockTokens,
       share: entry.teamBlockShare,
+      unavailableReason: entry.teamBlockUnavailableReason,
     },
     {
       key: 'repo',
       label: 'Repository files',
       tokens: entry.repoFiles?.approxTokens ?? null,
       share: entry.repoFiles?.share ?? null,
+      unavailableReason: null,
     },
     {
       key: 'cli',
@@ -121,6 +123,7 @@ function MemberBase({
           : 'Added by the CLI',
       tokens: entry.cliRemainderTokens,
       share: entry.cliRemainderShare,
+      unavailableReason: entry.cliRemainderUnavailableReason,
     },
   ];
   return (
@@ -181,6 +184,15 @@ function MemberBase({
             : ''}
           .
         </li>
+        {parts.flatMap((part) =>
+          part.tokens === null && part.unavailableReason !== null
+            ? [
+                <li key={part.key} data-slot="fresh-session-part-unmeasured">
+                  {part.label}: not measured — {part.unavailableReason}.
+                </li>,
+              ]
+            : [],
+        )}
         <li>
           {entry.repoFiles === null
             ? `Repository files: not measured — ${entry.repoFilesUnavailableReason ?? 'unknown'}.`

@@ -45,6 +45,12 @@ const NOT_MEASURED_REASON: Record<
 
 const NO_START_REASON = 'no fresh session of this member in the runs read';
 
+const LEFT_TEAM_REASON =
+  'the member is no longer in the team, so its instruction block cannot be composed';
+
+const NO_BLOCK_REASON =
+  "it is the base less Geniro's instruction block, which was not measured";
+
 /**
  * What a member's fresh CLI session starts with: the context its sessions
  * opened at in the team's newest runs, beside the parts of it that can be
@@ -196,6 +202,8 @@ export class FreshSessionBaseService {
       lastStartAt: fold.lastStartAt.toISOString(),
       teamBlockTokens,
       teamBlockShare: shareOf(teamBlockTokens, base),
+      teamBlockUnavailableReason:
+        teamBlockTokens === null ? LEFT_TEAM_REASON : null,
       repoFiles:
         repo.kind === 'measured'
           ? {
@@ -210,6 +218,8 @@ export class FreshSessionBaseService {
       repoFilesUnavailableReason: repo.kind === 'measured' ? null : repo.reason,
       cliRemainderTokens: remainder,
       cliRemainderShare: remainder === null ? null : shareOf(remainder, base),
+      cliRemainderUnavailableReason:
+        remainder === null ? NO_BLOCK_REASON : null,
       mcpServers:
         mcp === null
           ? null
@@ -261,10 +271,13 @@ function unstartedEntry(
     lastStartAt: null,
     teamBlockTokens,
     teamBlockShare: null,
+    teamBlockUnavailableReason:
+      teamBlockTokens === null ? LEFT_TEAM_REASON : null,
     repoFiles: null,
     repoFilesUnavailableReason: NO_START_REASON,
     cliRemainderTokens: null,
     cliRemainderShare: null,
+    cliRemainderUnavailableReason: NO_START_REASON,
     mcpServers: null,
     mcpServersUnavailableReason: NO_START_REASON,
     notMeasured: notMeasured(),

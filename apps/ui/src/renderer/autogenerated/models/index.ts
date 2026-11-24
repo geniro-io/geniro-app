@@ -6022,6 +6022,12 @@ export interface FreshSessionBase {
     teamBlockShare: number | null;
     /**
      * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    teamBlockUnavailableReason: string | null;
+    /**
+     * 
      * @type {FreshSessionBaseRepoFiles}
      * @memberof FreshSessionBase
      */
@@ -6044,6 +6050,12 @@ export interface FreshSessionBase {
      * @memberof FreshSessionBase
      */
     cliRemainderShare: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    cliRemainderUnavailableReason: string | null;
     /**
      * 
      * @type {FreshSessionBaseMcpServers}

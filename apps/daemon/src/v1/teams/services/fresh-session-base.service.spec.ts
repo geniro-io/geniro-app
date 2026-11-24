@@ -165,6 +165,8 @@ describe('FreshSessionBaseService', () => {
         names: ['codegraph', 'blender'],
       },
       mcpServersUnavailableReason: null,
+      teamBlockUnavailableReason: null,
+      cliRemainderUnavailableReason: null,
     });
     expect(manager!.notMeasured.map((part) => part.part)).toEqual([
       'plugins',
@@ -203,7 +205,10 @@ describe('FreshSessionBaseService', () => {
       starts: 0,
       baseTokens: null,
       cliRemainderTokens: null,
+      cliRemainderUnavailableReason:
+        'no fresh session of this member in the runs read',
       teamBlockTokens: 12_000,
+      teamBlockUnavailableReason: null,
       project: null,
     });
   });
@@ -252,7 +257,7 @@ describe('FreshSessionBaseService', () => {
     expect(harvested).toEqual([['claude', repo, '/profiles/third']]);
   });
 
-  it('measures no CLI remainder for a member no longer in the team, rather than counting its block as the CLI’s', async () => {
+  it('says why neither its block nor the CLI remainder is measured for a member no longer in the team', async () => {
     const answer = await serviceOver([
       start('r-geniro', { memberId: 'retired' }),
     ]).measure({ slug: 'dev-team', team: TEAM, settings: {} });
@@ -262,8 +267,12 @@ describe('FreshSessionBaseService', () => {
     ).toMatchObject({
       baseTokens: 144_982,
       teamBlockTokens: null,
+      teamBlockUnavailableReason:
+        'the member is no longer in the team, so its instruction block cannot be composed',
       cliRemainderTokens: null,
       cliRemainderShare: null,
+      cliRemainderUnavailableReason:
+        "it is the base less Geniro's instruction block, which was not measured",
     });
   });
 });

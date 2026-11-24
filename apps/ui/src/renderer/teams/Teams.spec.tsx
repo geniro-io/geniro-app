@@ -2132,6 +2132,38 @@ describe('Teams — a member’s always-on instruction size', () => {
           notMeasured: [],
         },
         {
+          memberId: 'retired',
+          poolMember: null,
+          agent: 'claude',
+          model: 'sonnet',
+          project: { projectId: 'p1', name: 'Geniro' },
+          starts: 1,
+          baseTokens: 150_000,
+          minTokens: 150_000,
+          maxTokens: 150_000,
+          medianRequests: 1,
+          firstStartAt: '2026-11-23T10:00:00.000Z',
+          lastStartAt: '2026-11-23T10:00:00.000Z',
+          teamBlockTokens: null,
+          teamBlockShare: null,
+          teamBlockUnavailableReason: 'BLOCK-REASON',
+          repoFiles: {
+            measuredAt: '2026-11-24T00:00:00.000Z',
+            root: '/repos/geniro-app',
+            chars: 400,
+            approxTokens: 1_500,
+            share: 0.01,
+            files: [],
+          },
+          repoFilesUnavailableReason: null,
+          cliRemainderTokens: null,
+          cliRemainderShare: null,
+          cliRemainderUnavailableReason: 'REMAINDER-REASON',
+          mcpServers: null,
+          mcpServersUnavailableReason: 'MCP-REASON',
+          notMeasured: [],
+        },
+        {
           memberId: 'lead',
           poolMember: null,
           agent: 'claude',
@@ -2179,7 +2211,7 @@ describe('Teams — a member’s always-on instruction size', () => {
     expect(
       block?.querySelector('[data-slot="fresh-session-mcp"]')?.textContent,
     ).toContain('codegraph, blender');
-    const [primary, pooled] = [
+    const [primary, pooled, retired] = [
       ...(block?.querySelectorAll('[data-slot="fresh-session-base"]') ?? []),
     ];
     expect(
@@ -2202,6 +2234,19 @@ describe('Teams — a member’s always-on instruction size', () => {
     expect(pooled?.textContent).toContain(
       'Added by the CLI, repository files included',
     );
+    expect(
+      [
+        ...(retired?.querySelectorAll(
+          '[data-slot="fresh-session-part-unmeasured"]',
+        ) ?? []),
+      ].map((row) => row.textContent),
+    ).toEqual([
+      'Geniro instructions: not measured — BLOCK-REASON.',
+      'Added by the CLI: not measured — REMAINDER-REASON.',
+    ]);
+    expect(
+      primary?.querySelector('[data-slot="fresh-session-part-unmeasured"]'),
+    ).toBeNull();
     expect(
       block?.querySelector('[data-slot="fresh-session-unstarted"]')
         ?.textContent,

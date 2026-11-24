@@ -337,8 +337,13 @@ describe('ChangesReviewDialog — the screen', () => {
     await mount(screen());
 
     expect(text()).toContain('Review changes');
-    expect(text().match(/src\/a\.ts/g)!.length).toBeGreaterThanOrEqual(2);
-    expect(text().match(/src\/b\.ts/g)!.length).toBeGreaterThanOrEqual(2);
+    const tree = document.querySelector(
+      'nav[aria-label="Changed files"]',
+    )!.textContent;
+    expect(tree).toContain('a.ts');
+    expect(tree).toContain('b.ts');
+    expect(text().match(/src\/a\.ts/g)!.length).toBeGreaterThanOrEqual(1);
+    expect(text().match(/src\/b\.ts/g)!.length).toBeGreaterThanOrEqual(1);
     expect(text()).toContain('+2');
     expect(text()).toContain('−1');
   });
@@ -855,5 +860,90 @@ describe('ChangesReviewDialog — the thread’s other work folders', () => {
         startLine: 21,
       }),
     );
+  });
+});
+
+describe('ChangesReviewDialog — comments outside the diff', () => {
+  const linesFrom = (from: number, to: number, text: (n: number) => string) =>
+    Array.from({ length: to - from + 1 }, (_, i) => text(from + i));
+
+  it('places a comment on a revealed line beside it, not as Outdated', async () => {
+    const readFileLines = vi.fn(
+      async (request: ReadFileLinesRequest): Promise<FileLines> => ({
+        lines: linesFrom(
+          request.from,
+          request.to,
+          (n) => 'const line' + n + ' = 0;',
+        ),
+        total: 40,
+        unavailableReason: null,
+      }),
+    );
+    const ctl = review({
+      comments: [
+        sent({
+          startLine: 7,
+          endLine: 7,
+          quote: 'const line7 = 0;',
+          body: 'On a revealed line',
+        }),
+      ],
+    });
+    await mount(screen({ changes: [FILE_A], review: ctl, readFileLines }));
+
+    await press(must('Show 19 more lines above'));
+
+    expect(text()).toContain('On a revealed line');
+    expect(text()).not.toContain('Outdated');
+  });
+
+  it('does not call a comment Outdated when its lines outside the diff still read the same on disk', async () => {
+    const readFileLines = vi.fn(
+      async (request: ReadFileLinesRequest): Promise<FileLines> => ({
+        lines: linesFrom(request.from, request.to, () => 'const kept = 1;'),
+        total: 40,
+        unavailableReason: null,
+      }),
+    );
+    const ctl = review({
+      comments: [
+        sent({
+          startLine: 30,
+          endLine: 30,
+          quote: 'const kept = 1;',
+          body: 'Far below',
+        }),
+      ],
+    });
+    await mount(screen({ changes: [FILE_A], review: ctl, readFileLines }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(readFileLines).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'src/a.ts', from: 30, to: 30 }),
+    );
+    expect(text()).toContain('Far below');
+    expect(text()).not.toContain('Outdated');
+  });
+
+  it('lists a draft on a file that is no longer changed, where it can still be deleted', async () => {
+    const ctl = review({
+      comments: [comment({ path: 'src/gone.ts', body: 'On a vanished file' })],
+    });
+    await mount(screen({ changes: [FILE_A], review: ctl }));
+
+    expect(text()).toContain('No longer changed');
+    expect(text()).toContain('On a vanished file');
+    await press(must('Delete'));
+    expect(ctl.remove).toHaveBeenCalledWith('c1');
+  });
+});
+
+describe('ChangesReviewDialog — opened from the transcript', () => {
+  it('says a comment it was opened at no longer exists', async () => {
+    await mount(screen({ changes: [FILE_A], focusComment: 4 }));
+
+    expect(text()).toContain('Comment #4 was deleted.');
   });
 });

@@ -85,6 +85,7 @@ export function useReviewComments({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState<ReviewSending>('idle');
   const pending = useRef<PendingSend | null>(null);
+  const refused = useRef(false);
 
   useEffect(() => {
     if (client === null || runId === null) {
@@ -104,6 +105,7 @@ export function useReviewComments({
 
   useEffect(() => {
     pending.current = null;
+    refused.current = false;
     setSending('idle');
     setError(null);
   }, [runId]);
@@ -183,10 +185,12 @@ export function useReviewComments({
           ? api.sendChatReview({ runId, sendReviewDto })
           : teamApi.sendTeamReview({ runId, sendReviewDto }));
         pending.current = null;
+        refused.current = false;
         setSending('idle');
         setError(null);
       } catch (err) {
         if (isRunBusyError(err)) {
+          refused.current = true;
           pending.current = request;
           setSending('waiting');
           return;
@@ -216,6 +220,7 @@ export function useReviewComments({
 
   const cancelWaiting = useLatestCallback((): void => {
     pending.current = null;
+    refused.current = false;
     setSending('idle');
   }, []);
 
@@ -230,7 +235,7 @@ export function useReviewComments({
           void deliver(pending.current);
         }
       },
-      isTeam ? ACTION_RETRY_MS : 0,
+      isTeam || refused.current ? ACTION_RETRY_MS : 0,
     );
     return () => clearTimeout(timer);
   }, [sending, agentWorking, isTeam, deliver]);

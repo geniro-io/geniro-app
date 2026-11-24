@@ -5450,6 +5450,7 @@ export const REVIEW_COMMENT_MAX_CHARS = 4000;
 export const REVIEW_MAX_COMMENTS = 50;
 export const REVIEW_QUOTE_LINES = 20;
 export const REVIEW_NOTE_MAX_CHARS = 4000;
+export const REVIEW_PLACE_MAX_CHARS = 4096;
 
 export const ReviewCommentSideSchema = z
   .enum(['new', 'old', 'file'])
@@ -5519,13 +5520,22 @@ const ReviewCommentTextSchema = z
     'holds a control or format character',
   );
 
+const ReviewCommentPlaceSchema = z
+  .string()
+  .min(1)
+  .max(REVIEW_PLACE_MAX_CHARS)
+  .refine(
+    (place) => !hasHiddenText(place, false),
+    'holds a line break, control or format character',
+  );
+
 export const ReviewCommentCreateSchema = z.object({
-  folder: z.string().min(1),
-  path: z.string().min(1),
+  folder: ReviewCommentPlaceSchema,
+  path: ReviewCommentPlaceSchema,
   side: ReviewCommentSideSchema,
   startLine: z.number().int().min(1).nullable().optional(),
   endLine: z.number().int().min(1).nullable().optional(),
-  quote: ReviewCommentTextSchema,
+  quote: z.string().max(REVIEW_COMMENT_MAX_CHARS),
   body: ReviewCommentTextSchema.pipe(z.string().trim().min(1)),
 });
 export type ReviewCommentCreate = z.infer<typeof ReviewCommentCreateSchema>;

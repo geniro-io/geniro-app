@@ -102,4 +102,43 @@ describe('answerReviewCommentResultText', () => {
       await db.orm.close(true);
     }
   });
+
+  it('lists as unanswered only sent comments the agent never answered, not one the user reopened', async () => {
+    const db = await reviewCommentsDb();
+    try {
+      await db.seedRun('run-1');
+      for (let line = 1; line <= 3; line += 1) {
+        await db.service.add('run-1', {
+          ...DRAFT,
+          startLine: line,
+          endLine: line,
+        });
+      }
+      await db.service.send(
+        'run-1',
+        { clientMessageId: 'm-1', note: null },
+        async () => ({ seq: 9 }) as ItemWire,
+      );
+      await db.service.answer(
+        'run-1',
+        { memberId: null },
+        { comment: 1, reply: 'Done.', status: 'fixed' },
+      );
+      const listed = await db.service.list('run-1');
+      await db.service.setStatus('run-1', listed![0]!.id, 'sent');
+
+      const outcome = await db.service.answer(
+        'run-1',
+        { memberId: null },
+        { comment: 2, reply: 'Done too.', status: 'fixed' },
+      );
+
+      const { text, isError } = answerReviewCommentResultText(outcome);
+      expect(isError).toBe(false);
+      expect(text).toContain('Answered #2 as fixed');
+      expect(text).toContain('Still unanswered: #3.');
+    } finally {
+      await db.orm.close(true);
+    }
+  });
 });

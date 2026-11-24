@@ -51,7 +51,7 @@ export function answerReviewCommentResultText(outcome: ReviewCommentsOutcome): {
     };
   }
   const open = outcome.comments.filter(
-    (comment) => comment.status === 'sent' && comment.agentStatus === null,
+    (comment) => comment.status === 'sent' && comment.agentRepliedAt === null,
   );
   const left =
     open.length === 0

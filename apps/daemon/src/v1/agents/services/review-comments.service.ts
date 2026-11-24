@@ -23,6 +23,7 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
+import { withoutHiddenText } from '../utils/hidden-text';
 import { itemToWire } from '../utils/item-wire';
 import { KeyedChain } from '../utils/keyed-chain';
 import { composeReviewText, snapshotOf } from '../utils/review-message';
@@ -97,7 +98,7 @@ export class ReviewCommentsService implements OnModuleInit {
           side: draft.side,
           startLine,
           endLine: lineless ? null : (draft.endLine ?? startLine),
-          quote: lineless ? '' : draft.quote,
+          quote: lineless ? '' : withoutHiddenText(draft.quote, true),
           body,
           status: 'draft',
         },

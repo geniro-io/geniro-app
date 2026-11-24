@@ -1,11 +1,19 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import { Fragment, type ReactNode, useMemo, useState } from 'react';
+import {
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
-import type {
-  FileLines,
-  GitChange,
-  GitChangeStatus,
-  ReadFileLinesRequest,
+import {
+  FILE_LINES_MAX,
+  type FileLines,
+  type GitChange,
+  type GitChangeStatus,
+  type ReadFileLinesRequest,
 } from '../../shared/contracts';
 import { CopyButton } from '../components/copy-button';
 import { DiffFigures } from '../components/diff-figures';
@@ -135,6 +143,39 @@ function highlightedHunk(hunk: DiffHunk, language: string | null): ReactNode[] {
   return code;
 }
 
+/** GitHub's five squares: how much of the change adds and how much removes. */
+function ChangeBar({
+  added,
+  removed,
+}: {
+  added: number | null;
+  removed: number | null;
+}): React.JSX.Element | null {
+  const total = (added ?? 0) + (removed ?? 0);
+  if (added === null || removed === null || total === 0) {
+    return null;
+  }
+  const green = Math.round((added / total) * 5);
+  const red = Math.min(5 - green, Math.round((removed / total) * 5));
+  return (
+    <span aria-hidden className="flex gap-px">
+      {Array.from({ length: 5 }, (_, index) => (
+        <span
+          key={index}
+          className={cn(
+            'size-2 rounded-[1px]',
+            index < green
+              ? 'bg-success'
+              : index < green + red
+                ? 'bg-destructive'
+                : 'bg-muted-foreground/25',
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
 function newEnd(hunk: DiffHunk): number {
   return hunk.newStart + Math.max(hunk.newLines, 1) - 1;
 }
@@ -212,6 +253,7 @@ export function ReviewFileCard({
         <CopyButton text={change.path} label="Copy path" className="size-6" />
         <span className={cn('text-xs', meta.className)}>{meta.label}</span>
         <DiffFigures added={change.added} removed={change.removed} />
+        <ChangeBar added={change.added} removed={change.removed} />
         {openCount > 0 ? (
           <span className="text-xs text-muted-foreground tabular-nums">
             {openCount} {openCount === 1 ? 'comment' : 'comments'}
@@ -299,6 +341,53 @@ function FileBody({
   const [extra, setExtra] = useState<ReadonlyMap<number, string>>(new Map());
   const [total, setTotal] = useState<number | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
+  const [onDisk, setOnDisk] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const asked = useRef(new Set<string>());
+  const outsideDiff = useMemo(
+    () =>
+      comments.filter((comment) => {
+        if (comment.side !== 'new' || comment.startLine === null) {
+          return false;
+        }
+        const end = comment.endLine ?? comment.startLine;
+        return !parsed.hunks.some(
+          (hunk) => comment.startLine! <= newEnd(hunk) && end >= hunk.newStart,
+        );
+      }),
+    [comments, parsed],
+  );
+  useEffect(() => {
+    if (readFileLines === undefined) {
+      return;
+    }
+    for (const comment of outsideDiff) {
+      const key = `${comment.id}:${comment.quote}`;
+      if (asked.current.has(key) || comment.startLine === null) {
+        continue;
+      }
+      asked.current.add(key);
+      const from = comment.startLine;
+      const to = Math.min(comment.endLine ?? from, from + FILE_LINES_MAX - 1);
+      void readFileLines({
+        dir: folder,
+        path: change.path,
+        at: 'worktree',
+        from,
+        to,
+      })
+        .then((read) => {
+          const same =
+            read.unavailableReason === null &&
+            read.lines.map((line) => line.trimEnd()).join('\n') ===
+              comment.quote
+                .split('\n')
+                .map((line) => line.trimEnd())
+                .join('\n');
+          setOnDisk((current) => new Map(current).set(comment.id, same));
+        })
+        .catch(() => undefined);
+    }
+  }, [outsideDiff, readFileLines, folder, change.path]);
   const expandable =
     readFileLines !== undefined &&
     parsed.hunks.length > 0 &&
@@ -474,13 +563,29 @@ function FileBody({
       shown.add(lineKey('old', row.oldLine));
     }
   }
+  const revealedHunk: DiffHunk = {
+    oldStart: 0,
+    oldLines: 0,
+    newStart: 0,
+    newLines: 0,
+    context: '',
+    rows: rows
+      .filter((entry) => entry.row.key.startsWith('x:'))
+      .map(({ row }) => ({
+        kind: 'context',
+        oldLine: row.oldLine,
+        newLine: row.newLine,
+        text: extra.get(row.newLine ?? 0) ?? '',
+      })),
+  };
+  const anchorHunks = [...parsed.hunks, revealedHunk];
   const placed = new Map<
     string,
     { comment: ReviewComment; outdated: boolean }[]
   >();
   const loose: { comment: ReviewComment; outdated: boolean }[] = [];
   for (const comment of comments) {
-    const where = anchorComment(comment, parsed.hunks);
+    const where = anchorComment(comment, anchorHunks);
     if (
       where.kind === 'line' &&
       shown.has(lineKey(where.side, where.endLine))
@@ -490,9 +595,12 @@ function FileBody({
         ...(placed.get(key) ?? []),
         { comment, outdated: false },
       ]);
-    } else {
-      loose.push({ comment, outdated: where.kind === 'outdated' });
+      continue;
     }
+    loose.push({
+      comment,
+      outdated: where.kind === 'outdated' && onDisk.get(comment.id) !== true,
+    });
   }
 
   const thread = ({

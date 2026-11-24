@@ -129,6 +129,49 @@ describe('ReviewCommentsService — the comments of a review', () => {
     ).toMatchObject({ body: 'x'.repeat(4000) });
   });
 
+  it('refuses a line comment without a first line, with a first line below 1, or ending before it starts', async () => {
+    for (const range of [
+      { startLine: null, endLine: null },
+      { startLine: 0, endLine: 0 },
+      { startLine: 5, endLine: 4 },
+    ]) {
+      expect(
+        refusal(await db.service.add('run-1', { ...DRAFT, ...range })).code,
+      ).toBe('REVIEW_COMMENT_BAD_RANGE');
+    }
+  });
+
+  it('keeps a whole-file comment free of lines and quote, whatever it was given', async () => {
+    const added = ok(await db.service.add('run-1', { ...DRAFT, side: 'file' }))
+      .changed[0]!;
+
+    expect(added).toMatchObject({
+      side: 'file',
+      startLine: null,
+      endLine: null,
+      quote: '',
+    });
+  });
+
+  it('refuses quoted code over 4000 characters', async () => {
+    expect(
+      refusal(
+        await db.service.add('run-1', { ...DRAFT, quote: 'x'.repeat(4001) }),
+      ).code,
+    ).toBe('REVIEW_COMMENT_TOO_LONG');
+  });
+
+  it('keeps quoted code whose file holds a hidden character, without the character', async () => {
+    const added = ok(
+      await db.service.add('run-1', {
+        ...DRAFT,
+        quote: '\uFEFFconst total = 0;',
+      }),
+    ).changed[0]!;
+
+    expect(added.quote).toBe('const total = 0;');
+  });
+
   it('removes a comment from the list, whatever its status', async () => {
     const added = ok(await db.service.add('run-1', DRAFT));
 

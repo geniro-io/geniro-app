@@ -18,6 +18,7 @@ import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
+import { buildChangesTree, type ChangeTreeNode } from './changes-tree';
 import { folderName } from './directory-select';
 import { ReviewCommentThread, reviewLineLabel } from './review-comment-thread';
 import { ReviewFileCard, STATUS_META } from './review-file-card';
@@ -206,9 +207,7 @@ export function ChangesReviewDialog({
     files.map((file) => `${file.folder}\0${file.change.path}`),
   );
   const gone = review.comments.filter(
-    (comment) =>
-      comment.status !== 'draft' &&
-      !listed.has(`${comment.folder}\0${comment.path}`),
+    (comment) => !listed.has(`${comment.folder}\0${comment.path}`),
   );
   const drafts = review.comments.filter(
     (comment) => comment.status === 'draft',
@@ -330,6 +329,12 @@ export function ChangesReviewDialog({
         {review.error ? (
           <ErrorText className="shrink-0 px-5 py-2">{review.error}</ErrorText>
         ) : null}
+        {focusComment !== null &&
+        !review.comments.some((comment) => comment.number === focusComment) ? (
+          <p className="shrink-0 px-5 py-2 text-xs text-muted-foreground">
+            {`Comment #${focusComment} was deleted.`}
+          </p>
+        ) : null}
         <div className="flex min-h-0 flex-1">
           {narrow ? null : (
             <nav
@@ -362,57 +367,32 @@ export function ChangesReviewDialog({
                       )}
                     </p>
                   )}
-                  <ul className="m-0 flex list-none flex-col p-0">
-                    {section.files
-                      .filter(
-                        (file) =>
-                          needle === '' ||
-                          file.change.path.toLowerCase().includes(needle),
-                      )
-                      .map((file) => {
-                        const count = (
-                          commentsByFile.get(
-                            `${file.folder}\0${file.change.path}`,
-                          ) ?? []
-                        ).filter(
-                          (comment) => comment.status !== 'resolved',
-                        ).length;
-                        return (
-                          <li key={file.key}>
-                            <button
-                              type="button"
-                              title={file.change.path}
-                              className={cn(
-                                'flex w-full cursor-pointer items-baseline gap-2 rounded px-1.5 py-1 text-left hover:bg-sidebar-accent',
-                                viewedOf(file) && 'opacity-60',
-                              )}
-                              onClick={() => jumpTo(file)}>
-                              <span
-                                aria-hidden
-                                className={cn(
-                                  'text-[10px]',
-                                  STATUS_META[file.change.status].className,
-                                )}>
-                                ●
-                              </span>
-                              <span className="min-w-0 flex-1 font-mono text-xs break-all">
-                                {file.change.path}
-                              </span>
-                              {count > 0 ? (
-                                <span className="text-xs text-primary tabular-nums">
-                                  {count}
-                                </span>
-                              ) : null}
-                              <DiffFigures
-                                added={file.change.added}
-                                removed={file.change.removed}
-                                className="text-[11px]"
-                              />
-                            </button>
-                          </li>
-                        );
-                      })}
-                  </ul>
+                  <FileTree
+                    nodes={buildChangesTree(
+                      section.files
+                        .filter(
+                          (file) =>
+                            needle === '' ||
+                            file.change.path.toLowerCase().includes(needle),
+                        )
+                        .map((file) => file.change),
+                    )}
+                    depth={0}
+                    fileOf={(change) =>
+                      section.files.find((file) => file.change === change) ??
+                      null
+                    }
+                    openCount={(file) =>
+                      (
+                        commentsByFile.get(
+                          `${file.folder}\0${file.change.path}`,
+                        ) ?? []
+                      ).filter((comment) => comment.status !== 'resolved')
+                        .length
+                    }
+                    viewed={viewedOf}
+                    onPick={jumpTo}
+                  />
                 </div>
               ))}
             </nav>
@@ -518,6 +498,89 @@ export function ChangesReviewDialog({
         }}
       />
     </Dialog>
+  );
+}
+
+function FileTree({
+  nodes,
+  depth,
+  fileOf,
+  openCount,
+  viewed,
+  onPick,
+}: {
+  nodes: readonly ChangeTreeNode[];
+  depth: number;
+  fileOf: (change: GitChange) => ReviewFile | null;
+  openCount: (file: ReviewFile) => number;
+  viewed: (file: ReviewFile) => boolean;
+  onPick: (file: ReviewFile) => void;
+}): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col p-0">
+      {nodes.map((node) => {
+        if (node.type === 'dir') {
+          return (
+            <li key={`dir:${node.path}`}>
+              <p
+                className="truncate py-0.5 font-mono text-xs text-muted-foreground"
+                style={{ paddingLeft: `${0.375 + depth * 0.75}rem` }}
+                title={node.path}>
+                {node.name}/
+              </p>
+              <FileTree
+                nodes={node.children}
+                depth={depth + 1}
+                fileOf={fileOf}
+                openCount={openCount}
+                viewed={viewed}
+                onPick={onPick}
+              />
+            </li>
+          );
+        }
+        const file = fileOf(node.change);
+        if (file === null) {
+          return null;
+        }
+        const count = openCount(file);
+        return (
+          <li key={file.key}>
+            <button
+              type="button"
+              title={file.change.path}
+              style={{ paddingLeft: `${0.375 + depth * 0.75}rem` }}
+              className={cn(
+                'flex w-full cursor-pointer items-baseline gap-2 rounded py-1 pr-1.5 text-left hover:bg-sidebar-accent',
+                viewed(file) && 'opacity-60',
+              )}
+              onClick={() => onPick(file)}>
+              <span
+                aria-hidden
+                className={cn(
+                  'text-[10px]',
+                  STATUS_META[file.change.status].className,
+                )}>
+                ●
+              </span>
+              <span className="min-w-0 flex-1 font-mono text-xs break-all">
+                {node.name}
+              </span>
+              {count > 0 ? (
+                <span className="text-xs text-primary tabular-nums">
+                  {count}
+                </span>
+              ) : null}
+              <DiffFigures
+                added={file.change.added}
+                removed={file.change.removed}
+                className="text-[11px]"
+              />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

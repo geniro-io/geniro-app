@@ -230,7 +230,7 @@ export abstract class HarvestStore<T> {
             typeof record.harvestedAt === 'number'
           ) {
             this.records.set(key, {
-              entries: record.entries as T[],
+              entries: record.entries,
               harvestedAt: record.harvestedAt,
             });
           }

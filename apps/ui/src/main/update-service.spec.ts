@@ -826,7 +826,7 @@ describe('UpdateService reporting', () => {
       checkDeadlineMs: 1000,
       fetchLatest: () =>
         hang
-          ? new Promise<ReleaseLookup>(() => undefined)
+          ? new Promise<ReleaseLookup>(() => {})
           : Promise.resolve({
               ok: true,
               release: RELEASE,

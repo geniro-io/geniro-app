@@ -78,7 +78,7 @@ async function draw(
       <LocalImageLoaderContext.Provider value={options.load ?? null}>
         <BrowserPaneContext.Provider
           value={
-            options.pane == null
+            options.pane === null || options.pane === undefined
               ? null
               : {
                   openPane: options.pane.openPane,

@@ -75,7 +75,7 @@ export function AnalysisDialog({
       slug === null
         ? await apis.chats.getThreadAnalysis({ runId: sourceId })
         : await apis.teams.getTeamAnalysis({ slug });
-    if (analysis == null) {
+    if (analysis === null || analysis === undefined) {
       throw new Error(
         slug === null
           ? 'This thread has no analysis yet.'

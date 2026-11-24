@@ -141,7 +141,9 @@ describe('HostWakeChatDelivery', () => {
     h.setHold(null);
     h.settle();
     h.stop();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(h.oweKeyNote).not.toHaveBeenCalled();
@@ -235,7 +237,9 @@ describe('HostWakeChatDelivery', () => {
     await Promise.resolve();
     h.setHold(null);
     h.settle();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(h.oweKeyNote).not.toHaveBeenCalled();

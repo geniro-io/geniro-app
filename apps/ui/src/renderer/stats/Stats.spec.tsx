@@ -162,7 +162,7 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
       { key: 'run-3', title: null, deleted: false, totals: totals() },
     ],
     ...overrides,
-  } as UsageStatsDto;
+  };
 }
 
 /**

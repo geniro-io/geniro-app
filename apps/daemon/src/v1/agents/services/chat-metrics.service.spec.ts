@@ -740,34 +740,31 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
         onIdleFarewell: () => {},
       } as unknown as AgentSessionRegistry,
       {
-        for: adapterFor.mockImplementation(
-          () =>
-            ({
-              getConfig: () => ({
-                usage: {
-                  unavailableReason: null,
-                  breakdown: { kind: 'reads', channel: 'live-process' },
-                  planLimits: {
-                    kind: 'reads',
-                    channel: 'live-process',
-                    ...(opts.oneShotPlan ? { oneShot: true } : {}),
-                  },
-                },
-              }),
-              readContextUsage,
-              readPlanLimits,
-              modelPriceOf: (model: string | null) => {
-                pricedModels.push(model);
-                return null;
+        for: adapterFor.mockImplementation(() => ({
+          getConfig: () => ({
+            usage: {
+              unavailableReason: null,
+              breakdown: { kind: 'reads', channel: 'live-process' },
+              planLimits: {
+                kind: 'reads',
+                channel: 'live-process',
+                ...(opts.oneShotPlan ? { oneShot: true } : {}),
               },
-              resolveModel: (model: string | null, dir: string | null) => {
-                resolvedUnder.push(dir);
-                return Promise.resolve(model);
-              },
-              modelVendorOf: () => 'anthropic',
-              vocabularyProfile: (dir: string | null) => dir,
-            }) as unknown as AgentAdapter,
-        ),
+            },
+          }),
+          readContextUsage,
+          readPlanLimits,
+          modelPriceOf: (model: string | null) => {
+            pricedModels.push(model);
+            return null;
+          },
+          resolveModel: (model: string | null, dir: string | null) => {
+            resolvedUnder.push(dir);
+            return Promise.resolve(model);
+          },
+          modelVendorOf: () => 'anthropic',
+          vocabularyProfile: (dir: string | null) => dir,
+        })),
       } as unknown as AgentAdapterRegistry,
       { all: () => new Subject<RunItemEvent>() } as unknown as AgentEventBus,
       {
@@ -1009,7 +1006,9 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     const built = buildCall({ live: {}, plan: PLAN });
 
     await built.service.read('run-1', null, 'call-3');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(built.nodeRemember).not.toHaveBeenCalled();
     expect(built.runRemember).not.toHaveBeenCalled();
@@ -1670,7 +1669,9 @@ describe('ChatMetricsService', () => {
       });
 
       await service.read('run-1');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
 
       const [runId, json] = remembered.mock.calls[0] ?? [];
       expect(runId).toBe('run-1');
@@ -1692,7 +1693,9 @@ describe('ChatMetricsService', () => {
 
       // Nobody has opened this chat's readout yet.
       settleTurn();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(vi.mocked(readContextUsage)).not.toHaveBeenCalled();
 
       // Opening it is what marks the chat as watched. That open ASKS (nothing
@@ -1702,7 +1705,9 @@ describe('ChatMetricsService', () => {
       const afterOpen = vi.mocked(readContextUsage).mock.calls.length;
 
       settleTurn();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(vi.mocked(readContextUsage).mock.calls.length).toBeGreaterThan(
         afterOpen,
       );

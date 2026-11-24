@@ -103,7 +103,7 @@ function readEntry(value: unknown): MonitorEntry | null {
     description,
     event,
     end: readEnding,
-    lines: lines as string[],
+    lines: lines,
     omitted,
     command: typeof command === 'string' && command !== '' ? command : null,
     startedAt:

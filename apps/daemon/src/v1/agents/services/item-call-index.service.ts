@@ -557,7 +557,7 @@ async function writeStamps<K>(
   return em.transactional(async (tx) => {
     let changed = 0;
     for (const [inCall, group] of byInCall) {
-      changed += await write(group, inCall, tx as EntityManager);
+      changed += await write(group, inCall, tx);
     }
     return changed;
   });

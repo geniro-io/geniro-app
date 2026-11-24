@@ -1,9 +1,9 @@
 import type { Configuration, Constructor } from '@mikro-orm/core';
+import type { SqliteConnection } from '@mikro-orm/sqlite';
 import {
   AbstractSqlDriver,
   MikroORM,
   SqlEntityManager,
-  SqliteConnection,
   type SqliteDriver,
   SqlitePlatform,
 } from '@mikro-orm/sqlite';

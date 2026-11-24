@@ -1236,8 +1236,11 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
         },
       })}\n`;
     const lastResponse = (): Record<string, unknown> =>
-      JSON.parse(child.stdin.written.split('\n').filter(Boolean).at(-1)!)
-        .response.response;
+      (
+        JSON.parse(child.stdin.written.split('\n').filter(Boolean).at(-1)!) as {
+          response: { response: Record<string, unknown> };
+        }
+      ).response.response;
 
     child.stdout.emitData(request('req-s'));
     const card = events.at(-1);
@@ -1350,7 +1353,9 @@ describe('ClaudeAdapter instruction file delivery', () => {
         ending === 'exit' ? null : 'SIGTERM',
       );
       await handle.done;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(existsSync(path)).toBe(false);
     },
   );
@@ -1418,7 +1423,9 @@ describe('ClaudeAdapter instruction file delivery', () => {
     ).toBeNull();
     discardUnused?.();
     fake.child.emit('close', 0, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(readdirSync(dir)).toEqual([]);
   });
 
@@ -1433,7 +1440,9 @@ describe('ClaudeAdapter instruction file delivery', () => {
     );
     expect(readdirSync(dir)).toHaveLength(1);
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(readdirSync(dir)).toEqual([]);
   });
 
@@ -1564,7 +1573,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     // The file dies with the turn.
     child.emit('close', 0, null);
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(existsSync(configPath)).toBe(false);
   });
 
@@ -1582,7 +1593,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     handle.cancel();
     child.emit('close', null, 'SIGTERM');
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(existsSync(configPath)).toBe(false);
   });
 
@@ -1615,7 +1628,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     // gone once the settled handle's callback has run.
     expect(existsSync(configPath)).toBe(true);
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(existsSync(configPath)).toBe(false);
     expect(adapter.disposeCalls).toBe(1);
   });
@@ -1667,7 +1682,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
 
     child.emit('close', 0, null);
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     // The guard exists so cleanup failure cannot reject the settle chain —
     // deleting the catch would make this an unhandled rejection instead.
@@ -2620,7 +2637,7 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     const lines = child.stdin.written
       .split('\n')
       .filter((line) => line.trim() !== '')
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line) as unknown);
     expect(lines[0]).toEqual({
       type: 'user',
       message: {
@@ -4275,7 +4292,7 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
       cwd: profile,
       configDir: profile,
       resumeSessionId: sessionId,
-    } as AgentTurnInput);
+    });
     adapter.line({ type: 'system', subtype: 'init', session_id: sessionId });
     const events = adapter.line({
       type: 'result',
@@ -4326,7 +4343,7 @@ describe('ClaudeAdapter — a resumed process’s first cost', () => {
       cwd: profile,
       configDir: profile,
       resumeSessionId: sessionId,
-    } as AgentTurnInput);
+    });
     appendFileSync(transcript, costState(40));
     adapter.line({ type: 'system', subtype: 'init', session_id: sessionId });
     const done = result(41).find((event) => event.type === 'turn_complete');
@@ -4770,7 +4787,9 @@ describe('ClaudeAdapter — what a model name resolves to', () => {
   /** Let a background probe spawn, or a held one take its answer. */
   const settle = async (): Promise<void> => {
     for (let i = 0; i < 20; i += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     }
   };
 

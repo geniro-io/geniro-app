@@ -31,7 +31,7 @@ export function errorDetail(fields: {
   // 0ms duration. `httpStatus` is the one where truthiness would silently be
   // right, and writing it differently from its neighbours is how the next
   // field gets it wrong.
-  if (fields.httpStatus != null) {
+  if (fields.httpStatus !== null && fields.httpStatus !== undefined) {
     detail.httpStatus = fields.httpStatus;
   }
   if (fields.requestId) {
@@ -40,10 +40,10 @@ export function errorDetail(fields: {
   if (fields.sessionId) {
     detail.sessionId = fields.sessionId;
   }
-  if (fields.durationMs != null) {
+  if (fields.durationMs !== null && fields.durationMs !== undefined) {
     detail.durationMs = fields.durationMs;
   }
-  if (fields.exitCode != null) {
+  if (fields.exitCode !== null && fields.exitCode !== undefined) {
     detail.exitCode = fields.exitCode;
   }
   if (fields.signal) {

@@ -11,7 +11,7 @@ export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
     description: null,
     instructions: null,
     instructionBlocks:
-      over.instructions == null
+      over.instructions === null || over.instructions === undefined
         ? []
         : [{ id: 'b1', title: '', text: over.instructions }],
     instructionsRevision: 0,

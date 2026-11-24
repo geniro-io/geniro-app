@@ -155,7 +155,7 @@ describe('buildArtifactFile', () => {
     );
 
     const theme = parse(file).head.querySelector('style[data-geniro="theme"]');
-    const css = theme!.textContent!;
+    const css = theme!.textContent;
     expect(css).toMatch(
       /@layer geniro-base \{ html, body \{ background: var\(--geniro-bg\);/,
     );

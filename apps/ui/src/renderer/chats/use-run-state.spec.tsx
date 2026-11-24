@@ -406,7 +406,7 @@ describe('useRunState', () => {
     const h = harness('r1');
     await h.render('r1');
     expect(h.state().calls).toHaveLength(1);
-    h.api.readRunState.mockImplementation(() => new Promise(() => undefined));
+    h.api.readRunState.mockImplementation(() => new Promise(() => {}));
 
     await h.render('r2');
 

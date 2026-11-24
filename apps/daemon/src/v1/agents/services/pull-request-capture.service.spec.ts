@@ -1,3 +1,5 @@
+import type * as timersPromisesModule from 'node:timers/promises';
+
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,12 +34,14 @@ const pauses = vi.hoisted(() => ({
   release: [] as (() => void)[],
 }));
 vi.mock('node:timers/promises', async (importOriginal) => {
-  const real = await importOriginal<typeof import('node:timers/promises')>();
+  const real = await importOriginal<typeof timersPromisesModule>();
   return {
     ...real,
     setTimeout: (ms?: number) =>
       pauses.held
-        ? new Promise<void>((resolve) => pauses.release.push(resolve))
+        ? new Promise<void>((resolve) => {
+            pauses.release.push(resolve);
+          })
         : real.setTimeout(ms),
   };
 });
@@ -1369,9 +1373,13 @@ describe('PullRequestCaptureService', () => {
     );
 
     const pass = service.sync([chatRun()], em);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     const announced = service.announceOutcome('run-1', 'acme/platform#87');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(deps.published).toEqual([]);
 
     landWrite();
@@ -1427,7 +1435,9 @@ describe('PullRequestCaptureService', () => {
     void service.sync([chatRun()], em).then(() => {
       listed = true;
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listed).toBe(true);
 
     landWrite();
@@ -1506,7 +1516,9 @@ describe('PullRequestCaptureService', () => {
 
     const announced = service.announceOutcome('run-1', 'acme/platform#87');
     const listing = service.sync([chatRun()], em);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     releaseRead();
     await announced;
     await listing;
@@ -1540,12 +1552,16 @@ describe('PullRequestCaptureService', () => {
     service.onModuleInit();
 
     const pass = service.sync([chatRun()], em);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     deps.deleted[0]?.('run-1');
     landWrite();
     await pass;
     const later = service.sync([chatRun()], em);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     landWrite();
     await later;
 
@@ -1597,7 +1613,9 @@ describe('PullRequestCaptureService', () => {
     pauses.held = true;
     try {
       const done = service.rescanOutdatedQuietly();
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(writes).toHaveLength(5);
       expect(pauses.release).toHaveLength(1);
 
@@ -1797,10 +1815,14 @@ describe('PullRequestCaptureService', () => {
     );
 
     const sweep = service.rescanOutdatedQuietly();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     const first = await Promise.race([
       service.sync([chatRun()], em).then(() => 'listed'),
-      new Promise((resolve) => setImmediate(() => resolve('waited'))),
+      new Promise((resolve) => {
+        setImmediate(() => resolve('waited'));
+      }),
     ]);
 
     expect(first).toBe('listed');
@@ -2095,7 +2117,9 @@ describe('PullRequestCaptureService — telling the activity ledger which pull r
       updateWithoutActivity: async () => {
         // A write takes longer than a tick, so an announce that did not wait
         // for it would land first.
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         order.push('row written');
         return 1;
       },
@@ -2129,7 +2153,9 @@ describe('PullRequestCaptureService — telling the activity ledger which pull r
  * that quietly stops being right the moment a query is added.
  */
 const settled = (): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, 0));
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 describe('PullRequestCaptureService — capturing when a TURN ends', () => {
   /** A run dao that also answers `getById`, which the settle path needs. */

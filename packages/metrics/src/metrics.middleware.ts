@@ -53,27 +53,29 @@ export class FastifyMetricsMiddleware implements NestMiddleware {
     // keeps caller-supplied values (run ids, user-named slugs, cwd query
     // strings) off the public /metrics surface and bounds label cardinality
     // to the route table.
-    // @ts-ignore
-    res.on('finish', () => {
-      const path = (req as unknown as Record<string, unknown>)[
-        ROUTE_TEMPLATE_KEY
-      ];
-      const labels = {
-        path: typeof path === 'string' ? path : UNROUTED_LABEL,
-        method,
-      };
-      this.metricsService.incGauge(RequestMetric, 1, {
-        ...labels,
-        status: String(
-          (res as unknown as { statusCode?: number }).statusCode ?? 0,
-        ),
-      });
-      this.metricsService.observeHistogram(
-        RequestTimeMetric,
-        (Date.now() - now) / 1000,
-        labels,
-      );
-    });
+    (res as unknown as { on: (event: string, cb: () => void) => void }).on(
+      'finish',
+      () => {
+        const path = (req as unknown as Record<string, unknown>)[
+          ROUTE_TEMPLATE_KEY
+        ];
+        const labels = {
+          path: typeof path === 'string' ? path : UNROUTED_LABEL,
+          method,
+        };
+        this.metricsService.incGauge(RequestMetric, 1, {
+          ...labels,
+          status: String(
+            (res as unknown as { statusCode?: number }).statusCode ?? 0,
+          ),
+        });
+        this.metricsService.observeHistogram(
+          RequestTimeMetric,
+          (Date.now() - now) / 1000,
+          labels,
+        );
+      },
+    );
 
     next();
   }

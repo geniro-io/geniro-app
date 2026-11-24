@@ -460,7 +460,9 @@ export const MemberEventCard = memo(function MemberEventCard({
 }: MemberEventCardProps): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
   const agentLabel =
-    meta?.agent == null ? null : agentShortName(identities, meta.agent);
+    meta?.agent === null || meta?.agent === undefined
+      ? null
+      : agentShortName(identities, meta.agent);
   return (
     <AgentEventCard
       kind={kind}

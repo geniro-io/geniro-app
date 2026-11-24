@@ -202,7 +202,9 @@ describe('ThreadAnalysisService.start', () => {
     process.on('unhandledRejection', unhandled);
     runDao.listOrphanedAnalyses.mockRejectedValueOnce(new Error('db closed'));
     service.onApplicationBootstrap();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
   });
@@ -253,7 +255,9 @@ describe('ThreadAnalysisService.start', () => {
     process.on('unhandledRejection', unhandled);
     runDao.listAnalysesOf.mockRejectedValueOnce(new Error('db closed'));
     deleted.next('source');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
     service.onModuleDestroy();

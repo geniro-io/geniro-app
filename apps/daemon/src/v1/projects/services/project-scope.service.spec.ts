@@ -57,7 +57,7 @@ describe('ProjectScopeService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    em = orm.em.fork() as EntityManager;
+    em = orm.em.fork();
     service = new ProjectScopeService(
       em,
       new TaskDao(em),

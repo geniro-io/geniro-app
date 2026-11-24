@@ -1,5 +1,5 @@
-import { AuthContextStorage } from './auth-context-storage';
-import { AuthProvider } from './providers/auth.provider';
+import type { AuthContextStorage } from './auth-context-storage';
+import type { AuthProvider } from './providers/auth.provider';
 
 export interface IContextData {
   sub?: string;

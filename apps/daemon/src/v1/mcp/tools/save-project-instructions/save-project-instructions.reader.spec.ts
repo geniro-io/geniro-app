@@ -139,7 +139,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    em = orm.em.fork() as EntityManager;
+    em = orm.em.fork();
     const projectDao = new ProjectDao(em);
     const taskDao = new TaskDao(em);
     const runDao = new RunDao(em);
@@ -595,7 +595,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   });
 
   describe('in a project chat', () => {
-    const chatContext = { ...CONTEXT, runId: 'project-chat' } as McpCallContext;
+    const chatContext = { ...CONTEXT, runId: 'project-chat' };
     let chatTool: SaveProjectInstructionsTool;
 
     beforeEach(() => {
@@ -777,7 +777,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   });
 
   describe('in an ordinary chat', () => {
-    const chatContext = { ...CONTEXT, runId: 'plain-chat' } as McpCallContext;
+    const chatContext = { ...CONTEXT, runId: 'plain-chat' };
     let chatTool: SaveProjectInstructionsTool;
 
     beforeEach(() => {
@@ -817,9 +817,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
       );
       expect(properties).toEqual(['projectId', 'blocks', 'baseRevision']);
       expect(listed?.description).toContain('list_projects');
-      expect(
-        chatTool.list({ ...chatContext, runId: 'other' } as McpCallContext),
-      ).toEqual([]);
+      expect(chatTool.list({ ...chatContext, runId: 'other' })).toEqual([]);
     });
 
     it('writes the project it names behind the card and logs this chat as the source', async () => {

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type * as fsPromisesModule from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { open, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +12,7 @@ import type { SubagentRecoveryRef } from '../../adapter.types';
 import { recoverClaudeSubagent } from './claude-subagent-recovery.utils';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const actual = await importOriginal<typeof fsPromisesModule>();
   return {
     ...actual,
     open: vi.fn(actual.open),

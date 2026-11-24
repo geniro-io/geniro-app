@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type * as fsPromisesModule from 'node:fs/promises';
 import {
   mkdir,
   mkdtemp,
@@ -46,7 +47,7 @@ const { rmGate } = vi.hoisted(() => ({
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const actual = await importOriginal<typeof fsPromisesModule>();
   return {
     ...actual,
     rm: async (...args: Parameters<typeof actual.rm>): Promise<void> => {
@@ -166,7 +167,9 @@ describe('AvatarStoreService', () => {
     expect(
       await Promise.race([
         saving.then(() => 'saved'),
-        new Promise((resolve) => setTimeout(() => resolve('waiting'), 50)),
+        new Promise((resolve) => {
+          setTimeout(() => resolve('waiting'), 50);
+        }),
       ]),
     ).toBe('waiting');
     release();

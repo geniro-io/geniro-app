@@ -442,7 +442,7 @@ function useCallReadings(block: CallBlockEntry, callee: string): CallReadings {
   const context = {
     contextTokens: live?.contextTokens ?? folded.contextTokens,
     contextEstimated:
-      live?.contextTokens != null
+      live?.contextTokens !== null && live?.contextTokens !== undefined
         ? live.contextEstimated === true
         : folded.contextEstimated === true,
     contextWindowTokens:
@@ -481,7 +481,8 @@ function useCallReadings(block: CallBlockEntry, callee: string): CallReadings {
      * daemon's per-call counts over the fold, which holds only the loaded window.
      */
     toolCount: live?.toolCalls ?? countTools(block.entries),
-    toolCountIsConversation: live?.toolCalls != null,
+    toolCountIsConversation:
+      live?.toolCalls !== null && live?.toolCalls !== undefined,
   };
 }
 

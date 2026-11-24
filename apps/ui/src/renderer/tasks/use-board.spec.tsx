@@ -326,8 +326,9 @@ describe('a card held for a worktree failure', () => {
 
     async function openBoard(): Promise<ReturnType<typeof vi.fn>> {
       const { apis } = stubApis();
-      const readProjectQueue = apis.projects.readProjectQueue as ReturnType<
-        typeof vi.fn
+      const readProjectQueue = apis.projects
+        .readProjectQueue as unknown as ReturnType<
+        typeof vi.fn<() => Promise<ReturnType<typeof queueHolding>>>
       >;
       // A fresh object per read, as a parsed response is.
       readProjectQueue.mockImplementation(async () => queueHolding(60_000));

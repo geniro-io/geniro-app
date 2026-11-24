@@ -382,7 +382,10 @@ export class ClaudeDelegateSettler {
       this.deps.readTranscript(sessionId, end.agentId).catch(() => null);
     const wait =
       this.deps.wait ??
-      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+      ((ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }));
     let totals = await read();
     for (
       let attempt = 0;

@@ -32,7 +32,7 @@ function session(overrides: Partial<LoginSessionDto> = {}): LoginSessionDto {
     url: null,
     message: null,
     ...overrides,
-  } as LoginSessionDto;
+  };
 }
 
 function render(el: React.ReactNode): void {

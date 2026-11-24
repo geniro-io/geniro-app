@@ -2,7 +2,9 @@ import { act } from 'react';
 
 const tick = (): Promise<void> =>
   act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   });
 
 /** A `StageGraph` draws after its lazy chunk and its ELK layout land; jsdom also lacks the DOMMatrix React Flow reads. */

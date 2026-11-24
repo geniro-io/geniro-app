@@ -4232,7 +4232,8 @@ export class AcpTurnDriver {
       // here is a label ON that denominator, so one without the other names
       // something no figure is being measured against.
       contextModel:
-        this.contextReading?.windowTokens == null
+        this.contextReading?.windowTokens === null ||
+        this.contextReading?.windowTokens === undefined
           ? null
           : // The reading's own name when it carries one; otherwise the model
             // the AGENT said it was running as. cursor's session store records

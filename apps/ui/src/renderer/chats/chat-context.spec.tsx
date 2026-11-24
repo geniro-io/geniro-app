@@ -36,7 +36,7 @@ function systemRow(payload: Record<string, unknown>): ChatItem {
     role: null,
     payload,
     createdAt: '2026-09-14T10:00:00.000Z',
-  } as ChatItem;
+  };
 }
 
 describe('chatContextFigures', () => {

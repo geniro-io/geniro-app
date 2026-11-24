@@ -159,7 +159,7 @@ export class ModelsService {
         model.contextTokens ??
         this.options.windows?.get(kind, resolved) ??
         adapter.catalogWindow(resolved);
-      return contextTokens == null
+      return contextTokens === null || contextTokens === undefined
         ? model
         : {
             ...model,

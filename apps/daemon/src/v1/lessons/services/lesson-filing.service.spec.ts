@@ -532,7 +532,7 @@ describe('LessonFilingService.file', () => {
       });
 
       const result = await fixture.service.file(fixture.turn, [
-        lesson({ dedup: dedup as LessonDedup }),
+        lesson({ dedup: dedup }),
       ]);
 
       expect(codesOf(result)).toEqual(['UNKNOWN_HANDLE']);

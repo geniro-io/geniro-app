@@ -52,7 +52,7 @@ describe('ConnectionBanner', () => {
     render({ reason: null });
 
     expect(container.textContent).toContain('Not connected');
-    expect(container.textContent!.trim().length).toBeGreaterThan(20);
+    expect(container.textContent.trim().length).toBeGreaterThan(20);
   });
 
   it('announces itself politely, not as an interruption', () => {

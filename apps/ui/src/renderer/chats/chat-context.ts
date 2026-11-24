@@ -52,7 +52,8 @@ export function chatContextFigures(
   const { live, run, transcript } = sources;
   // The estimate mark belongs to whichever source supplied the count.
   const counted = [live, run, transcript].find(
-    (source) => source?.contextTokens != null,
+    (source) =>
+      source?.contextTokens !== null && source?.contextTokens !== undefined,
   );
   const tokens = counted?.contextTokens ?? null;
   // The window is read whether or not there is a count. A compaction clears

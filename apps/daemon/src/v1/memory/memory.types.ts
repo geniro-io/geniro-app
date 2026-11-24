@@ -351,7 +351,13 @@ const MemoryTextFieldsSchema = z.object({
 const notBothScopes = (entry: {
   projectId?: string | null;
   teamSlug?: string | null;
-}) => !(entry.projectId != null && entry.teamSlug != null);
+}) =>
+  !(
+    entry.projectId !== null &&
+    entry.projectId !== undefined &&
+    entry.teamSlug !== null &&
+    entry.teamSlug !== undefined
+  );
 const NOT_BOTH_SCOPES = {
   message: 'an entry is filed under a project or a team, not both',
 };

@@ -102,7 +102,9 @@ async function main(): Promise<void> {
     );
     process.kill(service.pid ?? -1, 'SIGABRT');
     console.log(`crash observed: ${JSON.stringify(await crashed)}`);
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_100);
+    });
     const afterCrash = await service.request(
       { op: 'counts', slot: 'active' },
       30_000,

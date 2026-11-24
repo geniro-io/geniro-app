@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type * as xyflowReactModule from '@xyflow/react';
 import type { ReactFlowProps } from '@xyflow/react';
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -40,7 +41,7 @@ const seams = vi.hoisted(() => ({
 }));
 
 vi.mock('@xyflow/react', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@xyflow/react')>();
+  const actual = await importOriginal<typeof xyflowReactModule>();
   const spied = new WeakMap<object, object>();
   return {
     ...actual,
@@ -86,7 +87,9 @@ const MANAGER = {
 const settle = async (): Promise<void> => {
   for (let round = 0; round < 40; round += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
     });
   }
 };

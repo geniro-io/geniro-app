@@ -188,10 +188,12 @@ describe('the page runtime', () => {
   ];
 
   const run = (): void => {
-    new Function(ARTIFACT_RUNTIME_SCRIPT)();
+    (new Function(ARTIFACT_RUNTIME_SCRIPT) as () => void)();
   };
   const flush = (): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, 0));
+    new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   const geniro = (): {
     token: (name: string) => string;
     palette: () => string[];
@@ -212,13 +214,12 @@ describe('the page runtime', () => {
     listeners = [];
     documentListeners = [];
     const add = window.addEventListener.bind(window);
-    vi.spyOn(window, 'addEventListener').mockImplementation(((
-      type: string,
-      handler: EventListenerOrEventListenerObject,
-    ) => {
-      listeners.push([type, handler]);
-      add(type, handler);
-    }) as typeof window.addEventListener);
+    vi.spyOn(window, 'addEventListener').mockImplementation(
+      (type: string, handler: EventListenerOrEventListenerObject) => {
+        listeners.push([type, handler]);
+        add(type, handler);
+      },
+    );
     const addToDocument = document.addEventListener.bind(document);
     vi.spyOn(document, 'addEventListener').mockImplementation(((
       type: string,

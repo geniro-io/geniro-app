@@ -66,9 +66,11 @@ describe('MonitorRowWriter', () => {
     await registry.settled('run-1', 5000);
 
     expect(created.map((row) => row.memberId)).toEqual([null, null]);
-    const payloads = created.map((row) => JSON.parse(row.payload));
-    expect(payloads.map((p) => p.monitors[0].event)).toEqual(['start', 'end']);
-    expect(payloads[0].monitors[0]).toMatchObject({
+    const payloads = created.map(
+      (row) => JSON.parse(row.payload) as { monitors: { event: string }[] },
+    );
+    expect(payloads.map((p) => p.monitors[0]!.event)).toEqual(['start', 'end']);
+    expect(payloads[0]!.monitors[0]).toMatchObject({
       command: 'while true; do sleep 1; done',
       startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       timeoutMs: 60_000,

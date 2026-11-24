@@ -90,7 +90,7 @@ export function createTeeingSpawn(inner: SpawnFn): SpawnFn {
         return wrapped;
       },
       kill: (signal?: NodeJS.Signals) => child.kill(signal),
-    } as SpawnedProcess;
+    };
     return wrapped;
   };
 }
@@ -188,5 +188,5 @@ function teeWrites(
         );
       };
     },
-  }) as NodeJS.WritableStream;
+  });
 }

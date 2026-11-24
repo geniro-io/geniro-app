@@ -197,7 +197,9 @@ function build(opts: {
    * reached.
    */
   const drain = (): Promise<unknown> =>
-    new Promise((resolve) => setTimeout(resolve, 0));
+    new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
   const settle = async (memberId: string | null = null): Promise<void> => {
     items.next({ runId: 'run-a', item: item(memberId) });

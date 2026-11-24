@@ -97,6 +97,6 @@ export function readStageChangePayload(
     text: bag.text,
     rev: bag.rev,
     by,
-    ...(bag.lead === undefined ? {} : { lead: bag.lead as string }),
+    ...(bag.lead === undefined ? {} : { lead: bag.lead }),
   };
 }

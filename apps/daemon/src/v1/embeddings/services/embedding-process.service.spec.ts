@@ -43,7 +43,9 @@ function processGroupOf(pid: number): string {
 }
 
 function pause(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function crash(service: EmbeddingProcessService): Promise<void> {
@@ -178,7 +180,9 @@ describe('EmbeddingProcessService', () => {
     ).rejects.toBeInstanceOf(EmbeddingUnavailableError);
     expect(service.failure).toBe('the embedding process exited with code 3');
 
-    await new Promise((resolve) => setTimeout(resolve, RESTART_WAIT_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, RESTART_WAIT_MS);
+    });
 
     const restarted = await service.request(
       { op: 'getMeta', key: 'pid' },

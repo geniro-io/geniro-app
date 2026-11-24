@@ -4,12 +4,14 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as settingsMigrationsModule from './settings-migrations';
+
 const mocks = vi.hoisted(() => ({ userData: '' }));
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 vi.mock('./settings-migrations', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./settings-migrations')>()),
+  ...(await importOriginal<typeof settingsMigrationsModule>()),
   SETTINGS_VERSION: 3,
 }));
 

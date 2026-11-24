@@ -454,9 +454,7 @@ describe('mapEventToItem', () => {
     });
     // A plain permission must not fake the question discriminator — the key is
     // absent, not merely undefined.
-    expect(
-      'requiresUserInteraction' in (mapped!.payload as Record<string, unknown>),
-    ).toBe(false);
+    expect('requiresUserInteraction' in mapped!.payload).toBe(false);
   });
 
   it('persists the remembering options the card draws, without the adapter-private reply', () => {

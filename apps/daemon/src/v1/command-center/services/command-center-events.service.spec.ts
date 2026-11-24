@@ -140,7 +140,9 @@ describe('CommandCenterEventsService', () => {
     });
 
     await vi.waitFor(() => expect(board.managerRunId).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(contacts.publishContact).not.toHaveBeenCalled();
     expect(contacts.publishChanged).not.toHaveBeenCalled();

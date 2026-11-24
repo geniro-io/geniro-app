@@ -49,7 +49,7 @@ function listenWithCleanup(): void {
 function runWrapper(body: string): void {
   document.body.innerHTML = body;
   listenWithCleanup();
-  new Function(ARTIFACT_WRAPPER_SCRIPT)();
+  (new Function(ARTIFACT_WRAPPER_SCRIPT) as () => void)();
   vi.restoreAllMocks();
   vi.spyOn(window.parent, 'postMessage').mockImplementation(
     (message: unknown) => {

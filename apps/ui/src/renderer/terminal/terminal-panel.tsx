@@ -105,7 +105,7 @@ export function TerminalPanel({
           className="size-6 shrink-0"
           aria-label="Hide the terminal panel"
           title="Hide — the shells keep running (⌃`)"
-          onClick={terminals.hide}>
+          onClick={() => terminals.hide()}>
           <ChevronDown className="size-3.5 shrink-0" />
         </Button>
       </div>

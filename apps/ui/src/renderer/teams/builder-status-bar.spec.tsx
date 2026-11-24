@@ -58,12 +58,12 @@ describe('BuilderStatusBar', () => {
 
   it('says why held edits are not written, only while paused', () => {
     render({ saveState: 'paused', pausedReason: 'fix the problems first' });
-    expect(saveLine().textContent!.trim()).toBe(
+    expect(saveLine().textContent.trim()).toBe(
       'Not saved yet — fix the problems first',
     );
 
     render({ saveState: 'saved', pausedReason: 'fix the problems first' });
-    expect(saveLine().textContent!.trim()).toBe('Saved');
+    expect(saveLine().textContent.trim()).toBe('Saved');
   });
 
   it('reports each save state distinctly', () => {
@@ -76,7 +76,7 @@ describe('BuilderStatusBar', () => {
       'paused',
     ] as AutosaveState[]) {
       render({ saveState });
-      seen.set(saveState, saveLine().textContent!.trim());
+      seen.set(saveState, saveLine().textContent.trim());
     }
     expect(seen.get('saving')).toBe('Saving…');
     expect(seen.get('saved')).toBe('Saved');

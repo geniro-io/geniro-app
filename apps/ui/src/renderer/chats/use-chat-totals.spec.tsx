@@ -118,12 +118,12 @@ function announcingClient(): {
   return {
     client: {
       onRunStatus: (fn) => {
-        listener = fn as (event: never) => void;
+        listener = fn;
         return () => {
           listener = null;
         };
       },
-    } as NonNullable<Parameters<typeof useChatTotals>[3]>,
+    },
     announce: async (event) => {
       await act(async () => {
         listener?.({ status: null, ...event } as never);

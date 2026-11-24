@@ -208,7 +208,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
         payload,
         createdAt: at,
         inCall: null,
-      } as ItemWire,
+      },
     });
   }
 

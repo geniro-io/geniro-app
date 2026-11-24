@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import type * as fsPromisesModule from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { carryCodexSession } from './codex-session-carry.utils';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const original = await importOriginal<typeof import('node:fs/promises')>();
+  const original = await importOriginal<typeof fsPromisesModule>();
   return { ...original, writeFile: vi.fn(original.writeFile) };
 });
 
@@ -166,9 +167,7 @@ describe('carryCodexSession', () => {
     await carryCodexSession(input);
     writeFileSync(input.sourcePath, HISTORY + CONTINUATION);
     const { writeFile: write } =
-      await vi.importActual<typeof import('node:fs/promises')>(
-        'node:fs/promises',
-      );
+      await vi.importActual<typeof fsPromisesModule>('node:fs/promises');
     vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
       await write(...args);
       writeFileSync(input.targetPath, HISTORY + 'a concurrent turn\n');

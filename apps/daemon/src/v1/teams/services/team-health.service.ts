@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
-import type { AgentMcpServer } from '../../agents/adapters/adapter.types';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentVersionService } from '../../agents/services/agent-version.service';
@@ -250,7 +249,7 @@ export class TeamHealthService {
         (answer): McpFacts =>
           answer.unavailableReason === null
             ? {
-                servers: answer.servers as AgentMcpServer[],
+                servers: answer.servers,
                 checking: answer.pending,
                 checkedAt: answer.pending ? null : new Date().toISOString(),
               }

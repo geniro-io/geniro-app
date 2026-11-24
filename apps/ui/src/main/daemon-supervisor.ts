@@ -318,7 +318,9 @@ export function defaultReadStartTime(pid: number): number | null {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**
@@ -1226,9 +1228,9 @@ export class DaemonSupervisor {
   private async stopChild(child: ChildProcess): Promise<void> {
     child.kill('SIGTERM');
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) =>
-        child.once('exit', () => resolve(true)),
-      ),
+      new Promise<boolean>((resolve) => {
+        child.once('exit', () => resolve(true));
+      }),
       delay(this.shutdownGraceMs).then(() => false),
     ]);
     if (!exited) {

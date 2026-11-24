@@ -14,6 +14,7 @@ export const environment = () =>
     // Cast like prod's: `getEnv` answers `string`, and every variant has to
     // land on `LogLevel` or the union across them widens back to `string` and
     // stops satisfying the logger.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- the assertion sets the inferred property type, which `satisfies` leaves as string
     logLevel: getEnv('LOG_LEVEL', 'debug') as LogLevel,
     prettyLog: getEnv('PRETTY_LOGS', true),
   }) as const satisfies Record<string, string | number | boolean | null>;

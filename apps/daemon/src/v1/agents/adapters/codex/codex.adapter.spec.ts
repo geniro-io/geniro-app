@@ -14,7 +14,8 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../../diagnostics/utils/redact';
 import { AgentKind } from '../../../runs/runs.types';
-import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import type { FakeChild } from '../../__tests__/fake-child';
+import { fakeSpawn } from '../../__tests__/fake-child';
 import { MAX_ANSWER_LENGTH } from '../../chat.types';
 import type { AgentVersionService } from '../../services/agent-version.service';
 import type { ProcessRegistry } from '../../services/process-registry';
@@ -690,7 +691,9 @@ describe('listings', () => {
     }) as unknown as typeof spawn;
     const spawned = async (count: number): Promise<void> => {
       while (children.length < count) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       }
     };
     const adapter = adapterWith({ groupSpawnFn });
@@ -1482,7 +1485,9 @@ describe('context readout', () => {
     function settledOrWaiting(reading: Promise<unknown>): Promise<unknown> {
       return Promise.race([
         reading,
-        new Promise((resolve) => setImmediate(() => resolve('waiting'))),
+        new Promise((resolve) => {
+          setImmediate(() => resolve('waiting'));
+        }),
       ]);
     }
 
@@ -1533,7 +1538,9 @@ describe('context readout', () => {
       await read(adapter, listings.live);
 
       listings.answer(['github']);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       await expect(
         settledOrWaiting(read(adapter, heldListings().live)),
@@ -1546,7 +1553,9 @@ describe('context readout', () => {
       await read(adapter, listings.live);
 
       listings.answer(null);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       await expect(
         settledOrWaiting(read(adapter, heldListings().live)),
@@ -2265,7 +2274,7 @@ describe('CodexAdapter sub-agent recovery references', () => {
   function infoOf(events: AgentEvent[], id: string): unknown {
     return events.find(
       (event) => event.type === 'subagent_info' && event.id === id,
-    ) as { recovery?: SubagentRecoveryRef | null } | undefined;
+    );
   }
 
   it('names the native child thread on the reference of a subAgentActivity launch', () => {

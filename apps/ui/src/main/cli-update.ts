@@ -372,7 +372,9 @@ const SETTLE_TIMEOUT_MS = 3 * 60_000;
 const SETTLE_POLL_MS = 2000;
 
 const wait = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 /**
  * The version the binary answers once the update has landed. `unchanged` means

@@ -11,6 +11,7 @@ import {
 } from '../__fixtures__/knowledge';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { aProject } from '../__fixtures__/projects';
+import type * as daemonApiModule from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 
 const knowledgeApi = vi.hoisted(() => ({
@@ -35,7 +36,7 @@ const projectsApi = vi.hoisted(() => ({ listProjects: vi.fn() }));
 const teamsApi = vi.hoisted(() => ({ listTeams: vi.fn() }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../daemon-api')>()),
+  ...(await importOriginal<typeof daemonApiModule>()),
   createDaemonApis: () => ({
     knowledge: knowledgeApi,
     projects: projectsApi,
@@ -79,7 +80,9 @@ const client = {
 
 async function settle(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 
@@ -193,7 +196,12 @@ describe('Knowledge — the list', () => {
       el.querySelector<HTMLInputElement>('[aria-label="Search documents"]')!,
       'release',
     );
-    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await act(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 300);
+        }),
+    );
 
     expect(knowledgeApi.listKnowledge).toHaveBeenLastCalledWith(
       expect.objectContaining({ q: 'release' }),
@@ -713,7 +721,12 @@ describe('Knowledge — the page’s own actions', () => {
     ]) {
       await type(search, partial);
     }
-    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await act(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 300);
+        }),
+    );
 
     expect(knowledgeApi.listKnowledge).toHaveBeenCalledTimes(1);
     expect(knowledgeApi.listKnowledge).toHaveBeenLastCalledWith(

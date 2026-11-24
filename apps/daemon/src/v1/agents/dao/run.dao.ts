@@ -1095,7 +1095,10 @@ export class RunDao extends BaseDao<Run> {
       .execute();
     return rows.map((row) => ({
       runId: row.id,
-      newestSeq: row.newest_seq == null ? -1 : Number(row.newest_seq),
+      newestSeq:
+        row.newest_seq === null || row.newest_seq === undefined
+          ? -1
+          : Number(row.newest_seq),
       reconciledThroughSeq: row.reconciled_through_seq,
     }));
   }

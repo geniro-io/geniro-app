@@ -106,13 +106,13 @@ describe('useChatSearch', () => {
     // Nothing orders two in-flight fetches. A slow answer to `bloom` landing
     // after a fast one to `bloom filter` would put the wrong list under a field
     // the user is still typing in.
-    const slow = new Promise((resolve) =>
+    const slow = new Promise((resolve) => {
       setTimeout(
         () =>
           resolve({ hits: [hit(1, 'the stale answer')], partialReason: null }),
         1_000,
-      ),
-    );
+      );
+    });
     const searchChat = vi
       .fn()
       .mockReturnValueOnce(slow)

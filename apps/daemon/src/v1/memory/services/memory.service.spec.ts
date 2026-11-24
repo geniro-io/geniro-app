@@ -3131,7 +3131,9 @@ describe('MemoryService', () => {
       expect(
         rows.map((row) => [
           row.statesRule,
-          row.referencedPaths === null ? null : JSON.parse(row.referencedPaths),
+          row.referencedPaths === null
+            ? null
+            : (JSON.parse(row.referencedPaths) as unknown),
         ]),
       ).toEqual([
         [true, ['apps/daemon/src/main.ts', 'docs/a.md']],

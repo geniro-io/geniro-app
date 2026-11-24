@@ -105,7 +105,7 @@ function mount(tasksApi: DaemonApis['tasks'] | null): Harness {
  */
 function stubExecCommand(returns: boolean): ReturnType<typeof vi.fn> {
   const exec = vi.fn(() => returns);
-  document.execCommand = exec as unknown as typeof document.execCommand;
+  document.execCommand = exec;
   return exec;
 }
 
@@ -115,7 +115,9 @@ const MAX_SETTLE_TURNS = 50;
 /** One macrotask turn, with React's own work flushed around it. */
 const turn = async (): Promise<void> => {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 };
 

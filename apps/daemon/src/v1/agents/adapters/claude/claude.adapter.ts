@@ -215,7 +215,6 @@ import {
   parseProjectServerNames,
 } from './utils/claude-mcp-folder.utils';
 import { parseMcpGetHealth, parseMcpList } from './utils/claude-mcp-list.utils';
-import type { ClaudeHomeConfig } from './utils/claude-mcp-toggle.utils';
 import {
   parseHomeConfig,
   readConfiguredServers,
@@ -2054,14 +2053,9 @@ export class ClaudeAdapter extends AgentAdapter {
     const file = this.homeConfigFile(options.configDir ?? null);
     const projectKey = await claudeProjectKey(cwd);
     await this.rewriteHomeConfig(file, `switching ${server}`, (config) => {
-      const next = withDisabledServer(
-        config as ClaudeHomeConfig,
-        projectKey,
-        server,
-        enabled,
-      );
+      const next = withDisabledServer(config, projectKey, server, enabled);
       // Already in that state — never rewrite the user's config.
-      return next === config ? null : (next as Record<string, unknown>);
+      return next === config ? null : next;
     });
   }
 

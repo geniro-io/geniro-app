@@ -205,7 +205,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
   };
 
   const fresh = async (taskId: string) =>
-    taskDao.getById(taskId, orm.em.fork() as EntityManager);
+    taskDao.getById(taskId, orm.em.fork());
 
   const arm = async () => {
     const row = await projectDao.getById(project.id, em);
@@ -275,10 +275,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(answer.text).toContain(
       'It runs on claude, in folder /tmp/geniro-task-board-tool-spec (from the project), with model=(not set), effort=(not set), approval=(not set), configDir=/tmp/profiles/work (from the project).',
     );
-    const [stored] = await taskDao.listForProject(
-      project.id,
-      orm.em.fork() as EntityManager,
-    );
+    const [stored] = await taskDao.listForProject(project.id, orm.em.fork());
     expect(stored).toMatchObject({
       title: 'Board tools for every agent',
       description: 'So a chat can file a ticket.',
@@ -387,7 +384,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       );
     }
     expect(backlog.isError).toBe(false);
-    const rows = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const rows = await taskDao.listAll(orm.em.fork());
     expect(rows.map((row) => [row.title, row.status]).sort()).toEqual([
       ['fine', 'backlog'],
       ['parked', 'backlog'],
@@ -418,7 +415,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       expect(answer.text).toContain(
         'may not put a card in that intake or change existing cards on this board',
       );
-      const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+      const [stored] = await taskDao.listAll(orm.em.fork());
       expect(stored).toMatchObject({ description: null, report: null });
     },
   );
@@ -438,7 +435,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(auto.isError).toBe(true);
     expect(auto.text).toContain("may not set a card's approval to `auto`");
     expect(ask.isError).toBe(false);
-    const rows = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const rows = await taskDao.listAll(orm.em.fork());
     expect(rows.map((row) => row.title)).toEqual(['y']);
 
     const raised = await call(
@@ -448,7 +445,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     );
     expect(raised.isError).toBe(true);
     expect(raised.text).toContain("may not set a card's approval to `auto`");
-    const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const [stored] = await taskDao.listAll(orm.em.fork());
     expect(stored?.approval).toBe('ask');
   });
 
@@ -477,7 +474,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       expect(answer.text).toContain(
         "may not change an existing card's run configuration",
       );
-      const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+      const [stored] = await taskDao.listAll(orm.em.fork());
       expect(stored).toMatchObject({
         agentKind: 'claude',
         approval: 'ask',
@@ -610,7 +607,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(answer.text).toMatch(
       /^Updated GEN-1: changed title, priority, labels, model; moved `backlog` → `in_review`\./,
     );
-    const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const [stored] = await taskDao.listAll(orm.em.fork());
     expect(stored).toMatchObject({
       title: 'new',
       labels: '["bug"]',
@@ -630,7 +627,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
 
     expect(answer.isError).toBe(true);
     expect(answer.text).toContain("'runId' cannot be set by a tool");
-    const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const [stored] = await taskDao.listAll(orm.em.fork());
     expect(stored).toMatchObject({ title: 'x', runId: null });
   });
 
@@ -646,7 +643,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
 
     expect(answer.isError).toBe(false);
     expect(answer.text).toContain('is in `backlog`, not `todo`');
-    const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+    const [stored] = await taskDao.listAll(orm.em.fork());
     expect(stored).toMatchObject({ title: 'x', status: 'backlog' });
   });
 
@@ -703,7 +700,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       expect(answer.text).toBe(
         'Saved title, but did not move GEN-1: it moved meanwhile.',
       );
-      const [stored] = await taskDao.listAll(orm.em.fork() as EntityManager);
+      const [stored] = await taskDao.listAll(orm.em.fork());
       expect(stored).toMatchObject({ title: 'y', status: 'backlog' });
     } finally {
       tasks.moveStatus = moveStatus;
@@ -1103,7 +1100,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       runId: 'run-1',
     });
     expect(await fresh(task.id)).toBeNull();
-    const run = await runDao.getById('run-1', orm.em.fork() as EntityManager);
+    const run = await runDao.getById('run-1', orm.em.fork());
     expect(run).toMatchObject({ id: 'run-1', taskId: null });
     expect(changes).toEqual([
       {

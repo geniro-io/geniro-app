@@ -255,7 +255,7 @@ function main(): void {
     const { id, ...request } = message;
     inFlight += 1;
     worker
-      .handle(request as WorkerRequest)
+      .handle(request)
       .then(
         (result) => reply({ id, ok: true, result }),
         (err: unknown) =>

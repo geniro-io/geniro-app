@@ -254,7 +254,7 @@ bootstrapper.addExtension(
 
       // Then the additive sync from the entities. `safe: true` never emits
       // destructive DDL, so a removed or renamed column keeps its data.
-      const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
+      const orm = app.get<MikroORM, SqliteMikroOrm>(MikroORM);
       await orm.schema.update({ safe: true });
       // WAL, so a process READING the database cannot make this daemon's
       // writes fail. Under the default rollback journal a reader holds a lock

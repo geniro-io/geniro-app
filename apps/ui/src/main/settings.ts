@@ -175,7 +175,7 @@ export function readSettings(): Settings {
       ...DEFAULT_SETTINGS,
       ...salvaged,
       settingsVersion: storedSettingsVersion(stored),
-    } as Settings;
+    };
   } catch {
     return defaults;
   }
@@ -203,7 +203,7 @@ function salvageCliRecord<
       Object.assign(salvaged, single.data);
     }
   }
-  return salvaged as Settings[K];
+  return salvaged;
 }
 
 /**
@@ -243,7 +243,7 @@ function salvageList<K extends 'runConfigs' | 'fastActions' | 'configProfiles'>(
       continue;
     }
     seen.add(parsed.data.id);
-    salvaged.push(parsed.data as Settings[K][number]);
+    salvaged.push(parsed.data);
   }
   // Salvaging entry-by-entry skips the array-level cap, so it is re-applied
   // here: an over-long hand-edited file would otherwise load in full and then

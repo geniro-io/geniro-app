@@ -451,7 +451,9 @@ export class PullRequestCaptureService implements OnModuleInit {
     const rows: Awaited<ReturnType<ItemDao['pullRequestCandidates']>> = [];
     for (let from = scanned; from < maxSeq; from += CANDIDATE_WINDOW_SEQS) {
       if (from > scanned) {
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
       rows.push(
         ...(await this.itemDao.pullRequestCandidates(
@@ -622,7 +624,9 @@ export class PullRequestCaptureService implements OnModuleInit {
         from += CANDIDATE_WINDOW_SEQS
       ) {
         if (from > readThrough) {
-          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise((resolve) => {
+            setImmediate(resolve);
+          });
         }
         found = (
           await this.itemDao.pullRequestNamingCandidates(

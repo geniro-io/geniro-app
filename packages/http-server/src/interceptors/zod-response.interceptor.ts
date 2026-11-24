@@ -6,8 +6,6 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import lodash from 'lodash';
-
-const { pick } = lodash;
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import z from 'zod';
@@ -25,13 +23,13 @@ export class ZodResponseInterceptor implements NestInterceptor {
   constructor(private readonly reflector: Reflector) {}
 
   intercept(ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const meta = (this.reflector.getAllAndOverride('swagger/apiResponse', [
-      ctx.getHandler(),
-      ctx.getClass(),
-    ]) || {}) as Record<string, { type?: MaybeZodDto; isArray?: boolean }>;
+    const meta =
+      this.reflector.getAllAndOverride<
+        Record<string, { type?: MaybeZodDto; isArray?: boolean } | undefined>
+      >('swagger/apiResponse', [ctx.getHandler(), ctx.getClass()]) || {};
 
     const resp = meta['200'] || meta['201'] || meta['default'];
-    const dto = resp?.type as MaybeZodDto | undefined;
+    const dto = resp?.type;
     const schema = getZod(dto);
     if (!schema) {
       return next.handle();
@@ -41,7 +39,7 @@ export class ZodResponseInterceptor implements NestInterceptor {
 
     const s = resp?.isArray ? z.array(schema) : schema;
     return next.handle().pipe(
-      map((d) => {
+      map((d: unknown) => {
         const data = s.safeParse(d);
 
         if (!data.error) {
@@ -52,11 +50,11 @@ export class ZodResponseInterceptor implements NestInterceptor {
           const keys = Object.keys(schemaDef);
 
           if (Array.isArray(d)) {
-            return d.map((item) =>
-              item && typeof item === 'object' ? pick(item, keys) : item,
+            return (d as unknown[]).map((item) =>
+              item && typeof item === 'object' ? lodash.pick(item, keys) : item,
             );
           }
-          return pick(d as Record<string, unknown>, keys);
+          return lodash.pick(d as Record<string, unknown>, keys);
         }
       }),
     );

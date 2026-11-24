@@ -315,11 +315,9 @@ describe('ItemDao (in-memory sqlite)', () => {
 
     const rows = await dao.teamNoteRows('run-a');
     expect(rows.map((row) => row.seq)).toEqual([2, 5, 7]);
-    expect(rows.map((row) => JSON.parse(row.payload).text)).toEqual([
-      'first',
-      'second',
-      'third',
-    ]);
+    expect(
+      rows.map((row) => (JSON.parse(row.payload) as { text: unknown }).text),
+    ).toEqual(['first', 'second', 'third']);
     expect(await dao.teamNoteCount('run-a')).toBe(3);
     expect(await dao.teamNoteCount('run-a', undefined, 5)).toBe(2);
   });
@@ -337,11 +335,11 @@ describe('ItemDao (in-memory sqlite)', () => {
     const rows = await dao.stageChangeRows('run-a');
 
     expect(rows.map((row) => row.seq)).toEqual([2, 5, 9]);
-    expect(rows.map((row) => JSON.parse(row.payload).stageId)).toEqual([
-      'plan',
-      'build',
-      'review',
-    ]);
+    expect(
+      rows.map(
+        (row) => (JSON.parse(row.payload) as { stageId: unknown }).stageId,
+      ),
+    ).toEqual(['plan', 'build', 'review']);
     expect(rows.every((row) => row.createdAt instanceof Date)).toBe(true);
     expect(await dao.stageChangeRows('run-none')).toEqual([]);
   });
@@ -1995,7 +1993,9 @@ describe('ItemDao (in-memory sqlite)', () => {
       .execute();
 
     const ids = (rows: { payload: unknown }[]): unknown[] =>
-      rows.map((row) => JSON.parse(String(row.payload)).id);
+      rows.map(
+        (row) => (JSON.parse(String(row.payload)) as { id: unknown }).id,
+      );
     const found = await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b']);
     expect(ids(found)).toEqual(['toolu_a', 'toolu_b']);
     expect(found.map((row) => [row.memberId, row.createdAt])).toEqual([

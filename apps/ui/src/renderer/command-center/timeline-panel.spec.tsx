@@ -292,8 +292,8 @@ describe('TimelinePanel — threads and messages', () => {
       ...el.querySelectorAll<HTMLElement>('[data-kind="outcome"]'),
     ];
     expect(outcomes).toHaveLength(2);
-    const finished = outcomes.find((row) => row.textContent!.includes('done'))!;
-    const failed = outcomes.find((row) => row.textContent!.includes('failed'))!;
+    const finished = outcomes.find((row) => row.textContent.includes('done'))!;
+    const failed = outcomes.find((row) => row.textContent.includes('failed'))!;
     expect(
       finished.querySelector('span[aria-hidden="true"]')!.className,
     ).toContain('text-success');

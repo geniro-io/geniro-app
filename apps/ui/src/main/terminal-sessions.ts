@@ -218,7 +218,7 @@ export class TerminalSessions {
   private async loadSpawn(): Promise<PtySpawn> {
     if (this.spawn === null) {
       const nodePty = await import('node-pty');
-      this.spawn = nodePty.spawn as PtySpawn;
+      this.spawn = nodePty.spawn;
     }
     this.ensureSpawnHelperExecutable();
     return this.spawn;

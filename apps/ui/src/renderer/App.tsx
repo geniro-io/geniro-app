@@ -578,7 +578,14 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const { toggle: toggleTerminal } = terminals;
+  const toggleTerminal = useLatestCallback(
+    (cwd: string | null) => terminals.toggle(cwd),
+    [],
+  );
+  const openTerminal = useLatestCallback(
+    (cwd: string | null) => terminals.openTab(cwd),
+    [],
+  );
   useTerminalShortcut(
     useLatestCallback(
       () => toggleTerminal(view === 'chats' ? chatFolder : null),
@@ -926,7 +933,7 @@ export function App(): React.JSX.Element {
                       onFirstLaunchHandled={() => setChatLaunch(null)}
                       onActiveRunChange={setOpenRunId}
                       onTitleChange={setChatTitle}
-                      onOpenTerminal={terminals.openTab}
+                      onOpenTerminal={openTerminal}
                       onFolderChange={setChatFolder}
                       // Chats has no route of its own to Settings — the nav rail is
                       // this component's. Handing it one callback is what lets the

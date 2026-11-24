@@ -9,7 +9,7 @@ import { atomicWrite } from '../../../../utils/atomic-file';
 import { registerSecret } from '../../../diagnostics/utils/redact';
 import { AgentKind } from '../../../runs/runs.types';
 import type { HostToolResultLedger } from '../../services/host-tool-result.ledger';
-import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
+import type { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { adapterQuestionOf } from '../../utils/card-questions';
 import { asNumber, asRecord, asString } from '../../utils/json-util';
 import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
@@ -3084,7 +3084,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     // For as long as the process lives, so the answers geniro's endpoint serves
     // it are kept for `mcpToolResult` to read back.
     const release =
-      input.mcpEndpoint == null
+      input.mcpEndpoint === null || input.mcpEndpoint === undefined
         ? undefined
         : this.cursorOptions.hostToolResults?.watch(input.mcpEndpoint);
     return () => {

@@ -12,8 +12,8 @@ describe(MetricsService, () => {
   const service = new MetricsService();
 
   describe('gauge metrics', () => {
-    beforeAll(() => {
-      service.clearAll();
+    beforeAll(async () => {
+      await service.clearAll();
       service.registerGauge('requests', 'all requests', ['path']);
     });
 
@@ -61,8 +61,8 @@ describe(MetricsService, () => {
   });
 
   describe('counter metrics', () => {
-    beforeAll(() => {
-      service.clearAll();
+    beforeAll(async () => {
+      await service.clearAll();
       service.registerCounter('requests_counter', 'all requests', ['path']);
     });
 
@@ -92,8 +92,8 @@ describe(MetricsService, () => {
   });
 
   describe('histogram metrics', () => {
-    beforeAll(() => {
-      service.clearAll();
+    beforeAll(async () => {
+      await service.clearAll();
       service.registerHistogram('requests_time', 'all requests time', ['path']);
     });
 

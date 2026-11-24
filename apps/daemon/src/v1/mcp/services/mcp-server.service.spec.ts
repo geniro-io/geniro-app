@@ -69,7 +69,7 @@ import {
   HOST_TEAM_NOTES_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
-import { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
+import type { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import { ActionBroker } from '../../agents/services/action.broker';
 import { AnalysisBroker } from '../../agents/services/analysis.broker';
@@ -368,7 +368,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
   const milestones = milestoneBroker();
   milestones.register('run-1', 'agent', noop as never);
   const projectCards = new ProjectInstructionsBroker();
-  projectCards.register('run-1', 'agent', noop as never);
+  projectCards.register('run-1', 'agent', noop);
   for (const broker of [
     questions,
     charts,
@@ -4203,7 +4203,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const noop = async (): Promise<never> => {
       throw new Error('not called');
     };
-    plans.register('run-1', 'agent', noop as never, { answersAtOnce: true });
+    plans.register('run-1', 'agent', noop, { answersAtOnce: true });
     const { json } = await post(
       service(
         new CallBroker(),
@@ -4529,7 +4529,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
-    } as Parameters<typeof createMcpTools>[0]);
+    });
     const listing = tools.flatMap((tool) =>
       tool.list({ runId: 'run-1', memberId: 'agent', conversationId: null }),
     );
@@ -4634,7 +4634,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
       stages: stageService(),
-    } as Parameters<typeof createMcpTools>[0]);
+    });
   };
 
   const proposalContext = {
@@ -6439,7 +6439,9 @@ async function callGoals(
       );
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
   try {
     const port = (server.address() as AddressInfo).port;
     const res = await fetch(

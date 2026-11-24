@@ -139,7 +139,9 @@ export function useLineSnapshots({
         }
         if (baseSha === null) {
           if (refused !== null) {
-            throw refused;
+            throw refused instanceof Error
+              ? refused
+              : new Error(String(refused));
           }
           return;
         }

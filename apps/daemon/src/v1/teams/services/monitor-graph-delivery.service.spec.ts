@@ -114,7 +114,9 @@ describe('MonitorGraphDelivery', () => {
       description: 'someone else',
       timeoutMs: 60_000,
     });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
     fake.answer('woken');
     fake.endTurn();
     const prompt = fake.wakeConversation.mock.calls.at(-1)?.[2];

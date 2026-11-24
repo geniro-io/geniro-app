@@ -914,9 +914,9 @@ describe('McpSection — a sign-in that has been asked for', () => {
       signInGroup(el).click();
     });
 
-    const button = [...el.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('Signing in'),
-    ) as HTMLButtonElement | undefined;
+    const button = [...el.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.includes('Signing in'),
+    );
     expect(button).toBeDefined();
     // Disabled too: a second press opens a second browser challenge, which
     // invalidates the first.

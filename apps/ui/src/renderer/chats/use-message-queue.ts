@@ -326,7 +326,9 @@ export function useMessageQueue({
               // is still running and its terminal item fires this drain again.
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, delay));
+            await new Promise((resolve) => {
+              setTimeout(resolve, delay);
+            });
             // Not abandoned when the user switches away mid-retry: queueing IS
             // the instruction to send it when the turn ends.
           }

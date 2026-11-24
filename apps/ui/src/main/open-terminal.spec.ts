@@ -1,3 +1,4 @@
+import type * as nodeChildProcessModule from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,9 +23,7 @@ const mocks = vi.hoisted(() => ({
 // REAL shell below, which needs the rest of the module intact.
 vi.mock('node:child_process', async () => {
   const actual =
-    await vi.importActual<typeof import('node:child_process')>(
-      'node:child_process',
-    );
+    await vi.importActual<typeof nodeChildProcessModule>('node:child_process');
   return {
     ...actual,
     execFile: (

@@ -32,7 +32,7 @@ export class FetchContextDataMiddleware implements NestMiddleware {
 
         return next();
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         this.logger.error(<Error>e, 'Cannot verify the token');
 
         // Still set the storage even on error, so downstream code doesn't crash

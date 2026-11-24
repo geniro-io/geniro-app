@@ -2321,12 +2321,12 @@ export function buildSubagentBlocks(
       recoverable: declared?.recoverable ?? false,
       processEnded:
         declared?.backgroundOutcome === 'untracked' && declared.processEnded,
-      returned: launch?.result != null,
+      returned: launch?.result !== null && launch?.result !== undefined,
       failed: payload?.isError === true,
       // Only stringify a body that EXISTS. `toolResultText(null)` returns
       // the four characters `null`, which the result panel then framed as
       // the delegate's own answer.
-      result: body == null ? null : toolResultText(body),
+      result: body === null || body === undefined ? null : toolResultText(body),
       // Decided in the pass below, once the delegate's rows are known.
       resultIsOwn: false,
       lastRowAt: null,
@@ -2535,16 +2535,17 @@ export function workflowCardsOf(items: readonly ChatItem[]): WorkflowEntry[] {
       parentToolUseId: anchor === null ? null : subagentIdOf(anchor),
       workflow,
       script: inputString(launch?.call, 'script'),
-      returned: launch?.result != null,
+      returned: launch?.result !== null && launch?.result !== undefined,
       failed: payload?.isError === true,
       // Only stringify a body that EXISTS. `toolResultText(null)` returns the
       // four characters `null`, which the result panel would then frame as the
       // workflow's own answer.
-      result: body == null ? null : toolResultText(body),
+      result: body === null || body === undefined ? null : toolResultText(body),
       // A roster that arrived AFTER the answer says the workflow was plainly
       // not reporting through it — see {@link WorkflowEntry.resultIsOwn}.
       resultIsOwn:
-        launch?.result != null &&
+        launch?.result !== null &&
+        launch?.result !== undefined &&
         (lastRowSeq.get(id) ?? 0) <= launch.result.seq,
       lastRowAt: lastRowAt.get(id) ?? null,
     };
@@ -4698,7 +4699,7 @@ function foldToolGroup(pairs: readonly ToolPair[]): {
     const input = (call.payload as { input?: unknown } | null)?.input;
     const file =
       input && typeof input === 'object' && 'file_path' in input
-        ? String((input as { file_path: unknown }).file_path)
+        ? String(input.file_path)
         : null;
     // What the call DID, from the ONE classifier — the agent's own answer when it
     // made one, else its tool name. The name buckets are one CLI's vocabulary:

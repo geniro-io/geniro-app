@@ -89,7 +89,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    em = orm.em.fork() as EntityManager;
+    em = orm.em.fork();
     projectDao = new ProjectDao(em);
     taskDao = new TaskDao(em);
     runDao = new RunDao(em);

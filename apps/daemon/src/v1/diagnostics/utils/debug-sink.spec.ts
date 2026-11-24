@@ -197,7 +197,9 @@ async function until(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition() && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
 }
 
@@ -227,7 +229,9 @@ async function settledCount(dir: string, timeoutMs = 5_000): Promise<number> {
     if (stable >= 5 && count > 0) {
       return count;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
   return last;
 }

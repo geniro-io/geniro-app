@@ -1010,7 +1010,9 @@ describe('createRunProcessReaper — the journaled record of what a dead CLI lef
     });
 
     die(42);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(journaled().map((entry) => entry.cliPid)).toEqual([42]);
 
     graceOver();
@@ -1028,7 +1030,9 @@ describe('createRunProcessReaper — the journaled record of what a dead CLI lef
 
     die(42);
     await vi.waitFor(() => expect(warn).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(journaled().map((entry) => entry.cliPid)).toEqual([42]);
   });

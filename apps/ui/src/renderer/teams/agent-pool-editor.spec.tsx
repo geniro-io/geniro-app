@@ -233,7 +233,9 @@ describe('AgentPoolEditor', () => {
 
     renderEditor([{ agent: 'claude', model: 'opus' }], agentsApi);
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
     // The member's own model is the question its vocabulary is asked with.
@@ -285,7 +287,9 @@ describe('AgentPoolEditor', () => {
         efforts: [{ id: 'high', label: 'high' }],
         unavailableReason: null,
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
     expect(pending()).toBeNull();
@@ -393,7 +397,9 @@ describe('AgentPoolEditor', () => {
     );
     // The listing is debounced behind the member's mount.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 700);
+      });
     });
     press(button('MCP servers'));
 

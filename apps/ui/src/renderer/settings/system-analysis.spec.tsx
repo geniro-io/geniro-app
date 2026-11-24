@@ -202,7 +202,9 @@ function agentsApiStub(): DaemonApis['agents'] {
 
 async function settle(ms = 0): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   });
 }
 
@@ -447,10 +449,11 @@ describe('SystemAnalysisPage', () => {
       await renderPage({ api: asApi(api) });
       await press(button(container, 'Start analysis'));
 
-      const budgetSignals = timeout.mock.calls.flatMap(([ms], index) =>
-        ms === SYSTEM_ANALYSIS_TIMEOUT_MS
-          ? [timeout.mock.results[index]?.value]
-          : [],
+      const budgetSignals = timeout.mock.calls.flatMap(
+        ([ms], index): unknown[] =>
+          ms === SYSTEM_ANALYSIS_TIMEOUT_MS
+            ? [timeout.mock.results[index]?.value]
+            : [],
       );
       expect(budgetSignals).toHaveLength(2);
       expect(api.readSystemAnalysisScope.mock.calls[0]?.[1]?.signal).toBe(

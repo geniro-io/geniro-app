@@ -91,11 +91,11 @@ export function useDebugLog(
     void apis.diagnostics
       .readDebugLog({ afterSeq: lastSeqRef.current })
       .then((page) => {
-        setChannelsState(page.channels as DebugChannel[]);
+        setChannelsState(page.channels);
         setFilePath(page.filePath ?? null);
         setDropped((prev) => prev + page.dropped);
         lastSeqRef.current = page.lastSeq;
-        append(page.entries as DebugLogEntry[]);
+        append(page.entries);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
@@ -153,7 +153,7 @@ export function useDebugLog(
       setChannelsState(next);
       void apis.diagnostics
         .setDebugChannels({ debugSettingsDto: { channels: next } })
-        .then((result) => setChannelsState(result.channels as DebugChannel[]))
+        .then((result) => setChannelsState(result.channels))
         .catch((err: unknown) => setError(String(err)));
     },
     [apis],

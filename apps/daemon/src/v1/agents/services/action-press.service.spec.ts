@@ -16,6 +16,7 @@ import {
   describe,
   expect,
   it,
+  type Mock,
   vi,
 } from 'vitest';
 
@@ -58,7 +59,9 @@ function released(
 ): Promise<boolean> {
   return Promise.race([
     slots.settled(runId, 60_000).then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), 100);
+    }),
   ]);
 }
 
@@ -69,7 +72,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
   let runs: RunDao;
   let actions: ChatActionsService;
   let publisher: ActionPublishService;
-  let sendMessage: ReturnType<typeof vi.fn>;
+  let sendMessage: Mock;
   let presses: ActionPressService;
 
   const ctx: ActionPublishContext = {
@@ -908,7 +911,9 @@ describe('ActionPressService (in-memory sqlite)', () => {
       await pressCommand({ argv: ['true'], notifyAgent: true });
 
       await expect.poll(() => sendMessage.mock.calls.length).toBe(1);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
       expect(sendMessage).toHaveBeenCalledTimes(1);
     });
 

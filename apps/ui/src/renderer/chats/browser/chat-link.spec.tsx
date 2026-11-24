@@ -506,7 +506,7 @@ describe('BrowserGrid — the pane the links read', () => {
   }
 
   it('reports the thread flag as it changes, through the same controls object', async () => {
-    const seen = vi.fn();
+    const seen = vi.fn<(pane: BrowserPaneControls | null) => void>();
     await render(
       <ThreadUiMemoryContext.Provider value={RUN}>
         <BrowserGrid runId={RUN}>

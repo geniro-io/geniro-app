@@ -464,9 +464,9 @@ function PoolMemberRow({
                 ? (server) => mcpSignIn.start(member.agent, server, configDir)
                 : undefined
             }
-            signingIn={ownsSignIn ? mcpSignIn!.signingIn : null}
-            loginServer={ownsSignIn ? mcpSignIn!.loginServer : null}
-            loginPanel={ownsSignIn ? mcpSignIn!.loginPanel : null}
+            signingIn={ownsSignIn ? mcpSignIn.signingIn : null}
+            loginServer={ownsSignIn ? mcpSignIn.loginServer : null}
+            loginPanel={ownsSignIn ? mcpSignIn.loginPanel : null}
             // This member's PROFILE, the file its own rows came from.
             configActions={
               agentsApi

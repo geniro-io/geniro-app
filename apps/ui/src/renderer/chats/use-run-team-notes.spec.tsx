@@ -83,13 +83,13 @@ describe('useRunTeamNotes', () => {
     const lists = [[note(5, 'first')], [note(9, 'second'), note(5, 'first')]];
     const read = vi.fn(async () => ({ notes: lists.shift() ?? [] }));
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(texts()).toEqual(['first']);
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(read).toHaveBeenCalledTimes(1);
 
-    await render(read as unknown as Read, 'run-1', 9);
+    await render(read, 'run-1', 9);
     expect(texts()).toEqual(['second', 'first']);
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -104,10 +104,10 @@ describe('useRunTeamNotes', () => {
           }),
     );
 
-    await render(read as unknown as Read, 'run-1', 0);
+    await render(read, 'run-1', 0);
     expect(texts()).toEqual(['from run 1']);
 
-    await render(read as unknown as Read, 'run-2', 0);
+    await render(read, 'run-2', 0);
     expect(texts()).toEqual([]);
 
     await act(async () => {
@@ -125,16 +125,16 @@ describe('useRunTeamNotes', () => {
       return { notes: [note(5, 'held')] };
     });
 
-    await render(read as unknown as Read, null, 0);
+    await render(read, null, 0);
     expect(read).not.toHaveBeenCalled();
     expect(seen?.loaded).toBe(false);
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(texts()).toEqual(['held']);
     expect(seen?.loaded).toBe(true);
 
     fail = true;
-    await render(read as unknown as Read, 'run-1', 9);
+    await render(read, 'run-1', 9);
     expect(texts()).toEqual([]);
     expect(seen?.loaded).toBe(true);
   });

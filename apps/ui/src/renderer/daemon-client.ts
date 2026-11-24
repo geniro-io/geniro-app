@@ -213,7 +213,7 @@ function readStageProgressEntry(raw: unknown): StageProgressEntry | null {
     id,
     title,
     status: status as StageProgressEntry['status'],
-    next: next as string[],
+    next: next,
     ...(chosen === undefined ? {} : { chosen }),
     ...(actor === undefined ? {} : { by: actor }),
     ...(text === undefined ? {} : { text }),

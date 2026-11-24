@@ -1,7 +1,6 @@
-import type { EntityManager, FilterQuery } from '@mikro-orm/sqlite';
+import type { EntityManager } from '@mikro-orm/sqlite';
 
 import type { RunDao } from '../../agents/dao/run.dao';
-import type { Run } from '../../runs/entity/run.entity';
 
 /**
  * Let go of every chat that was working one of these cards, as the cards are
@@ -38,11 +37,7 @@ export async function releaseTaskRuns(
   if (taskIds.length === 0) {
     return;
   }
-  const runs = await runDao.getAll(
-    { taskId: { $in: [...taskIds] } } as FilterQuery<Run>,
-    {},
-    em,
-  );
+  const runs = await runDao.getAll({ taskId: { $in: [...taskIds] } }, {}, em);
   if (runs.length === 0) {
     return;
   }

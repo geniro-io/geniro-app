@@ -68,8 +68,7 @@ export class MetricsModule implements OnModuleInit {
     // Nest's middie shim hands middleware only the raw IncomingMessage). The
     // middleware reads the stamp at response `finish`, so hook-vs-middleware
     // ordering is irrelevant. Unrouted requests leave no stamp.
-    const fastify = this.adapterHost?.httpAdapter?.getInstance?.() as
-      FastifyLike | undefined;
+    const fastify = this.adapterHost?.httpAdapter?.getInstance?.<FastifyLike>();
     fastify?.addHook?.('onRequest', (request, _reply, done) => {
       const url = request.routeOptions?.url;
       if (typeof url === 'string') {

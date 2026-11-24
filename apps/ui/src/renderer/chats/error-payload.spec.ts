@@ -103,7 +103,7 @@ describe('errorReportText', () => {
         detail: { code: 'api_error', requestId: 'req_011Ce' },
       }),
       createdAt: '2026-08-18T13:56:13.063Z',
-    } as ChatItem;
+    };
 
     expect(errorReportText(item)).toBe(
       [

@@ -14,7 +14,9 @@ export const SHUTDOWN_DRAIN_MS = 5000;
 const SHUTDOWN_POLL_MS = 25;
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**

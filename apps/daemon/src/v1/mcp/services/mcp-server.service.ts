@@ -297,7 +297,7 @@ export class McpServerService {
     const endpointPath = hostEndpointPath(runId, memberId, conversationId);
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name;
-      const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      const args = request.params.arguments ?? {};
       const answer = (result: CallToolResult): CallToolResult => {
         this.servedResults.record(endpointPath, name, args, result);
         return result;

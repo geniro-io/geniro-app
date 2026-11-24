@@ -122,7 +122,7 @@ function button(name: string): HTMLButtonElement {
   if (!found) {
     throw new Error(`no button "${name}"`);
   }
-  return found as HTMLButtonElement;
+  return found;
 }
 
 async function press(name: string): Promise<void> {
@@ -134,7 +134,9 @@ async function press(name: string): Promise<void> {
 async function flush(): Promise<void> {
   for (let tick = 0; tick < 8; tick += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
   }
 }
@@ -494,8 +496,8 @@ describe('AnalyzeThreadDialog', () => {
       });
       const count = vi.fn().mockResolvedValue({ inPeriod: 12, analysed: 12 });
       const { rerender } = await renderTeam(vi.fn(), vi.fn(), check, count);
-      check.mockReturnValue(new Promise(() => undefined));
-      count.mockReturnValue(new Promise(() => undefined));
+      check.mockReturnValue(new Promise(() => {}));
+      count.mockReturnValue(new Promise(() => {}));
 
       await rerender();
 
@@ -636,7 +638,9 @@ describe('AnalyzeThreadDialog', () => {
       >();
       const countTeamAnalysisRuns = vi.fn(
         ({ days }: { days: number }) =>
-          new Promise((resolve) => answers.set(days, resolve)),
+          new Promise((resolve) => {
+            answers.set(days, resolve);
+          }),
       );
       await renderTeam(vi.fn(), vi.fn(), undefined, countTeamAnalysisRuns);
       expect(countLine().textContent).toBe('Counting…');

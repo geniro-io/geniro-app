@@ -402,7 +402,9 @@ describe('StageWakeService.onModuleInit', () => {
     h.service.onModuleInit();
     expect(h.settled).toHaveLength(1);
     h.settled[0]!('run-1');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(h.notes).toEqual([{ action: 'nudge', stageId: 'build', rev: 3 }]);
   });
 });
@@ -492,7 +494,9 @@ describe('StageWakeService in relay mode', () => {
     const h = setUp({ canWake: true });
     h.service.onModuleInit();
     h.moved[0]!('run-1', COMPLETED);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(h.published.map((wake) => wake.owner.memberId)).toEqual(['helper']);
     expect(h.notes).toEqual([
       { action: 'handoff', stageId: 'review', rev: 1, lead: 'helper' },
@@ -513,7 +517,9 @@ describe('StageWakeService in relay mode', () => {
     const h = setUp({ canWake: true });
     h.service.onModuleInit();
     h.moved[0]!('run-1', moved);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(h.published).toEqual([]);
     expect(h.notes).toEqual([]);
   });
@@ -522,7 +528,9 @@ describe('StageWakeService in relay mode', () => {
     const h = setUp({ canWake: true });
     h.service.onModuleInit();
     h.moved[0]!('run-1', COMPLETED);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     const [wake] = h.published;
     h.setCached({ rev: 1, leadId: 'helper' });
     expect(wake!.withdrawn?.()).toBe(false);

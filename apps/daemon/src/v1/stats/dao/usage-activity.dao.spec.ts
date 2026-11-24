@@ -454,10 +454,10 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       const reader = new UsageActivityDao(em);
       // Every statement is compiled by the native database, whichever builder wrote it, so a
       // statement per thread would show here as one call per thread however the rows were fetched.
-      const prepare = vi.spyOn(
-        await em.getConnection().getNativeClient(),
-        'prepare',
-      );
+      const client = (await em.getConnection().getNativeClient()) as {
+        prepare(sql: string): unknown;
+      };
+      const prepare = vi.spyOn(client, 'prepare');
 
       await reader.peakLinesBefore(
         [

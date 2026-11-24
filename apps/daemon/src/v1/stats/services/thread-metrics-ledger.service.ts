@@ -69,7 +69,7 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
 
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      this.observe(event);
+      void this.observe(event);
     });
     this.bus.allDeleted().subscribe((runId) => {
       this.forget(runId);

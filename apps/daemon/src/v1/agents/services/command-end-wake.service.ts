@@ -4,7 +4,8 @@ import {
   commandEndWakeMessage,
   commandEndWakePrompt,
 } from '../utils/command-end-wake-text';
-import { HostWakeBus, hostWakeSessionKey } from './host-wake.bus';
+import type { HostWakeBus } from './host-wake.bus';
+import { hostWakeSessionKey } from './host-wake.bus';
 
 export const COMMAND_END_WAKE_BATCH_MS = 2_000;
 

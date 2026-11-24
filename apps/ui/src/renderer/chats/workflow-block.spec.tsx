@@ -544,11 +544,9 @@ describe('ActiveWorkflowChips', () => {
   it('hands the chip’s press to the caller, which takes the reader to the card', () => {
     const revealed = render([workflow('b', 'running')]);
     act(() =>
-      (
-        container.querySelector(
-          '[data-slot="workflow-chip"]',
-        ) as HTMLElement | null
-      )?.click(),
+      container
+        .querySelector<HTMLElement>('[data-slot="workflow-chip"]')
+        ?.click(),
     );
     expect(revealed()).toEqual(['b']);
   });

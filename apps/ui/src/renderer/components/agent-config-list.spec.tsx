@@ -295,7 +295,7 @@ describe('AgentConfigList — the account control matches the reported state', (
           : button.textContent?.includes('Signing in')
             ? 'Signing in…'
             : 'Sign in',
-        button: button as HTMLButtonElement,
+        button: button,
       }));
   }
 

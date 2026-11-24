@@ -637,7 +637,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const mode =
-      run?.approval == null
+      run?.approval === null || run?.approval === undefined
         ? 'is not running in `auto` approval'
         : `runs in \`${run.approval}\` approval`;
     if (armed) {

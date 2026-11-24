@@ -203,7 +203,7 @@ describe('LessonsBlock', () => {
         getLessonReflection: vi.fn(async () => ({
           ...FACTS_DONE,
           model: 'claude-sonnet-5-5',
-        })) as never,
+        })),
       }),
       { ...ENTRY, card: { ...ENTRY.card, model: 'haiku' } },
     );
@@ -298,7 +298,7 @@ describe('LessonsBlock', () => {
       .mockResolvedValueOnce({ ...FACTS_DONE, working: true, costUsd: null })
       .mockResolvedValueOnce(FACTS_DONE);
     const api = lessonsApi({
-      getLessonReflection: getLessonReflection as never,
+      getLessonReflection: getLessonReflection,
     });
     const el = await render(api);
 
@@ -327,7 +327,7 @@ describe('LessonsBlock', () => {
       costUsd: null,
     }));
     const api = lessonsApi({
-      getLessonReflection: getLessonReflection as never,
+      getLessonReflection: getLessonReflection,
     });
     await render(api);
 
@@ -448,7 +448,7 @@ describe('LessonsBlock', () => {
           : FACTS_DONE,
     );
     const api = lessonsApi({
-      getLessonReflection: getLessonReflection as never,
+      getLessonReflection: getLessonReflection,
     });
     const el = await render(api, {
       ...ENTRY,

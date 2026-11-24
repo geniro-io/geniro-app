@@ -84,7 +84,7 @@ const pills = (): HTMLElement[] => [
   ...container.querySelectorAll<HTMLElement>('[data-slot="stage-pill"]'),
 ];
 const titleOf = (each: HTMLElement): string =>
-  each.querySelector('[data-slot="stage-pill-title"]')!.textContent!;
+  each.querySelector('[data-slot="stage-pill-title"]')!.textContent;
 const columns = (): string[][] => {
   const out: string[][] = [];
   for (const each of pills()) {
@@ -97,7 +97,10 @@ const edgeEls = (): SVGPathElement[] => [
 ];
 const edges = (): Record<string, string | undefined> =>
   Object.fromEntries(
-    edgeEls().map((edge) => [edge.dataset.edge, edge.dataset.highlight]),
+    edgeEls().map((edge): [string, string | undefined] => [
+      edge.dataset.edge as string,
+      edge.dataset.highlight,
+    ]),
   );
 const canvas = (): HTMLElement =>
   container.querySelector<HTMLElement>('[data-slot="stage-graph-canvas"]')!;

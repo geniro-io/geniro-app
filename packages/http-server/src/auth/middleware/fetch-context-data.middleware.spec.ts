@@ -1,9 +1,9 @@
-import { BaseLogger } from '@packages/common';
+import type { BaseLogger } from '@packages/common';
 import type { FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IContextData } from '../auth.types';
-import { AuthContextService } from '../auth-context.service';
+import type { AuthContextService } from '../auth-context.service';
 import { AuthContextStorage } from '../auth-context-storage';
 import { FetchContextDataMiddleware } from './fetch-context-data.middleware';
 
@@ -94,7 +94,11 @@ describe('FetchContextDataMiddleware', () => {
     });
 
     // Verify that we can call checkSub on the storage (it should throw properly)
-    expect(() => req.__contextDataStorage.checkSub()).toThrow();
+    expect(() =>
+      (
+        req as { __contextDataStorage: { checkSub: () => void } }
+      ).__contextDataStorage.checkSub(),
+    ).toThrow();
     expect(req.__contextDataStorage).toBeDefined();
   });
 });

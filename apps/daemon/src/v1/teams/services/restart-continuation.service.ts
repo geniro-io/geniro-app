@@ -87,7 +87,11 @@ export class RestartContinuationService {
       this.logger.error(
         `run ${runId}: could not continue after ${interruptCauseClause(record.cause)}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      await this.abandon(runId, record, run.teamId != null);
+      await this.abandon(
+        runId,
+        record,
+        run.teamId !== null && run.teamId !== undefined,
+      );
     }
   }
 

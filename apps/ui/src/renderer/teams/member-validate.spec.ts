@@ -71,9 +71,7 @@ describe('validateMember mirrors the daemon’s member schema', () => {
     ['configDir', 'Config directory', 'settings'],
   ])('flags a NUL in `%s` under its field', (key, label, field) => {
     // The escape, never the raw byte — a NUL in a .ts file has no diff.
-    expect(
-      validateMember({ ...MEMBER, [key]: 'a\u0000b' } as TeamMember),
-    ).toEqual([
+    expect(validateMember({ ...MEMBER, [key]: 'a\u0000b' })).toEqual([
       { field, message: `${label} contains an invisible NUL character.` },
     ]);
   });

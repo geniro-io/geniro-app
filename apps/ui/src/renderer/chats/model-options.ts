@@ -3,7 +3,9 @@ import { modelPriceText, modelPriceTitle } from '../components/model-price';
 import { formatTokens } from './agent-activity';
 
 export function modelLabel(model: AgentModel): string {
-  return model.contextTokens == null || model.contextWindowSelectable
+  return model.contextTokens === null ||
+    model.contextTokens === undefined ||
+    model.contextWindowSelectable
     ? model.label
     : `${model.label} · ${formatTokens(model.contextTokens)}`;
 }
@@ -20,14 +22,18 @@ export function modelDisplayName(models: AgentModel[], model: string): string {
 
 /** A picker row's right-hand price, or nothing for a model nothing priced. */
 export function modelHint(model: AgentModel): string | undefined {
-  return model.price == null ? undefined : modelPriceText(model.price);
+  return model.price === null || model.price === undefined
+    ? undefined
+    : modelPriceText(model.price);
 }
 
 /** A picker row's tooltip: why it cannot run, else every rate it is priced at. */
 export function modelTitle(model: AgentModel): string | undefined {
   return (
     model.unavailableReason ??
-    (model.price == null ? undefined : modelPriceTitle(model.price))
+    (model.price === null || model.price === undefined
+      ? undefined
+      : modelPriceTitle(model.price))
   );
 }
 

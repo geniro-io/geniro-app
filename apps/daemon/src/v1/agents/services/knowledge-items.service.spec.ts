@@ -41,7 +41,7 @@ function item(over: Partial<RecommendationItem>): RecommendationItem {
     },
     risk: { level: 'low', note: 'none' },
     ...over,
-  } as RecommendationItem;
+  };
 }
 
 const ADD = item({

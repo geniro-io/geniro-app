@@ -8,15 +8,15 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type { AgentMcpServer } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
-import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentMcpService } from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
-import { AgentVersionService } from '../../agents/services/agent-version.service';
+import type { AgentVersionService } from '../../agents/services/agent-version.service';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { ModelsService } from '../../agents/services/models.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
@@ -53,7 +53,7 @@ interface Harness {
   harvest: McpHarvestStore;
   folderless: string;
   listMcpServers: ReturnType<typeof vi.fn>;
-  mcpList: ReturnType<typeof vi.spyOn>;
+  mcpList: MockInstance<AgentMcpService['list']>;
   vocabularies: ReturnType<typeof freshVocabularyStore>;
 }
 

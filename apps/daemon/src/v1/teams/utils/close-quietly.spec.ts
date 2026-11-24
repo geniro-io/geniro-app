@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { closeQuietly } from './close-quietly';
 
-const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+const tick = (): Promise<void> =>
+  new Promise((r) => {
+    setImmediate(r);
+  });
 
 describe('closeQuietly', () => {
   it('invokes close and swallows its rejection — no unhandled rejection escapes', async () => {

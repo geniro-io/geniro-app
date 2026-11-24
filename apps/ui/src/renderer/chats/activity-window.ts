@@ -68,7 +68,7 @@ export function inWindow(
     return true;
   }
   const at = run.lastActivityAt;
-  if (at == null) {
+  if (at === null || at === undefined) {
     return false;
   }
   return at >= window.since && (window.until === null || at < window.until);

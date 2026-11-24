@@ -106,7 +106,8 @@ export class SubagentRecoveryService
         item.kind === 'subagent_info' &&
         (payload?.backgroundOutcome === 'untracked' ||
           (payload?.backgroundOpen === false &&
-            payload.backgroundOutcome == null));
+            (payload.backgroundOutcome === null ||
+              payload.backgroundOutcome === undefined)));
       if (
         lost ||
         ['turn_complete', 'turn_cancelled', 'error'].includes(item.kind)

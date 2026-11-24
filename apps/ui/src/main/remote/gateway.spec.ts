@@ -628,9 +628,9 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
       res.writeHead(200).end('{}');
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
 
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
@@ -686,9 +686,9 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
       res.end('bytes');
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
     const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
     writeFileSync(join(staticRoot, 'index.html'), '<html></html>');
@@ -728,9 +728,9 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
       res.end(JSON.stringify({ sawAuth: req.headers.authorization }));
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
 
     const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
@@ -778,9 +778,9 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
       res.writeHead(200).end('{}');
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
 
     const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
@@ -877,9 +877,9 @@ describe('RemoteGateway: the pairing gate on the proxied surfaces', () => {
       daemonConnections += 1;
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
 
     const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
@@ -1004,9 +1004,9 @@ describe('RemoteGateway: the /ws upgrade path shape', () => {
       daemonConnections += 1;
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     const daemonPort = (daemon.address() as { port: number }).port;
 
     const dir = mkdtempSync(join(tmpdir(), 'geniro-gateway-registry-'));
@@ -1076,9 +1076,9 @@ describe('RemoteGateway: a proxied /ws that stays open', () => {
       );
     });
     plainServers.push(daemon);
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     return (daemon.address() as { port: number }).port;
   }
 
@@ -1101,9 +1101,9 @@ describe('RemoteGateway: a proxied /ws that stays open', () => {
           ].join('\r\n'),
         );
       });
-      const closed = new Promise<void>((resolveClosed) =>
-        socket.once('close', () => resolveClosed()),
-      );
+      const closed = new Promise<void>((resolveClosed) => {
+        socket.once('close', () => resolveClosed());
+      });
       socket.on('error', () => undefined);
       socket.once('data', (chunk: Buffer) => {
         if (chunk.toString('utf8').startsWith('HTTP/1.1 101')) {
@@ -1125,7 +1125,9 @@ describe('RemoteGateway: a proxied /ws that stays open', () => {
   ): Promise<boolean> {
     return Promise.race([
       promise.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), ms);
+      }),
     ]);
   }
 

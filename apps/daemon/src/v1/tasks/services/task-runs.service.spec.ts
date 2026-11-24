@@ -15,6 +15,7 @@ import {
   describe,
   expect,
   it,
+  type Mock,
   vi,
 } from 'vitest';
 
@@ -97,8 +98,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
    * a raw `mkdtempSync` result fails this round-trip on macOS only.
    */
   let worktree: string;
-  let createChat: ReturnType<typeof vi.fn>;
-  let sendMessage: ReturnType<typeof vi.fn>;
+  let createChat: Mock;
+  let sendMessage: Mock;
   let updateSettings: ReturnType<typeof vi.fn>;
   let offeredApproval: ReturnType<typeof vi.fn>;
   let startTeamRun: ReturnType<typeof vi.fn>;
@@ -1640,10 +1641,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
   /** The card's edge, read through a FRESH fork — the spec's own `em` caches. */
   const edgeOf = async (taskId: string) => {
-    const stored = await taskDao.getById(
-      taskId,
-      orm.em.fork() as EntityManager,
-    );
+    const stored = await taskDao.getById(taskId, orm.em.fork());
     return {
       status: stored?.status,
       runId: stored?.runId,
@@ -1759,7 +1757,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // Release only once the first start has actually reached `createChat` —
     // it awaits the card read and the status move before it gets there.
     while (createChat.mock.calls.length === 0) {
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     }
     release?.();
     await first.catch(() => undefined);
@@ -1876,8 +1876,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       await taskDao.setStoppedAt(taskId, new Date(), em);
     };
     const stoppedAtOf = async (taskId: string): Promise<Date | null> =>
-      (await taskDao.getById(taskId, orm.em.fork() as EntityManager))
-        ?.stoppedAt ?? null;
+      (await taskDao.getById(taskId, orm.em.fork()))?.stoppedAt ?? null;
 
     it('refuses an AUTOPILOT start — the queue’s hold is the fast answer, this is the line', async () => {
       const task = await seed();
@@ -1916,10 +1915,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
       await service.start(task.id, start());
 
-      const after = await taskDao.getById(
-        task.id,
-        orm.em.fork() as EntityManager,
-      );
+      const after = await taskDao.getById(task.id, orm.em.fork());
       expect(after?.stoppedAt).toBeNull();
       expect(after?.interruptedBy).toBeNull();
     });
@@ -1978,10 +1974,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     const failureOf = async (
       taskId: string,
     ): Promise<{ at: Date | null; reason: string | null }> => {
-      const task = await taskDao.getById(
-        taskId,
-        orm.em.fork() as EntityManager,
-      );
+      const task = await taskDao.getById(taskId, orm.em.fork());
       return {
         at: task?.prepareFailedAt ?? null,
         reason: task?.prepareFailedReason ?? null,

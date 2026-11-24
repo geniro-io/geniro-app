@@ -50,7 +50,7 @@ afterEach(() => {
 function render(
   summary: TeamSummary,
   onOpen: () => void = vi.fn(),
-  onDelete: () => void | Promise<void> = vi.fn(),
+  onDelete: () => void = vi.fn(),
 ): HTMLElement {
   act(() => {
     root.render(

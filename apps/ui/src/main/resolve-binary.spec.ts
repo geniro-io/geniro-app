@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type * as nodeOsModule from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -31,7 +32,7 @@ const TEMP_ROOT = process.env.TMPDIR ?? '/tmp';
 const home = mkdtempSync(join(TEMP_ROOT, 'geniro-resolve-binary-home-'));
 
 vi.mock('node:os', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:os')>();
+  const actual = await importOriginal<typeof nodeOsModule>();
   return { ...actual, homedir: () => home };
 });
 

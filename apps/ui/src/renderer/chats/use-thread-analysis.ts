@@ -26,8 +26,9 @@ export function isAnalysisRun(
   >,
 ): boolean {
   return (
-    run.analysisSourceRunId != null ||
-    run.analysisTeamSlug != null ||
+    (run.analysisSourceRunId !== null &&
+      run.analysisSourceRunId !== undefined) ||
+    (run.analysisTeamSlug !== null && run.analysisTeamSlug !== undefined) ||
     run.analysisPurpose === 'system'
   );
 }
@@ -37,7 +38,7 @@ export function analysisMarkOf(reading: Reading): ThreadAnalysisMark {
   if (reading === null) {
     return 'none';
   }
-  if (reading.awaiting != null) {
+  if (reading.awaiting !== null && reading.awaiting !== undefined) {
     return 'waiting';
   }
   return reading.status === 'running' ? 'working' : 'idle';

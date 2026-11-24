@@ -312,7 +312,9 @@ export class ActionPressService {
           return;
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, this.notifyRetryMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, this.notifyRetryMs);
+      });
     }
   }
 

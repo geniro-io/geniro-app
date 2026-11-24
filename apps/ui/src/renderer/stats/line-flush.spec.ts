@@ -98,9 +98,7 @@ describe('answerLineFlush', () => {
 
   it('stops holding a flush once its hook has unmounted', async () => {
     // A flush that never settles: if the unregister did not drop it, the quit would wait on it forever.
-    const unregister = registerLineFlush(
-      () => new Promise<void>(() => undefined),
-    );
+    const unregister = registerLineFlush(() => new Promise<void>(() => {}));
     unregister();
 
     answerLineFlush('quit-4');

@@ -297,7 +297,7 @@ function Scorecard({
   const unpriced = stats.runs - perRun.pricedRuns;
   return (
     <>
-      {stats.population == null ? null : (
+      {stats.population === null || stats.population === undefined ? null : (
         <p
           data-slot="analysis-population"
           className="m-0 text-[11px] leading-snug text-muted-foreground">

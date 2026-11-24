@@ -44,7 +44,7 @@ export const LESSONS_BUTTON: Record<
 };
 
 export function lessonsMarkOf(state: ThreadLessonsStateDto): ThreadLessonsMark {
-  if (state.reflectionRunId != null) {
+  if (state.reflectionRunId !== null && state.reflectionRunId !== undefined) {
     return 'reflecting';
   }
   return state.reflectable ? 'ready' : 'nothing_new';

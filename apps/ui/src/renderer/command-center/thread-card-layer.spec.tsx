@@ -350,7 +350,7 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
   });
 
   it('archives the thread of the card whose head icon is pressed, through the action of its run', () => {
-    const archive = vi.fn();
+    const archive = vi.fn<(runId: string) => void>();
     const archiveOf = vi.fn<ThreadArchiveOf>((runId) => () => archive(runId));
     drawLayer(
       {
@@ -476,7 +476,9 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
       act(() => {
         flowStore!.setState({ transform: [0, 0, 2] });
       });
-      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      act(() => {
+        vi.advanceTimersByTime(ZOOM_SETTLE_MS);
+      });
       expect(scalerOf('a').style.zoom).toBe('2');
       expect(scalerOf('a').style.transform).toBe('');
       expect(section.style.width).toBe('400px');
@@ -485,7 +487,9 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
       act(() => {
         flowStore!.setState({ transform: [0, 0, 0.5] });
       });
-      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      act(() => {
+        vi.advanceTimersByTime(ZOOM_SETTLE_MS);
+      });
       expect(scalerOf('a').style.zoom).toBe('0.5');
       expect(section.style.width).toBe('400px');
     } finally {
@@ -508,10 +512,14 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
       expect(scalerOf('a').style.zoom).toBe('1');
       expect(scalerOf('a').style.transform).toBe('scale(2)');
 
-      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS - 1));
+      act(() => {
+        vi.advanceTimersByTime(ZOOM_SETTLE_MS - 1);
+      });
       expect(scalerOf('a').style.zoom).toBe('1');
 
-      act(() => vi.advanceTimersByTime(1));
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
       expect(scalerOf('a').style.zoom).toBe('2');
       expect(scalerOf('a').style.transform).toBe('');
     } finally {
@@ -542,7 +550,9 @@ describe('ThreadCardLayer — following the flow’s pan and zoom', () => {
       expect(scalerOf('a').style.zoom).toBe('1');
       expect(scalerOf('a').style.transform).toBe('scale(2)');
 
-      act(() => vi.advanceTimersByTime(ZOOM_SETTLE_MS));
+      act(() => {
+        vi.advanceTimersByTime(ZOOM_SETTLE_MS);
+      });
       expect(scalerOf('a').style.zoom).toBe('2');
       expect(scalerOf('a').style.transform).toBe('');
     } finally {

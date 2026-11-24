@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readdirSync } from 'node:fs';
+import type * as nodeFsPromisesModule from 'node:fs/promises';
 import {
   mkdir,
   mkdtemp,
@@ -49,7 +50,7 @@ const { unremovable, unrenamable } = vi.hoisted(() => ({
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const actual = await importOriginal<typeof nodeFsPromisesModule>();
   return {
     ...actual,
     rm: (
@@ -109,7 +110,9 @@ vi.mock('node:child_process', () => ({
     void mocks
       .ditto(file, args, options)
       .then(() => cb(null, { stdout: '', stderr: '' }))
-      .catch((err: Error) => cb(err));
+      .catch((err: unknown) => {
+        cb(err instanceof Error ? err : new Error(String(err)));
+      });
   },
 }));
 
@@ -159,7 +162,7 @@ function serve(sumsText: string, zip: Buffer = ZIP_BYTES): void {
               { headers: { 'content-length': String(zip.length) } },
             ),
       ),
-    ) as unknown as typeof fetch,
+    ),
   );
 }
 
@@ -545,7 +548,9 @@ describe('sweepUpdateDebris', () => {
     const sampler = (async (): Promise<void> => {
       while (sampling) {
         samples.push(process.noAsar);
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
       }
     })();
     const removed = await sweepUpdateDebris({ workDir, bundlePath });

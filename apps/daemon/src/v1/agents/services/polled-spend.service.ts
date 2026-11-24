@@ -959,7 +959,9 @@ export class PolledSpendService implements OnModuleInit {
       const serialized = writePolledSpendLedger(ledger);
       const { state, run } = target;
       runs.set(run.id, run);
-      const perRun = nodeTotals.get(run.id) ?? new Map();
+      const perRun =
+        nodeTotals.get(run.id) ??
+        new Map<string, { cents: number; events: number }>();
       perRun.set(state.memberId, {
         cents: totals.cents,
         events: totals.events,

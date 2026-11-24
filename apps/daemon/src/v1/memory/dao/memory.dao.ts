@@ -750,10 +750,11 @@ export class MemoryDao extends BaseDao<Memory> {
       .where((eb) =>
         eb.or([eb('m.restored_at', 'is', null), eb('m.restored_at', '<', at)]),
       )
-      .where(({ not, exists, selectFrom }) =>
-        not(
-          exists(
-            selectFrom('memory_marks as k')
+      .where((outer) =>
+        outer.not(
+          outer.exists(
+            outer
+              .selectFrom('memory_marks as k')
               .select('k.id')
               .whereRef('k.memory_id', '=', 'm.id')
               .where('k.deleted_at', 'is', null)

@@ -97,7 +97,9 @@ interface Ctx {
 }
 
 const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 function stateOf(tab: BrowserTab): TabState {
   let state = tabStates.get(tab);
@@ -1107,7 +1109,7 @@ async function execute(
 
 function requestIdOf(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null && 'id' in raw) {
-    const id = (raw as { id: unknown }).id;
+    const id = raw.id;
     return typeof id === 'string' ? id : '';
   }
   return '';

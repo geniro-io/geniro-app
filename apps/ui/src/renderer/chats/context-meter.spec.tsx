@@ -516,14 +516,20 @@ describe('the expanded readout the meter opens onto', () => {
 
       // Across and away again, faster than the delay.
       hoverIn(meterTrigger());
-      act(() => vi.advanceTimersByTime(120));
+      act(() => {
+        vi.advanceTimersByTime(120);
+      });
       hoverOut(meterTrigger());
-      act(() => vi.advanceTimersByTime(5_000));
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
       expect(load).not.toHaveBeenCalled();
 
       // Resting on it IS the ask — the delay defers the fetch, never cancels it.
       hoverIn(meterTrigger());
-      act(() => vi.advanceTimersByTime(300));
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -540,7 +546,9 @@ describe('the expanded readout the meter opens onto', () => {
     try {
       renderWithLoader(() => Promise.resolve(METRICS));
       hoverIn(meterTrigger());
-      act(() => vi.advanceTimersByTime(300));
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
       expect(panel()).not.toBeNull();
 
       // Off the ring, across the gap, onto the panel. The panel is a DOM child
@@ -548,7 +556,9 @@ describe('the expanded readout the meter opens onto', () => {
       // handlers used to hang off never could, the two being siblings.
       hoverOut(meterTrigger());
       hoverIn(panel());
-      act(() => vi.advanceTimersByTime(5_000));
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
 
       expect(panel()).not.toBeNull();
     } finally {
@@ -563,11 +573,15 @@ describe('the expanded readout the meter opens onto', () => {
     try {
       renderWithLoader(() => Promise.resolve(METRICS));
       hoverIn(meterTrigger());
-      act(() => vi.advanceTimersByTime(300));
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
       expect(panel()).not.toBeNull();
 
       hoverOut(meterTrigger());
-      act(() => vi.advanceTimersByTime(5_000));
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
 
       expect(panel()).toBeNull();
     } finally {
@@ -580,7 +594,9 @@ describe('the expanded readout the meter opens onto', () => {
     try {
       renderWithLoader(() => Promise.resolve(METRICS));
       hoverIn(meterTrigger());
-      act(() => vi.advanceTimersByTime(300));
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
       panel()!.getBoundingClientRect = () =>
         ({
           left: 0,
@@ -626,14 +642,18 @@ describe('the expanded readout the meter opens onto', () => {
       renderWithLoader(() => Promise.resolve(METRICS));
       hoverIn(meterTrigger());
       // Quicker than the rest delay: the open timer is still pending.
-      act(() => vi.advanceTimersByTime(100));
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
 
       act(() => meterTrigger()?.click());
       expect(panel()).not.toBeNull();
       act(() => meterTrigger()?.click());
       expect(panel()).toBeNull();
 
-      act(() => vi.advanceTimersByTime(5_000));
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
       expect(panel()).toBeNull();
     } finally {
       vi.useRealTimers();

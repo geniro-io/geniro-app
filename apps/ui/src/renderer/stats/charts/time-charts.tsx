@@ -249,7 +249,7 @@ export function DailySeriesChart({
       ) : (
         <ResponsiveContainer width="100%" height={HERO_HEIGHT}>
           {spec.shape === 'area' ? (
-            <AreaChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+            <AreaChart data={points} margin={CHART_MARGIN}>
               <defs>
                 {/* Keyed by metric, because an SVG gradient is referenced by ID and
                   a single one would keep the previous metric's stops after the
@@ -293,7 +293,7 @@ export function DailySeriesChart({
               ))}
             </AreaChart>
           ) : (
-            <BarChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+            <BarChart data={points} margin={CHART_MARGIN}>
               <Axes points={points} value={value} />
               <Tooltip
                 cursor={{ fill: 'var(--color-muted)' }}
@@ -414,7 +414,7 @@ export function CumulativeSpendChart({
 }): React.JSX.Element {
   return (
     <ResponsiveContainer width="100%" height={SUPPORT_HEIGHT}>
-      <LineChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+      <LineChart data={points} margin={CHART_MARGIN}>
         <Axes
           points={points}
           value={{ tickFormatter: formatUsdAxis, allowDecimals: true }}
@@ -497,7 +497,7 @@ export function TokenSplitChart({
         ]}
       />
       <ResponsiveContainer width="100%" height={SUPPORT_HEIGHT}>
-        <BarChart data={points as DayPoint[]} margin={CHART_MARGIN}>
+        <BarChart data={points} margin={CHART_MARGIN}>
           <Axes
             points={points}
             value={{ tickFormatter: formatTokens, allowDecimals: true }}

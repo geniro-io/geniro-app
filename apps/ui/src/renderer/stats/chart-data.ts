@@ -135,7 +135,10 @@ function sumTokens(
   input: number | null | undefined,
   output: number | null | undefined,
 ): number | null {
-  if (input == null && output == null) {
+  if (
+    (input === null || input === undefined) &&
+    (output === null || output === undefined)
+  ) {
     return null;
   }
   return (input ?? 0) + (output ?? 0);

@@ -288,7 +288,9 @@ function build(
 
 /** Lets the subscription's queued close finish: every fake resolves at once. */
 function settle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe('LessonSegmentService', () => {
@@ -488,7 +490,7 @@ describe('LessonSegmentService', () => {
       ['a team analysis', { analysisTeamSlug: 'reviewers' }],
     ])('never queues %s', async (_, overrides) => {
       const h = build({
-        runs: [runOf(overrides as Partial<Run>)],
+        runs: [runOf(overrides)],
         items: { src: correctionStretch() },
       });
 

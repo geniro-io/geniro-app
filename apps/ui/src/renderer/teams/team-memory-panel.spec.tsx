@@ -100,7 +100,9 @@ function Harness({
 
 async function settle(ms = 0): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   });
 }
 

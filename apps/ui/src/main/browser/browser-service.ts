@@ -300,7 +300,10 @@ export class BrowserService {
       this.attachAgentOp(tab, options.agentOp);
     }
     this.layout(chat);
-    this.emitRun(runId, options.openedBy != null ? id : null);
+    this.emitRun(
+      runId,
+      options.openedBy !== null && options.openedBy !== undefined ? id : null,
+    );
     try {
       await options.beforeLoad?.(tabSession);
     } catch (error) {
@@ -488,7 +491,7 @@ export class BrowserService {
         await shell.openExternal(url);
       }
     } else {
-      clipboard.writeText(contents.getURL());
+      await clipboard.writeText(contents.getURL());
     }
   }
 
@@ -527,7 +530,9 @@ export class BrowserService {
   async capture(runId: string): Promise<string | null> {
     const chat = this.chats.get(runId);
     const tab =
-      chat?.activeTabId == null ? undefined : chat.tabs.get(chat.activeTabId);
+      chat?.activeTabId === null || chat?.activeTabId === undefined
+        ? undefined
+        : chat.tabs.get(chat.activeTabId);
     if (tab === undefined || tab.view.webContents.isDestroyed()) {
       return null;
     }
@@ -574,7 +579,7 @@ export class BrowserService {
 
   stopAgent(runId: string, tabId: string): void {
     const tab = this.getTab(runId, tabId);
-    if (tab?.op == null) {
+    if (tab?.op === null || tab?.op === undefined) {
       return;
     }
     tab.op.abort();
@@ -724,7 +729,9 @@ export class BrowserService {
   focusActiveTab(runId: string): void {
     const chat = this.chats.get(runId);
     const tab =
-      chat?.activeTabId == null ? undefined : chat.tabs.get(chat.activeTabId);
+      chat?.activeTabId === null || chat?.activeTabId === undefined
+        ? undefined
+        : chat.tabs.get(chat.activeTabId);
     if (tab === undefined) {
       return;
     }

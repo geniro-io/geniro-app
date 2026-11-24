@@ -326,7 +326,8 @@ export function useTranscriptJump({
           anchors: [...scroller.querySelectorAll<HTMLElement>(ANCHORS)].filter(
             (anchor) =>
               anchor.dataset.callSeq === undefined &&
-              anchor.parentElement?.closest('[data-role="call-block"]') == null,
+              (anchor.parentElement?.closest('[data-role="call-block"]') ??
+                null) === null,
           ),
         };
       }

@@ -103,7 +103,7 @@ function harness(
     status: async (runId: string, status: RunStatusEvent['status']) => {
       await act(async () => {
         for (const listener of listeners) {
-          listener({ runId, status } as RunStatusEvent);
+          listener({ runId, status });
         }
       });
     },

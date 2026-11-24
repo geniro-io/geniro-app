@@ -380,7 +380,9 @@ export function turnUsageOf(options: {
         ? null
         : [{ model: options.model, costUsd: own.costUsd }];
   const subagentCosts =
-    options.subagents == null ? [] : options.subagents.modelCosts;
+    options.subagents === null || options.subagents === undefined
+      ? []
+      : options.subagents.modelCosts;
   const context = latest?.last.totalTokens ?? null;
   const window = latest?.modelContextWindow ?? null;
   return {
@@ -394,7 +396,9 @@ export function turnUsageOf(options: {
     contextModel: window !== null ? options.model : null,
     costUsd: spend?.costUsd ?? null,
     // Every dollar here is the list price above — codex states none.
-    ...(spend?.costUsd == null ? {} : { estimatedCostUsd: spend.costUsd }),
+    ...(spend?.costUsd === null || spend?.costUsd === undefined
+      ? {}
+      : { estimatedCostUsd: spend.costUsd }),
     durationMs: options.durationMs,
     apiMs: null,
     ttftMs: null,

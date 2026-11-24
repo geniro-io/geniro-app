@@ -1,3 +1,5 @@
+import type * as nodeCryptoModule from 'node:crypto';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `randomInt` has to be deterministic for the rotation tests (a real random
@@ -12,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { randomIntMock } = vi.hoisted(() => ({ randomIntMock: vi.fn() }));
 
 vi.mock('node:crypto', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:crypto')>();
+  const actual = await importOriginal<typeof nodeCryptoModule>();
   return { ...actual, randomInt: randomIntMock };
 });
 

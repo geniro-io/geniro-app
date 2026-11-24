@@ -22,7 +22,9 @@ async function settledState(done: Promise<void>): Promise<boolean> {
   void done.then(() => {
     settled = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   return settled;
 }
 

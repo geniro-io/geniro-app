@@ -145,7 +145,7 @@ interface EditInFlight {
 function editedFields(dto: UpdateTaskDto): Partial<TaskDto> {
   return Object.fromEntries(
     Object.entries(dto).filter(([, value]) => value !== undefined),
-  ) as Partial<TaskDto>;
+  );
 }
 
 /** A card with an edit laid over it — what the board shows before the answer. */

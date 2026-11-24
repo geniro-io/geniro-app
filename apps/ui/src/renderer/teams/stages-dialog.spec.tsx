@@ -104,7 +104,7 @@ const fieldIssues = (tone: 'error' | 'warning'): string[] =>
     ...container.querySelectorAll(
       `[data-slot="stage-field-issue"][data-tone="${tone}"]`,
     ),
-  ].map((issue) => issue.textContent!);
+  ].map((issue) => issue.textContent);
 const field = (label: string): HTMLInputElement | HTMLTextAreaElement => {
   const htmlFor = [...container.querySelectorAll('label')].find(
     (l) => l.textContent === label,
@@ -134,10 +134,10 @@ describe('StagesDialog', () => {
     expect(container.textContent).toContain('No stages yet');
 
     click(button('Add stage'));
-    type(field('Title') as HTMLInputElement, 'Fix the Build');
-    type(field('Goal') as HTMLInputElement, 'Build is green');
+    type(field('Title'), 'Fix the Build');
+    type(field('Goal'), 'Build is green');
     click(button('Add stage'));
-    type(field('Goal') as HTMLInputElement, 'Merged');
+    type(field('Goal'), 'Merged');
     expect(rowTitles()).toEqual(['Fix the Build', 'Stage 2']);
 
     click(doneButton());
@@ -155,9 +155,9 @@ describe('StagesDialog', () => {
   it('edits the selected stage and writes trimmed text, dropping empty optional fields', () => {
     render(LINE);
     click(rows()[1]!.querySelector('button'));
-    type(field('Title') as HTMLInputElement, '  Repair  ');
-    type(field('How to work') as HTMLTextAreaElement, '   ');
-    type(field('Goal') as HTMLInputElement, ' Repair merged ');
+    type(field('Title'), '  Repair  ');
+    type(field('How to work'), '   ');
+    type(field('Goal'), ' Repair merged ');
     click(doneButton());
 
     expect(lastSaved()[1]).toEqual({
@@ -264,7 +264,7 @@ describe('StagesDialog', () => {
       { id: 'c', title: 'C', goal: 'c' },
     ]);
     const hint = (): string =>
-      container.querySelector('[data-slot="stage-next-hint"]')!.textContent!;
+      container.querySelector('[data-slot="stage-next-hint"]')!.textContent;
     expect(hint()).toBe('Then B');
 
     const next = (name: string): HTMLButtonElement =>
@@ -334,21 +334,21 @@ describe('StagesDialog', () => {
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
 
-    type(field('Title') as HTMLInputElement, '   ');
+    type(field('Title'), '   ');
     expect(fieldIssues('error')).toEqual(['Error: A stage needs a title']);
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
-    type(field('Title') as HTMLInputElement, 'A');
+    type(field('Title'), 'A');
     expect(fieldIssues('error')).toEqual([]);
 
-    type(field('Goal') as HTMLInputElement, '');
+    type(field('Goal'), '');
     expect(fieldIssues('error')).toEqual(['Error: A stage needs a goal']);
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
-    type(field('Goal') as HTMLInputElement, 'a');
+    type(field('Goal'), 'a');
 
     click(button('Add stage'));
-    type(field('Goal') as HTMLInputElement, 'b');
+    type(field('Goal'), 'b');
     click(rows()[0]!.querySelector('button'));
     click(
       [
@@ -403,9 +403,9 @@ describe('StagesDialog', () => {
     expect(rowWords('stage-3')).toContain('error');
     expect(rowWords('stage-4')).toContain('error');
 
-    type(field('Goal') as HTMLInputElement, 'Shipped');
+    type(field('Goal'), 'Shipped');
     click(rows()[2]!.querySelector('button'));
-    type(field('Goal') as HTMLInputElement, 'Reviewed');
+    type(field('Goal'), 'Reviewed');
     expect(errorAlert()).toBeNull();
     click(doneButton());
     expect(lastSaved()).toHaveLength(4);
@@ -437,7 +437,7 @@ describe('StagesDialog', () => {
     expect(
       container.querySelector('button[aria-label="Expand How to work"]'),
     ).not.toBeNull();
-    type(field('How to work') as HTMLTextAreaElement, ' Find it ');
+    type(field('How to work'), ' Find it ');
     click(doneButton());
     expect(lastSaved()[0]!.howToWork).toBe('Find it');
   });
@@ -450,7 +450,7 @@ describe('StagesDialog', () => {
     ]);
     const options = (): string[] =>
       [...container.querySelectorAll('[aria-pressed]')].map(
-        (b) => b.textContent!,
+        (b) => b.textContent,
       );
     expect(options()).toEqual(['Twin (twin-1)', 'Twin (twin-2)']);
     click(

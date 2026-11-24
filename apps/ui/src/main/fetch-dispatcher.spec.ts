@@ -38,9 +38,9 @@ describe('installFetchDispatcher, against the real bundled fetch', () => {
       req.resume();
       req.on('end', () => res.end('ok'));
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
     const address = server.address();
     if (address === null || typeof address === 'string') {
       throw new Error('the test server has no port');
@@ -58,7 +58,9 @@ describe('installFetchDispatcher, against the real bundled fetch', () => {
       await (installed as { close(): Promise<void> }).close();
     }
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it('a socket that refuses its type of service once connected fails no request and throws nothing', async () => {
@@ -91,7 +93,9 @@ describe('installFetchDispatcher, against the real bundled fetch', () => {
     // socket's `error` event, so the request rejects and the process lives on.
     expect(installFetchDispatcher()).toBeNull();
     const probe = connect(Number(new URL(url).port), '127.0.0.1');
-    await new Promise<void>((resolve) => probe.once('connect', resolve));
+    await new Promise<void>((resolve) => {
+      probe.once('connect', resolve);
+    });
     const tcp = Object.getPrototypeOf(handleOf(probe)) as TcpHandle;
     probe.destroy();
     vi.spyOn(tcp, 'setTypeOfService').mockReturnValue(UV_EINVAL);

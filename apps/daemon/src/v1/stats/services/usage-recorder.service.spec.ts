@@ -227,7 +227,9 @@ describe('UsageRecorderService', () => {
       item: usageItem({ kind: 'tool_call', payload: { name: 'ls' } }),
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(recordOnce).not.toHaveBeenCalled();
   });
 
@@ -241,7 +243,9 @@ describe('UsageRecorderService', () => {
       item: usageItem({ payload: { stopReason: 'end_turn' } }),
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(recordOnce).not.toHaveBeenCalled();
   });
 
@@ -426,7 +430,9 @@ describe('UsageRecorderService', () => {
 
       bus.publishRunStatus({ runId: 'run-cursor', status: 'completed' });
 
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(recordPolledSpend).not.toHaveBeenCalled();
     });
 
@@ -438,7 +444,9 @@ describe('UsageRecorderService', () => {
       announceSpend();
 
       await vi.waitFor(() => expect(recordPolledSpend).toHaveBeenCalled());
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(announced).toEqual([]);
     });
 
@@ -451,7 +459,9 @@ describe('UsageRecorderService', () => {
 
       announceSpend();
 
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(recordPolledSpend).not.toHaveBeenCalled();
     });
 

@@ -166,7 +166,9 @@ export function inScope(
   window: ActivityWindow | null,
 ): boolean {
   return (
-    (scope === 'all' || (run.archivedAt != null) === (scope === 'archived')) &&
+    (scope === 'all' ||
+      (run.archivedAt !== null && run.archivedAt !== undefined) ===
+        (scope === 'archived')) &&
     inWindow(run, window)
   );
 }

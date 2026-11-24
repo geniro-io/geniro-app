@@ -661,7 +661,9 @@ export function TaskRunConfigRows({
                 onChange({ model, effort: null, modelParameters: {} });
               }}
             />
-            {value.model === null && inherited?.model != null ? (
+            {value.model === null &&
+            inherited?.model !== null &&
+            inherited?.model !== undefined ? (
               <InheritedTag />
             ) : null}
           </PropertyRow>
@@ -680,7 +682,9 @@ export function TaskRunConfigRows({
                   onChange({ effort });
                 }}
               />
-              {value.effort === null && inherited?.effort != null ? (
+              {value.effort === null &&
+              inherited?.effort !== null &&
+              inherited?.effort !== undefined ? (
                 <InheritedTag />
               ) : null}
             </PropertyRow>
@@ -733,7 +737,9 @@ export function TaskRunConfigRows({
                   onChange({ approval });
                 }}
               />
-              {value.approval === null && inherited?.approval != null ? (
+              {value.approval === null &&
+              inherited?.approval !== null &&
+              inherited?.approval !== undefined ? (
                 <InheritedTag />
               ) : null}
             </PropertyRow>

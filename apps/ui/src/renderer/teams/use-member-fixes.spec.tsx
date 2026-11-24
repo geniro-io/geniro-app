@@ -114,7 +114,9 @@ describe('useMemberFixes', () => {
     expect(fix?.label).toBe('Open MCP');
     act(() => fix!.run());
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 600);
+      });
     });
     expect(listAgentMcpServers).toHaveBeenCalledWith(
       { agent: 'cursor-agent', configDir: '/p/spare' },

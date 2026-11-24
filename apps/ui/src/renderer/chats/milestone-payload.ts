@@ -46,7 +46,7 @@ export function readMilestonePayload(
     text: bag.text,
     kind: bag.kind as MilestoneKind,
     nodeId: bag.nodeId,
-    conversationId: bag.conversationId as string | null,
-    ...(bag.callId === undefined ? {} : { callId: bag.callId as string }),
+    conversationId: bag.conversationId,
+    ...(bag.callId === undefined ? {} : { callId: bag.callId }),
   };
 }

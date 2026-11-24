@@ -16,7 +16,15 @@ import {
   ConflictException,
   NotFoundException,
 } from '@packages/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from 'vitest';
 
 import {
   type DeferredCard,
@@ -222,7 +230,7 @@ function fakeChats(approvals: ApprovalRegistry) {
 describe('TeamProposalService', () => {
   let dir: string;
   let store: TeamStoreService;
-  let assertRunnable: ReturnType<typeof vi.fn>;
+  let assertRunnable: Mock;
   let runs: FakeRuns;
   let approvals: ApprovalRegistry;
   let chats: ReturnType<typeof fakeChats>;
@@ -1784,7 +1792,9 @@ describe('TeamProposalService', () => {
         service.propose('run-1', { team: FASTER }),
       ]);
       await vi.waitFor(() => expect(assertRunnable).toHaveBeenCalledTimes(1));
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       // The second waits for the first to stand, rather than both reading the
       // run before either has written its card.
       expect(assertRunnable).toHaveBeenCalledTimes(1);

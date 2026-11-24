@@ -32,7 +32,8 @@ export function tallyMarks(
 ): Map<string, MemoryMarkTally> {
   const latest = new Map<string, Map<string, MemoryCountedMark>>();
   for (const mark of marks) {
-    const threads = latest.get(mark.memoryId) ?? new Map();
+    const threads =
+      latest.get(mark.memoryId) ?? new Map<string, MemoryCountedMark>();
     threads.delete(mark.threadId);
     threads.set(mark.threadId, mark);
     latest.set(mark.memoryId, threads);

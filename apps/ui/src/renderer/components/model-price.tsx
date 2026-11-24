@@ -55,7 +55,7 @@ export function ModelPrice({
   compact?: boolean;
   className?: string;
 }): React.JSX.Element | null {
-  if (price == null) {
+  if (price === null || price === undefined) {
     return null;
   }
   return (

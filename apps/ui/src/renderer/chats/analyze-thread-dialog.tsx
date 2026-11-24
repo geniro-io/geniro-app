@@ -256,7 +256,8 @@ export function AnalyzeThreadDialog({
     config.model,
     configDir,
   );
-  const isTeam = team !== null || source?.teamId != null;
+  const isTeam =
+    team !== null || (source?.teamId !== null && source?.teamId !== undefined);
   const approval: ChatApprovalMode = isChatApprovalMode(config.approval)
     ? config.approval
     : ANALYSIS_DEFAULT_APPROVAL;
@@ -384,8 +385,12 @@ export function AnalyzeThreadDialog({
   };
 
   const facts = [
-    source?.workedMs == null ? null : formatDuration(source.workedMs),
-    source?.toolCalls == null ? null : `${source.toolCalls} tool calls`,
+    source?.workedMs === null || source?.workedMs === undefined
+      ? null
+      : formatDuration(source.workedMs),
+    source?.toolCalls === null || source?.toolCalls === undefined
+      ? null
+      : `${source.toolCalls} tool calls`,
   ].filter((fact): fact is string => fact !== null);
 
   return (

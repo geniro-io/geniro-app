@@ -838,8 +838,8 @@ export function Teams({
       if (openGeneration.current !== generation) {
         return;
       }
-      setHasAnalysis(analysis != null);
-      if (analysis == null) {
+      setHasAnalysis(analysis !== null && analysis !== undefined);
+      if (analysis === null || analysis === undefined) {
         setAnalyzeOpen(true);
       } else {
         setAnalysisOpen(true);

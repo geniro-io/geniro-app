@@ -14,28 +14,27 @@ import { type ChatTimelineState, useChatTimeline } from './use-chat-timeline';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const marker = (seq: number, preview: string): ChatTimelineMarker =>
-  ({
-    seq,
-    createdAt: '2026-09-07T12:00:00.000Z',
-    preview,
-    segment: {
-      aiMessages: 1,
-      elapsedMs: 1000,
-      totals: {
-        turns: 1,
-        costedTurns: 1,
-        costUsd: 0.1,
-        estimatedCostUsd: null,
-        inputTokens: 10,
-        outputTokens: 5,
-        cacheReadTokens: null,
-        cacheCreationTokens: null,
-        thinkingTokens: null,
-        workedMs: 900,
-      },
+const marker = (seq: number, preview: string): ChatTimelineMarker => ({
+  seq,
+  createdAt: '2026-09-07T12:00:00.000Z',
+  preview,
+  segment: {
+    aiMessages: 1,
+    elapsedMs: 1000,
+    totals: {
+      turns: 1,
+      costedTurns: 1,
+      costUsd: 0.1,
+      estimatedCostUsd: null,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      workedMs: 900,
     },
-  }) as ChatTimelineMarker;
+  },
+});
 
 /** A whole reply, so a mock can never be missing a field the hook reads. */
 const rail = (...markers: ChatTimelineMarker[]): ChatTimelineDto => ({

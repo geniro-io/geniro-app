@@ -242,7 +242,9 @@ describe('useLibraryHealth', () => {
     const read = vi.fn(async () => {
       inFlight += 1;
       most = Math.max(most, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
       inFlight -= 1;
       return dto([member('ok')]);
     });

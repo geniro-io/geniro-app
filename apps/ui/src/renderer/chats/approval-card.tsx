@@ -1179,7 +1179,7 @@ function PermissionCard({
   const projectCard = projectInstructionsCardOf(toolName, input);
   const filePath =
     input && typeof input === 'object' && 'file_path' in input
-      ? String((input as { file_path: unknown }).file_path)
+      ? String(input.file_path)
       : null;
   // An agent may name a tool call and withhold its arguments — an ACP `read` or
   // `edit` call does exactly that, and the daemon normalizes the empty bag it

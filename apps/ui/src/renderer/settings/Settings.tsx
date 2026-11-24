@@ -1074,7 +1074,7 @@ export function Settings({
       }
       try {
         const result = await apis.cliAuth.cliLogout({
-          agent: kind as never,
+          agent: kind,
           // Omitted means the CLI's own default profile, exactly as on the
           // sign-in beside it — the daemon reads an absent value that way
           // (`CliAuthService.resolveConfigDir`), so a blank must never be sent.

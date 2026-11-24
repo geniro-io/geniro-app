@@ -107,7 +107,11 @@ export function codexContextUsage(
     autoCompactAtTokens: facts?.autoCompactTokens ?? null,
     // Only a threshold geniro set is KNOWN: codex's own default is not stated
     // anywhere it reports, so silence is unknown rather than "off".
-    autoCompactEnabled: facts?.autoCompactTokens != null ? true : null,
+    autoCompactEnabled:
+      facts?.autoCompactTokens !== null &&
+      facts?.autoCompactTokens !== undefined
+        ? true
+        : null,
     memoryFiles: (facts?.instructionSources ?? []).map((path) => ({
       path,
       kind: null,

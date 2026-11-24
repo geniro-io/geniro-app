@@ -6,8 +6,6 @@ import {
 } from '@nestjs/common';
 import lodash from 'lodash';
 
-const { compact } = lodash;
-
 import { BaseLogger } from './base-logger';
 import { DefaultLogger } from './default-logger';
 import { type ILoggerParams, Logger, LoggerParams } from './logger.types';
@@ -18,7 +16,7 @@ export class LoggerModule {
     param: ILoggerParams,
     instance?: Type<BaseLogger>,
   ): DynamicModule {
-    const providers: Provider[] = compact([
+    const providers: Provider[] = lodash.compact([
       {
         provide: LoggerParams,
         useValue: param,

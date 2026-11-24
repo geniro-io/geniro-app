@@ -870,7 +870,7 @@ describe('LessonProposalService.save into knowledge', () => {
     const { service, knowledge } = build(row);
     knowledge.list.mockResolvedValueOnce({
       documents: [{ id: 'kd-1' }],
-    } as never);
+    });
     knowledge.get.mockResolvedValueOnce({
       id: 'kd-1',
       handle: 'k-1',
@@ -942,7 +942,7 @@ describe('LessonProposalService.save into knowledge', () => {
     };
     knowledge.list.mockResolvedValueOnce({
       documents: [{ id: 'kd-1' }],
-    } as never);
+    });
     knowledge.get.mockResolvedValueOnce(document as never);
     knowledge.edit.mockResolvedValueOnce({
       kind: 'stale',

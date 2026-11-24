@@ -977,7 +977,7 @@ describe('Menu — fitting the window', () => {
           left: 0,
           right: 200,
           width: 200,
-        } as DOMRect;
+        };
       });
     try {
       return open(BRANCHES, props);

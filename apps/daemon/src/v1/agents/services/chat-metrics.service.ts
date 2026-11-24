@@ -1457,7 +1457,9 @@ function newestOwnTurnModel(
     const payload = asRecord(parseJsonColumn(payloads[index]));
     if (
       ownOnly &&
-      (payload?.callId != null || payload?.parentToolUseId != null)
+      ((payload?.callId !== null && payload?.callId !== undefined) ||
+        (payload?.parentToolUseId !== null &&
+          payload?.parentToolUseId !== undefined))
     ) {
       continue;
     }

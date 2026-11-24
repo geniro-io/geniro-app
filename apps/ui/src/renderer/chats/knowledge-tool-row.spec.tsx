@@ -535,7 +535,9 @@ describe('the documents a panel reads as they stand now', () => {
 
   async function settle(): Promise<void> {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
   }
 
@@ -822,7 +824,7 @@ describe('the documents a panel reads as they stand now', () => {
   });
 
   it('names no empty list while its own search has found nothing yet', async () => {
-    drawBare({ query: 'release' }, () => new Promise(() => undefined));
+    drawBare({ query: 'release' }, () => new Promise(() => {}));
 
     expect(trigger()?.getAttribute('aria-label')).toBe('Searched knowledge');
   });
@@ -911,7 +913,7 @@ describe('the documents a panel reads as they stand now', () => {
 
   it('opens a document by its handle while no fresh read has found it', async () => {
     const open = vi.fn();
-    drawWith(() => new Promise(() => undefined), open);
+    drawWith(() => new Promise(() => {}), open);
     await press();
 
     linksToKnowledge()[1]?.click();

@@ -1,5 +1,13 @@
 import { BadRequestException, NotFoundException } from '@packages/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from 'vitest';
 
 import {
   SINGLE_AGENT_NODE,
@@ -30,12 +38,12 @@ function sendOk(title: string) {
 
 describe('CommandCenterOpsService', () => {
   let db: Db;
-  let delivery: { send: ReturnType<typeof vi.fn> };
+  let delivery: { send: Mock };
   let events: CommandCenterEventBus;
   let publishChanged: ReturnType<typeof vi.fn>;
   let broker: CommandCenterOpsBroker;
   let roster: { rosterThreads: ReturnType<typeof vi.fn> };
-  let chats: { archive: ReturnType<typeof vi.fn> };
+  let chats: { archive: Mock };
   let board: { board: ReturnType<typeof vi.fn> };
   let service: CommandCenterOpsService;
 

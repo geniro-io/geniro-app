@@ -40,19 +40,29 @@ describe('useFlash', () => {
   it('shows a kind, then reverts once the window has passed', () => {
     act(() => handle.show('done'));
     expect(shown()).toBe('done');
-    act(() => vi.advanceTimersByTime(FLASH_WINDOW_MS - 1));
+    act(() => {
+      vi.advanceTimersByTime(FLASH_WINDOW_MS - 1);
+    });
     expect(shown()).toBe('done');
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(shown()).toBe('none');
   });
 
   it('restarts the window when shown again, so the second kind gets its full time', () => {
     act(() => handle.show('done'));
-    act(() => vi.advanceTimersByTime(FLASH_WINDOW_MS - 100));
+    act(() => {
+      vi.advanceTimersByTime(FLASH_WINDOW_MS - 100);
+    });
     act(() => handle.show('failed'));
-    act(() => vi.advanceTimersByTime(FLASH_WINDOW_MS - 1));
+    act(() => {
+      vi.advanceTimersByTime(FLASH_WINDOW_MS - 1);
+    });
     expect(shown()).toBe('failed');
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(shown()).toBe('none');
   });
 

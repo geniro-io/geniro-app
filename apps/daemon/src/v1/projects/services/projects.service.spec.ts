@@ -112,7 +112,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    em = orm.em.fork() as EntityManager;
+    em = orm.em.fork();
     projectDao = new ProjectDao(em);
     taskDao = new TaskDao(em);
     labelInstructionDao = new LabelInstructionDao(em);
@@ -838,8 +838,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
   it('writes the lessons setting on update, returns it on the wire, and null hands it back to inherit', async () => {
     const project = await service.create({ name: 'Board', folder });
     const storedLessons = async (): Promise<unknown> =>
-      (await new ProjectDao(orm.em.fork() as EntityManager).getById(project.id))
-        ?.lessons;
+      (await new ProjectDao(orm.em.fork()).getById(project.id))?.lessons;
 
     const off = await service.update(project.id, { lessons: 'off' });
     expect(off.lessons).toBe('off');

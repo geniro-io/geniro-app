@@ -36,7 +36,7 @@ describe('ZodResponseInterceptor', () => {
           200: {
             type: { schema },
           },
-        } as Record<string, unknown>;
+        };
       }
       return undefined;
     });
@@ -47,9 +47,9 @@ describe('ZodResponseInterceptor', () => {
     const input = { a: 'ok', b: 42, extra: 'remove-me' };
     const out$ = interceptor.intercept(ctx, createCallHandler(input));
 
-    const result = await new Promise<unknown>((resolve) =>
-      out$.subscribe(resolve),
-    );
+    const result = await new Promise<unknown>((resolve) => {
+      out$.subscribe(resolve);
+    });
     expect(result).toEqual({ a: 'ok', b: 42 });
     expect(result).not.toHaveProperty('extra');
   });
@@ -64,7 +64,7 @@ describe('ZodResponseInterceptor', () => {
           200: {
             type: { schema },
           },
-        } as Record<string, unknown>;
+        };
       }
       return undefined;
     });
@@ -80,9 +80,9 @@ describe('ZodResponseInterceptor', () => {
     } as unknown;
     const out$ = interceptor.intercept(ctx, createCallHandler(invalid));
 
-    const result = await new Promise<unknown>((resolve) =>
-      out$.subscribe(resolve),
-    );
+    const result = await new Promise<unknown>((resolve) => {
+      out$.subscribe(resolve);
+    });
     // Should pick only schema keys from original object
     expect(result).toEqual({ a: 'ok', b: 'not-a-number' });
     expect(result).not.toHaveProperty('extra');

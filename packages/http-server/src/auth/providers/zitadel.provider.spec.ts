@@ -6,8 +6,8 @@ import { ZitadelProvider } from './zitadel.provider';
 const ZITADEL_URL = 'http://localhost:8085';
 const ZITADEL_ISSUER = 'http://localhost:8085';
 
-const mockJwtVerify = vi.fn();
-const mockCreateRemoteJWKSet = vi.fn();
+const mockJwtVerify = vi.fn<(...args: unknown[]) => unknown>();
+const mockCreateRemoteJWKSet = vi.fn<(...args: unknown[]) => unknown>();
 
 vi.mock('jose', () => ({
   createRemoteJWKSet: (...args: unknown[]) => mockCreateRemoteJWKSet(...args),

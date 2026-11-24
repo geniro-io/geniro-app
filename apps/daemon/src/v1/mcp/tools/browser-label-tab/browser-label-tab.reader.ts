@@ -19,7 +19,10 @@ export const BrowserLabelTabArgsSchema = z.object({
 export function readBrowserLabelTab(
   args: Record<string, unknown>,
 ): ToolArgs<BrowserOp> {
-  if (args.name == null && args.color == null) {
+  if (
+    (args.name === null || args.name === undefined) &&
+    (args.color === null || args.color === undefined)
+  ) {
     return { ok: false, error: 'Give a name, a color or both' };
   }
   return readBrowserOp(

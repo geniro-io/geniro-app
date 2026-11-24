@@ -3,8 +3,6 @@ import lodash from 'lodash';
 import P from 'pino';
 import pretty from 'pino-pretty';
 
-const { isObject, isString, isUndefined, pickBy } = lodash;
-
 import { type ILoggerParams, type LogLevel } from './logger.types';
 
 export abstract class BaseLogger
@@ -87,7 +85,7 @@ export abstract class BaseLogger
       [key: string]: unknown;
       _args?: unknown[];
     }>((acc, curr) => {
-      if (isObject(curr)) {
+      if (lodash.isObject(curr)) {
         Object.assign(acc, curr);
       } else {
         (acc._args ??= []).push(curr);
@@ -95,7 +93,7 @@ export abstract class BaseLogger
       return acc;
     }, {});
 
-    return pickBy(
+    return lodash.pickBy(
       {
         msg,
         error: err
@@ -111,7 +109,7 @@ export abstract class BaseLogger
         data: Object.keys(data).length ? data : undefined,
         ...(this.getCustomPayload?.() ?? {}),
       },
-      (v) => !isUndefined(v),
+      (v) => !lodash.isUndefined(v),
     );
   }
 
@@ -131,13 +129,13 @@ export abstract class BaseLogger
     message?: string,
     ...args: unknown[]
   ): void {
-    const isErr = !isString(err);
+    const isErr = !lodash.isString(err);
     this.pino.error(
       this.buildPayload({
-        msg: message ?? (isErr ? (err as Error).message : err),
+        msg: message ?? (isErr ? err.message : err),
         level: 'error',
         args,
-        err: isErr ? (err as Error) : undefined,
+        err: isErr ? err : undefined,
       }),
     );
   }

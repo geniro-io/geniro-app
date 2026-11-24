@@ -18,17 +18,23 @@ import { ExceptionHandler } from './exception-handler';
 @Catch()
 export class ExceptionsFilter extends BaseExceptionFilter {
   constructor(private readonly moduleRef: INestApplication) {
-    const applicationRef = moduleRef.get(HttpAdapterHost) as HttpServer;
+    const applicationRef = moduleRef.get<HttpAdapterHost, HttpServer>(
+      HttpAdapterHost,
+    );
 
     super(applicationRef);
   }
 
-  async catch(exception: unknown, host: ArgumentsHost) {
+  catch(exception: unknown, host: ArgumentsHost): void {
+    void this.handleException(exception, host);
+  }
+
+  private async handleException(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const contextId = ContextIdFactory.create();
-    const response = ctx.getResponse() as {
+    const response = ctx.getResponse<{
       status: (code: number) => { send: (data: unknown) => void };
-    };
+    }>();
     const request = ctx.getRequest<FastifyRequest & FastifyRequest['raw']>();
 
     this.moduleRef.registerRequestByContextId(request, contextId);

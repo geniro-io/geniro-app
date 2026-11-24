@@ -25,7 +25,7 @@ function stubFetch(response: Partial<Response> & { ok: boolean }) {
   const fetchMock = vi.fn().mockResolvedValue({
     json: () => Promise.resolve({}),
     text: () => Promise.resolve(''),
-    clone() {
+    clone(): unknown {
       return this;
     },
     status: 200,

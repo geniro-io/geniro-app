@@ -658,9 +658,7 @@ describe('Storage', () => {
     expect(api.cleanStorage).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain('Deleting the archived chats…');
 
-    api.getStorageJob.mockImplementation(() =>
-      Promise.resolve({ job: done as StorageJob | null }),
-    );
+    api.getStorageJob.mockImplementation(() => Promise.resolve({ job: done }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STORAGE_JOB_POLL_MS);
     });
@@ -774,9 +772,9 @@ describe('Storage', () => {
         Promise.resolve({
           job: {
             ...running,
-            state: 'failed',
+            state: 'failed' as const,
             error: 'permission denied',
-          } as StorageJob | null,
+          },
         }),
       ),
       cleanStorage: vi.fn(() => Promise.resolve(running)),
@@ -982,10 +980,10 @@ describe('Storage', () => {
         Promise.resolve({
           job: {
             ...running,
-            state: 'done',
+            state: 'done' as const,
             removed: 20,
             freedBytes: 5 * 1024 * 1024,
-          } as StorageJob | null,
+          },
         }),
       ),
       cleanStorage: vi.fn(() => Promise.resolve(running)),
@@ -1029,7 +1027,7 @@ describe('Storage', () => {
         .mockReturnValueOnce(after.promise),
       getStorageJob: vi.fn(() =>
         Promise.resolve({
-          job: { ...running, state: 'done', removed: 20 } as StorageJob | null,
+          job: { ...running, state: 'done' as const, removed: 20 },
         }),
       ),
       cleanStorage: vi.fn(() => Promise.resolve(running)),
@@ -1075,7 +1073,7 @@ describe('Storage', () => {
         .mockResolvedValueOnce(usage())
         .mockReturnValueOnce(before.promise),
       getStorageJob: vi.fn(
-        () => new Promise<{ job: StorageJob | null }>(() => undefined),
+        () => new Promise<{ job: StorageJob | null }>(() => {}),
       ),
       cleanStorage: vi.fn(() => Promise.resolve(running)),
     };

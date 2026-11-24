@@ -36,13 +36,17 @@ beforeAll(async () => {
     }
     route(request, response);
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
   port = (server.address() as AddressInfo).port;
 });
 
 afterAll(async () => {
   server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 });
 
 /** Every name resolves to the given address. */
@@ -250,11 +254,13 @@ describe('downloadRemoteImage', () => {
 
   it('names only the error code of a connection that failed', async () => {
     const closed = createServer();
-    await new Promise<void>((resolve) =>
-      closed.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      closed.listen(0, '127.0.0.1', resolve);
+    });
     const closedPort = (closed.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      closed.close(() => resolve());
+    });
 
     const error = await refusal(
       downloadRemoteImage(`http://images.test:${closedPort}/a.png`, local),

@@ -300,7 +300,9 @@ describe('ModelsService — an account change (`forgetAgent`)', () => {
   /** Let the listing's own awaits (the version) run until the ask is made. */
   async function untilAsked(calls: () => number, count: number): Promise<void> {
     while (calls() < count) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
   }
 
@@ -372,7 +374,9 @@ describe('ModelsService — an account change (`forgetAgent`)', () => {
     store.forget('cursor-agent');
     models.forgetAgent('cursor-agent');
     listing.answer(0, OLD);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(
       store.read('cursor-agent', null, null, '2026.08.11-e8db854', isList),
@@ -416,7 +420,9 @@ describe('ModelsService — a listing the CLI could not answer', () => {
       (await models.list('cursor-agent')).map((model) => model.id),
     ).toContain('claude-opus-5');
     await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(
       (await models.list('cursor-agent')).map((model) => model.id),

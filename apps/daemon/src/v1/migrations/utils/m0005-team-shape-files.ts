@@ -52,7 +52,8 @@ async function exists(path: string): Promise<boolean> {
 export const teamShapeFiles: FileMigration = {
   id: TEAM_SHAPE_FILES_ID,
   kind: 'files',
-  async up({ userDataDir, backup }) {
+  async up(context) {
+    const { userDataDir } = context;
     const library = join(userDataDir, LIBRARY_DIR);
     if (!(await exists(library))) {
       return;
@@ -85,7 +86,7 @@ export const teamShapeFiles: FileMigration = {
         );
         continue;
       }
-      const copy = backup(path);
+      const copy = context.backup(path);
       const { notes } = legacy.converted;
       if (notes.length > 0) {
         await writeFile(

@@ -484,7 +484,7 @@ describe('useAgentMcp', () => {
     // previous folder's rows in it breaks that promise in the one direction
     // that matters: the panel then states folder A's servers as folder B's,
     // which is wrong rather than merely stale.
-    const neverAnswers = new Promise<never>(() => undefined);
+    const neverAnswers = new Promise<never>(() => {});
     const call = vi.fn((request: McpRequest) =>
       request.cwd === '/proj-a'
         ? Promise.resolve({

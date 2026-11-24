@@ -1885,7 +1885,9 @@ export class CallBroker implements OnModuleInit {
           mode,
           sessionId: threadSessionId,
           ...(threadMember !== null ? { member: threadMember } : {}),
-          ...(threadMember !== null && selected.plan?.preferred != null
+          ...(threadMember !== null &&
+          selected.plan?.preferred !== null &&
+          selected.plan?.preferred !== undefined
             ? { preferredMember: selected.plan.preferred }
             : {}),
           ...cacheResultFields(threadCache),
@@ -3215,13 +3217,15 @@ export class CallBroker implements OnModuleInit {
         input.deferred === true
           ? (answer) =>
               this.continueAsked(runId, callId, deferredQuestionPrompt(answer))
-          : input.deliver,
+          : (answer) => input.deliver(answer),
       fail:
         input.deferred === true
           ? () => {
               this.continueAsked(runId, callId, deferredQuestionPrompt(null));
             }
-          : input.fail,
+          : () => {
+              input.fail();
+            },
       ownerTold: false,
       envelopeDelivered: false,
     };

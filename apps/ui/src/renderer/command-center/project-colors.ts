@@ -16,7 +16,7 @@ export function projectColorsOf(
 ): ProjectColor[] {
   const byId = new Map<string, string>();
   for (const project of projects) {
-    if (project != null && !byId.has(project.id)) {
+    if (project !== null && project !== undefined && !byId.has(project.id)) {
       byId.set(project.id, project.name);
     }
   }

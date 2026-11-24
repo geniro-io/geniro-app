@@ -51,7 +51,9 @@ describe('acpSessionListFrames', () => {
       clientName: 'geniro',
       clientVersion: '1',
     });
-    const methods = frames.map((frame) => JSON.parse(frame).method);
+    const methods = frames.map(
+      (frame) => (JSON.parse(frame) as { method: string }).method,
+    );
     expect(methods).toEqual(['initialize', 'session/list']);
   });
 });
@@ -135,10 +137,9 @@ describe('acpSessionLoadFrames', () => {
       clientName: 'geniro',
       clientVersion: '1',
     });
-    expect(frames.map((frame) => JSON.parse(frame).method)).toEqual([
-      'initialize',
-      'session/load',
-    ]);
+    expect(
+      frames.map((frame) => (JSON.parse(frame) as { method: string }).method),
+    ).toEqual(['initialize', 'session/load']);
     // No MCP servers: this session is being READ, and dialling the folder's
     // servers would start every one of the user's own processes for a
     // transcript nobody is going to act on.

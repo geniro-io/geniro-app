@@ -462,7 +462,9 @@ export function Sharing({
               id="settings-agents-share"
               checked={current.agentsMayShare}
               disabled={sharing === null}
-              onCheckedChange={(on) => save({ ...current, agentsMayShare: on })}
+              onCheckedChange={(on) => {
+                void save({ ...current, agentsMayShare: on });
+              }}
             />
           </SettingsPanelRow>
         </SettingsPanel>
@@ -491,9 +493,9 @@ export function Sharing({
                   })),
                 },
               ]}
-              onValueChange={(id) =>
-                save({ ...current, defaultDestinationId: id })
-              }
+              onValueChange={(id) => {
+                void save({ ...current, defaultDestinationId: id });
+              }}
             />
           </SettingsPanelRow>
           <SettingsPanelRow

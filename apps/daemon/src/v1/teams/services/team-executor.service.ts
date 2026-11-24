@@ -60,6 +60,7 @@ import {
   type PersistedResetWake,
   type RestartContinuation,
   type RestartContinuationCall,
+  type ReviewPayload,
   type RunCallSeed,
   type RunListPage,
   type RunWire,
@@ -170,6 +171,7 @@ import {
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-background-work';
 import { isHostArtifactAnswersCall } from '../../agents/utils/host-artifact';
+import { isHostAnswerReviewCommentCall } from '../../agents/utils/host-review-comments';
 import { isHostBrowserCall } from '../../agents/utils/host-browser';
 import { hostEndpointPath } from '../../agents/utils/host-endpoint';
 import { isHostFlagIssueCall } from '../../agents/utils/host-flag-issue';
@@ -699,6 +701,7 @@ interface LiveRunControl {
     images: SendMessageImage[],
     backgroundWork?: FollowUpBackgroundWork,
     storedText?: string,
+    review?: ReviewPayload,
   ): Promise<ItemWire | null>;
   /** Hand the message to the callee of ONE running call — see `deliverToCall`. */
   deliverToCall(
@@ -761,10 +764,12 @@ function callNotRunning(): ConflictException {
 function messagePayload(
   text: string,
   stored: readonly AttachmentWire[],
-): { text: string; images?: AttachmentWire[] } {
+  review?: ReviewPayload,
+): { text: string; images?: AttachmentWire[]; review?: ReviewPayload } {
   return {
     text,
     ...(stored.length > 0 ? { images: [...stored] } : {}),
+    ...(review === undefined ? {} : { review }),
   };
 }
 
@@ -2429,6 +2434,8 @@ export class TeamExecutorService
     backgroundWork?: FollowUpBackgroundWork,
     /** What the user's row keeps when it must not hold `text` itself (a card's hidden field). */
     storedText?: string,
+    /** The review this message sends, kept on the user's row for its transcript card. */
+    review?: ReviewPayload,
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
@@ -2448,6 +2455,7 @@ export class TeamExecutorService
             images,
             backgroundWork,
             storedText,
+            review,
           );
           if (item !== null) {
             return item;
@@ -2461,6 +2469,7 @@ export class TeamExecutorService
           null,
           undefined,
           storedText,
+          review,
         );
       },
     );
@@ -2530,6 +2539,7 @@ export class TeamExecutorService
     seedRow: Record<string, unknown> | null = null,
     restart?: RestartPass,
     storedText?: string,
+    review?: ReviewPayload,
   ): Promise<ItemWire> {
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException(
@@ -2547,6 +2557,7 @@ export class TeamExecutorService
         seedRow,
         restart,
         storedText,
+        review,
       );
     } catch (err) {
       this.registry.release(run.id);
@@ -2589,6 +2600,7 @@ export class TeamExecutorService
     seedRow: Record<string, unknown> | null = null,
     restart?: RestartPass,
     storedText?: string,
+    review?: ReviewPayload,
   ): Promise<{
     team: Team;
     dropped: DroppedNodeSetting[];
@@ -2669,7 +2681,7 @@ export class TeamExecutorService
       await this.seqs.reserve(run.id),
       seedRow === null ? 'message' : 'system',
       seedRow === null ? 'user' : null,
-      seedRow ?? messagePayload(storedText ?? text, storedImages),
+      seedRow ?? messagePayload(storedText ?? text, storedImages, review),
     );
     if (leadTurn) {
       this.markRootsStarting(run.id, lead);
@@ -6989,6 +7001,10 @@ export class TeamExecutorService
                   hostMcpServerName(runId),
                   event.toolName,
                 ) ||
+                isHostAnswerReviewCommentCall(
+                  hostMcpServerName(runId),
+                  event.toolName,
+                ) ||
                 isHostBrowserCall(hostMcpServerName(runId), event.toolName) ||
                 isHostMilestoneCall(hostMcpServerName(runId), event.toolName) ||
                 isHostTeamProposalCall(
@@ -7535,6 +7551,10 @@ export class TeamExecutorService
         isHostQuestionCall(hostMcpServerName(runId), request.toolName) ||
         isHostKnowledgeCall(hostMcpServerName(runId), request.toolName) ||
         isHostArtifactAnswersCall(hostMcpServerName(runId), request.toolName) ||
+        isHostAnswerReviewCommentCall(
+          hostMcpServerName(runId),
+          request.toolName,
+        ) ||
         isHostBrowserCall(hostMcpServerName(runId), request.toolName) ||
         isHostMilestoneCall(hostMcpServerName(runId), request.toolName) ||
         isHostTeamProposalCall(hostMcpServerName(runId), request.toolName) ||
@@ -9720,6 +9740,7 @@ export class TeamExecutorService
       images: SendMessageImage[],
       backgroundWork?: FollowUpBackgroundWork,
       storedText?: string,
+      review?: ReviewPayload,
     ): Promise<ItemWire | null> => {
       // A pass that is over hands the message back to be walked from the
       // trigger — unless the run is AWAKE for work its own agents started
@@ -9817,7 +9838,7 @@ export class TeamExecutorService
       let persisted = false;
       try {
         item = await persistUserMessage(null, {
-          ...messagePayload(storedText ?? text, stored),
+          ...messagePayload(storedText ?? text, stored, review),
           deliveryId,
         });
         persisted = true;

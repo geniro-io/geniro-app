@@ -5444,6 +5444,181 @@ export type GoalRefusalCode =
   | 'TOO_MANY_GOALS'
   | 'EMPTY_TEXT';
 
+export const HOST_ANSWER_REVIEW_COMMENT_TOOL = 'answer_review_comment';
+
+export const REVIEW_COMMENT_MAX_CHARS = 4000;
+export const REVIEW_MAX_COMMENTS = 50;
+export const REVIEW_QUOTE_LINES = 20;
+export const REVIEW_NOTE_MAX_CHARS = 4000;
+
+export const ReviewCommentSideSchema = z
+  .enum(['new', 'old', 'file'])
+  .meta({ id: 'ReviewCommentSide' });
+export type ReviewCommentSide = z.infer<typeof ReviewCommentSideSchema>;
+
+export const ReviewCommentStatusSchema = z
+  .enum(['draft', 'sent', 'resolved'])
+  .meta({ id: 'ReviewCommentStatus' });
+export type ReviewCommentStatus = z.infer<typeof ReviewCommentStatusSchema>;
+
+export const ReviewAgentStatusSchema = z
+  .enum(['fixed', 'not_fixed'])
+  .meta({ id: 'ReviewAgentStatus' });
+export type ReviewAgentStatus = z.infer<typeof ReviewAgentStatusSchema>;
+
+export const ReviewCommentWireSchema = z
+  .object({
+    id: z.string(),
+    number: z
+      .number()
+      .int()
+      .describe('The comment within its run, as the agent names it'),
+    folder: z
+      .string()
+      .describe('The folder the comment was made in: the chat folder or one of its agent worktrees'),
+    path: z.string().describe('The file, relative to its repository root'),
+    side: ReviewCommentSideSchema.describe(
+      'new: lines of the file as it is now; old: removed lines; file: the whole file',
+    ),
+    startLine: z.number().int().nullable(),
+    endLine: z.number().int().nullable(),
+    quote: z.string().describe('The lines the comment was written on'),
+    body: z.string(),
+    status: ReviewCommentStatusSchema,
+    sentSeq: z
+      .number()
+      .int()
+      .nullable()
+      .describe('The transcript row of the review that sent it'),
+    sentAt: z.string().nullable(),
+    agentStatus: ReviewAgentStatusSchema.nullable(),
+    agentReply: z.string().nullable(),
+    agentRepliedAt: z.string().nullable(),
+    agentMemberId: z
+      .string()
+      .nullable()
+      .describe('The team member that answered it; null for a chat agent'),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .meta({ id: 'ReviewComment' });
+export type ReviewCommentWire = z.infer<typeof ReviewCommentWireSchema>;
+
+export const ReviewCommentsWireSchema = z.object({
+  comments: z.array(ReviewCommentWireSchema),
+});
+export type ReviewCommentsWire = z.infer<typeof ReviewCommentsWireSchema>;
+
+const ReviewCommentTextSchema = z
+  .string()
+  .max(REVIEW_COMMENT_MAX_CHARS)
+  .refine(
+    (text) => !hasHiddenText(text, true),
+    'holds a control or format character',
+  );
+
+export const ReviewCommentCreateSchema = z.object({
+  folder: z.string().min(1),
+  path: z.string().min(1),
+  side: ReviewCommentSideSchema,
+  startLine: z.number().int().min(1).nullable().optional(),
+  endLine: z.number().int().min(1).nullable().optional(),
+  quote: ReviewCommentTextSchema,
+  body: ReviewCommentTextSchema.pipe(z.string().trim().min(1)),
+});
+export type ReviewCommentCreate = z.infer<typeof ReviewCommentCreateSchema>;
+
+export const ReviewCommentEditSchema = z
+  .object({
+    body: ReviewCommentTextSchema.pipe(z.string().trim().min(1)).optional(),
+    status: z.enum(['resolved', 'sent']).optional(),
+  })
+  .refine(
+    (edit) => (edit.body === undefined) !== (edit.status === undefined),
+    'send exactly one of body or status',
+  );
+export type ReviewCommentEdit = z.infer<typeof ReviewCommentEditSchema>;
+
+export const ReviewSendSchema = z.object({
+  clientMessageId: z.string().min(1).max(200),
+  note: z
+    .string()
+    .max(REVIEW_NOTE_MAX_CHARS)
+    .refine(
+      (text) => !hasHiddenText(text, true),
+      'holds a control or format character',
+    )
+    .nullable()
+    .optional(),
+});
+export type ReviewSend = z.infer<typeof ReviewSendSchema>;
+
+export const ReviewSendWireSchema = z.object({
+  seq: z.number().int().describe('The transcript row the review was sent as'),
+  sent: z.number().int().describe('How many comments it carried'),
+});
+export type ReviewSendWire = z.infer<typeof ReviewSendWireSchema>;
+
+/**
+ * One comment as the review message carried it, kept on the user's row so the
+ * transcript card reads whole after the comment is edited or deleted.
+ *
+ * TWIN PARSER: the renderer reads it back off a user message row's
+ * `payload.review` (`apps/ui/src/renderer/chats/review-payload.ts`).
+ */
+export interface ReviewSnapshot {
+  number: number;
+  folder: string;
+  path: string;
+  side: ReviewCommentSide;
+  startLine: number | null;
+  endLine: number | null;
+  quote: string;
+  body: string;
+}
+
+export interface ReviewPayload {
+  note: string | null;
+  comments: ReviewSnapshot[];
+}
+
+export interface ReviewCommentDraft {
+  folder: string;
+  path: string;
+  side: ReviewCommentSide;
+  startLine?: number | null;
+  endLine?: number | null;
+  quote: string;
+  body: string;
+}
+
+export type ReviewCommentRefusalCode =
+  | 'RUN_NOT_FOUND'
+  | 'RUN_ARCHIVED'
+  | 'REVIEW_COMMENT_NOT_FOUND'
+  | 'REVIEW_COMMENT_NOT_DRAFT'
+  | 'REVIEW_COMMENT_NOT_SENT'
+  | 'REVIEW_COMMENT_EMPTY'
+  | 'REVIEW_COMMENT_TOO_LONG'
+  | 'REVIEW_COMMENT_BAD_RANGE';
+
+/** A review-comment write as its service answers it. */
+export type ReviewCommentsOutcome =
+  | {
+      status: 'ok';
+      comments: ReviewCommentWire[];
+      changed: ReviewCommentWire[];
+    }
+  | { status: 'refused'; code: ReviewCommentRefusalCode; reason: string };
+
+/** What the review message hands its delivery: the agent's text and the user's row. */
+export interface ReviewMessage {
+  text: string;
+  storedText: string;
+  review: ReviewPayload;
+  clientMessageId: string;
+}
+
 /** How a thread ended, in the words every run can use — a pull request or not. */
 export const ThreadOutcomeKindSchema = z
   .enum(['success', 'partial', 'failed', 'abandoned'])
@@ -5879,6 +6054,16 @@ export interface ThreadListAnswer {
  * `apps/ui/src/renderer/daemon-client.ts`.
  */
 export interface ThreadMessagesChange {
+  runId: string;
+}
+
+/**
+ * A run's review comments changed. Names the run, never a comment.
+ *
+ * TWIN PARSER: `parseReviewCommentsChanged` in
+ * `apps/ui/src/renderer/daemon-client.ts` reads it.
+ */
+export interface ReviewCommentsChange {
   runId: string;
 }
 

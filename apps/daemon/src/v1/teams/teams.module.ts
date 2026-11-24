@@ -33,6 +33,7 @@ import { StageService } from './services/stage.service';
 import { StageWakeService } from './services/stage-wake.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { TeamActionsService } from './services/team-actions.service';
+import { TeamReviewService } from './services/team-review.service';
 import { TeamAnalysisService } from './services/team-analysis.service';
 import { TeamCardsService } from './services/team-cards.service';
 import { TeamChangeService } from './services/team-change.service';
@@ -114,6 +115,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeLogDao,
     TeamChangeLogService,
     TeamActionsService,
+    TeamReviewService,
     TeamProposalService,
     TeamCardsService,
     TeamHealthService,

@@ -9,6 +9,7 @@ import type {
   RunDeltaEvent,
   RunItemEvent,
   RunStatusEvent,
+  ReviewCommentsChange,
   RunWire,
   ThreadMessagesChange,
   ThreadMessageSent,
@@ -37,6 +38,7 @@ export class AgentEventBus {
   private readonly statuses = new Subject<RunStatusEvent>();
   private readonly deleted = new Subject<string>();
   private readonly threadMessageChanges = new Subject<ThreadMessagesChange>();
+  private readonly reviewCommentChanges = new Subject<ReviewCommentsChange>();
   private readonly threadMessagesSent = new Subject<ThreadMessageSent>();
   private readonly replyCreditsSpent = new Subject<ReplyCreditSpent>();
   private readonly promptCacheWarmups = new Subject<PromptCacheWarmupSpend>();
@@ -128,6 +130,15 @@ export class AgentEventBus {
 
   allThreadMessageChanges(): Observable<ThreadMessagesChange> {
     return this.threadMessageChanges.asObservable();
+  }
+
+  /** A run's review comments changed. Names the run, never a comment. */
+  publishReviewCommentsChanged(runId: string): void {
+    this.reviewCommentChanges.next({ runId });
+  }
+
+  allReviewCommentChanges(): Observable<ReviewCommentsChange> {
+    return this.reviewCommentChanges.asObservable();
   }
 
   /** A message between threads was written. Names both ends, never the text. */

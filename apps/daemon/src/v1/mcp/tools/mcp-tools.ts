@@ -14,6 +14,7 @@ import type { GalleryImageService } from '../../agents/services/gallery-image.se
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import type { GoalsService } from '../../agents/services/goals.service';
+import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { MilestoneBroker } from '../../agents/services/milestone.broker';
@@ -57,6 +58,7 @@ import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { CheckLessonsTool } from './check-lessons/check-lessons.tool';
 import { FlagIssueTool } from './flag-issue/flag-issue.tool';
+import { AnswerReviewCommentTool } from './answer-review-comment/answer-review-comment.tool';
 import { GoalsTool } from './goals/goals.tool';
 import { gatedForHiddenLessons } from './hidden-lessons-gate';
 import { KnowledgeReadTool } from './knowledge-read/knowledge-read.tool';
@@ -129,6 +131,7 @@ export interface McpToolDeps {
   milestones: MilestoneBroker;
   goals: GoalsService;
   goalWriters: GoalWritersBroker;
+  reviewComments: ReviewCommentsService;
   stages: StageService;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -188,6 +191,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new MoveStageTool(deps.stages, deps.calls),
     new MilestoneTool(deps.milestones),
     new GoalsTool(deps.goals, deps.goalWriters),
+    new AnswerReviewCommentTool(deps.reviewComments),
     new FlagIssueTool(deps.flags),
     new AskUserQuestionTool(deps.questions),
     new ShowChartTool(deps.charts),

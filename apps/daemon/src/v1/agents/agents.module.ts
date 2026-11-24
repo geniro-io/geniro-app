@@ -23,6 +23,7 @@ import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
 import { GoalsController } from './controllers/goals.controller';
+import { ReviewCommentsController } from './controllers/review-comments.controller';
 import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
 import { MemoryCheckController } from './controllers/memory-check.controller';
@@ -35,6 +36,7 @@ import { AgentFlagDao } from './dao/agent-flag.dao';
 import { CallContextDao } from './dao/call-context.dao';
 import { ChatSearchIndexDao } from './dao/chat-search-index.dao';
 import { GoalDao } from './dao/goal.dao';
+import { ReviewCommentDao } from './dao/review-comment.dao';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -103,6 +105,7 @@ import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
 import { GoalWritersBroker } from './services/goal-writers.broker';
 import { GoalsService } from './services/goals.service';
+import { ReviewCommentsService } from './services/review-comments.service';
 import { HostToolResultLedger } from './services/host-tool-result.ledger';
 import { HostWakeBus } from './services/host-wake.bus';
 import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
@@ -224,6 +227,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ArtifactsController,
     ChatController,
     GoalsController,
+    ReviewCommentsController,
     ThreadMessagesController,
     ChatSearchController,
     KeptSessionsController,
@@ -330,6 +334,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     MilestoneBroker,
     GoalsService,
     GoalDao,
+    ReviewCommentsService,
+    ReviewCommentDao,
     RunOutcomeHistoryService,
     {
       provide: GH_COMMAND_RUNNER,
@@ -752,6 +758,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     MilestoneBroker,
     GoalsService,
     GoalDao,
+    ReviewCommentsService,
+    ReviewCommentDao,
     RunOutcomeHistoryService,
     // For the team delivery, which records the end of output it drops.
     MonitorRowWriter,

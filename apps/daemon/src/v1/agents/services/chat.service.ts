@@ -90,6 +90,7 @@ import {
   type ItemWire,
   type ProjectChatSource,
   type RecommendationApply,
+  type ReviewPayload,
   type RunAwaiting,
   type RunGroupColor,
   type RunListPage,
@@ -152,6 +153,7 @@ import {
   isHostArtifactAnswersCall,
   isHostArtifactCall,
 } from '../utils/host-artifact';
+import { isHostAnswerReviewCommentCall } from '../utils/host-review-comments';
 import { isHostBoardCall } from '../utils/host-board';
 import { isHostBrowserCall } from '../utils/host-browser';
 import { isHostChartCall } from '../utils/host-chart';
@@ -6172,6 +6174,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       deliveryId?: string;
       /** What the user's row keeps when it must not hold `text` itself (a card's hidden field). */
       storedText?: string;
+      /** The review this message sends, kept on the user's row for its transcript card. */
+      review?: ReviewPayload;
     } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
@@ -6247,6 +6251,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       joinOnly?: boolean;
       deliveryId?: string;
       storedText?: string;
+      review?: ReviewPayload;
     },
   ): Promise<ItemWire> {
     const runId = run.id;
@@ -6503,6 +6508,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // (`share: true`) needs no card either.
         isHostArtifactCall(hostServerName, toolName) ||
         isHostArtifactAnswersCall(hostServerName, toolName) ||
+        isHostAnswerReviewCommentCall(hostServerName, toolName) ||
         // The notify tool, on the render family's reading: a banner the agent
         // asks for is not something a permission card meaningfully guards.
         isHostNotifyCall(hostServerName, toolName) ||
@@ -6666,6 +6672,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   ...(options.apply === undefined
                     ? {}
                     : { apply: options.apply }),
+                  ...(options.review === undefined
+                    ? {}
+                    : { review: options.review }),
                 },
               );
 

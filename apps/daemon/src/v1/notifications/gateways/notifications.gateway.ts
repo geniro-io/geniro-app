@@ -165,6 +165,7 @@ export class NotificationsGateway
   private knowledgeSubscription?: Subscription;
   private embeddingsSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
+  private reviewCommentsSubscription?: Subscription;
   private commandCenterSubscription?: Subscription;
   private commandCenterContactSubscription?: Subscription;
   private projectSubscription?: Subscription;
@@ -308,6 +309,22 @@ export class NotificationsGateway
         },
         error: (err: unknown) =>
           this.logger.error(`thread message bus errored: ${String(err)}`),
+      });
+    // Goes to EVERY client, paired devices included: a phone reviews too.
+    this.reviewCommentsSubscription = this.bus
+      .allReviewCommentChanges()
+      .subscribe({
+        next: (change) => {
+          try {
+            server.emit('review_comments_changed', change);
+          } catch (err) {
+            this.logger.error(
+              `failed to broadcast review_comments_changed (${change.runId}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
+        error: (err: unknown) =>
+          this.logger.error(`review comment bus errored: ${String(err)}`),
       });
     // Goes to EVERY client, paired devices included: the command center reads
     // the same board on the phone. Run ids and message ends only, never text.
@@ -603,6 +620,7 @@ export class NotificationsGateway
     this.knowledgeSubscription?.unsubscribe();
     this.embeddingsSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
+    this.reviewCommentsSubscription?.unsubscribe();
     this.commandCenterSubscription?.unsubscribe();
     this.commandCenterContactSubscription?.unsubscribe();
     this.projectSubscription?.unsubscribe();

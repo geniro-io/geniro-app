@@ -17,6 +17,7 @@ import { GalleryImageService } from '../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
 import { GoalWritersBroker } from '../agents/services/goal-writers.broker';
 import { GoalsService } from '../agents/services/goals.service';
+import { ReviewCommentsService } from '../agents/services/review-comments.service';
 import { KnowledgeItemsService } from '../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
 import { MilestoneBroker } from '../agents/services/milestone.broker';
@@ -136,6 +137,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         commandCenters: CommandCenterBroker,
         commandCenterOps: CommandCenterOpsBroker,
         surfaces: SurfaceBroker,
+        reviewComments: ReviewCommentsService,
       ) =>
         createMcpTools({
           calls,
@@ -185,6 +187,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           commandCenters,
           commandCenterOps,
           surfaces,
+          reviewComments,
         }),
       inject: [
         CallBroker,
@@ -234,6 +237,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         CommandCenterBroker,
         CommandCenterOpsBroker,
         SurfaceBroker,
+        ReviewCommentsService,
       ],
     },
     McpServerService,

@@ -22,6 +22,7 @@ import { cameViaRemote } from '../../../auth/remote-marker';
 import type {
   ActionPressWire,
   ItemWire,
+  ReviewSendWire,
   RunWire,
   SurfaceWire,
   ThreadAnalysisWire,
@@ -34,8 +35,10 @@ import {
   ListChatsQueryDto,
   PressActionDto,
   PressSurfaceDto,
+  ReviewSendDto,
   RunDto,
   SendMessageDto,
+  SendReviewDto,
   SurfaceDto,
   ThreadAnalysisDto,
 } from '../../agents/dto/chat.dto';
@@ -94,6 +97,7 @@ import { TeamChatService } from '../services/team-chat.service';
 import { TeamExecutorService } from '../services/team-executor.service';
 import { TeamHealthService } from '../services/team-health.service';
 import { TeamOverlayService } from '../services/team-overlay.service';
+import { TeamReviewService } from '../services/team-review.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
   AnalysisJudgeCheckWire,
@@ -141,6 +145,7 @@ export class TeamsController {
     private readonly health: TeamHealthService,
     private readonly overlays: TeamOverlayService,
     private readonly freshSessionBases: FreshSessionBaseService,
+    private readonly reviews: TeamReviewService,
   ) {}
 
   /**
@@ -290,6 +295,20 @@ export class TeamsController {
     @Body() dto: PressSurfaceDto,
   ): Promise<SurfaceWire> {
     return this.actions.pressSurface(runId, surfaceId, dto);
+  }
+
+  /** The review screen's send in a team run: every draft as one message to the lead. */
+  @Post('runs/:runId/review-comments/send')
+  @ApiOperation({ operationId: 'sendTeamReview' })
+  @ZodResponse({ status: 201, type: ReviewSendDto })
+  sendReview(
+    @Param('runId') runId: string,
+    @Body() dto: SendReviewDto,
+  ): Promise<ReviewSendWire> {
+    return this.reviews.send(runId, {
+      clientMessageId: dto.clientMessageId,
+      note: dto.note ?? null,
+    });
   }
 
   /** Takes an agent's button off a team run; no agent is told. */

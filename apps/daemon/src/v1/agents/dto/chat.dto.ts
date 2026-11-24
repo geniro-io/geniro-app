@@ -33,6 +33,11 @@ import {
   MAX_RUN_NOTES_LENGTH,
   RecommendationApplySchema,
   ReplyLanguageSchema,
+  ReviewCommentCreateSchema,
+  ReviewCommentEditSchema,
+  ReviewCommentsWireSchema,
+  ReviewSendSchema,
+  ReviewSendWireSchema,
   RunArtifactsWireSchema,
   RunGoalCloseSchema,
   RunGoalCreateSchema,
@@ -944,3 +949,17 @@ export class CreateRunGoalDto extends createZodDto(RunGoalCreateSchema) {}
 export class EditRunGoalDto extends createZodDto(RunGoalEditSchema) {}
 
 export class CloseRunGoalDto extends createZodDto(RunGoalCloseSchema) {}
+
+export class ReviewCommentsDto extends createZodDto(ReviewCommentsWireSchema) {}
+
+export class CreateReviewCommentDto extends createZodDto(
+  ReviewCommentCreateSchema,
+) {}
+
+export class EditReviewCommentDto extends createZodDto(
+  ReviewCommentEditSchema,
+) {}
+
+export class SendReviewDto extends createZodDto(ReviewSendSchema) {}
+
+export class ReviewSendDto extends createZodDto(ReviewSendWireSchema) {}

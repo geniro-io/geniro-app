@@ -17,7 +17,7 @@ export function monitorSchema(): Record<string, unknown> {
       },
       description: {
         type: 'string',
-        description: `What it watches, at most ${MONITOR_DESCRIPTION_MAX} characters — e.g. "CI run 4812".`,
+        description: `What it watches, e.g. "CI run 4812". A longer one is cut to its first ${MONITOR_DESCRIPTION_MAX} characters.`,
       },
       timeout_ms: {
         type: 'integer',

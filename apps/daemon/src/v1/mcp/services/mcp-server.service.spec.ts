@@ -6151,12 +6151,68 @@ describe('McpServerService — the monitor tools', () => {
     }
   });
 
-  it('refuses an empty command, an over-long description and a timeout out of range, starting nothing', async () => {
+  it('starts a monitor whose description runs past its limit under the first 60 characters', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      const started = await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'y'.repeat(75),
+        timeout_ms: 60_000,
+      });
+      expect(started.isError).toBe(false);
+
+      const listed = await call(subject, 'list_monitors', {});
+      expect(JSON.parse(listed.content[0]!.text)).toMatchObject([
+        { id: 'm1', description: 'y'.repeat(60), command: 'sleep 30' },
+      ]);
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
+  it('answers a stop of a monitor that already ended with a result, not an error, and still refuses an id it never ran', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    const ended = new Promise<void>((resolve) => {
+      const off = registry.subscribe((event) => {
+        if (event.type === 'end') {
+          off();
+          resolve();
+        }
+      });
+    });
+    try {
+      await call(subject, 'monitor', {
+        command: 'exit 0',
+        description: 'quick',
+        timeout_ms: 60_000,
+      });
+      await ended;
+
+      const answered = await call(subject, 'stop_monitor', { id: 'm1' });
+      expect(answered.isError).toBe(false);
+      expect(answered.content[0]?.text).toBe(
+        'Monitor m1 already ended: exit code 0. Nothing more is sent from it.',
+      );
+
+      const unknown = await call(subject, 'stop_monitor', { id: 'm9' });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content[0]?.text).toContain(
+        'no running monitor m9 of yours',
+      );
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
+  it('refuses an empty command and a timeout out of range, starting nothing', async () => {
     const { broker, registry } = monitorBroker();
     const subject = monitorService(broker);
     for (const args of [
       { command: '   ', description: 'x' },
-      { command: 'true', description: 'y'.repeat(61) },
       { command: 'true', description: 'x', timeout_ms: 999 },
       { command: 'true', description: 'x', timeout_ms: 86_400_001 },
       { command: 'true', description: 'x', timeout_ms: 1500.5 },

@@ -89,7 +89,12 @@ export function followsPastItsReader(command: string): boolean {
   });
 }
 
-/** Refused rather than clamped: a cut-down timeout is not the one asked for. */
+/** The first code points of a label, its trailing blanks dropped. */
+function cutDescription(value: string): string {
+  return Array.from(value).slice(0, MONITOR_DESCRIPTION_MAX).join('').trimEnd();
+}
+
+/** Refused rather than clamped, except the description, which only labels the monitor and is cut. */
 const MonitorArgsSchema = z
   .object({
     command: z
@@ -109,11 +114,11 @@ const MonitorArgsSchema = z
       .string()
       .trim()
       .min(1, 'description is empty')
-      .max(MONITOR_DESCRIPTION_MAX)
       .refine(
         (value) => !CONTROL.test(value) && !value.includes('\n'),
         'description must be one line without control characters',
-      ),
+      )
+      .transform(cutDescription),
     timeout_ms: z
       .number()
       .int()

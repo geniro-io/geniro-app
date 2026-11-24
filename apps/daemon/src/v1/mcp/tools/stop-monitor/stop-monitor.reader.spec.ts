@@ -17,4 +17,12 @@ describe('readStopMonitor', () => {
       'Stopped monitor m2. Nothing more is sent from it.',
     );
   });
+
+  it('says how a monitor that already ended ended, and that nothing more comes from it', () => {
+    expect(
+      stopMonitorResultText({ status: 'ended', end: 'exit code 0' }, 'm2'),
+    ).toBe(
+      'Monitor m2 already ended: exit code 0. Nothing more is sent from it.',
+    );
+  });
 });

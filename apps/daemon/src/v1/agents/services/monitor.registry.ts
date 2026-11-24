@@ -185,10 +185,7 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
       ended !== undefined &&
       (caller === undefined || ended.caller === caller)
     ) {
-      return {
-        status: 'refused',
-        reason: `already ended: ${describeMonitorEnd(ended.end)}`,
-      };
+      return { status: 'ended', end: describeMonitorEnd(ended.end) };
     }
     if (
       monitor === undefined ||
@@ -200,7 +197,7 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
       };
     }
     if (monitor.cause !== null) {
-      return { status: 'refused', reason: 'already ended: it is stopping' };
+      return { status: 'ended', end: 'stopping' };
     }
     monitor.cause = cause;
     monitor.stream.stop();

@@ -1174,6 +1174,126 @@ describe('the page runtime', () => {
       expect(click.defaultPrevented).toBe(false);
     });
 
+    describe('Enter in a form with no submit button', () => {
+      const enter = (
+        selector: string,
+        init: KeyboardEventInit = {},
+      ): KeyboardEvent => {
+        const key = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        });
+        document.querySelector(selector)?.dispatchEvent(key);
+        return key;
+      };
+
+      it('closes the dialog from its one text field, as a browser submits such a form', () => {
+        open(
+          '<dialog><form method="dialog"><input id="name" value="Ann"></form></dialog>',
+        );
+        dialog().returnValue = 'before';
+
+        const key = enter('#name');
+
+        expect(dialog().open).toBe(false);
+        expect(key.defaultPrevented).toBe(true);
+        expect(submits).toEqual([null]);
+        expect(dialog().returnValue).toBe('before');
+      });
+
+      it('closes on Shift+Enter too, as the browser does', () => {
+        open('<dialog><form method="dialog"><input id="name"></form></dialog>');
+        enter('#name', { shiftKey: true });
+        expect(dialog().open).toBe(false);
+      });
+
+      it('keeps the dialog open while that field is required and empty', () => {
+        open(
+          '<dialog><form method="dialog"><input id="name" required></form></dialog>',
+        );
+        enter('#name');
+        expect(dialog().open).toBe(true);
+        expect(submits).toEqual([]);
+      });
+
+      it.each([
+        [
+          'the page cancels the submit event',
+          () =>
+            document
+              .querySelector('form')
+              ?.addEventListener('submit', (event) => event.preventDefault()),
+        ],
+        [
+          'the page cancels the key',
+          () =>
+            document
+              .getElementById('name')
+              ?.addEventListener('keydown', (event) => event.preventDefault()),
+        ],
+      ])('keeps the dialog open when %s', (_, cancel) => {
+        open('<dialog><form method="dialog"><input id="name"></form></dialog>');
+        cancel();
+        enter('#name');
+        expect(dialog().open).toBe(true);
+      });
+
+      it.each([
+        [
+          'a form with two text fields',
+          '<dialog><form method="dialog"><input id="name"><input id="other"></form></dialog>',
+          {},
+        ],
+        [
+          'a form with a submit button, which Enter reaches as a click',
+          '<dialog><form method="dialog"><input id="name"><button>Close</button></form></dialog>',
+          {},
+        ],
+        [
+          'a textarea',
+          '<dialog><form method="dialog"><textarea id="name"></textarea></form></dialog>',
+          {},
+        ],
+        [
+          'a checkbox',
+          '<dialog><form method="dialog"><input id="name" type="checkbox"></form></dialog>',
+          {},
+        ],
+        [
+          'a checkbox beside one text field',
+          '<dialog><form method="dialog"><input><input id="name" type="checkbox"></form></dialog>',
+          {},
+        ],
+        [
+          'Ctrl+Enter',
+          '<dialog><form method="dialog"><input id="name"></form></dialog>',
+          { ctrlKey: true },
+        ],
+        [
+          'Cmd+Enter',
+          '<dialog><form method="dialog"><input id="name"></form></dialog>',
+          { metaKey: true },
+        ],
+        [
+          'Enter that ends a composition',
+          '<dialog><form method="dialog"><input id="name"></form></dialog>',
+          { isComposing: true },
+        ],
+        [
+          'a form of another method',
+          '<dialog><form><input id="name"></form></dialog>',
+          {},
+        ],
+      ])('leaves the key alone in %s', (_, body, init) => {
+        open(body);
+        const key = enter('#name', init);
+        expect(key.defaultPrevented).toBe(false);
+        expect(dialog().open).toBe(true);
+      });
+    });
+
     it.each([
       [
         'a form of another method',

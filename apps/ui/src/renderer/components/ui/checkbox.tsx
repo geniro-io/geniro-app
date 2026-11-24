@@ -67,12 +67,15 @@ function Checkbox({
   label,
   disabled = false,
   id,
+  'aria-label': ariaLabel,
 }: {
   checked: boolean;
   onCheckedChange: (next: boolean) => void;
   label: React.ReactNode;
   disabled?: boolean;
   id?: string;
+  /** For a short label that only makes sense beside what it ticks. */
+  'aria-label'?: string;
 }): React.JSX.Element {
   return (
     <button
@@ -80,6 +83,7 @@ function Checkbox({
       role="checkbox"
       id={id}
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       data-slot="checkbox"
       data-state={checked ? 'checked' : 'unchecked'}

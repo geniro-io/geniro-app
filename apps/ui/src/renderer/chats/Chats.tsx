@@ -164,7 +164,7 @@ import {
 import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
 import { memberCallWaits } from './call-waits';
-import { ChatChangesDialog } from './chat-changes-dialog';
+import { ChangesReviewDialog } from './changes-review-dialog';
 import {
   chatContextFigures,
   type ContextFigures,
@@ -477,6 +477,7 @@ import {
   useTranscriptJump,
 } from './use-transcript-jump';
 import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
+import { useReviewComments } from './use-review-comments';
 import { useWaitingMessages } from './use-waiting-messages';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
@@ -3291,6 +3292,7 @@ export function Chats({
     arrived: boolean;
   } | null>(null);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [reviewFocus, setReviewFocus] = useState<number | null>(null);
   const chatSearch = useChatSearch(activeRunId, chatApi);
 
   // The jump state machine — reveal, mark, fetch-around, and what "Latest"
@@ -3448,10 +3450,14 @@ export function Chats({
   );
 
   const openChatSearch = useLatestCallback((): void => setSearchOpen(true), []);
-  const openChatChanges = useLatestCallback(
-    (): void => setChangesOpen(true),
-    [],
-  );
+  const openChatChanges = useLatestCallback((): void => {
+    setReviewFocus(null);
+    setChangesOpen(true);
+  }, []);
+  const openReviewComment = useLatestCallback((number: number): void => {
+    setReviewFocus(number);
+    setChangesOpen(true);
+  }, []);
   const closeChatChanges = useLatestCallback(
     (): void => setChangesOpen(false),
     [],
@@ -7455,6 +7461,18 @@ export function Chats({
           activeParkedReason,
           pausedQueues.has(activeRunId),
         );
+  const review = useReviewComments({
+    api: chatApi,
+    teamApi: activeTeamId === null ? null : teamApi,
+    client,
+    runId: activeRunId,
+    agentWorking:
+      activeTeamId === null
+        ? runState.turnStartedAt !== null
+        : activeFacts !== null &&
+          followUpDelivery({ ...activeFacts, queued: false }).action ===
+            'queue',
+  });
   /**
    * The open turn as a CHAT header (and each agent's figure) should measure it:
    * the hold counted as a parked stretch, exactly like an approval card's wait.
@@ -12152,9 +12170,17 @@ export function Chats({
                     fresh read (`refresh(true)`, past the freshness floor), which
                     is the behaviour the dialog documented for itself. */}
                 {changesOpen && activeRun ? (
-                  <ChatChangesDialog
+                  <ChangesReviewDialog
                     open
+                    folder={activeRun.cwd ?? ''}
+                    threadId={activeRun.id}
                     startSha={activeRun.startSha}
+                    baseSha={chatChanges.baseSha}
+                    review={review}
+                    readFileLines={
+                      isRemoteRuntime() ? undefined : window.geniro.readFileLines
+                    }
+                    focusComment={reviewFocus}
                     changes={chatChanges.changes}
                     elsewhere={chatChanges.elsewhere}
                     truncated={chatChanges.truncated}

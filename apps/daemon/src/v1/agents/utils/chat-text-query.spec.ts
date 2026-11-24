@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  anyTermMatchQuery,
   chatTextMatchQuery,
   chatTextQueryTerms,
   matchEveryWordElseAny,
@@ -50,6 +51,26 @@ describe('chatTextQueryTerms', () => {
       'платеж',
       'x',
     ]);
+  });
+});
+
+describe('anyTermMatchQuery', () => {
+  it('joins each term as its own match with OR, in the order given', () => {
+    expect(anyTermMatchQuery(['retry', 'backoff'], 30)).toBe(
+      '"retry"* OR "backoff"*',
+    );
+  });
+
+  it('uses only the first `limit` terms', () => {
+    expect(anyTermMatchQuery(['retry', 'backoff', 'cache'], 2)).toBe(
+      '"retry"* OR "backoff"*',
+    );
+  });
+
+  it('skips a term with nothing to index, and answers null when none is left', () => {
+    expect(anyTermMatchQuery(['--', 'retry'], 30)).toBe('"retry"*');
+    expect(anyTermMatchQuery(['--', '!!'], 30)).toBeNull();
+    expect(anyTermMatchQuery([], 30)).toBeNull();
   });
 });
 

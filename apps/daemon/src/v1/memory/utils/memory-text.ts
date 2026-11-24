@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { HOST_MEMORY_SEARCH_TOOL } from '../../agents/chat.types';
 import {
-  chatTextMatchQuery,
+  anyTermMatchQuery,
   chatTextQueryTerms,
 } from '../../agents/utils/chat-text-query';
 import { redactSecrets } from '../../diagnostics/utils/redact';
@@ -57,17 +57,15 @@ export function memoryIndexOf(
 
 /**
  * An FTS5 query matching any one of a first message's words, or null when the
- * message has none worth searching for. Each word goes through
- * `chatTextMatchQuery` alone: that helper reads only thirty words of a query,
- * so the words are joined here, not inside it.
+ * message has none worth searching for.
  */
 export function indexMatchQuery(message: string): string | null {
-  const matches = [...new Set(chatTextQueryTerms(message))]
-    .filter((term) => term.length >= MATCH_TERM_MIN_CHARS)
-    .slice(0, MEMORY_INDEX_MATCH_TERMS)
-    .map((term) => chatTextMatchQuery(term))
-    .filter((match): match is string => match !== null);
-  return matches.length === 0 ? null : matches.join(' OR ');
+  return anyTermMatchQuery(
+    [...new Set(chatTextQueryTerms(message))].filter(
+      (term) => term.length >= MATCH_TERM_MIN_CHARS,
+    ),
+    MEMORY_INDEX_MATCH_TERMS,
+  );
 }
 
 /**

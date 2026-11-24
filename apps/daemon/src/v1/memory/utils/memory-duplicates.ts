@@ -1,4 +1,4 @@
-import { chatTextMatchQuery } from '../../agents/utils/chat-text-query';
+import { anyTermMatchQuery } from '../../agents/utils/chat-text-query';
 import { ruleOfLessonBody } from './lesson-body';
 import { termsOf } from './memory-pairs';
 
@@ -35,17 +35,13 @@ export function nearDuplicateCandidatesQuery(note: NoteText): string | null {
           ...wordSequenceOf(note.title),
           ...wordSequenceOf(ruleOfLessonBody(note.body)),
         ]);
-  const parts = [...words]
-    .sort(
-      (a, b) =>
-        Number(title.has(b)) - Number(title.has(a)) ||
-        b.length - a.length ||
-        a.localeCompare(b),
-    )
-    .slice(0, CANDIDATE_TERMS)
-    .map(chatTextMatchQuery)
-    .filter((part): part is string => part !== null);
-  return parts.length === 0 ? null : parts.join(' OR ');
+  const ordered = [...words].sort(
+    (a, b) =>
+      Number(title.has(b)) - Number(title.has(a)) ||
+      b.length - a.length ||
+      a.localeCompare(b),
+  );
+  return anyTermMatchQuery(ordered, CANDIDATE_TERMS);
 }
 
 /**

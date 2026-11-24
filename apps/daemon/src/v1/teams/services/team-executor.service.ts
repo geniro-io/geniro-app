@@ -241,6 +241,7 @@ import {
   restartContinuationColumn,
   restartContinuationPrompt,
 } from '../../agents/utils/run-restart-continuation';
+import { CALLEE_INTERRUPTED_ERROR } from '../../agents/utils/run-state-folds';
 import {
   type RunStatusAnnounce,
   writeRunStatus,
@@ -1850,7 +1851,7 @@ export class TeamExecutorService
       closing > 0 ? await this.seqs.reserve(runId, closing) : 0,
       {
         member: 'interrupted',
-        call: `CALLEE_FAILED: interrupted — ${clause} before the call finished`,
+        call: `${CALLEE_INTERRUPTED_ERROR} — ${clause} before the call finished`,
       },
     );
     await this.setRunStatus(em, runId, 'failed');
@@ -1879,7 +1880,7 @@ export class TeamExecutorService
           calleeNodeId: call.calleeMemberId,
           mode: call.mode,
           status: 'error',
-          error: `CALLEE_FAILED: interrupted — ${clause} before the call finished`,
+          error: `${CALLEE_INTERRUPTED_ERROR} — ${clause} before the call finished`,
         },
       );
     } catch (err) {
@@ -4027,7 +4028,7 @@ export class TeamExecutorService
         });
         await this.closeOpenMemberWork(em, run.id, history, seq, {
           member: 'interrupted',
-          call: `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
+          call: `${CALLEE_INTERRUPTED_ERROR} — ${interruptCauseClause(cause)} before the call finished`,
         });
         await this.setRunStatus(em, run.id, 'failed');
         reconciled += 1;
@@ -4169,7 +4170,7 @@ export class TeamExecutorService
                 },
                 call.callId,
               )
-            : `CALLEE_FAILED: interrupted — ${interruptCauseClause(cause)} before the call finished`,
+            : `${CALLEE_INTERRUPTED_ERROR} — ${interruptCauseClause(cause)} before the call finished`,
         },
       );
     }

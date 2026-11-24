@@ -17,6 +17,9 @@ import {
 } from './json-util';
 import { SubagentRecoveryRefSchema } from './subagent-recovery-ref';
 
+/** An app quit or a daemon stop cut the call off: a stop, not the callee failing. */
+export const CALLEE_INTERRUPTED_ERROR = 'CALLEE_FAILED: interrupted';
+
 /**
  * How a settled call ended, read off its broker envelope.
  *
@@ -28,7 +31,9 @@ export function callEndStatus(payload: unknown): RunWorkStatus {
   if (payloadString(payload, 'status') === 'ok') {
     return 'completed';
   }
-  return payloadString(payload, 'error')?.startsWith('CALLEE_CANCELLED')
+  const error = payloadString(payload, 'error');
+  return error?.startsWith('CALLEE_CANCELLED') ||
+    error?.startsWith(CALLEE_INTERRUPTED_ERROR)
     ? 'cancelled'
     : 'failed';
 }

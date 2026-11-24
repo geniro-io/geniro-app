@@ -49,6 +49,38 @@ describe('foldRunCalls', () => {
     expect(calls[2]!.endedAt).toBeNull();
   });
 
+  it('reads a call an app quit or a daemon stop cut off as cancelled, and every other callee failure as failed', () => {
+    const errors = [
+      'CALLEE_FAILED: interrupted — the app was quit before the call finished',
+      'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly before the call finished',
+      'CALLEE_FAILED: exit 1',
+      'CALLEE_FAILED[crashed]: the process exited',
+      'CALLEE_FAILED[rate_limited]: usage limit reached',
+      'CALLEE_FAILED[auth_expired]: signed out',
+      'CALLEE_FAILED[daemon_restart]: the daemon stopped again (it restarted) while this call was being continued after an earlier restart',
+    ];
+    const calls = foldRunCalls(
+      errors.flatMap((error, at) => [
+        row(at * 2 + 1, 'call_started', { callId: `call-${at}` }),
+        row(at * 2 + 2, 'call_result', {
+          callId: `call-${at}`,
+          status: 'error',
+          error,
+        }),
+      ]),
+    );
+
+    expect(calls.map((call) => call.status)).toEqual([
+      'cancelled',
+      'cancelled',
+      'failed',
+      'failed',
+      'failed',
+      'failed',
+      'failed',
+    ]);
+  });
+
   it('takes the caller from the payload over the row, and caps the brief', () => {
     const [call] = foldRunCalls([
       row(1, 'call_started', {

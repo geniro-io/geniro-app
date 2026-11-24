@@ -1634,6 +1634,20 @@ describe('WorkingAgentsCard', () => {
       expect(toggleOf(el).querySelector('svg')).toBeNull();
     });
 
+    it('draws no failure dot over a stopped conversation, only over a failed one', () => {
+      const stopped = renderSquare([
+        named('call-2', 'Engineer', 'finished'),
+        named('call-1', 'QA', 'stopped'),
+      ]);
+      expect(dot(stopped.el)).toBeNull();
+
+      const failed = renderSquare([
+        named('call-2', 'Engineer', 'finished'),
+        named('call-1', 'QA', 'failed'),
+      ]);
+      expect(dot(failed.el)).not.toBeNull();
+    });
+
     it('leads with an unseen failure once nobody is live', () => {
       const { el } = renderSquare([
         named('call-2', 'Engineer', 'finished'),

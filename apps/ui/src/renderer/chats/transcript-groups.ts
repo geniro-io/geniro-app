@@ -3705,10 +3705,14 @@ function closeGroupsBeforeTurnEnds(
   walk(entries);
 }
 
+/** TWIN of the daemon's `CALLEE_INTERRUPTED_ERROR` (run-state-folds.ts): an app quit or a daemon stop cut the call off. */
+const CALLEE_INTERRUPTED_ERROR = 'CALLEE_FAILED: interrupted';
+
 /**
  * The status a `call_result` envelope states. TWIN PARSER: the broker
- * (`call-broker.service.ts`) writes `{status: 'ok' | 'error', error}`, and a
- * cancel's error carries the `CALLEE_CANCELLED` code.
+ * (`call-broker.service.ts`) writes `{status: 'ok' | 'error', error}`; a
+ * cancel's error carries the `CALLEE_CANCELLED` code, and a call an app quit
+ * or a daemon stop cut off reads as stopped too.
  *
  * The ONE reading of how a settled call ended: the transcript's call card and
  * the agents panel's instance both go through it, so a call stopped by its
@@ -3724,7 +3728,9 @@ export function callResultStatus(
   if (payloadString(payload, 'status') === 'ok') {
     return 'completed';
   }
-  return payloadString(payload, 'error')?.startsWith('CALLEE_CANCELLED')
+  const error = payloadString(payload, 'error');
+  return error?.startsWith('CALLEE_CANCELLED') ||
+    error?.startsWith(CALLEE_INTERRUPTED_ERROR)
     ? 'cancelled'
     : 'failed';
 }

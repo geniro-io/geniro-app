@@ -248,7 +248,7 @@ class FakeRunDao {
   }
   async create(data: Partial<Run>): Promise<Run> {
     const run = {
-      id: `run-${this.n++}`,
+      id: `${String(this.n++).padStart(8, '0')}-0000-4000-8000-000000000000`,
       title: null,
       status: 'pending',
       teamId: null,
@@ -4641,7 +4641,9 @@ describe('TeamExecutorService', () => {
       'req-9',
       false,
     );
-    expect(approvals.listByRun('run-0')).toHaveLength(0);
+    expect(
+      approvals.listByRun('00000000-0000-4000-8000-000000000000'),
+    ).toHaveLength(0);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
@@ -7128,6 +7130,9 @@ describe('TeamExecutorService — agent calls', () => {
     // naming each callee and its public role — what that callee DOES...
     expect(caller.input.systemPrompt).toBe('You orchestrate.');
     expect(caller.input.callSurfacePrompt).toContain('May call');
+    expect(caller.input.callSurfacePrompt).toContain(
+      `mcp__${hostMcpServerName(run.id)}__call_agent`,
+    );
     expect(caller.input.callSurfacePrompt).toContain(
       'Helper (agent id: helper)',
     );
@@ -9699,8 +9704,12 @@ describe('TeamExecutorService — agent calls', () => {
     await drain();
     // The throw did not spawn a live turn, and the member/run settled failed.
     expect(claude.starts).toHaveLength(0);
-    expect(nodeDao.row('run-0', 'a')?.status).toBe('failed');
-    expect(runDao.runs.get('run-0')?.status).toBe('failed');
+    expect(
+      nodeDao.row('00000000-0000-4000-8000-000000000000', 'a')?.status,
+    ).toBe('failed');
+    expect(
+      runDao.runs.get('00000000-0000-4000-8000-000000000000')?.status,
+    ).toBe('failed');
   });
 
   it('a callee whose start throws yields a CALL_FAILED envelope without wedging the run', async () => {

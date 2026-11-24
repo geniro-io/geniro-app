@@ -10,6 +10,7 @@ import {
   joinTurnInstructionParts,
   turnInstructionParts,
 } from '../../agents/utils/agent-instructions';
+import { hostMcpServerName } from '../../agents/utils/host-question';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { Team } from '../teams.types';
 import { ANSWERING_A_CALL } from '../utils/callee-text';
@@ -86,6 +87,7 @@ describe('InstructionSizesService', () => {
           [reviewer],
           claude.getConfig().questionToolName,
           false,
+          hostMcpServerName('6f1c2a9b-0000-4000-8000-000000000000'),
         ),
       }),
     );

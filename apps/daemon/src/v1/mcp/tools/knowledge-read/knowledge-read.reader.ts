@@ -4,6 +4,7 @@ import { HOST_KNOWLEDGE_SEARCH_TOOL } from '../../../agents/chat.types';
 import { PAGE_BYTES } from '../../../agents/services/thread-reader.service';
 import {
   KNOWLEDGE_HANDLE_MAX_CHARS,
+  KNOWLEDGE_READ_CALL,
   type KnowledgeDocumentDto,
 } from '../../../knowledge/knowledge.types';
 import { levelOfKey } from '../../../knowledge/utils/knowledge-text';
@@ -44,7 +45,10 @@ export type KnowledgeReadArgs = z.infer<typeof KnowledgeReadArgsSchema>;
 export function readKnowledgeReadArgs(
   args: Record<string, unknown>,
 ): ToolArgs<KnowledgeReadArgs> {
-  return readToolArgs(KnowledgeReadArgsSchema, args);
+  const read = readToolArgs(KnowledgeReadArgsSchema, args);
+  return read.ok
+    ? read
+    : { ok: false, error: `call ${KNOWLEDGE_READ_CALL}.\n${read.error}` };
 }
 
 export function knowledgeMissingText(

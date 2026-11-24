@@ -39,6 +39,27 @@ describe('readKnowledgeReadArgs', () => {
       false,
     );
   });
+
+  it('leads each refused call with the right call, then the reason', () => {
+    expect(readKnowledgeReadArgs({ name: 'x' })).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        /^call knowledge_read\(\{handle: "<name>"\}\)\.\n/,
+      ),
+    });
+    expect(readKnowledgeReadArgs({ id: 'x' })).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        /^call knowledge_read\(\{handle: "<name>"\}\)\.\n/,
+      ),
+    });
+    expect(readKnowledgeReadArgs({})).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        /^call knowledge_read\(\{handle: "<name>"\}\)\.\n[\s\S]*received undefined/,
+      ),
+    });
+  });
 });
 
 describe('knowledgeReadResultText', () => {

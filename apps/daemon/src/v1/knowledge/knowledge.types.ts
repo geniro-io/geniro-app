@@ -73,7 +73,8 @@ const KnowledgePlaceKeySchema = z
   .regex(/^(global|project:.+|team:.+)$/);
 
 /** The first line of a run's knowledge index, as its agents read it. */
-export const KNOWLEDGE_INDEX_PREFACE = `Knowledge index (written or approved by the user — read a body with ${HOST_KNOWLEDGE_READ_TOOL}, find more with ${HOST_KNOWLEDGE_SEARCH_TOOL}):`;
+export const KNOWLEDGE_READ_CALL = `${HOST_KNOWLEDGE_READ_TOOL}({handle: "<name>"})`;
+export const KNOWLEDGE_INDEX_PREFACE = `Knowledge index (written or approved by the user — read a body with ${KNOWLEDGE_READ_CALL}, find more with ${HOST_KNOWLEDGE_SEARCH_TOOL}):`;
 
 /**
  * The settings Electron main pushes (`PUT /v1/knowledge/config`); replaces

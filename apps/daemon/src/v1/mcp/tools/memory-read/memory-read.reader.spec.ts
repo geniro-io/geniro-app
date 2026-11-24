@@ -65,7 +65,8 @@ describe('readMemoryReadArgs', () => {
   it('refuses id and ids sent together, saying to send one of them', () => {
     expect(readMemoryReadArgs({ id: 'm12', ids: ['m12'] })).toEqual({
       ok: false,
-      error: 'send ids (a list of handles) or id (one handle), not both',
+      error:
+        'call memory_read({ids: ["m12"]}) — at most 3 handles.\nsend ids (a list of handles) or id (one handle), not both',
     });
   });
 
@@ -80,8 +81,27 @@ describe('readMemoryReadArgs', () => {
   it('asks for ids when neither field is sent', () => {
     expect(readMemoryReadArgs({})).toEqual({
       ok: false,
-      error: 'ids is required — the handles to read, like ["m12"]',
+      error:
+        'call memory_read({ids: ["m12"]}) — at most 3 handles.\nids is required — the handles to read, like ["m12"]',
     });
+  });
+
+  it('leads each refused call with the right call and the cap, whatever was wrong with it', () => {
+    const lead = 'call memory_read({ids: ["m12"]}) — at most 3 handles.';
+    const cases: Record<string, unknown>[] = [
+      { handle: 'm758' },
+      { items: ['m1'] },
+      {
+        ids: Array.from({ length: MEMORY_READ_MAX + 1 }, (_, i) => `m${i + 1}`),
+      },
+      {},
+    ];
+    for (const args of cases) {
+      const read = readMemoryReadArgs(args);
+
+      expect(read.ok).toBe(false);
+      expect(!read.ok && read.error.split('\n')[0]).toBe(lead);
+    }
   });
 });
 

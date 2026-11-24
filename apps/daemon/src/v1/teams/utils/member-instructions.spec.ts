@@ -94,24 +94,31 @@ describe('calleesOf', () => {
 
 describe('callSurfaceText', () => {
   const dev = member('dev', { name: 'Developer', role: 'Writes the code.' });
+  const server = 'geniro-ab12cd34';
 
   it('names each callee by its role and the caller’s own question tool', () => {
-    const text = callSurfaceText([dev], 'AskUserQuestion', false);
+    const text = callSurfaceText([dev], 'AskUserQuestion', false, server);
 
     expect(text).toContain('- Developer (agent id: dev) — Writes the code.');
     expect(text).toContain('ask the user with your AskUserQuestion tool');
     expect(text).not.toContain(ANSWERING_WITH_CALLS_OUT);
   });
 
+  it('opens by naming the run’s MCP server and the call tool listed under it', () => {
+    expect(callSurfaceText([dev], null, false, server)).toContain(
+      'May call (via the call_agent tool of MCP server geniro-ab12cd34, listed as mcp__geniro-ab12cd34__call_agent; await_agent collects async results):',
+    );
+  });
+
   it('says the caller cannot escalate when its CLI has no question tool', () => {
-    expect(callSurfaceText([dev], null, false)).toContain(
+    expect(callSurfaceText([dev], null, false, server)).toContain(
       'you cannot escalate to the user',
     );
   });
 
   it('adds the calls-out rule only on a turn that answers a call', () => {
     expect(
-      callSurfaceText([dev], null, true).endsWith(
+      callSurfaceText([dev], null, true, server).endsWith(
         `\n${ANSWERING_WITH_CALLS_OUT}`,
       ),
     ).toBe(true);
@@ -128,6 +135,7 @@ describe('callSurfaceText', () => {
       ],
       null,
       false,
+      server,
     );
 
     expect(text).toContain('Writes the code.');
@@ -155,6 +163,7 @@ describe('memberInstructionFields', () => {
       answeringACall: false,
       config,
       stageMap: null,
+      serverName: 'geniro-ab12cd34',
       ...overrides,
     });
 
@@ -172,12 +181,19 @@ describe('memberInstructionFields', () => {
       answeringACall: false,
       config,
       stageMap: null,
+      serverName: 'geniro-ab12cd34',
     });
 
     expect(fields.systemPrompt).toBeNull();
     expect(fields.characterPrompt).toBeNull();
     expect(fields.instructionBlocks).toBeNull();
     expect(fields.callSurfacePrompt).toBeNull();
+  });
+
+  it('names the run’s MCP server in the call surface it builds', () => {
+    expect(fieldsOf().callSurfacePrompt).toContain(
+      'mcp__geniro-ab12cd34__call_agent',
+    );
   });
 
   it('joins the member’s blocks and lists every other member in the call surface', () => {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-src 'self' http://127.0.0.1:*" />
+      content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; img-src 'self' data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' http://127.0.0.1:*" />
     <!--
       `frame-src 'self'` is for the PHONE: over the LAN gateway or a tunnel the
       daemon is reached through the page's own origin, so an artifact frame's

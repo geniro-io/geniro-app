@@ -19,3 +19,9 @@ Search by meaning runs that model with ONNX Runtime (onnxruntime-node,
 Copyright Microsoft Corporation, MIT License), tokenizes with
 @huggingface/tokenizers (Apache License 2.0), and stores chat vectors with
 sqlite-vec by Alex Garcia (MIT License or Apache License 2.0).
+
+Agent cards (show_ui) speak the A2UI protocol, v1.0. The daemon vendors its
+JSON Schemas (agent_to_renderer.json, common_types.json and the basic catalog)
+from https://github.com/a2ui-project/a2ui, Copyright the A2UI authors,
+licensed under the Apache License 2.0, and validates against them with
+@cfworker/json-schema (MIT License).

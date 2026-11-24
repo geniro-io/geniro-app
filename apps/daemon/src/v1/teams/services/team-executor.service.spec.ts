@@ -53,7 +53,12 @@ import type {
   ClaudeModesVerdict,
 } from '../../agents/adapters/claude/claude.types';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
-import type { HostRowWire, HostWake } from '../../agents/chat.types';
+import type {
+  HostRowWire,
+  HostUiCall,
+  HostWake,
+  SurfacePublisher,
+} from '../../agents/chat.types';
 import {
   ChatApprovalModeSchema,
   type HistoryWindow,
@@ -116,6 +121,11 @@ import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { RunWriteQueue } from '../../agents/services/run-write.queue';
 import type { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
+import { SurfaceBroker } from '../../agents/services/surface.broker';
+import type {
+  SurfaceRowSink,
+  SurfaceService,
+} from '../../agents/services/surface.service';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
@@ -1346,6 +1356,8 @@ function setup(
   artifacts: ArtifactBroker;
   /** The button tools' broker, over the real publisher and its one writer. */
   actions: ActionBroker;
+  surfaceSinks: SurfaceBroker;
+  surfacePublishers: SurfacePublisher[];
   /** The team-note tools' broker, over the fake `items` table. */
   teamNotes: TeamNoteBroker;
   /** `record_outcome`'s broker, over the fake `items` and `runs` tables. */
@@ -1592,6 +1604,27 @@ function setup(
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const artifacts = new ArtifactBroker();
   const actions = new ActionBroker();
+  const surfaceSinks = new SurfaceBroker();
+  const surfacePublishers: SurfacePublisher[] = [];
+  const surfaces = {
+    draw: async (
+      _runId: string,
+      publisher: SurfacePublisher,
+      _call: HostUiCall,
+      sink: SurfaceRowSink,
+    ) => {
+      surfacePublishers.push(publisher);
+      await sink({ surfaceId: 's1', version: 1, op: 'create', title: 'T' });
+      return {
+        status: 'shown' as const,
+        surfaceId: 's1',
+        version: 1,
+        op: 'create' as const,
+        components: 1,
+        media: 0,
+      };
+    },
+  } as unknown as SurfaceService;
   const teamNotes = new TeamNoteBroker(em, itemDao as unknown as ItemDao);
   const milestones = new MilestoneBroker(em, {
     newestRowsOfKinds: async (runId: string) =>
@@ -1811,6 +1844,8 @@ function setup(
     opts.cacheKeepAlive as PromptCacheKeepAliveService | undefined,
     undefined,
     milestones,
+    surfaceSinks,
+    surfaces,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1851,6 +1886,8 @@ function setup(
     removedAttachmentRuns,
     artifacts,
     actions,
+    surfaceSinks,
+    surfacePublishers,
     teamNotes,
     runOutcomes,
     milestones,
@@ -7845,6 +7882,125 @@ describe('TeamExecutorService — agent calls', () => {
 
     expect(actions.canPublish(run.id, 'helper')).toBe(false);
     expect(actions.canPublish(run.id, 'orch')).toBe(false);
+  });
+
+  it('files a member’s show_ui row under the call its conversation answers', async () => {
+    const {
+      service,
+      claude,
+      callBroker,
+      surfaceSinks,
+      surfacePublishers,
+      itemDao,
+    } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'draw it',
+    });
+    await drain();
+
+    expect(surfaceSinks.canDraw(run.id, 'helper')).toBe(true);
+    expect(
+      await surfaceSinks.draw(
+        run.id,
+        'helper',
+        { title: 'T', messages: [] },
+        callerKey('helper', 'call-1'),
+        new AbortController().signal,
+      ),
+    ).toMatchObject({ status: 'shown', surfaceId: 's1' });
+
+    const rows = itemDao.items.filter((item) => item.kind === 'show_ui');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.memberId).toBe('helper');
+    expect(JSON.parse(rows[0]!.payload)).toEqual({
+      surfaceId: 's1',
+      version: 1,
+      op: 'create',
+      title: 'T',
+      callId: 'call-1',
+    });
+    expect(surfacePublishers).toEqual([
+      {
+        memberId: 'helper',
+        conversationId: 'call-1',
+        callId: 'call-1',
+        agentLabel: 'Helper',
+      },
+    ]);
+
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'drawn');
+    expect(await envelope).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1' },
+    });
+    await drain();
+  });
+
+  it('files the lead’s own show_ui row with no call and an unlabelled publisher', async () => {
+    const { service, surfaceSinks, surfacePublishers, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(
+      await surfaceSinks.draw(
+        run.id,
+        'orch',
+        { title: 'T', messages: [] },
+        'orch',
+        new AbortController().signal,
+      ),
+    ).toMatchObject({ status: 'shown', surfaceId: 's1' });
+
+    const rows = itemDao.items.filter((item) => item.kind === 'show_ui');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.memberId).toBe('orch');
+    expect(JSON.parse(rows[0]!.payload)).toEqual({
+      surfaceId: 's1',
+      version: 1,
+      op: 'create',
+      title: 'T',
+    });
+    expect(surfacePublishers).toEqual([
+      {
+        memberId: 'orch',
+        conversationId: null,
+        callId: null,
+        agentLabel: null,
+      },
+    ]);
+    await drain();
+  });
+
+  it('drops a deleted run’s show_ui drawers', async () => {
+    const { service, surfaceSinks } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(surfaceSinks.canDraw(run.id, 'helper')).toBe(true);
+    expect(surfaceSinks.canDraw(run.id, 'orch')).toBe(true);
+
+    await service.deleteRun(run.id);
+
+    expect(surfaceSinks.canDraw(run.id, 'helper')).toBe(false);
+    expect(surfaceSinks.canDraw(run.id, 'orch')).toBe(false);
   });
 
   it('marks every team run for the page tool’s run-wide wording, whether or not it has anyone to call, until the run is deleted', async () => {

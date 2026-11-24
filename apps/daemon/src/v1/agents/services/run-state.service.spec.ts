@@ -31,6 +31,7 @@ import type { MonitorRegistry } from './monitor.registry';
 import { RunHoldRegistry } from './run-hold.registry';
 import type { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunStateService } from './run-state.service';
+import type { SurfaceService } from './surface.service';
 
 /**
  * Real-driver spec, on `item.dao.spec.ts`'s pattern: the reads here filter on
@@ -78,7 +79,10 @@ describe('RunStateService (in-memory sqlite)', () => {
   let cacheReads: { kinds: string[]; atLeast: number | 'fresh' | undefined }[] =
     [];
 
-  function service(running: MonitorSnapshot[] = []): RunStateService {
+  function service(
+    running: MonitorSnapshot[] = [],
+    surfaces?: SurfaceService,
+  ): RunStateService {
     const shells = {
       read: () => Promise.resolve({ shells: [] }),
     } as unknown as ChatShellsService;
@@ -120,6 +124,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       } as unknown as MonitorRegistry,
       recordingCache(),
       holds,
+      surfaces,
     );
   }
 
@@ -871,5 +876,36 @@ describe('RunStateService (in-memory sqlite)', () => {
     await createRun('running', 'dev-team');
     await insert(1, 'message', { text: 'q' }, { role: 'user', at: 1000 });
     expect((await service().read('run-a')).turnStartedAt).toBeNull();
+  });
+
+  it('serves the cards the surface service lists for the run', async () => {
+    await createRun('running');
+    const cards = [
+      {
+        surfaceId: 'plan',
+        version: 2,
+        firstSeq: 7,
+        removed: true,
+        publisher: { memberId: 'a', agentLabel: 'Alice' },
+      },
+    ];
+    const asked: string[] = [];
+    const surfaces = {
+      index: (runId: string) => {
+        asked.push(runId);
+        return Promise.resolve(cards);
+      },
+    } as unknown as SurfaceService;
+
+    const state = await service([], surfaces).read('run-a');
+
+    expect(asked).toEqual(['run-a']);
+    expect(state.surfaces).toEqual(cards);
+  });
+
+  it('serves no cards when there is no surface service', async () => {
+    await createRun('running');
+
+    expect((await service().read('run-a')).surfaces).toEqual([]);
   });
 });

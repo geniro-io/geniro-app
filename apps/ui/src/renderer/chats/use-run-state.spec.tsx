@@ -35,6 +35,7 @@ const state = (calls: number): RunStateDto => ({
   shells: [],
   monitors: [],
   actions: [],
+  surfaces: [],
   openToolCalls: [],
   throughSeq: -1,
   turnStartedAt: null,

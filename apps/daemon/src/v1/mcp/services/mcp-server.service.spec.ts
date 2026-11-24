@@ -100,6 +100,7 @@ import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
+import { SurfaceBroker } from '../../agents/services/surface.broker';
 import { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
 import {
   TeamNoteBroker,
@@ -275,6 +276,7 @@ function service(
   flags = flagBroker(),
   // Never asked by the cases that pass none: no sink, so the tool is not listed.
   milestones = milestoneBroker(),
+  surfaces = new SurfaceBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -288,6 +290,7 @@ function service(
       comparisons,
       galleries,
       galleryImages,
+      surfaces,
       artifacts,
       artifactAnswers: {} as ChatArtifactsService,
       browser,
@@ -369,6 +372,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   milestones.register('run-1', 'agent', noop as never);
   const projectCards = new ProjectInstructionsBroker();
   projectCards.register('run-1', 'agent', noop);
+  const surfaces = new SurfaceBroker();
+  surfaces.register('run-1', 'agent', noop);
   for (const broker of [
     questions,
     charts,
@@ -441,6 +446,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     undefined,
     flags,
     milestones,
+    surfaces,
   );
   const listedOn = async (runId: string): Promise<ToolListing[]> =>
     (
@@ -2927,6 +2933,7 @@ describe('McpServerService', () => {
       ...({} as Parameters<typeof createMcpTools>[0]),
       galleries: new GalleryBroker(),
       galleryImages,
+      surfaces: new SurfaceBroker(),
     }).find((entry) => entry.handles(HOST_GALLERY_TOOL))!;
     const result = await tool.call(
       HOST_GALLERY_TOOL,
@@ -4495,6 +4502,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
+      surfaces: new SurfaceBroker(),
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
@@ -4600,6 +4608,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
+      surfaces: new SurfaceBroker(),
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
@@ -4915,6 +4924,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
+      surfaces: new SurfaceBroker(),
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
@@ -5060,6 +5070,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         comparisons: new ComparisonBroker(),
         galleries: new GalleryBroker(),
         galleryImages: {} as GalleryImageService,
+        surfaces: new SurfaceBroker(),
         artifacts: new ArtifactBroker(),
         artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),
@@ -5210,6 +5221,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       comparisons: new ComparisonBroker(),
       galleries: new GalleryBroker(),
       galleryImages: {} as GalleryImageService,
+      surfaces: new SurfaceBroker(),
       artifacts: new ArtifactBroker(),
       artifactAnswers: {} as ChatArtifactsService,
       actions: new ActionBroker(),
@@ -5279,6 +5291,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         comparisons: new ComparisonBroker(),
         galleries: new GalleryBroker(),
         galleryImages: {} as GalleryImageService,
+        surfaces: new SurfaceBroker(),
         artifacts: new ArtifactBroker(),
         artifactAnswers: {} as ChatArtifactsService,
         actions: new ActionBroker(),

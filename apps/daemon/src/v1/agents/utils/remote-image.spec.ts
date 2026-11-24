@@ -9,9 +9,11 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  downloadRemoteFile,
   downloadRemoteImage,
   isPublicAddress,
   isRemoteImageUrl,
+  type RemoteFileKind,
   RemoteImageError,
   type ResolveAll,
 } from './remote-image';
@@ -346,5 +348,67 @@ describe('downloadRemoteImage', () => {
       downloadRemoteImage(at('/hang'), { ...local, timeoutMs: 100 }),
     );
     expect(error.message).toBe('the download timed out');
+  });
+});
+
+const WAV = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(12)]);
+
+const SOUND: RemoteFileKind<'wav'> = {
+  accept: 'audio/*',
+  maxBytes: WAV.length,
+  sniff: (bytes) =>
+    bytes.subarray(0, 4).toString('latin1') === 'RIFF' ? 'wav' : null,
+  unknownType: 'not a sound clip',
+  tooLarge: (size) => `over the ${size} limit for a sound`,
+};
+
+describe('downloadRemoteFile with a kind of its own', () => {
+  it('asks for the accept type of its kind', async () => {
+    let accept: string | undefined;
+    routes.set('/clip.wav', (request, response) => {
+      accept = request.headers.accept;
+      response.writeHead(200).end(WAV);
+    });
+
+    await downloadRemoteFile(at('/clip.wav'), SOUND, local);
+
+    expect(accept).toBe('audio/*');
+  });
+
+  it('types the download by its own sniff', async () => {
+    routes.set('/tone.wav', (_request, response) => {
+      response.writeHead(200).end(WAV);
+    });
+
+    const clip = await downloadRemoteFile(at('/tone.wav'), SOUND, local);
+
+    expect(clip.mediaType).toBe('wav');
+    expect(clip.bytes.equals(WAV)).toBe(true);
+  });
+
+  it('refuses a body over its ceiling with its own wording', async () => {
+    routes.set('/long.wav', (_request, response) => {
+      response
+        .writeHead(200, { 'content-length': '64' })
+        .end(Buffer.alloc(64, 1));
+    });
+
+    const error = await refusal(
+      downloadRemoteFile(at('/long.wav'), SOUND, local),
+    );
+
+    expect(error.message).toMatch(/^over the .+ limit for a sound$/);
+  });
+
+  it('refuses bytes its own sniff rejects with its own wording', async () => {
+    routes.set('/page.wav', (_request, response) => {
+      response.writeHead(200).end('<html></html>');
+    });
+
+    const error = await refusal(
+      downloadRemoteFile(at('/page.wav'), SOUND, local),
+    );
+
+    expect(error.message).toBe('not a sound clip');
   });
 });

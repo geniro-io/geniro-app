@@ -1,6 +1,6 @@
-import { Check } from 'lucide-react';
 import { useId } from 'react';
 
+import { CheckIndicator } from './checkbox';
 import { cn } from './utils';
 
 /**
@@ -179,32 +179,15 @@ export function OptionIndicator({
   chosen: boolean;
 }): React.JSX.Element {
   return (
-    <span
-      aria-hidden="true"
+    <CheckIndicator
       data-slot="option-indicator"
-      className={cn(
-        // `mt-0.5` rather than centring the row: a label that wraps
-        // to three lines would otherwise float its box against the
-        // middle line, where it reads as belonging to that line
-        // rather than to the option.
-        'mt-0.5 flex size-4 shrink-0 items-center justify-center border transition-colors',
-        arity === 'many' ? 'rounded-[4px]' : 'rounded-full',
-        chosen
-          ? 'border-primary bg-primary text-primary-foreground'
-          : // NOT `border-input`: that token is tuned for a field's
-            // own edge against page cream, where it is meant to
-            // recede — at 16px it disappeared, and an invisible
-            // checkbox is exactly the state this control exists to
-            // make visible.
-            'border-muted-foreground/50',
-      )}>
-      {chosen ? (
-        arity === 'many' ? (
-          <Check className="size-3" strokeWidth={3} />
-        ) : (
-          <span className="size-1.5 rounded-full bg-primary-foreground" />
-        )
-      ) : null}
-    </span>
+      // `mt-0.5` rather than centring the row: a label that wraps
+      // to three lines would otherwise float its box against the
+      // middle line, where it reads as belonging to that line
+      // rather than to the option.
+      className="mt-0.5"
+      checked={chosen}
+      shape={arity === 'many' ? 'square' : 'round'}
+    />
   );
 }

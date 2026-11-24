@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import { SurfaceCard } from './a2ui-surface';
 import { ActionCard } from './action-card';
 import { ArtifactCard } from './artifact-block';
 import { BrowserScreenshotCard } from './browser-screenshot-card';
@@ -62,6 +63,8 @@ export const EntryCard = memo(function EntryCard({
           memoryKey={`gallery:${entry.id}`}
         />
       );
+    case 'surface':
+      return <SurfaceCard row={entry.surface} />;
     case 'browser-screenshot':
       return (
         <BrowserScreenshotCard

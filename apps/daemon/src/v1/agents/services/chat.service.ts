@@ -190,6 +190,7 @@ import {
   standingProposalCardId,
 } from '../utils/host-teams';
 import { threadCardFields } from '../utils/host-thread-message';
+import { hostUiDownloads, isHostUiCall } from '../utils/host-ui';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import { endsReasoningStretch, isLiveWordsEvent } from '../utils/live-words';
@@ -308,6 +309,8 @@ import { RunOutcomeBroker } from './run-outcome.broker';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
+import { SurfaceBroker, type SurfaceDrawer } from './surface.broker';
+import { SurfaceService } from './surface.service';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
 import { ThreadInboxService } from './thread-inbox.service';
@@ -938,6 +941,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     /** Which model settings a CLI session fixes, for `updateSettings`. Optional for the positional specs. */
     @Optional()
     private readonly modelParameterListings?: ModelParametersService,
+    /** `show_ui`'s sink, kept with the other render tools. Optional for the positional specs. */
+    @Optional() private readonly surfaceSinks?: SurfaceBroker,
+    @Optional() private readonly surfaces?: SurfaceService,
   ) {}
 
   /**
@@ -6164,6 +6170,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        */
       joinOnly?: boolean;
       deliveryId?: string;
+      /** What the user's row keeps when it must not hold `text` itself (a card's hidden field). */
+      storedText?: string;
     } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
@@ -6189,8 +6197,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (options.hostRow === undefined) {
       this.commandEndWakes?.userSpoke(runId);
     }
-    return this.messageSends.send(runId, text, options.clientMessageId, () =>
-      this.sendMessageOnce(em, run, text, images, options),
+    return this.messageSends.send(
+      runId,
+      options.storedText ?? text,
+      options.clientMessageId,
+      () => this.sendMessageOnce(em, run, text, images, options),
     );
   }
 
@@ -6235,6 +6246,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       onHostRowWritten?: () => void;
       joinOnly?: boolean;
       deliveryId?: string;
+      storedText?: string;
     },
   ): Promise<ItemWire> {
     const runId = run.id;
@@ -6341,6 +6353,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         text,
         images,
         options.backgroundWork,
+        undefined,
+        options.storedText,
       );
     }
     if (options.joinOnly === true) {
@@ -6477,6 +6491,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostChartCall(hostServerName, toolName) ||
         (isHostGalleryCall(hostServerName, toolName) &&
           !hostGalleryDownloads(input)) ||
+        (isHostUiCall(hostServerName, toolName) && !hostUiDownloads(input)) ||
         // The artifact tool, on the render family's reading. It looks like the
         // one that should be gated — the agent is handing over a page of its
         // own code — and it is the one that least needs to be: the document
@@ -6646,7 +6661,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                 'message',
                 'user',
                 {
-                  text,
+                  text: options.storedText ?? text,
                   ...(attachments.length > 0 ? { images: attachments } : {}),
                   ...(options.apply === undefined
                     ? {}
@@ -8993,6 +9008,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     images: SendMessageImage[],
     backgroundWork?: FollowUpBackgroundWork,
     joined?: { row: HostRowWire; deliveryId: string },
+    storedText?: string,
   ): Promise<ItemWire> {
     const busy = new ConflictException(
       'RUN_BUSY',
@@ -9062,7 +9078,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // symptom was "it deletes its last message".
     const seq = await this.seqs.reserve(runId);
     return this.persist(em, runId, seq, 'message', 'user', {
-      text,
+      text: storedText ?? text,
       ...(attachments.length > 0 ? { images: attachments } : {}),
       deliveryId,
       // NOT stamped with how it was sent. A `midTurn: true` flag used to ride
@@ -9335,7 +9351,37 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         callId: null,
       }),
     };
+    const surfaces = this.surfaces;
+    const drawUi: SurfaceDrawer | null =
+      surfaces === undefined
+        ? null
+        : (call, _caller, stop) =>
+            surfaces.draw(
+              runId,
+              {
+                memberId: SINGLE_AGENT_NODE,
+                conversationId: null,
+                callId: null,
+                agentLabel: null,
+              },
+              call,
+              async (payload) =>
+                (
+                  await this.persist(
+                    this.em.fork(),
+                    runId,
+                    await this.seqs.reserve(runId),
+                    'show_ui',
+                    null,
+                    this.attributeCard(runId, payload),
+                  )
+                ).seq,
+              stop,
+            );
     this.keptHostTools.set(runId, [
+      ...(this.surfaceSinks === undefined || drawUi === null
+        ? []
+        : [this.surfaceSinks.register(runId, SINGLE_AGENT_NODE, drawUi)]),
       this.charts.register(runId, SINGLE_AGENT_NODE, drawChart),
       this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics),
       this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison),

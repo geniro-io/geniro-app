@@ -37,6 +37,7 @@ export type GeniroCardKind =
   | 'metrics'
   | 'comparison'
   | 'gallery'
+  | 'surface'
   | 'screenshot'
   | 'artifact'
   | 'patch'
@@ -125,6 +126,7 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   show_metrics: 'metrics',
   show_comparison: 'comparison',
   show_gallery: 'gallery',
+  show_ui: 'surface',
   // Its card is built from the call and its result, so the pair is not hidden
   // the way the others' are (`transcript-groups.ts`).
   [BROWSER_SCREENSHOT]: 'screenshot',

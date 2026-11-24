@@ -24,6 +24,7 @@ import type { ProjectChatBroker } from '../../agents/services/project-chat.broke
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
+import type { SurfaceBroker } from '../../agents/services/surface.broker';
 import type { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
 import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
@@ -96,6 +97,7 @@ import { ShowChartTool } from './show-chart/show-chart.tool';
 import { ShowComparisonTool } from './show-comparison/show-comparison.tool';
 import { ShowGalleryTool } from './show-gallery/show-gallery.tool';
 import { ShowMetricsTool } from './show-metrics/show-metrics.tool';
+import { ShowUiTool } from './show-ui/show-ui.tool';
 import { StartThreadTool } from './start-thread/start-thread.tool';
 import { StopMonitorTool } from './stop-monitor/stop-monitor.tool';
 import { TeamNoteTool } from './team-note/team-note.tool';
@@ -114,6 +116,7 @@ export interface McpToolDeps {
   comparisons: ComparisonBroker;
   galleries: GalleryBroker;
   galleryImages: GalleryImageService;
+  surfaces: SurfaceBroker;
   artifacts: ArtifactBroker;
   artifactAnswers: ChatArtifactsService;
   browser: BrowserBroker;
@@ -191,6 +194,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),
     new ShowGalleryTool(deps.galleries, deps.galleryImages),
+    new ShowUiTool(deps.surfaces),
     new ShowArtifactTool(deps.artifacts, deps.shares),
     new ArtifactAnswersTool(deps.artifacts, deps.artifactAnswers),
     ...createBrowserTools(deps.browser, deps.attachments),

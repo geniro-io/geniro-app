@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
 import type { Item } from '../../runs/entity/item.entity';
@@ -30,6 +30,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { MonitorRegistry } from './monitor.registry';
 import { RunHoldRegistry } from './run-hold.registry';
 import { RunKindRowsCache } from './run-kind-rows.cache';
+import { SurfaceService } from './surface.service';
 
 /**
  * What a run holds as a whole, for the readouts that must not depend on how
@@ -57,6 +58,7 @@ export class RunStateService {
     private readonly monitors: MonitorRegistry,
     private readonly kindRows: RunKindRowsCache,
     private readonly holds: RunHoldRegistry,
+    @Optional() private readonly surfaces?: SurfaceService,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -244,6 +246,7 @@ export class RunStateService {
           throughSeq,
         ),
       ).live,
+      surfaces: (await this.surfaces?.index(runId)) ?? [],
       turnStartedAt,
       turnHeldMs: Math.round(hold?.heldMs ?? 0),
       turnHeldSince:

@@ -93,6 +93,7 @@ import {
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
+  HOST_UI_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
@@ -18548,5 +18549,114 @@ describe('ChatService — the command center manager', () => {
     await drain();
 
     expect(briefWrites()).toEqual(['Brief two']);
+  });
+});
+
+describe('ChatService — card values and the pictures a card draws', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-chat-card-')));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keeps the stored text in the user row and sends the agent the text itself', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'the real words', [], {
+      storedText: 'the stored words',
+    });
+    await drain();
+
+    expect((claude.start.mock.calls[0]![0] as AgentTurnInput).prompt).toBe(
+      'the real words',
+    );
+    const rows = await itemDao.getByRun(run.id);
+    const userRow = rows.find(
+      (row) => row.kind === 'message' && row.role === 'user',
+    );
+    expect(JSON.parse(userRow?.payload ?? 'null')).toMatchObject({
+      text: 'the stored words',
+    });
+  });
+
+  it('auto-approves a show_ui call that names no picture url, outside auto', async () => {
+    const { service, claude, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = {
+      messages: [
+        {
+          version: '1.0',
+          createSurface: {
+            surfaceId: 'plan',
+            components: [{ id: 'root', component: 'Text', text: 'Hello' }],
+          },
+        },
+      ],
+    };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-ui',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_UI_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-ui',
+      true,
+      input,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('puts a show_ui call that downloads a picture to the user, outside auto', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-ui',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_UI_TOOL}`,
+      input: {
+        messages: [
+          {
+            version: '1.0',
+            createSurface: {
+              surfaceId: 'photo',
+              components: [
+                {
+                  id: 'root',
+                  component: 'Image',
+                  url: 'https://cdn.example/b.png',
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalledWith(
+      'p-ui',
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(
+      itemDao.items.filter((i) => i.kind === 'approval_request'),
+    ).toHaveLength(1);
+    expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 });

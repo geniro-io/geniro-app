@@ -457,6 +457,7 @@ import { useRunState } from './use-run-state';
 import { useRunTeamNotes } from './use-run-team-notes';
 import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
+import type { SurfaceHost } from './use-surface';
 import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
 import {
   lessonsMarkOf,
@@ -5049,6 +5050,51 @@ export function Chats({
       pressRaisedWorkingRef.current = false;
     },
     [refuseHostedTurn],
+  );
+  const surfaceVersions = useMemo(
+    () =>
+      new Map(
+        runState.surfaces.map(
+          (entry) => [entry.surfaceId, entry.version] as const,
+        ),
+      ),
+    [runState.surfaces],
+  );
+  const hostedSurfacePress = useLatestCallback(async (): Promise<void> => {
+    pressRaisedWorkingRef.current = await startHostedTurn(
+      activeRunIdRef.current,
+    );
+  }, []);
+  const hostedSurfaceSettled = useLatestCallback((taken: boolean): void => {
+    if (pressRaisedWorkingRef.current && !taken) {
+      refuseHostedTurn();
+    }
+    pressRaisedWorkingRef.current = false;
+  }, []);
+  const surfaceHost = useMemo<SurfaceHost | null>(
+    () =>
+      activeRunId === null
+        ? null
+        : {
+            runId: activeRunId,
+            api: chatApi,
+            teamPress: activeTeamId === null ? null : teamApi,
+            versions: surfaceVersions,
+            turnOpen: runState.turnStartedAt !== null,
+            beforePress: isHosted ? hostedSurfacePress : null,
+            pressSettled: isHosted ? hostedSurfaceSettled : null,
+          },
+    [
+      activeRunId,
+      chatApi,
+      activeTeamId,
+      teamApi,
+      surfaceVersions,
+      runState.turnStartedAt,
+      isHosted,
+      hostedSurfacePress,
+      hostedSurfaceSettled,
+    ],
   );
   const pressHooks: PressHooks = isHosted
     ? {
@@ -9853,7 +9899,8 @@ export function Chats({
         agentsApi={agentsApi}
         lessonsJump={jumpToSeq}
         taskReader={taskReader}
-        threadContext={threadContext}>
+        threadContext={threadContext}
+        surfaceHost={surfaceHost}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

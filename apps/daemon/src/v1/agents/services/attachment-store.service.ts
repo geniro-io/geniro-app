@@ -19,6 +19,7 @@ import {
   type AttachmentWire,
   MAX_ATTACHMENT_BYTES,
   MAX_LOCAL_IMAGE_BYTES,
+  MAX_UI_MEDIA_BYTES,
 } from '../chat.types';
 
 /** `<userData>/` directory the attachments live in, one folder per run. */
@@ -41,6 +42,24 @@ const EXTENSIONS: Record<AttachmentMediaType, string> = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ATTACHMENT_ID = new RegExp(
   `^${UUID.source.slice(1, -1)}\\.(png|jpg|gif|webp)$`,
+);
+
+export const SURFACE_MEDIA_TYPES = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  ogg: 'audio/ogg',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+} as const;
+export type SurfaceMediaExtension = keyof typeof SURFACE_MEDIA_TYPES;
+
+const SURFACE_MEDIA_FILE = new RegExp(
+  `^ui-${UUID.source.slice(1, -1)}\\.(${Object.keys(SURFACE_MEDIA_TYPES).join('|')})$`,
 );
 
 /**
@@ -133,6 +152,64 @@ export class AttachmentStoreService {
     }
     if (existsSync(dir) && readdirSync(dir).length === 0) {
       rmdirSync(dir);
+    }
+  }
+
+  saveSurfaceMedia(
+    runId: string,
+    extension: SurfaceMediaExtension,
+    bytes: Buffer,
+  ): string {
+    if (!UUID.test(runId)) {
+      throw new BadRequestException('RUN_ID_INVALID', 'not a run id');
+    }
+    if (bytes.byteLength > MAX_UI_MEDIA_BYTES) {
+      throw new BadRequestException(
+        'ATTACHMENT_TOO_LARGE',
+        `a card's media file may be at most ${Math.floor(MAX_UI_MEDIA_BYTES / 1024 / 1024)}MB`,
+      );
+    }
+    const file = `ui-${randomUUID()}.${extension}`;
+    const dir = join(this.root, runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, file), bytes);
+    return file;
+  }
+
+  readSurfaceMedia(
+    runId: string,
+    file: string,
+  ): { mediaType: string; bytes: Buffer } {
+    if (!UUID.test(runId) || !SURFACE_MEDIA_FILE.test(file)) {
+      throw new NotFoundException(
+        'SURFACE_MEDIA_NOT_FOUND',
+        'no such media file',
+      );
+    }
+    const extension = file.slice(
+      file.lastIndexOf('.') + 1,
+    ) as SurfaceMediaExtension;
+    try {
+      return {
+        mediaType: SURFACE_MEDIA_TYPES[extension],
+        bytes: readFileSync(join(this.root, runId, file)),
+      };
+    } catch {
+      throw new NotFoundException(
+        'SURFACE_MEDIA_NOT_FOUND',
+        'no such media file',
+      );
+    }
+  }
+
+  removeSurfaceMedia(runId: string, files: readonly string[]): void {
+    if (!UUID.test(runId)) {
+      return;
+    }
+    for (const file of files) {
+      if (SURFACE_MEDIA_FILE.test(file)) {
+        rmSync(join(this.root, runId, file), { force: true });
+      }
     }
   }
 

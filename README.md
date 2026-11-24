@@ -116,7 +116,7 @@ Agents publish live HTML pages that open next to the chat, with audio, video, fo
 <td valign="top">
 
 <b>🃏 Rich cards</b><br>
-Charts, comparisons, scorecards, image galleries, plans, questions and buttons, instead of a wall of text.
+Charts, comparisons, scorecards, image galleries, plans, questions, buttons and A2UI cards you fill in, instead of a wall of text.
 
 </td>
 </tr>
@@ -320,6 +320,7 @@ Geniro gives every agent a set of MCP tools for showing results instead of descr
 | 🗺 **Plan** | A plan you approve before any work starts |
 | ❓ **Question** | Multiple-choice questions you answer with a click |
 | 🔘 **Buttons** | "Press when the PR is merged" or "Stop the preview server" |
+| 🧩 **Card** | An [A2UI](https://a2ui.org) card in the chat: a form you fill in, a choice to make, a status board the agent keeps up to date in place, pictures, video or sound. What you type is kept until you press its button, password fields excepted; the press reaches the agent as your message. If the agent rewrites a field you had changed, its value wins and the field is marked |
 | 👀 **Monitor** | A background command (a CI run, a long build, a log) that wakes the agent with what it prints; you are notified when the agent finishes after the command ends, not after each batch of output while it still runs. A monitor stopped by an app update or a restart is not started again: its agent is told which one, with its command, and starts it again if it still needs it |
 | 🔔 **Notify** | A macOS notification when something needs you |
 

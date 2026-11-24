@@ -8,7 +8,6 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
@@ -63,6 +62,7 @@ import {
   withStoredMedia,
 } from '../utils/artifact-page-media';
 import { fsErrorCode } from '../utils/fs-error-code';
+import { localMediaRoots, systemMediaRoots } from '../utils/local-media-roots';
 
 /** Constructor options — test seams, not user config. */
 export interface ArtifactStoreOptions {
@@ -88,18 +88,6 @@ export type ArtifactPublishResult =
   { ok: true; stored: StoredArtifact } | { ok: false; reason: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/**
- * The folders besides the run's own that an image may come from: `/tmp`, where an
- * agent most often writes a screenshot, and the system temp directory, which on
- * macOS (`$TMPDIR`) is a path of its own. `/tmp` is named literally rather than
- * taken from the system, because on a machine whose temp directory IS `/tmp` the
- * two would be one entry, and the literal admission would go untested. A function,
- * so the directory is read at each publish rather than once when the module loads.
- */
-function systemImageRoots(): string[] {
-  return ['/tmp', tmpdir()];
-}
 
 /** What `meta.json` holds beside an artifact's versions. */
 interface ArtifactMeta {
@@ -815,13 +803,10 @@ export class ArtifactStoreService {
   /** The folders a page's pictures and media may come from: the system temp ones and the run's own. */
   private async rootsOf(runId: string): Promise<string[]> {
     if (this.runs === undefined) {
-      return systemImageRoots();
+      return systemMediaRoots();
     }
     const run = await this.runs.getById(runId);
-    const folder = run?.cwd ?? null;
-    return folder === null
-      ? systemImageRoots()
-      : [...systemImageRoots(), folder];
+    return localMediaRoots(run?.cwd ?? null);
   }
 
   /**

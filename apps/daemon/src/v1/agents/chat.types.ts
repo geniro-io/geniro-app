@@ -2142,6 +2142,115 @@ export type HostGalleryOutcome =
   | { status: 'drawn'; images: number }
   | { status: 'unavailable'; reason: string };
 
+export const HOST_UI_TOOL = 'show_ui';
+export const MAX_UI_COMPONENTS = 200;
+export const MAX_UI_SURFACE_BYTES = 256 * 1024;
+export const MAX_UI_DRAFT_BYTES = 64 * 1024;
+export const MAX_UI_LIVE_SURFACES = 50;
+export const MAX_UI_MEDIA_BYTES = 50 * 1024 * 1024;
+export const MAX_UI_MESSAGES = 20;
+export const MAX_UI_REGEX_LENGTH = 512;
+export const MAX_UI_TITLE_LENGTH = 120;
+export const MAX_UI_SURFACE_ID_LENGTH = 128;
+export const MAX_UI_MEDIA_PER_CALL = 12;
+export const UI_MEDIA_URL_PREFIX = 'geniro-media:';
+export const UI_ONE_SHOT_EXTENSION = 'geniroOneShot';
+export const UI_OBSCURED_MASK = '••••';
+
+export interface SurfacePublisher {
+  memberId: string;
+  conversationId: string | null;
+  callId: string | null;
+  agentLabel: string | null;
+}
+
+export interface HostUiCall {
+  title: string | null;
+  messages: unknown;
+}
+
+export type HostUiOutcome =
+  | {
+      status: 'shown';
+      surfaceId: string;
+      version: number;
+      op: SurfaceOp;
+      components: number;
+      media: number;
+    }
+  | { status: 'invalid'; error: string }
+  | { status: 'unavailable'; reason: string };
+
+export const SURFACE_OPS = ['create', 'update', 'remove'] as const;
+export type SurfaceOp = (typeof SURFACE_OPS)[number];
+
+export interface SurfaceRowPayload {
+  surfaceId: string;
+  version: number;
+  op: SurfaceOp;
+  title: string | null;
+}
+
+export const SurfacePublisherWireSchema = z
+  .object({
+    memberId: z.string().nullable(),
+    agentLabel: z.string().nullable(),
+  })
+  .meta({ id: 'SurfacePublisher' });
+
+export const SurfaceMediaWireSchema = z
+  .object({ mediaType: z.string(), source: z.string().nullable() })
+  .meta({ id: 'SurfaceMedia' });
+
+export const SurfaceWireSchema = z.object({
+  surfaceId: z.string(),
+  version: z.number().int(),
+  title: z.string().nullable(),
+  components: z.array(z.record(z.string(), z.unknown())),
+  dataModel: z.record(z.string(), z.unknown()),
+  drafts: z.record(z.string(), z.unknown()),
+  agentWrites: z.array(z.string()),
+  overriddenDrafts: z.array(z.string()),
+  oneShotPressed: z.array(z.string()),
+  removed: z.boolean(),
+  publisher: SurfacePublisherWireSchema,
+  media: z.record(z.string(), SurfaceMediaWireSchema),
+});
+export type SurfaceWire = z.infer<typeof SurfaceWireSchema>;
+
+export const SurfaceIndexEntrySchema = z
+  .object({
+    surfaceId: z.string(),
+    version: z.number().int(),
+    firstSeq: z.number().int(),
+    removed: z.boolean(),
+    publisher: SurfacePublisherWireSchema,
+  })
+  .meta({ id: 'SurfaceIndexEntry' });
+export type SurfaceIndexEntry = z.infer<typeof SurfaceIndexEntrySchema>;
+
+export const SurfaceDraftsBodySchema = z.object({
+  version: z.number().int().min(1),
+  changes: z.record(z.string().max(512), z.unknown()),
+});
+export type SurfaceDraftsBody = z.infer<typeof SurfaceDraftsBodySchema>;
+
+export const SurfacePressBodySchema = z.object({
+  sourceComponentId: z.string().min(1).max(200),
+  changes: z.record(z.string().max(512), z.unknown()),
+  userMessage: z.string().max(4000).nullable(),
+  context: z.record(z.string().max(200), z.unknown()),
+  clientMessageId: z.string().min(1).max(200),
+});
+export type SurfacePressBody = z.infer<typeof SurfacePressBodySchema>;
+
+export const SurfaceMediaDataSchema = z.object({
+  file: z.string(),
+  mediaType: z.string(),
+  data: z.string(),
+});
+export type SurfaceMediaData = z.infer<typeof SurfaceMediaDataSchema>;
+
 /**
  * geniro's own in-app browser tools: one const per tool, so the permission gate
  * (`isHostBrowserCall`), the cookie masking in `mapEventToItem` and the MCP
@@ -6212,6 +6321,11 @@ export const RunStateWireSchema = z.object({
     .array(LiveActionSchema)
     .describe(
       'the buttons agents published that can still be pressed, newest first',
+    ),
+  surfaces: z
+    .array(SurfaceIndexEntrySchema)
+    .describe(
+      "every card agents drew with show_ui, in the order they were placed, with each one's newest version",
     ),
   openToolCalls: z
     .array(ItemWireSchema)

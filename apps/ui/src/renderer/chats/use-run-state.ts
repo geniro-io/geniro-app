@@ -14,7 +14,7 @@ import { isAgentToolName } from './tool-kind';
  * Rows whose arrival can change what the run holds as a whole — a card opening
  * or closing, a call or delegate starting or ending, a command detaching or
  * finishing, a workflow announcing itself, an agent's button appearing or
- * being pressed.
+ * being pressed, an agent's card drawn or redrawn.
  */
 const STRUCTURAL_KINDS = new Set<ChatItem['kind']>([
   'approval_request',
@@ -28,6 +28,7 @@ const STRUCTURAL_KINDS = new Set<ChatItem['kind']>([
   'shell_info',
   'action',
   'action_outcome',
+  'show_ui',
 ]);
 
 /**
@@ -100,6 +101,7 @@ const EMPTY: RunStateDto = {
   shells: [],
   monitors: [],
   actions: [],
+  surfaces: [],
   openToolCalls: [],
   // Nothing read yet: no ending is the daemon's to state.
   throughSeq: -1,

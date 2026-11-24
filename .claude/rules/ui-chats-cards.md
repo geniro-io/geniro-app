@@ -12,6 +12,8 @@ paths:
   - "apps/ui/src/renderer/chats/metrics-block*"
   - "apps/ui/src/renderer/chats/comparison-block*"
   - "apps/ui/src/renderer/chats/gallery-block*"
+  - "apps/ui/src/renderer/chats/a2ui-*"
+  - "apps/ui/src/renderer/chats/use-surface*"
   - "apps/ui/src/renderer/chats/local-image-loader*"
   - "apps/ui/src/renderer/chats/workflow-block*"
   - "apps/ui/src/renderer/chats/diff-view*"
@@ -51,6 +53,7 @@ paths:
 - Charts key rows by position (`s0`, `s1`, …), never by series name. `null` stays a gap.
 - Metrics colour a delta by stated sentiment, never by sign.
 - The gallery loads through `LocalImageLoaderContext`. It does that sequentially and only while open, releases images on fold, and uses no lightbox of its own. A picture named by URL arrives already downloaded by the daemon (a local path, with the URL as `source`); the renderer never fetches one. Each card shows its caption and description under the picture in one horizontally scrolling strip, and the viewer shows the description too.
+- An A2UI card (`show_ui`: `a2ui-surface.tsx`, `a2ui-components.tsx` over the pure `a2ui-model.ts`, `use-surface.ts`): drawn at its `create` row only (`SurfaceEntry`), read whole from `GET …/surfaces/:surfaceId` and read again when run state's `surfaces` names a newer version, so later rows draw nothing of their own. Every catalog component is drawn with this design system's primitives, never `@a2ui/react`; Text is the chat's markdown with links, pictures and HTML stripped (`cardMarkdown`), and a link is an `openUrl` button through `ChatLink`. Values typed are saved as drafts (`useDebouncedPersist`), an obscured field's never; a draft refused `UI_SURFACE_CHANGED` is read again and sent again without the pointers the agent wrote, and a field the agent overwrote is marked (`overriddenDrafts`). A press resolves the button's `userMessage` and `context` here (a List template's scope is known only here), keeps one `clientMessageId` through its `RUN_BUSY` retries (on the chat's turn closing, on `ACTION_RETRY_MS` in a team run) and goes through the team route in a team run. Media arrives as base64 from the chat route: a picture as a `data:` URL, video and sound as a `blob:` URL made on Play and revoked on unmount (the renderer CSP's `media-src 'self' blob:`).
 - Dynamic workflow: the roster is taken whole. A launch is recognised by a `workflow_info` row, never by tool name.
 - `save_project_instructions` renders as an ordinary approval card (`diff-view.tsx` `editDiffOf`), drawing the daemon's unified hunks and the `P-` ids it carries out (`projectInstructionsCardOf`, `UnifiedDiff`) while its hazard scan reads the whole old and new text; the verdict row's `outcome` (`not-saved` draws "✗ Not saved") and `answer` say what Apply did. The card marks the words that changed inside paired lines (`UnifiedDiff` `wordLevel`). It is `'patch'` in `GENIRO_TOOLS` (`isProposedChange`); a refused `save_project_instructions` call keeps its row (`transcript-groups.ts`).
 - A plan or question row that cannot be parsed falls back to the permission body.

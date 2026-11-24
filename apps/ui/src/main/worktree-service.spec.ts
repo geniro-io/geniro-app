@@ -32,6 +32,7 @@ import {
   readRegistry,
   settleWorktreeForTask,
   taskBranchName,
+  WORKTREES_DIR_NAME,
 } from './worktree-service';
 
 let repo: string;
@@ -714,4 +715,17 @@ describe('prepareWorktree by what the folder is', () => {
     },
     TIMEOUT_MS,
   );
+});
+
+describe("where the daemon looks for a card's worktree", () => {
+  it("is the folder main makes it in: the twin of the daemon's TASK_WORKTREES_DIR_NAME", () => {
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/v1/tasks/utils/task-worktree.ts'),
+      'utf8',
+    );
+
+    expect(daemon).toContain(
+      `export const TASK_WORKTREES_DIR_NAME = '${WORKTREES_DIR_NAME}';`,
+    );
+  });
 });

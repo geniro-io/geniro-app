@@ -7,10 +7,12 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import type { LocalImageWire } from '../../agents/chat.types';
 import { LocalImageDto } from '../../agents/dto/chat.dto';
 import { LocalImageService } from '../../agents/services/local-image.service';
@@ -212,13 +214,15 @@ export class TasksController {
   }
 
   /**
-   * Start an agent on this task, in a worktree the caller has already made.
+   * Start an agent on this task, in the worktree Electron main has already made
+   * — desktop only: a paired device presses Run through main's own channel.
    *
    * Answers with the TASK rather than the run: the board is what the presser
    * is looking at, and the card now carries the run's id, its branch and its
    * worktree — everything needed to open the conversation from here.
    */
   @Post(':taskId/runs')
+  @UseGuards(DesktopOnlyGuard)
   @ApiOperation({ operationId: 'startTaskRun' })
   @ZodResponse({ status: 201, type: TaskDto })
   startRun(

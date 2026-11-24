@@ -212,13 +212,14 @@ describe('AutopilotConductor', () => {
       approval: 'auto',
       startedBy: 'autopilot',
       from: 'todo',
-      cwd: '/wt/t1',
       branch: 'geniro/t1',
       // The user's per-CLI switches, as a hand-pressed Run sends them — a
       // run snapshots them, so an autopilot start without them would run with
       // every option at its default.
       agentOptions: { claude: { browserTools: true } },
     });
+    // The daemon finds the card's worktree itself; the start names no folder.
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
   });
 
   // A hand-pressed Run sends the user's standing instructions; an autopilot

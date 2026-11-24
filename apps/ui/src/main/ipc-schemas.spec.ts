@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   branchNameSchema,
+  cardPressSchema,
   changesPullRequestsSchema,
   commitShaSchema,
   gitDirSchema,
@@ -10,7 +11,6 @@ import {
   settingsPatchSchema,
   storageEntryNameSchema,
   taskIdSchema,
-  taskWorktreeSchema,
   terminalColsSchema,
   terminalCreateSchema,
   terminalRowsSchema,
@@ -180,20 +180,25 @@ describe('taskIdSchema', () => {
   });
 });
 
-describe('taskWorktreeSchema', () => {
-  it('requires a real task id and an absolute folder', () => {
+describe('cardPressSchema', () => {
+  it('takes a real task id, the column it was seen in and an optional note', () => {
     expect(
-      taskWorktreeSchema.safeParse({ taskId: 't1', folder: '/Users/me/proj' })
+      cardPressSchema.safeParse({ taskId: 't1', from: 'todo', prompt: 'go' })
         .success,
     ).toBe(true);
     expect(
-      taskWorktreeSchema.safeParse({ taskId: '../x', folder: '/Users/me/proj' })
-        .success,
+      cardPressSchema.safeParse({ taskId: '../x', from: 'todo' }).success,
     ).toBe(false);
-    expect(
-      taskWorktreeSchema.safeParse({ taskId: 't1', folder: 'relative' })
-        .success,
-    ).toBe(false);
+  });
+
+  it('never carries a folder: a paired device cannot name where the run works', () => {
+    const parsed = cardPressSchema.parse({
+      taskId: 't1',
+      from: 'todo',
+      folder: '/Users/someone/elsewhere',
+    });
+
+    expect(parsed).toEqual({ taskId: 't1', from: 'todo' });
   });
 });
 

@@ -26,24 +26,17 @@ import {
 /**
  * Start a run for one task.
  *
- * The CWD and BRANCH come from the caller because the daemon runs no git: the
- * Electron main process prepares the worktree and names the branch, and this
- * route records what it was told. A daemon that derived either would be the
- * one thing this app's git discipline forbids.
+ * The BRANCH comes from the caller because the daemon runs no git: Electron
+ * main prepares the worktree and names the branch. The folder the run works in
+ * is never the caller's: the daemon reads it off the card (`taskRunFolder`).
  */
 export const startTaskRunSchema = z.object({
-  cwd: z
-    .string()
-    .min(1)
-    .describe(
-      "The worktree the agent works in — already created by the caller — or the task's own folder when that is in no git repository; validated here only as a real directory",
-    ),
   branch: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'The branch that worktree has checked out; absent when the folder is in no git repository and the run works in it directly',
+      "The branch the card's worktree has checked out; absent when the card's folder is in no git repository and the run works in that folder directly",
     ),
   /**
    * The status the caller believes the task is in, on `moveTaskStatus`'s own

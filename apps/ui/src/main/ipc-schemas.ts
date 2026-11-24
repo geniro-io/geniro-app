@@ -659,10 +659,21 @@ export const storageEntryNamesSchema = z
   .array(storageEntryNameSchema)
   .max(2000);
 
-/** Which task to make a worktree for, and the repository to cut it from. */
-export const taskWorktreeSchema = z.object({
+/**
+ * TWIN: `TASK_RUN_PROMPT_MAX` in `apps/daemon/src/v1/tasks/tasks.types.ts`,
+ * the longest note a Run press may carry. Change one and change the other.
+ */
+export const MAX_RUN_PRESS_PROMPT_CHARS = 20_000;
+
+/**
+ * A Run press on a board card: the card, the column the presser saw it in (the
+ * daemon's vocabulary, held opaque), and what they typed. No folder: main reads
+ * the card's own from the daemon.
+ */
+export const cardPressSchema = z.object({
   taskId: taskIdSchema,
-  folder: absolutePath,
+  from: z.string().min(1).max(64),
+  prompt: z.string().max(MAX_RUN_PRESS_PROMPT_CHARS).optional(),
 });
 
 /**

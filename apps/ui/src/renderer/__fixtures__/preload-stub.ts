@@ -14,7 +14,7 @@ import {
   type GitInfo,
   type PullRequestRefResult,
   type Settings,
-  type TaskWorktreeResult,
+  type TaskRunStartResult,
   type TaskWorktreeSettleResult,
   type UpdateState,
 } from '../../shared/contracts';
@@ -321,18 +321,9 @@ export function createPreloadStub(
       note('lineMeasurementsFlushed');
       return Promise.resolve();
     },
-    prepareTaskWorktree: (input: {
-      taskId: string;
-      folder: string;
-    }): Promise<TaskWorktreeResult> => {
-      note('prepareTaskWorktree');
-      return Promise.resolve({
-        ok: true,
-        path: `/tmp/geniro-worktrees/${input.taskId}`,
-        branch: `geniro/task-${input.taskId}`,
-        reused: false,
-        error: null,
-      });
+    startTaskRun: (): Promise<TaskRunStartResult> => {
+      note('startTaskRun');
+      return Promise.resolve({ ok: true });
     },
     pruneTaskWorktree: (): Promise<boolean> => {
       note('pruneTaskWorktree');

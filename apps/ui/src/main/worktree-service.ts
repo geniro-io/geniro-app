@@ -74,7 +74,13 @@ export function taskBranchName(taskId: string): string {
   return `geniro/task-${taskId}`;
 }
 
-/** The directory under userData every task worktree is made in. */
+/**
+ * The directory under userData every task worktree is made in.
+ *
+ * TWIN: `TASK_WORKTREES_DIR_NAME` in
+ * `apps/daemon/src/v1/tasks/utils/task-worktree.ts`, where the daemon finds a
+ * card's worktree to run it in. Change one and change the other.
+ */
 export const WORKTREES_DIR_NAME = 'worktrees';
 
 export function worktreesRoot(): string {

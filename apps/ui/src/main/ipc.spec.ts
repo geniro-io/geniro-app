@@ -15,6 +15,8 @@ import type { DaemonSupervisor } from './daemon-supervisor';
 import type * as gitChangesModule from './git-changes';
 import { lineMeasurementFlush } from './line-measurement-flush';
 import type { RemoteAccess } from './remote/remote-access';
+import type * as taskRunStartModule from './task-run-start';
+import type { RunStartDeps } from './task-run-start';
 import type * as worktreeServiceModule from './worktree-service';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
@@ -143,6 +145,14 @@ vi.mock('./git-changes', async (importOriginal) => ({
 vi.mock('./worktree-service', async (importOriginal) => ({
   ...(await importOriginal<typeof worktreeServiceModule>()),
   worktreesRoot: mocks.worktreesRoot,
+}));
+
+const cardStarts = vi.hoisted(() => ({
+  startCardPress: vi.fn(async () => ({ ok: true as const })),
+}));
+vi.mock('./task-run-start', async (importOriginal) => ({
+  ...(await importOriginal<typeof taskRunStartModule>()),
+  startCardPress: cardStarts.startCardPress,
 }));
 
 import { registerIpc } from './ipc';
@@ -853,6 +863,70 @@ describe('registerIpc listWorktrees', () => {
       handler(IPC.listWorktrees)({}, '/repo', 1.5),
     ).rejects.toBeInstanceOf(ZodError);
     expect(mocks.readLinkedWorktrees).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerIpc startTaskRun', () => {
+  const daemonHandle = {
+    host: '127.0.0.1',
+    port: 47615,
+    token: 'tok',
+    version: '0.1.0',
+    startedAt: '2026-09-07T12:00:00.000Z',
+  };
+  const cardRuns = {} as RunStartDeps;
+
+  const register = (handle: typeof daemonHandle | null): void => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registerIpc(
+      { getHandle: () => handle } as unknown as DaemonSupervisor,
+      {} as UpdateService,
+      {} as SearchModelService,
+      noTerminals,
+      undefined,
+      undefined,
+      undefined,
+      cardRuns,
+    );
+  };
+
+  it('starts the card main reads, never a folder the press names', async () => {
+    register(daemonHandle);
+
+    const result = await handler(IPC.startTaskRun)(
+      {},
+      { taskId: 't1', from: 'todo', folder: '/Users/someone/elsewhere' },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(cardStarts.startCardPress).toHaveBeenCalledWith(
+      cardRuns,
+      daemonHandle,
+      { taskId: 't1', from: 'todo' },
+      expect.any(Function),
+    );
+  });
+
+  it('answers that the daemon is not running, and starts nothing, without one', async () => {
+    register(null);
+
+    const result = await handler(IPC.startTaskRun)(
+      {},
+      { taskId: 't1', from: 'todo' },
+    );
+
+    expect(result).toEqual({ ok: false, error: 'the daemon is not running' });
+    expect(cardStarts.startCardPress).not.toHaveBeenCalled();
+  });
+
+  it('refuses a press that does not name a real card', async () => {
+    register(daemonHandle);
+
+    await expect(
+      handler(IPC.startTaskRun)({}, { taskId: '../x', from: 'todo' }),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(cardStarts.startCardPress).not.toHaveBeenCalled();
   });
 });
 

@@ -31,6 +31,7 @@
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-page.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-runtime.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/migrations/migrations.types.ts",
+        "$TURBO_ROOT$/apps/daemon/src/v1/tasks/utils/task-worktree.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/teams/utils/prompt-cache-standing.ts"
       ]
     },
@@ -47,6 +48,7 @@
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-page.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-runtime.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/migrations/migrations.types.ts",
+        "$TURBO_ROOT$/apps/daemon/src/v1/tasks/utils/task-worktree.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/teams/utils/prompt-cache-standing.ts"
       ]
     },
@@ -63,6 +65,7 @@
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-page.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/agents/utils/artifact-runtime.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/migrations/migrations.types.ts",
+        "$TURBO_ROOT$/apps/daemon/src/v1/tasks/utils/task-worktree.ts",
         "$TURBO_ROOT$/apps/daemon/src/v1/teams/utils/prompt-cache-standing.ts"
       ]
     },

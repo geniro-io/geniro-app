@@ -100,6 +100,14 @@ export function themeVar(name: string): string {
  * refuses. Done here rather than in the store so a page already published is
  * mended too, and the served page does not carry each picture twice.
  *
+ * And it closes a `<dialog>` from a submit button of its `method="dialog"`
+ * form itself — validity, a cancelable `submit`, then `close` with the
+ * button's value — and on Enter in the one text field of such a form that has
+ * no submit button, where a browser submits it implicitly. The frame and the
+ * share envelope are sandboxed without `allow-forms`, which refuses that
+ * submission too. It does so in a saved file as well, cancelling the
+ * browser's own, so every reading behaves the same.
+ *
  * It must not spell the frame's postMessage tags or the frame wrapper's own
  * markers: it also ships in the RAW document a saved file is built from, which
  * carries none of the frame plumbing.
@@ -656,6 +664,54 @@ export const ARTIFACT_RUNTIME_SCRIPT = `
   document.addEventListener('change', onControl, true);
   document.addEventListener('input', onControl, true);
   document.addEventListener('click', onPress, true);
+
+  // A frame sandboxed without allow-forms refuses every form submission, a method="dialog" one included.
+  var BLOCKS_IMPLICIT_SUBMISSION = /^(text|search|email|url|tel|password|date|month|week|time|datetime-local|number)$/;
+
+  function isSubmitButton(control) {
+    var type = control.type;
+    return control.tagName === 'BUTTON' ? type === 'submit' : control.tagName === 'INPUT' && (type === 'submit' || type === 'image');
+  }
+
+  function blocksImplicitSubmission(control) {
+    return control.tagName === 'INPUT' && BLOCKS_IMPLICIT_SUBMISSION.test(control.type);
+  }
+
+  function submitToDialog(event, form, submitter) {
+    var method = submitter && submitter.hasAttribute('formmethod') ? submitter.getAttribute('formmethod') : form.getAttribute('method');
+    var dialog = String(method).trim().toLowerCase() === 'dialog' ? form.closest('dialog') : null;
+    if (!dialog || !dialog.open) return;
+    event.preventDefault();
+    if (!form.noValidate && !(submitter && submitter.formNoValidate) && !form.reportValidity()) return;
+    var init = { bubbles: true, cancelable: true, submitter: submitter };
+    var submit = typeof SubmitEvent === 'function' ? new SubmitEvent('submit', init) : new Event('submit', init);
+    if (!form.dispatchEvent(submit)) return;
+    if (submitter && submitter.type !== 'image' && submitter.hasAttribute('value')) dialog.close(submitter.value);
+    else dialog.close();
+  }
+
+  window.addEventListener('click', function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    var target = event.target;
+    var control = target && target.closest ? target.closest('button, input') : null;
+    if (control && control.form && isSubmitButton(control)) submitToDialog(event, control.form, control);
+  });
+
+  // A form with a submit button is submitted on Enter through a click on that button.
+  window.addEventListener('keydown', function (event) {
+    if (event.defaultPrevented || event.key !== 'Enter' || event.isComposing) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    var field = event.target;
+    if (!field || !field.form || !blocksImplicitSubmission(field)) return;
+    var form = field.form;
+    var fields = 0;
+    for (var i = 0; i < form.elements.length; i++) {
+      var control = form.elements[i];
+      if (isSubmitButton(control)) return;
+      if (blocksImplicitSubmission(control)) fields++;
+    }
+    if (fields === 1) submitToDialog(event, form, null);
+  });
 
   // The kept answers, from the host as the page opens, after each of this page's
   // saves lands, and whenever another frame of the page saves. A pick this page

@@ -6,7 +6,7 @@ import type { McpCallContext, McpToolResult } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
 import { answerReviewCommentInstructions } from './answer-review-comment.instructions';
 import {
-  answerReviewCommentText,
+  answerReviewCommentResultText,
   readAnswerReviewComment,
 } from './answer-review-comment.reader';
 import { answerReviewCommentSchema } from './answer-review-comment.schema';
@@ -45,7 +45,7 @@ export class AnswerReviewCommentTool extends BaseMcpTool {
     }
     try {
       const outcome = await this.reviews.answer(runId, { memberId }, call);
-      const reply = answerReviewCommentText(call, outcome);
+      const reply = answerReviewCommentResultText(outcome);
       return this.text(reply.text, reply.isError);
     } catch (error) {
       this.logger.error(

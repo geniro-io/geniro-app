@@ -40,8 +40,7 @@ export function readAnswerReviewComment(
 }
 
 /** The receipt the agent reads back. */
-export function answerReviewCommentText(
-  call: AnswerReviewCommentCall,
+export function answerReviewCommentResultText(
   outcome: ReviewCommentsOutcome,
 ): { text: string; isError: boolean } {
   if (outcome.status === 'refused') {
@@ -57,8 +56,12 @@ export function answerReviewCommentText(
     open.length === 0
       ? 'Every sent comment has an answer now.'
       : `Still unanswered: ${open.map((comment) => `#${comment.number}`).join(', ')}.`;
+  const answered = outcome.changed[0];
   return {
-    text: `Answered #${call.comment} as ${call.status}; the user sees it under their comment. ${left}`,
+    text:
+      answered === undefined
+        ? left
+        : `Answered #${answered.number} as ${answered.agentStatus ?? 'answered'}; the user sees it under their comment. ${left}`,
     isError: false,
   };
 }

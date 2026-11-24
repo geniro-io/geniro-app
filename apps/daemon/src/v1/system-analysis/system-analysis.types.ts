@@ -21,6 +21,8 @@ export const SYSTEM_DIGEST_GONE_FLAGS = 20;
 /** Failed tools listed per thread, the most frequent first. */
 export const SYSTEM_DIGEST_TOOLS_PER_THREAD = 5;
 export const SYSTEM_ANALYSIS_DAYS_MAX = 90;
+/** How long a start reuses the digest the scope read built for the same period length. */
+export const SYSTEM_DIGEST_REUSE_MS = 5 * 60_000;
 
 /** The signal weights of a thread's score; each counted signal times its weight. */
 export const SYSTEM_DIGEST_WEIGHTS = {

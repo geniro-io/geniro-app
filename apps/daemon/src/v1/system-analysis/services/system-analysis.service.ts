@@ -17,6 +17,7 @@ import { TeamRecommendationDao } from '../../stats/dao/team-recommendation.dao';
 import type { TeamRecommendationRow } from '../../stats/stats.types';
 import {
   type StartSystemAnalysis,
+  SYSTEM_DIGEST_REUSE_MS,
   type SystemAnalysisList,
   type SystemAnalysisRow,
   type SystemAnalysisScope,
@@ -28,6 +29,8 @@ import { ensureSystemAnalysisFolder } from '../utils/system-analysis-folder';
 import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 import { SystemDigestService, systemPeriodOf } from './system-digest.service';
 
+type DigestBuild = Awaited<ReturnType<SystemDigestService['build']>>;
+
 /**
  * Settings' system analysis: what a period holds, starting an analysis over
  * it, and the analyses run before. Each analysis is a hidden chat of its own,
@@ -35,6 +38,12 @@ import { SystemDigestService, systemPeriodOf } from './system-digest.service';
  */
 @Injectable()
 export class SystemAnalysisService {
+  private kept: {
+    days: number;
+    at: number;
+    build: Promise<DigestBuild>;
+  } | null = null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly digests: SystemDigestService,
@@ -47,7 +56,7 @@ export class SystemAnalysisService {
   ) {}
 
   async scope(days: number): Promise<SystemAnalysisScope> {
-    const { digest } = await this.digests.build(systemPeriodOf(days));
+    const { digest } = await this.buildFresh(days);
     return {
       period: digest.period,
       totals: digest.totals,
@@ -57,7 +66,7 @@ export class SystemAnalysisService {
 
   async start(input: StartSystemAnalysis): Promise<RunWire> {
     const { days, ...setup } = input;
-    const { digest, runs } = await this.digests.build(systemPeriodOf(days));
+    const { digest, runs } = await this.takeBuild(days);
     if (runs.length === 0) {
       throw new ConflictException(
         'SYSTEM_ANALYSIS_NOTHING',
@@ -85,6 +94,33 @@ export class SystemAnalysisService {
     }
     this.events.publishChanged(run.id);
     return run;
+  }
+
+  private buildFresh(days: number): Promise<DigestBuild> {
+    const entry = {
+      days,
+      at: Date.now(),
+      build: this.digests.build(systemPeriodOf(days)),
+    };
+    this.kept = entry;
+    entry.build.catch(() => {
+      if (this.kept === entry) {
+        this.kept = null;
+      }
+    });
+    return entry.build;
+  }
+
+  /** The scope read's build for the same `days` while it is fresh, taken so no second start reads it; a build that fails is made again. */
+  private takeBuild(days: number): Promise<DigestBuild> {
+    const kept = this.kept;
+    this.kept = null;
+    const fresh = () => this.digests.build(systemPeriodOf(days));
+    return kept !== null &&
+      kept.days === days &&
+      Date.now() - kept.at < SYSTEM_DIGEST_REUSE_MS
+      ? kept.build.catch(fresh)
+      : fresh();
   }
 
   async list(page: {

@@ -6,7 +6,8 @@ import { MemoryDao } from '../dao/memory.dao';
 /**
  * Makes sure the memory full-text index exists and is complete — once, at
  * boot, after the schema sync and before the server listens — the way
- * `ChatTextIndexService` does for chats.
+ * `ChatTextIndexService` does for chats. The rank setting lives in the table's
+ * own config, so it runs before the early return and after a rebuild.
  */
 @Injectable()
 export class MemoryTextIndexService {
@@ -21,11 +22,13 @@ export class MemoryTextIndexService {
   async ensure(): Promise<void> {
     try {
       await this.memories.createTable();
+      await this.memories.setRank();
       const present = await this.memories.presentTriggers();
       if (present.size === MEMORY_TEXT_TRIGGERS.length) {
         return;
       }
       await this.memories.rebuild();
+      await this.memories.setRank();
       this.logger.log('built the memory search index');
     } catch (error) {
       this.logger.error(

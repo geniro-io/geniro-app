@@ -2,10 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import {
-  chatTextMatchQuery,
-  chatTextQueryTerms,
-} from '../../agents/utils/chat-text-query';
+import { matchEveryWordElseAny } from '../../agents/utils/chat-text-query';
 import {
   hasHiddenText,
   withoutHiddenText,
@@ -1209,18 +1206,9 @@ export class KnowledgeService {
     em: EntityManager,
   ): Promise<string[]> {
     const ids = heads.map((head) => head.id);
-    const every = chatTextMatchQuery(text);
-    if (every === null) {
-      return [];
-    }
-    const found = await this.documents.matchIds(every, ids, em);
-    if (found.length > 0) {
-      return found;
-    }
-    const terms = chatTextQueryTerms(text).filter((term) => term.length > 1);
-    const any =
-      terms.length > 1 ? chatTextMatchQuery(terms.join(' OR ')) : null;
-    return any === null ? [] : this.documents.matchIds(any, ids, em);
+    return matchEveryWordElseAny(text, (query) =>
+      this.documents.matchIds(query, ids, em),
+    );
   }
 
   /** Up to three visible handles a mistaken read may have meant. */

@@ -7,6 +7,7 @@ import {
   CREATE_MEMORY_TEXT_TABLE,
   DROP_MEMORY_TEXT_TABLE,
   DROP_RETIRED_MEMORY_TEXT_TRIGGERS,
+  MEMORY_TEXT_RANK,
   MEMORY_TEXT_TRIGGERS,
 } from '../../../db/memory-text-index.ddl';
 import { idBatches } from '../../agents/utils/id-batches';
@@ -1191,6 +1192,11 @@ export class MemoryDao extends BaseDao<Memory> {
   /** Create the FTS table when it does not exist yet. */
   async createTable(): Promise<void> {
     await this.em.getConnection().execute(CREATE_MEMORY_TEXT_TABLE, [], 'run');
+  }
+
+  /** Stored in the table's own config, and lost with it. */
+  async setRank(): Promise<void> {
+    await this.em.getConnection().execute(MEMORY_TEXT_RANK, [], 'run');
   }
 
   /**

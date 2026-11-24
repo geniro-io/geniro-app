@@ -754,10 +754,12 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'call_question': {
       // The CALLER, not the user, answers it through answer_agent, so its
       // options are inert; the answer, once loaded, is drawn on this card.
+      const passedOn = answerPairs.passedOn.has(item.id);
       const raw = (item.payload as { options?: unknown } | null)?.options;
-      const options = Array.isArray(raw)
-        ? raw.filter((option): option is string => typeof option === 'string')
-        : [];
+      const options =
+        Array.isArray(raw) && !passedOn
+          ? raw.filter((option): option is string => typeof option === 'string')
+          : [];
       const caller =
         nodeName(payloadString(item.payload, 'callerNodeId')) ?? 'The caller';
       const paired = answerPairs.byQuestion.get(item.id);
@@ -772,12 +774,14 @@ export const TranscriptItem = memo(function TranscriptItem({
           }
           {...memberCard(payloadString(item.payload, 'calleeNodeId'))}
           callId={payloadString(item.payload, 'callId')}
-          text={payloadString(item.payload, 'question')}
+          text={passedOn ? null : payloadString(item.payload, 'question')}
           options={options}
           outcome={
             paired === undefined
               ? {
-                  text: `${caller} answers this — or passes it on to you as its own question.`,
+                  text: passedOn
+                    ? `${caller} passed this on to you as its own question.`
+                    : `${caller} answers this — or passes it on to you as its own question.`,
                 }
               : paired.outcome === 'answered'
                 ? { text: `${caller} answered: ${paired.answer ?? ''}` }

@@ -24,12 +24,24 @@ export interface CallAnswerPairs {
    * answer, drawn on their question's card instead of on their own.
    */
   shownOnQuestion: ReadonlySet<string>;
+  /**
+   * The `call_question` rows their caller passed on to the user as its own
+   * question card while they were still open: drawn without their text and
+   * options, since that card is the one the user answers.
+   */
+  passedOn: ReadonlySet<string>;
 }
 
 export const NO_CALL_ANSWER_PAIRS: CallAnswerPairs = {
   byQuestion: new Map(),
   shownOnQuestion: new Set(),
+  passedOn: new Set(),
 };
+
+interface OpenQuestion {
+  questionId: string;
+  callerNodeId: string | null;
+}
 
 function answerOutcomeOf(item: ChatItem): PairedCallAnswer['outcome'] | null {
   const outcome = payloadString(item.payload, 'outcome');
@@ -46,6 +58,11 @@ function answerOutcomeOf(item: ChatItem): PairedCallAnswer['outcome'] | null {
     : null;
 }
 
+function isQuestionCard(item: ChatItem): boolean {
+  const questions = (item.payload as { questions?: unknown } | null)?.questions;
+  return Array.isArray(questions) && questions.length > 0;
+}
+
 function orphanOf(item: ChatItem): AgentCallEvent | null {
   const events = readAgentCallEvents(item.payload);
   const [only] = events ?? [];
@@ -57,13 +74,16 @@ function orphanOf(item: ChatItem): AgentCallEvent | null {
  * first answer of the same call written after it and before the call's next
  * question. A `message_agent` message is never an answer. The row saying no
  * turn of the caller was left to answer goes on the call's latest question,
- * before or after its answer row, unless that question was answered.
+ * before or after its answer row, unless that question was answered. A question
+ * card its caller raises while the question is open marks that question as
+ * passed on to the user.
  */
 export function pairCallAnswers(rows: readonly ChatItem[]): CallAnswerPairs {
-  const open = new Map<string, string>();
+  const open = new Map<string, OpenQuestion>();
   const latest = new Map<string, string>();
   const byQuestion = new Map<string, PairedCallAnswer>();
   const shownOnQuestion = new Set<string>();
+  const passedOn = new Set<string>();
   for (const item of [...rows].sort((a, b) => a.seq - b.seq)) {
     if (item.kind === 'system') {
       const orphan = orphanOf(item);
@@ -85,12 +105,28 @@ export function pairCallAnswers(rows: readonly ChatItem[]): CallAnswerPairs {
       }
       continue;
     }
+    if (item.kind === 'approval_request') {
+      if (isQuestionCard(item)) {
+        for (const question of open.values()) {
+          if (
+            question.callerNodeId !== null &&
+            question.callerNodeId === item.memberId
+          ) {
+            passedOn.add(question.questionId);
+          }
+        }
+      }
+      continue;
+    }
     const callId = payloadString(item.payload, 'callId');
     if (callId === null) {
       continue;
     }
     if (item.kind === 'call_question') {
-      open.set(callId, item.id);
+      open.set(callId, {
+        questionId: item.id,
+        callerNodeId: payloadString(item.payload, 'callerNodeId'),
+      });
       latest.set(callId, item.id);
       continue;
     }
@@ -98,21 +134,21 @@ export function pairCallAnswers(rows: readonly ChatItem[]): CallAnswerPairs {
       continue;
     }
     const outcome = answerOutcomeOf(item);
-    const questionId = open.get(callId);
-    if (outcome === null || questionId === undefined) {
+    const question = open.get(callId);
+    if (outcome === null || question === undefined) {
       continue;
     }
     open.delete(callId);
-    byQuestion.set(questionId, {
+    byQuestion.set(question.questionId, {
       outcome,
       answer: payloadString(item.payload, 'answer'),
-      noAnswer: byQuestion.get(questionId)?.noAnswer ?? null,
+      noAnswer: byQuestion.get(question.questionId)?.noAnswer ?? null,
     });
     shownOnQuestion.add(item.id);
   }
-  return byQuestion.size === 0
+  return byQuestion.size === 0 && passedOn.size === 0
     ? NO_CALL_ANSWER_PAIRS
-    : { byQuestion, shownOnQuestion };
+    : { byQuestion, shownOnQuestion, passedOn };
 }
 
 export const CallAnswerPairsContext =

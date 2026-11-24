@@ -990,4 +990,212 @@ describe('the page runtime', () => {
 
     expect(seen).toEqual(['sentinel-fg']);
   });
+
+  describe('a <dialog> closed from its method="dialog" form', () => {
+    let submits: (Element | null)[];
+    const countSubmits = (event: Event): void => {
+      submits.push((event as SubmitEvent).submitter);
+    };
+    const dialog = (): HTMLDialogElement =>
+      document.querySelector('dialog') as HTMLDialogElement;
+    const press = (selector: string): MouseEvent => {
+      const click = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      });
+      document.querySelector(selector)?.dispatchEvent(click);
+      return click;
+    };
+    const open = (body: string): void => {
+      document.body.innerHTML = body;
+      document.querySelector('dialog')?.setAttribute('open', '');
+      run();
+    };
+
+    const nativeClose = Object.getOwnPropertyDescriptor(
+      HTMLDialogElement.prototype,
+      'close',
+    );
+
+    beforeEach(() => {
+      submits = [];
+      document.addEventListener('submit', countSubmits);
+      Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+        configurable: true,
+        writable: true,
+        value(this: HTMLDialogElement, result?: string) {
+          if (!this.open) {
+            return;
+          }
+          if (result !== undefined) {
+            this.returnValue = result;
+          }
+          this.removeAttribute('open');
+        },
+      });
+    });
+
+    afterEach(() => {
+      if (nativeClose) {
+        Object.defineProperty(
+          HTMLDialogElement.prototype,
+          'close',
+          nativeClose,
+        );
+      } else {
+        Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+      }
+    });
+
+    it('closes the dialog its button sits in, which a frame without allow-forms never submits', () => {
+      open(
+        '<dialog><p>Read only</p><form method="dialog"><button id="close">Close</button></form></dialog>',
+      );
+
+      const click = press('#close');
+
+      expect(dialog().open).toBe(false);
+      expect(click.defaultPrevented).toBe(true);
+      expect(submits).toEqual([document.getElementById('close')]);
+    });
+
+    it('closes with the button value as the return value, and leaves it alone for a button with none', () => {
+      open(
+        '<dialog><form method="dialog"><button id="yes" value="confirm">Yes</button><button id="no">No</button></form></dialog>',
+      );
+      dialog().returnValue = 'before';
+
+      press('#yes');
+      expect(dialog().returnValue).toBe('confirm');
+
+      dialog().setAttribute('open', '');
+      dialog().returnValue = 'before';
+      press('#no');
+      expect(dialog().open).toBe(false);
+      expect(dialog().returnValue).toBe('before');
+    });
+
+    it.each([
+      [
+        'an <input type="submit">',
+        '<input type="submit" id="close" value="Done">',
+      ],
+      [
+        'an <input type="image">',
+        '<input type="image" id="close" alt="Close">',
+      ],
+    ])('closes from %s too', (_, control) => {
+      open(`<dialog><form method="dialog">${control}</form></dialog>`);
+      press('#close');
+      expect(dialog().open).toBe(false);
+    });
+
+    it('takes the method from the button when it names one', () => {
+      open(
+        '<dialog><form><button id="close" formmethod="dialog">Close</button></form></dialog>',
+      );
+      press('#close');
+      expect(dialog().open).toBe(false);
+    });
+
+    it.each([
+      [
+        'the page cancels the submit event',
+        () =>
+          document
+            .querySelector('form')
+            ?.addEventListener('submit', (event) => event.preventDefault()),
+      ],
+      [
+        'the page cancels the click',
+        () =>
+          document
+            .getElementById('close')
+            ?.addEventListener('click', (event) => event.preventDefault()),
+      ],
+    ])('keeps the dialog open when %s', (_, cancel) => {
+      open(
+        '<dialog><form method="dialog"><button id="close">Close</button></form></dialog>',
+      );
+      cancel();
+      press('#close');
+      expect(dialog().open).toBe(true);
+    });
+
+    it('keeps the dialog open while a required field is empty, and closes once it is filled', () => {
+      open(
+        '<dialog><form method="dialog"><input id="name" required><button id="close">Save</button></form></dialog>',
+      );
+
+      press('#close');
+      expect(dialog().open).toBe(true);
+      expect(submits).toEqual([]);
+
+      (document.getElementById('name') as HTMLInputElement).value = 'Ann';
+      press('#close');
+      expect(dialog().open).toBe(false);
+    });
+
+    it.each([
+      [
+        'a form marked novalidate',
+        '<dialog><form method="dialog" novalidate><input required><button id="close">Close</button></form></dialog>',
+      ],
+      [
+        'a button marked formnovalidate',
+        '<dialog><form method="dialog"><input required><button id="close" formnovalidate>Cancel</button></form></dialog>',
+      ],
+    ])('skips validation for %s', (_, body) => {
+      open(body);
+      press('#close');
+      expect(dialog().open).toBe(false);
+    });
+
+    it('leaves a press of another mouse button alone', () => {
+      open(
+        '<dialog><form method="dialog"><button id="close">Close</button></form></dialog>',
+      );
+      const click = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      });
+      document.getElementById('close')?.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(false);
+      expect(dialog().open).toBe(true);
+    });
+
+    it('leaves a dialog that is already closed alone', () => {
+      document.body.innerHTML =
+        '<dialog><form method="dialog"><button id="close">Close</button></form></dialog>';
+      run();
+      const click = press('#close');
+      expect(click.defaultPrevented).toBe(false);
+    });
+
+    it.each([
+      [
+        'a form of another method',
+        '<dialog><form><button id="close">Send</button></form></dialog>',
+      ],
+      [
+        'a plain button',
+        '<dialog><form method="dialog"><button id="close" type="button">Close</button></form></dialog>',
+      ],
+      [
+        'a button whose formmethod overrides the dialog method',
+        '<dialog><form method="dialog"><button id="close" formmethod="get">Send</button></form></dialog>',
+      ],
+      [
+        'a dialog form outside any dialog',
+        '<div><form method="dialog"><button id="close">Close</button></form></div><dialog></dialog>',
+      ],
+    ])('leaves the click alone for %s', (_, body) => {
+      open(body);
+      const click = press('#close');
+      expect(click.defaultPrevented).toBe(false);
+      expect(dialog().open).toBe(true);
+    });
+  });
 });

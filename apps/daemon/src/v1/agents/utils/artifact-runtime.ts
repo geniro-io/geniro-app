@@ -100,6 +100,13 @@ export function themeVar(name: string): string {
  * refuses. Done here rather than in the store so a page already published is
  * mended too, and the served page does not carry each picture twice.
  *
+ * And it closes a `<dialog>` from a submit button of its `method="dialog"`
+ * form itself — validity, a cancelable `submit`, then `close` with the
+ * button's value — because the frame and the share envelope are sandboxed
+ * without `allow-forms`, which refuses that submission too. It does so in a
+ * saved file as well, cancelling the browser's own, so every reading behaves
+ * the same.
+ *
  * It must not spell the frame's postMessage tags or the frame wrapper's own
  * markers: it also ships in the RAW document a saved file is built from, which
  * carries none of the frame plumbing.
@@ -656,6 +663,33 @@ export const ARTIFACT_RUNTIME_SCRIPT = `
   document.addEventListener('change', onControl, true);
   document.addEventListener('input', onControl, true);
   document.addEventListener('click', onPress, true);
+
+  // A frame sandboxed without allow-forms refuses every form submission, a method="dialog" one included.
+  function dialogSubmitter(target) {
+    var control = target && target.closest ? target.closest('button, input') : null;
+    if (!control || !control.form) return null;
+    var type = control.type;
+    var submits = control.tagName === 'BUTTON' ? type === 'submit' : type === 'submit' || type === 'image';
+    return submits ? control : null;
+  }
+
+  window.addEventListener('click', function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    var submitter = dialogSubmitter(event.target);
+    if (!submitter) return;
+    var form = submitter.form;
+    var method = submitter.hasAttribute('formmethod') ? submitter.getAttribute('formmethod') : form.getAttribute('method');
+    var dialog = String(method).trim().toLowerCase() === 'dialog' ? form.closest('dialog') : null;
+    if (!dialog || !dialog.open) return;
+    event.preventDefault();
+    if (!form.noValidate && !submitter.formNoValidate && !form.reportValidity()) return;
+    var submit = typeof SubmitEvent === 'function'
+      ? new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: submitter })
+      : new Event('submit', { bubbles: true, cancelable: true });
+    if (!form.dispatchEvent(submit)) return;
+    if (submitter.type !== 'image' && submitter.hasAttribute('value')) dialog.close(submitter.value);
+    else dialog.close();
+  });
 
   // The kept answers, from the host as the page opens, after each of this page's
   // saves lands, and whenever another frame of the page saves. A pick this page

@@ -332,6 +332,7 @@ export function registerIpc(
         migrating: supervisor.getMigration(),
       },
       isPackaged: app.isPackaged,
+      appVersion: app.getVersion(),
     };
   });
 

@@ -1106,7 +1106,7 @@ export interface UpdateState {
    * only one of the three that has touched the bundle.
    */
   failedPhase: UpdatePhase | null;
-  /** The running app's version, so a screen can state it without a second call. */
+  /** The version on disk: the running app's, or the staged release's once `ready`. */
   currentVersion: string;
   /**
    * Whether THIS install can replace itself.
@@ -1930,6 +1930,8 @@ export interface GeniroApi {
      * question, since a built-but-unpackaged run answers it the other way.
      */
     isPackaged: boolean;
+    /** The version this process runs, whatever an update has staged on disk. */
+    appVersion: string;
   }>;
   /** Daemon connection handle (host + port + token) for opening an authed WS. */
   getDaemonHandle(): Promise<DaemonHandle | null>;

@@ -133,7 +133,13 @@ vi.mock('./command-center/CommandCenter', async () => {
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));
 vi.mock('./debug/debug-panel', () => ({ DebugPanel: () => null }));
 
-import { CLI_KINDS, type DaemonHandle } from '../shared/contracts';
+import {
+  CLI_KINDS,
+  type DaemonHandle,
+  DEFAULT_SETTINGS,
+  type Settings,
+  type UpdateState,
+} from '../shared/contracts';
 import { createPreloadStub } from './__fixtures__/preload-stub';
 import { afterPopstate } from './__tests__/after-popstate';
 import { App } from './App';
@@ -327,6 +333,59 @@ describe('App — while the daemon starts', () => {
     await flush();
 
     expect(connects).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('App — What’s new across an in-app update', () => {
+  it('records nothing when an update is staged, so the relaunch still opens What’s new', async () => {
+    const writes: Partial<Settings>[] = [];
+    let pushUpdate: ((state: UpdateState) => void) | null = null;
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => new Promise<DaemonHandle>(() => undefined),
+      getStatus: () =>
+        Promise.resolve({
+          onboardingComplete: true,
+          daemon: { connected: false, handle: null, migrating: null },
+          isPackaged: true,
+          appVersion: '9.0.0',
+        }),
+      getSettings: () =>
+        Promise.resolve({
+          ...DEFAULT_SETTINGS,
+          onboardingComplete: true,
+          lastSeenChangelogVersion: '9.0.0',
+        }),
+      updateSettings: (patch) => {
+        writes.push(patch);
+        return Promise.resolve(DEFAULT_SETTINGS);
+      },
+      onUpdateState: (listener) => {
+        pushUpdate = listener;
+        return () => undefined;
+      },
+    });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await flush();
+    await act(async () => {
+      pushUpdate?.({
+        phase: 'ready',
+        version: '9.1.0',
+        currentVersion: '9.1.0',
+        progress: null,
+        message: null,
+        canInstall: true,
+        failedPhase: null,
+      });
+    });
+    await flush();
+
+    expect(pushUpdate).not.toBeNull();
+    expect(
+      writes.filter((patch) => 'lastSeenChangelogVersion' in patch),
+    ).toEqual([]);
   });
 });
 

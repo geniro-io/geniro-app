@@ -8,18 +8,20 @@ export interface WhatsNewController {
   releases: readonly ChangelogRelease[];
   /** The version the profile last saw, which the shown releases start after. */
   since: string | null;
+  /** The running version the shown releases end at; null while the dialog is shut. */
+  current: string | null;
   /** Close the dialog and record the running version as seen. */
   dismiss: () => void;
 }
 
 /**
- * Decides once per running version whether this launch opens "What's new",
- * from the profile's last seen version, and records the running one — at once
- * when there is nothing to show, otherwise when the dialog is dismissed.
+ * Decides once per launch whether "What's new" opens, from the profile's last
+ * seen version and the version this process runs, and records the running one
+ * — at once when there is nothing to show, otherwise when the dialog is
+ * dismissed.
  */
 export function useWhatsNew(
   changelog: readonly ChangelogRelease[],
-  current: string | null,
 ): WhatsNewController {
   const [shown, setShown] = useState<{
     releases: ChangelogRelease[];
@@ -28,9 +30,6 @@ export function useWhatsNew(
   } | null>(null);
 
   useEffect(() => {
-    if (current === null) {
-      return;
-    }
     let cancelled = false;
     void Promise.all([window.geniro.getStatus(), window.geniro.getSettings()])
       .then(([status, settings]) => {
@@ -40,7 +39,7 @@ export function useWhatsNew(
         const plan = planWhatsNew({
           releases: changelog,
           lastSeen: settings.lastSeenChangelogVersion,
-          current,
+          current: status.appVersion,
           isPackaged: status.isPackaged,
           onboardingComplete: status.onboardingComplete,
         });
@@ -63,7 +62,7 @@ export function useWhatsNew(
     return () => {
       cancelled = true;
     };
-  }, [changelog, current]);
+  }, [changelog]);
 
   const dismiss = useLatestCallback(() => {
     if (shown === null) {
@@ -78,6 +77,7 @@ export function useWhatsNew(
   return {
     releases: shown?.releases ?? [],
     since: shown?.since ?? null,
+    current: shown?.record ?? null,
     dismiss,
   };
 }

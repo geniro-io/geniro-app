@@ -117,6 +117,7 @@ export function createPreloadStub(
         onboardingComplete: settings.onboardingComplete,
         daemon: { connected: false, handle: null, migrating: null },
         isPackaged: false,
+        appVersion: '0.0.0-storybook',
       });
     },
     getDaemonHandle: (): Promise<DaemonHandle | null> => {

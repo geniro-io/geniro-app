@@ -102,6 +102,31 @@ describe('WhatsNewDialog', () => {
     ).toBe('Why it helps.');
   });
 
+  it('fills the window and scrolls the changes alone, under a fixed range and buttons', () => {
+    act(() =>
+      root.render(
+        <WhatsNewDialog
+          open
+          releases={RELEASES}
+          since="1.1.0"
+          current="1.3.0"
+          onClose={() => undefined}
+          onOpenFullChangelog={() => undefined}
+        />,
+      ),
+    );
+
+    const card = container.querySelector('[role="dialog"] > div[tabindex]');
+    expect(card?.classList.contains('h-full')).toBe(true);
+    expect(card?.classList.contains('max-w-none')).toBe(true);
+    const body = container.querySelector('[data-slot="whats-new-body"]');
+    expect(body?.classList.contains('overflow-y-auto')).toBe(true);
+    expect(
+      body?.querySelector('[data-slot="changelog-digest"]'),
+    ).not.toBeNull();
+    expect(body?.querySelector('[data-slot="whats-new-range"]')).toBeNull();
+  });
+
   it('names only the running version when the profile had none recorded', () => {
     act(() =>
       root.render(

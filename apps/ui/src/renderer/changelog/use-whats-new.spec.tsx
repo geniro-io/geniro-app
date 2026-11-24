@@ -45,8 +45,8 @@ let root: Root;
 let writes: Partial<Settings>[];
 let latest: ReturnType<typeof useWhatsNew> | null;
 
-function Probe({ current }: { current: string | null }): null {
-  latest = useWhatsNew(CHANGELOG, current);
+function Probe(): null {
+  latest = useWhatsNew(CHANGELOG);
   return null;
 }
 
@@ -56,14 +56,19 @@ async function mount({
   isPackaged = true,
   onboardingComplete = true,
 }: {
-  current: string | null;
+  current: string;
   lastSeen: string | null;
   isPackaged?: boolean;
   onboardingComplete?: boolean;
 }): Promise<void> {
   window.geniro = createPreloadStub({
     getStatus: () =>
-      Promise.resolve({ onboardingComplete, daemon: DAEMON, isPackaged }),
+      Promise.resolve({
+        onboardingComplete,
+        daemon: DAEMON,
+        isPackaged,
+        appVersion: current,
+      }),
     getSettings: () =>
       Promise.resolve({
         ...DEFAULT_SETTINGS,
@@ -75,7 +80,7 @@ async function mount({
     },
   });
   await act(async () => {
-    root.render(<Probe current={current} />);
+    root.render(<Probe />);
   });
 }
 
@@ -98,6 +103,7 @@ describe('useWhatsNew', () => {
 
     expect(latest?.releases.map((r) => r.version)).toEqual(['1.3.0']);
     expect(latest?.since).toBe('1.1.0');
+    expect(latest?.current).toBe('1.3.0');
     expect(writes).toEqual([]);
 
     await act(async () => latest?.dismiss());
@@ -141,7 +147,7 @@ describe('useWhatsNew', () => {
       },
     });
     await act(async () => {
-      root.render(<Probe current="1.3.0" />);
+      root.render(<Probe />);
     });
 
     expect(latest?.releases).toEqual([]);
@@ -155,6 +161,7 @@ describe('useWhatsNew', () => {
           onboardingComplete: false,
           daemon: DAEMON,
           isPackaged: true,
+          appVersion: '1.3.0',
         }),
       updateSettings: (patch) => {
         writes.push(patch);
@@ -162,16 +169,9 @@ describe('useWhatsNew', () => {
       },
     });
     await act(async () => {
-      root.render(<Probe current="1.3.0" />);
+      root.render(<Probe />);
     });
 
     expect(writes).toEqual([{ lastSeenChangelogVersion: '1.3.0' }]);
-  });
-
-  it('waits for the running version before deciding', async () => {
-    await mount({ current: null, lastSeen: '1.1.0' });
-
-    expect(latest?.releases).toEqual([]);
-    expect(writes).toEqual([]);
   });
 });

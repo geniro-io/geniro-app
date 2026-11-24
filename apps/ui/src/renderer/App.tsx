@@ -332,7 +332,7 @@ export function App(): React.JSX.Element {
   /** The open thread's folder, reported up by `Chats` — where a new terminal starts. */
   const [chatFolder, setChatFolder] = useState<string | null>(null);
   const update = useUpdateState();
-  const whatsNew = useWhatsNew(CHANGELOG, update.state?.currentVersion ?? null);
+  const whatsNew = useWhatsNew(CHANGELOG);
   const clientRef = useRef<DaemonClient | null>(null);
   // One set of clients per launch handle. Built here rather than inside the
   // panel so a toggle does not construct five API objects, and so the UI error
@@ -1172,7 +1172,7 @@ export function App(): React.JSX.Element {
             open={whatsNew.releases.length > 0}
             releases={whatsNew.releases}
             since={whatsNew.since}
-            current={update.state?.currentVersion ?? ''}
+            current={whatsNew.current ?? ''}
             onClose={whatsNew.dismiss}
             onOpenFullChangelog={() => {
               whatsNew.dismiss();

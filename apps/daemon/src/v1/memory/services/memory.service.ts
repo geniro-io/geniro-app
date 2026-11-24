@@ -2227,10 +2227,6 @@ export function entryOf(row: Memory, marksPurge: boolean): MemoryEntry {
   };
 }
 
-/**
- * The excerpt is masked BEFORE it is cut: a secret registered after the entry
- * was saved could otherwise straddle the cut and leave as an unmasked prefix.
- */
 function candidateOf(
   match: Pick<Memory, 'id' | 'handle' | 'projectId' | 'teamSlug'>,
   relevance: number,
@@ -2244,6 +2240,10 @@ function candidateOf(
   };
 }
 
+/**
+ * The excerpt is masked BEFORE it is cut: a secret registered after the entry
+ * was saved could otherwise straddle the cut and leave as an unmasked prefix.
+ */
 function toHit(row: Memory): MemoryHit {
   const { body, ...rest } = toEntry(row);
   return { ...rest, excerpt: excerptOf(redactSecrets(body)) };

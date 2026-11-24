@@ -1872,7 +1872,7 @@ describe('MemoryService', () => {
           USER,
           {
             title: 'Kitchen note',
-            body: 'press the skin gently, look for a yellow colour, smell the stem end and wait two more days when it is still firm papaya',
+            body: 'papaya bought from the market on sunday, peeled at home with lime juice, a pinch of salt and a spoon of honey after lunch',
             scope: 'team',
           },
           TEAM_A,

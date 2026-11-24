@@ -199,6 +199,10 @@ const api: GeniroApi = {
       workFolder,
       pullRequests,
     ) as ReturnType<GeniroApi['getChangesSince']>,
+  readFileLines: (request) =>
+    ipcRenderer.invoke(IPC.readFileLines, request) as ReturnType<
+      GeniroApi['readFileLines']
+    >,
   listWorktrees: (dir, startedAtMs) =>
     ipcRenderer.invoke(IPC.listWorktrees, dir, startedAtMs) as ReturnType<
       GeniroApi['listWorktrees']

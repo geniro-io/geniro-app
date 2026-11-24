@@ -299,6 +299,10 @@ export function installRemoteBridge(): void {
       invoke(IPC.getChangesTotals, [dir, sha]) as ReturnType<
         GeniroApi['getChangesTotals']
       >,
+    readFileLines: (request) =>
+      invoke(IPC.readFileLines, [request]) as ReturnType<
+        GeniroApi['readFileLines']
+      >,
     lineMeasurementsFlushed: (requestId) =>
       invoke(IPC.lineMeasurementsFlushed, [requestId]) as ReturnType<
         GeniroApi['lineMeasurementsFlushed']

@@ -67,6 +67,7 @@ import {
   configProfileNameSchema,
   detectClisOptionsSchema,
   epochMsSchema,
+  fileLinesRequestSchema,
   finderPathSchema,
   gitDirSchema,
   knowledgeExportSaveSchema,
@@ -105,6 +106,7 @@ import {
   type NotificationTarget,
 } from './notifications/notifications.service';
 import { openInTerminal } from './open-terminal';
+import { readFileLines } from './read-file-lines';
 import type { RemoteAccess } from './remote/remote-access';
 import { revealPath } from './reveal-path';
 import { saveArtifact } from './save-artifact';
@@ -618,6 +620,14 @@ export function registerIpc(
         workFolderFlagSchema.parse(workFolder) === true,
         changesPullRequestsSchema.parse(pullRequests),
       ),
+  );
+  handle(
+    IPC.readFileLines,
+    denyRemotely(
+      'reads files of a folder on the computer running geniro — a remote device shows the diff without the lines around it',
+    ),
+    (_event, request: unknown) =>
+      readFileLines(fileLinesRequestSchema.parse(request)),
   );
   // The candidates `getChangesSince` above is then asked about, so it reaches as far.
   handle(

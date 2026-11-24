@@ -1492,6 +1492,11 @@ export interface GitChange {
   path: string;
   status: GitChangeStatus;
   /**
+   * The path a renamed or copied file had before, relative to the repository
+   * root; null for every other status, untracked files included.
+   */
+  oldPath: string | null;
+  /**
    * The unified diff for this file, or null when there is none to show — an
    * untracked file past the per-read body budget, or a diff git could not
    * produce. Null is "no body", never "no change".
@@ -1538,6 +1543,40 @@ export interface GitChanges {
    * base — nothing newer shared, no remote to ask, or `movedOffStart`.
    */
   upstreamBase: GitUpstreamBase | null;
+  /**
+   * The full sha of the commit `changes` is measured against: the start, the
+   * upstream base, the fork point or HEAD. Null when the list could not be read.
+   */
+  baseSha: string | null;
+}
+
+/** The most lines one {@link GeniroApi.readFileLines} call returns. */
+export const FILE_LINES_MAX = 200;
+
+/** The largest file {@link GeniroApi.readFileLines} reads, in bytes. */
+export const FILE_LINES_MAX_BYTES = 4 * 1024 * 1024;
+
+/** One line range of a file of a changed folder, 1-based and inclusive. */
+export interface ReadFileLinesRequest {
+  /** A folder of the repository, as {@link GeniroApi.getChangesSince} takes it. */
+  dir: string;
+  /** Repository-root-relative, as {@link GitChange.path} names it. */
+  path: string;
+  /** The working copy, or the file as it stood at a commit. */
+  at: 'worktree' | { sha: string };
+  from: number;
+  to: number;
+}
+
+/**
+ * The lines {@link ReadFileLinesRequest} asked for. A refusal answers no lines,
+ * a total of 0 and the reason.
+ */
+export interface FileLines {
+  lines: string[];
+  /** The file's line count. */
+  total: number;
+  unavailableReason: string | null;
 }
 
 /** The commit a changes list is measured against, and the ref it came from. */
@@ -2096,6 +2135,12 @@ export interface GeniroApi {
     pullRequests?: readonly ChangesPullRequest[],
   ): Promise<GitChanges>;
   /**
+   * Lines `from`..`to` of one changed file: the working copy, or the file at
+   * a commit. Read-only, and desktop only — a paired device sees the diff
+   * without the lines around it.
+   */
+  readFileLines(request: ReadFileLinesRequest): Promise<FileLines>;
+  /**
    * The repository's LINKED worktrees other than `dir`'s own — never the main
    * checkout, nor one whose directory is gone — as real paths, empty when git
    * cannot answer. Candidates only: which of them a thread worked in is the
@@ -2586,6 +2631,7 @@ export const IPC = {
   getGitStamp: 'geniro:getGitStamp',
   getGitHead: 'geniro:getGitHead',
   getChangesSince: 'geniro:getChangesSince',
+  readFileLines: 'geniro:readFileLines',
   listWorktrees: 'geniro:listWorktrees',
   getChangesTotals: 'geniro:getChangesTotals',
   lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',

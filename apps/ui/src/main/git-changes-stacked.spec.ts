@@ -89,6 +89,7 @@ describe('readChangesSince', () => {
           sha: run(['rev-parse', 'origin/feature/stack']),
           ref: 'origin/feature/stack',
         });
+        expect(result.baseSha).toBe(run(['rev-parse', 'origin/feature/stack']));
         expect(result.changes.map((change) => change.path)).toEqual([
           'mine.txt',
         ]);
@@ -401,5 +402,6 @@ describe('readChangesSince', () => {
     const result = await readChangesSince(dir, 'c'.repeat(40));
 
     expect(result.unavailableReason).toBe('Not a git repository.');
+    expect(result.baseSha).toBeNull();
   });
 });

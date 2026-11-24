@@ -1032,6 +1032,7 @@ function main(): void {
         }
         return browser;
       },
+      runStartDeps,
     );
     const access = new RemoteAccess({
       ipcRegistry,

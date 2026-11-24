@@ -14,7 +14,6 @@ import { startTaskRunSchema } from './task-run.dto';
  */
 describe('startTaskRunSchema — startedBy reaches the service', () => {
   const valid = {
-    cwd: '/tmp/geniro-task-run-dto-spec',
     branch: 'geniro/task-1',
     from: 'todo',
   };

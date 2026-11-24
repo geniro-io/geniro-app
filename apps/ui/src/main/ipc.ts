@@ -28,7 +28,6 @@ import {
   readChangesTotals,
   readLinkedWorktrees,
 } from './git-changes';
-import { gitFailureLine } from './git-failure';
 import {
   carryChangesToBranch,
   pullBranch,
@@ -60,6 +59,7 @@ import {
   browserTabActionSchema,
   browserTabIdSchema,
   browserTabLabelSchema,
+  cardPressSchema,
   changesPullRequestsSchema,
   chatExportSaveSchema,
   cliKindSchema,
@@ -85,7 +85,6 @@ import {
   storageEntryNameSchema,
   storageEntryNamesSchema,
   taskIdSchema,
-  taskWorktreeSchema,
   terminalAckCharsSchema,
   terminalColsSchema,
   terminalCreateSchema,
@@ -115,11 +114,11 @@ import { saveMemoryExport } from './save-memory-export';
 import type { SearchModelService } from './search-model/search-model.service';
 import { readSettings, updateSettings } from './settings';
 import { showInFinder } from './show-in-finder';
+import { type RunStartDeps, startCardPress } from './task-run-start';
 import type { TerminalSessions } from './terminal-sessions';
 import type { UpdateService } from './update-service';
 import { reportMainLog } from './window-diagnostics';
 import {
-  prepareWorktree,
   pruneWorktreeForTask,
   removeWorktreeOnRequest,
   settleFinishedWorktree,
@@ -233,6 +232,8 @@ export function registerIpc(
   afterRestart?: (handle: DaemonHandle | null) => void,
   /** The in-app browser; a getter because it exists only once the egress proxy is up. */
   browser?: () => BrowserService,
+  /** What a board card's Run press starts with — the deps autopilot's starts use. */
+  cardRuns?: RunStartDeps,
 ): IpcRegistry {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
@@ -749,49 +750,20 @@ export function registerIpc(
       saveKnowledgeExport(knowledgeExportSaveSchema.parse(input)),
   );
 
-  // ALLOW_REMOTELY here and on `settleTaskWorktree` below, unlike
-  // `switchBranch`/`pullBranch` further down: both act only on a directory
-  // THIS APP made under its own userData folder (`worktree-service.ts`),
-  // bounded there by path, never on the user's own checkout — the same
-  // directory a task's run already works in, whether started from the
-  // desktop or from a paired phone.
-  handle(
-    IPC.prepareTaskWorktree,
-    ALLOW_REMOTELY,
-    async (_event, input: unknown) => {
-      const parsed = taskWorktreeSchema.parse(input);
-      try {
-        const made = await prepareWorktree(parsed, {
-          log: (level, message) => {
-            void reportMainLog(supervisor.getHandle(), level, message, {
-              source: 'worktree',
-            });
-          },
-        });
-        return {
-          ok: true,
-          path: made.path,
-          branch: made.branch,
-          reused: made.reused,
-          error: null,
-        };
-      } catch (error) {
-        // Shaped rather than rethrown: an exception crossing IPC arrives as a
-        // string with its structure gone, and the caller must be able to tell a
-        // failed worktree from a made one before it starts a run against it.
-        return {
-          ok: false,
-          path: null,
-          branch: null,
-          reused: false,
-          error: gitFailureLine(
-            error,
-            error instanceof Error ? error.message : String(error),
-          ),
-        };
-      }
-    },
-  );
+  // ALLOW_REMOTELY: a paired phone presses Run too. The press names only the
+  // card — main reads the folder the daemon holds for it, makes the worktree
+  // under its own userData folder and starts the run on the loopback route a
+  // paired device may not call.
+  handle(IPC.startTaskRun, ALLOW_REMOTELY, async (_event, press: unknown) => {
+    const parsed = cardPressSchema.parse(press);
+    const daemon = supervisor.getHandle();
+    if (daemon === null || cardRuns === undefined) {
+      return { ok: false, error: 'the daemon is not running' };
+    }
+    return startCardPress(cardRuns, daemon, parsed, (line) => {
+      void reportMainLog(daemon, 'warn', line, { source: 'worktree' });
+    });
+  });
 
   // Which cards' work the daemon calls finished, asked right before a removal.
   const finishedCards = (
@@ -812,9 +784,9 @@ export function registerIpc(
 
   // All three mutate the USER's own checkout — not an app-owned worktree — with
   // no one at the Mac to notice files changing under an editor that has that
-  // folder open. `prepareTaskWorktree`/`settleTaskWorktree` below are the
-  // safe half of this same list: they act on a directory this app made under
-  // its own data folder, which is why they stay allowed.
+  // folder open. `startTaskRun`/`settleTaskWorktree` above are the safe half
+  // of this same list: they act on a directory this app made under its own
+  // data folder, which is why they stay allowed.
   handle(
     IPC.switchBranch,
     denyRemotely(

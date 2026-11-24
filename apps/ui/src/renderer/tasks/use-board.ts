@@ -17,9 +17,7 @@ import type { DaemonApis } from '../daemon-api';
 import { describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { useAutopilotLimitLapse } from '../projects/use-autopilot-limit-lapse';
-import { currentRunSettings } from '../run-settings';
 import type { NewTaskAttachments } from './new-task-dialog';
-import { startTaskRun } from './start-task-run';
 import {
   readAsBase64,
   referencesStagedImage,
@@ -1025,24 +1023,32 @@ export function useBoard(
     setSelectedProjectId(projectId);
   }, []);
 
-  /** Press Run: start the card's agent in its worktree, see `startTaskRun`. */
+  /**
+   * Press Run: main makes the card's worktree and starts its agent there
+   * (`GeniroApi.startTaskRun`), then the card is read back to show its run.
+   */
   const runTask = useLatestCallback(
     async (taskId: string, prompt = ''): Promise<boolean> => {
       const task = tasks.find((row) => row.id === taskId);
-      const project = projects.find((row) => row.id === task?.projectId);
-      if (!apis || task === undefined || project === undefined) {
+      if (!apis || task === undefined) {
         return false;
       }
       setStartingTaskId(taskId);
       try {
-        const started = await startTaskRun({
-          apis,
-          bridge: window.geniro,
-          readRunSettings: currentRunSettings,
-          task,
-          project,
-          prompt,
+        const result = await window.geniro.startTaskRun({
+          taskId,
+          from: task.status,
+          ...(prompt.trim() === '' ? {} : { prompt: prompt.trim() }),
         });
+        if (!result.ok) {
+          setError(result.error);
+          return false;
+        }
+        const started = await apis.tasks.readTask({ taskId }).catch(() => null);
+        if (started === null) {
+          reload();
+          return true;
+        }
         setTasks((current) =>
           current.map((row) => (row.id === taskId ? started : row)),
         );
@@ -1054,7 +1060,7 @@ export function useBoard(
         setStartingTaskId(null);
       }
     },
-    [apis, projects, tasks],
+    [apis, tasks, reload],
   );
 
   const dismissError = useLatestCallback(() => {

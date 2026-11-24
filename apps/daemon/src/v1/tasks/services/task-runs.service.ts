@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -45,8 +45,12 @@ import {
   TASK_REPORT_INSTRUCTIONS,
   TASK_REPORT_INSTRUCTIONS_TEAM,
 } from '../utils/task-prompt';
+import { taskRunFolder, taskWorktreesRoot } from '../utils/task-worktree';
 import { LabelInstructionsService } from './label-instructions.service';
 import { TasksService } from './tasks.service';
+
+/** A card's start with the folder its run works in, which the daemon decides. */
+type PlacedTaskRun = StartTaskRun & { cwd: string };
 
 /** What a new run is made with, whichever start makes it. */
 interface NewRunSpec {
@@ -98,6 +102,7 @@ export class TaskRunsService {
    * and is refused at boot for its own reasons.
    */
   private readonly perProject = new Map<string, Promise<unknown>>();
+  private readonly worktreesRoot: string;
 
   constructor(
     private readonly em: EntityManager,
@@ -113,7 +118,11 @@ export class TaskRunsService {
     private readonly overlays: TeamOverlayService,
     private readonly runTeams: RunTeamService,
     private readonly turnFolders: TurnFolderService,
-  ) {}
+    /** Test seam only — nothing in the app passes it. */
+    @Optional() worktreesRoot?: string,
+  ) {
+    this.worktreesRoot = worktreesRoot ?? taskWorktreesRoot();
+  }
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
     if (!this.tasks.claimStart(taskId)) {
@@ -244,6 +253,15 @@ export class TaskRunsService {
     }
     await this.assertNotAlreadyRunning(task, em);
     await this.assertAutopilotMayStart(project, task, input);
+    const placed: PlacedTaskRun = {
+      ...input,
+      cwd: taskRunFolder(
+        task,
+        project.folder,
+        input.branch,
+        this.worktreesRoot,
+      ),
+    };
 
     // Read before the move below, so a failed lookup has no reservation to
     // undo.
@@ -276,8 +294,8 @@ export class TaskRunsService {
     // never sent into a team run, nor the reverse.
     const resumed =
       target.kind === 'agent'
-        ? await this.resume(task, input, target, labelInstructions, em)
-        : await this.resumeTeam(task, input, target, em);
+        ? await this.resume(task, placed, target, labelInstructions, em)
+        : await this.resumeTeam(task, placed, target, em);
     if (resumed !== null) {
       return resumed;
     }
@@ -297,7 +315,7 @@ export class TaskRunsService {
     try {
       const brief = this.brief(task, input);
       const run = await this.newRun(target, {
-        cwd: input.cwd,
+        cwd: placed.cwd,
         title: task.title,
         prompt: brief,
         settings: input,
@@ -307,7 +325,7 @@ export class TaskRunsService {
         owner: { taskId: task.id, ...identifierOf(task, project) },
       });
       runId = run.id;
-      const wire = await this.recordRun(taskId, run.id, input);
+      const wire = await this.recordRun(taskId, run.id, placed);
       // A team's seed prompt IS its opening message, persisted by the
       // executor; only a chat is sent its brief.
       if (target.kind === 'agent') {
@@ -457,7 +475,7 @@ export class TaskRunsService {
    */
   private async resume(
     task: Task,
-    input: StartTaskRun,
+    input: PlacedTaskRun,
     target: ResolvedAgentTarget,
     labelInstructions: string | null,
     em: EntityManager,
@@ -550,7 +568,10 @@ export class TaskRunsService {
    * Put a run its folder's deletion moved back into the worktree this press
    * just cut for its card, before the turn reads the row.
    */
-  private async returnToWorktree(run: Run, input: StartTaskRun): Promise<void> {
+  private async returnToWorktree(
+    run: Run,
+    input: PlacedTaskRun,
+  ): Promise<void> {
     await this.turnFolders.returnTo(run.id, input.cwd, {
       startSha: input.startSha ?? null,
       startDirty: input.startDirty ?? null,
@@ -559,7 +580,7 @@ export class TaskRunsService {
 
   private async resumeTeam(
     task: Task,
-    input: StartTaskRun,
+    input: PlacedTaskRun,
     target: ResolvedTeamTarget,
     em: EntityManager,
   ): Promise<TaskWire | null> {
@@ -684,7 +705,7 @@ export class TaskRunsService {
   private recordRun(
     taskId: string,
     runId: string,
-    input: StartTaskRun,
+    input: PlacedTaskRun,
   ): Promise<TaskWire> {
     return this.tasks.update(taskId, {
       runId,

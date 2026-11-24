@@ -4,6 +4,7 @@ import {
   type RunSettings,
   runSettingsOf,
   type Settings,
+  type TaskRunStartResult,
 } from '../shared/contracts';
 import { gitFailureLine } from './git-failure';
 
@@ -154,8 +155,9 @@ export async function runSnapshotOf(
 }
 
 /**
- * Post the run that starts the card in its prepared worktree. Throws the
- * daemon's refusal as a {@link DaemonRefusal}.
+ * Post the run that starts the card in its prepared worktree. The daemon finds
+ * that worktree itself from the card and the branch; the body never names a
+ * folder. Throws the daemon's refusal as a {@link DaemonRefusal}.
  */
 export async function startRunOn(
   deps: RunStartDeps,
@@ -163,21 +165,131 @@ export async function startRunOn(
   task: RunTask,
   worktree: Worktree,
   starter: RunStarter,
+  prompt = '',
 ): Promise<void> {
   await daemonPost(
     handle,
     `/v1/tasks/${encodeURIComponent(task.taskId)}/runs`,
     {
-      cwd: worktree.path,
       ...(worktree.branch === null ? {} : { branch: worktree.branch }),
       from: task.status,
       ...(starter.approval === undefined ? {} : { approval: starter.approval }),
       startedBy: starter.startedBy,
-      // The same snapshot a hand-pressed Run takes.
+      ...(prompt.trim() === '' ? {} : { prompt: prompt.trim() }),
       ...(await runSnapshotOf(deps, worktree.path)),
     },
     deps.fetchTimeoutMs,
   );
+}
+
+/**
+ * A person's Run press on a board card, from this Mac or a paired device: the
+ * card, the column the presser saw it in, and what they typed. Never a folder —
+ * the card's own is read from the daemon.
+ */
+export interface CardPress {
+  taskId: string;
+  from: string;
+  prompt?: string;
+}
+
+/**
+ * Start a card for a Run press: make its worktree from the folder the daemon
+ * holds for the card, post the start, and give back a worktree this press made
+ * when the start is refused ({@link mayGiveBack}). Answers the failure as the
+ * sentence to show rather than throwing it, since an error crossing IPC loses
+ * everything but its text.
+ */
+export async function startCardPress(
+  deps: RunStartDeps,
+  handle: DaemonHandle,
+  press: CardPress,
+  log: (line: string) => void,
+): Promise<TaskRunStartResult> {
+  let task: RunTask;
+  try {
+    task = await cardToRun(deps, handle, press);
+  } catch (error) {
+    return { ok: false, error: sentenceOf(error) };
+  }
+  const prepared = await prepareRunWorktree(deps, task);
+  if (!prepared.ok) {
+    return { ok: false, error: prepared.gitLine };
+  }
+  const worktree = prepared.worktree;
+  try {
+    await startRunOn(
+      deps,
+      handle,
+      task,
+      worktree,
+      { startedBy: 'user' },
+      press.prompt,
+    );
+    return { ok: true };
+  } catch (error) {
+    if (
+      !worktree.reused &&
+      (await mayGiveBack(deps, handle, task.taskId, error))
+    ) {
+      await deps.discardWorktree(task.taskId).catch((cleanup: unknown) => {
+        log(
+          `could not release the worktree for "${task.title}": ${messageOf(cleanup)}`,
+        );
+      });
+    }
+    return { ok: false, error: sentenceOf(error) };
+  }
+}
+
+/**
+ * TWIN PARSER: `TaskWireSchema` and `ProjectWireSchema` in the daemon
+ * (`v1/tasks/tasks.types.ts`, `v1/projects/projects.types.ts`), read here
+ * without the generated client, which is the renderer's.
+ */
+async function cardToRun(
+  deps: RunStartDeps,
+  handle: DaemonHandle,
+  press: CardPress,
+): Promise<RunTask> {
+  const card = await daemonRead<{
+    title?: unknown;
+    folder?: unknown;
+    projectId?: unknown;
+  }>(
+    handle,
+    `/v1/tasks/${encodeURIComponent(press.taskId)}`,
+    deps.fetchTimeoutMs,
+  );
+  if (typeof card.projectId !== 'string') {
+    throw new Error(`the card ${press.taskId} names no project`);
+  }
+  const folder =
+    typeof card.folder === 'string'
+      ? card.folder
+      : (
+          await daemonRead<{ folder?: unknown }>(
+            handle,
+            `/v1/projects/${encodeURIComponent(card.projectId)}`,
+            deps.fetchTimeoutMs,
+          )
+        ).folder;
+  if (typeof folder !== 'string' || folder.trim() === '') {
+    throw new Error(`the card ${press.taskId} has no folder to work in`);
+  }
+  return {
+    taskId: press.taskId,
+    title: typeof card.title === 'string' ? card.title : press.taskId,
+    status: press.from,
+    folder,
+  };
+}
+
+/** The daemon's own sentence for a refusal, else the error's text. */
+function sentenceOf(error: unknown): string {
+  return error instanceof DaemonRefusal && error.reason !== null
+    ? error.reason
+    : messageOf(error);
 }
 
 /** Tell the daemon a card's worktree could not be made or its start refused. */
@@ -248,6 +360,7 @@ export class DaemonRefusal extends Error {
     message: string,
     readonly status: number,
     readonly code: string | null,
+    readonly reason: string | null = null,
   ) {
     super(message);
   }
@@ -328,7 +441,12 @@ async function refusalOf(
     body === null
       ? `${method} ${path} answered ${res.status}`
       : `${method} ${path} answered ${res.status}: ${body.detail}`;
-  return new DaemonRefusal(line, res.status, body?.code ?? null);
+  return new DaemonRefusal(
+    line,
+    res.status,
+    body?.code ?? null,
+    body?.reason ?? null,
+  );
 }
 
 /**
@@ -342,7 +460,9 @@ async function refusalOf(
  * expected shape falls back to its own text, trimmed to something a log line
  * can hold.
  */
-function bodyOf(body: string): { detail: string; code: string | null } | null {
+function bodyOf(
+  body: string,
+): { detail: string; code: string | null; reason: string | null } | null {
   const text = body.trim();
   if (text === '') {
     return null;
@@ -367,6 +487,7 @@ function bodyOf(body: string): { detail: string; code: string | null } | null {
         return {
           detail: code === null ? message : `${code} — ${message}`,
           code,
+          reason: message,
         };
       }
     }
@@ -379,5 +500,6 @@ function bodyOf(body: string): { detail: string; code: string | null } | null {
         ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
         : text,
     code: null,
+    reason: null,
   };
 }

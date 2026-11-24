@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,6 +103,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
    * a raw `mkdtempSync` result fails this round-trip on macOS only.
    */
   let worktree: string;
+  /** Where the service finds each card's worktree, as `<userData>/worktrees`. */
+  let worktreesRoot: string;
   let createChat: Mock;
   let sendMessage: Mock;
   let updateSettings: ReturnType<typeof vi.fn>;
@@ -185,14 +187,16 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   });
 
   const start = (over: Partial<StartTaskRun> = {}): StartTaskRun => ({
-    cwd: worktree,
     branch: 'geniro/task-1',
     from: 'todo',
     ...over,
   });
 
   beforeAll(async () => {
-    worktree = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-task-run-')));
+    worktreesRoot = realpathSync(
+      mkdtempSync(join(tmpdir(), 'geniro-task-run-')),
+    );
+    worktree = worktreesRoot;
     orm = await MikroORM.init(
       defineConfig({
         ...GENIRO_ORM_RUNTIME,
@@ -209,7 +213,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
   afterAll(async () => {
     await orm.close(true);
-    rmSync(worktree, { recursive: true, force: true });
+    rmSync(worktreesRoot, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -394,6 +398,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           new AgentSessionRegistry(4),
         );
       })(),
+      worktreesRoot,
     );
     // Asks by default, so a team card is unattended-incapable unless a test
     // says otherwise.
@@ -407,6 +412,12 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     projectId = project.id;
   });
 
+  /** What Electron main does before it starts a card: make its worktree. */
+  const cutWorktree = (taskId: string): void => {
+    worktree = join(worktreesRoot, taskId);
+    mkdirSync(worktree);
+  };
+
   const seed = async (over: { title?: string; description?: string } = {}) => {
     const task = await tasks.create({
       projectId,
@@ -414,6 +425,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       description: over.description,
     });
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+    cutWorktree(task.id);
     return task;
   };
 
@@ -678,21 +690,54 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(stored?.runId).toBe('run-1');
   });
 
-  it('records a run started in a folder with no branch as working in that folder, clearing a branch an earlier run left', async () => {
+  it("records a run started with no branch as working in the card's own folder, clearing a branch an earlier run left", async () => {
     const task = await seed();
-    await taskDao.updateById(task.id, { branch: 'geniro/task-earlier' });
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-no-git-')));
+    await taskDao.updateById(task.id, {
+      branch: 'geniro/task-earlier',
+      folder,
+    });
 
     const started = await service.start(task.id, start({ branch: undefined }));
 
+    expect(createChat.mock.calls[0]![0]).toMatchObject({ cwd: folder });
     expect(started).toMatchObject({
       status: 'in_progress',
       runId: 'run-1',
       branch: null,
-      worktreePath: worktree,
+      worktreePath: folder,
     });
-    expect(
-      startTaskRunSchema.safeParse({ cwd: worktree, from: 'todo' }).success,
-    ).toBe(true);
+    expect(startTaskRunSchema.safeParse({ from: 'todo' }).success).toBe(true);
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("runs a card with no folder of its own and no branch in its project's folder", async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-project-')));
+    await projectDao.updateById(projectId, { folder });
+    const task = await seed();
+
+    await service.start(task.id, start({ branch: undefined }));
+
+    expect(createChat.mock.calls[0]![0]).toMatchObject({ cwd: folder });
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("runs in the card's own worktree under userData, never a cwd the body names", async () => {
+    const task = await seed();
+    const elsewhere = realpathSync(
+      mkdtempSync(join(tmpdir(), 'geniro-elsewhere-')),
+    );
+
+    const started = await service.start(task.id, {
+      ...start(),
+      cwd: elsewhere,
+    } as StartTaskRun);
+
+    expect(createChat.mock.calls[0]![0]).toMatchObject({
+      cwd: join(worktreesRoot, task.id),
+    });
+    expect(started.worktreePath).toBe(join(worktreesRoot, task.id));
+    rmSync(elsewhere, { recursive: true, force: true });
   });
 
   it('starts the chat at the project’s context window and model parameters', async () => {
@@ -740,6 +785,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
     const task = await tasks.create({ projectId: loose.id, title: 'ship it' });
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+    cutWorktree(task.id);
     resolveAutoGroupId.mockResolvedValueOnce('folder-group');
 
     await service.start(task.id, start());
@@ -807,6 +853,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
     const task = await tasks.create({ projectId: named.id, title: 'ship it' });
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+    cutWorktree(task.id);
 
     await service.start(task.id, start());
 

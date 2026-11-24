@@ -137,8 +137,9 @@ export class CommandCenterController {
     return this.starts.startThreadRun(startId, dto);
   }
 
-  /** The drain could not start it (a card's start, or a cardless one): the request ends and the manager is told. */
+  /** The drain could not start it (a card's start, or a cardless one): the request ends and the manager is told — desktop only: only Electron main's drain reports one. */
   @Post('starts/:startId/failed')
+  @UseGuards(DesktopOnlyGuard)
   @HttpCode(204)
   @ApiOperation({ operationId: 'reportCommandCenterStartFailed' })
   failed(

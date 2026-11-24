@@ -1584,32 +1584,13 @@ export interface ChangesBaseUnreachable {
 }
 
 /**
- * The outcome of preparing a task's worktree.
- *
- * A RESULT rather than a throw, on `BranchSwitchResult`'s own terms: this
- * crosses IPC, where an exception arrives as a string with its shape gone, and
- * the caller has a real decision to make on a failure — it must not go on to
- * start a run against a worktree that was never made.
+ * How a Run press on a board card ended. A RESULT rather than a throw, on
+ * `BranchSwitchResult`'s own terms: this crosses IPC, where an exception
+ * arrives as a string with its shape gone. `error` is the sentence to show —
+ * git's own first line when the worktree could not be made, else the daemon's
+ * refusal.
  */
-export interface TaskWorktreeResult {
-  ok: boolean;
-  /** Where the agent will work; null when the worktree could not be made. */
-  path: string | null;
-  /**
-   * The branch it has checked out; null on failure, and for a folder in no
-   * repository, where the run works in the folder itself.
-   */
-  branch: string | null;
-  /**
-   * Whether this was the task's OWN worktree, already standing and handed back
-   * as it was rather than made now. A caller whose start is then refused must
-   * leave a reused one alone: another run of this same task may be why the
-   * start was refused, and be working in it. False on failure.
-   */
-  reused: boolean;
-  /** Why it failed, as git's own first line; null on success. */
-  error: string | null;
-}
+export type TaskRunStartResult = { ok: true } | { ok: false; error: string };
 
 /**
  * What became of a finished card's worktree.
@@ -2237,16 +2218,16 @@ export interface GeniroApi {
     markdown: string;
   }): Promise<FileSaveResult>;
   /**
-   * Make the worktree and branch a task's agent will work in.
-   *
-   * Here rather than in the daemon because every git call this app makes
-   * belongs to the main process. The daemon is told the path afterwards and
-   * records it; it never creates one.
+   * Press Run on a board card: main makes the card's worktree from the folder
+   * the daemon holds for it (every git call this app makes is main's) and
+   * starts its run. Takes no folder: the run works where the card says.
    */
-  prepareTaskWorktree(input: {
+  startTaskRun(press: {
     taskId: string;
-    folder: string;
-  }): Promise<TaskWorktreeResult>;
+    /** The column the presser saw the card in; a start against a moved card loses. */
+    from: string;
+    prompt?: string;
+  }): Promise<TaskRunStartResult>;
   /**
    * Take down the worktree a task was given, keeping its BRANCH.
    *
@@ -2608,7 +2589,7 @@ export const IPC = {
   listWorktrees: 'geniro:listWorktrees',
   getChangesTotals: 'geniro:getChangesTotals',
   lineMeasurementsFlushed: 'geniro:lineMeasurementsFlushed',
-  prepareTaskWorktree: 'geniro:prepareTaskWorktree',
+  startTaskRun: 'geniro:startTaskRun',
   pruneTaskWorktree: 'geniro:pruneTaskWorktree',
   settleTaskWorktree: 'geniro:settleTaskWorktree',
   openInTerminal: 'geniro:openInTerminal',

@@ -419,9 +419,9 @@ export const TASKS_AWAITING_MERGE_MAX = 100;
 /**
  * What starting a run for one task needs to know.
  *
- * `cwd` and `branch` are the caller's because the daemon runs no git: the
- * Electron main process makes the worktree and names the branch, and this
- * module records what it is told. `from` is the status the caller believed the
+ * `branch` is the caller's because the daemon runs no git: Electron main makes
+ * the worktree and names the branch. The folder the run works in is the
+ * daemon's own reading of the card (`taskRunFolder`). `from` is the status the caller believed the
  * card was in, on {@link TaskStatusMove}'s own terms — starting a run moves
  * the card, so a start computed against a stale one must lose.
  *
@@ -462,7 +462,6 @@ export interface ProjectRunStart extends Pick<
 }
 
 export interface StartTaskRun {
-  cwd: string;
   branch?: string;
   from: TaskStatus;
   /**

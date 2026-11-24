@@ -107,25 +107,14 @@ beforeEach(() => {
   mocks.createTask.mockImplementation(({ createTaskDto }) =>
     Promise.resolve(card({ id: 'new', title: createTaskDto.title })),
   );
-  mocks.startTaskRun.mockImplementation(({ startTaskRunDto }) =>
-    Promise.resolve(
-      card({
-        status: TaskStatus.InProgress,
-        runId: 'run-1',
-        branch: startTaskRunDto.branch,
-        worktreePath: startTaskRunDto.cwd,
-      }),
-    ),
+  // Read back after a started press, for the card with its run on it.
+  mocks.readTask.mockResolvedValue(
+    card({ status: TaskStatus.InProgress, runId: 'run-1' }),
   );
-  // Read after a REFUSED press, to learn whether another start of the card is
-  // using the worktree the press made — by default nothing is, the card
-  // still being where the press found it.
-  mocks.readTask.mockResolvedValue(card());
   window.geniro = createPreloadStub();
-  // The stub answers correctly but its methods are plain functions; these two
-  // are asserted ON, so they need to be spies over the stub's own behaviour.
-  window.geniro.prepareTaskWorktree = vi.fn(window.geniro.prepareTaskWorktree);
-  window.geniro.pruneTaskWorktree = vi.fn(window.geniro.pruneTaskWorktree);
+  // The stub answers correctly but its methods are plain functions; this one
+  // is asserted ON, so it needs to be a spy over the stub's own behaviour.
+  window.geniro.startTaskRun = vi.fn(window.geniro.startTaskRun);
 });
 
 afterEach(() => {
@@ -1537,33 +1526,23 @@ describe('the column surface', () => {
     });
   };
 
-  it('runs a task: worktree first, then the agent inside it', async () => {
+  it('runs a task through main, naming only the card and the column it was seen in', async () => {
     const el = await board();
     await openDetail(el);
 
     await runTask(el);
 
-    // The worktree must exist before the daemon is asked to run in it — the
-    // daemon runs no git and cannot make one for itself.
-    expect(window.geniro.prepareTaskWorktree).toHaveBeenCalledWith({
+    // Main makes the worktree from the folder the daemon holds for the card and
+    // starts the run on a route a paired device may not call; the press itself
+    // names no folder, so it cannot choose where the run works.
+    expect(window.geniro.startTaskRun).toHaveBeenCalledWith({
       taskId: 't1',
-      folder: '/w',
+      // What THIS board believed the card was in, so a start against a card
+      // someone else already moved is refused rather than applied.
+      from: TaskStatus.Todo,
     });
-    expect(mocks.startTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: 't1',
-        startTaskRunDto: expect.objectContaining({
-          cwd: '/tmp/geniro-worktrees/t1',
-          branch: 'geniro/task-t1',
-          // What THIS board believed the card was in, so a start against a
-          // card someone else already moved is refused rather than applied.
-          from: TaskStatus.Todo,
-        }),
-      }),
-    );
-    // Moving the prune into a `finally` would destroy the worktree on every
-    // SUCCESSFUL start, and both run tests would stay green without this.
-    expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
+    expect(mocks.startTaskRun).not.toHaveBeenCalled();
+    expect(mocks.readTask).toHaveBeenCalledWith({ taskId: 't1' });
   });
 
   it('asks what to add before it starts anything', async () => {
@@ -1579,8 +1558,7 @@ describe('the column surface', () => {
     });
 
     expect(el.querySelector('[data-slot="run-task"]')).not.toBeNull();
-    expect(mocks.startTaskRun).not.toHaveBeenCalled();
-    expect(window.geniro.prepareTaskWorktree).not.toHaveBeenCalled();
+    expect(window.geniro.startTaskRun).not.toHaveBeenCalled();
   });
 
   it('carries what was typed there into the run', async () => {
@@ -1589,12 +1567,8 @@ describe('the column surface', () => {
 
     await runTask(el, 'The tests still fail.');
 
-    expect(mocks.startTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        startTaskRunDto: expect.objectContaining({
-          prompt: 'The tests still fail.',
-        }),
-      }),
+    expect(window.geniro.startTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: 'The tests still fail.' }),
     );
   });
 
@@ -1607,83 +1581,26 @@ describe('the column surface', () => {
 
     await runTask(el);
 
-    const sent = mocks.startTaskRun.mock.calls[0]?.[0] as {
-      startTaskRunDto: Record<string, unknown>;
-    };
-    expect('prompt' in sent.startTaskRunDto).toBe(false);
+    const sent = vi.mocked(window.geniro.startTaskRun).mock.calls[0]?.[0];
+    expect(sent).toBeDefined();
+    expect('prompt' in (sent ?? {})).toBe(false);
   });
 
-  // A project's folder is the DEFAULT for its board, not the law: one board
-  // routinely holds work across several checkouts. A card that names its own
-  // is cut from that one, and the project's is what an unnamed card takes —
-  // the test above is the other half of this pair.
-  it('cuts from the folder the CARD names, not the project one', async () => {
-    mocks.reconcileTasks.mockResolvedValue([card({ folder: '/elsewhere' })]);
-    const el = await board();
-    await openDetail(el);
-
-    await runTask(el);
-
-    expect(window.geniro.prepareTaskWorktree).toHaveBeenCalledWith({
-      taskId: 't1',
-      folder: '/elsewhere',
-    });
-  });
-
-  it('removes the worktree it just made when the run cannot be started', async () => {
-    mocks.startTaskRun.mockRejectedValueOnce(new Error('daemon said no'));
-    const el = await board();
-    await openDetail(el);
-
-    await runTask(el);
-
-    // Otherwise every failed press leaves a checkout on disk for a card whose
-    // work may never be finished, which is all the reaper ever collects.
-    expect(window.geniro.pruneTaskWorktree).toHaveBeenCalledWith('t1');
-    expect(el.textContent).toContain('daemon said no');
-  });
-
-  it('leaves the task’s OWN worktree alone when the run cannot be started', async () => {
-    // A reused worktree was not made by this press — it is the task's own,
-    // standing from an earlier run — and a refused start may mean that run is
-    // still working in it. Giving it back would take its cwd away.
-    window.geniro.prepareTaskWorktree = vi.fn(() =>
+  it('shows the reason main gives when the run could not be started, and reads no card back', async () => {
+    window.geniro.startTaskRun = vi.fn(() =>
       Promise.resolve({
-        ok: true,
-        path: '/tmp/geniro-worktrees/t1',
-        branch: 'geniro/task-t1',
-        reused: true,
-        error: null,
-      }),
-    );
-    mocks.startTaskRun.mockRejectedValueOnce(new Error('TASK_ALREADY_RUNNING'));
-    const el = await board();
-    await openDetail(el);
-
-    await runTask(el);
-
-    expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
-    expect(el.textContent).toContain('TASK_ALREADY_RUNNING');
-  });
-
-  it('does not start a run when the worktree could not be made', async () => {
-    window.geniro = createPreloadStub();
-    window.geniro.prepareTaskWorktree = vi.fn(() =>
-      Promise.resolve({
-        ok: false,
-        path: null,
-        branch: null,
-        reused: false,
+        ok: false as const,
         error: 'fatal: not a git repository',
       }),
     );
     const el = await board();
     await openDetail(el);
+    mocks.readTask.mockClear();
 
     await runTask(el);
 
-    expect(mocks.startTaskRun).not.toHaveBeenCalled();
     expect(el.textContent).toContain('fatal: not a git repository');
+    expect(mocks.readTask).not.toHaveBeenCalled();
   });
 
   it('refuses to start a card an agent is already working', async () => {

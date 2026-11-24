@@ -3,10 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  DEFAULT_SETTINGS,
-  type TaskWorktreeSettleResult,
-} from '../../shared/contracts';
+import { type TaskWorktreeSettleResult } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   BlockedTask,
@@ -689,23 +686,50 @@ describe('useBoard', () => {
     expect(prune).toHaveBeenCalledWith('t1');
   });
 
-  it('starts a run carrying the user’s agent options and reply language, as a chat does', async () => {
-    const agentOptions = { 'cursor-agent': { maxMode: false } };
-    window.geniro = createPreloadStub({
-      getSettings: () =>
-        Promise.resolve({
-          ...DEFAULT_SETTINGS,
-          onboardingComplete: true,
-          agentOptions,
-          replyLanguage: ' Russian ',
-        }),
-    });
+  it('starts a run through main and puts the card it reads back on the board', async () => {
+    window.geniro = createPreloadStub();
+    const startTaskRun = vi.fn(() => Promise.resolve({ ok: true as const }));
+    window.geniro.startTaskRun = startTaskRun;
     const { apis } = stubApis();
-    const startTaskRun = vi.fn().mockResolvedValue(task());
-    (
-      apis.tasks as unknown as { startTaskRun: typeof startTaskRun }
-    ).startTaskRun = startTaskRun;
+    const startTaskRunApi = vi.fn();
+    Object.assign(apis.tasks, {
+      startTaskRun: startTaskRunApi,
+      readTask: vi
+        .fn()
+        .mockResolvedValue(task({ status: 'in_progress', runId: 'run-1' })),
+    });
     const board = await mount(apis);
+
+    let started = false;
+    await act(async () => {
+      started = await board.current.runTask('t1', '  the tests still fail ');
+    });
+
+    expect(started).toBe(true);
+    expect(startTaskRun).toHaveBeenCalledWith({
+      taskId: 't1',
+      from: 'todo',
+      prompt: 'the tests still fail',
+    });
+    expect(startTaskRunApi).not.toHaveBeenCalled();
+    expect(board.current.tasks.find((row) => row.id === 't1')).toMatchObject({
+      status: 'in_progress',
+      runId: 'run-1',
+    });
+  });
+
+  it('counts a started run as started when reading the card back fails, and reloads the board instead', async () => {
+    window.geniro = createPreloadStub();
+    window.geniro.startTaskRun = vi.fn(() =>
+      Promise.resolve({ ok: true as const }),
+    );
+    const { apis } = stubApis();
+    const board = await mount(apis);
+    Object.assign(apis.tasks, {
+      readTask: vi.fn().mockRejectedValue(new Error('timed out')),
+    });
+    const reconcile = apis.tasks.reconcileTasks as ReturnType<typeof vi.fn>;
+    const readsBefore = reconcile.mock.calls.length;
 
     let started = false;
     await act(async () => {
@@ -713,15 +737,25 @@ describe('useBoard', () => {
     });
 
     expect(started).toBe(true);
-    expect(startTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: 't1',
-        startTaskRunDto: expect.objectContaining({
-          agentOptions,
-          replyLanguage: 'Russian',
-        }),
-      }),
+    expect(board.current.error).toBeNull();
+    expect(reconcile.mock.calls.length).toBeGreaterThan(readsBefore);
+  });
+
+  it('shows main’s reason and starts nothing when the press fails', async () => {
+    window.geniro = createPreloadStub();
+    window.geniro.startTaskRun = vi.fn(() =>
+      Promise.resolve({ ok: false as const, error: 'no agent or team' }),
     );
+    const { apis } = stubApis();
+    const board = await mount(apis);
+
+    let started = true;
+    await act(async () => {
+      started = await board.current.runTask('t1');
+    });
+
+    expect(started).toBe(false);
+    expect(board.current.error).toBe('no agent or team');
   });
 
   it('keeps the card, and says why, when the delete is refused', async () => {
@@ -1275,97 +1309,6 @@ describe('useBoard', () => {
 
       expect(prune).not.toHaveBeenCalled();
     });
-  });
-});
-
-/**
- * A refused Run press, and the worktree the press made for it.
- *
- * The worktree lives at ONE path per task, so the autopilot starting the same
- * card a moment later is handed the directory this press made, as `reused`.
- * When THAT start is the one the daemon took, this refusal is the loser's, and
- * pruning the clean tree takes the cwd out from under the agent it started.
- */
-describe('pressing Run when the daemon refuses the start', () => {
-  /** A refusal in the daemon's uniform shape, as `createDaemonApis` throws it. */
-  const refusal = (status: number, code: string, message: string): Error =>
-    new Error(
-      `daemon POST /v1/tasks/t1/runs failed (${status}): ${JSON.stringify({
-        statusCode: status,
-        code,
-        message,
-      })}`,
-    );
-
-  const press = async (
-    refused: Error,
-    card: TaskDto | Error,
-  ): Promise<{ prune: ReturnType<typeof vi.fn> }> => {
-    window.geniro = createPreloadStub();
-    const prune = vi.fn(() => Promise.resolve(true));
-    window.geniro.pruneTaskWorktree = prune;
-    const { apis } = stubApis();
-    Object.assign(apis.tasks, {
-      startTaskRun: vi.fn().mockRejectedValue(refused),
-      readTask:
-        card instanceof Error
-          ? vi.fn().mockRejectedValue(card)
-          : vi.fn().mockResolvedValue(card),
-    });
-    const board = await mount(apis);
-    let started = true;
-    await act(async () => {
-      started = await board.current.runTask('t1');
-    });
-    expect(started).toBe(false);
-    return { prune };
-  };
-
-  it('gives back a worktree it made when nothing else is using it', async () => {
-    const { prune } = await press(
-      refusal(400, 'NO_RUN_TARGET', 'no agent or team'),
-      task({ status: 'todo' }),
-    );
-
-    expect(prune).toHaveBeenCalledWith('t1');
-  });
-
-  it('keeps it when the refusal names another start of the card', async () => {
-    // That start may not have moved the card yet, so the card alone could not
-    // say so — it still reads `todo` here.
-    const { prune } = await press(
-      refusal(409, 'TASK_RUN_STARTING', 'task t1 is already starting a run'),
-      task({ status: 'todo' }),
-    );
-
-    expect(prune).not.toHaveBeenCalled();
-  });
-
-  it('keeps it when the card is being worked once the refusal lands', async () => {
-    const { prune } = await press(
-      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 is in in_progress'),
-      task({ status: 'in_progress' }),
-    );
-
-    expect(prune).not.toHaveBeenCalled();
-  });
-
-  it('gives it back when the card is gone', async () => {
-    const { prune } = await press(
-      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
-      refusal(404, 'TASK_NOT_FOUND', 'no task with id t1'),
-    );
-
-    expect(prune).toHaveBeenCalledWith('t1');
-  });
-
-  it('keeps it when the card cannot be read', async () => {
-    const { prune } = await press(
-      refusal(400, 'TASK_STATUS_CONFLICT', 'task t1 moved'),
-      new Error('daemon GET /v1/tasks/t1 failed (500): upstream'),
-    );
-
-    expect(prune).not.toHaveBeenCalled();
   });
 });
 

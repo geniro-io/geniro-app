@@ -189,8 +189,8 @@ describe('ThreadStartConductor', () => {
     });
     expect(starts).toHaveLength(1);
     expect(starts[0]?.path).toBe('/v1/tasks/t1/runs');
+    expect(starts[0]?.body).not.toHaveProperty('cwd');
     expect(starts[0]?.body).toMatchObject({
-      cwd: '/wt/t1',
       branch: 'geniro/t1',
       from: 'todo',
       startedBy: 'manager',

@@ -1,8 +1,16 @@
 name: Model assets
 
-# Publishes the search model's files to their pre-release tag. Run by hand from
-# main; the app downloads the model from that tag.
+# Publishes the search model's files to the pre-release tag the manifest names;
+# the app downloads the model from that tag. Runs by itself when a push to main
+# changes the manifest or this file, and by hand from main. A pre-release that
+# already holds every file of the manifest, uploaded whole, is left as it is.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/ui/src/main/search-model/search-model.manifest.json
+      - .github/workflows/model-assets.yaml
   workflow_dispatch:
 
 permissions:
@@ -21,7 +29,58 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v5
 
+      - name: Check the published pre-release against the manifest
+        id: published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_SLUG: ${{ github.repository }}
+          MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
+        run: |
+          set -euo pipefail
+          tag="$(jq -r '.tag' "$MANIFEST")"
+          release="$RUNNER_TEMP/release.json"
+          if ! gh api "repos/$REPO_SLUG/releases/tags/$tag" > "$release" 2> "$RUNNER_TEMP/release.err"; then
+            if grep -q 'HTTP 404' "$RUNNER_TEMP/release.err"; then
+              echo "No release for $tag yet: publishing it."
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/release.err" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.prerelease' "$release")" != "true" ]]; then
+            echo "error: the release $tag exists but is not a pre-release; the model must never be a regular release" >&2
+            exit 1
+          fi
+          asset_of() {
+            jq -r --arg name "$1" '[.assets[] | select(.name == $name)][0] // {} | [(.state // "absent"), ((.size // 0) | tostring), (.digest // "")] | @tsv' "$release"
+          }
+          stale=()
+          while IFS=$'\t' read -r name bytes sha256; do
+            IFS=$'\t' read -r state size digest < <(asset_of "$name")
+            if [[ "$state" != "uploaded" ]]; then
+              stale+=("$name is $state")
+            elif [[ "$size" != "$bytes" ]]; then
+              stale+=("$name is $size bytes, the manifest says $bytes")
+            elif [[ -n "$digest" && "$digest" != "sha256:$sha256" ]]; then
+              stale+=("$name has $digest, the manifest says sha256:$sha256")
+            fi
+          done < <(jq -r '.files[] | [.name, (.bytes | tostring), .sha256] | @tsv' "$MANIFEST")
+          IFS=$'\t' read -r state size _ < <(asset_of SHA256SUMS.txt)
+          if [[ "$state" != "uploaded" || "$size" == "0" ]]; then
+            stale+=("SHA256SUMS.txt is $state")
+          fi
+          if (( ${#stale[@]} == 0 )); then
+            echo "The pre-release $tag already holds every file of the manifest: nothing to publish."
+            echo "Nothing to publish: \`$tag\` already holds every file of the manifest." >> "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'Publishing %s: %s\n' "$tag" "${stale[@]}"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
       - name: Download the files and check them against the manifest
+        if: steps.published.outputs.publish == 'true'
         env:
           MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
         run: |
@@ -48,15 +107,16 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Publish the pre-release
+        if: steps.published.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_SLUG: ${{ github.repository }}
           MANIFEST: apps/ui/src/main/search-model/search-model.manifest.json
-          TITLE: 'Search model: EmbeddingGemma 2 (daa72c5)'
         run: |
           set -euo pipefail
           tag="$(jq -r '.tag' "$MANIFEST")"
           revision="$(jq -r '.revision' "$MANIFEST")"
+          title="Search model: EmbeddingGemma 2 (${revision:0:7})"
           mapfile -t names < <(jq -r '.files[].name' "$MANIFEST")
           assets=()
           for name in "${names[@]}"; do
@@ -71,5 +131,5 @@ jobs:
           if gh release view "$tag" -R "$REPO_SLUG" > /dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" -R "$REPO_SLUG" --clobber
           else
-            gh release create "$tag" "${assets[@]}" -R "$REPO_SLUG" --target "$GITHUB_SHA" --prerelease --title "$TITLE" --notes "$notes"
+            gh release create "$tag" "${assets[@]}" -R "$REPO_SLUG" --target "$GITHUB_SHA" --prerelease --title "$title" --notes "$notes"
           fi

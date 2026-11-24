@@ -137,7 +137,9 @@ export class RunTeardownService {
     let live: boolean;
     try {
       const run = await this.runDao.getById(runId, em.fork());
-      live = run !== null && run.archivedAt == null;
+      live =
+        run !== null &&
+        (run.archivedAt === null || run.archivedAt === undefined);
     } catch (err) {
       this.logger.warn(
         `run ${runId}: could not read whether it is still live after a failed archive or delete; it stays ended: ${String(err)}`,
@@ -214,7 +216,7 @@ export class RunTeardownService {
       // deleted at the end, once every process is closed and the run is gone.
       const run = await this.runDao.getById(runId, em);
       const transcripts =
-        run?.archivedAt != null
+        run?.archivedAt !== null && run?.archivedAt !== undefined
           ? {
               createdAt: run.createdAt,
               targets: await this.transcripts.collect(run, em),

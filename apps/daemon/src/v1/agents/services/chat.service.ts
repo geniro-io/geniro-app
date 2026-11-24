@@ -5676,7 +5676,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           mapped.kind,
           mapped.role,
           {
-            ...(mapped.payload as Record<string, unknown>),
+            ...mapped.payload,
             ...ownerFields(delegate),
           },
           delegate.memberId,
@@ -5802,7 +5802,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             mapped.kind,
             mapped.role,
             {
-              ...(mapped.payload as Record<string, unknown>),
+              ...mapped.payload,
               ...ownerFields(shell),
             },
             shell.memberId,

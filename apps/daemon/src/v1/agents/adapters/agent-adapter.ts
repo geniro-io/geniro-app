@@ -2464,7 +2464,7 @@ export abstract class AgentAdapter {
   spawnedConversations(
     _conversationIds: readonly string[],
   ): Promise<Map<string, string[]>> {
-    return Promise.resolve(new Map());
+    return Promise.resolve(new Map<string, string[]>());
   }
 
   /**

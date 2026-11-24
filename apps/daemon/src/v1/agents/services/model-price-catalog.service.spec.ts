@@ -271,7 +271,7 @@ describe('ModelPriceCatalog', () => {
       now += MODEL_PRICES_REFRESH_AFTER_MS;
       const before = readFileSync(file, 'utf8');
 
-      const prices = catalog(failing as ModelPriceFetch);
+      const prices = catalog(failing);
       await expect(prices.refreshIfStale()).resolves.toBeUndefined();
 
       expect(prices.priceOf('openai', 'gpt-6-astra')?.input).toBe(10);

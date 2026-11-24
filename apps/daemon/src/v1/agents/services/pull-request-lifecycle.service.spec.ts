@@ -244,7 +244,9 @@ describe('PullRequestLifecycleService', () => {
     const run: GhCommandRunner = async (command) => {
       inFlight += 1;
       most = Math.max(most, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
       inFlight -= 1;
       return command.args[1] === 'graphql'
         ? ok(pullRequest('MERGED'))

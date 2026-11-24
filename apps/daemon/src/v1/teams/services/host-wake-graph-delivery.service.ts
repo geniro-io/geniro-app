@@ -41,7 +41,7 @@ export class HostWakeGraphDelivery implements OnModuleInit {
         return;
       }
       const key = heldKey(wake.owner.runId, wake.owner.caller);
-      const held = this.held.get(key) ?? new Map();
+      const held = this.held.get(key) ?? new Map<string, HostWake>();
       held.set(wake.key, wake);
       this.held.set(key, held);
       this.release(wake.owner.runId, wake.owner.caller);

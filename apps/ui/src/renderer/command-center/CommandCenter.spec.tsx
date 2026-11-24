@@ -4,29 +4,36 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../../shared/contracts';
+import type * as chatsUseThreadPullRequestsModule from '../chats/use-thread-pull-requests';
+import type * as componentsUiSelectModule from '../components/ui/select';
+import type * as daemonApiModule from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { CommandCenter } from './CommandCenter';
 import type { GraphViewProps } from './graph-view';
 import { ThreadCard } from './thread-card';
 import type { ThreadCardChatProps } from './thread-card-chat';
+import type * as useOpenRequestsModule from './use-open-requests';
 
-const { probes, fakes } = vi.hoisted(() => ({
-  probes: {
-    graph: null as GraphViewProps | null,
-    dock: null as { onOpenThread: (runId: string) => void } | null,
-  },
-  fakes: {
-    board: null as unknown,
-    timeline: null as unknown,
-    requests: null as unknown,
-    projects: null as unknown,
-    sources: null as unknown,
-    capabilities: null as unknown,
-    managerChoice: null as unknown,
-    pullRequests: null as unknown,
-    apis: null as unknown,
-  },
-}));
+const { probes, fakes } = vi.hoisted(() => {
+  const unset: unknown = null;
+  return {
+    probes: {
+      graph: null as GraphViewProps | null,
+      dock: null as { onOpenThread: (runId: string) => void } | null,
+    },
+    fakes: {
+      board: unset,
+      timeline: unset,
+      requests: unset,
+      projects: unset,
+      sources: unset,
+      capabilities: unset,
+      managerChoice: unset,
+      pullRequests: unset,
+      apis: unset,
+    },
+  };
+});
 
 vi.mock('./use-command-center-board', () => ({
   useCommandCenterBoard: () => fakes.board,
@@ -35,7 +42,7 @@ vi.mock('./use-command-center-timeline', () => ({
   useCommandCenterTimeline: () => fakes.timeline,
 }));
 vi.mock('./use-open-requests', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./use-open-requests')>()),
+  ...(await importOriginal<typeof useOpenRequestsModule>()),
   useOpenRequests: () => fakes.requests,
 }));
 vi.mock('../projects/use-projects', () => ({
@@ -51,13 +58,11 @@ vi.mock('./use-manager-choice', () => ({
   useManagerChoice: () => fakes.managerChoice,
 }));
 vi.mock('../chats/use-thread-pull-requests', async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import('../chats/use-thread-pull-requests')
-  >()),
+  ...(await importOriginal<typeof chatsUseThreadPullRequestsModule>()),
   useThreadPullRequests: () => fakes.pullRequests,
 }));
 vi.mock('../daemon-api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../daemon-api')>()),
+  ...(await importOriginal<typeof daemonApiModule>()),
   createDaemonApis: () => fakes.apis,
 }));
 vi.mock('./graph-view', () => ({
@@ -83,7 +88,7 @@ vi.mock('./manager-dock', () => ({
   },
 }));
 vi.mock('../components/ui/select', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../components/ui/select')>()),
+  ...(await importOriginal<typeof componentsUiSelectModule>()),
   Select: ({
     groups,
     value,
@@ -209,7 +214,9 @@ afterEach(() => {
 async function settle(): Promise<void> {
   for (let round = 0; round < 10; round += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
   }
 }
@@ -825,7 +832,7 @@ describe('CommandCenter — answering a timeline question', () => {
           x: 0,
           y: top,
           toJSON: () => ({}),
-        } as DOMRect;
+        };
       });
     fakes.requests = {
       requests: [

@@ -39,7 +39,7 @@ function macAssets(version: string): string[] {
 }
 
 function mockFetch(impl: () => Promise<Response> | Response): void {
-  vi.stubGlobal('fetch', vi.fn(impl) as unknown as typeof fetch);
+  vi.stubGlobal('fetch', vi.fn(impl));
 }
 
 afterEach(() => {
@@ -215,7 +215,7 @@ describe('fetchLatestRelease', () => {
         return Promise.resolve(
           feedResponse([release('v1.0.0', macAssets('1.0.0'))]),
         );
-      }) as unknown as typeof fetch,
+      }),
     );
 
     await fetchLatestRelease();

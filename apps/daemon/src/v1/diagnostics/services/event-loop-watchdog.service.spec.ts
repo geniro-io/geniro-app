@@ -14,7 +14,9 @@ function blockFor(ms: number): void {
 }
 
 function turn(ms = 60): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 describe('EventLoopWatchdogService', () => {

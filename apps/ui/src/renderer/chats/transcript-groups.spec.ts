@@ -5804,7 +5804,7 @@ describe('buildSubagentBlocks', () => {
       (entry): entry is ToolGroupEntry => entry.type === 'tools',
     );
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.pairs.map((pair) => pair.call.payload)).toEqual([
+    expect(groups[0]?.pairs.map((pair): unknown => pair.call.payload)).toEqual([
       { id: 'g1', name: 'Grep', input: { pattern: 'x' } },
     ]);
     expect(toolGroupSummary(groups[0]!.pairs)).toBe('Searched 1 time');
@@ -7005,7 +7005,7 @@ describe('withLiveText — a card being WRITTEN', () => {
           continue;
         }
         if ('entries' in entry) {
-          walk(entry.entries as readonly TranscriptEntry[]);
+          walk(entry.entries);
         }
       }
     };

@@ -257,12 +257,9 @@ function harness(
   let turnEnded: (runId: string, caller: string) => void = () => undefined;
   const executor = {
     joinThreadMessage: vi.fn(
-      async (_run: string, _join: ThreadMessageJoin) =>
-        'idle' as 'joined' | 'busy' | 'idle' | 'question' | 'over_budget',
+      async (_run: string, _join: ThreadMessageJoin) => 'idle',
     ),
-    wakeLeadForThreadMessage: vi.fn(
-      async () => 'woken' as 'woken' | 'busy' | 'refused',
-    ),
+    wakeLeadForThreadMessage: vi.fn(async () => 'woken'),
     threadLeadCaller: vi.fn(async () => 'lead'),
     memberNameOf: vi.fn(async () => 'Lead'),
     leadCacheFacts: vi.fn(async () => null),
@@ -338,12 +335,16 @@ function harness(
     executor,
     published,
     settle: async (status: RunStatusEvent['status'], runId = TARGET) => {
-      statuses.next({ runId, status } as RunStatusEvent);
-      await new Promise((resolve) => setImmediate(resolve));
+      statuses.next({ runId, status });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     },
     endTurn: async (caller: string) => {
       turnEnded(TARGET, caller);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     },
     send: (wake = true, text = 'hello') =>
       service.send({ from, toRunId: TARGET, text, wake }),
@@ -413,7 +414,7 @@ describe('ThreadDeliveryService: an idle chat', () => {
   ] as const)(
     'starts nothing when %s, and says why',
     async (_label, target, opts, wake, reason) => {
-      const h = harness(target as Partial<Run>, opts);
+      const h = harness(target, opts);
 
       const answer = await h.send(wake);
 
@@ -484,7 +485,7 @@ describe('ThreadDeliveryService: the user’s Deliver now', () => {
   ] as const)(
     'is not held back by %s, which only limit an agent’s wake',
     async (_label, target, opts) => {
-      const h = harness(target as Partial<Run>, opts);
+      const h = harness(target, opts);
       const message = await sentQuietly(h);
 
       await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
@@ -502,7 +503,7 @@ describe('ThreadDeliveryService: the user’s Deliver now', () => {
   ] as const)(
     'starts nothing on a thread that is %s, and says why',
     async (reason, target) => {
-      const h = harness(target as Partial<Run>);
+      const h = harness(target);
       const message = await sentQuietly(h);
 
       await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
@@ -1124,7 +1125,9 @@ describe('ThreadDeliveryService: a team', () => {
     h.runs.set(TARGET, runOf({ teamId: 'team-1', status: 'completed' }));
 
     join.onDropped();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(rows.written.filter((row) => row.runId === TARGET)).toHaveLength(1);
     expect(rows.written[0]?.payload.message).toContain('did not reach');
@@ -1171,7 +1174,7 @@ describe('ThreadDeliveryService: who may reach whom', () => {
     ['a thread’s analysis', { analysisSourceRunId: 'r' }, null],
     ['a team’s analysis', { analysisTeamSlug: 'x' }, null],
   ] as const)('%s', async (_label, extra, expected) => {
-    const h = harness(extra as Partial<Run>);
+    const h = harness(extra);
 
     await expect(h.service.senderTarget(TARGET)).resolves.toBe(expected);
   });

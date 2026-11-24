@@ -64,7 +64,7 @@ function fakeWindow(
     show: () => calls.push('show'),
     focus: () => calls.push('focus'),
     ...overrides,
-  } as NotificationWindow & { calls: string[] };
+  };
 }
 
 describe('NotificationService', () => {

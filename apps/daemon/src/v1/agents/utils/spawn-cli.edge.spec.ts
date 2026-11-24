@@ -383,7 +383,9 @@ describe('runHeadlessCli stream edge cases', () => {
     void handle.done.then(() => {
       settled = true;
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(settled).toBe(false); // done still waits for close
 
     child.emit('close', 0, null);

@@ -62,7 +62,7 @@ async function tick(ms = AUTOSAVE_DELAY_MS): Promise<void> {
 }
 
 function state(): string {
-  return container.querySelector('[data-testid="state"]')!.textContent!;
+  return container.querySelector('[data-testid="state"]')!.textContent;
 }
 
 describe('useAutosave', () => {

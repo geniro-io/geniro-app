@@ -327,11 +327,11 @@ describe('TaskRunConfigRows', () => {
     // A pending agentsApi call, never resolved within this test — the exact
     // window the placeholder exists for.
     const pendingApi = withVocabulary({
-      listAgentModels: vi.fn(() => new Promise<AgentModel[]>(() => undefined)),
+      listAgentModels: vi.fn(() => new Promise<AgentModel[]>(() => {})),
       listAgentEfforts: vi.fn(
         () =>
           new Promise<{ efforts: AgentEffort[]; unavailableReason: null }>(
-            () => undefined,
+            () => {},
           ),
       ),
     }) as unknown as DaemonApis['agents'];

@@ -21,7 +21,11 @@ export interface RunTargetFields {
 
 /** The composer-style target these fields name, or null when they name none. */
 export function targetOf(row: RunTargetFields): string | null {
-  if (row.teamSlug != null && row.teamSlug !== '') {
+  if (
+    row.teamSlug !== null &&
+    row.teamSlug !== undefined &&
+    row.teamSlug !== ''
+  ) {
     return `team:${row.teamSlug}`;
   }
   return row.agentKind ?? null;

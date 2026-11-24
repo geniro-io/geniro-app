@@ -17,7 +17,7 @@ import type {
   ModelPriceLookup,
   ModelPriceProvider,
 } from '../utils/model-prices';
-import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
+import type { SpawnFn } from '../utils/spawn-cli';
 import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
 import { freshVocabularyStore } from './__tests__/fresh-vocabulary-store';
 import type {
@@ -135,7 +135,7 @@ class ProbeChild extends EventEmitter {
 }
 
 const spawning = (child: ProbeChild): SpawnFn => {
-  return () => child as unknown as SpawnedProcess;
+  return () => child;
 };
 
 const dirs: string[] = [];
@@ -926,7 +926,7 @@ describe('AgentAdapter.listReportedCommands', () => {
     let env: NodeJS.ProcessEnv | undefined;
     const spawn: SpawnFn = (_command, _args, options) => {
       env = options.env;
-      return child as unknown as SpawnedProcess;
+      return child;
     };
     const profile = tempDir();
     const adapter = new NoInternalPrefixAdapter({
@@ -2695,7 +2695,9 @@ describe('AgentAdapter pty wrapper', () => {
     /** Wait for the async half of the reap to have signalled, or not. */
     async function settled(): Promise<void> {
       for (let i = 0; i < 5; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       }
     }
 

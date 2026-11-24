@@ -122,7 +122,7 @@ function button(name: string): HTMLButtonElement {
         .join(' | ')}`,
     );
   }
-  return found as HTMLButtonElement;
+  return found;
 }
 
 function click(el: HTMLElement): void {
@@ -745,7 +745,7 @@ describe('RunConfigPicker — reordering', () => {
     if (!li) {
       throw new Error(`no row "${name}"`);
     }
-    return li as HTMLLIElement;
+    return li;
   }
 
   /** Names of the rows, top to bottom, as drawn. */
@@ -773,7 +773,7 @@ describe('RunConfigPicker — reordering', () => {
   }
 
   it('rearranges under the pointer and writes the new order ONCE, at the end', () => {
-    const onReorder = vi.fn();
+    const onReorder = vi.fn<(configs: RunConfig[]) => void>();
     render({ configs: three, onReorder });
 
     fire(row('Alpha'), 'dragstart');
@@ -841,7 +841,7 @@ describe('RunConfigPicker — reordering', () => {
   });
 
   it('moves a row one place per arrow key on its grip', () => {
-    const onReorder = vi.fn();
+    const onReorder = vi.fn<(configs: RunConfig[]) => void>();
     render({ configs: three, onReorder });
 
     act(() => {

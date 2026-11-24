@@ -134,7 +134,7 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
       stream: {
         pid: null,
         stop: () => undefined,
-        ended: new Promise(() => undefined),
+        ended: new Promise(() => {}),
       },
       batcher: new MonitorBatcher(),
       window: null,

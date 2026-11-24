@@ -29,27 +29,27 @@ import { debugSink } from './debug-sink';
 export class SinkLogger extends ConsoleLogger {
   override log(message: unknown, ...rest: unknown[]): void {
     this.capture('info', message, rest);
-    super.log(message as string, ...(rest as string[]));
+    super.log(message, ...(rest as string[]));
   }
 
   override error(message: unknown, ...rest: unknown[]): void {
     this.capture('error', message, rest);
-    super.error(message as string, ...(rest as string[]));
+    super.error(message, ...(rest as string[]));
   }
 
   override warn(message: unknown, ...rest: unknown[]): void {
     this.capture('warn', message, rest);
-    super.warn(message as string, ...(rest as string[]));
+    super.warn(message, ...(rest as string[]));
   }
 
   override debug(message: unknown, ...rest: unknown[]): void {
     this.capture('debug', message, rest);
-    super.debug(message as string, ...(rest as string[]));
+    super.debug(message, ...(rest as string[]));
   }
 
   override verbose(message: unknown, ...rest: unknown[]): void {
     this.capture('trace', message, rest);
-    super.verbose(message as string, ...(rest as string[]));
+    super.verbose(message, ...(rest as string[]));
   }
 
   override fatal(message: unknown, ...rest: unknown[]): void {
@@ -57,7 +57,7 @@ export class SinkLogger extends ConsoleLogger {
     // wants one bucket, and a level nothing else ever emits would be a filter
     // that is empty on every normal day.
     this.capture('error', message, rest);
-    super.fatal(message as string, ...(rest as string[]));
+    super.fatal(message, ...(rest as string[]));
   }
 
   /**

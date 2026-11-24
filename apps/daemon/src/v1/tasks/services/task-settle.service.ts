@@ -160,7 +160,11 @@ export class TaskSettleService implements OnModuleInit {
       }
       // An announce carries a null status to say only what the run is DOING;
       // it asserts nothing about settling.
-      if (event.status == null || !isTerminalRunStatus(event.status)) {
+      if (
+        event.status === null ||
+        event.status === undefined ||
+        !isTerminalRunStatus(event.status)
+      ) {
         return;
       }
       const status = event.status;

@@ -12,7 +12,7 @@ import { CodeBlock } from './ui/code-block';
 
 let container: HTMLDivElement;
 let root: Root;
-let writeText: ReturnType<typeof vi.fn>;
+let writeText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 
 beforeEach(() => {
   container = document.createElement('div');

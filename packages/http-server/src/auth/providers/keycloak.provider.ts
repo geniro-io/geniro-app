@@ -50,7 +50,7 @@ export class KeycloakProvider extends AuthProvider {
       if (!iss) {
         throw new UnauthorizedException('UNAUTHORIZED', 'No issuer found');
       }
-      const issuer = <string>iss;
+      const issuer = iss;
       const realm = this.realms.get(issuer);
       if (!realm) {
         throw new UnauthorizedException('UNAUTHORIZED', 'No realm found');

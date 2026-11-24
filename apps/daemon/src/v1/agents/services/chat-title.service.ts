@@ -242,7 +242,7 @@ export class ChatTitleService implements OnModuleInit {
       if (event.item.memberId !== null) {
         if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
           this.lastEarlyAskAt.set(event.runId, this.now());
-          void this.name(event.runId).catch((err) => {
+          void this.name(event.runId).catch((err: unknown) => {
             this.logger.warn(
               `failed to name run ${event.runId}: ${
                 err instanceof Error ? err.message : String(err)
@@ -267,13 +267,15 @@ export class ChatTitleService implements OnModuleInit {
       // one can only trim the opening line, while `upgrade` replaces it with
       // the name the AGENT gave the conversation once there is one.
       if (event.item.kind === 'message' && event.item.role === 'user') {
-        void this.name(event.runId, { unnamedOnly: true }).catch((err) => {
-          this.logger.warn(
-            `failed to name run ${event.runId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        });
+        void this.name(event.runId, { unnamedOnly: true }).catch(
+          (err: unknown) => {
+            this.logger.warn(
+              `failed to name run ${event.runId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          },
+        );
         return;
       }
       // The agent's FIRST words, which is the earliest moment this conversation
@@ -315,7 +317,7 @@ export class ChatTitleService implements OnModuleInit {
       // the declining costs.
       if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
         this.lastEarlyAskAt.set(event.runId, this.now());
-        void this.name(event.runId).catch((err) => {
+        void this.name(event.runId).catch((err: unknown) => {
           this.logger.warn(
             `failed to name run ${event.runId}: ${
               err instanceof Error ? err.message : String(err)
@@ -341,7 +343,7 @@ export class ChatTitleService implements OnModuleInit {
       // would surface as an unhandled rejection and reach the process-level
       // crash guard. An unnamed chat must not be able to take the daemon's turn
       // plumbing with it.
-      void this.name(event.runId, { mayAsk }).catch((err) => {
+      void this.name(event.runId, { mayAsk }).catch((err: unknown) => {
         this.logger.warn(
           `failed to name run ${event.runId}: ${
             err instanceof Error ? err.message : String(err)

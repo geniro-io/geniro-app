@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type { EntityManager } from '@mikro-orm/sqlite';
 import {
   defineConfig,
-  EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -403,7 +403,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
         nodes,
         runs,
         turns,
-        orm.em.fork() as EntityManager,
+        orm.em.fork(),
         join(marker, 'no-such-dir', 'marker'),
       );
 

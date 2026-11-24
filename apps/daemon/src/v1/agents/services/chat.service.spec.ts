@@ -33,10 +33,10 @@ import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
-import { Item } from '../../runs/entity/item.entity';
-import { NodeState } from '../../runs/entity/node-state.entity';
-import { Run } from '../../runs/entity/run.entity';
-import { AgentKind } from '../../runs/runs.types';
+import type { Item } from '../../runs/entity/item.entity';
+import type { NodeState } from '../../runs/entity/node-state.entity';
+import type { Run } from '../../runs/entity/run.entity';
+import type { AgentKind } from '../../runs/runs.types';
 import { fakeSpawn } from '../__tests__/fake-child';
 import { fakeEntityManager } from '../__tests__/fake-entity-manager';
 import { FakeWallTurnDao } from '../__tests__/fake-wall-turn-dao';
@@ -97,9 +97,9 @@ import {
   SINGLE_AGENT_NODE,
 } from '../chat.types';
 import type { CallContextDao } from '../dao/call-context.dao';
-import { ItemDao } from '../dao/item.dao';
-import { NodeStateDao } from '../dao/node-state.dao';
-import { RunDao } from '../dao/run.dao';
+import type { ItemDao } from '../dao/item.dao';
+import type { NodeStateDao } from '../dao/node-state.dao';
+import type { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
 import { serializePendingQuestion } from '../utils/pending-question';
@@ -117,7 +117,7 @@ import { ActionBroker } from './action.broker';
 import { ActionCommandRegistry } from './action-command.registry';
 import { ActionPublishService } from './action-publish.service';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
-import { AgentEventBus } from './agent-events.bus';
+import type { AgentEventBus } from './agent-events.bus';
 import type { AgentMcpService } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AnalysisBroker } from './analysis.broker';
@@ -161,18 +161,18 @@ import { ProjectInstructionsBroker } from './project-instructions.broker';
 import type { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
-import { RunGroupsService } from './run-groups.service';
+import type { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
 import type { RunNoticeWriter } from './run-notice.writer';
 import { RunOutcomeBroker } from './run-outcome.broker';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
-import { SessionTranscriptsService } from './session-transcripts.service';
+import type { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
-import { ThreadInboxService } from './thread-inbox.service';
+import type { ThreadInboxService } from './thread-inbox.service';
 import type { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
@@ -1142,7 +1142,10 @@ function fakeAdapter(
   };
 }
 
-const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+const tick = (): Promise<void> =>
+  new Promise((r) => {
+    setImmediate(r);
+  });
 /** End the harness agent's running turn and let the settle land. */
 async function finishTurn(agent: {
   emit: (e: AgentEvent) => void;
@@ -1355,10 +1358,7 @@ function setup(
   // One registry over the fake adapters, exactly as the module wires it: the
   // services under test resolve a kind through it rather than holding two
   // adapters each.
-  const adapters = new AgentAdapterRegistry([
-    claude.adapter,
-    cursor.adapter as unknown as CursorAcpAdapter,
-  ]);
+  const adapters = new AgentAdapterRegistry([claude.adapter, cursor.adapter]);
   const efforts = new EffortsService(
     adapters,
     new ProcessRegistry(),
@@ -1791,7 +1791,11 @@ describe('ChatService', () => {
 
       const items = itemDao.items.filter((item) => item.runId === run.id);
       expect(
-        items.map((item) => [item.kind, item.role, JSON.parse(item.payload)]),
+        items.map((item) => [
+          item.kind,
+          item.role,
+          JSON.parse(item.payload) as unknown,
+        ]),
       ).toEqual([
         [
           'system',
@@ -1854,7 +1858,7 @@ describe('ChatService', () => {
       });
 
       const items = itemDao.items.filter((item) => item.runId === run.id);
-      expect(items.map((item) => JSON.parse(item.payload))).toEqual([
+      expect(items.map((item) => JSON.parse(item.payload) as unknown)).toEqual([
         { text: 'the only row' },
       ]);
       // Seqs are allocated per PERSISTED row, so the skipped event leaves no
@@ -2114,7 +2118,9 @@ describe('ChatService', () => {
           }),
       );
       const archiving = service.archive(run.id);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(runDao.runs.get(run.id)?.archivedAt).toBeNull();
       release();
       await held;
@@ -4110,7 +4116,7 @@ describe('ChatService', () => {
             .filter(
               (item) => item.runId === run.id && item.kind === 'unanswerable',
             )
-            .map((item) => JSON.parse(item.payload)),
+            .map((item) => JSON.parse(item.payload) as unknown),
         ).toEqual([{ id: 'old-patch', toolName: 'propose_patch' }]);
         expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
           'const timeout = 30;\n',
@@ -4133,7 +4139,7 @@ describe('ChatService', () => {
             seq,
             kind,
             payload: JSON.stringify(payload),
-          } as never);
+          });
         }
         runDao.runs.get(run.id)!.pendingQuestion = JSON.stringify({
           kind: 'patch',
@@ -4183,7 +4189,7 @@ describe('ChatService', () => {
         expect(
           ctx.itemDao.items
             .filter((item) => item.kind === 'unanswerable')
-            .map((item) => JSON.parse(item.payload).id),
+            .map((item) => (JSON.parse(item.payload) as { id: unknown }).id),
         ).toEqual([requestId]);
         expect(ctx.runDao.runs.get(runId)?.pendingQuestion).toBeNull();
         expect(
@@ -4476,9 +4482,9 @@ describe('ChatService', () => {
         const retired = itemDao.items.filter(
           (item) => item.kind === 'unanswerable',
         );
-        expect(retired.map((item) => JSON.parse(item.payload))).toEqual([
-          { id: 'card-1', toolName: 'propose_team' },
-        ]);
+        expect(
+          retired.map((item) => JSON.parse(item.payload) as unknown),
+        ).toEqual([{ id: 'card-1', toolName: 'propose_team' }]);
       });
 
       it('keeps the outcome and the note on the verdict row, readable while the message is held', async () => {
@@ -4499,7 +4505,9 @@ describe('ChatService', () => {
         const verdicts = itemDao.items.filter(
           (item) => item.kind === 'approval_verdict',
         );
-        expect(verdicts.map((item) => JSON.parse(item.payload))).toEqual([
+        expect(
+          verdicts.map((item) => JSON.parse(item.payload) as unknown),
+        ).toEqual([
           {
             id: 'card-1',
             allow: true,
@@ -4692,7 +4700,7 @@ describe('ChatService', () => {
         expect(
           itemDao.items
             .filter((i) => i.kind === 'unanswerable')
-            .map((i) => JSON.parse(i.payload).id),
+            .map((i) => (JSON.parse(i.payload) as { id: unknown }).id),
         ).toEqual(['card-1']);
         expect(approvals.listByRun(run.id)).toEqual([]);
         expect(runDao.runs.get(run.id)?.pendingTeamProposal).toBeNull();
@@ -6312,7 +6320,7 @@ describe('ChatService', () => {
         // Deliberately NEVER settles: the registry drops its entry when `done`
         // does, so an already-resolved promise would leave nothing registered
         // to cancel by the time the archive gets there.
-        done: new Promise<void>(() => undefined),
+        done: new Promise<void>(() => {}),
         cancel: cancelled,
         respondApproval: () => false,
         sendUserMessage: () => false,
@@ -8527,9 +8535,9 @@ describe('ChatService', () => {
           ?.file_path === 'w-1.txt',
     );
     const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
-    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
-      JSON.parse(first!.payload).id,
-    ]);
+    expect(
+      closed.map((item) => (JSON.parse(item.payload) as { id: unknown }).id),
+    ).toEqual([JSON.parse(first!.payload).id]);
   });
 
   it('keeps only open cards and the ones being filed, and forgets a deleted run’s', async () => {
@@ -8636,9 +8644,9 @@ describe('ChatService', () => {
           ?.file_path === 'in-1.txt',
     );
     const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
-    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
-      JSON.parse(first!.payload).id,
-    ]);
+    expect(
+      closed.map((item) => (JSON.parse(item.payload) as { id: unknown }).id),
+    ).toEqual([JSON.parse(first!.payload).id]);
   });
 
   it('closes an in-turn card withdrawn off-turn while its row was still being written', async () => {
@@ -8680,9 +8688,9 @@ describe('ChatService', () => {
 
     const card = itemDao.items.find((item) => item.kind === 'approval_request');
     const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
-    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
-      JSON.parse(card!.payload).id,
-    ]);
+    expect(
+      closed.map((item) => (JSON.parse(item.payload) as { id: unknown }).id),
+    ).toEqual([JSON.parse(card!.payload).id]);
     expect(approvals.listByRun(run.id)).toEqual([]);
     expect(claude.handles[0]?.respondApproval).not.toHaveBeenCalled();
     claude.finish();
@@ -8832,9 +8840,9 @@ describe('ChatService', () => {
 
     const card = itemDao.items.find((item) => item.kind === 'approval_request');
     const closed = itemDao.items.filter((item) => item.kind === 'unanswerable');
-    expect(closed.map((item) => JSON.parse(item.payload).id)).toEqual([
-      JSON.parse(card!.payload).id,
-    ]);
+    expect(
+      closed.map((item) => (JSON.parse(item.payload) as { id: unknown }).id),
+    ).toEqual([JSON.parse(card!.payload).id]);
     expect(approvals.listByRun(run.id)).toEqual([]);
     expect(respond).not.toHaveBeenCalled();
   });
@@ -9212,7 +9220,7 @@ describe('ChatService', () => {
       holdNextRead = false;
       // Different ORM forks hold different entities: cancellation must not
       // magically mutate the snapshot this earlier read will return.
-      const snapshot = row ? ({ ...row } as Run) : null;
+      const snapshot = row ? { ...row } : null;
       await pending;
       return snapshot;
     };
@@ -10032,7 +10040,7 @@ describe('ChatService', () => {
 
     const dead = (await itemDao.getByRun(run.id))
       .filter((i) => i.kind === 'unanswerable')
-      .map((i) => JSON.parse(i.payload));
+      .map((i) => JSON.parse(i.payload) as unknown);
     expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
   });
 
@@ -10066,7 +10074,7 @@ describe('ChatService', () => {
 
     const dead = (await itemDao.getByRun(run.id))
       .filter((i) => i.kind === 'unanswerable')
-      .map((i) => JSON.parse(i.payload));
+      .map((i) => JSON.parse(i.payload) as unknown);
     expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
   });
 
@@ -10096,7 +10104,8 @@ describe('ChatService', () => {
     const closes = (await itemDao.getByRun(run.id)).filter(
       (i) =>
         i.kind === 'subagent_info' &&
-        JSON.parse(i.payload).backgroundOutcome != null,
+        ((JSON.parse(i.payload) as { backgroundOutcome?: unknown })
+          .backgroundOutcome ?? null) !== null,
     );
     expect(closes).toHaveLength(1);
     // The whole of the fix: the close has to land where the opens are.
@@ -10278,7 +10287,7 @@ describe('ChatService', () => {
     const realMaxSeq = itemDao.maxSeq.bind(itemDao);
     vi.spyOn(itemDao, 'maxSeq').mockImplementationOnce(async (...args) => {
       void registry.onApplicationShutdown();
-      return realMaxSeq(...(args as Parameters<typeof realMaxSeq>));
+      return realMaxSeq(...args);
     });
 
     await expect(service.sendMessage(run.id, 'too late')).rejects.toThrow(
@@ -11591,7 +11600,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       }
       gatePending = false;
       const row = await originalGetById(id);
-      const snapshot = row ? ({ ...row } as Run) : null;
+      const snapshot = row ? { ...row } : null;
       await readGate;
       return snapshot;
     };
@@ -12281,7 +12290,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     claude.finish();
     await drain();
     const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
-    expect(dead.map((i) => JSON.parse(i.payload))).toEqual([
+    expect(dead.map((i) => JSON.parse(i.payload) as unknown)).toEqual([
       { id: cardB, toolName: 'Write' },
     ]);
   });
@@ -12852,7 +12861,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(
       itemDao.items
         .filter((i) => i.kind === 'approval_request')
-        .map((i) => JSON.parse(i.payload).toolName),
+        .map((i) => (JSON.parse(i.payload) as { toolName: unknown }).toolName),
     ).toEqual([`mcp__${hostMcpServerName(run.id)}__${HOST_READ_TEAMS_TOOL}`]);
     expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
@@ -13262,7 +13271,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       }
       gatePending = false;
       const row = await originalGetById(id);
-      const snapshot = row ? ({ ...row } as Run) : null;
+      const snapshot = row ? { ...row } : null;
       await readGate;
       return snapshot;
     };
@@ -14770,7 +14779,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       if (!holding) {
         return row;
       }
-      await new Promise<void>((resolve) => parked.push(resolve));
+      await new Promise<void>((resolve) => {
+        parked.push(resolve);
+      });
       return row;
     };
 
@@ -14901,7 +14912,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       if (!holding) {
         return row;
       }
-      await new Promise<void>((resolve) => parked.push(resolve));
+      await new Promise<void>((resolve) => {
+        parked.push(resolve);
+      });
       return row;
     };
 
@@ -16282,7 +16295,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       // …and WHEN the row was written, which is what the sidebar orders on.
       // Only a write carries it: the activity announce a few tests below
       // asserts its own exact shape, and that one has no `at` in it.
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
     });
 
     claude.emit({
@@ -16298,7 +16311,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
       // A settle the agent said nothing on carries an explicit null, never a
       // missing field: the client holds the last sentence it was given, so an
       // absent one leaves the PREVIOUS turn's closing words standing and this
@@ -16381,7 +16394,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
       summary: null,
       housekeeping: true,
     });
@@ -16428,7 +16441,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
       summary: 'Fixed the parser — 3 tests green.',
     });
   });
@@ -16453,7 +16466,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'failed',
       activity: null,
       awaiting: null,
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
       // The failure's OWN message rides the announcement: the client that has
       // to act on it is the one not looking at this chat, and a notification
       // saying only "the turn failed" sends the user to find out what did.
@@ -16471,7 +16484,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'cancelled',
       activity: null,
       awaiting: null,
-      at: expect.any(String) as unknown as string,
+      at: expect.any(String),
       summary: null,
     });
   });

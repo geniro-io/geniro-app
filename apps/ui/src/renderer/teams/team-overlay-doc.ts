@@ -181,7 +181,7 @@ export function overrideFields(
         settings[field] = value;
       }
     }
-    return { ...own, settings: settings as TeamOverlayMemberSettings };
+    return { ...own, settings: settings };
   });
 }
 

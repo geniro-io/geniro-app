@@ -58,7 +58,8 @@ export class HostWakeChatDelivery implements OnModuleInit {
       if (wake.owner.target !== 'chat') {
         return;
       }
-      const held = this.held.get(wake.owner.runId) ?? new Map();
+      const held =
+        this.held.get(wake.owner.runId) ?? new Map<string, HostWake>();
       held.set(wake.key, wake);
       this.held.set(wake.owner.runId, held);
       void this.release(wake.owner.runId);

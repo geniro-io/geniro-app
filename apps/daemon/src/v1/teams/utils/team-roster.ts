@@ -48,7 +48,7 @@ export function leadOf(
     return trigger;
   }
   const stage =
-    progress?.current == null
+    progress?.current === null || progress?.current === undefined
       ? undefined
       : team.stages?.find((s) => s.id === progress.current);
   const own = stage === undefined ? null : stageLeadOf(stage, team.members);
@@ -140,7 +140,7 @@ export function calleesOf(
   members: readonly TeamMember[],
 ): Map<string, readonly TeamMember[]> {
   return members.length < 2
-    ? new Map()
+    ? new Map<string, readonly TeamMember[]>()
     : new Map(
         members.map((member) => [
           member.id,

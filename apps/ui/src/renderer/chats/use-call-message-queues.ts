@@ -169,7 +169,9 @@ export function useCallMessageQueues(send: CallMessageSend): CallMessageQueues {
               return;
             }
             attempt += 1;
-            await new Promise((resolve) => setTimeout(resolve, wait));
+            await new Promise((resolve) => {
+              setTimeout(resolve, wait);
+            });
           }
         }
       } finally {

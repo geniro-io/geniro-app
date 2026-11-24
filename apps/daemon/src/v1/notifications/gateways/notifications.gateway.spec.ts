@@ -411,7 +411,7 @@ describe('NotificationsGateway', () => {
     const deltas = socket.emit.mock.calls.filter(
       ([event]) => event === 'agent_delta',
     );
-    expect(deltas.map(([, delta]) => delta)).toEqual([
+    expect(deltas.map(([, delta]: unknown[]) => delta)).toEqual([
       expect.objectContaining({
         runId: 'r1',
         ownerKey: 'engineer::call-1',
@@ -883,7 +883,7 @@ describe('runs_changed broadcast', () => {
   const runtime = {
     token: 't',
     version: '0',
-  } as unknown as import('../../../auth/runtime').RuntimeInfo;
+  } as unknown as RuntimeInfo;
 
   it('broadcasts a re-filed run to EVERY client, and stops on destroy', () => {
     // A thread archived on the phone must leave the desktop's sidebar too, and
@@ -931,7 +931,7 @@ describe('verdict round-trip', () => {
   const runtime = {
     token: 't',
     version: '0',
-  } as unknown as import('../../../auth/runtime').RuntimeInfo;
+  } as unknown as RuntimeInfo;
 
   it('routes a valid verdict to the approval registry and acks applied', () => {
     const approvals = new ApprovalRegistry();

@@ -89,7 +89,7 @@ const flowVariants = cva(
 
 /** The path as a CSS value too, so a wire moved by a new layout glides with its boxes. */
 export function pathStyle(path: string): React.CSSProperties {
-  return { d: `path('${path}')` } as React.CSSProperties;
+  return { d: `path('${path}')` };
 }
 
 function TravelDot({

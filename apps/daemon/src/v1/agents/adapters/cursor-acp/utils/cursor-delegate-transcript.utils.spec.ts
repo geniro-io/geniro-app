@@ -1,4 +1,5 @@
 import type { PathLike } from 'node:fs';
+import type * as fsPromisesModule from 'node:fs/promises';
 import { mkdir, mkdtemp, open, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +16,7 @@ import {
 } from './cursor-delegate-transcript.utils';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const actual = await importOriginal<typeof fsPromisesModule>();
   return { ...actual, open: vi.fn(actual.open) };
 });
 
@@ -219,9 +220,7 @@ describe('cursor transcripts on disk', () => {
         await write(path(), ended);
         await utimes(path(), 2, 2);
         const real = (
-          await vi.importActual<typeof import('node:fs/promises')>(
-            'node:fs/promises',
-          )
+          await vi.importActual<typeof fsPromisesModule>('node:fs/promises')
         ).open;
         // The first open is the tail that decides the ending, the second is
         // the longer read for the report: the CLI appends in between.

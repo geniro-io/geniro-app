@@ -14,7 +14,7 @@ import {
   vi,
 } from 'vitest';
 
-import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import type { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
 import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { BrowserHostApprovals } from '../../browser/services/browser-host-approvals.service';
@@ -51,20 +51,20 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { ActionCommandRegistry } from './action-command.registry';
-import { AgentAdapterRegistry } from './agent-adapter.registry';
+import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
-import { AgentSessionRegistry } from './agent-session.registry';
-import { ArtifactStoreService } from './artifact-store.service';
-import { AttachmentStoreService } from './attachment-store.service';
+import type { AgentSessionRegistry } from './agent-session.registry';
+import type { ArtifactStoreService } from './artifact-store.service';
+import type { AttachmentStoreService } from './attachment-store.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
-import { ItemSeqAllocator } from './item-seq.allocator';
+import type { ItemSeqAllocator } from './item-seq.allocator';
 import { MonitorRegistry } from './monitor.registry';
-import { PartialStreamService } from './partial-stream.service';
+import type { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
-import { ThreadInboxService } from './thread-inbox.service';
+import type { ThreadInboxService } from './thread-inbox.service';
 
 /**
  * The teardown's own spec, over REAL DAOs on a real in-memory schema.

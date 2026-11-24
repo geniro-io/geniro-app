@@ -241,7 +241,9 @@ export function subagentState(
     ...(facts.childSessionId === undefined
       ? {}
       : { subagentSessionId: facts.childSessionId }),
-    ...(facts.figures == null ? {} : cumulativeFiguresOf(facts.figures)),
+    ...(facts.figures === null || facts.figures === undefined
+      ? {}
+      : cumulativeFiguresOf(facts.figures)),
   };
 }
 

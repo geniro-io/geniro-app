@@ -254,7 +254,7 @@ export class TeamStatsService {
         ...new Set(
           runIds.flatMap((runId) => {
             const version = threadOf.get(runId)?.version;
-            return version == null ? [] : [version];
+            return version === null || version === undefined ? [] : [version];
           }),
         ),
       ]
@@ -278,7 +278,9 @@ export class TeamStatsService {
         })
         .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())[0];
       const member = (
-        newest?.version == null ? undefined : teams.get(newest.version)
+        newest?.version === null || newest?.version === undefined
+          ? undefined
+          : teams.get(newest.version)
       )?.members.find((entry) => entry.id === row.memberId);
       const judge =
         row.judge.agent === null
@@ -328,7 +330,7 @@ function stageOwnersOf(
   );
   return (runId, stageId) => {
     const version = versionOfRun.get(runId);
-    return version == null
+    return version === null || version === undefined
       ? []
       : (ownersByVersion.get(version)?.get(stageId) ?? []);
   };

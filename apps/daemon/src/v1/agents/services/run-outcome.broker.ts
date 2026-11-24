@@ -143,7 +143,8 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     }
     const standing = readThreadOutcome(run.threadOutcome);
     if (
-      standing?.seq != null &&
+      standing?.seq !== null &&
+      standing?.seq !== undefined &&
       standing.kind === input.kind &&
       standing.summary === input.summary
     ) {

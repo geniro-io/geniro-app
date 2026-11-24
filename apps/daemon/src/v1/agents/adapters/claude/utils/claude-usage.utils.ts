@@ -581,7 +581,8 @@ function modelSteps(
   // A total that went down is a new ledger behind a reused id: the cost step
   // takes it whole, so the per-model steps do too.
   const restarted =
-    previous?.costUsd != null &&
+    previous?.costUsd !== null &&
+    previous?.costUsd !== undefined &&
     cumulative.costUsd !== null &&
     cumulative.costUsd < previous.costUsd;
   const base = previous === undefined || restarted ? {} : previous.costByModel;

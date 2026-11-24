@@ -1387,7 +1387,7 @@ describe('DaemonSupervisor.stop — bounded', () => {
     const h = harness({
       pidfile: info({ pid: 1111 }),
       alive: () => true,
-      healthy: () => new Promise<boolean>(() => undefined),
+      healthy: () => new Promise<boolean>(() => {}),
       stopWaitMs: 30,
     });
     void h.supervisor.start().catch(() => undefined);
@@ -1496,7 +1496,9 @@ function respawner(
 
 /** Lets every pending respawn timer run and its start settle. */
 const settleRespawns = (): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, 60));
+  new Promise((resolve) => {
+    setTimeout(resolve, 60);
+  });
 
 describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
   it('is respawned, and the new one is announced', async () => {
@@ -1577,7 +1579,9 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
       log: () => undefined,
     });
     const starting = supervisor.start();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
 
     child.exitCode = 1;
     child.emit('exit', null, 'SIGTERM');

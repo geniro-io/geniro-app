@@ -45,10 +45,7 @@ type AgentClass = new (options: AgentOptions) => object;
  * replaced.
  */
 export function installFetchDispatcher(
-  scope: Record<PropertyKey, unknown> = globalThis as unknown as Record<
-    PropertyKey,
-    unknown
-  >,
+  scope: Record<PropertyKey, unknown> = globalThis,
 ): string | null {
   // Node loads its undici lazily, and only loading it installs the default
   // dispatcher; reading one of its globals is what loads it.

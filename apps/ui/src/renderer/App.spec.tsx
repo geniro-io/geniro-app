@@ -177,7 +177,7 @@ beforeAll(async () => {
 
 /** jsdom ships no `matchMedia`; the shell asks it for the narrow layout. */
 function stubMatchMedia(narrow: boolean): void {
-  window.matchMedia = ((query: string) => ({
+  window.matchMedia = (query: string) => ({
     matches: narrow,
     media: query,
     onchange: null,
@@ -186,7 +186,7 @@ function stubMatchMedia(narrow: boolean): void {
     addListener: () => undefined,
     removeListener: () => undefined,
     dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia;
+  });
 }
 
 beforeEach(() => {
@@ -212,7 +212,9 @@ afterEach(async () => {
 
 const flush = async (): Promise<void> => {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 };
 
@@ -341,7 +343,7 @@ describe('App — What’s new across an in-app update', () => {
     const writes: Partial<Settings>[] = [];
     let pushUpdate: ((state: UpdateState) => void) | null = null;
     window.geniro = createPreloadStub({
-      ensureDaemon: () => new Promise<DaemonHandle>(() => undefined),
+      ensureDaemon: () => new Promise<DaemonHandle>(() => {}),
       getStatus: () =>
         Promise.resolve({
           onboardingComplete: true,
@@ -457,14 +459,18 @@ describe('App — the Projects address', () => {
       tries += 1
     ) {
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
       });
     }
     expect(backToGallery()).not.toBeNull();
 
     await act(async () => {
       location.hash = '#/projects';
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     await flush();
 
@@ -480,7 +486,9 @@ describe('App — the command center between visits', () => {
   const go = async (hash: string): Promise<void> => {
     await act(async () => {
       location.hash = hash;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     await flush();
   };
@@ -504,7 +512,9 @@ describe('App — the command center between visits', () => {
     });
     for (let tries = 0; tries < 100 && !testOver && !stub(); tries += 1) {
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
       });
     }
     expect(stub()).not.toBeNull();
@@ -633,7 +643,9 @@ describe('App — phone pages and the tab bar', () => {
       tries += 1
     ) {
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
       });
     }
     if (!sectionsNav()) {

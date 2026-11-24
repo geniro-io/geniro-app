@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import type { LessonModelChoice, ReflectLessons } from '../lessons.types';
 import {
@@ -193,7 +192,7 @@ describe('reflectionChoiceOf', () => {
     [
       'a thread with no agent of its own runs as Claude with the CLI defaults',
       null,
-      { agentKind: null as unknown as Run['agentKind'], configDir: null },
+      { agentKind: null, configDir: null },
       {},
       {
         agentKind: AgentKind.Claude,

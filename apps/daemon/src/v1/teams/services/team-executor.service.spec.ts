@@ -18,11 +18,13 @@ import {
   describe,
   expect,
   it,
+  type Mock,
   onTestFinished,
   vi,
 } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import type * as stopCauseModule from '../../../utils/stop-cause';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { fakeEntityManager } from '../../agents/__tests__/fake-entity-manager';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
@@ -105,14 +107,14 @@ import { PartialStreamService } from '../../agents/services/partial-stream.servi
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
-import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
+import type { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunOutcomeHistoryService } from '../../agents/services/run-outcome-history.service';
 import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { RunWriteQueue } from '../../agents/services/run-write.queue';
-import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
+import type { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
@@ -190,7 +192,7 @@ const stopCause = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../utils/stop-cause', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/stop-cause')>()),
+  ...(await importOriginal<typeof stopCauseModule>()),
   peekStopCause: stopCause.peek,
 }));
 
@@ -501,9 +503,7 @@ class FakeItemDao {
   ): Promise<Pick<Item, 'payload' | 'memberId' | 'createdAt'>[]> {
     return this.ofKinds(runId, ['tool_call'])
       .filter((i) =>
-        ids.includes(
-          String((JSON.parse(i.payload as string) as { id?: unknown }).id),
-        ),
+        ids.includes(String((JSON.parse(i.payload) as { id?: unknown }).id)),
       )
       .map((i) => ({
         payload: i.payload,
@@ -524,7 +524,8 @@ class FakeItemDao {
       if (
         row.memberId === null ||
         typeof callId !== 'string' ||
-        payload.parentToolUseId != null
+        (payload.parentToolUseId !== null &&
+          payload.parentToolUseId !== undefined)
       ) {
         continue;
       }
@@ -564,10 +565,12 @@ class FakeItemDao {
             row.role === 'user') ||
           (row.memberId === memberId &&
             ((['message', 'tool_call', 'tool_result'].includes(row.kind) &&
-              payload.callId == null &&
-              payload.parentToolUseId == null) ||
+              (payload.callId === null || payload.callId === undefined) &&
+              (payload.parentToolUseId === null ||
+                payload.parentToolUseId === undefined)) ||
               (['call_started', 'call_result'].includes(row.kind) &&
-                payload.callerConversationId == null)))
+                (payload.callerConversationId === null ||
+                  payload.callerConversationId === undefined))))
         );
       })
       .sort((a, b) => a.seq - b.seq)
@@ -1147,7 +1150,9 @@ class FakeAdapter {
 
 const drain = async (): Promise<void> => {
   for (let i = 0; i < 25; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   }
 };
 
@@ -1310,7 +1315,7 @@ function setup(
   deltas: RunDeltaEvent[];
   partials: PartialStreamService;
   spendStore: FakeUnrecordedSpendStore;
-  claudeEnsureVerdict: ReturnType<typeof vi.fn>;
+  claudeEnsureVerdict: Mock;
   mergeAcquire: ReturnType<typeof vi.fn>;
   mergeReleases: ReturnType<typeof vi.fn>[];
   skillHarvest: SkillHarvestStore;
@@ -2810,7 +2815,7 @@ describe('TeamExecutorService', () => {
       const card = itemDao.items.find(
         (item) => item.kind === 'approval_request',
       );
-      expect(JSON.parse(card!.payload as string)).toMatchObject({
+      expect(JSON.parse(card!.payload)).toMatchObject({
         threadTitle: 'Pelican',
       });
     });
@@ -2921,7 +2926,7 @@ describe('TeamExecutorService', () => {
     );
     expect(capability.tellLiveNode('a', 'a question')).toBe(true);
     const ids = turn.sendUserMessage.mock.calls.map(
-      ([message]) => message.deliveryId!,
+      ([message]: { deliveryId?: string }[]) => message!.deliveryId!,
     );
 
     turn.emit({ type: 'follow_up_dropped', deliveryIds: ids });
@@ -3735,13 +3740,10 @@ describe('TeamExecutorService', () => {
 
     const partialRows = itemDao.items
       .filter((item) => item.kind === 'message')
-      .map(
-        (item) =>
-          ({
-            memberId: item.memberId,
-            ...(JSON.parse(item.payload as string) as Record<string, unknown>),
-          }) as Record<string, unknown>,
-      )
+      .map((item): Record<string, unknown> => ({
+        memberId: item.memberId,
+        ...(JSON.parse(item.payload) as Record<string, unknown>),
+      }))
       .filter((payload) => payload.partial === true);
     expect(partialRows).toEqual([
       { memberId: 'a', text: 'Half a sen', partial: true, nodeId: 'a' },
@@ -3793,8 +3795,7 @@ describe('TeamExecutorService', () => {
       written.filter(
         (item) =>
           item.kind === 'message' &&
-          (JSON.parse(item.payload as string) as { partial?: boolean })
-            .partial === true,
+          (JSON.parse(item.payload) as { partial?: boolean }).partial === true,
       ),
     ).toEqual([]);
   });
@@ -4494,7 +4495,9 @@ describe('TeamExecutorService', () => {
 
     expect(approvals.listByRun(run.id)).toEqual([]);
     const closed = itemDao.items.filter((i) => i.kind === 'unanswerable');
-    expect(closed.map((i) => JSON.parse(i.payload).id)).toEqual([card]);
+    expect(
+      closed.map((i) => (JSON.parse(i.payload) as { id: unknown }).id),
+    ).toEqual([card]);
     expect(claude.starts[0]!.respondApproval).not.toHaveBeenCalled();
     expect(awaitingEvents.at(-1)).toEqual({ runId: run.id, awaiting: null });
     // The card was a blocker of this member; a blocker left in place suspends
@@ -4551,7 +4554,9 @@ describe('TeamExecutorService', () => {
 
     expect(approvals.listByRun(run.id)).toEqual([]);
     const closed = itemDao.items.filter((i) => i.kind === 'unanswerable');
-    expect(closed.map((i) => JSON.parse(i.payload).id)).toEqual([card]);
+    expect(
+      closed.map((i) => (JSON.parse(i.payload) as { id: unknown }).id),
+    ).toEqual([card]);
     expect(calleeUnblocked).toHaveBeenCalledWith(run.id, 'call-1');
     completeTurn(engineer, 'done');
     await drain();
@@ -5449,7 +5454,9 @@ describe('TeamExecutorService — a usage-limit continue a restart carried over'
    * loop: a longer timer created later always fires after it.
    */
   const elapse = (): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, 5));
+    new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
 
   /** What a restarted daemon reads back off the row, the reset already past. */
   const promised = (owner: string) => ({
@@ -6777,7 +6784,7 @@ describe('TeamExecutorService — agent calls', () => {
     });
     await drain();
     const ids = callee.sendUserMessage.mock.calls.map(
-      ([message]) => message.deliveryId!,
+      ([message]: { deliveryId?: string }[]) => message!.deliveryId!,
     );
 
     callee.emit({ type: 'follow_up_dropped', deliveryIds: ids });
@@ -7406,7 +7413,7 @@ describe('TeamExecutorService — agent calls', () => {
       card,
     );
     const dead = itemDao.items.filter((i) => i.kind === 'unanswerable');
-    expect(dead.map((row) => JSON.parse(row.payload))).toEqual([
+    expect(dead.map((row) => JSON.parse(row.payload) as unknown)).toEqual([
       { id: card, toolName: 'Bash', nodeId: 'eng' },
     ]);
 
@@ -7446,7 +7453,9 @@ describe('TeamExecutorService — agent calls', () => {
       expect(
         itemDao.items
           .filter((i) => i.kind === 'call_answer')
-          .map((row) => JSON.parse(row.payload).outcome),
+          .map(
+            (row) => (JSON.parse(row.payload) as { outcome: unknown }).outcome,
+          ),
       ).toContain('timeout');
     } finally {
       vi.useRealTimers();
@@ -8892,7 +8901,9 @@ describe('TeamExecutorService — agent calls', () => {
     const note = itemDao.items.find(
       (i) =>
         i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('self-check failed'),
+        (JSON.parse(i.payload) as { message: string }).message.includes(
+          'self-check failed',
+        ),
     );
     expect(note).toBeDefined();
     completeTurn(claude.starts[0]!, 'done');
@@ -9094,7 +9105,9 @@ describe('TeamExecutorService — agent calls', () => {
     const note = itemDao.items.find(
       (i) =>
         i.kind === 'system' &&
-        JSON.parse(i.payload).message.includes('endpoint unavailable'),
+        (JSON.parse(i.payload) as { message: string }).message.includes(
+          'endpoint unavailable',
+        ),
     );
     expect(note).toBeDefined();
     completeTurn(claude.starts[0]!, 'done');
@@ -10407,7 +10420,7 @@ describe('TeamExecutorService — agent calls', () => {
         .filter((item) => item.kind === 'status' && item.memberId === 'eng')
         .map(
           (item) =>
-            JSON.parse(item.payload as string) as {
+            JSON.parse(item.payload) as {
               status: string;
               callId?: string;
             },
@@ -11359,7 +11372,7 @@ describe('TeamExecutorService — agent calls', () => {
       expect(cursor.starts[2]!.input.resumeSessionId).toBe('second-backup');
       completeTurn(cursor.starts[2]!, 'more done');
       await drain();
-      service.cancel(first.id);
+      void service.cancel(first.id);
     });
 
     /** The member hand-off rows a run wrote, in order. */
@@ -11948,7 +11961,7 @@ describe('TeamExecutorService — agent calls', () => {
         status: 'ok',
         result: { member: 2 },
       });
-      service.cancel(run.id);
+      void service.cancel(run.id);
       await drain();
     });
 
@@ -12004,7 +12017,7 @@ describe('TeamExecutorService — agent calls', () => {
         contextTokens: 20,
         contextWindowTokens: 200,
       });
-      service.cancel(run.id);
+      void service.cancel(run.id);
       await drain();
     });
 
@@ -12135,7 +12148,7 @@ describe('TeamExecutorService — agent calls', () => {
       });
       await drain();
       expect(cursor.starts).toHaveLength(1);
-      service.cancel(run.id);
+      void service.cancel(run.id);
       await drain();
       expect(claude.starts).toHaveLength(0);
       expect(cursor.starts).toHaveLength(1);
@@ -12177,7 +12190,7 @@ describe('TeamExecutorService — agent calls', () => {
           await drain();
         }
         expect(clearing).toHaveBeenCalled();
-        service.cancel(run.id);
+        void service.cancel(run.id);
         release();
         await drain();
         expect(cursor.starts).toHaveLength(0);
@@ -15378,9 +15391,9 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         JSON.stringify(item.payload).includes('background build passed'),
     );
     expect(row).toBeDefined();
-    expect(
-      (JSON.parse(row!.payload as string) as { callId?: string }).callId,
-    ).toBe('call-2');
+    expect((JSON.parse(row!.payload) as { callId?: string }).callId).toBe(
+      'call-2',
+    );
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -15458,7 +15471,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         JSON.stringify(item.payload).includes('0 errors'),
     );
     expect(row?.memberId).toBe('callee');
-    expect(JSON.parse(row!.payload as string)).toMatchObject({
+    expect(JSON.parse(row!.payload)).toMatchObject({
       text: 'the build finished: 0 errors',
       callId: 'call-1',
     });
@@ -15499,8 +15512,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         (item) =>
           item.kind === 'status' &&
           item.memberId === 'callee' &&
-          (JSON.parse(item.payload as string) as { offTurn?: boolean })
-            .offTurn === true,
+          (JSON.parse(item.payload) as { offTurn?: boolean }).offTurn === true,
       ),
     ).toBe(true);
 
@@ -15602,11 +15614,10 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     const partialRow = itemDao.items.find(
       (item) =>
         item.kind === 'message' &&
-        (JSON.parse(item.payload as string) as { partial?: boolean })
-          .partial === true,
+        (JSON.parse(item.payload) as { partial?: boolean }).partial === true,
     );
     expect(partialRow?.memberId).toBe('callee');
-    expect(JSON.parse(partialRow!.payload as string)).toMatchObject({
+    expect(JSON.parse(partialRow!.payload)).toMatchObject({
       text: 'The build is hal',
       callId: 'call-1',
     });
@@ -15718,8 +15729,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         (item) =>
           item.kind === 'status' &&
           item.memberId === 'callee' &&
-          (JSON.parse(item.payload as string) as { offTurn?: boolean })
-            .offTurn === true,
+          (JSON.parse(item.payload) as { offTurn?: boolean }).offTurn === true,
       ).length;
     const before = offTurnStatuses();
 
@@ -15765,11 +15775,10 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     const partialRows = itemDao.items.filter(
       (item) =>
         item.kind === 'message' &&
-        (JSON.parse(item.payload as string) as { partial?: boolean })
-          .partial === true,
+        (JSON.parse(item.payload) as { partial?: boolean }).partial === true,
     );
     expect(partialRows.map((item) => item.memberId)).toEqual(['callee']);
-    expect(JSON.parse(partialRows[0]!.payload as string)).toMatchObject({
+    expect(JSON.parse(partialRows[0]!.payload)).toMatchObject({
       text: 'The build is hal',
       callId: 'call-1',
     });
@@ -15858,8 +15867,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       itemDao.items.filter(
         (item) =>
           item.kind === 'message' &&
-          (JSON.parse(item.payload as string) as { partial?: boolean })
-            .partial === true,
+          (JSON.parse(item.payload) as { partial?: boolean }).partial === true,
       ),
     ).toEqual([]);
     completeTurn(claude.starts[0]!, 'done');
@@ -16031,9 +16039,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
 
     const compactions = itemDao.items
       .filter((item) => item.kind === 'system' && item.memberId === 'callee')
-      .map(
-        (item) => JSON.parse(item.payload as string) as Record<string, unknown>,
-      )
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
       .filter((payload) => payload.compaction !== undefined);
     expect(compactions).toEqual([
       expect.objectContaining({
@@ -16278,10 +16284,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     const statuses = (): string[] =>
       itemDao.items
         .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-        .map(
-          (item) =>
-            (JSON.parse(item.payload as string) as { status: string }).status,
-        );
+        .map((item) => (JSON.parse(item.payload) as { status: string }).status);
     expect(statuses()).toEqual(['running', 'completed']);
 
     callee.emitOffTurn({ type: 'text', text: 'the build finished' });
@@ -16295,9 +16298,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     // never claims: the team clock ends a lost card only on the latter.
     const runningRows = itemDao.items
       .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-      .map(
-        (item) => JSON.parse(item.payload as string) as Record<string, unknown>,
-      )
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
       .filter((payload) => payload.status === 'running');
     expect(runningRows.map((payload) => payload.offTurn)).toEqual([
       undefined,
@@ -16371,7 +16372,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       .filter((item) => item.kind === 'status' && item.memberId === 'callee')
       .map(
         (item) =>
-          JSON.parse(item.payload as string) as {
+          JSON.parse(item.payload) as {
             status: string;
             callId?: string;
           },
@@ -16439,7 +16440,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       .filter((item) => item.kind === 'status' && item.memberId === 'callee')
       .map(
         (item) =>
-          JSON.parse(item.payload as string) as {
+          JSON.parse(item.payload) as {
             status: string;
             callId?: string;
           },
@@ -16482,10 +16483,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     const statuses = (): string[] =>
       itemDao.items
         .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-        .map(
-          (item) =>
-            (JSON.parse(item.payload as string) as { status: string }).status,
-        );
+        .map((item) => (JSON.parse(item.payload) as { status: string }).status);
 
     callee.emitOffTurn({
       type: 'tool_call',
@@ -16552,10 +16550,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     expect(
       itemDao.items
         .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-        .map(
-          (item) =>
-            (JSON.parse(item.payload as string) as { status: string }).status,
-        ),
+        .map((item) => (JSON.parse(item.payload) as { status: string }).status),
     ).toEqual(['running', 'completed']);
     expect(nodeDao.row(run.id, 'callee')?.status).toBe('completed');
   });
@@ -16619,10 +16614,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     expect(
       itemDao.items
         .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-        .map(
-          (item) =>
-            (JSON.parse(item.payload as string) as { status: string }).status,
-        ),
+        .map((item) => (JSON.parse(item.payload) as { status: string }).status),
     ).toEqual(['running', 'completed']);
     // The steps themselves are still recorded.
     expect(
@@ -16664,10 +16656,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     expect(
       itemDao.items
         .filter((item) => item.kind === 'status' && item.memberId === 'callee')
-        .map(
-          (item) =>
-            (JSON.parse(item.payload as string) as { status: string }).status,
-        ),
+        .map((item) => (JSON.parse(item.payload) as { status: string }).status),
     ).toEqual(['running', 'completed']);
     expect(
       itemDao.items.some(
@@ -19029,7 +19018,7 @@ describe('TeamExecutorService — work still out when a process ends', () => {
       .filter((i) => i.runId === runId)
       .sort((a, b) => a.seq - b.seq);
   const payloadOf = (row: Item): Record<string, unknown> =>
-    JSON.parse(row.payload as string) as Record<string, unknown>;
+    JSON.parse(row.payload) as Record<string, unknown>;
   const untrackedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
     rowsOf(itemDao, runId).filter(
       (i) =>
@@ -22266,7 +22255,9 @@ describe('TeamExecutorService — relay mode', () => {
         owners: [{ owner: 'bob', calls: [{ callId: 'call-3', callee: 'Cy' }] }],
       },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
     await drain();
 
     const resumed = claude.starts[walked];

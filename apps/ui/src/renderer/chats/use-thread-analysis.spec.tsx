@@ -67,7 +67,7 @@ function harness(analysis: unknown) {
             runId: 'analysis-1',
             status: null,
             ...event,
-          } as RunStatusEvent);
+          });
         }
       });
     },
@@ -108,7 +108,7 @@ describe('useThreadAnalysis', () => {
 
     h.getThreadAnalysis.mockResolvedValueOnce({
       analysis: { id: 'analysis-1', status: 'running', awaiting: null },
-    } as never);
+    });
     await h.render('source', 1);
 
     expect(h.getThreadAnalysis).toHaveBeenCalledTimes(2);
@@ -133,9 +133,7 @@ describe('useThreadAnalysis', () => {
 
     await h.render('source');
     expect(h.mark()).toBe('working');
-    h.getThreadAnalysis.mockImplementationOnce(
-      () => new Promise(() => undefined),
-    );
+    h.getThreadAnalysis.mockImplementationOnce(() => new Promise(() => {}));
     await h.render('other');
     expect(h.mark()).toBe('none');
   });

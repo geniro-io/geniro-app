@@ -1620,7 +1620,9 @@ describe('ApprovalCard — a screenshot pasted into the answer', () => {
         throw new Error('the pasted image never staged');
       }
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       });
     }
   }
@@ -1813,7 +1815,9 @@ describe('ApprovalCard — a screenshot belongs to the TAB it was pasted into', 
         throw new Error('the pasted image never staged');
       }
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       });
     }
   }

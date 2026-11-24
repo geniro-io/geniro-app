@@ -43,7 +43,7 @@ describe('readProcessStartTimes', () => {
     // A REAL just-exited pid, which is exactly what a stale journal holds —
     // not an invented number, which `ps` would reject on different grounds.
     const dead = spawnSync('true');
-    const deadPid = dead.pid!;
+    const deadPid = dead.pid;
 
     const started = readProcessStartTimes([1, deadPid]);
 

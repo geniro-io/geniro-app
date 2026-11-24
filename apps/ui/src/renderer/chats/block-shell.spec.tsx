@@ -87,9 +87,9 @@ describe('BlockShell', () => {
       container.querySelector('[data-slot="block-status-badge"]'),
     ).toBeNull();
 
-    act(() =>
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
 
     expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('inner thread');
@@ -159,9 +159,9 @@ describe('BlockShell', () => {
     expect(action).not.toBeNull();
     expect(toggle()?.contains(action)).toBe(false);
 
-    act(() =>
-      action?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      action?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(pressed).toEqual(['action']);
     expect(toggle()?.getAttribute('aria-expanded')).toBe('false');
     expect(container.textContent).not.toContain('inner thread');
@@ -353,7 +353,9 @@ describe('the clamped panel', () => {
     const more = [...container.querySelectorAll('button')].find((button) =>
       button.textContent?.includes('Show more'),
     );
-    act(() => more?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    act(() => {
+      more?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(clamp()).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import type {
   ChatEmbeddableRow,
   ChatSearchIndexDao,
 } from '../dao/chat-search-index.dao';
+import type * as eventLoopSlicesModule from '../utils/event-loop-slices';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatEmbeddingSourceService } from './chat-embedding-source.service';
 
@@ -20,7 +21,7 @@ const { yieldIfHeld } = vi.hoisted(() => ({
 }));
 
 vi.mock('../utils/event-loop-slices', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../utils/event-loop-slices')>()),
+  ...(await importOriginal<typeof eventLoopSlicesModule>()),
   eventLoopSlicer: () => yieldIfHeld,
 }));
 

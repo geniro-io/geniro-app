@@ -122,7 +122,9 @@ function ZoomControls({
         className="size-7 text-muted-foreground"
         aria-label="Zoom out"
         disabled={atFit}
-        onClick={() => api.zoomOut()}>
+        onClick={() => {
+          void api.zoomOut();
+        }}>
         <Minus className="size-4" />
       </Button>
       {/* The reading IS the reset control: a percentage the user can read and a
@@ -143,7 +145,9 @@ function ZoomControls({
           size="sm"
           className="h-7 min-w-14 px-1.5 text-xs tabular-nums text-muted-foreground"
           aria-label="Reset zoom to fit"
-          onClick={() => api.resetTransform()}>
+          onClick={() => {
+            void api.resetTransform();
+          }}>
           {label}
         </Button>
       )}
@@ -154,7 +158,9 @@ function ZoomControls({
         className="size-7 text-muted-foreground"
         aria-label="Zoom in"
         disabled={atMax}
-        onClick={() => api.zoomIn()}>
+        onClick={() => {
+          void api.zoomIn();
+        }}>
         <Plus className="size-4" />
       </Button>
       {/* FULL SCREEN, and a real one: the browser's own, over the stage that
@@ -238,7 +244,7 @@ function ZoomableSurface({
       return;
     }
     if (atMax) {
-      api.resetTransform();
+      void api.resetTransform();
       return;
     }
     // The library's OWN viewport element, never this component's wrapper: the
@@ -256,7 +262,7 @@ function ZoomableSurface({
     const pointerY = event.clientY - box.top;
     const contentX = (pointerX - positionX) / scale;
     const contentY = (pointerY - positionY) / scale;
-    api.setTransform(
+    void api.setTransform(
       pointerX - contentX * next,
       pointerY - contentY * next,
       next,

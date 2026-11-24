@@ -271,7 +271,7 @@ describe('runBrowserAgentRequest', () => {
     vi.useFakeTimers();
     try {
       const { host, debug, tab } = rig();
-      debug.handlers['Runtime.evaluate'] = () => new Promise(() => undefined);
+      debug.handlers['Runtime.evaluate'] = () => new Promise(() => {});
       const pending = runBrowserAgentRequest(
         host,
         request({ kind: 'evaluate', tab: 't1', expression: 'wait()' }),
@@ -302,8 +302,7 @@ describe('runBrowserAgentRequest', () => {
       debug.handlers['Runtime.evaluate'] = () => ({
         result: { type: 'object', value: [433, 763] },
       });
-      debug.handlers['Page.getLayoutMetrics'] = () =>
-        new Promise(() => undefined);
+      debug.handlers['Page.getLayoutMetrics'] = () => new Promise(() => {});
       const pending = runBrowserAgentRequest(
         host,
         request({
@@ -604,7 +603,7 @@ describe('runBrowserAgentRequest', () => {
 
   it('replies the Stop sentence when the user stops the op', async () => {
     const { host, debug, tab } = rig();
-    debug.handlers['Runtime.evaluate'] = () => new Promise(() => undefined);
+    debug.handlers['Runtime.evaluate'] = () => new Promise(() => {});
 
     const pending = runBrowserAgentRequest(
       host,

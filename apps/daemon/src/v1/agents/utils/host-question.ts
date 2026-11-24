@@ -244,9 +244,7 @@ function optionFields(option: unknown): {
   if (typeof option === 'string') {
     return { label: option };
   }
-  return typeof option === 'object' && option !== null
-    ? (option as { label?: unknown; description?: unknown })
-    : {};
+  return typeof option === 'object' && option !== null ? option : {};
 }
 
 function overflowOf(

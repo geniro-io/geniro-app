@@ -304,9 +304,9 @@ describe('RemoteAccess.revokeDevice against a real gateway', () => {
         'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
       );
     });
-    await new Promise<void>((resolve) =>
-      daemon.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
     cleanups.push(
       () =>
         new Promise<void>((resolve) => {
@@ -345,9 +345,9 @@ describe('RemoteAccess.revokeDevice against a real gateway', () => {
       cleanups.push(() => {
         socket.destroy();
       });
-      const closed = new Promise<void>((resolveClosed) =>
-        socket.once('close', () => resolveClosed()),
-      );
+      const closed = new Promise<void>((resolveClosed) => {
+        socket.once('close', () => resolveClosed());
+      });
       socket.on('error', () => undefined);
       socket.once('data', (chunk: Buffer) => {
         if (chunk.toString('utf8').startsWith('HTTP/1.1 101')) {
@@ -365,7 +365,9 @@ describe('RemoteAccess.revokeDevice against a real gateway', () => {
   ): Promise<boolean> {
     return Promise.race([
       promise.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), ms);
+      }),
     ]);
   }
 

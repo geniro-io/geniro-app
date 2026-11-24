@@ -112,7 +112,8 @@ export function ownToolCallSeqsByCall(
   for (const row of rows) {
     if (
       row.kind !== 'tool_call' ||
-      row.memberId == null ||
+      row.memberId === null ||
+      row.memberId === undefined ||
       typeof row.inCall !== 'string' ||
       row.inCall === '' ||
       subagentIdOf(row) !== null
@@ -424,7 +425,8 @@ export function resolveCalleeContext(
     ?.calls.find((call) => call.callId === callId);
   // A live count is the CLI's own; only the durable row can be a stand-in.
   const estimated =
-    live?.contextTokens == null && row?.contextEstimated === true;
+    (live?.contextTokens === null || live?.contextTokens === undefined) &&
+    row?.contextEstimated === true;
   return {
     contextTokens: live?.contextTokens ?? row?.contextTokens ?? null,
     contextWindowTokens:

@@ -145,7 +145,7 @@ describe('GalleryImageService.localize', () => {
           ? Promise.resolve({ mediaType: 'image/png', bytes: PNG })
           : new Promise((_resolve, reject) => {
               options!.signal!.addEventListener('abort', () =>
-                reject(new RemoteImageError(options!.abortReason!)),
+                reject(new RemoteImageError(options!.abortReason)),
               );
             }),
     });

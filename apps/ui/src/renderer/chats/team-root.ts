@@ -41,7 +41,9 @@ export function runLeadOf(
   memberIds: ReadonlySet<string>,
   triggerMember: string | null,
 ): string | null {
-  return currentLead != null && memberIds.has(currentLead)
+  return currentLead !== null &&
+    currentLead !== undefined &&
+    memberIds.has(currentLead)
     ? currentLead
     : triggerMember;
 }

@@ -100,7 +100,9 @@ function mountPicker(agentsApi: DaemonApis['agents']): () => Picker {
 
 const settle = (): Promise<void> =>
   act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 
 describe('a picker’s vocabulary', () => {

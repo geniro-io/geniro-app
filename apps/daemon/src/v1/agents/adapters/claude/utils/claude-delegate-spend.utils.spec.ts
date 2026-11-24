@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { AgentEvent, TurnIo } from '../../adapter.types';
+import type { AgentEvent } from '../../adapter.types';
 import {
   BACKGROUND_AGENT,
   BACKGROUND_CALL,
@@ -508,7 +508,7 @@ describe('ClaudeDelegateSettler', () => {
     settler.attach({
       write: () => true,
       emit: (event: AgentEvent) => emitted.push(event),
-    } as unknown as TurnIo);
+    });
 
     const end = taskNotification(
       BACKGROUND_AGENT,
@@ -519,10 +519,14 @@ describe('ClaudeDelegateSettler', () => {
     settler.observe(end);
     expect(reads).toBe(1);
     (release as (() => void) | null)?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(reads).toBe(2);
     (release as (() => void) | null)?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(progressOf(emitted)).toHaveLength(2);
     expect(progressOf(emitted).every((event) => event.final)).toBe(true);

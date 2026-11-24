@@ -214,7 +214,9 @@ export class RemoteGateway {
       for (const { upgrade } of this.upgrades.values()) {
         upgrade.close();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       this.server = null;
       this.stopping = null;
     })();

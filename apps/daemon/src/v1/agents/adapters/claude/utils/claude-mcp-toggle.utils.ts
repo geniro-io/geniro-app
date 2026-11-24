@@ -1,5 +1,5 @@
+import type { CLAUDE_DISABLED_MCP_SERVERS_KEY } from '../claude.const';
 import {
-  CLAUDE_DISABLED_MCP_SERVERS_KEY,
   CLAUDE_HOME_DISABLED_MCP_KEY,
   CLAUDE_MCP_SERVERS_KEY,
 } from '../claude.const';
@@ -54,9 +54,7 @@ function projectOf(
   projectKey: string,
 ): ProjectEntry | null {
   const entry = config.projects?.[projectKey];
-  return typeof entry === 'object' && entry !== null
-    ? (entry as ProjectEntry)
-    : null;
+  return typeof entry === 'object' && entry !== null ? entry : null;
 }
 
 /**

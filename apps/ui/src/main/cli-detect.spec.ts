@@ -1,3 +1,4 @@
+import type * as nodeFsModule from 'node:fs';
 import type { PathLike } from 'node:fs';
 import {
   chmodSync,
@@ -44,7 +45,7 @@ vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
 // assertion would be machine-dependent. Inside the sandbox the REAL accessSync
 // runs, so the chmod-executable fixtures are genuinely probed for X_OK.
 vi.mock('node:fs', async (importOriginal) => {
-  const real = await importOriginal<typeof import('node:fs')>();
+  const real = await importOriginal<typeof nodeFsModule>();
   return {
     ...real,
     accessSync: (path: PathLike, mode?: number): void => {

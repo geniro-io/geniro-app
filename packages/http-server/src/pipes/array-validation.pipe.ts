@@ -1,4 +1,5 @@
 import { type ParseArrayOptions, ParseArrayPipe } from '@nestjs/common';
+import type { ValidationError } from 'class-validator';
 
 import { ValidationPipe } from './validation.pipe';
 
@@ -10,8 +11,8 @@ export class ArrayValidationPipe extends ParseArrayPipe {
       skipNullProperties: false,
       whitelist: true,
       //transformerPackage: Transformer,
-      exceptionFactory: (...args) =>
-        ValidationPipe.getExceptionFactory(...args),
+      exceptionFactory: (errors: ValidationError[]) =>
+        ValidationPipe.getExceptionFactory(errors),
       ...(options || {}),
     });
   }

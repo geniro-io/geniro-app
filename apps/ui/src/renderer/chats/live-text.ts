@@ -492,7 +492,7 @@ export function applyLiveText(
     event.spentCostUsd === null &&
     // A DELEGATE still out keeps its owner's entry: its spend is on the row
     // the same way the owner's own spend is.
-    event.delegates == null
+    (event.delegates === null || event.delegates === undefined)
   ) {
     next.delete(key);
   } else {
@@ -510,12 +510,15 @@ export function applyLiveText(
       spentOutputTokens: event.spentOutputTokens,
       spentCacheReadTokens: event.spentCacheReadTokens,
       spentCostUsd: event.spentCostUsd,
-      ...(event.spentEstimatedCostUsd == null
+      ...(event.spentEstimatedCostUsd === null ||
+      event.spentEstimatedCostUsd === undefined
         ? {}
         : { spentEstimatedCostUsd: event.spentEstimatedCostUsd }),
       // Replaced whole: an owner whose delegates have all settled sends none,
       // and its last set goes with this event.
-      ...(event.delegates == null ? {} : { delegates: event.delegates }),
+      ...(event.delegates === null || event.delegates === undefined
+        ? {}
+        : { delegates: event.delegates }),
     });
   }
   return next;

@@ -180,7 +180,9 @@ describe('RemoteTunnel', () => {
     // after the push would beat the data the failure is reported FROM — the
     // ordering a real dying client has, and the one that makes this assertion
     // about the tail rather than about a race.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     child.emit('exit', 1, null);
     const state = await started;
 
@@ -208,7 +210,9 @@ describe('RemoteTunnel', () => {
     // Measured on a real ngrok session: a reconnect handed out a new
     // subdomain. The mask still admits it; the screen must not go stale.
     child.stdout.push('{"url":"https://5cd3-1-2-3-4.ngrok-free.app"}\n');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(tunnel.state().url).toBe('https://5cd3-1-2-3-4.ngrok-free.app');
   });
 
@@ -240,7 +244,9 @@ describe('RemoteTunnel', () => {
     child.exitCode = 1;
     child.emit('exit', 1, null);
     child.stdout.push('{"url":"https://5cd3-1-2-3-4.ngrok-free.app"}\n');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(tunnel.state().status).toBe('error');
     expect(tunnel.allowedHostPattern()).toBeNull();
@@ -492,7 +498,9 @@ describe('RemoteTunnel', () => {
     const FEATURES_TIMEOUT =
       'Failed to fetch features, default to disable error="lookup cfd-features.argotunnel.com on 100.95.0.253:53: dial udp 100.95.0.253:53: i/o timeout"';
     const delivered = (): Promise<void> =>
-      new Promise((resolve) => setTimeout(resolve, 5));
+      new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
 
     afterEach(() => {
       vi.useRealTimers();
@@ -642,9 +650,9 @@ describe('probeReady', () => {
       res.statusCode = req.url === '/ready' ? status : 404;
       res.end();
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
     const { port } = server.address() as AddressInfo;
     const url = `http://127.0.0.1:${String(port)}/ready`;
 
@@ -652,7 +660,9 @@ describe('probeReady', () => {
     status = 503;
     expect(await probeReady(url)).toBe(false);
 
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     expect(await probeReady(url)).toBe(false);
   });
 });

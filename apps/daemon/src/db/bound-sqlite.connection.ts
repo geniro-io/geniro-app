@@ -170,7 +170,7 @@ function placeholderFor(
   bound: unknown[],
 ): string {
   if (isRaw(value)) {
-    const fragment = value as RawQueryFragment;
+    const fragment = value;
     return bindInto(platform, fragment.sql, fragment.params, bound, false);
   }
   if (Array.isArray(value)) {
@@ -290,7 +290,7 @@ export class BoundSqliteConnection extends TimedSqliteConnection {
       sql = raw(sql, values);
     }
     if (isRaw(sql)) {
-      const fragment = sql as RawQueryFragment;
+      const fragment = sql;
       values = fragment.params;
       sql = fragment.sql;
     }
@@ -312,13 +312,17 @@ function abortOptionsOf(loggerContext: LoggingOptions | undefined): {
   abort: AbortableQueryOptions | undefined;
   context: LoggingOptions | undefined;
 } {
-  const stashed = loggerContext as
+  const stashed:
     | (LoggingOptions & {
         signal?: AbortSignal;
         inflightQueryAbortStrategy?: InflightQueryAbortStrategy;
       })
-    | undefined;
-  if (stashed?.signal == null && stashed?.inflightQueryAbortStrategy == null) {
+    | undefined = loggerContext;
+  if (
+    (stashed?.signal === null || stashed?.signal === undefined) &&
+    (stashed?.inflightQueryAbortStrategy === null ||
+      stashed?.inflightQueryAbortStrategy === undefined)
+  ) {
     return { abort: undefined, context: loggerContext };
   }
   const { signal, inflightQueryAbortStrategy, ...rest } = stashed;

@@ -50,9 +50,9 @@ describe('ItemSeqAllocator', () => {
     // caller is in flight before the first one resolves.
     const { allocator, reads } = setup(
       async () =>
-        await new Promise<number>((resolve) =>
-          setTimeout(() => resolve(41), 5),
-        ),
+        await new Promise<number>((resolve) => {
+          setTimeout(() => resolve(41), 5);
+        }),
     );
 
     const issued = await Promise.all(

@@ -816,7 +816,7 @@ describe('TasksService (in-memory sqlite)', () => {
     await service.recordPrepareFailure(task.id, "fatal: 'b' is already used");
     const after = Date.now();
 
-    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    const row = await taskDao.getById(task.id, orm.em.fork());
     expect(row?.prepareFailedReason).toBe("fatal: 'b' is already used");
     expect(row?.prepareFailedAt?.getTime()).toBeGreaterThanOrEqual(before);
     expect(row?.prepareFailedAt?.getTime()).toBeLessThanOrEqual(after);
@@ -847,7 +847,7 @@ describe('TasksService (in-memory sqlite)', () => {
 
     await service.recordPrepareFailure(task.id, 'fatal: x');
 
-    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    const row = await taskDao.getById(task.id, orm.em.fork());
     expect(row?.prepareFailedAt).toBeNull();
     expect(changes).toEqual([]);
   });
@@ -873,7 +873,7 @@ describe('TasksService (in-memory sqlite)', () => {
 
     await service.recordPrepareFailure(task.id, 'fatal: again');
 
-    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    const row = await taskDao.getById(task.id, orm.em.fork());
     expect(row?.prepareFailedReason).toBe('fatal: again');
     expect(row?.prepareFailedAt?.getTime()).toBeGreaterThanOrEqual(before);
   });
@@ -888,7 +888,7 @@ describe('TasksService (in-memory sqlite)', () => {
 
     await service.recordPrepareFailure(task.id, 'fatal: x');
 
-    const row = await taskDao.getById(task.id, orm.em.fork() as EntityManager);
+    const row = await taskDao.getById(task.id, orm.em.fork());
     expect(row?.prepareFailedReason).toBe('fatal: x');
   });
 

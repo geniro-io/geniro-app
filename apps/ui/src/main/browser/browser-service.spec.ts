@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type BrowserStateEvent, IPC } from '../../shared/contracts';
 import { AgentOp } from './browser-agent-op';
+import type * as browserSessionsModule from './browser-sessions';
 
 interface FakeContents extends EventEmitter {
   url: string;
@@ -104,7 +105,7 @@ vi.mock('electron', async () => {
     setVisible = vi.fn();
     setBackgroundColor = vi.fn();
     constructor(public options: { webPreferences: { partition: string } }) {
-      h.views.push(this as unknown as FakeView);
+      h.views.push(this);
     }
   }
   class Window extends Emitter {
@@ -132,7 +133,7 @@ vi.mock('electron', async () => {
     });
     constructor() {
       super();
-      h.windows.push(this as unknown as FakeWindow);
+      h.windows.push(this);
     }
   }
   return {
@@ -171,7 +172,7 @@ vi.mock('electron', async () => {
 });
 
 vi.mock('./browser-sessions', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./browser-sessions')>()),
+  ...(await importOriginal<typeof browserSessionsModule>()),
   configureBrowserSession: h.configure,
 }));
 

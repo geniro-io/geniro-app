@@ -251,7 +251,7 @@ describe('readAgentsWorking', () => {
   const respond = (status: number, body: unknown): typeof fetch =>
     vi.fn(() =>
       Promise.resolve(new Response(JSON.stringify(body), { status })),
-    ) as unknown as typeof fetch;
+    );
 
   it('asks the activity route with the launch token', async () => {
     const fetchImpl = respond(200, { working: true });

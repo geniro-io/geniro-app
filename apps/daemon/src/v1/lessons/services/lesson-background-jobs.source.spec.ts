@@ -224,7 +224,9 @@ describe('LessonBackgroundJobSource', () => {
     recorded('refl-a');
     recorded('check-a');
     recorded('chat-1');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(seen).toEqual(['lessons', 'lessons']);
   });

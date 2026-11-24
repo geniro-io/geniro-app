@@ -160,10 +160,10 @@ function agentLabelOf(
   identities: readonly AgentIdentityCapability[],
   teams: ReadonlyMap<string, TeamFace>,
 ): string | null {
-  if (card.run.teamId != null) {
+  if (card.run.teamId !== null && card.run.teamId !== undefined) {
     return teams.get(card.run.teamId)?.name ?? card.run.teamId;
   }
-  return card.run.agentKind == null
+  return card.run.agentKind === null || card.run.agentKind === undefined
     ? null
     : agentShortName(identities, card.run.agentKind);
 }
@@ -181,11 +181,11 @@ function threadNameOf(
     title: card.run.title ?? 'Untitled thread',
     project: card.run.project?.name ?? null,
     projectColor:
-      card.run.project == null
+      card.run.project === null || card.run.project === undefined
         ? null
         : (projectColors.get(card.run.project.id) ?? null),
     agentLabel: agentLabelOf(card, identities, teams),
-    isTeam: card.run.teamId != null,
+    isTeam: card.run.teamId !== null && card.run.teamId !== undefined,
   };
 }
 
@@ -194,13 +194,13 @@ function faceOf(
   identities: readonly AgentIdentityCapability[],
   teams: ReadonlyMap<string, TeamFace>,
 ): ThreadFaceLook {
-  if (card.run.teamId != null) {
+  if (card.run.teamId !== null && card.run.teamId !== undefined) {
     const team = teams.get(card.run.teamId);
     return team === undefined || team.people.length === 0
       ? { kind: 'unknown' }
       : { kind: 'team', people: team.people, total: team.total };
   }
-  return card.run.agentKind == null
+  return card.run.agentKind === null || card.run.agentKind === undefined
     ? { kind: 'unknown' }
     : {
         kind: 'agent',
@@ -227,7 +227,7 @@ export function managerIdentityOf(
       text: working ? 'Working' : 'Idle',
     },
     agentLabel:
-      manager.agentKind == null
+      manager.agentKind === null || manager.agentKind === undefined
         ? null
         : agentShortName(identities, manager.agentKind),
     isTeam: false,
@@ -338,7 +338,7 @@ export function threadCardViewOf(
     statusText: statusTextOf(card, status, attention),
     attention,
     boardCard:
-      card.task == null
+      card.task === null || card.task === undefined
         ? null
         : {
             identifier: card.task.identifier ?? null,

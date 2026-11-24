@@ -449,7 +449,7 @@ describe('the injected wrapper script', () => {
       addOnDocument(type, handler, options);
     }) as typeof document.addEventListener;
     try {
-      new Function(wrapperScript())();
+      (new Function(wrapperScript()) as () => void)();
     } finally {
       window.addEventListener = addOnWindow;
       document.addEventListener = addOnDocument;
@@ -468,7 +468,9 @@ describe('the injected wrapper script', () => {
    * no flush — those read a synchronous `setProperty`.
    */
   const flush = (): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, 0));
+    new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
   afterEach(() => {
     for (const [target, type, handler, options] of listeners) {

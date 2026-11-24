@@ -354,7 +354,9 @@ function EvidenceList({
         <li key={`${entry.seq}:${index}`} className="min-w-0">
           <span className="font-mono text-[11px] text-muted-foreground">
             {[
-              entry.runId == null ? null : `run ${entry.runId.slice(0, 8)}`,
+              entry.runId === null || entry.runId === undefined
+                ? null
+                : `run ${entry.runId.slice(0, 8)}`,
               `seq ${entry.seq}`,
               entry.nodeId,
               entry.ts,
@@ -1018,7 +1020,7 @@ export function RecommendationsCard({
     .filter((group) => group.items.length > 0);
   const unit: ProjectionUnit = team ? 'run' : 'thread';
   const projectionPopulation =
-    teamStats?.population == null
+    teamStats?.population === null || teamStats?.population === undefined
       ? null
       : {
           runs: teamStats.population.runs,

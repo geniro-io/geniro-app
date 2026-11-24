@@ -88,7 +88,7 @@ export function stageLayout<S extends StageGraphStage>(
     (a, b) => Number(named.has(a)) - Number(named.has(b)),
   );
   const backEdges = new Set<string>();
-  const state = unique.map(() => 'new' as 'new' | 'walking' | 'done');
+  const state = unique.map(() => 'new');
   const walk = (from: number): void => {
     state[from] = 'walking';
     for (const to of nextsOf[from]!) {

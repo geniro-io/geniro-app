@@ -23,7 +23,9 @@ describe('mapWithLimit', () => {
       async (n) => {
         inFlight += 1;
         peak = Math.max(peak, inFlight);
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         inFlight -= 1;
         return n * 2;
       },
@@ -40,7 +42,9 @@ describe('mapWithLimit', () => {
     await mapWithLimit(['a', 'b'], 5, async (s) => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       inFlight -= 1;
       return s;
     });

@@ -161,7 +161,7 @@ function conversationReplacedRow(runId: string, seq: number): ChatItem {
 /** A fake DaemonClient whose listeners the test fires by hand. */
 function makeClient(): {
   client: DaemonClient;
-  joinRun: ReturnType<typeof vi.fn>;
+  joinRun: ReturnType<typeof vi.fn<(runId: string) => Promise<void>>>;
   leaveRun: ReturnType<typeof vi.fn>;
   emitItem: (item: ChatItem) => void;
   emitRunStatus: (event: RunStatusEvent) => void;
@@ -579,7 +579,10 @@ describe('useChatRun', () => {
     const harness = await mount(client);
     const pending: ((rows: ChatRun[]) => void)[] = [];
     chatApi.listChats.mockImplementation(
-      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+      () =>
+        new Promise<ChatRun[]>((resolve) => {
+          pending.push(resolve);
+        }),
     );
     const before = chatApi.listChats.mock.calls.length;
 
@@ -647,7 +650,10 @@ describe('useChatRun', () => {
     const harness = await mount(client);
     const pending: ((rows: ChatRun[]) => void)[] = [];
     chatApi.listChats.mockImplementation(
-      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+      () =>
+        new Promise<ChatRun[]>((resolve) => {
+          pending.push(resolve);
+        }),
     );
     const before = chatApi.listChats.mock.calls.length;
 
@@ -673,7 +679,7 @@ describe('useChatRun', () => {
     const { client } = makeClient();
     const harness = await mount(client);
     chatApi.listChats.mockImplementation(
-      () => new Promise<ChatRun[]>(() => undefined),
+      () => new Promise<ChatRun[]>(() => {}),
     );
     const before = chatApi.listChats.mock.calls.length;
 
@@ -696,7 +702,7 @@ describe('useChatRun', () => {
 
     for (const runId of ['w1', 'w2', 'w3']) {
       await act(async () => {
-        emitRunStatus({ runId, status: 'running' } as RunStatusEvent);
+        emitRunStatus({ runId, status: 'running' });
       });
     }
 
@@ -725,7 +731,7 @@ describe('useChatRun', () => {
     expect(harness.state().offScopeRuns.map((run) => run.id)).toEqual(['r8']);
 
     await act(async () => {
-      emitRunStatus({ runId: 'r8', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r8', status: 'completed' });
     });
     expect(harness.state().offScopeRuns[0]?.status).toBe('completed');
   });
@@ -739,14 +745,16 @@ describe('useChatRun', () => {
     chatApi.listChats.mockImplementation((params?: { runId?: string }) =>
       params?.runId === 'r9'
         ? Promise.resolve([{ ...run1, id: 'r9' }])
-        : new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+        : new Promise<ChatRun[]>((resolve) => {
+            pending.push(resolve);
+          }),
     );
 
     act(() => {
       harness.state().refreshRuns();
     });
     await act(async () => {
-      emitRunStatus({ runId: 'r9', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r9', status: 'running' });
     });
     await act(async () => {
       pending[0]?.([run1, run2]);
@@ -768,7 +776,7 @@ describe('useChatRun', () => {
       { ...run1, id: 'r9', holdingFor: 1, shellsOpen: 1 },
     ]);
     await act(async () => {
-      emitRunStatus({ runId: 'r9', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r9', status: 'running' });
     });
 
     expect([...harness.state().shellsOut].sort()).toEqual(['r1', 'r9']);
@@ -780,7 +788,10 @@ describe('useChatRun', () => {
     const harness = await mount(client);
     const pending: ((rows: ChatRun[]) => void)[] = [];
     chatApi.listChats.mockImplementation(
-      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+      () =>
+        new Promise<ChatRun[]>((resolve) => {
+          pending.push(resolve);
+        }),
     );
 
     act(() => {
@@ -802,7 +813,10 @@ describe('useChatRun', () => {
     const harness = await mount(client);
     const pending: ((rows: ChatRun[]) => void)[] = [];
     chatApi.listChats.mockImplementation(
-      () => new Promise<ChatRun[]>((resolve) => pending.push(resolve)),
+      () =>
+        new Promise<ChatRun[]>((resolve) => {
+          pending.push(resolve);
+        }),
     );
 
     act(() => {
@@ -1370,7 +1384,9 @@ describe('useChatRun', () => {
     await act(async () => {
       fireDisconnect();
       fireReconnect();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
     expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i1']);
@@ -1389,7 +1405,9 @@ describe('useChatRun', () => {
     await act(async () => {
       fireDisconnect();
       fireReconnect();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
     expect(harness.state().arrivals.map((item) => item.id)).toEqual(['r1-i1']);
@@ -1578,8 +1596,8 @@ describe('useChatRun', () => {
     // them; that item drains it, and the settle behind it must not again.
     await act(async () => {
       emitItem(turnEnd('r1', 1));
-      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
-      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r2', status: 'completed' });
+      emitRunStatus({ runId: 'r1', status: 'completed' });
     });
 
     expect(harness.drain.mock.calls).toEqual([['r1'], ['r2']]);
@@ -1601,7 +1619,7 @@ describe('useChatRun', () => {
     expect(harness.state().streaming).toBe(false);
 
     await act(async () => {
-      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'running' });
     });
     expect(harness.state().streaming).toBe(true);
 
@@ -1611,7 +1629,7 @@ describe('useChatRun', () => {
         status: 'completed',
         restored: true,
         noTerminalItem: true,
-      } as RunStatusEvent);
+      });
     });
 
     expect(harness.state().streaming).toBe(false);
@@ -1647,8 +1665,8 @@ describe('useChatRun', () => {
           runId: 'r1',
           status: 'running',
           activity: 'still working',
-        } as RunStatusEvent);
-        emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+        });
+        emitRunStatus({ runId: 'r1', status: 'completed' });
       });
 
       expect(harness.state().runs.find((run) => run.id === 'r1')?.status).toBe(
@@ -1666,8 +1684,8 @@ describe('useChatRun', () => {
 
     await act(async () => {
       emitItem(turnEnd('r1', 1));
-      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
-      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'running' });
+      emitRunStatus({ runId: 'r2', status: 'completed' });
     });
 
     expect(harness.state().streaming).toBe(true);
@@ -1686,7 +1704,7 @@ describe('useChatRun', () => {
     await open(harness, 'r2');
     expect(harness.state().streaming).toBe(true);
     await act(async () => {
-      emitRunStatus({ runId: 'r2', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r2', status: 'completed' });
     });
 
     expect(harness.state().streaming).toBe(true);
@@ -1702,9 +1720,9 @@ describe('useChatRun', () => {
 
     await act(async () => {
       emitItem(turnEnd('r1', 1));
-      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'running' });
       emitItem(msg('r1', 2, 'assistant', 'carrying on'));
-      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'completed' });
     });
 
     expect(harness.state().streaming).toBe(true);
@@ -1718,12 +1736,12 @@ describe('useChatRun', () => {
     harness.queued.add('r1');
 
     await act(async () => {
-      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'running' });
       emitRunStatus({
         runId: 'r1',
         status: 'cancelled',
         noTerminalItem: true,
-      } as RunStatusEvent);
+      });
     });
 
     expect(harness.state().streaming).toBe(false);
@@ -1763,7 +1781,7 @@ describe('useChatRun', () => {
         runId: 'r2',
         status: 'completed',
         summary: 'main did not move — the tag points at the same commit.',
-      } as RunStatusEvent);
+      });
     });
 
     expect(harness.state().runs.find((r) => r.id === 'r2')?.lastMessage).toBe(
@@ -1785,7 +1803,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         subagentsOut: 1,
-      } as RunStatusEvent);
+      });
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.subagentsOut).toBe(
       1,
@@ -1796,7 +1814,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         subagentsOut: 0,
-      } as RunStatusEvent);
+      });
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.subagentsOut).toBe(
       0,
@@ -1957,7 +1975,7 @@ describe('useChatRun', () => {
         // Exactly what the daemon sends for a message: no status, no activity.
         status: null,
         preview: 'checking the second hypothesis',
-      } as RunStatusEvent);
+      });
     });
 
     const r2 = harness.state().runs.find((r) => r.id === 'r2')!;
@@ -1990,7 +2008,7 @@ describe('useChatRun', () => {
     ] as RunStatusEvent['taskList'];
 
     await act(async () => {
-      emitRunStatus({ runId: 'r1', status: null, taskList } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: null, taskList });
     });
 
     expect(harness.state().runs.find((r) => r.id === 'r1')?.taskList).toEqual(
@@ -2005,7 +2023,7 @@ describe('useChatRun', () => {
     const stages = stageProgress(1, 'review');
 
     await act(async () => {
-      emitRunStatus({ runId: 'r1', status: null, stages } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: null, stages });
     });
 
     expect(harness.state().runs.find((r) => r.id === 'r1')?.stages).toEqual(
@@ -2033,7 +2051,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         resetWakes,
-      } as RunStatusEvent);
+      });
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.resetWakes).toEqual(
       resetWakes,
@@ -2047,7 +2065,7 @@ describe('useChatRun', () => {
         currentLead: null,
         goals: [],
         outcome: null,
-      } as RunStatusEvent);
+      });
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.resetWakes).toEqual(
       [],
@@ -2073,7 +2091,7 @@ describe('useChatRun', () => {
         runId: 'r2',
         status: 'completed',
         summary: null,
-      } as RunStatusEvent);
+      });
     });
 
     expect(harness.state().runs.find((r) => r.id === 'r2')?.lastMessage).toBe(
@@ -2201,8 +2219,8 @@ describe('useChatRun', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      emitRunStatus({ runId: 'r1', status: 'running' } as RunStatusEvent);
-      emitRunStatus({ runId: 'r1', status: 'completed' } as RunStatusEvent);
+      emitRunStatus({ runId: 'r1', status: 'running' });
+      emitRunStatus({ runId: 'r1', status: 'completed' });
     });
 
     expect(harness.state().streaming).toBe(false);
@@ -2441,7 +2459,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         stages: stageProgress(2, 'review'),
-      } as RunStatusEvent);
+      });
     });
 
     await act(async () => {
@@ -2488,7 +2506,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         stages: stageProgress(2, 'review'),
-      } as RunStatusEvent);
+      });
     });
 
     await act(async () => {
@@ -2536,7 +2554,7 @@ describe('useChatRun', () => {
         status: 'running',
         at: '2026-09-27T11:00:00.000Z',
         stages: stageProgress(2, 'review'),
-      } as RunStatusEvent);
+      });
     });
 
     await act(async () => {
@@ -2568,7 +2586,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         stages: stageProgress(2, 'review'),
-      } as RunStatusEvent);
+      });
     });
 
     act(() => {
@@ -3383,7 +3401,9 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
 
     await act(async () => {
       await harness.state().loadAround(5);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
     expect(harness.state().awayFromTail).toBe(false);
@@ -3418,7 +3438,9 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     let opening: Promise<void> = Promise.resolve();
     await act(async () => {
       opening = harness.state().activateRun('r1');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
     await act(async () => {
       await harness.state().loadAround(10);
@@ -3449,7 +3471,9 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     let leaving: Promise<void> = Promise.resolve();
     await act(async () => {
       leaving = harness.state().activateRun('r1');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
     await open(harness, 'r2');
     expect(harness.state().hasOlder).toBe(false);
@@ -4220,7 +4244,10 @@ describe('useChatRun — anchors', () => {
     await open(harness, 'r1');
     let answer: (value: unknown) => void = () => undefined;
     chatApi.listRunItems.mockImplementationOnce(
-      () => new Promise((resolve) => (answer = resolve)),
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
     );
     await act(async () => {
       emitItem(calleeStatus(20, 'call-7'));

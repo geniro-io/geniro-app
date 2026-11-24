@@ -1,7 +1,7 @@
 import { type IAppBootstrapperExtension } from '@packages/common';
 
 import { MetricsModule } from './metrics.module';
-import { MetricsService } from './services/metrics.service';
+import type { MetricsService } from './services/metrics.service';
 
 export * from './metrics.module';
 export * from './metrics.types';

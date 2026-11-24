@@ -432,7 +432,7 @@ describe('diffRows', () => {
           members: proposal.team.members.map((member) =>
             member.id === 'reviewer' ? { ...member, ...memberChange } : member,
           ),
-        } as typeof proposal.team,
+        },
       );
     const flagged = (rows: ReturnType<typeof diffRows>) =>
       rows

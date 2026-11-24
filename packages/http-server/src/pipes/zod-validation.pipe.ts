@@ -4,7 +4,7 @@ import {
   type PipeTransform,
 } from '@nestjs/common';
 import { ValidationException } from '@packages/common';
-import z, { ZodError } from 'zod';
+import z from 'zod';
 
 @Injectable()
 export class ZodValidationPipe implements PipeTransform {
@@ -22,7 +22,7 @@ export class ZodValidationPipe implements PipeTransform {
     const result = schema.safeParse(value, { reportInput: true });
 
     if (!result.success) {
-      const e = result.error as ZodError;
+      const e = result.error;
 
       throw new ValidationException(
         'VALIDATION_ERROR',

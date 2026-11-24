@@ -397,7 +397,9 @@ function fakeClient() {
 
 async function settle(ms = 0): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   });
 }
 
@@ -2854,7 +2856,7 @@ function lessonsApiOf(waiting: number, saved: number): DaemonApis['lessons'] {
               lessonProposal(`w${i}`, 'proposed'),
             ),
     })),
-    getLessonsSpend: vi.fn(() => new Promise(() => undefined)),
+    getLessonsSpend: vi.fn(() => new Promise(() => {})),
   } as unknown as DaemonApis['lessons'];
 }
 

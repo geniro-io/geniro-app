@@ -20,7 +20,7 @@ const docWith = (
   }) as unknown as OpenAPIObject;
 
 const schemasOf = (doc: OpenAPIObject): Record<string, unknown> =>
-  (doc.components?.schemas ?? {}) as Record<string, unknown>;
+  doc.components?.schemas ?? {};
 
 describe('canonicalizeOpenApiSchemas', () => {
   it('drops the _Output suffix from component names and from every $ref', () => {

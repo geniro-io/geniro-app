@@ -32,7 +32,7 @@ export function toolMetricOf(
       ? null
       : adapters.for(agentKind).toolCallMetric(name, toolKind);
   const mcp =
-    own?.server != null
+    own?.server !== null && own?.server !== undefined
       ? own
       : [...adapters.all().values()]
           .map((adapter) => adapter.toolCallMetric(name, toolKind))

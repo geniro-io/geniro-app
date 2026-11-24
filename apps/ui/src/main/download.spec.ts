@@ -56,16 +56,18 @@ beforeEach(async () => {
     res.writeHead(500).end();
   };
   server = createServer((req, res) => handle(req, res));
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
   const { port } = server.address() as AddressInfo;
   base = `http://127.0.0.1:${port}`;
 });
 
 afterEach(async () => {
   server.closeAllConnections();
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
   await rm(root, { recursive: true, force: true });
 });
 

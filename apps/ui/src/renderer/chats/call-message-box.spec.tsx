@@ -166,7 +166,9 @@ async function pressEnter(box: HTMLTextAreaElement): Promise<void> {
 async function flush(): Promise<void> {
   for (let tick = 0; tick < 8; tick += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
   }
 }

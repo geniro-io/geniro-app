@@ -1,6 +1,6 @@
+import type { EntityManager } from '@mikro-orm/sqlite';
 import {
   defineConfig,
-  EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';

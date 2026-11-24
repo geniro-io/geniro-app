@@ -31,11 +31,7 @@ export class LabelInstructionDao extends BaseDao<LabelInstruction> {
     label: string,
     txEm?: EntityManager,
   ): Promise<LabelInstruction | null> {
-    return this.getOne(
-      { projectId, label } as FilterQuery<LabelInstruction>,
-      {},
-      txEm,
-    );
+    return this.getOne({ projectId, label }, {}, txEm);
   }
 
   /**
@@ -57,7 +53,7 @@ export class LabelInstructionDao extends BaseDao<LabelInstruction> {
       {
         label: { $in: [...labels] },
         $or: [{ projectId: null }, { projectId }],
-      } as FilterQuery<LabelInstruction>,
+      },
       {},
       txEm,
     );

@@ -1661,7 +1661,9 @@ describe('CursorAcpAdapter turn shaping', () => {
     handle.cancel();
     child.emit('close', null, 'SIGTERM');
     await handle.done;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(existsSync(dataDir!)).toBe(false);
   });
 
@@ -4294,7 +4296,9 @@ describe('CursorAcpAdapter misuse', () => {
       });
       const spawned = async (count: number): Promise<void> => {
         while (children.length < count) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+          });
         }
       };
       const isReply = (value: unknown): value is string =>
@@ -7036,7 +7040,9 @@ describe('CursorAcpAdapter — what an MCP call answered', () => {
     );
     expect(events.some((event) => event.type === 'turn_complete')).toBe(true);
     child.emit('close', 0, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     ledger.record(PATH, 'team_notes', {}, served);
 
     expect(
@@ -7053,7 +7059,9 @@ describe('CursorAcpAdapter — what an MCP call answered', () => {
     const { child } = drive(ledger);
     child.stdout.emitData(call(SERVER, 'team_notes', {}));
     child.emit('close', 1, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     ledger.record(PATH, 'team_notes', {}, served);
 
     expect(

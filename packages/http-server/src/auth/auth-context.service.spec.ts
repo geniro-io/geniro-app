@@ -21,7 +21,7 @@ class MockAuthProvider extends AuthProvider {
     if (this.opts.token) {
       return this.opts.token;
     }
-    const auth = req?.headers?.authorization as string | undefined;
+    const auth = req?.headers?.authorization;
     return auth?.split(' ').pop();
   }
 
@@ -107,7 +107,7 @@ describe('AuthContextService', () => {
       req.headers = {
         'x-dev-jwt-sub': 'dev-user',
         'authorization': 'Bearer any-token',
-      } as any;
+      };
       const builder = new MockAuthContextDataBuilder({
         devMode: true,
         devUserResult: { sub: 'dev-user' },
@@ -125,7 +125,7 @@ describe('AuthContextService', () => {
     });
 
     it('uses provider.verifyToken when token present and not in devMode', async () => {
-      req.headers = { authorization: 'Bearer token-123' } as any;
+      req.headers = { authorization: 'Bearer token-123' };
       const provider = new MockAuthProvider({
         verifyResult: { sub: 'verified' },
       });
@@ -156,7 +156,7 @@ describe('AuthContextService', () => {
       const provider = new MockAuthProvider({
         verifyResult: { sub: 'u-1', name: 'John' },
       });
-      req.headers = { authorization: 'Bearer anything' } as any;
+      req.headers = { authorization: 'Bearer anything' };
       const builder = new MockAuthContextDataBuilder({
         buildResult: { sub: 'u-1', name: 'John' },
       });
@@ -171,7 +171,7 @@ describe('AuthContextService', () => {
 
     it('checkSub throws UnauthorizedException when no sub', async () => {
       const provider = new MockAuthProvider({ verifyResult: {} });
-      req.headers = { authorization: 'Bearer t' } as any;
+      req.headers = { authorization: 'Bearer t' };
       const builder = new MockAuthContextDataBuilder({
         buildResult: {},
       });

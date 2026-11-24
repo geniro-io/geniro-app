@@ -375,7 +375,7 @@ export function teamFromLegacyGraph(value: Fields): Team | null {
       lead === undefined ? [] : [{ kind: 'first-message', member: lead }],
     instructionBlocks,
     ...(stages === undefined ? {} : { stages: stages as Team['stages'] }),
-  } as Team;
+  };
 }
 
 function readTeam(value: unknown): Team | null {
@@ -405,7 +405,7 @@ function readDiffEntry(raw: unknown): ProposalDiffEntry | null {
   }
   const fields = entry.fields.map(readDiffField);
   return fields.every((field) => field !== null)
-    ? { id: entry.id, fields: fields as ProposalDiffField[] }
+    ? { id: entry.id, fields: fields }
     : null;
 }
 
@@ -417,7 +417,7 @@ function readList<T>(
     return null;
   }
   const items = value.map(read);
-  return items.every((item) => item !== null) ? (items as T[]) : null;
+  return items.every((item) => item !== null) ? items : null;
 }
 
 const readChangedEntries = (value: unknown): ProposalDiffEntry[] | null =>
@@ -506,7 +506,7 @@ function readOverlay(value: unknown): ProposalOverlay | null {
   return {
     projectId: raw.projectId,
     projectName: raw.projectName,
-    overlay: document as TeamOverlay,
+    overlay: document,
     baseHash: raw.baseHash,
     diffText: raw.diffText,
   };

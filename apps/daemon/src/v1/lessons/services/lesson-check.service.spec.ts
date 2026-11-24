@@ -136,7 +136,7 @@ function build(
               id: 'chk',
               agentKind: 'codex',
               model: 'gpt-judge',
-            } as Partial<Run>)
+            })
           : source,
       ),
     ),
@@ -590,7 +590,7 @@ describe('LessonCheckService check runs that settle without verdicts', () => {
     built.statuses.next({
       runId: 'chk',
       status: 'completed',
-    } as RunStatusEvent);
+    });
     await vi.waitFor(() =>
       expect(built.chats.createChat).toHaveBeenCalledTimes(2),
     );
@@ -599,7 +599,7 @@ describe('LessonCheckService check runs that settle without verdicts', () => {
     built.statuses.next({
       runId: 'chk',
       status: 'completed',
-    } as RunStatusEvent);
+    });
     await vi.waitFor(() =>
       expect(built.chats.createChat).toHaveBeenCalledTimes(
         LESSON_SEGMENT_MAX_ATTEMPTS,
@@ -610,7 +610,7 @@ describe('LessonCheckService check runs that settle without verdicts', () => {
     built.statuses.next({
       runId: 'chk',
       status: 'completed',
-    } as RunStatusEvent);
+    });
     await vi.waitFor(() =>
       expect(built.filing.deliverUnchecked).toHaveBeenCalledTimes(1),
     );
@@ -637,7 +637,7 @@ describe('LessonCheckService check runs that settle without verdicts', () => {
     built.statuses.next({
       runId: 'chk',
       status: 'completed',
-    } as RunStatusEvent);
+    });
     await vi.waitFor(() => expect(built.segments.ofCheck).toHaveBeenCalled());
     await Promise.resolve();
 

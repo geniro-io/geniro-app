@@ -281,7 +281,7 @@ describe('ArtifactCard', () => {
     expect(frame).not.toBeNull();
 
     for (const label of [/Save .* as an HTML file/, /full screen/i]) {
-      expect(button(label).closest('div')?.contains(frame!)).toBe(true);
+      expect(button(label).closest('div')?.contains(frame)).toBe(true);
     }
   });
 

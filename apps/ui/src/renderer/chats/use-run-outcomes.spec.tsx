@@ -79,13 +79,13 @@ describe('useRunOutcomes', () => {
     const lists = [[pullRequest(87)], [pullRequest(90), pullRequest(87)]];
     const read = vi.fn(async () => ({ pullRequests: lists.shift() ?? [] }));
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(numbers()).toEqual([87]);
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(read).toHaveBeenCalledTimes(1);
 
-    await render(read as unknown as Read, 'run-1', 9);
+    await render(read, 'run-1', 9);
     expect(numbers()).toEqual([90, 87]);
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -102,10 +102,10 @@ describe('useRunOutcomes', () => {
           }),
     );
 
-    await render(read as unknown as Read, 'run-1', 0);
+    await render(read, 'run-1', 0);
     expect(numbers()).toEqual([87]);
 
-    await render(read as unknown as Read, 'run-2', 0);
+    await render(read, 'run-2', 0);
     expect(numbers()).toEqual([]);
 
     await act(async () => {
@@ -123,15 +123,15 @@ describe('useRunOutcomes', () => {
       return { pullRequests: [pullRequest(87)] };
     });
 
-    await render(read as unknown as Read, null, 0);
+    await render(read, null, 0);
     expect(read).not.toHaveBeenCalled();
     expect(seen?.loaded).toBe(false);
 
-    await render(read as unknown as Read, 'run-1', 5);
+    await render(read, 'run-1', 5);
     expect(numbers()).toEqual([87]);
 
     fail = true;
-    await render(read as unknown as Read, 'run-1', 9);
+    await render(read, 'run-1', 9);
     expect(numbers()).toEqual([]);
     expect(seen?.loaded).toBe(true);
   });

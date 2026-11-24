@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from 'vitest';
 
 import { createGroupTerminator, GROUP_KILL_GRACE_MS } from './kill-tree';
 
@@ -26,7 +34,7 @@ function fakeChild(pid: number | null = 4242): {
 }
 
 describe('createGroupTerminator', () => {
-  let kill: ReturnType<typeof vi.spyOn>;
+  let kill: MockInstance<typeof process.kill>;
 
   beforeEach(() => {
     vi.useFakeTimers();

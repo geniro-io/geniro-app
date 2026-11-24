@@ -22,7 +22,7 @@ const CONTEXT = {
   requestId: 1,
 } as McpCallContext;
 
-const BUILDER_CONTEXT = { ...CONTEXT, runId: 'builder' } as McpCallContext;
+const BUILDER_CONTEXT = { ...CONTEXT, runId: 'builder' };
 
 /**
  * The tool over doubles. `answers` are what successive saves answer, in turn;
@@ -275,7 +275,7 @@ describe('SaveTeamChangeTool', () => {
     const result = await save.call(
       'save_team_change',
       { edits: [{ path: 'name', value: 'x' }] },
-      { ...CONTEXT, runId: 'plain' } as McpCallContext,
+      { ...CONTEXT, runId: 'plain' },
     );
 
     expect(result).toEqual({

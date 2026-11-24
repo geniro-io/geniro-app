@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import type * as remoteRemoteSessionModule from '../remote/remote-session';
 import {
   type NewTaskAttachments,
   NewTaskDialog,
@@ -17,7 +18,7 @@ import type { TaskFieldsContext } from './task-fields';
 // that switches this to a phone on purpose.
 const runtime = vi.hoisted(() => ({ remote: false }));
 vi.mock('../remote/remote-session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../remote/remote-session')>()),
+  ...(await importOriginal<typeof remoteRemoteSessionModule>()),
   isRemoteRuntime: () => runtime.remote,
 }));
 
@@ -351,11 +352,11 @@ describe('what a draft stages for the card it becomes', () => {
    * writes the text into the focused field and fires `input`.
    */
   const installInsertText = (): void => {
-    document.execCommand = ((_command: string, _ui: boolean, text: string) => {
+    document.execCommand = (_command: string, _ui: boolean, text: string) => {
       const field = document.activeElement as HTMLTextAreaElement;
       setDescription(field.value + text);
       return true;
-    }) as unknown as typeof document.execCommand;
+    };
   };
 
   const pasteScreenshot = (): void => {

@@ -165,7 +165,7 @@ export function AgentActionBlock({
         {failed ? (
           <p className="whitespace-pre-wrap break-words text-xs text-destructive [overflow-wrap:anywhere]">
             {payloadString(envelope, 'error') ??
-              (result == null
+              (result === null || result === undefined
                 ? 'The action could not be completed.'
                 : toolResultText(result))}
           </p>

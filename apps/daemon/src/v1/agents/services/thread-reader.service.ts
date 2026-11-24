@@ -463,7 +463,7 @@ export class ThreadReaderService {
     let digest: Record<string, unknown> | null;
     try {
       digest =
-        run?.analysisDigest == null
+        run?.analysisDigest === null || run?.analysisDigest === undefined
           ? null
           : (JSON.parse(run.analysisDigest) as Record<string, unknown>);
     } catch {

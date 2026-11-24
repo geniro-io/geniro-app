@@ -16,7 +16,9 @@ const DOCUMENT: AgentMcpConfigDto = {
 
 /** Answers after a beat, as the daemon does; nothing leaves the catalog. */
 const later = <T,>(value: T): Promise<T> =>
-  new Promise((resolve) => setTimeout(() => resolve(value), 500));
+  new Promise((resolve) => {
+    setTimeout(() => resolve(value), 500);
+  });
 
 const ACTIONS: McpConfigActions = {
   read: () => later(DOCUMENT),

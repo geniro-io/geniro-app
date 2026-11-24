@@ -139,7 +139,9 @@ let container: HTMLDivElement | null = null;
 
 async function settle(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 
@@ -409,7 +411,9 @@ describe('SearchSettings', () => {
     expect(h.api.getEmbeddingStatus).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1100);
+      });
     });
     expect(h.api.getEmbeddingStatus).toHaveBeenCalledTimes(2);
   });

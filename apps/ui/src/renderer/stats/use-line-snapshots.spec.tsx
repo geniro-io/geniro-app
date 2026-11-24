@@ -284,12 +284,12 @@ describe('useLineSnapshots', () => {
     // move its total later than the read it started after.
     getChangesTotals.mockImplementation(
       () =>
-        new Promise((resolve) =>
+        new Promise((resolve) => {
           setTimeout(
             () => resolve({ linesAdded: 1, linesRemoved: 0, partial: false }),
             500,
-          ),
-        ),
+          );
+        }),
     );
     await mount([THREAD]);
 
@@ -607,11 +607,11 @@ describe('useLineSnapshots', () => {
     await act(async () => {
       // An activity announce says nothing about whether the run is still going, and a run
       // still working has not finished changing the folder.
-      statusListener?.({ runId: 'run-a', status: null } as RunStatusEvent);
+      statusListener?.({ runId: 'run-a', status: null });
       statusListener?.({
         runId: 'run-a',
         status: 'running',
-      } as RunStatusEvent);
+      });
     });
     await elapse(MEASURE_DEBOUNCE_MS);
     expect(getChangesTotals).not.toHaveBeenCalled();
@@ -620,7 +620,7 @@ describe('useLineSnapshots', () => {
       statusListener?.({
         runId: 'run-a',
         status: 'cancelled',
-      } as RunStatusEvent);
+      });
     });
     await elapse(MEASURE_DEBOUNCE_MS);
     expect(recordLineSnapshot).toHaveBeenCalledTimes(1);

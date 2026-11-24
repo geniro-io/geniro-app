@@ -290,9 +290,9 @@ describe('the daemon boots and serves', () => {
   );
 
   it('shuts down on SIGTERM and clears its pidfile and lock', async () => {
-    const exited = new Promise<void>((resolve) =>
-      child.once('exit', () => resolve()),
-    );
+    const exited = new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+    });
     child.kill('SIGTERM');
     await exited;
     expect(existsSync(join(userData, 'daemon.json'))).toBe(false);

@@ -12,8 +12,10 @@ import {
 } from '../shared/contracts';
 import { type RemoteAccessState, TUNNEL_OFF } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import type * as gitChangesModule from './git-changes';
 import { lineMeasurementFlush } from './line-measurement-flush';
 import type { RemoteAccess } from './remote/remote-access';
+import type * as worktreeServiceModule from './worktree-service';
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -134,12 +136,12 @@ vi.mock('./settings', () => ({
   updateSettings: mocks.updateSettings,
 }));
 vi.mock('./git-changes', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./git-changes')>()),
+  ...(await importOriginal<typeof gitChangesModule>()),
   readLinkedWorktrees: mocks.readLinkedWorktrees,
   readChangesSince: mocks.readChangesSince,
 }));
 vi.mock('./worktree-service', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./worktree-service')>()),
+  ...(await importOriginal<typeof worktreeServiceModule>()),
   worktreesRoot: mocks.worktreesRoot,
 }));
 

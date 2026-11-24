@@ -226,7 +226,10 @@ function build(
 }
 
 /** Let the queued microtasks/timers of the service's own polling run. */
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+const tick = (): Promise<void> =>
+  new Promise((r) => {
+    setTimeout(r, 20);
+  });
 
 describe('CliAuthService — sign-out', () => {
   it('runs the CLI and reports success, with no terminal involved', async () => {

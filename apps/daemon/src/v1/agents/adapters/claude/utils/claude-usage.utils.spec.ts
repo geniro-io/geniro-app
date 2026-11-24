@@ -1043,7 +1043,9 @@ describe('ClaudeSessionCostLedger — totals that survive a daemon restart', () 
     const store = new ClaudeCostTotalsFile(join(dir, 'totals.json'));
     const before = new ClaudeSessionCostLedger(undefined, store);
     readClaudeUsage(result(500), before);
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_100);
+    });
 
     const after = new ClaudeSessionCostLedger(undefined, store);
     after.seedForResume(SESSION, { costUsd: 570, apiMs: null });

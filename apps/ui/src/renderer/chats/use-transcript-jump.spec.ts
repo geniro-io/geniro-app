@@ -3,11 +3,13 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as threadUiMemoryModule from './thread-ui-memory';
+
 const memory = vi.hoisted(() => ({
   write: vi.fn<(runId: string, key: string, value: boolean) => void>(),
 }));
 vi.mock('./thread-ui-memory', async (original) => ({
-  ...(await original<typeof import('./thread-ui-memory')>()),
+  ...(await original<typeof threadUiMemoryModule>()),
   writeThreadFlag: memory.write,
 }));
 

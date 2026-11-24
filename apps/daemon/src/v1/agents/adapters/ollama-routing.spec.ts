@@ -189,7 +189,14 @@ describe('Ollama through the existing agent harnesses', () => {
       child.stdin.written
         .trim()
         .split('\n')
-        .map((line) => JSON.parse(line));
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              id?: number;
+              method?: string;
+              params?: Record<string, unknown>;
+            },
+        );
     const initialize = frames().find((frame) => frame.method === 'initialize')!;
     child.stdout.emitData(
       JSON.stringify({ id: initialize.id, result: {} }) + '\n',

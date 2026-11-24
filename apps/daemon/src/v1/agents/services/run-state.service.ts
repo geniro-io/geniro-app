@@ -222,7 +222,7 @@ export class RunStateService {
     // records; the rows answer for a turn of ours and a stretch it missed.
     const turnStartedAt = !chatTurnOpen
       ? null
-      : hold?.startedAt != null
+      : hold?.startedAt !== null && hold?.startedAt !== undefined
         ? new Date(hold.startedAt).toISOString()
         : ((await this.itemDao.openTurnStartedAt(runId, em))?.toISOString() ??
           null);
@@ -247,7 +247,9 @@ export class RunStateService {
       turnStartedAt,
       turnHeldMs: Math.round(hold?.heldMs ?? 0),
       turnHeldSince:
-        hold?.heldSince == null ? null : new Date(hold.heldSince).toISOString(),
+        hold?.heldSince === null || hold?.heldSince === undefined
+          ? null
+          : new Date(hold.heldSince).toISOString(),
     };
   }
 

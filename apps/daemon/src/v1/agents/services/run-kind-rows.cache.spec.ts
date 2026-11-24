@@ -2,9 +2,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { EntityManager } from '@mikro-orm/sqlite';
 import {
   defineConfig,
-  EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -216,7 +216,7 @@ describe('RunKindRowsCache (in-memory sqlite)', () => {
       seqs,
       bus,
       calls,
-      orm.em.fork() as EntityManager,
+      orm.em.fork(),
       10,
     );
     await write(0, 'turn_complete');
@@ -301,7 +301,9 @@ describe('RunKindRowsCache (in-memory sqlite)', () => {
     });
 
     const reading = seqsOf(['turn_complete']);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     bus.publishRunDeleted('run-a');
     release();
     await reading;

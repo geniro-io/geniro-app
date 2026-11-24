@@ -86,7 +86,7 @@ export function runOutcomesOf(
   const repos = new Set<string>();
   for (const row of pullRequests ?? []) {
     repos.add(`${row.owner}/${row.repo}`);
-    if (row.outcome != null) {
+    if (row.outcome !== null && row.outcome !== undefined) {
       newest.set(pullRequestOutcomeKey(row), row.outcome);
     }
   }

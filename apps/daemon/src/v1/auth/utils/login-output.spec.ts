@@ -143,7 +143,9 @@ describe('plainTerminalText', () => {
     // Asserting on control characters is the whole point of this test.
     // eslint-disable-next-line no-control-regex
     expect(/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)).toBe(false);
-    expect(() => JSON.parse(JSON.stringify({ text }))).not.toThrow();
+    expect(() => {
+      JSON.parse(JSON.stringify({ text }));
+    }).not.toThrow();
   });
 
   it('reads the CLI’s last line as prose', () => {

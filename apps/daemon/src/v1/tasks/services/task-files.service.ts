@@ -92,7 +92,7 @@ export class TaskFilesService {
     // a lost attachment rather than a breached cap, since last-writer-wins
     // cannot produce a longer list than the writer held.
     await em.transactional(async (tx) => {
-      const task = await this.require(taskId, tx as EntityManager);
+      const task = await this.require(taskId, tx);
       const held = parseTaskFiles(task.attachments);
       if (held.length >= TASK_FILES_MAX) {
         throw tooManyAttachments();

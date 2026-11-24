@@ -81,7 +81,7 @@ export type LiveRowKind = 'thinking' | 'working' | 'composing';
 /** Read the live-row marker off a synthetic item's payload, or null. */
 export function liveRowKind(payload: unknown): LiveRowKind | null {
   if (payload && typeof payload === 'object' && 'live' in payload) {
-    const value = (payload as { live: unknown }).live;
+    const value = payload.live;
     if (value === 'thinking' || value === 'working' || value === 'composing') {
       return value;
     }

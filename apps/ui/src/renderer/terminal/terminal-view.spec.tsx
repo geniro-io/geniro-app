@@ -10,6 +10,7 @@ import type {
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { randomId } from '../random-id';
+import type { TerminalEnding } from './terminal-view';
 
 const xterm = vi.hoisted(() => ({
   instances: [] as {
@@ -95,7 +96,6 @@ vi.mock('@xterm/xterm', () => ({
 }));
 
 const { default: TerminalView } = await import('./terminal-view');
-type TerminalEnding = import('./terminal-view').TerminalEnding;
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -498,11 +498,15 @@ describe('TerminalView', () => {
       await act(async () => {
         next.render(<TerminalView cwd={cwd} shown onEnded={() => undefined} />);
       });
-      act(() => vi.advanceTimersToNextFrame());
+      act(() => {
+        vi.advanceTimersToNextFrame();
+      });
     };
     try {
       await mount([{ cwd: '/work/app' }]);
-      act(() => vi.advanceTimersToNextFrame());
+      act(() => {
+        vi.advanceTimersToNextFrame();
+      });
       expect(xterm.focus).toHaveBeenCalledOnce();
 
       // Any other field: opening a terminal from it is asking for the shell.

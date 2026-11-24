@@ -1237,7 +1237,7 @@ export class ItemDao extends BaseDao<Item> {
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
       .executeTakeFirst();
-    return row?.last == null ? 0 : Number(row.last);
+    return row?.last === null || row?.last === undefined ? 0 : Number(row.last);
   }
 
   /**
@@ -2557,7 +2557,7 @@ export class ItemDao extends BaseDao<Item> {
     const em = txEm ?? this.em.fork();
     await em.transactional(async (tx) => {
       for (const { id, refs } of rows) {
-        await this.getRepo(tx as EntityManager).nativeUpdate({ id }, refs);
+        await this.getRepo(tx).nativeUpdate({ id }, refs);
       }
     });
   }

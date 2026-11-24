@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { createTurnSemaphore, type TurnSlot } from './turn-semaphore';
 
 const tick = (): Promise<void> =>
-  new Promise((resolve) => setImmediate(resolve));
+  new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 
 describe('createTurnSemaphore', () => {
   it('hands out up to `slots` concurrently and queues the rest in order', async () => {

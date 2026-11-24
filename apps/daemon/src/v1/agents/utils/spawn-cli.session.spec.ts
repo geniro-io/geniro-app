@@ -356,7 +356,9 @@ describe('a run-scoped session outlives its turns', () => {
     child.stdin.breakPipe();
     // A macrotask, so every pending microtask (the `closed` continuation
     // above) has already run — no timing to be lucky about.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(announced).toBe(true);
     expect(session.alive).toBe(false);
@@ -1125,7 +1127,9 @@ describe('cancelling a session turn', () => {
     line(child, { continuationDone: true, finalText: 'Both are fixed.' });
     await Promise.race([
       handle?.done,
-      new Promise((resolve) => setTimeout(resolve, 50)),
+      new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      }),
     ]);
 
     expect(settled).toBe(true);
@@ -5279,8 +5283,12 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     emit(child, { run: 'sleep 300', id: 'call-1' });
     emit(child, { answered: 'call-1' });
     emit(child, { done: true });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
 
     const opened = [...events, ...offTurn].filter(
       (e) => e.type === 'shell_open',
@@ -5302,8 +5310,12 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
       emit(child, { answered: `call-${i}` });
     }
     emit(child, { done: true });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
 
     expect(session.runningCommands).toEqual(['pnpm dev']);
   });
@@ -5318,8 +5330,12 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     emit(child, { run: 'ls -la', id: 'call-1' });
     emit(child, { answered: 'call-1' });
     emit(child, { done: true });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
 
     expect([...events, ...offTurn].some((e) => e.type === 'shell_open')).toBe(
       false,
@@ -5335,8 +5351,12 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     ]);
     emit(child, { run: 'sleep 300', id: 'call-1' });
     emit(child, { done: true });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
 
     expect([...events, ...offTurn].some((e) => e.type === 'shell_open')).toBe(
       false,
@@ -5365,8 +5385,12 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
     emit(child, { run: 'sleep 300', id: 'call-1' });
     emit(child, { answered: 'call-1' });
     emit(child, { done: true });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => {
+      setImmediate(r);
+    });
+    await new Promise((r) => {
+      setImmediate(r);
+    });
 
     expect(listing).not.toHaveBeenCalled();
   });
@@ -6312,7 +6336,9 @@ describe('where a session’s detached commands run', () => {
   /** Until the session has read the table `n` times and filed what it read. */
   async function afterReading(reads: () => number, n: number): Promise<void> {
     await vi.waitFor(() => expect(reads()).toBeGreaterThanOrEqual(n));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 
   /** The groups the session hands over when its process dies right now. */

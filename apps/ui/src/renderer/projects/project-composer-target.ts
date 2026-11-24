@@ -43,7 +43,11 @@ export function projectTargetSeed(
   if (target === null) {
     return null;
   }
-  if (project.teamSlug != null && project.teamSlug !== '') {
+  if (
+    project.teamSlug !== null &&
+    project.teamSlug !== undefined &&
+    project.teamSlug !== ''
+  ) {
     return {
       target,
       agentKind: targetAgentKind(target),

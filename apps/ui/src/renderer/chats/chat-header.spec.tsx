@@ -3,13 +3,14 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type * as remoteRemoteSessionModule from '../remote/remote-session';
 import { CHAT_AGENT_KEY } from './agent-activity';
 import { ChatHeader } from './chat-header';
 
 const remote = vi.hoisted(() => ({ value: false }));
 
 vi.mock('../remote/remote-session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../remote/remote-session')>()),
+  ...(await importOriginal<typeof remoteRemoteSessionModule>()),
   isRemoteRuntime: () => remote.value,
 }));
 

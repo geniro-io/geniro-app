@@ -196,7 +196,7 @@ export function threadPullRequestsOf(
   run: { pullRequests?: RunPullRequest[] } | null | undefined,
   store: ReadonlyMap<string, PullRequestRefResult>,
 ): PullRequestRefResult[] {
-  if (run?.pullRequests == null) {
+  if (run?.pullRequests === null || run?.pullRequests === undefined) {
     return [];
   }
   return [...run.pullRequests]

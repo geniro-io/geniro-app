@@ -47,6 +47,30 @@ const config = defineConfig([
       'no-useless-catch': 'error',
       'no-useless-escape': 'error',
       'prefer-const': 'error',
+      eqeqeq: 'error',
+      'no-eval': 'error',
+      'no-promise-executor-return': 'error',
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { fixStyle: 'separate-type-imports' },
+      ],
+      '@typescript-eslint/no-confusing-non-null-assertion': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'error',
+      '@typescript-eslint/no-unsafe-argument': 'error',
+      '@typescript-eslint/no-unsafe-call': 'error',
+      '@typescript-eslint/no-unsafe-return': 'error',
+      '@typescript-eslint/only-throw-error': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'error',
+        {
+          allowDefaultCaseForExhaustiveSwitch: true,
+          considerDefaultExhaustiveForUnions: true,
+        },
+      ],
+      '@typescript-eslint/unbound-method': 'error',
+      '@typescript-eslint/use-unknown-in-catch-callback-variable': 'error',
       '@typescript-eslint/no-unsafe-assignment': 'error',
       '@typescript-eslint/no-unsafe-member-access': 'error',
       '@typescript-eslint/no-require-imports': 'error',
@@ -179,23 +203,22 @@ const config = defineConfig([
     },
   },
   {
-    files: ['**/*.spec.ts', '**/*.spec.tsx', '**/*.int.ts'],
-    rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
-    },
-  },
-  {
     files: [
       '**/*.spec.ts',
       '**/*.spec.tsx',
       '**/*.int.ts',
       '**/*.cy.ts',
       '**/cypress/**/*.{js,ts,tsx}',
+      '**/__tests__/**/*.{ts,tsx}',
     ],
     rules: {
       // Tests frequently consume intentionally-untyped fixtures and API responses.
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/only-throw-error': 'off',
+      '@typescript-eslint/unbound-method': 'off',
     },
   },
 ]);

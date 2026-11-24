@@ -1,9 +1,4 @@
-import type { EntityData } from '@mikro-orm/core';
-import {
-  EntityManager,
-  type FilterQuery,
-  type QueryOrderMap,
-} from '@mikro-orm/sqlite';
+import { EntityManager, type QueryOrderMap } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
@@ -67,8 +62,8 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<boolean> {
     const affected = await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, status, deletedAt: null } as FilterQuery<Task>,
-      { position, updatedAt: at } as EntityData<Task>,
+      { id: taskId, status, deletedAt: null },
+      { position, updatedAt: at },
     );
     return affected === 1;
   }
@@ -104,7 +99,7 @@ export class TaskDao extends BaseDao<Task> {
       return [];
     }
     return this.getAll(
-      { projectId: { $in: [...projectIds] }, number } as FilterQuery<Task>,
+      { projectId: { $in: [...projectIds] }, number },
       {},
       txEm,
     );
@@ -114,11 +109,7 @@ export class TaskDao extends BaseDao<Task> {
     ids: readonly string[],
     txEm?: EntityManager,
   ): Promise<Task[]> {
-    return this.getAll(
-      { id: { $in: [...ids] } } as FilterQuery<Task>,
-      {},
-      txEm,
-    );
+    return this.getAll({ id: { $in: [...ids] } }, {}, txEm);
   }
 
   /**
@@ -158,7 +149,7 @@ export class TaskDao extends BaseDao<Task> {
    */
   async listAwaitingMerge(txEm?: EntityManager): Promise<Task[]> {
     return this.getAll(
-      { status: 'in_review', runId: { $ne: null } } as FilterQuery<Task>,
+      { status: 'in_review', runId: { $ne: null } },
       {
         orderBy: { updatedAt: 'asc', id: 'asc' },
         fields: [
@@ -182,7 +173,7 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<Task | null> {
     return this.getRepo(txEm ?? this.em.fork()).findOne(
-      { source, sourceRef, deletedAt: null } as FilterQuery<Task>,
+      { source, sourceRef, deletedAt: null },
       { disableIdentityMap: true },
     );
   }
@@ -273,13 +264,13 @@ export class TaskDao extends BaseDao<Task> {
     doneAt: Date = at,
   ): Promise<boolean> {
     const affected = await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, status: from, deletedAt: null } as FilterQuery<Task>,
+      { id: taskId, status: from, deletedAt: null },
       {
         status: to,
         position,
         updatedAt: at,
         ...(to === 'done' ? { lastDoneAt: doneAt } : {}),
-      } as EntityData<Task>,
+      },
     );
     return affected === 1;
   }
@@ -300,11 +291,11 @@ export class TaskDao extends BaseDao<Task> {
     interruptedBy: InterruptCause | null = null,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, deletedAt: null } as FilterQuery<Task>,
+      { id: taskId, deletedAt: null },
       {
         stoppedAt,
         interruptedBy: stoppedAt === null ? null : interruptedBy,
-      } as EntityData<Task>,
+      },
     );
   }
 
@@ -319,11 +310,11 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, deletedAt: null } as FilterQuery<Task>,
+      { id: taskId, deletedAt: null },
       {
         prepareFailedAt: failure?.at ?? null,
         prepareFailedReason: failure?.reason ?? null,
-      } as EntityData<Task>,
+      },
     );
   }
 
@@ -342,7 +333,7 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, deletedAt: null } as FilterQuery<Task>,
+      { id: taskId, deletedAt: null },
       {
         startRequestedAt: request?.requestedAt ?? null,
         startRequestedByRunId: request?.byRunId ?? null,
@@ -350,7 +341,7 @@ export class TaskDao extends BaseDao<Task> {
         startRequestNote: request?.note ?? null,
         startRequestWatch: request?.watch ?? false,
         startRequestKind: request === null ? null : (request.kind ?? 'manager'),
-      } as EntityData<Task>,
+      },
     );
   }
 
@@ -366,8 +357,8 @@ export class TaskDao extends BaseDao<Task> {
         deletedAt: null,
         startRequestedAt: { $ne: null },
         startApprovedAt: null,
-      } as FilterQuery<Task>,
-      { startApprovedAt: at } as EntityData<Task>,
+      },
+      { startApprovedAt: at },
     );
     return changed > 0;
   }
@@ -385,8 +376,8 @@ export class TaskDao extends BaseDao<Task> {
         id: taskId,
         deletedAt: null,
         startRequestedAt: { $ne: null },
-      } as FilterQuery<Task>,
-      { startRequestedAt: null, startApprovedAt: null } as EntityData<Task>,
+      },
+      { startRequestedAt: null, startApprovedAt: null },
     );
     return settled > 0;
   }
@@ -415,7 +406,7 @@ export class TaskDao extends BaseDao<Task> {
         runId: { $ne: null },
         deletedAt: null,
         ...kind,
-      } as FilterQuery<Task>,
+      },
       { disableIdentityMap: true },
     );
   }
@@ -426,8 +417,8 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { id: taskId } as FilterQuery<Task>,
-      { startRequestedByRunId: null } as EntityData<Task>,
+      { id: taskId },
+      { startRequestedByRunId: null },
     );
   }
 
@@ -442,8 +433,8 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<boolean> {
     const claimed = await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, startRequestedByRunId: managerRunId } as FilterQuery<Task>,
-      { startRequestedByRunId: null } as EntityData<Task>,
+      { id: taskId, startRequestedByRunId: managerRunId },
+      { startRequestedByRunId: null },
     );
     return claimed > 0;
   }
@@ -455,15 +446,15 @@ export class TaskDao extends BaseDao<Task> {
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { id: taskId, startRequestedByRunId: null } as FilterQuery<Task>,
-      { startRequestedByRunId: managerRunId } as EntityData<Task>,
+      { id: taskId, startRequestedByRunId: null },
+      { startRequestedByRunId: managerRunId },
     );
   }
 
   /** Cards whose start request was approved and not yet started, oldest first. */
   async listApprovedStarts(txEm?: EntityManager): Promise<Task[]> {
     return this.getRepo(txEm).find(
-      { startApprovedAt: { $ne: null }, deletedAt: null } as FilterQuery<Task>,
+      { startApprovedAt: { $ne: null }, deletedAt: null },
       { orderBy: { startApprovedAt: 'asc' }, disableIdentityMap: true },
     );
   }
@@ -475,7 +466,7 @@ export class TaskDao extends BaseDao<Task> {
         startRequestedAt: { $ne: null },
         startApprovedAt: null,
         deletedAt: null,
-      } as FilterQuery<Task>,
+      },
       { orderBy: { startRequestedAt: 'asc' }, disableIdentityMap: true },
     );
   }
@@ -489,7 +480,7 @@ export class TaskDao extends BaseDao<Task> {
       return [];
     }
     return this.getRepo(txEm).find(
-      { runId: { $in: [...runIds] }, deletedAt: null } as FilterQuery<Task>,
+      { runId: { $in: [...runIds] }, deletedAt: null },
       { disableIdentityMap: true },
     );
   }

@@ -196,7 +196,9 @@ export function artifactAnswersStore(
       return values;
     },
     subscribe: (artifactId, from, listener) => {
-      const frames = listeners.get(artifactId) ?? new Map();
+      const frames =
+        listeners.get(artifactId) ??
+        new Map<symbol, (values: Record<string, unknown>) => void>();
       frames.set(from, listener);
       listeners.set(artifactId, frames);
       return () => {

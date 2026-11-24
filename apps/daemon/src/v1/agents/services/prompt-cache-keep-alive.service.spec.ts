@@ -56,7 +56,7 @@ class FakeAdapter {
           usage,
           stopReason: null,
           finalText: null,
-        } as AgentEvent);
+        });
         resolve();
       },
     };

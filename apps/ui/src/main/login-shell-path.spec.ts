@@ -134,7 +134,9 @@ describe('loginShellPath', () => {
     const pid = Number(readFileSync(pidFile, 'utf8').trim());
     // SIGKILL is delivered by the time the promise has resolved; the kernel
     // reaps asynchronously, so allow it the moment it needs.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(isAlive(pid)).toBe(false);
   }, 30_000);
 

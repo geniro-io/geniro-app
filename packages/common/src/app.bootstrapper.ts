@@ -6,8 +6,6 @@ import {
 import { NestFactory } from '@nestjs/core';
 import lodash from 'lodash';
 
-const { compact, flatten } = lodash;
-
 import { AppBootstrapperModule } from './app-bootstrapper.module';
 import {
   type IAppBootstrapperExtension,
@@ -79,10 +77,10 @@ export class AppBootstrapper {
 
   public buildModule(modules?: NonNullable<ModuleMetadata['imports']>) {
     return AppBootstrapperModule.forRoot(
-      compact([
+      lodash.compact([
         ...this.bootstrapModules,
         this.buildLoggerModule(),
-        ...flatten(this.extensions.map((e) => e.modules)),
+        ...lodash.flatten(this.extensions.map((e) => e.modules)),
         ...(modules || []),
       ]),
       this.params,
@@ -92,7 +90,7 @@ export class AppBootstrapper {
   public async init(module?: DynamicModule) {
     const appBootstrapperModule = module || this.buildModule();
 
-    const customBootstrapperList = compact(
+    const customBootstrapperList = lodash.compact(
       this.extensions.map((e) => e.customBootstrapper),
     );
 

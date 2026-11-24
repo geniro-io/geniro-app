@@ -118,7 +118,7 @@ describe('AutopilotControl', () => {
 
     openPanel(el);
     act(() => {
-      (byLabel('Autopilot') as HTMLElement | null)?.click();
+      byLabel('Autopilot')?.click();
     });
 
     expect(onUpdate).toHaveBeenCalledWith({ autopilotEnabled: true });

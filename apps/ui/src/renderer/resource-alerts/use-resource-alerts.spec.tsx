@@ -95,7 +95,9 @@ describe('useResourceAlerts', () => {
   const settle = async (action: () => void): Promise<void> => {
     await act(async () => {
       action();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
   };
 

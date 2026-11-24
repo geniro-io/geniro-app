@@ -472,10 +472,12 @@ async function press(): Promise<void> {
 
 function peeks(): Record<string, string> {
   return Object.fromEntries(
-    [...container.querySelectorAll('[data-memory-peek]')].map((node) => [
-      node.getAttribute('data-memory-peek'),
-      (node.textContent ?? '').replace(/\s+/g, ' ').trim(),
-    ]),
+    [...container.querySelectorAll('[data-memory-peek]')].map(
+      (node): [string, string] => [
+        node.getAttribute('data-memory-peek') as string,
+        (node.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      ],
+    ),
   );
 }
 

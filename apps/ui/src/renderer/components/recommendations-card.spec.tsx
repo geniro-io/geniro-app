@@ -54,7 +54,7 @@ function button(el: HTMLElement, name: string): HTMLButtonElement {
   if (!found) {
     throw new Error(`no button "${name}"`);
   }
-  return found as HTMLButtonElement;
+  return found;
 }
 
 function click(el: HTMLElement): void {

@@ -1,9 +1,9 @@
 import type { EntityClass, EntityData } from '@mikro-orm/core';
+import type { SqlEntityRepository } from '@mikro-orm/sqlite';
 import {
   type EntityManager,
   type FilterQuery,
   type FindOptions,
-  SqlEntityRepository,
 } from '@mikro-orm/sqlite';
 
 export abstract class BaseDao<T extends object> {

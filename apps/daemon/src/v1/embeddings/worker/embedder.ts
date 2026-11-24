@@ -35,10 +35,12 @@ export class Embedder {
 
   static async load(model: EmbeddingModelRef): Promise<Embedder> {
     const tokenizer = new Tokenizer(
-      JSON.parse(readFileSync(join(model.dir, 'tokenizer.json'), 'utf8')),
+      JSON.parse(
+        readFileSync(join(model.dir, 'tokenizer.json'), 'utf8'),
+      ) as object,
       JSON.parse(
         readFileSync(join(model.dir, 'tokenizer_config.json'), 'utf8'),
-      ),
+      ) as object,
     );
     const session = await InferenceSession.create(
       join(model.dir, 'model_quantized.onnx'),

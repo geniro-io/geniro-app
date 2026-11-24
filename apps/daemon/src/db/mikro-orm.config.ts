@@ -62,6 +62,6 @@ export default defineConfig({
   // `Application%20Support` and the daemon died before Nest started.
   dynamicImportProvider: async (id: string) => {
     const path = id.startsWith('file://') ? fileURLToPath(id) : id;
-    return import(path);
+    return (await import(path)) as unknown;
   },
 });

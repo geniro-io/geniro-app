@@ -150,7 +150,7 @@ export function memberRunCells(input: MemberRunsInput): MemberRunCells {
     }
   }
   for (const goal of ours(input.goals)) {
-    if (goal.memberId == null) {
+    if (goal.memberId === null || goal.memberId === undefined) {
       continue;
     }
     const goals = cellOf(goal.memberId, goal.runId).goals;

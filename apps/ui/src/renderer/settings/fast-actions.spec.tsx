@@ -65,7 +65,7 @@ function button(name: string): HTMLButtonElement {
         .join(' | ')}`,
     );
   }
-  return found as HTMLButtonElement;
+  return found;
 }
 
 function click(el: HTMLElement): void {

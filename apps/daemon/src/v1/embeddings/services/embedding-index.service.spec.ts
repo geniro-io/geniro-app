@@ -110,7 +110,7 @@ class FakeEmbeddingProcess {
     _timeoutMs: number,
   ): Promise<WorkerResults[Op]> {
     this.requests.push(request);
-    const override = this.handlers[request.op] as Handler<Op> | undefined;
+    const override = this.handlers[request.op];
     if (override) {
       return override(request);
     }
@@ -531,14 +531,20 @@ describe('EmbeddingIndexService', () => {
 
       await index.setConfig(ON);
       await waitReady();
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_100);
+      });
       reasons.length = 0;
       index.chatAdded();
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_100);
+      });
       expect(reasons).toEqual([]);
 
       await index.setConfig({ ...ON, onBattery: true });
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_100);
+      });
       reasons.length = 0;
       chats.add(2, 'r1');
       index.chatAdded();
@@ -552,7 +558,9 @@ describe('EmbeddingIndexService', () => {
       await index.setConfig({ ...ON, enabled: false, onBattery: true });
       reasons.length = 0;
       index.chatAdded();
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_100);
+      });
       expect(reasons).toEqual([]);
     }, 15_000);
 
@@ -720,7 +728,9 @@ describe('EmbeddingIndexService', () => {
 
       await index.setConfig(ON);
       await vi.waitFor(() => expect(documents).toHaveBeenCalledOnce());
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(indexedIds('memory')).toEqual([]);
 
       memory.set('m3', 'three');

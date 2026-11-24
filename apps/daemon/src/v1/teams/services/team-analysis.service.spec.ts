@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { NotFoundException } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RunWire } from '../../agents/chat.types';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { Team } from '../teams.types';
@@ -30,7 +29,7 @@ describe('TeamAnalysisService', () => {
     dir = await mkdtemp(join(tmpdir(), 'geniro-team-analysis-'));
     store = new TeamStoreService({ teamsDir: dir });
     analyses = {
-      startTeam: vi.fn().mockResolvedValue({ id: 'analysis' } as RunWire),
+      startTeam: vi.fn().mockResolvedValue({ id: 'analysis' }),
       findTeamAnalysis: vi.fn().mockResolvedValue(null),
       countTeamRunsInPeriod: vi
         .fn()

@@ -31,7 +31,11 @@ export interface MappedItem {
  */
 export function mapEventToItem(event: AgentEvent): MappedItem | null {
   const item = mapEventBody(event);
-  if (item === null || event.parentToolUseId == null) {
+  if (
+    item === null ||
+    event.parentToolUseId === null ||
+    event.parentToolUseId === undefined
+  ) {
     return item;
   }
   // On the PAYLOAD rather than as a column: it means the same thing for every

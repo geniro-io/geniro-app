@@ -47,7 +47,7 @@ describe('claudePermissionOptions', () => {
 
   it('never echoes a mode change — it is not an answer about this tool', () => {
     const replies = claudePermissionOptions(SUGGESTIONS).flatMap((option) =>
-      Array.isArray(option.reply) ? option.reply : [],
+      Array.isArray(option.reply) ? (option.reply as { type?: string }[]) : [],
     );
     expect(replies.some((update) => update.type === 'setMode')).toBe(false);
   });

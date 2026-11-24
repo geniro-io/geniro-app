@@ -58,7 +58,7 @@ export class RunContextRegistry {
       tokens,
       window: reading.window ?? current?.window ?? null,
       estimated:
-        reading.tokens != null
+        reading.tokens !== null && reading.tokens !== undefined
           ? reading.estimated === true
           : tokens !== null && current?.estimated === true,
     };

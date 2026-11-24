@@ -46,9 +46,9 @@ describe('WriteFailureNotices', () => {
     await vi.advanceTimersByTimeAsync(WRITE_FAILURE_NOTICE_DELAY_MS);
 
     expect(
-      warn.mock.calls.map(([runId, message]) => [
+      warn.mock.calls.map(([runId, message]: unknown[]) => [
         runId,
-        /^1 event /.test(message),
+        /^1 event /.test(String(message)),
       ]),
     ).toEqual([
       ['run-a', true],

@@ -451,7 +451,9 @@ describe('deliverRelayedImages', () => {
 
   const flush = (): Promise<void> =>
     act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     });
 
   it('sends the pictures to the thread once its answer turn settles when that turn refused them', async () => {

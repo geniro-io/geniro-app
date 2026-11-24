@@ -230,7 +230,9 @@ describe('MonitorChatDelivery', () => {
       description: 'quiet one',
       timeoutMs: 60_000,
     });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
     chat.setHold(null);
     chat.settle();
     await until(() => chat.sendMessage.mock.calls.length === 1);
@@ -267,13 +269,17 @@ describe('MonitorChatDelivery', () => {
       description: 'loop',
       timeoutMs: 60_000,
     });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
     registry.stopRun(owner.runId, 'thread-stop');
     await registry.settled(owner.runId, 5000);
 
     chat.setHold(null);
     chat.settle();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(chat.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -347,7 +353,9 @@ describe('MonitorChatDelivery', () => {
     });
     await until(() => chat.sendMessage.mock.calls.length === 1);
     // New output does not retry early: the retry waits for its moment.
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 800);
+    });
     expect(chat.sendMessage).toHaveBeenCalledTimes(1);
     expect(registry.isRunning(owner.runId)).toBe(true);
 
@@ -449,7 +457,9 @@ describe('MonitorChatDelivery', () => {
     await until(() => chat.sendMessage.mock.calls.length === 1);
     await registry.settled(owner.runId, 5000);
     chat.settle();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(chat.sendMessage).toHaveBeenCalledTimes(1);
     // Its row carried the output; no end is written beside it.
     expect(ends).toEqual([]);
@@ -470,7 +480,9 @@ describe('MonitorChatDelivery', () => {
     // and the failed start announces a settle before it throws.
     chat.sendMessage.mockImplementationOnce(async () => {
       chat.setHold('wait');
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 700);
+      });
       chat.setHold(null);
       chat.settle();
       throw new Error('the folder is gone');
@@ -483,7 +495,9 @@ describe('MonitorChatDelivery', () => {
       timeoutMs: 60_000,
     });
     await until(() => chat.sendMessage.mock.calls.length === 1);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1000);
+    });
     expect(chat.sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -506,9 +520,13 @@ describe('MonitorChatDelivery', () => {
     await until(() => chat.sendMessage.mock.calls.length === 1);
     chat.stop();
     fail(new Error('the folder is gone'));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     chat.settle();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(chat.sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -575,7 +593,9 @@ describe('MonitorChatDelivery', () => {
       ],
     );
     chat.settle();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(chat.sendMessage).not.toHaveBeenCalled();
 
     service.startDelivering();

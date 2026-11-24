@@ -39,7 +39,9 @@ class FakeItems {
     delayMs = 0,
   ): Promise<ItemWire> {
     if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
     const seq = this.nextSeq++;
     const list = this.rows.get(runId) ?? [];

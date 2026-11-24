@@ -53,9 +53,9 @@ const meta = {
   args: {
     plugins: [DATADOG, LINEAR],
     onAdd: () =>
-      new Promise<string | null>((resolve) =>
-        setTimeout(() => resolve(null), 800),
-      ),
+      new Promise<string | null>((resolve) => {
+        setTimeout(() => resolve(null), 800);
+      }),
   },
   decorators: [
     (story) => (

@@ -58,7 +58,9 @@ function approvalCapabilityFor(
 
 function settle(): Promise<void> {
   return act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 

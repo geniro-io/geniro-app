@@ -42,7 +42,9 @@ export async function measurePath(
     }
     visited += 1;
     if (visited % YIELD_EVERY_ENTRIES === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
   }
   return total;

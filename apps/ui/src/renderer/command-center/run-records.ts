@@ -13,7 +13,7 @@ export function readRunRecords<T>(
     }
     return Object.fromEntries(
       Object.entries(stored).filter(([, value]) => isRecord(value)),
-    ) as RunRecords<T>;
+    );
   } catch {
     return {};
   }

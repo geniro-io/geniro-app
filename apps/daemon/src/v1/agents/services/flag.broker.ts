@@ -128,7 +128,10 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
       teamSlug: run?.teamId ?? null,
       projectId: run?.projectId ?? null,
       runKind: run === null ? 'chat' : agentFlagRunKindOf(run),
-      runTitle: run?.title == null ? null : redactSecrets(run.title),
+      runTitle:
+        run?.title === null || run?.title === undefined
+          ? null
+          : redactSecrets(run.title),
       cost: input.cost,
       category: input.category,
       minutesLost: input.minutesLost,

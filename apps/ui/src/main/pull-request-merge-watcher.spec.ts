@@ -114,9 +114,7 @@ function github(
           pullRequest: {
             number: ref.number,
             title: `pr ${ref.number}`,
-            state: (isMerged
-              ? 'merged'
-              : 'open') satisfies PullRequestState as PullRequestState,
+            state: (isMerged ? 'merged' : 'open') satisfies PullRequestState,
             isDraft: false,
             headRefName: 'feat/x',
             isCrossRepository: false,

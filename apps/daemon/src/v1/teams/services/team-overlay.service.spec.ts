@@ -141,7 +141,9 @@ describe('TeamOverlayService', () => {
     await overlays.save('ops', 'p3', {});
 
     events.publish({ projectId: 'p3' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(await overlays.listForProject('p3')).toEqual(['dev', 'ops']);
 
     projects.delete('p3');

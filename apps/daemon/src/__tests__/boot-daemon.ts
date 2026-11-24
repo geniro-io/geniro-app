@@ -102,9 +102,9 @@ export async function stopDaemon(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  const exited = new Promise<void>((resolve) =>
-    child.once('exit', () => resolve()),
-  );
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+  });
   child.kill('SIGTERM');
   await exited;
 }

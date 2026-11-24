@@ -299,7 +299,9 @@ describe('a gallery an agent handed over', () => {
         <LocalImageLoaderContext.Provider
           value={async (path) => {
             asked.push(path);
-            return new Promise<string>((resolve) => release.push(resolve));
+            return new Promise<string>((resolve) => {
+              release.push(resolve);
+            });
           }}>
           <GalleryCard gallery={GALLERY} />
         </LocalImageLoaderContext.Provider>,
@@ -326,7 +328,9 @@ describe('a gallery an agent handed over', () => {
         <LocalImageLoaderContext.Provider
           value={async (path) => {
             asked.push(path);
-            return new Promise<string>((resolve) => release.push(resolve));
+            return new Promise<string>((resolve) => {
+              release.push(resolve);
+            });
           }}>
           <GalleryCard gallery={GALLERY} />
         </LocalImageLoaderContext.Provider>,
@@ -471,7 +475,7 @@ describe('a gallery an agent handed over', () => {
       '[data-slot="gallery-strip"]',
     )!;
     const scrollBy = vi.fn();
-    strip.scrollBy = scrollBy as unknown as typeof strip.scrollBy;
+    strip.scrollBy = scrollBy;
 
     // jsdom lays nothing out, so every width reads 0: nothing is out of view.
     expect(control('Scroll the gallery forward')).toBeNull();

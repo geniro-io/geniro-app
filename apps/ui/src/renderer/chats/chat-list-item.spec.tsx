@@ -308,7 +308,10 @@ describe('ChatListItem', () => {
       it('is held while the read is pending, and not offered on a guess', async () => {
         let answer!: (mark: ThreadLessonsMark) => void;
         const readLessonsMark = vi.fn(
-          () => new Promise<ThreadLessonsMark>((resolve) => (answer = resolve)),
+          () =>
+            new Promise<ThreadLessonsMark>((resolve) => {
+              answer = resolve;
+            }),
         );
         const container = await mount(
           <ChatListItem {...props({ onReflect: vi.fn(), readLessonsMark })} />,

@@ -1,7 +1,15 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -30,7 +38,7 @@ describe('CommandCenterChatService', () => {
     refreshTeamInstructions: ReturnType<typeof vi.fn>;
     offeredApproval: ReturnType<typeof vi.fn>;
     deleteCommandCenterChats: ReturnType<typeof vi.fn>;
-    moveChatFolder: ReturnType<typeof vi.fn>;
+    moveChatFolder: Mock;
   };
   let board: {
     activeThreads: ReturnType<typeof vi.fn>;

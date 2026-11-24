@@ -399,7 +399,9 @@ function answerPerAccount(
 
 /** Let the bus subscriber's own async work settle. */
 async function flush(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 /**

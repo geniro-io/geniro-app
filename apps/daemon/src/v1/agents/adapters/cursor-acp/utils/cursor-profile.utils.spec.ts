@@ -1,3 +1,4 @@
+import type * as fsModule from 'node:fs';
 import {
   chmodSync,
   existsSync,
@@ -22,7 +23,7 @@ import {
 const fsFaults = vi.hoisted(() => ({ failWrites: false }));
 
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>();
+  const actual = await importOriginal<typeof fsModule>();
   return {
     ...actual,
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {

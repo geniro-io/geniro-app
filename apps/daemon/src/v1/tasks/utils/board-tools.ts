@@ -438,7 +438,5 @@ export const BOARD_TOOLS: readonly TaskBoardTool[] = Object.values(TOOLS);
  * listing and the refusal of an unknown argument cannot disagree.
  */
 export function boardToolArgs(name: HostBoardTool): string[] {
-  return Object.keys(
-    (TOOLS[name].inputSchema.properties ?? {}) as Record<string, unknown>,
-  );
+  return Object.keys(TOOLS[name].inputSchema.properties ?? {});
 }

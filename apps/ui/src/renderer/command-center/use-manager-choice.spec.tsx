@@ -49,7 +49,7 @@ async function mount(
       Promise.resolve({
         ...DEFAULT_SETTINGS,
         lastManagerConfig: saved,
-      } as Settings),
+      }),
     updateSettings: (patch) => {
       writes.push(patch);
       return Promise.resolve(DEFAULT_SETTINGS);
@@ -94,7 +94,7 @@ describe('useManagerChoice', () => {
 
   it('shows no choice until the saved one has been read', async () => {
     window.geniro = createPreloadStub({
-      getSettings: () => new Promise<Settings>(() => undefined),
+      getSettings: () => new Promise<Settings>(() => {}),
     });
     await act(async () => {
       root.render(<Probe cliDetections={ALL_FOUND} />);

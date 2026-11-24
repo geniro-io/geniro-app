@@ -149,7 +149,9 @@ export function CommandCenter({
   const unknownTeams = [
     ...new Set(
       (board.cards ?? []).flatMap((card) =>
-        card.run.teamId != null && !teamFaces.has(card.run.teamId)
+        card.run.teamId !== null &&
+        card.run.teamId !== undefined &&
+        !teamFaces.has(card.run.teamId)
           ? [card.run.teamId]
           : [],
       ),
@@ -189,13 +191,14 @@ export function CommandCenter({
   const asking = useMemo(
     () =>
       (board.cards ?? []).flatMap((card): AskingThread[] =>
-        card.run.awaiting == null
+        card.run.awaiting === null || card.run.awaiting === undefined
           ? []
           : [
               {
                 runId: card.run.id,
                 title: card.run.title ?? 'Untitled thread',
-                isTeam: card.run.teamId != null,
+                isTeam:
+                  card.run.teamId !== null && card.run.teamId !== undefined,
                 awaiting: card.run.awaiting,
                 lastActivityAt: card.run.lastActivityAt ?? card.run.createdAt,
               },
@@ -431,7 +434,7 @@ export function CommandCenter({
             card.run.title ??
             'Untitled thread',
           running: card.run.status === 'running',
-          isTeam: card.run.teamId != null,
+          isTeam: card.run.teamId !== null && card.run.teamId !== undefined,
         });
     };
   }, [board.cards, threadIdentities, archiveFlow.ask]);

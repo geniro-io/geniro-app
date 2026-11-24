@@ -225,7 +225,9 @@ export class ShareSignInService {
       !isOver(run.session.status) &&
       Date.now() < deadline
     ) {
-      await new Promise((resolve) => setTimeout(resolve, URL_POLL_MS));
+      await new Promise((resolve) => {
+        setTimeout(resolve, URL_POLL_MS);
+      });
     }
   }
 

@@ -35,7 +35,7 @@ import type { PartialStreamService } from '../../agents/services/partial-stream.
 import type { ProcessRegistry } from '../../agents/services/process-registry';
 import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
-import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
+import type { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { CallContext } from '../../runs/entity/call-context.entity';

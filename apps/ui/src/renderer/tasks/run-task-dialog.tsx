@@ -64,7 +64,7 @@ export function RunTaskDialog({
    * since been deleted or archived — states this side cannot see, and rare
    * enough that stating the ordinary case is worth more than saying nothing.
    */
-  const continues = task?.runId != null;
+  const continues = task?.runId !== null && task?.runId !== undefined;
 
   return (
     <Dialog open={open} onClose={onClose} title="Run task">

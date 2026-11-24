@@ -180,7 +180,7 @@ function patchById<T extends { id: string }>(
     }
     const id = item.get('id');
     if (typeof id === 'string' && !kept.has(id)) {
-      kept.set(id, item as YAMLMap);
+      kept.set(id, item);
     }
   }
   existing.items = entries.map((entry) => {

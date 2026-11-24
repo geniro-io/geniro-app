@@ -1190,7 +1190,9 @@ describe('ShareService', () => {
       ).toBe(true);
       // Told only once both wakes settled.
       nth(wakes, 0).onDelivered();
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(nth(await service.list(), 0).askedByAgent).toBe(true);
       nth(wakes, 1).onDelivered();
       await expect
@@ -1215,8 +1217,11 @@ describe('ShareService', () => {
       await service.retryAwaiting('company');
       nth(wakes, 0).onDelivered();
       await expect
-        .poll(async () =>
-          JSON.parse((await dao.listOwedWakes())[0]?.asker ?? 'null'),
+        .poll(
+          async () =>
+            JSON.parse(
+              (await dao.listOwedWakes())[0]?.asker ?? 'null',
+            ) as unknown,
         )
         .toEqual([other]);
       wakes = [];

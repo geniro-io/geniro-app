@@ -78,7 +78,11 @@ export function conversationWorkByCall({
   }
   for (const agent of agents) {
     for (const thread of agent.threads) {
-      if (thread.kind === 'subagent' && thread.callId != null) {
+      if (
+        thread.kind === 'subagent' &&
+        thread.callId !== null &&
+        thread.callId !== undefined
+      ) {
         entry(thread.callId).subagents.push(thread);
       }
     }

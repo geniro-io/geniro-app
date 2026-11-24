@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import { AgentKind } from '../../runs/runs.types';
@@ -29,7 +29,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
-import { AgentAdapterRegistry } from './agent-adapter.registry';
+import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService, BLOCKING_LIST_TIMEOUT_MS } from './agent-mcp.service';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
@@ -111,7 +111,7 @@ interface Harness {
   readMcpServerHealth: ReturnType<typeof vi.fn>;
   forgetMcpNeedsAuth: ReturnType<typeof vi.fn>;
   writeMcpConfigDocument: ReturnType<typeof vi.fn>;
-  addMcpServer: ReturnType<typeof vi.fn>;
+  addMcpServer: Mock;
 }
 
 interface HarnessOptions {
@@ -752,7 +752,7 @@ describe('AgentMcpService.list', () => {
       calls += 1;
       return calls === 1
         ? Promise.resolve([server('codegraph')])
-        : new Promise<AgentMcpServer[]>(() => undefined);
+        : new Promise<AgentMcpServer[]>(() => {});
     });
 
     await service.list(AgentKind.Claude, cwd);
@@ -788,10 +788,9 @@ describe('AgentMcpService.list', () => {
     clock = 60 * 60 * 1000;
     expect(harvest.get('claude', cwd, null)).toBeNull();
 
-    const { service } = harness(
-      () => new Promise<AgentMcpServer[]>(() => undefined),
-      { harvest },
-    );
+    const { service } = harness(() => new Promise<AgentMcpServer[]>(() => {}), {
+      harvest,
+    });
 
     const asked = service.list(AgentKind.Claude, cwd, { refresh: true });
     await vi.advanceTimersByTimeAsync(400);
@@ -816,10 +815,10 @@ describe('AgentMcpService.list', () => {
     const cwd = realDir();
     const harvest = emptyHarvest();
     harvest.record('claude', cwd, null, [server('gmail')]);
-    const { service } = harness(
-      () => new Promise<AgentMcpServer[]>(() => undefined),
-      { facts: { configured: ['codegraph'] }, harvest },
-    );
+    const { service } = harness(() => new Promise<AgentMcpServer[]>(() => {}), {
+      facts: { configured: ['codegraph'] },
+      harvest,
+    });
 
     // Through Reconnect, which is where the union is visible at all: a fresh
     // harvest ANSWERS an ordinary read outright, and only a refresh forces the
@@ -843,10 +842,9 @@ describe('AgentMcpService.list', () => {
     // them settle rather than watching a spinner over an empty box.
     vi.useFakeTimers();
     const cwd = realDir();
-    const { service } = harness(
-      () => new Promise<AgentMcpServer[]>(() => undefined),
-      { facts: { configured: ['sentry', 'codegraph'] } },
-    );
+    const { service } = harness(() => new Promise<AgentMcpServer[]>(() => {}), {
+      facts: { configured: ['sentry', 'codegraph'] },
+    });
 
     const asked = service.list(AgentKind.Claude, cwd);
     await vi.advanceTimersByTimeAsync(400);
@@ -883,9 +881,7 @@ describe('AgentMcpService.list', () => {
     // "this folder has no servers".
     vi.useFakeTimers();
     const cwd = realDir();
-    const { service } = harness(
-      () => new Promise<AgentMcpServer[]>(() => undefined),
-    );
+    const { service } = harness(() => new Promise<AgentMcpServer[]>(() => {}));
 
     const asked = service.list(AgentKind.Claude, cwd);
     await vi.advanceTimersByTimeAsync(400);
@@ -2285,10 +2281,10 @@ describe('AgentMcpService.recheckServer', () => {
     harvest.record('claude', cwd, null, [
       { ...server('gmail'), status: 'unknown' },
     ]);
-    const { service } = harness(
-      () => new Promise<AgentMcpServer[]>(() => undefined),
-      { harvest, probeHealth: { status: 'connected', detail: null } },
-    );
+    const { service } = harness(() => new Promise<AgentMcpServer[]>(() => {}), {
+      harvest,
+      probeHealth: { status: 'connected', detail: null },
+    });
 
     const listing = await service.recheckServer(AgentKind.Claude, cwd, 'gmail');
 
@@ -2405,7 +2401,9 @@ describe('AgentMcpService.copyPluginServer', () => {
     expect(listMcpServers).toHaveBeenCalledTimes(2);
     expect(copied.servers.map((row) => row.name)).toContain('datadog');
     releaseOld([server('a')]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const after = await service.list(AgentKind.CursorAgent, cwd);
     expect(after.servers.map((row) => row.name)).toContain('datadog');
   });
@@ -2424,7 +2422,9 @@ describe('AgentMcpService.copyPluginServer', () => {
     await vi.waitFor(() => expect(listMcpServers).toHaveBeenCalledTimes(2));
 
     held[0]?.([server('a')]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const meanwhile = await service.list(AgentKind.CursorAgent, cwd);
 
     // Joined the copy's dial rather than starting a third.
@@ -2449,7 +2449,9 @@ describe('AgentMcpService.copyPluginServer', () => {
     await service.list(AgentKind.CursorAgent, cwd);
     await service.copyPluginServer(input(cwd));
     failOld(new Error('old dial broke'));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     // Past the copy's own reading, so the next ask has to look further.
     setNow(10 * 60_000);
 

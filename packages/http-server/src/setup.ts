@@ -1,5 +1,3 @@
-import type { AddressInfo } from 'node:net';
-
 import compress, { type FastifyCompressOptions } from '@fastify/compress';
 import multipart from '@fastify/multipart';
 import {
@@ -19,9 +17,9 @@ import {
   type SwaggerCustomOptions,
   SwaggerModule,
 } from '@nestjs/swagger';
+import type { BaseLogger } from '@packages/common';
 import {
   AppBootstrapperConfigService,
-  BaseLogger,
   DefaultLogger,
   type IAppBootstrapperExtension,
   Logger,
@@ -309,7 +307,7 @@ export const setupMiddlewares = (
   const serverApp = app as NestFastifyApplication;
   const fastifyInstance: FastifyInstance = serverApp
     .getHttpAdapter()
-    .getInstance() as unknown as FastifyInstance;
+    .getInstance();
 
   // if (sentryService.isSentryInit && param.logger?.sentry?.enabledHttpTracing) {
   //   app.use(Sentry.Handlers.requestHandler());
@@ -457,7 +455,7 @@ const resolveBoundPort = (app: INestApplication, fallback: number): number => {
   const fastify = app
     .getHttpAdapter()
     .getInstance() as unknown as FastifyInstance;
-  const address = fastify.server.address() as AddressInfo | string | null;
+  const address = fastify.server.address();
   return address && typeof address !== 'string' ? address.port : fallback;
 };
 
@@ -469,7 +467,7 @@ export const runHttpApp = async (
   const host = params.host ?? '0.0.0.0';
 
   try {
-    await (<INestApplication>app).listen(port, host);
+    await app.listen(port, host);
   } catch (err) {
     // With portFallback, a busy preferred port is recoverable: let the OS
     // assign a free one rather than crashing. Any other error still propagates.
@@ -479,7 +477,7 @@ export const runHttpApp = async (
     ) {
       throw err;
     }
-    await (<INestApplication>app).listen(0, host);
+    await app.listen(0, host);
   }
 
   const boundPort = resolveBoundPort(app, port);

@@ -1,3 +1,4 @@
+import type * as fsModule from 'node:fs';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +17,7 @@ import { resolveValidCwd } from './resolve-cwd';
 const denied = vi.hoisted(() => ({ path: null as string | null, code: '' }));
 
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>();
+  const actual = await importOriginal<typeof fsModule>();
   return {
     ...actual,
     opendirSync: (path: string, ...rest: unknown[]) => {

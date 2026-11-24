@@ -77,7 +77,11 @@ export class HandoffService {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${input.runId}`);
     }
-    if (!run.teamId && input.memberId != null) {
+    if (
+      !run.teamId &&
+      input.memberId !== null &&
+      input.memberId !== undefined
+    ) {
       throw new BadRequestException(
         'HANDOFF_NODE_UNEXPECTED',
         `chat run ${run.id} does not accept a memberId`,

@@ -215,7 +215,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   /** Long enough for `endFinishedWork` to have read the card and the run. */
   const flushSettle = async (): Promise<void> => {
     for (let tick = 0; tick < 5; tick += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
     }
   };
 
@@ -251,7 +253,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
    * a card twice sees the first answer again.
    */
   const statusOf = async (taskId: string): Promise<string | undefined> =>
-    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.status;
+    (await taskDao.getById(taskId, orm.em.fork()))?.status;
 
   it('leaves a card whose run COMPLETED where it is, with no report written for the agent', async () => {
     // The agent moves its own card and writes its own report through
@@ -352,7 +354,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   const stoppedAtOf = async (
     taskId: string,
   ): Promise<Date | null | undefined> =>
-    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.stoppedAt;
+    (await taskDao.getById(taskId, orm.em.fork()))?.stoppedAt;
 
   it('marks the CARD as stopped when the user stops the run — the mark outlives the run moving on', async () => {
     // The run's own `cancelled` was the only record of the Stop, and the user
@@ -474,7 +476,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     // The subscriber detaches its work, so yield a full turn of the event
     // loop — every await under it resolves synchronously (better-sqlite3), so
     // one macrotask is enough for the whole chain.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect((await taskDao.getById(task.id))?.status).toBe('failed');
   });
@@ -489,7 +493,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       status: null,
       at: new Date().toISOString(),
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
@@ -501,7 +507,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       status,
       at: new Date().toISOString(),
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   };
 
   it('puts a FAILED card back to work when its run works again', async () => {
@@ -1064,10 +1072,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     const markOf = async (
       taskId: string,
     ): Promise<{ stoppedAt: Date | null; interruptedBy: string | null }> => {
-      const task = await taskDao.getById(
-        taskId,
-        orm.em.fork() as EntityManager,
-      );
+      const task = await taskDao.getById(taskId, orm.em.fork());
       return {
         stoppedAt: task?.stoppedAt ?? null,
         interruptedBy: task?.interruptedBy ?? null,
@@ -1550,7 +1555,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     service.onModuleInit();
 
     bus.publishRunDeleted('run-1');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const stored = await taskDao.getById(task.id);
     // Left holding the run, the card sits in `in_progress` for good with Run
@@ -1567,7 +1574,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     service.onModuleInit();
 
     bus.publishRunDeleted('run-1');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const stored = await taskDao.getById(task.id);
     expect(stored?.status).toBe('in_review');
@@ -1579,7 +1588,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     service.onModuleInit();
 
     bus.publishRunDeleted('some-other-run');
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect((await taskDao.getById(task.id))?.runId).toBe('run-1');
   });

@@ -190,11 +190,11 @@ describe('SubagentBlock', () => {
     expect(
       container.querySelector('[data-slot="subagent-meta-tools"]'),
     ).toBeNull();
-    act(() =>
+    act(() => {
       container
         .querySelector<HTMLElement>('[data-slot="subagent-meta"] button')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(
       container.querySelector('[data-slot="subagent-meta-detail"]')
         ?.textContent,
@@ -345,9 +345,9 @@ describe('SubagentBlock', () => {
     );
     expect(trigger?.getAttribute('aria-label')).toContain('claude-opus-5');
 
-    act(() =>
-      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(
       container.querySelector('[data-slot="subagent-meta-detail"]')
         ?.textContent,
@@ -398,9 +398,9 @@ describe('SubagentBlock', () => {
         />,
       ),
     );
-    act(() =>
-      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
 
     expect(container.textContent).toContain('Task for Review the diff');
     expect(container.textContent).toContain('Look for off-by-one errors.');
@@ -427,9 +427,9 @@ describe('SubagentBlock', () => {
         />,
       ),
     );
-    act(() =>
-      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
 
     // TurnBlock's caption.
     expect(container.querySelector('[data-role="subagent-label"]')).toBeNull();
@@ -599,9 +599,9 @@ describe('SubagentBlock', () => {
     expect(badge()?.textContent).toBe('cancelled');
     expect(container.querySelector('svg.animate-spin')).toBeNull();
 
-    act(() =>
-      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     // Opening the thread neither adds a second reading of the status nor
     // changes the one on the header.
     expect(badge()?.textContent).toBe('cancelled');
@@ -745,9 +745,9 @@ describe('SubagentBlock', () => {
     // would fail this while satisfying the guideline.
     expect(control?.className).toContain('size-6');
 
-    act(() =>
-      control?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      control?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(opened).toHaveLength(1);
     expect(opened[0]?.id).toBe('task-1');
     // Pressing it must not also toggle the disclosure it sits inside.
@@ -1232,11 +1232,11 @@ describe('SubagentBlock figures', () => {
   }
 
   function openPlate(): void {
-    act(() =>
+    act(() => {
       container
         .querySelector<HTMLElement>('[data-slot="subagent-meta"] button')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
   }
 
   function popoverLabels(): string[] {
@@ -1446,9 +1446,9 @@ describe('SubagentBlock figures', () => {
         />,
       ),
     );
-    act(() =>
-      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
-    );
+    act(() => {
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(
       container.querySelector('[data-slot="subagent-window-note"]')
         ?.textContent,

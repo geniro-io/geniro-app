@@ -31,7 +31,7 @@ class Thing extends TimestampsEntity {
 }
 
 class ThingDao extends BaseDao<Thing> {
-  constructor(em: import('@mikro-orm/sqlite').EntityManager) {
+  constructor(em: EntityManager) {
     super(em, Thing);
   }
 }
@@ -80,7 +80,7 @@ describe('BaseDao', () => {
     const expected = [{ id: '1', name: 'test', deletedAt: null }];
     vi.mocked(repo.find).mockResolvedValue(expected);
 
-    const result = await dao.getAll(where as never, options as never);
+    const result = await dao.getAll(where, options);
 
     expect(repo.find).toHaveBeenCalledWith(where, options);
     expect(result).toBe(expected);
@@ -91,7 +91,7 @@ describe('BaseDao', () => {
     const expected = { id: '1', name: 'test', deletedAt: null };
     vi.mocked(repo.findOne).mockResolvedValue(expected);
 
-    const result = await dao.getOne(where as never);
+    const result = await dao.getOne(where);
 
     expect(repo.findOne).toHaveBeenCalledWith(where, undefined);
     expect(result).toBe(expected);
@@ -111,7 +111,7 @@ describe('BaseDao', () => {
     const where = { name: 'test' };
     vi.mocked(repo.count).mockResolvedValue(42);
 
-    const result = await dao.count(where as never);
+    const result = await dao.count(where);
 
     expect(repo.count).toHaveBeenCalledWith(where);
     expect(result).toBe(42);
@@ -120,7 +120,7 @@ describe('BaseDao', () => {
   it('create calls repo.create with partial option + em.flush', async () => {
     const data = { name: 'new' };
     const created = { id: '1', name: 'new', deletedAt: null };
-    vi.mocked(repo.create).mockReturnValue(created as never);
+    vi.mocked(repo.create).mockReturnValue(created);
 
     const result = await dao.create(data);
 
@@ -134,7 +134,7 @@ describe('BaseDao', () => {
     const txEm = createMockEm(txRepo);
     const data = { name: 'new' };
     const created = { id: '1', name: 'new', deletedAt: null };
-    vi.mocked(txRepo.create).mockReturnValue(created as never);
+    vi.mocked(txRepo.create).mockReturnValue(created);
 
     const result = await dao.create(data, txEm);
 
@@ -150,8 +150,8 @@ describe('BaseDao', () => {
     const entityA = { id: '1', name: 'a', deletedAt: null };
     const entityB = { id: '2', name: 'b', deletedAt: null };
     vi.mocked(repo.create)
-      .mockReturnValueOnce(entityA as never)
-      .mockReturnValueOnce(entityB as never);
+      .mockReturnValueOnce(entityA)
+      .mockReturnValueOnce(entityB);
 
     const result = await dao.createMany(data);
 
@@ -244,7 +244,7 @@ describe('BaseDao', () => {
     ];
     vi.mocked(repo.find).mockResolvedValue(entities);
 
-    await dao.delete({ name: 'x' } as never);
+    await dao.delete({ name: 'x' });
 
     expect(entities[0]!.deletedAt).not.toBeNull();
     expect(entities[1]!.deletedAt).not.toBeNull();
@@ -258,7 +258,7 @@ describe('BaseDao', () => {
   it('delete is a no-op when no matches found', async () => {
     vi.mocked(repo.find).mockResolvedValue([]);
 
-    await dao.delete({ name: 'x' } as never);
+    await dao.delete({ name: 'x' });
 
     expect(em.flush).not.toHaveBeenCalled();
   });
@@ -295,7 +295,7 @@ describe('BaseDao', () => {
     ];
     vi.mocked(repo.find).mockResolvedValue(entities);
 
-    await dao.hardDelete({ name: 'x' } as never);
+    await dao.hardDelete({ name: 'x' });
 
     expect(em.remove).toHaveBeenCalledTimes(2);
     expect(em.remove).toHaveBeenCalledWith(entities[0]);
@@ -306,7 +306,7 @@ describe('BaseDao', () => {
   it('hardDelete is a no-op when no matches found', async () => {
     vi.mocked(repo.find).mockResolvedValue([]);
 
-    await dao.hardDelete({ name: 'x' } as never);
+    await dao.hardDelete({ name: 'x' });
 
     expect(em.remove).not.toHaveBeenCalled();
     expect(em.flush).not.toHaveBeenCalled();
@@ -320,7 +320,7 @@ describe('BaseDao', () => {
     // difference between purging one tenant's rows and purging everyone's.
     vi.mocked(repo.find).mockResolvedValue([]);
 
-    await dao.hardDeleteIncludingSoftDeleted({ name: 'x' } as never);
+    await dao.hardDeleteIncludingSoftDeleted({ name: 'x' });
 
     expect(repo.find).toHaveBeenCalledWith(
       { name: 'x' },
@@ -334,7 +334,7 @@ describe('BaseDao', () => {
     const entities: TestEntity[] = [{ id: '1', name: 'a', deletedAt: null }];
     vi.mocked(txRepo.find).mockResolvedValue(entities);
 
-    await dao.hardDelete({ name: 'x' } as never, txEm);
+    await dao.hardDelete({ name: 'x' }, txEm);
 
     expect(txEm.getRepository).toHaveBeenCalledWith(TestEntity);
     expect(txEm.remove).toHaveBeenCalledWith(entities[0]);
@@ -422,7 +422,7 @@ describe('BaseDao (real in-memory sqlite driver)', () => {
     await dao.create({ id: 't1', name: 'a' });
     await dao.deleteById('t1');
 
-    await dao.hardDelete({ name: 'a' } as never);
+    await dao.hardDelete({ name: 'a' });
 
     const rows = await orm.em
       .getConnection()
@@ -434,9 +434,7 @@ describe('BaseDao (real in-memory sqlite driver)', () => {
     await dao.create({ id: 't2', name: 'b' });
     await dao.deleteById('t2');
 
-    expect(
-      await dao.hardDeleteIncludingSoftDeleted({ name: 'b' } as never),
-    ).toBe(1);
+    expect(await dao.hardDeleteIncludingSoftDeleted({ name: 'b' })).toBe(1);
 
     // Gone from the table itself, not merely from a filtered read — asserted
     // against raw SQL, because every DAO read hides soft-deleted rows anyway

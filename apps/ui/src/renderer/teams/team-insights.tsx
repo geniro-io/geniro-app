@@ -71,7 +71,9 @@ export function TeamStatsTab({
           <KpiTile
             caption="Cost"
             value={
-              stats?.costUsd == null ? null : formatExactUsd(stats.costUsd)
+              stats?.costUsd === null || stats?.costUsd === undefined
+                ? null
+                : formatExactUsd(stats.costUsd)
             }
             note={
               isEstimatedCost(estimated)
@@ -90,7 +92,9 @@ export function TeamStatsTab({
           <KpiTile
             caption="Worked time"
             value={
-              stats?.workedMs == null ? null : formatDuration(stats.workedMs)
+              stats?.workedMs === null || stats?.workedMs === undefined
+                ? null
+                : formatDuration(stats.workedMs)
             }
             note={
               stats && stats.measuredWorkedMs > 0
@@ -116,7 +120,8 @@ export function TeamStatsTab({
           <KpiTile
             caption="Goals achieved"
             value={
-              goals?.achievedShare == null
+              goals?.achievedShare === null ||
+              goals?.achievedShare === undefined
                 ? null
                 : formatPercent(goals.achievedShare * 100)
             }
@@ -135,10 +140,12 @@ export function TeamStatsTab({
           <KpiTile
             caption="Hand-offs"
             value={
-              metrics?.handOffs == null ? null : formatCount(metrics.handOffs)
+              metrics?.handOffs === null || metrics?.handOffs === undefined
+                ? null
+                : formatCount(metrics.handOffs)
             }
             note={
-              metrics?.handOffs == null
+              metrics?.handOffs === null || metrics?.handOffs === undefined
                 ? null
                 : `over ${formatCount(goals?.measuredRuns ?? 0)} measured runs`
             }

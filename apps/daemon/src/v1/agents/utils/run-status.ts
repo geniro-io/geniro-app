@@ -181,7 +181,8 @@ export async function writeRunStatus(
       ? {}
       : {
           promptCacheExpiresAt: cacheExpiry.toISOString(),
-          ...(read?.promptCacheTtlMs != null
+          ...(read?.promptCacheTtlMs !== null &&
+          read?.promptCacheTtlMs !== undefined
             ? { promptCacheTtlMs: read.promptCacheTtlMs }
             : {}),
           promptCacheTtlReason: read?.promptCacheTtlReason ?? null,

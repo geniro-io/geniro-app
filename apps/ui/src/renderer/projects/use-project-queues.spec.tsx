@@ -40,7 +40,9 @@ const queue = (
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
-let readProjectQueue: ReturnType<typeof vi.fn>;
+let readProjectQueue: ReturnType<
+  typeof vi.fn<(args: { projectId: string }) => Promise<ProjectQueueDto>>
+>;
 let taskListeners: ((event: TaskChangedEvent) => void)[];
 let projectListeners: ((event: ProjectsChangedEvent) => void)[];
 let reconnectListeners: (() => void)[];

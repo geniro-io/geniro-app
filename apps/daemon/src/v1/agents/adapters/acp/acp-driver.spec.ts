@@ -839,7 +839,7 @@ describe('AcpSession session resume', () => {
     expect(events).toEqual([
       {
         type: 'approval_request',
-        id: expect.any(String) as unknown as string,
+        id: expect.any(String),
         toolName: 'write_file',
         input: { path: 'a.ts', contents: 'x' },
       },
@@ -5208,9 +5208,10 @@ describe('AcpSession task list', () => {
       if (!Array.isArray(record?.rows)) {
         return null;
       }
+      const mode: 'snapshot' | 'patch' =
+        record.whole === true ? 'snapshot' : 'patch';
       return {
-        mode: (record.whole === true ? 'snapshot' : 'patch') as
-          'snapshot' | 'patch',
+        mode,
         tasks: record.rows.map((row) => row as never),
         toolCallId: 'call-1',
       };

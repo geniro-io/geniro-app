@@ -673,7 +673,7 @@ function teamReporter(
   existing?: (runId: string, seqs: number[], upTo: number) => number[],
   opened?: Map<string, AnalysedRun>,
   cardPullRequests: () => Promise<Map<string, CardPullRequest[]>> = () =>
-    Promise.resolve(new Map()),
+    Promise.resolve(new Map<string, CardPullRequest[]>()),
 ) {
   const written: { kind: string; payload: object }[] = [];
   const asked: { runId: string; seqs: number[] }[] = [];

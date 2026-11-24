@@ -223,6 +223,7 @@ import {
 } from '../../agents/utils/polled-spend';
 import {
   conversationsBill,
+  type ConversationSpend,
   readPolledSpendLedger,
 } from '../../agents/utils/polled-spend-ledger';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
@@ -3561,8 +3562,9 @@ export class TeamExecutorService
       const ownsModel =
         typeof ownMember === 'number' &&
         ownMember === (ownPoolMembers.get(turn.memberId) ?? 1) &&
-        payload?.callId == null &&
-        payload?.parentToolUseId == null;
+        (payload?.callId === null || payload?.callId === undefined) &&
+        (payload?.parentToolUseId === null ||
+          payload?.parentToolUseId === undefined);
       if (
         (member === null || ownsModel) &&
         typeof model === 'string' &&
@@ -3745,7 +3747,7 @@ export class TeamExecutorService
           callTotals.get(callId)?.totals ?? emptyTotals(),
           callSelfPriced.get(callId) ?? emptyTotals(),
           conversationsBill(
-            ledgers.get(memberId) ?? new Map(),
+            ledgers.get(memberId) ?? new Map<string, ConversationSpend>(),
             new Set(sessions),
           ),
         ),
@@ -5083,7 +5085,7 @@ export class TeamExecutorService
         const mapped = mapEventToItem(event);
         if (mapped) {
           await persistItem(owner.memberId, mapped.kind, mapped.role, {
-            ...(mapped.payload as Record<string, unknown>),
+            ...mapped.payload,
             ...ownerFields(owner),
           });
         }
@@ -6451,7 +6453,7 @@ export class TeamExecutorService
                 : mapEventToItem({ ...event, deliveryIds: userDeliveries });
             if (mapped) {
               await persistItem(node.id, mapped.kind, mapped.role, {
-                ...(mapped.payload as Record<string, unknown>),
+                ...mapped.payload,
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
@@ -6943,7 +6945,7 @@ export class TeamExecutorService
             // unambiguous even when parallel calls hit the SAME member.
             try {
               await persistItem(node.id, mapped.kind, mapped.role, {
-                ...(mapped.payload as Record<string, unknown>),
+                ...mapped.payload,
                 // A card row carries the CARD id, which is what the renderer
                 // sends back as the verdict's `requestId`.
                 ...(cardId !== null ? { id: cardId } : {}),
@@ -6994,7 +6996,8 @@ export class TeamExecutorService
                   );
                 } else if (
                   event.type === 'subagent_info' &&
-                  event.parentToolUseId == null
+                  (event.parentToolUseId === null ||
+                    event.parentToolUseId === undefined)
                 ) {
                   // A BACKGROUND delegate is the same wait, outliving the tool
                   // call that launched it — a cursor turn is held open for its
@@ -7010,7 +7013,8 @@ export class TeamExecutorService
                     );
                   } else if (
                     event.backgroundOpen === false ||
-                    event.backgroundOutcome != null
+                    (event.backgroundOutcome !== null &&
+                      event.backgroundOutcome !== undefined)
                   ) {
                     this.callBroker.noteCalleeToolFinished(
                       runId,
@@ -7351,7 +7355,7 @@ export class TeamExecutorService
             this.partials.endThinking(runId, ownerKey, node.id);
           }
           await persistItem(node.id, mapped.kind, mapped.role, {
-            ...(mapped.payload as Record<string, unknown>),
+            ...mapped.payload,
             nodeId: node.id,
             ...(callId ? { callId } : {}),
             ...usageOwner(mapped.kind),
@@ -9732,7 +9736,7 @@ export class TeamExecutorService
       }
       for (const root of roots) {
         if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
-          continueNode(root, text, turnImages);
+          void continueNode(root, text, turnImages);
         } else {
           releaseWaitsFor(conversationNodes.get(root.id) ?? root);
         }

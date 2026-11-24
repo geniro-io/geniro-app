@@ -70,7 +70,9 @@ function renderPastFirstPayload(memoize: Memoize): WeakRef<object> {
 }
 
 async function collected(ref: WeakRef<object>): Promise<boolean> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   collectGarbage();
   return ref.deref() === undefined;
 }

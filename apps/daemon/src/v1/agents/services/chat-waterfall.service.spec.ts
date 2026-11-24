@@ -116,8 +116,8 @@ function build(
             .filter(
               (r) =>
                 r.kind === 'tool_call' &&
-                (r.payload as { parentToolUseId?: string | null } | null)
-                  ?.parentToolUseId != null &&
+                ((r.payload as { parentToolUseId?: string | null } | null)
+                  ?.parentToolUseId ?? null) !== null &&
                 (maxSeq === undefined || r.seq <= maxSeq),
             )
             .map((r) => r.seq),

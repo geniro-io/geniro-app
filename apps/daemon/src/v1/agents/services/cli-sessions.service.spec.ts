@@ -145,7 +145,7 @@ describe('CliSessionsService.list', () => {
     const { service } = setup({
       listSessions: () => {
         calls += 1;
-        return new Promise((resolve) =>
+        return new Promise((resolve) => {
           setTimeout(
             () =>
               resolve({
@@ -154,8 +154,8 @@ describe('CliSessionsService.list', () => {
                 partialReason: null,
               }),
             5,
-          ),
-        );
+          );
+        });
       },
     });
     await Promise.all([

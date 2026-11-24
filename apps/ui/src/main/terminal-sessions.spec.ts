@@ -1,10 +1,13 @@
+import type * as nodeFsModule from 'node:fs';
 import { mkdtempSync } from 'node:fs';
+import type * as nodeOsModule from 'node:os';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC } from '../shared/contracts';
+import type { PtyLike, PtySpawn, TerminalOwner } from './terminal-sessions';
 
 const mocks = vi.hoisted(() => ({
   chmodSync: vi.fn(),
@@ -14,14 +17,14 @@ const mocks = vi.hoisted(() => ({
 // Only the two calls with side effects outside the test are replaced: the chmod
 // of node-pty's real helper, and the user record the login shell is read from.
 vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const actual = await vi.importActual<typeof nodeFsModule>('node:fs');
   return { ...actual, chmodSync: mocks.chmodSync };
 });
 vi.mock('node:os', async () => {
-  const actual = await vi.importActual<typeof import('node:os')>('node:os');
+  const actual = await vi.importActual<typeof nodeOsModule>('node:os');
   return {
     ...actual,
-    userInfo: (...args: unknown[]) =>
+    userInfo: (...args: unknown[]): unknown =>
       mocks.userInfo.getMockImplementation()
         ? mocks.userInfo(...args)
         : actual.userInfo(),
@@ -36,9 +39,6 @@ const {
   TerminalSessions,
   terminalEnv,
 } = await import('./terminal-sessions');
-type PtyLike = import('./terminal-sessions').PtyLike;
-type PtySpawn = import('./terminal-sessions').PtySpawn;
-type TerminalOwner = import('./terminal-sessions').TerminalOwner;
 
 class FakePty implements PtyLike {
   readonly pid = 4242;

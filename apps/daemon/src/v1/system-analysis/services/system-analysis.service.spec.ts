@@ -30,7 +30,7 @@ function buildOf(label: string, runIds: string[]): DigestBuild {
       goneFlags: [],
     },
     runs: runIds.map((runId) => ({ runId, snapshotSeq: 1, working: false })),
-  } as unknown as DigestBuild;
+  };
 }
 
 describe('SystemAnalysisService — the digest a start reads', () => {

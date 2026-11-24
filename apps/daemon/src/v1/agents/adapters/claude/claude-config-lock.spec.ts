@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type * as properLockfileModule from 'proper-lockfile';
 import type { LockOptions } from 'proper-lockfile';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -21,7 +22,7 @@ const { lockCalls } = vi.hoisted(() => ({
 }));
 
 vi.mock('proper-lockfile', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('proper-lockfile')>();
+  const actual = await importOriginal<typeof properLockfileModule>();
   return {
     ...actual,
     lock: (file: string, options: LockOptions) => {
@@ -59,7 +60,9 @@ describe('ClaudeAdapter — the config lock', () => {
 
     expect(lockCalls).toHaveLength(1);
     const onCompromised = lockCalls[0]?.onCompromised ?? PACKAGE_DEFAULT;
-    expect(() => onCompromised(new Error('lock is stale'))).not.toThrow();
+    expect(() => {
+      onCompromised(new Error('lock is stale'));
+    }).not.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('lock is stale'));
   });
 });

@@ -203,7 +203,8 @@ export function parseChangelog(
       const version = heading[1]!;
       const previous = releases.at(-1);
       if (
-        previous?.version != null &&
+        previous?.version !== null &&
+        previous?.version !== undefined &&
         compareVersions(previous.version, version) <= 0
       ) {
         throw formatError(

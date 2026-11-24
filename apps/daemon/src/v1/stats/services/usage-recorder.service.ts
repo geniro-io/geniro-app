@@ -82,7 +82,7 @@ export class UsageRecorderService implements OnModuleInit {
       // so a rejection escaping it would surface as an unhandled rejection and
       // reach the process-level crash guard — a lost accounting row must not be
       // able to take the daemon's turn plumbing with it.
-      void this.record(event.runId, event.item).catch((err) => {
+      void this.record(event.runId, event.item).catch((err: unknown) => {
         this.logger.warn(
           `failed to record usage for run ${event.runId} seq ${event.item.seq}: ${
             err instanceof Error ? err.message : String(err)
@@ -95,7 +95,7 @@ export class UsageRecorderService implements OnModuleInit {
         return;
       }
       // Owned here for the reason the turn subscription above owns its own.
-      void this.recordPolledSpend(event.runId).catch((err) => {
+      void this.recordPolledSpend(event.runId).catch((err: unknown) => {
         this.logger.warn(
           `failed to record polled spend for run ${event.runId}: ${
             err instanceof Error ? err.message : String(err)
@@ -104,7 +104,7 @@ export class UsageRecorderService implements OnModuleInit {
       });
     });
     this.bus.allPromptCacheWarmups().subscribe((spend) => {
-      void this.recordPromptCacheWarmup(spend).catch((err) => {
+      void this.recordPromptCacheWarmup(spend).catch((err: unknown) => {
         this.logger.warn(
           `failed to record prompt-cache warm-up for run ${spend.runId}: ${
             err instanceof Error ? err.message : String(err)

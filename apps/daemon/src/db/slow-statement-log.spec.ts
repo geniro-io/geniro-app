@@ -70,7 +70,7 @@ describe('timedDriver', () => {
     await ok.executeQuery(query);
     await expect(failing.executeQuery(query)).rejects.toThrow('SQLITE_BUSY');
 
-    expect(onSlow.mock.calls.map(([sql]) => sql)).toEqual([
+    expect(onSlow.mock.calls.map(([sql]: unknown[]) => sql)).toEqual([
       'select 1',
       'select 1',
     ]);

@@ -62,7 +62,9 @@ beforeAll(async () => {
   server.on('connection', () => {
     connections += 1;
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
   port = (server.address() as AddressInfo).port;
 });
 
@@ -77,7 +79,9 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 });
 
 describe('probeCallEndpoint', () => {
@@ -105,11 +109,13 @@ describe('probeCallEndpoint', () => {
 
   it('reports a refused connection with its error at once, without waiting out a budget', async () => {
     const closed = createServer();
-    await new Promise<void>((resolve) =>
-      closed.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => {
+      closed.listen(0, '127.0.0.1', resolve);
+    });
     const freePort = (closed.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      closed.close(() => resolve());
+    });
 
     await expect(
       probeCallEndpoint(

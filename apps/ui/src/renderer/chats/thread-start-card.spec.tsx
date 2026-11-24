@@ -250,7 +250,10 @@ describe('ThreadStartCard', () => {
   it('reads the card again after a reconnect, and keeps the newer of two answers', async () => {
     const answers: ((task: TaskDto) => void)[] = [];
     const { reader, read, reconnect } = fakeReader(
-      () => new Promise<TaskDto>((resolve) => answers.push(resolve)),
+      () =>
+        new Promise<TaskDto>((resolve) => {
+          answers.push(resolve);
+        }),
     );
     await render(<ThreadStartCard pair={pair(FILED)} />, reader);
     await act(async () => {

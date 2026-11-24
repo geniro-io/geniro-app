@@ -172,7 +172,10 @@ export class TurnFolderService {
     const forgotten = { startSha: null, startDirty: null };
     if (!(await this.runDao.rehome(runId, from, folder, forgotten, em))) {
       const now = await this.runDao.getById(runId, this.em.fork());
-      const current = now?.cwd == null ? null : existingDirectory(now.cwd);
+      const current =
+        now?.cwd === null || now?.cwd === undefined
+          ? null
+          : existingDirectory(now.cwd);
       return current ?? resolveValidCwd(gone);
     }
     await this.announceMove(runId, movedFolderNote(gone, folder), em);

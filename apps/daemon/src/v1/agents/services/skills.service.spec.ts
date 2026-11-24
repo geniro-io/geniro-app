@@ -449,7 +449,9 @@ class HeldClaude extends ClaudeAdapter {
 /** Resolve once `predicate` holds, polling the event loop rather than ticks. */
 async function until(predicate: () => boolean): Promise<void> {
   while (!predicate()) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 

@@ -166,7 +166,9 @@ describe('createTeeingSpawn', () => {
   it('records an unterminated last line once the stream ends', async () => {
     const child = fakeChild();
     createTeeingSpawn(() => child)('claude', [], { cwd: '/proj', env: {} });
-    const ended = new Promise((resolve) => child.stdout.once('end', resolve));
+    const ended = new Promise((resolve) => {
+      child.stdout.once('end', resolve);
+    });
 
     child.stdout.write('no newline at the end');
     expect(messages().some((m) => m.includes('no newline'))).toBe(false);

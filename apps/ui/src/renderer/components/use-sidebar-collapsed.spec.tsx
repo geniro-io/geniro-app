@@ -25,7 +25,7 @@ beforeEach(() => {
   (globalThis as { window?: { geniro?: unknown } }).window!.geniro = {
     getSettings,
     updateSettings,
-  } as unknown as Window['geniro'];
+  };
 });
 
 afterEach(() => {
@@ -85,7 +85,7 @@ describe('useSidebarCollapsed', () => {
     // The settings read resolves a frame or two after mount, so an animated
     // correction would show every launch sliding the rail shut — which looks
     // like the app forgetting and then remembering.
-    getSettings.mockReturnValue(new Promise<Settings>(() => undefined));
+    getSettings.mockReturnValue(new Promise<Settings>(() => {}));
 
     container = document.createElement('div');
     document.body.appendChild(container);

@@ -87,7 +87,7 @@ export function foldUsage(
     // and its reason travels with it, since a reason explains one lifetime.
     promptCacheTtlMs: later.promptCacheTtlMs ?? earlier.promptCacheTtlMs,
     promptCacheTtlReason:
-      later.promptCacheTtlMs != null
+      later.promptCacheTtlMs !== null && later.promptCacheTtlMs !== undefined
         ? later.promptCacheTtlReason
         : earlier.promptCacheTtlReason,
     modelCosts: foldModelCosts(earlier, later),

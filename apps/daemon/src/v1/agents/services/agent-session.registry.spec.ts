@@ -11,7 +11,7 @@ import type {
   AgentTurnInput,
   SessionCloseCause,
 } from '../adapters/adapter.types';
-import { AgentAdapter } from '../adapters/agent-adapter';
+import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { RecordedGroup } from '../utils/process-descendants';
 import {
   RUN_ID_ENV,
@@ -132,7 +132,9 @@ class FakeSession implements AgentSession {
     });
     return {
       done,
-      cancel: () => this.endTurn(),
+      cancel: () => {
+        void this.endTurn();
+      },
       respondApproval: () => true,
       sendUserMessage: () => true,
       attributableDelegate: (): string | null => null,

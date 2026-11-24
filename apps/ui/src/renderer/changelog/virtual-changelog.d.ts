@@ -1,4 +1,6 @@
 declare module 'virtual:geniro-changelog' {
-  const releases: import('../../shared/changelog').ChangelogRelease[];
+  import type { ChangelogRelease } from '../../shared/changelog';
+
+  const releases: ChangelogRelease[];
   export default releases;
 }

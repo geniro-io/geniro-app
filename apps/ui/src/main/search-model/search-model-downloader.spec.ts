@@ -103,7 +103,9 @@ async function serveRelease(
       res.end(body);
     },
   );
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
   const { port } = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${port}/`,
@@ -136,7 +138,9 @@ async function waitForFile(path: string): Promise<void> {
     if (existsSync(path)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`${path} never appeared`);
 }

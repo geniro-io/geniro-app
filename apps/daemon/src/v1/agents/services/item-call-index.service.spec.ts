@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type { EntityManager } from '@mikro-orm/sqlite';
 import {
   defineConfig,
-  EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -113,7 +113,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
   }
 
   async function inCallBySeq(runId = 'run-1'): Promise<(string | null)[]> {
-    const rows = await dao.getByRun(runId, -1, orm.em.fork() as EntityManager);
+    const rows = await dao.getByRun(runId, -1, orm.em.fork());
     return rows.map((row) => row.inCall);
   }
 
@@ -528,7 +528,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       const nextLaunch = new ItemCallIndexService(
         dao,
         runs,
-        orm.em.fork() as EntityManager,
+        orm.em.fork(),
         marker,
       );
       const reads = vi.spyOn(dao, 'inCallRowsOfKind');
@@ -701,7 +701,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       await new ItemCallIndexService(
         dao,
         runs,
-        orm.em.fork() as EntityManager,
+        orm.em.fork(),
         marker,
       ).ensureIndexed('chat-1');
 

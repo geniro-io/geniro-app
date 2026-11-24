@@ -570,7 +570,9 @@ describe('CallBroker', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     // Nothing was collected, so nothing was written — the entry is intact.
     expect(items.map((i) => i.kind)).toEqual(['call_started', 'call_result']);
     const retry = await broker.awaitAgent('run-1', 'orch', {
@@ -674,7 +676,9 @@ describe('CallBroker', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(items.map((i) => i.kind)).not.toContain('await_collected');
   });
 
@@ -706,7 +710,9 @@ describe('CallBroker', () => {
       sessionId: null,
     });
     await abandoned;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(items.map((i) => i.kind)).not.toContain('await_collected');
     expect(
       (await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' })).status,
@@ -785,7 +791,9 @@ describe('CallBroker', () => {
     });
     // The instant capability already settled the turn — after the microtask
     // chain drains, the result is on the transcript record.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(items.map((i) => i.kind)).toContain('call_result');
     const collected = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
@@ -1523,7 +1531,9 @@ describe('CallBroker — parked questions (M4)', () => {
     });
     expect((await sync).status).toBe('question');
     // Let the 10ms TTL fire and the failed turn settle through the chain.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     const final = await broker.awaitAgent('run-1', 'orch', {
       call_id: 'call-1',
     });
@@ -1989,7 +1999,9 @@ describe('CallBroker — parked questions (M4)', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     broker.drainCaller('run-1', 'orch');
     expect(wakeNode).toHaveBeenCalledTimes(1);
   });
@@ -2033,7 +2045,9 @@ describe('CallBroker — parked questions (M4)', () => {
       mode: 'async',
     });
     // Let the instant launch's settle chain run: the result is now WAITING.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     broker.drainCaller('run-1', 'orch');
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain('Helper has finished call-1');
@@ -2094,7 +2108,9 @@ describe('CallBroker — parked questions (M4)', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     expect(failed.count).toBe(0);
   });
 });
@@ -2183,7 +2199,9 @@ describe("CallBroker — await_agent over ALL of a caller's calls", () => {
       call_id: 'call-1',
     });
     deferred[1]!.resolve(done('already done'));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(await broker.awaitAgent('run-1', 'orch', {})).toMatchObject({
       status: 'ok',
       result: { call_id: 'call-2', text: 'already done' },
@@ -3899,7 +3917,9 @@ describe('CallBroker — message_agent', () => {
       resetsAt: null,
       sessionId: 'sess-1',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const uncollected = errorOf(
       broker.messageAgent('run-1', 'orch', {
@@ -4055,7 +4075,9 @@ describe('CallBroker — message_agent', () => {
       message: 'work',
       mode: 'async',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(
       broker.messageAgent('run-1', 'orch', {
         call_id: 'call-1',
@@ -4202,7 +4224,9 @@ describe('CallBroker — every conversation of a member is a caller of its own',
     h.broker.drainCaller('run-1', engineerIn('call-1'));
     h.broker.drainCaller('run-1', engineerIn('call-1'));
     h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     // Picked back up once — in its own conversation, as a call for its caller.
     expect(h.launches.map((l) => l.callId)).toEqual([
@@ -4218,7 +4242,9 @@ describe('CallBroker — every conversation of a member is a caller of its own',
     // active-turn cap — the calls the agent itself made do.
     expect(h.wakes).toEqual(['call-3']);
     h.deferred[2]!.resolve(DONE('looked at it'));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(
       h.items.filter(
         (item) =>
@@ -4268,10 +4294,14 @@ describe('CallBroker — every conversation of a member is a caller of its own',
         contextTokens: 900_000,
         contextWindowTokens: 1_000_000,
       });
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       vi.setSystemTime(start + 3 * 60 * 60_000);
       h.broker.drainCaller('run-1', engineerIn('call-1'));
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(h.launches[2]).toMatchObject({
         callId: 'call-3',
@@ -4311,7 +4341,9 @@ describe('CallBroker — every conversation of a member is a caller of its own',
       mode: 'async',
     });
     h.deferred[0]!.resolve({ ...DONE('dispatched'), sessionId: 'sess-1' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     return h;
   }
 
@@ -4351,7 +4383,9 @@ describe('CallBroker — every conversation of a member is a caller of its own',
     // That call's turn ends without answering: now it is picked back up for
     // the question, from the newest point of the conversation.
     h.deferred[2]!.resolve({ ...DONE('feature B done'), sessionId: 'sess-3' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(h.launches).toHaveLength(4);
     expect(h.launches[3]).toMatchObject({
       conversationId: 'call-1',
@@ -4377,7 +4411,9 @@ describe('CallBroker — every conversation of a member is a caller of its own',
       call_id: 'call-3',
       reason: 'not needed after all',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     // The research lands for a conversation with no turn to take it.
     h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
@@ -5491,7 +5527,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await started(broker);
     const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(broker.interruptWaits('run-1', 'orch')).toBe(true);
     const envelope = await waiting;
@@ -5525,7 +5563,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     const { broker } = harness({ launch: 'defer' });
     await started(broker);
     const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     broker.interruptWaits('run-1', 'orch');
 
     const envelope = await waiting;
@@ -5540,7 +5580,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     const { broker } = harness({ launch: 'defer' });
     await started(broker);
     const waiting = broker.awaitAgent('run-1', 'orch', {});
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     broker.interruptWaits('run-1', 'orch');
     expect(await waiting).toMatchObject({
       status: 'pending',
@@ -5556,7 +5598,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       agent: 'helper',
       message: 'm',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     broker.interruptWaits('run-1', 'orch');
     expect(await calling).toMatchObject({
       status: 'pending',
@@ -5607,7 +5651,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(broker.interruptWaits('run-1', 'orch')).toBe(false);
 
     expect(
@@ -5696,7 +5742,9 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
       call_id: 'call-1',
       timeout_ms: 20,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     broker.interruptWaits('run-1', 'helper');
     expect(await waiting).toEqual({
       status: 'pending',
@@ -6237,8 +6285,7 @@ describe('CallBroker — agent pool', () => {
                 item.kind === 'call_started' || item.kind === 'call_result',
             )
             .map((item) => {
-              const { preferredMember: _preferred, ...payload } =
-                item.payload as Record<string, unknown>;
+              const { preferredMember: _preferred, ...payload } = item.payload;
               return {
                 kind: item.kind,
                 payload:
@@ -6346,7 +6393,10 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     resetsAt: null,
     sessionId: null,
   });
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const flush = () =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   /** Run queued microtasks — for the fake-timer cases, where `flush` hangs. */
   const settle = async () => {
     for (let i = 0; i < 20; i += 1) {
@@ -6596,7 +6646,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     vi.useFakeTimers();
     try {
       const h = await engineerDelegated();
-      h.broker.holdCall('run-1', 'call-1');
+      void h.broker.holdCall('run-1', 'call-1');
       // A row straggling in after the turn ended must not restart the window.
       h.broker.noteCalleeActivity('run-1', 'call-1');
       await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
@@ -6793,7 +6843,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     expect(first()).toMatchObject({ kind: 'wake' });
 
     // The woken turn ends without answer_agent.
-    h.broker.holdCall('run-1', 'call-1');
+    void h.broker.holdCall('run-1', 'call-1');
     expect(failed.count).toBe(1);
     expect(
       h.items.find(
@@ -6954,7 +7004,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
 
   it('never reopens a cancelled conversation for what its cancel stopped', async () => {
     const h = await continuedWithLeftover();
-    h.broker.holdCall('run-1', 'call-3');
+    void h.broker.holdCall('run-1', 'call-3');
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
     // The stopped call settles the way the executor reports it.
     h.broker.noteCalleeSettling('run-1', 'call-2', settledWith());
@@ -7011,7 +7061,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
     // result must not then continue the conversation the caller stopped —
     // which call-1's session could resume.
     const h = await continuedWithLeftover();
-    h.broker.holdCall('run-1', 'call-3');
+    void h.broker.holdCall('run-1', 'call-3');
     h.broker.noteCalleeTurnEnded('run-1', 'call-2');
     h.broker.cancelAgent('run-1', 'orch', { call_id: 'call-3', reason: 'x' });
     await finishSubCall(h, 1, 'the research');
@@ -7381,7 +7431,10 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
 });
 
 describe('CallBroker — a callee question asked through a tool call that already returned', () => {
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const flush = () =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   function released<T>(promise: Promise<T>): () => T | undefined {
     let value: T | undefined;
     void promise.then((v) => {
@@ -7457,7 +7510,9 @@ describe('CallBroker — a callee question asked through a tool call that alread
   it('continues the callee without an answer when its question times out, rather than failing the call', async () => {
     const { h } = await askedDeferred(20);
     const release = released(h.broker.holdCall('run-1', 'call-1')!);
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     await flush();
     expect((release() as { prompt: string }).prompt).toContain(
       'was never answered',
@@ -7514,7 +7569,10 @@ describe('CallBroker — a callee question asked through a tool call that alread
 });
 
 describe('CallBroker — a callee question whose asker keeps its turn', () => {
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const flush = () =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
   it('answers the asker on a timeout without failing its call', async () => {
     const h = harness({ launch: 'defer', isNodeLive: (c) => c === 'orch' });
@@ -7536,7 +7594,9 @@ describe('CallBroker — a callee question whose asker keeps its turn', () => {
         failed.count += 1;
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
     expect(failed.count).toBe(1);
 
     h.deferred[0]!.resolve({
@@ -7775,7 +7835,9 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       sessionId: 'sess-1',
       ...warmLarge,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
       agent: 'helper',
@@ -7791,7 +7853,9 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       resetsAt: null,
       sessionId: null,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     vi.setSystemTime(START + 2 * HOUR);
     expect(listed(broker)).toEqual([
       expect.objectContaining({
@@ -7837,7 +7901,9 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
     settle(0, warmLarge);
     settle(1, { ...warmLarge, promptCacheTtlMs: null });
     settle(2, { ...warmLarge, promptCacheTtlMs: null, member: 2 });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     vi.setSystemTime(START + 2 * HOUR);
     const threads = listed(broker) as {
       thread: string;
@@ -8004,7 +8070,9 @@ describe('CallBroker — prompt-cache-aware continuations', () => {
       sessionId: 'sess-1',
       ...warmLarge,
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     vi.setSystemTime(START + 2 * HOUR);
     await broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -8796,7 +8864,9 @@ describe('CallBroker — tells the executor when a conversation is blocked', () 
       agent: 'helper',
       message: 'm',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(h.blockedReports).toEqual([['orch', true]]);
     h.deferred[0]!.resolve(DONE);
     await call;
@@ -8837,7 +8907,9 @@ describe('CallBroker — tells the executor when a conversation is blocked', () 
       agent: 'helper',
       message: 'm',
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     h.broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
     expect(h.blockedReports).toEqual([['orch', true]]);
     h.deferred[0]!.resolve(DONE);
@@ -8879,7 +8951,10 @@ describe('CallBroker.owedACallOrMonitor', () => {
     resetsAt: null,
     sessionId: null,
   };
-  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const flush = () =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
   it('is owed while its own call runs, while a result waits uncollected, or while a monitor owes it output — and not otherwise', async () => {
     const orch = member('orch', { name: 'Manager' });

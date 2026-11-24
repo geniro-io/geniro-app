@@ -40,7 +40,9 @@ async function groupGone(pgid: number): Promise<boolean> {
     if (!groupAlive(pgid)) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   return false;
 }

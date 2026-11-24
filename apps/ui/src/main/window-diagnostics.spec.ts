@@ -19,14 +19,15 @@ const HANDLE: DaemonHandle = {
   startedAt: '2026-01-01T00:00:00.000Z',
 };
 
-const failure = (over: Partial<Parameters<typeof isRealLoadFailure>[0]> = {}) =>
-  ({
-    errorCode: -6,
-    errorDescription: 'ERR_FILE_NOT_FOUND',
-    url: 'file:///app/index.html',
-    isMainFrame: true,
-    ...over,
-  }) as Parameters<typeof isRealLoadFailure>[0];
+const failure = (
+  over: Partial<Parameters<typeof isRealLoadFailure>[0]> = {},
+) => ({
+  errorCode: -6,
+  errorDescription: 'ERR_FILE_NOT_FOUND',
+  url: 'file:///app/index.html',
+  isMainFrame: true,
+  ...over,
+});
 
 describe('isRealLoadFailure', () => {
   it('is true for a failed top document', () => {
@@ -97,7 +98,7 @@ describe('reportMainLog', () => {
       'error',
       'the renderer failed to load',
       { kind: 'renderer-load-failed' },
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
 
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [
@@ -125,11 +126,11 @@ describe('reportMainLog', () => {
       'error',
       'the renderer failed to load',
       { kind: 'renderer-load-failed' },
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
     expect(fetchImpl).not.toHaveBeenCalled();
 
-    await flushMainLogs(HANDLE, fetchImpl as unknown as typeof fetch);
+    await flushMainLogs(HANDLE, fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [, init] = fetchImpl.mock.calls[0] as unknown as [
@@ -141,21 +142,15 @@ describe('reportMainLog', () => {
     });
 
     // Drained, not replayed: a second flush must not repeat the line.
-    await flushMainLogs(HANDLE, fetchImpl as unknown as typeof fetch);
+    await flushMainLogs(HANDLE, fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('drops the buffer when the daemon never arrives, rather than holding it forever', async () => {
     const fetchImpl = vi.fn();
-    await reportMainLog(
-      null,
-      'info',
-      'loaded',
-      {},
-      fetchImpl as unknown as typeof fetch,
-    );
-    await flushMainLogs(null, fetchImpl as unknown as typeof fetch);
-    await flushMainLogs(HANDLE, fetchImpl as unknown as typeof fetch);
+    await reportMainLog(null, 'info', 'loaded', {}, fetchImpl);
+    await flushMainLogs(null, fetchImpl);
+    await flushMainLogs(HANDLE, fetchImpl);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

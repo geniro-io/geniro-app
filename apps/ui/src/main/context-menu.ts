@@ -239,7 +239,9 @@ export function installContextMenu(
       if (entry.kind === 'copyLink') {
         return {
           label: 'Copy Link',
-          click: () => clipboard.writeText(entry.url),
+          click: () => {
+            void clipboard.writeText(entry.url);
+          },
         };
       }
       if (entry.kind === 'copyImage') {

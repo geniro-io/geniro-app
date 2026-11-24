@@ -77,6 +77,7 @@ export const environment = () => {
     fetchModelPrices: true,
 
     // logging
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- the assertion sets the inferred property type, which `satisfies` leaves as string
     logLevel: getEnv('LOG_LEVEL', 'info') as LogLevel,
     prettyLog: getEnv('PRETTY_LOGS', false),
   } as const satisfies Record<string, string | number | boolean | null>;

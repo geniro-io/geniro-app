@@ -196,10 +196,9 @@ describe('SystemAnalysisStartsService (in-memory sqlite)', () => {
   it('tells the analysis once when two reports of the same start race', async () => {
     await Promise.all([service.reportStarted(), service.reportStarted()]);
 
-    expect(info.mock.calls.map(([, message]) => message).sort()).toEqual([
-      'Started "Cap the output"',
-      'Started "Retry the fetch"',
-    ]);
+    expect(
+      info.mock.calls.map(([, message]: unknown[]) => message).sort(),
+    ).toEqual(['Started "Cap the output"', 'Started "Retry the fetch"']);
     expect(recordAnalysisRow).toHaveBeenCalledTimes(2);
     expect(
       (await taskDao.getById('card-1', db.em.fork()))?.startRequestedByRunId,

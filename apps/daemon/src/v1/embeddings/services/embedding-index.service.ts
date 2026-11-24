@@ -19,6 +19,7 @@ import {
   EMBEDDING_CONTROL_TIMEOUT_MS,
   EMBEDDING_QUERY_TIMEOUT_MS,
   EMBEDDING_SWEEP_INTERVAL_MS,
+  EMBEDDING_TOTALS_FRESH_MS,
   type EmbeddingConfig,
   type EmbeddingCounts,
   type EmbeddingModelRef,
@@ -34,7 +35,6 @@ import { EmbeddingProcessService } from './embedding-process.service';
 const DOCUMENT_BATCH = 16;
 const DOCUMENT_SOURCES: readonly DocumentSource[] = ['memory', 'knowledge'];
 const SLOTS: readonly ModelSlot[] = ['active', 'pending'];
-const TOTALS_FRESH_MS = 5_000;
 const RESUME_MARGIN_MS = 100;
 
 /** Where the forward cursors step back to once the newest rowid is `newest`: a step's worth below it. */
@@ -107,6 +107,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   private sweep: NodeJS.Timeout | null = null;
   private lastChanged = 0;
   private totalsReadAt = 0;
+  private totalsReading: Promise<void> | null = null;
   private changedTimer: NodeJS.Timeout | null = null;
   private resumeTimer: NodeJS.Timeout | null = null;
 
@@ -185,9 +186,8 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     return this.config;
   }
 
-  /** A chat message was stored. While chats wait for power nothing indexes it, so readers are told the total moved. */
+  /** A chat message was stored. While chats wait for power nothing indexes it, so readers are told the total may have moved. */
   chatAdded(): void {
-    this.totalsReadAt = 0;
     if (this.enabled && this.config.onBattery) {
       this.emit('progress');
     }
@@ -744,11 +744,21 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     progress.countsRead = true;
   }
 
-  private async refreshTotals(): Promise<void> {
-    if (Date.now() - this.totalsReadAt < TOTALS_FRESH_MS) {
-      return;
+  private refreshTotals(): Promise<void> {
+    if (this.totalsReading) {
+      return this.totalsReading;
+    }
+    if (Date.now() - this.totalsReadAt < EMBEDDING_TOTALS_FRESH_MS) {
+      return Promise.resolve();
     }
     this.totalsReadAt = Date.now();
+    this.totalsReading = this.readTotals().finally(() => {
+      this.totalsReading = null;
+    });
+    return this.totalsReading;
+  }
+
+  private async readTotals(): Promise<void> {
     for (const source of DOCUMENT_SOURCES) {
       const provider = this.documentProviders.get(source);
       if (provider) {

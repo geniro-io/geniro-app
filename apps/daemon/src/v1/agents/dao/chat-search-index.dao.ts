@@ -112,10 +112,12 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
     return rows.map((row) => row.id);
   }
 
-  /** How many messages search by meaning embeds: user and assistant messages long enough to mean something. */
-  async embeddableCount(): Promise<number> {
+  /** How many messages search by meaning embeds with an `items` rowid in `(after, upTo]`: user and assistant messages long enough to mean something. */
+  async embeddableCountBetween(after: number, upTo: number): Promise<number> {
     const row = await this.embeddable()
       .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('i.rowid', '>', after)
+      .where('i.rowid', '<=', upTo)
       .executeTakeFirst();
     return Number(row?.n ?? 0);
   }
@@ -156,7 +158,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
   private reachable(options: ChatSearchReach) {
     let query = this.database()
       .selectFrom('chat_text')
-      .innerJoin('items as i', 'i.id', 'chat_text.item_id')
+      .innerJoin('items as i', 'i.rowid', 'chat_text.rowid')
       .innerJoin('runs as r', 'r.id', 'i.run_id')
       .where('i.deleted_at', 'is', null)
       .where('r.deleted_at', 'is', null)

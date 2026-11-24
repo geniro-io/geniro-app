@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ChatSourceProvider } from '../../embeddings/embeddings.types';
+import {
+  type ChatSourceProvider,
+  EMBEDDING_CHAT_COUNT_WINDOW,
+} from '../../embeddings/embeddings.types';
 import type { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
 import type { ItemWire } from '../chat.types';
 import type {
@@ -11,6 +14,15 @@ import type {
 } from '../dao/chat-search-index.dao';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatEmbeddingSourceService } from './chat-embedding-source.service';
+
+const { yieldIfHeld } = vi.hoisted(() => ({
+  yieldIfHeld: vi.fn<() => Promise<void>>(async () => undefined),
+}));
+
+vi.mock('../utils/event-loop-slices', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/event-loop-slices')>()),
+  eventLoopSlicer: () => yieldIfHeld,
+}));
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -28,7 +40,9 @@ function row(
 function setup() {
   const bus = new AgentEventBus();
   const dao = {
-    embeddableCount: vi.fn<() => Promise<number>>(async () => 0),
+    embeddableCountBetween: vi.fn<
+      (after: number, upTo: number) => Promise<number>
+    >(async () => 0),
     newestItemRowid: vi.fn<() => Promise<number>>(async () => 0),
     embeddableRows: vi.fn<
       (
@@ -147,15 +161,56 @@ describe('ChatEmbeddingSourceService', () => {
     expect(dao.embeddableRows).toHaveBeenLastCalledWith(10, 'after', 5);
   });
 
-  it('reads its totals, cursor and live runs from the dao', async () => {
+  it('reads its cursor and live runs from the dao', async () => {
     const { dao, embeddings } = setup();
     const provider = registeredProvider(embeddings);
-    dao.embeddableCount.mockResolvedValueOnce(4);
     dao.newestItemRowid.mockResolvedValueOnce(12);
     dao.liveRunIds.mockResolvedValueOnce(['r1', 'r2']);
 
-    expect(await provider.total()).toBe(4);
     expect(await provider.newestRowid()).toBe(12);
     expect(await provider.liveRunIds()).toEqual(['r1', 'r2']);
+  });
+
+  it('counts the total window by window of item rowids, up to the newest one', async () => {
+    const { dao, embeddings } = setup();
+    const provider = registeredProvider(embeddings);
+    const newest = EMBEDDING_CHAT_COUNT_WINDOW * 2 + 7;
+    dao.newestItemRowid.mockResolvedValueOnce(newest);
+    dao.embeddableCountBetween
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce(5);
+
+    expect(await provider.total()).toBe(12);
+    expect(dao.embeddableCountBetween.mock.calls).toEqual([
+      [0, EMBEDDING_CHAT_COUNT_WINDOW],
+      [EMBEDDING_CHAT_COUNT_WINDOW, EMBEDDING_CHAT_COUNT_WINDOW * 2],
+      [EMBEDDING_CHAT_COUNT_WINDOW * 2, newest],
+    ]);
+  });
+
+  it('offers the event loop a turn before each window it counts', async () => {
+    const { dao, embeddings } = setup();
+    const provider = registeredProvider(embeddings);
+    dao.newestItemRowid.mockResolvedValueOnce(EMBEDDING_CHAT_COUNT_WINDOW * 2);
+    yieldIfHeld.mockClear();
+
+    await provider.total();
+
+    const yields = yieldIfHeld.mock.invocationCallOrder;
+    const counts = dao.embeddableCountBetween.mock.invocationCallOrder;
+    expect(yields).toHaveLength(2);
+    expect(counts).toHaveLength(2);
+    expect(yields[0]!).toBeLessThan(counts[0]!);
+    expect(yields[1]!).toBeGreaterThan(counts[0]!);
+    expect(yields[1]!).toBeLessThan(counts[1]!);
+  });
+
+  it('counts nothing when there are no items', async () => {
+    const { dao, embeddings } = setup();
+    const provider = registeredProvider(embeddings);
+
+    expect(await provider.total()).toBe(0);
+    expect(dao.embeddableCountBetween).not.toHaveBeenCalled();
   });
 });

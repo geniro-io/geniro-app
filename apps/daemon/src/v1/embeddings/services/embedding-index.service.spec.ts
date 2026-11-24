@@ -13,6 +13,7 @@ import {
   type DocumentSource,
   type DocumentSourceProvider,
   EMBEDDING_SWEEP_INTERVAL_MS,
+  EMBEDDING_TOTALS_FRESH_MS,
   type EmbeddingConfig,
   type EmbeddingModelRef,
   type EmbedDocument,
@@ -212,6 +213,8 @@ class FakeChats implements ChatSourceProvider {
   readonly rows: ChatSourceRow[] = [];
   readonly beforeCalls: number[] = [];
   readonly afterCalls: number[] = [];
+  totalCalls = 0;
+  totalGate: Promise<void> | null = null;
 
   add(rowid: number, runId: string, itemId = `c${rowid}`): void {
     this.rows.push({
@@ -230,6 +233,8 @@ class FakeChats implements ChatSourceProvider {
   }
 
   async total(): Promise<number> {
+    this.totalCalls++;
+    await this.totalGate;
     return this.rows.length;
   }
 
@@ -275,6 +280,16 @@ describe('EmbeddingIndexService', () => {
     chats = new FakeChats();
     index.registerDocuments(memory);
   });
+
+  /** A status read as it is answered once `ms` have passed on the wall clock. */
+  async function statusAfter(ms: number) {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + ms });
+    try {
+      return await index.status();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 
   const waitReady = () =>
     vi.waitFor(async () => expect((await index.status()).state).toBe('ready'), {
@@ -530,11 +545,9 @@ describe('EmbeddingIndexService', () => {
       await vi.waitFor(() => expect(reasons).toEqual(['progress']), {
         timeout: 3_000,
       });
-      expect((await index.status()).counts.chats).toMatchObject({
-        indexed: 1,
-        total: 2,
-        paused: 'battery',
-      });
+      expect(
+        (await statusAfter(EMBEDDING_TOTALS_FRESH_MS)).counts.chats,
+      ).toMatchObject({ indexed: 1, total: 2, paused: 'battery' });
 
       await index.setConfig({ ...ON, enabled: false, onBattery: true });
       reasons.length = 0;
@@ -542,6 +555,46 @@ describe('EmbeddingIndexService', () => {
       await new Promise((resolve) => setTimeout(resolve, 1_100));
       expect(reasons).toEqual([]);
     }, 15_000);
+
+    it('counts the totals once per freshness window, however many messages are stored meanwhile', async () => {
+      chats.add(1, 'r1');
+      index.registerChats(chats);
+      await index.setConfig(ON);
+      await waitReady();
+      const counted = chats.totalCalls;
+
+      chats.add(2, 'r1');
+      index.chatAdded();
+      index.chatAdded();
+      const status = await index.status();
+
+      expect(chats.totalCalls).toBe(counted);
+      expect(status.counts.chats.total).toBe(1);
+      expect(
+        (await statusAfter(EMBEDDING_TOTALS_FRESH_MS)).counts.chats.total,
+      ).toBe(2);
+      expect(chats.totalCalls).toBe(counted + 1);
+    });
+
+    it('shares one count between status reads that arrive while it runs', async () => {
+      chats.add(1, 'r1');
+      chats.add(2, 'r1');
+      index.registerChats(chats);
+      let release: () => void = () => undefined;
+      chats.totalGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await index.setConfig({ ...ON, onBattery: true });
+
+      const first = index.status();
+      const second = index.status();
+      release();
+      const [one, two] = await Promise.all([first, second]);
+
+      expect(chats.totalCalls).toBe(1);
+      expect(one.counts.chats.total).toBe(2);
+      expect(two.counts.chats.total).toBe(2);
+    });
 
     it('reports the pending model complete only once its backfill has run', async () => {
       memory.set('m1', 'one');

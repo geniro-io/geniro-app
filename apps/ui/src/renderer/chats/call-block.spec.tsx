@@ -353,6 +353,36 @@ describe('CallBlock', () => {
     expect(container.textContent).toContain('Waves rise and retreat');
   });
 
+  it('says "stopped" on the card of a call an app quit cut off, and of one its caller cancelled', () => {
+    for (const error of [
+      'CALLEE_FAILED: interrupted — the app was quit before the call finished',
+      'CALLEE_CANCELLED: stopped by orch',
+    ]) {
+      const [block] = groupTranscript([
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', mode: 'async' },
+          'orch',
+        ),
+        item(
+          'call_result',
+          { callId: 'call-1', calleeNodeId: 'poet', status: 'error', error },
+          'orch',
+        ),
+      ]);
+      act(() =>
+        root.render(
+          <TranscriptEntryView entry={block as CallBlockEntry} nodes={NODES} />,
+        ),
+      );
+
+      expect(
+        container.querySelector('[data-slot="block-status-badge"]')
+          ?.textContent,
+      ).toBe('stopped');
+    }
+  });
+
   it('a CONTINUED conversation is one card: each ask drawn as a brief, in order, and the shut line is the newest call’s', () => {
     // One Poet conversation continued once through `thread` — reported as two
     // cards reading like two Poets at work.

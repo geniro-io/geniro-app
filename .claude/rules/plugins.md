@@ -1,0 +1,78 @@
+---
+description: Custom plugins — the plugin file, approval by exact copy, the folder rule, the command runner, buttons, save_plugin and the chat block
+paths:
+  - "apps/daemon/src/v1/plugins/**"
+  - "apps/daemon/src/v1/mcp/tools/save-plugin/**"
+  - "apps/daemon/src/v1/agents/**/plugin-proposal*"
+  - "apps/daemon/src/v1/agents/**/host-plugin*"
+  - "apps/ui/src/renderer/chats/plugin-*"
+  - "apps/ui/src/renderer/settings/plugins-*"
+---
+
+# Plugins
+
+A Geniro Plugin is a block in the chat's right panel, under the agent cards: one shell command and a view of its JSON result. `v1/plugins` owns the files, approvals, runs and routes; `save_plugin` is how an agent proposes one. No plugin code runs in the renderer.
+
+## The file
+
+- `<userData>/plugins/<slug>.plugin.yaml`, slug lowercase only (`^[a-z0-9][a-z0-9-_]*$`). `.backups/` keeps the newest 20 copies per slug. Never SQLite, never settings.json; the storage group is `plugins`.
+- Fields: `name` (1–80 chars, one line); `enabled` (true); `folders` (absolute, `~` expanded at read; empty or absent = every folder); `refresh_minutes` (1–1440, default 5); `command` (one line, ≤ 4000 chars, no line break, no control, invisible or bidi character); `timeout_seconds` (1–120, default 30); `view` (A2UI components, one with id `root`, bound to `{"data": <parsed stdout>}` through `{"@path": "/data/…"}`); `buttons` (≤ 10: `id`, `command`, `confirm` (false), `timeout_minutes` (1–60, default 10), `env` mapping `PLUGIN_*` names to JSON pointers into the data).
+- The view is validated as an A2UI surface (`readA2uiMessages`) plus plugin rules: a Button names a declared button; a Button's functionCall is only `openUrl`; input components (TextField, CheckBox, ChoicePicker, Slider, DateTimeInput) and Modal are refused. Every refusal names a pointer and a reason.
+- A write keeps the user's comments, as team YAML does.
+
+## Approval
+
+- A plugin is `approved` only when its text equals `<userData>/plugins/.approved/<slug>.plugin.yaml`; otherwise `changed` (a hand edit, or a file never approved), and nothing of it runs.
+- A write the user makes by a press (Approve, the Settings switch, folders) goes file first, approved copy last, each atomically (temp file + rename). A crash between them leaves the plugin `changed`, never approved by accident.
+- A run reads the file once, compares that text with the approved copy and runs the command parsed from the same text.
+- No file watcher. Hand edits are found by comparing on every read (list, for-run, run, press).
+- Approve answers `PLUGIN_CHANGED` (409) when the text has moved on from the hash the user read.
+
+## Folders
+
+- A run matches a plugin when one of its candidates lies inside one of the plugin's folders. Candidates: the run's folder (`Run.cwd`) and its real roots — the card's worktree, else its project's roots (`ProjectRootsService.rootsOf`).
+- Plugin folders are canonicalized (realpath) at read. Both sides compare case-insensitively, segment by segment (`isWithinDirectory`).
+- Empty `folders` = everywhere. A run with no folder gets no blocks; a run whose candidates match none is refused `PLUGIN_FOLDER_MISMATCH`.
+
+## Runner
+
+- Runs `["/bin/sh", "-c", command]` through `runManagedCommand` in the folder, with the plugin's timeout, 1 MiB output kept from the head, `endGroupOnExit`, `buildChildEnv` inside the runner and ProcessRegistry label `plugin:<slug>`. No run-tag env: a plugin's command is not the run's work.
+- Single flight per (slug, folder): a second caller joins the first run.
+- The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart. Without `force`, a call within `refresh_minutes` returns it, and no run starts less than a minute after the previous one.
+- stdout must parse as JSON (`PLUGIN_OUTPUT_NOT_JSON`, with the first 2 KB). stderr and error text pass `redactSecrets` and are cut to 4 KB.
+- Checks at run and press, in order: folder, approval (`PLUGIN_NOT_APPROVED`), `PLUGIN_DISABLED`.
+
+## Buttons
+
+- A press sends `{runId, dataAt}`. Env values are read by the daemon from its own cached result, never from the client; a pointer the data lacks refuses `PLUGIN_NO_DATA`. Values are stringified, ≤ 1024 chars, no NUL.
+- Env names match `^PLUGIN_[A-Z0-9_]{1,57}$` only: `buildChildEnv` merges extra keys last, so any other name would let the data pick what runs.
+- `dataAt` is when the user read the data. A cache that has moved on refuses `PLUGIN_DATA_CHANGED` (409); the block refreshes and the user presses again.
+- One press at a time per (slug, button, folder); a second is `PLUGIN_BUSY`. Label `plugin-button:<slug>:<id>`, `endGroupOnExit`, the plugin's timeout, output tail masked, then cut as command actions are. `plugin-button:` counts as work; data runs do not. The data command runs again (forced) after a press.
+- Confirmation is the renderer's (`confirm-dialog`). The daemon runs a press it is sent.
+
+## Routes and events
+
+- All token-gated with no `DesktopOnlyGuard`: a paired device may refresh, press, approve, re-folder and delete (user decisions 10 and 10.1). Only Show file in Finder stays desktop-only.
+- `controllers/plugins.controller.ts`; `GET /v1/plugins/for-run/:runId` is declared before `:slug`. A route change means `pnpm generate:api` with the regenerated client committed.
+- `plugins_changed {slug | null}` goes out after every store write geniro makes.
+
+## save_plugin
+
+- `HOST_PLUGIN_TOOL = 'save_plugin'` (`agents/chat.types.ts`), module `mcp/tools/save-plugin/`. Arguments: `{slug?, name, folders?, refresh_minutes?, timeout_seconds?, command, view, buttons?, sample?}`. A refusal answers `INVALID_ARGS: <pointer>: <reason>` and parks nothing.
+- Every valid call parks a card (`PluginProposalBroker`, `parkWriteCard`) in every approval mode. Only Approve writes, file then approved copy; Reject tells the agent nothing was saved. The receipt names the slug and the file's path.
+- `folders` absent = the chat's folder. A `slug` naming an existing plugin is an update: the card shows a diff, and the write quotes the hash it was read at.
+- `sample` is output the agent got by running the command itself; the card previews from it. The daemon never runs an unapproved command to make a preview.
+- Offered to a chat and to a team's lead in its own conversation. A CLI that cannot hold a tool call open (`hostQuestionDeferredReason`) gets a deferred card that survives a restart, as project instructions do.
+- `v1/plugins` imports `v1/agents`, so `v1/agents` never imports `v1/plugins`: the store writer reaches the agent side through a seam the plugins module provides.
+- The tool's instructions say to create or change plugins only through `save_plugin`, never by writing files, and to set `confirm: true` on every button that deploys, deletes or writes.
+
+## Renderer
+
+- `chats/plugin-blocks.tsx`, `chats/use-plugin-blocks.ts`, `chats/plugin-surface.ts`. `Chats.tsx` reads for-run on open, on `plugins_changed` and after a reconnect; `AgentsPanel` shows one section per plugin under the agent cards, folded per thread.
+- A block draws only through `SurfaceBody`, over a `SurfaceDto` that `plugin-surface.ts` fills in full; its press maps a Button event to the plugin's button. A link opens only when its resolved URL is http(s).
+- The timer runs only while the section is open and the document visible, every `refresh_minutes`. The data and its time come from the daemon's result, so a remount loses nothing.
+- Ask appends the block's name, folder, time and data (JSON, ≤ 8 KB) to the composer through `appendDraft`. Nothing is sent by Ask.
+- A button with `confirm: true` opens the confirm dialog with its command line, folder and plugin; the others run at once.
+- States: loading, error (with Try again), empty, file changed (last data dimmed, "Plugin file changed · not run since", Review).
+- Review shows the approved text against the current one as a diff; Approve posts `{hash}`.
+- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, folders, Run now, Show file in Finder and Delete.

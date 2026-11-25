@@ -20,6 +20,7 @@ import {
   threadOutcomeOf,
   writeRunGoals,
 } from '../utils/run-goals';
+import { librarySlugOf } from '../utils/run-kind';
 import { AgentEventBus } from './agent-events.bus';
 
 /**
@@ -213,7 +214,7 @@ export class GoalsService implements OnModuleInit {
       {
         runId: run.id,
         number,
-        teamSlug: run.teamId,
+        teamSlug: librarySlugOf(run.teamId),
         memberId: memberOf(actor),
         text: draft.text,
         source: draft.source,

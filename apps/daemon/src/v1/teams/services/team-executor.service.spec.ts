@@ -23515,9 +23515,9 @@ describe('TeamExecutorService — chat teams', () => {
       { name: 'Chat team' },
     );
 
-    const opened = await service.promoteChat(
+    expect(await service.promoteChat(chat.id, team)).toBe(true);
+    const opened = await service.openChatTeamPass(
       chat.id,
-      team,
       'the plan',
       'This chat is now a team',
     );
@@ -23542,7 +23542,7 @@ describe('TeamExecutorService — chat teams', () => {
     expect(claude.starts[0]!.input.resumeSessionId).toBe('sess-chat');
   });
 
-  it('refuses a second promotion of the same chat as NOT_A_CHAT_RUN', async () => {
+  it('refuses a second promotion of the same chat', async () => {
     const { service, runDao } = setup();
     const chat = await runDao.create({
       teamId: null,
@@ -23554,11 +23554,9 @@ describe('TeamExecutorService — chat teams', () => {
       [member('agent', { name: 'This chat' }), member('dev')],
       { name: 'Chat team' },
     );
-    await service.promoteChat(chat.id, team, 'the plan', 'started');
+    expect(await service.promoteChat(chat.id, team)).toBe(true);
 
-    await expect(
-      service.promoteChat(chat.id, team, 'the plan again', 'started'),
-    ).rejects.toMatchObject({ errorCode: 'NOT_A_CHAT_RUN' });
+    expect(await service.promoteChat(chat.id, team)).toBe(false);
   });
 
   it('changes the run’s own copy of its team, never the base copy it was started from', async () => {

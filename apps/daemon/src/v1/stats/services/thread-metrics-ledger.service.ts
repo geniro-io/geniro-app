@@ -18,6 +18,7 @@ import {
   parseJsonColumn,
 } from '../../agents/utils/json-util';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import { toolMetricOf } from '../../agents/utils/tool-metric';
 import { usageFiguresFrom } from '../../agents/utils/usage-figures';
 import type { AgentKind } from '../../runs/runs.types';
@@ -348,7 +349,7 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
       return null;
     }
     const facts = {
-      teamSlug: run.teamId,
+      teamSlug: librarySlugOf(run.teamId),
       agentKind: run.agentKind,
       createdAt: run.createdAt,
     };

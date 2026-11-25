@@ -2519,17 +2519,11 @@ export class TeamExecutorService
   /**
    * Turn a chat into a team run it leads, in place (a chat team): the chat's
    * own agent is the lead member `agent`, so its session, its transcript and
-   * its `node_state` row carry over. Refused `NOT_A_CHAT_RUN` when the run
-   * already names a team or is archived; the caller has checked everything
-   * else. Then the team's first pass starts with `prompt` as the lead's turn,
-   * shown as `notice`, never as the user's words.
+   * its `node_state` row carry over. False when the run already names a team
+   * or is archived; the caller has checked everything else. No row is written:
+   * `openChatTeamPass` starts the team.
    */
-  async promoteChat(
-    runId: string,
-    team: Team,
-    prompt: string,
-    notice: string,
-  ): Promise<number> {
+  async promoteChat(runId: string, team: Team): Promise<boolean> {
     const em = this.em.fork();
     const snapshot = teamSnapshotOf(team);
     const flipped = await this.runDao.promoteToTeam(
@@ -2549,10 +2543,7 @@ export class TeamExecutorService
       em,
     );
     if (!flipped) {
-      throw new ConflictException(
-        'NOT_A_CHAT_RUN',
-        'the chat already runs a team or is archived',
-      );
+      return false;
     }
     this.departedMembers.set(runId, []);
     const run = assertTeamRun(
@@ -2560,12 +2551,41 @@ export class TeamExecutorService
       runId,
     );
     this.bus.publishRunsChanged([runToWire(run)]);
-    const opened = await this.walkAgain(this.em.fork(), run, prompt, [], {
-      severity: 'info',
-      message: notice,
-      chatTeam: { phase: 'started' },
-    });
-    return opened.seq;
+    return true;
+  }
+
+  /**
+   * Start a promoted chat's first pass with `prompt` as the lead's turn, shown
+   * as `notice`, never as the user's words; the seq of that notice row. A pass
+   * that cannot start leaves a red row saying the next message starts it, and
+   * answers null.
+   */
+  async openChatTeamPass(
+    runId: string,
+    prompt: string,
+    notice: string,
+  ): Promise<number | null> {
+    try {
+      const run = assertTeamRun(
+        await this.runDao.getById(runId, this.em.fork()),
+        runId,
+      );
+      const opened = await this.walkAgain(this.em.fork(), run, prompt, [], {
+        severity: 'info',
+        message: notice,
+        chatTeam: { phase: 'started' },
+      });
+      return opened.seq;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error(`run ${runId} could not start its team: ${reason}`);
+      await this.writeRunNote(runId, {
+        severity: 'error',
+        message: `This chat is now a team, but its first pass could not start (${reason}). Your next message starts it.`,
+        chatTeam: { phase: 'started' },
+      }).catch(() => undefined);
+      return null;
+    }
   }
 
   /** Write one system row into a team run's own flow, outside any pass. */

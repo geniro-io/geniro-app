@@ -208,7 +208,11 @@ export class ChatTeamService {
         continue;
       }
       const target = known(edit.memberId);
-      if (target === undefined || departed.has(edit.memberId)) {
+      if (
+        target === undefined ||
+        departed.has(edit.memberId) ||
+        removed.includes(edit.memberId)
+      ) {
         return refused(
           'UNKNOWN_MEMBER',
           `the team has no agent with id '${edit.memberId}'`,
@@ -340,15 +344,6 @@ export class ChatTeamService {
     if (!planned.ok) {
       return `Not applied — ${planned.code}: ${planned.message}. No card was shown.`;
     }
-    await this.executor.writeRunNote(runId, {
-      severity: 'info',
-      message: `Changed per the user's note: ${changeLines(planned.proposal.changes).join('; ')}`,
-      chatTeam: {
-        phase: 'changed',
-        remark: true,
-        changes: planned.proposal.changes,
-      },
-    });
     const applied = await this.executor.changeRunTeam(
       runId,
       planned.proposal.team,
@@ -358,6 +353,15 @@ export class ChatTeamService {
     if (applied.status === 'refused') {
       return `Not applied — ${applied.reason}. No card was shown.`;
     }
+    await this.executor.writeRunNote(runId, {
+      severity: 'info',
+      message: `Changed per the user's note: ${changeLines(planned.proposal.changes).join('; ')}`,
+      chatTeam: {
+        phase: 'changed',
+        remark: true,
+        changes: planned.proposal.changes,
+      },
+    });
     return `Applied per the user's note, with no card: ${changeLines(planned.proposal.changes).join('; ')}. ${rosterText(applied.team, applied.departed, planned.removed)}`;
   }
 
@@ -494,28 +498,39 @@ export class ChatTeamService {
       );
       return;
     }
+    const flipped = await this.executor
+      .promoteChat(runId, proposal.team)
+      .catch((error: unknown) => {
+        this.logger.error(
+          `run ${runId} could not become a team: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return false;
+      });
+    if (!flipped) {
+      const failed = ['the chat could not become a team'];
+      await cards.deliverOwnedCardVerdict(
+        runId,
+        requestId,
+        true,
+        `(Not started — ${failed[0]}. Propose the team again with run_team.${noted})`,
+        answer,
+        { kind: 'not-started', causes: failed },
+      );
+      return;
+    }
     await this.chats.recordOwnedCardVerdict(runId, requestId, true, {
       ...(answer === undefined ? {} : { answer }),
       outcome: { kind: 'started' },
     });
     this.chats.releaseForTeam(runId);
-    let opened: number;
-    try {
-      opened = await this.executor.promoteChat(
-        runId,
-        proposal.team,
-        startPrompt(proposal, note),
-        `This chat is now a team: ${proposal.members
-          .map((entry) => entry.member.name)
-          .join(', ')} joined it.`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `run ${runId} could not become a team: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return;
-    }
-    if (note !== '') {
+    const opened = await this.executor.openChatTeamPass(
+      runId,
+      startPrompt(proposal, note),
+      `This chat is now a team: ${proposal.members
+        .map((entry) => entry.member.name)
+        .join(', ')} joined it.`,
+    );
+    if (opened !== null && note !== '') {
       this.remarkGrants.set(runId, opened);
     }
   }

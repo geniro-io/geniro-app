@@ -172,8 +172,9 @@ function build() {
     promoteChat: vi.fn(async (runId: string, promoted: Team) => {
       runs.set(runId, teamRunOf(runId, promoted));
       team = promoted;
-      return 7;
+      return true;
     }),
+    openChatTeamPass: vi.fn(async () => 7),
     changeRunTeam: vi.fn(async (_runId: string, next: Team) => ({
       status: 'changed' as const,
       reaches: 'now' as const,
@@ -623,14 +624,17 @@ describe('ChatTeamService.carryOutVerdict', () => {
       },
     );
     expect(t.chats.releaseForTeam).toHaveBeenCalledWith('run-1');
-    const promote = t.executor.promoteChat as ReturnType<typeof vi.fn>;
-    expect(promote).toHaveBeenCalledWith(
+    expect(t.executor.promoteChat).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({ members: expect.any(Array) }),
+    );
+    const open = t.executor.openChatTeamPass as ReturnType<typeof vi.fn>;
+    expect(open).toHaveBeenCalledWith(
+      'run-1',
       expect.stringContaining('1. Read the spec'),
       'This chat is now a team: Dev joined it.',
     );
-    const prompt = promote.mock.calls[0]![2] as string;
+    const prompt = open.mock.calls[0]![1] as string;
     expect(prompt).toContain('2. Build it');
     expect(prompt).toContain(
       'Dev (id dev, claude): Writes the code Task: Build it',
@@ -639,7 +643,7 @@ describe('ChatTeamService.carryOutVerdict', () => {
     expect(
       (t.chats.releaseForTeam as ReturnType<typeof vi.fn>).mock
         .invocationCallOrder[0]!,
-    ).toBeLessThan(promote.mock.invocationCallOrder[0]!);
+    ).toBeLessThan(open.mock.invocationCallOrder[0]!);
   });
 
   it('applies an allowed change: the removed ids go to the executor, and the card records it changed', async () => {

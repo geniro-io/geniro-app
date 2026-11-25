@@ -59,3 +59,12 @@ const CHAT_TEAM_ID_PREFIX = 'chat:';
 export function isChatTeamId(teamId: string | null): boolean {
   return teamId !== null && teamId.startsWith(CHAT_TEAM_ID_PREFIX);
 }
+
+/**
+ * The library team a run's `teamId` names, or null for a chat and for a chat
+ * team, whose team lives only in that run — what every reader that files,
+ * scopes or counts by a library slug takes.
+ */
+export function librarySlugOf(teamId: string | null): string | null {
+  return isChatTeamId(teamId) ? null : teamId;
+}

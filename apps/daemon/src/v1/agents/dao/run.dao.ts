@@ -1564,24 +1564,6 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Write BOOKKEEPING columns on a run without claiming the run did anything.
-   *
-   * `updatedAt` is the sidebar's "last activity" — its order and the time each
-   * row prints — and `onUpdate` stamps it on every flush of a changed entity.
-   * So a write that is about the ROW rather than the conversation moved it too:
-   * the pull-request capture pass, which runs over every run the chat list
-   * returns, stamped a whole archive at once — REPORTED as every archived
-   * thread reading `just now` (and, twelve minutes later, every one reading
-   * `12m`), with no way left to tell when any of them was last worked in.
-   * Archiving, pinning, filing and renaming are the same kind of write.
-   *
-   * A `nativeUpdate` bypasses `onUpdate`, as the readings above rely on. What
-   * it does not do is tell the identity map, so a managed copy is patched and
-   * RE-SNAPSHOTTED here: left stale, the next flush of that fork would see the
-   * copy differ from its snapshot, write the columns a second time and stamp
-   * `updatedAt` anyway.
-   */
-  /**
    * Make a chat run a team run in place, only while it is still a chat and not
    * archived — a compare-and-set, so two presses never promote twice. True
    * when this write did it. Like {@link updateWithoutActivity}, the managed
@@ -1608,6 +1590,24 @@ export class RunDao extends BaseDao<Run> {
     return true;
   }
 
+  /**
+   * Write BOOKKEEPING columns on a run without claiming the run did anything.
+   *
+   * `updatedAt` is the sidebar's "last activity" — its order and the time each
+   * row prints — and `onUpdate` stamps it on every flush of a changed entity.
+   * So a write that is about the ROW rather than the conversation moved it too:
+   * the pull-request capture pass, which runs over every run the chat list
+   * returns, stamped a whole archive at once — REPORTED as every archived
+   * thread reading `just now` (and, twelve minutes later, every one reading
+   * `12m`), with no way left to tell when any of them was last worked in.
+   * Archiving, pinning, filing and renaming are the same kind of write.
+   *
+   * A `nativeUpdate` bypasses `onUpdate`, as the readings above rely on. What
+   * it does not do is tell the identity map, so a managed copy is patched and
+   * RE-SNAPSHOTTED here: left stale, the next flush of that fork would see the
+   * copy differ from its snapshot, write the columns a second time and stamp
+   * `updatedAt` anyway.
+   */
   async updateWithoutActivity(
     runId: string,
     data: Partial<Run>,

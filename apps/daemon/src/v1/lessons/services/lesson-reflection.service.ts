@@ -16,6 +16,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ChatService } from '../../agents/services/chat.service';
 import { existingDirectory } from '../../agents/utils/resolve-directory';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import { runSnapshotOf } from '../../agents/utils/run-snapshots';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
@@ -215,7 +216,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     const project = await this.projectScope.projectOfRun(source);
     const place = {
       projectId: project?.id ?? null,
-      teamSlug: source.teamId,
+      teamSlug: librarySlugOf(source.teamId),
     };
     const rejected = [
       ...(

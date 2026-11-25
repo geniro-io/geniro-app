@@ -133,10 +133,6 @@ export function onDemandMemberIds(team: LeadTeam): Set<string> {
 }
 
 /**
- * Every member a member may call: all the others. A team of one has nobody
- * to call, so it maps no caller and runs no call runtime.
- */
-/**
  * {@link calleesOf} for a run whose team lost members while it ran: every
  * member may still call, but a member in `departed` is nobody's callee.
  */
@@ -156,6 +152,10 @@ export function calleeMapOf(
   );
 }
 
+/**
+ * Every member a member may call: all the others. A team of one has nobody
+ * to call, so it maps no caller and runs no call runtime.
+ */
 export function calleesOf(
   members: readonly TeamMember[],
 ): Map<string, readonly TeamMember[]> {

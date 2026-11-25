@@ -1640,4 +1640,102 @@ describe('RunDao (in-memory sqlite)', () => {
       await expect(dao.readWork('missing-run')).resolves.toBeNull();
     });
   });
+
+  describe('promoteToTeam', () => {
+    const promotion: Partial<Run> = {
+      teamId: 'chat:c1',
+      teamOrigin: 'chat',
+      teamSnapshot: '{"name":"Builders"}',
+      teamBaseSnapshot: '{"name":"Builders"}',
+      teamOverlaySnapshot: null,
+      teamDeparted: null,
+      currentLead: 'agent',
+      agentKind: null,
+      approval: null,
+    };
+
+    it('makes a chat a team run in place, and writes the columns it is given', async () => {
+      await dao.create({
+        id: 'c1',
+        teamId: null,
+        archivedAt: null,
+        agentKind: 'claude',
+        approval: 'auto',
+      });
+
+      const flipped = await dao.promoteToTeam('c1', promotion, orm.em.fork());
+
+      expect(flipped).toBe(true);
+      const run = await new RunDao(orm.em.fork()).getById('c1');
+      expect(run).toMatchObject({
+        teamId: 'chat:c1',
+        teamOrigin: 'chat',
+        teamSnapshot: '{"name":"Builders"}',
+        teamBaseSnapshot: '{"name":"Builders"}',
+        currentLead: 'agent',
+        agentKind: null,
+        approval: null,
+      });
+    });
+
+    it('answers a second promotion of the same chat with false', async () => {
+      await dao.create({
+        id: 'c1',
+        teamId: null,
+        archivedAt: null,
+        agentKind: 'claude',
+      });
+      await dao.promoteToTeam('c1', promotion, orm.em.fork());
+
+      expect(
+        await dao.promoteToTeam(
+          'c1',
+          { ...promotion, teamId: 'chat:other' },
+          orm.em.fork(),
+        ),
+      ).toBe(false);
+      expect((await new RunDao(orm.em.fork()).getById('c1'))?.teamId).toBe(
+        'chat:c1',
+      );
+    });
+
+    it('refuses a run that already names a team, and writes nothing into it', async () => {
+      await dao.create({
+        id: 'team-run',
+        teamId: 'my-team',
+        archivedAt: null,
+        agentKind: 'claude',
+      });
+
+      expect(
+        await dao.promoteToTeam('team-run', promotion, orm.em.fork()),
+      ).toBe(false);
+      expect(await new RunDao(orm.em.fork()).getById('team-run')).toMatchObject(
+        {
+          teamId: 'my-team',
+          teamOrigin: null,
+          teamSnapshot: null,
+          agentKind: 'claude',
+        },
+      );
+    });
+
+    it('refuses an archived chat, and writes nothing into it', async () => {
+      await dao.create({
+        id: 'shelved',
+        teamId: null,
+        archivedAt: new Date(1_000),
+        agentKind: 'claude',
+      });
+
+      expect(await dao.promoteToTeam('shelved', promotion, orm.em.fork())).toBe(
+        false,
+      );
+      expect(await new RunDao(orm.em.fork()).getById('shelved')).toMatchObject({
+        teamId: null,
+        teamOrigin: null,
+        agentKind: 'claude',
+      });
+    });
+  });
 });

@@ -466,6 +466,22 @@ describe('ChatTeamService.prepareChange', () => {
     expect(result).toMatchObject({ ok: false, code: 'UNKNOWN_MEMBER' });
   });
 
+  it('refuses an edit to an agent the same change already removed', async () => {
+    const t = build();
+    teamRun(t);
+
+    const result = await t.service.prepareChange('run-1', {
+      summary: 's',
+      reason: 'r',
+      edits: [
+        { op: 'remove', memberId: 'dev' },
+        { op: 'update', memberId: 'dev', role: 'Reviews' },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'UNKNOWN_MEMBER' });
+  });
+
   it('refuses to re-add an id that has departed from the run', async () => {
     const t = build();
     teamRun(
@@ -644,6 +660,64 @@ describe('ChatTeamService.carryOutVerdict', () => {
       (t.chats.releaseForTeam as ReturnType<typeof vi.fn>).mock
         .invocationCallOrder[0]!,
     ).toBeLessThan(open.mock.invocationCallOrder[0]!);
+  });
+
+  it('reports a start the executor could not promote as not started, and carries nothing on', async () => {
+    const t = build();
+    t.runs.set('run-1', chatRun());
+    t.executor.promoteChat!.mockResolvedValueOnce(false);
+
+    await t.service.carryOutVerdict(
+      'run-1',
+      'req-1',
+      startProposal(),
+      true,
+      undefined,
+      t.cards,
+    );
+    await t.held[0]!();
+
+    expect(t.cards.deliverOwnedCardVerdict).toHaveBeenCalledWith(
+      'run-1',
+      'req-1',
+      true,
+      '(Not started — the chat could not become a team. Propose the team again with run_team.)',
+      undefined,
+      { kind: 'not-started', causes: ['the chat could not become a team'] },
+    );
+    expect(t.chats.recordOwnedCardVerdict).not.toHaveBeenCalled();
+    expect(t.chats.releaseForTeam).not.toHaveBeenCalled();
+    expect(t.executor.openChatTeamPass).not.toHaveBeenCalled();
+  });
+
+  it('reports a start whose promotion throws the same way as not started', async () => {
+    const t = build();
+    t.runs.set('run-1', chatRun());
+    t.executor.promoteChat!.mockRejectedValueOnce(
+      new Error('database is locked'),
+    );
+
+    await t.service.carryOutVerdict(
+      'run-1',
+      'req-1',
+      startProposal(),
+      true,
+      undefined,
+      t.cards,
+    );
+    await t.held[0]!();
+
+    expect(t.cards.deliverOwnedCardVerdict).toHaveBeenCalledWith(
+      'run-1',
+      'req-1',
+      true,
+      '(Not started — the chat could not become a team. Propose the team again with run_team.)',
+      undefined,
+      { kind: 'not-started', causes: ['the chat could not become a team'] },
+    );
+    expect(t.chats.recordOwnedCardVerdict).not.toHaveBeenCalled();
+    expect(t.chats.releaseForTeam).not.toHaveBeenCalled();
+    expect(t.executor.openChatTeamPass).not.toHaveBeenCalled();
   });
 
   it('applies an allowed change: the removed ids go to the executor, and the card records it changed', async () => {
@@ -875,5 +949,47 @@ describe('ChatTeamService.applyRemarkChange', () => {
     expect(await t.service.applyRemarkChange('run-1', addRequest)).toContain(
       "Applied per the user's note",
     );
+  });
+
+  it('leaves a refused change unwritten and says it was not applied', async () => {
+    const t = build();
+    await startedWithNote(t);
+    t.executor.changeRunTeam!.mockResolvedValueOnce({
+      status: 'refused',
+      reason: 'the team is being changed by another request',
+    });
+
+    const answer = await t.service.applyRemarkChange('run-1', addRequest);
+
+    expect(answer).toBe(
+      'Not applied — the team is being changed by another request. No card was shown.',
+    );
+    expect(t.executor.writeRunNote).not.toHaveBeenCalled();
+  });
+
+  it('writes the remark’s row only after the change lands', async () => {
+    const t = build();
+    await startedWithNote(t);
+
+    await t.service.applyRemarkChange('run-1', addRequest);
+
+    const changed = t.executor.changeRunTeam!.mock.invocationCallOrder[0]!;
+    const noted = t.executor.writeRunNote!.mock.invocationCallOrder[0]!;
+    expect(noted).toBeGreaterThan(changed);
+    expect(t.executor.writeRunNote).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        chatTeam: expect.objectContaining({ phase: 'changed', remark: true }),
+      }),
+    );
+  });
+
+  it('grants no change when the lead’s team pass did not open, though a note was typed', async () => {
+    const t = build();
+    t.executor.openChatTeamPass!.mockResolvedValueOnce(null);
+    await startedWithNote(t);
+
+    expect(await t.service.applyRemarkChange('run-1', addRequest)).toBeNull();
+    expect(t.executor.changeRunTeam).not.toHaveBeenCalled();
   });
 });

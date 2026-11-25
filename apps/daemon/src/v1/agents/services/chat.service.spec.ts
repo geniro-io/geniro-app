@@ -253,6 +253,10 @@ class FakeRunDao {
       archivedAt: null,
       groupId: null,
       pinnedPosition: null,
+      // Both read as null on a fresh row: `undefined` would count as work still
+      // open to `promotionBlockers`, which asks `!== null`.
+      pendingQuestion: null,
+      restartContinuation: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -18819,5 +18823,291 @@ describe('ChatService — card values and the pictures a card draws', () => {
       itemDao.items.filter((i) => i.kind === 'approval_request'),
     ).toHaveLength(1);
     expect(approvals.listByRun(run.id)).toHaveLength(1);
+  });
+});
+
+describe('ChatService — a chat on its way to becoming a team', () => {
+  it('runs an action at once when no turn of the chat runs', async () => {
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    const action = vi.fn(async () => undefined);
+
+    service.whenTurnEnds(run.id, action);
+
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds an action while a turn runs, and runs it when that turn ends', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const action = vi.fn(async () => undefined);
+
+    service.whenTurnEnds(run.id, action);
+    expect(action).not.toHaveBeenCalled();
+
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a held action when the chat is archived, so it never runs', async () => {
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const action = vi.fn(async () => undefined);
+    service.whenTurnEnds(run.id, action);
+
+    await service.archive(run.id);
+    await drain();
+
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it('drops a held action when the chat is deleted, so it never runs', async () => {
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const action = vi.fn(async () => undefined);
+    service.whenTurnEnds(run.id, action);
+
+    await service.delete(run.id);
+    await drain();
+
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it('drops a held action when the chat becomes a team, so it never runs', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const action = vi.fn(async () => undefined);
+    service.whenTurnEnds(run.id, action);
+
+    service.releaseForTeam(run.id);
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it('names nothing when nothing is open', async () => {
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+
+    expect(await service.promotionBlockers(run.id, null, true)).toEqual([]);
+  });
+
+  it('names a running turn only when the press asks, since the agent asks from inside one', async () => {
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    expect(await service.promotionBlockers(run.id, null, true)).toEqual([
+      'a turn of this chat is still running',
+    ]);
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([]);
+  });
+
+  it('names an open monitor, counted, and says how to stop it', async () => {
+    let open: { id: string }[] = [{ id: 'm1' }];
+    const monitors = {
+      list: () => open,
+      stopRun: () => undefined,
+    } as unknown as MonitorRegistry;
+    const { service } = setup({ monitors });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      '1 monitor is still running — stop it with stop_monitor',
+    ]);
+    open = [{ id: 'm1' }, { id: 'm2' }];
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      '2 monitors are still running — stop them with stop_monitor',
+    ]);
+  });
+
+  it('names a background command still running, counted', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'shell_open',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      '1 background command is still running — stop it or wait for it to finish',
+    ]);
+
+    claude.emit({
+      type: 'shell_open',
+      toolCallId: 'toolu_sh2',
+      workId: 'bash_2',
+    });
+    await drain();
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      '2 background commands are still running — stop them or wait for them to finish',
+    ]);
+  });
+
+  it('names a background sub-agent still working', async () => {
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'subagent_info',
+      id: 'task-a',
+      label: 'Review: bugs dimension',
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    await drain();
+
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      '1 background sub-agent is still working — wait for it to finish',
+    ]);
+  });
+
+  it('names another card waiting for the user, but never the card being answered', async () => {
+    const { service, approvals } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    approvals.track({
+      runId: run.id,
+      memberId: SINGLE_AGENT_NODE,
+      requestId: 'req-other',
+      toolName: 'Bash',
+      input: {},
+      question: false,
+      respond: () => true,
+    });
+
+    expect(await service.promotionBlockers(run.id, 'req-other', false)).toEqual(
+      [],
+    );
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      'another card is waiting for the user — let them answer it first',
+    ]);
+  });
+
+  it('names a question the user has yet to answer', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await runDao.setPendingQuestion(run.id, 'Which branch should it land on?');
+
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      'another card is waiting for the user — let them answer it first',
+    ]);
+  });
+
+  it('names work a restart cut off that is still being continued', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await runDao.setRestartContinuation(
+      run.id,
+      JSON.stringify({ cause: 'restart', turns: [], calls: [] }),
+    );
+
+    expect(await service.promotionBlockers(run.id, null, false)).toEqual([
+      'work cut off by a restart is still being continued',
+    ]);
+  });
+
+  it('lets go of a chat that became a team: closes its kept CLI process and takes its kept host tools down', async () => {
+    const { service, claude, charts, sessions } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+    const close = vi.spyOn(sessions, 'close');
+
+    service.releaseForTeam(run.id);
+
+    expect(close).toHaveBeenCalledWith(run.id, 'the chat became a team');
+    expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 });

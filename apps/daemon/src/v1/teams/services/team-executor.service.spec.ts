@@ -23639,4 +23639,29 @@ describe('TeamExecutorService — chat teams', () => {
     expect(applied).toMatchObject({ status: 'changed', reaches: 'now' });
     expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual(['c']);
   });
+
+  it('answers null for a chat that was never promoted, and says in its own flow that the next message starts it', async () => {
+    const { service, runDao, itemDao } = setup();
+    const chat = await runDao.create({
+      teamId: null,
+      status: 'completed',
+      agentKind: 'claude',
+      cwd: dir,
+    });
+
+    expect(
+      await service.openChatTeamPass(
+        chat.id,
+        'the plan',
+        'This chat is now a team',
+      ),
+    ).toBeNull();
+
+    const notes = itemDao.items.filter((item) => item.kind === 'system');
+    expect(notes).toHaveLength(1);
+    expect(JSON.parse(String(notes[0]!.payload))).toMatchObject({
+      severity: 'error',
+      message: expect.stringContaining('Your next message starts it'),
+    });
+  });
 });

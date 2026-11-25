@@ -344,4 +344,50 @@ describe('TeamHealthService', () => {
       h.service.memberHealth('team', 'ghost', false),
     ).rejects.toThrow(/no member 'ghost'/);
   });
+
+  it('lists a member’s CLI that is not installed', async () => {
+    vi.stubEnv(CLI_PATHS_ENV, JSON.stringify({ claude: '/nowhere/claude' }));
+    const team = teamOf([member('dev')]);
+
+    expect(
+      await harness(team, { version: null }).service.missingClis(team),
+    ).toEqual(['claude']);
+  });
+
+  it('lists a CLI several members use once, beside the others that are missing', async () => {
+    vi.stubEnv(
+      CLI_PATHS_ENV,
+      JSON.stringify({ claude: '/nowhere/claude', codex: '/nowhere/codex' }),
+    );
+    const team = teamOf([
+      member('a'),
+      member('b'),
+      member('c', { agent: 'codex' }),
+    ]);
+
+    expect(
+      await harness(team, { version: null }).service.missingClis(team),
+    ).toEqual(['claude', 'codex']);
+  });
+
+  it('lists the CLI of a pool seat that is missing, not the installed one beside it', async () => {
+    const binary = join(realDir(), 'claude');
+    writeFileSync(binary, '#!/bin/sh\nexit 1\n');
+    chmodSync(binary, 0o755);
+    vi.stubEnv(
+      CLI_PATHS_ENV,
+      JSON.stringify({ claude: binary, codex: '/nowhere/codex' }),
+    );
+    const team = teamOf([member('dev', { pool: [{ agent: 'codex' }] })]);
+
+    expect(
+      await harness(team, { version: null }).service.missingClis(team),
+    ).toEqual(['codex']);
+  });
+
+  it('is empty when every CLI the team names is installed', async () => {
+    const team = teamOf([member('dev', { pool: [{ agent: 'codex' }] })]);
+
+    expect(await harness(team).service.missingClis(team)).toEqual([]);
+  });
 });

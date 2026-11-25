@@ -123,6 +123,20 @@ describe('usageDimensions', () => {
     expect(dimensions.teamName).toBe('nightly-review');
   });
 
+  it('gives a chat team no name, though its run keeps a snapshot of it', () => {
+    // A chat team's team lives only in its run: the snapshot names the lead's
+    // team, and the ledger must not file a chat's spend under a team name.
+    const dimensions = usageDimensions(
+      run({
+        teamId: 'chat:run-a',
+        teamSnapshot: snapshotNamed('Lead team'),
+      }),
+      null,
+    );
+
+    expect(dimensions.teamName).toBeNull();
+  });
+
   it('falls back to the slug when the snapshot cannot be read', () => {
     const dimensions = usageDimensions(
       run({ teamId: 'nightly-review', teamSnapshot: 'not json {' }),

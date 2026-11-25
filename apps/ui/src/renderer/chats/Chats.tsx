@@ -6418,11 +6418,14 @@ export function Chats({
     readonly TeamStage[] | null
   >(null);
   useEffect(() => {
+    setMissingTeam(null);
+    setRunStageDefinitions(null);
+  }, [activeRun?.id, activeRun?.teamId]);
+  const activeTeamHash = activeRun?.teamHash ?? null;
+  useEffect(() => {
     let cancelled = false;
     const teamId = activeRun?.teamId;
     const runId = activeRun?.id;
-    setMissingTeam(null);
-    setRunStageDefinitions(null);
     if (!teamId || !runId) {
       setWfNodes({
         agents: [],
@@ -6480,7 +6483,7 @@ export function Chats({
     return () => {
       cancelled = true;
     };
-  }, [activeRun?.id, activeRun?.teamId, teamApi]);
+  }, [activeRun?.id, activeRun?.teamId, activeTeamHash, teamApi]);
 
   /**
    * Why THIS run's CLI cannot be handed a message mid-turn, or null when it

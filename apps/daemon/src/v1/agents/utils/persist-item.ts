@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { runTeamHashOf } from '../../teams/utils/team-snapshot';
 import {
   type ConfigDirPinWire,
   type ItemWire,
@@ -235,6 +236,10 @@ export function runToWire(
     departedMembers: readTeamDepartures(run.teamDeparted).map(
       (left) => left.memberId,
     ),
+    teamHash:
+      run.teamId === null || run.teamSnapshot === null
+        ? null
+        : runTeamHashOf(run.teamSnapshot),
     cwd: run.cwd,
     startSha: run.startSha,
     startDirty: run.startDirty,

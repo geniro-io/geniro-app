@@ -53,6 +53,7 @@ const run1: ChatRun = {
   teamOrigin: null,
   chatTeamSize: null,
   departedMembers: [],
+  teamHash: null,
   cwd: '/proj',
   startSha: null,
   startDirty: null,

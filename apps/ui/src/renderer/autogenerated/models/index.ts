@@ -3629,6 +3629,12 @@ export interface CommandCenterCardRun {
      * @type {string}
      * @memberof CommandCenterCardRun
      */
+    teamHash: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterCardRun
+     */
     cwd: string | null;
     /**
      * 
@@ -14716,6 +14722,12 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    teamHash: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     cwd: string | null;
     /**
      * 
@@ -21179,6 +21191,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     departedMembers: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    teamHash: string | null;
     /**
      * 
      * @type {string}

@@ -135,6 +135,26 @@ describe('runToWire', () => {
     expect(runToWire(new Run()).stages).toBeNull();
   });
 
+  it("projects a team run's team hash, which moves when its team is changed while it runs", () => {
+    const run = new Run();
+    run.teamId = 'dev-team';
+    run.teamSnapshot = JSON.stringify({ members: [{ id: 'lead' }] });
+    const before = runToWire(run).teamHash;
+
+    run.teamSnapshot = JSON.stringify({
+      members: [{ id: 'lead' }, { id: 'poet' }],
+    });
+    const after = runToWire(run).teamHash;
+
+    expect(before).toMatch(/^[0-9a-f]{64}$/);
+    expect(after).toMatch(/^[0-9a-f]{64}$/);
+    expect(after).not.toBe(before);
+  });
+
+  it('projects a chat with no team as no team hash', () => {
+    expect(runToWire(new Run()).teamHash).toBeNull();
+  });
+
   it('projects the run an analysis chat analyses, and the seq it stops at', () => {
     const run = new Run();
     run.analysisSourceRunId = 'source-run';

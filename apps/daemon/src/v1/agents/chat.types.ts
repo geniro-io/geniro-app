@@ -8625,6 +8625,12 @@ export const RunWireSchema = z.object({
     .describe(
       "Member ids removed from a team run's team while it ran — each finishes its running call, then leaves; empty for a chat",
     ),
+  teamHash: z
+    .string()
+    .nullable()
+    .describe(
+      'Hash of the team this run runs now, its own copy; changes whenever that team is changed while it runs. Null for a chat',
+    ),
   cwd: z.string().nullable(),
   /**
    * The commit the folder had checked out when this chat was created, and

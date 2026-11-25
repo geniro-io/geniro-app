@@ -148,6 +148,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     teamOrigin: null,
     chatTeamSize: null,
     departedMembers: [],
+    teamHash: null,
     cwd: worktree,
     startSha: null,
     startDirty: null,

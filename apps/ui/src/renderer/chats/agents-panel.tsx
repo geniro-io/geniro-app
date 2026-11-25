@@ -629,6 +629,17 @@ function SearchChatButton({
 }
 
 /**
+ * How a member the run removed mid-run reads: leaving while it is still running,
+ * left once it is not. Null for a member still in the team.
+ */
+function departureWord(
+  departed: boolean,
+  status: AgentDisplay['status'],
+): 'leaving' | 'left' | null {
+  return departed ? (status === 'running' ? 'leaving' : 'left') : null;
+}
+
+/**
  * A node's wait. No unread mark: a node's reply is seen by opening its thread,
  * so `unseen` and a seen-versus-unseen `failed` are the thread's to say.
  */
@@ -1923,6 +1934,7 @@ function WorkflowsSection({
 
 export function AgentsPanel({
   agents,
+  departedMembers = [],
   nodes,
   artifacts = [],
   publishedArtifacts = [],
@@ -1979,6 +1991,8 @@ export function AgentsPanel({
   notes,
 }: {
   agents: AgentDisplay[];
+  /** The members the run removed mid-run; each reads leaving or left in its card. */
+  departedMembers?: readonly string[];
   /** The run snapshot's members by id, for each card's avatar. */
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   /**
@@ -2880,6 +2894,10 @@ export function AgentsPanel({
                 shownInstances,
                 allInstancesShown,
               );
+              const departure = departureWord(
+                departedMembers.includes(agent.id),
+                agent.status,
+              );
               return (
                 <li
                   key={agent.id}
@@ -2901,6 +2919,13 @@ export function AgentsPanel({
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {agent.name}
                       </span>
+                      {departure === null ? null : (
+                        <span
+                          data-slot="agent-departure"
+                          className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          {departure}
+                        </span>
+                      )}
                       {/* The badge says WHICH CLI drives this agent, which is
                           news on a workflow card (`Reviewer` · `claude`) and
                           nothing at all on a 1:1 chat, where the agent's name

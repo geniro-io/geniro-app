@@ -23,6 +23,7 @@ function row(over: Partial<WorkingAgentRow>): WorkingAgentRow {
     callerKey: 'manager',
     title: 'Build the export button and its tests',
     state: 'working',
+    departure: null,
     waitingFor: [],
     startedAt: Date.now() - 695_000,
     clocks: [],

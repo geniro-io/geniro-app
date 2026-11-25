@@ -11,6 +11,7 @@ import {
   isGeniroFlagToolCall,
   isGeniroToolName,
   isTeamProposalTool,
+  RUN_TEAM,
   standsAcrossTurns,
   THREAD_QUESTION_CARD,
 } from './geniro-tool';
@@ -86,6 +87,12 @@ describe('which of them draw a card', () => {
     expect(standsAcrossTurns('propose_workflow')).toBe(true);
     expect(isTeamProposalTool('propose_workflow')).toBe(true);
     expect(isTeamProposalTool('propose_plan')).toBe(false);
+  });
+
+  it('draws the team card for run_team, which stands across turns', () => {
+    expect(geniroCardKindOf(`mcp__${SERVER}__run_team`, RUN)).toBe('team');
+    expect(standsAcrossTurns(RUN_TEAM)).toBe(true);
+    expect(isTeamProposalTool(RUN_TEAM)).toBe(true);
   });
 
   it('answers null for one of geniro’s tools that draws NOTHING', () => {

@@ -387,6 +387,9 @@ const run1: ChatRun = {
   title: 'My chat',
   agentKind: 'claude',
   teamId: null,
+  teamOrigin: null,
+  chatTeamSize: null,
+  departedMembers: [],
   cwd: '/proj',
   startSha: null,
   startDirty: null,
@@ -5187,6 +5190,9 @@ describe('Chats team runs', () => {
     title: 'Review team',
     agentKind: null,
     teamId: 'review-team',
+    teamOrigin: null,
+    chatTeamSize: null,
+    departedMembers: [],
     cwd: '/proj',
     startSha: null,
     startDirty: null,
@@ -7504,6 +7510,57 @@ describe('Chats — opening a team run reads its whole-run lists once', () => {
     expect(transcriptOf(container)).toContain('on it');
   });
 
+  it('draws an open chat as a team run once its row names the team, and sends through the team route', async () => {
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(1, 'user', 'question'),
+      msg(2, 'assistant', 'on it'),
+    ]);
+    teamApi.sendTeamRunMessage.mockResolvedValue(
+      msg(3, 'user', 'and the tests too'),
+    );
+    const { client, emitRunsChanged } = makeClient();
+    Object.assign(client, { onUsageRecorded: () => () => undefined });
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await flushChats();
+    expect(modelTrigger(container)).toBeDefined();
+    expect(teamApi.listTeamRunNodes).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitRunsChanged([{ ...run1, status: 'completed', teamId: 'chat:r1' }]);
+    });
+    await flushChats();
+
+    expect(teamApi.getTeamRunSnapshot).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(teamApi.listTeamRunNodes).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(modelTrigger(container)).toBeUndefined();
+    expect(transcriptOf(container)).toContain('on it');
+
+    const textarea = container.querySelector(
+      '[aria-label="Message the agent"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and the tests too');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.click();
+    });
+
+    expect(teamApi.sendTeamRunMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'and the tests too',
+      },
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+  });
+
   it('shows the placeholder over a re-opened run only while its page loads, without waiting for its state or nodes again', async () => {
     api.listRunItems.mockResolvedValue(FIRST_PAGE);
     const { client } = makeClient();
@@ -7812,6 +7869,9 @@ describe('Chats — handing a conversation to the user', () => {
       title: 'Review team',
       agentKind: null,
       teamId: 'review-team',
+      teamOrigin: null,
+      chatTeamSize: null,
+      departedMembers: [],
       cwd: '/proj',
       startSha: null,
       startDirty: null,

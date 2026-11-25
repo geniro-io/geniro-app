@@ -8,10 +8,13 @@ import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   REPLACE_WITH_OVERLAY_PROPOSAL,
+  RUN_CHANGE_PROPOSAL,
+  RUN_START_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
-import { PROPOSE_TEAM } from './geniro-tool';
+import { PROPOSE_TEAM, RUN_TEAM } from './geniro-tool';
+import { QueuedMessagesContext } from './queued-messages-context';
 
 /**
  * Drawn through `ApprovalCard`, the router every `approval_request` row goes
@@ -89,4 +92,68 @@ export const NotSaved: Story = {
 /** A payload this build cannot read falls back to the permission body. */
 export const Unparseable: Story = {
   args: { input: { mode: 'replace', slug: 'review-pair', team: 'oops' } },
+};
+
+/** A run_team start card: this chat becomes the team, its own agent the lead. */
+export const PendingRunStart: Story = {
+  args: { toolName: RUN_TEAM, input: RUN_START_PROPOSAL },
+};
+
+/** Start waits while this chat's composer queue holds messages. */
+export const PendingRunStartQueued: Story = {
+  args: { toolName: RUN_TEAM, input: RUN_START_PROPOSAL },
+  decorators: [
+    (story) => (
+      <QueuedMessagesContext.Provider value={2}>
+        {story()}
+      </QueuedMessagesContext.Provider>
+    ),
+  ],
+};
+
+/** A run_team change card: one agent joins, one leaves, one changes. */
+export const PendingRunChange: Story = {
+  args: { toolName: RUN_TEAM, input: RUN_CHANGE_PROPOSAL },
+};
+
+export const RunStarted: Story = {
+  args: {
+    toolName: RUN_TEAM,
+    input: RUN_START_PROPOSAL,
+    verdict: true,
+    outcome: { kind: 'started' },
+  },
+};
+
+export const RunNotStarted: Story = {
+  args: {
+    toolName: RUN_TEAM,
+    input: RUN_START_PROPOSAL,
+    verdict: true,
+    outcome: {
+      kind: 'not-started',
+      causes: ['a turn is still running', 'two agents are named Coder'],
+    },
+  },
+};
+
+export const RunChangeApplied: Story = {
+  args: {
+    toolName: RUN_TEAM,
+    input: RUN_CHANGE_PROPOSAL,
+    verdict: true,
+    outcome: { kind: 'changed' },
+  },
+};
+
+export const RunChangeNotApplied: Story = {
+  args: {
+    toolName: RUN_TEAM,
+    input: RUN_CHANGE_PROPOSAL,
+    verdict: true,
+    outcome: {
+      kind: 'not-changed',
+      reason: 'the running team changed after this was proposed',
+    },
+  },
 };

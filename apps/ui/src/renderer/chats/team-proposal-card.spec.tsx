@@ -17,10 +17,13 @@ import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   REPLACE_WITH_OVERLAY_PROPOSAL,
+  RUN_CHANGE_PROPOSAL,
+  RUN_START_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
-import { PROPOSE_TEAM } from './geniro-tool';
+import { PROPOSE_TEAM, RUN_TEAM } from './geniro-tool';
+import { QueuedMessagesContext } from './queued-messages-context';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -988,5 +991,134 @@ describe('TeamProposalCard', () => {
       expect(el.textContent).toContain('⏱ expired');
       expect(buttonNamed(el, 'Approve')).toBeUndefined();
     });
+  });
+});
+
+describe('run_team cards', () => {
+  const startCard = (
+    props: Partial<React.ComponentProps<typeof ApprovalCard>> = {},
+  ): React.ReactElement =>
+    card({ toolName: RUN_TEAM, input: RUN_START_PROPOSAL, ...props });
+
+  const changeCard = (
+    props: Partial<React.ComponentProps<typeof ApprovalCard>> = {},
+  ): React.ReactElement =>
+    card({ toolName: RUN_TEAM, input: RUN_CHANGE_PROPOSAL, ...props });
+
+  it('draws the start card: the plan, this chat as manager, and each agent with its task', () => {
+    const el = render(startCard());
+
+    expect(proposalCard(el)?.getAttribute('data-mode')).toBe('run-start');
+    expect(el.textContent).toContain('Run a team in this chat');
+    expect(el.textContent).toContain('2 agents beside this chat');
+    const plan = el.querySelector('[data-slot="run-team-plan"]')!;
+    expect(plan.querySelectorAll('li')).toHaveLength(3);
+    expect(plan.textContent).toContain('This chat merges the two results');
+    expect(rosterRow(el, 'agent').textContent).toContain('This chat — manager');
+    expect(rosterRow(el, 'agent').textContent).toContain('claude · default');
+    expect(rosterRow(el, 'coder').textContent).toContain(
+      'Change the parser and the card',
+    );
+    expect(rosterRow(el, 'coder').textContent).toContain('claude · sonnet');
+    expect(rosterRow(el, 'reviewer').textContent).toContain('codex · default');
+    expect(rosterRow(el, 'reviewer').textContent).toContain(
+      'Runs without asking',
+    );
+    expect(buttonNamed(el, 'Start')?.disabled).toBe(false);
+    expect(buttonNamed(el, 'Decline')).toBeDefined();
+  });
+
+  it('sends Start, and Decline with its note', () => {
+    const onRespond = vi.fn();
+    const el = render(startCard({ onRespond }));
+
+    click(buttonNamed(el, 'Start')!);
+    expect(onRespond).toHaveBeenLastCalledWith(true);
+
+    unmount();
+    const declined = vi.fn();
+    const again = render(startCard({ onRespond: declined }));
+    typeInto(again.querySelector('textarea')!, 'Not this week');
+    click(buttonNamed(again, 'Decline')!);
+    expect(declined).toHaveBeenLastCalledWith(false, 'Not this week');
+  });
+
+  it('holds Start while this chat queues messages, and says why', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <QueuedMessagesContext.Provider value={2}>
+        {startCard({ onRespond })}
+      </QueuedMessagesContext.Provider>,
+    );
+
+    expect(buttonNamed(el, 'Start')?.disabled).toBe(true);
+    expect(el.textContent).toContain('Send or clear the queued messages first');
+    expect(buttonNamed(el, 'Decline')?.disabled).toBe(false);
+    click(buttonNamed(el, 'Start')!);
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it('draws the change card: added, removed and changed agents, each field before and after', () => {
+    const el = render(changeCard());
+
+    expect(proposalCard(el)?.getAttribute('data-mode')).toBe('run-change');
+    expect(el.textContent).toContain('Change the running team');
+    expect(el.textContent).toContain(
+      'Tester — Runs the checks · claude · default',
+    );
+    expect(el.textContent).toContain('runs without asking');
+    expect(el.textContent).toContain(
+      'Reviewer — finishes its current call, then leaves',
+    );
+    expect(el.textContent).toContain(
+      'Coder · role: Writes the change → Writes the change and its tests',
+    );
+    expect(el.textContent).toContain('Coder · instructions');
+    expect(el.textContent).toContain('ask before touching the daemon');
+    expect(
+      el.querySelectorAll('[data-slot="team-diff-value"]').length,
+    ).toBeGreaterThan(0);
+    expect(buttonNamed(el, 'Apply')).toBeDefined();
+    expect(buttonNamed(el, 'Decline')).toBeDefined();
+  });
+
+  it('says what became of a start', () => {
+    const el = render(
+      startCard({ verdict: true, outcome: { kind: 'started' } }),
+    );
+    expect(el.textContent).toContain('✓ Team started');
+
+    rerender(
+      startCard({
+        verdict: true,
+        outcome: {
+          kind: 'not-started',
+          causes: ['a turn is still running', 'two agents are named Coder'],
+        },
+      }),
+    );
+    expect(el.textContent).toContain(
+      '✗ Not started: a turn is still running; two agents are named Coder',
+    );
+  });
+
+  it('says what became of a change', () => {
+    const el = render(
+      changeCard({ verdict: true, outcome: { kind: 'changed' } }),
+    );
+    expect(el.textContent).toContain('✓ Applied');
+
+    rerender(
+      changeCard({
+        verdict: true,
+        outcome: {
+          kind: 'not-changed',
+          reason: 'the running team changed after this was proposed',
+        },
+      }),
+    );
+    expect(el.textContent).toContain(
+      '✗ Not applied: the running team changed after this was proposed',
+    );
   });
 });

@@ -4739,3 +4739,39 @@ describe('AgentsPanel — the browser globe', () => {
     expect(localStorage.getItem('geniro.threadUi.run-1')).toBeNull();
   });
 });
+
+describe('AgentsPanel — a member the run removed mid-run', () => {
+  it('reads leaving while the removed agent is still running', () => {
+    const removed = agents.map((agent) =>
+      agent.id === 'worker' ? { ...agent, status: 'running' as const } : agent,
+    );
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={removed}
+        departedMembers={['worker']}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(cardFor(el, 'Worker').textContent).toContain('leaving');
+    expect(cardFor(el, 'Orchestrator').textContent).not.toContain('leaving');
+  });
+
+  it('reads left once the removed agent is no longer running', () => {
+    const done = agents.map((agent) =>
+      agent.id === 'worker'
+        ? { ...agent, status: 'completed' as const }
+        : agent,
+    );
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={done}
+        departedMembers={['worker']}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(cardFor(el, 'Worker').textContent).toContain('left');
+    expect(cardFor(el, 'Worker').textContent).not.toContain('leaving');
+  });
+});

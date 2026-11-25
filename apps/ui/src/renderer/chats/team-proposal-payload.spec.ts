@@ -14,23 +14,31 @@ import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   REPLACE_WITH_OVERLAY_PROPOSAL,
+  RUN_CHANGE_PROPOSAL,
+  RUN_START_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import {
   diffRows,
+  isRunProposal,
+  type ParsedLibraryProposal,
   previewMarks,
   proposalScanText,
   readProposalOutcome,
   readTeamProposal,
   rosterOf,
+  runChangeRows,
   stageMarksOf,
   teamFromLegacyGraph,
 } from './team-proposal-payload';
 
-function parsed(input: unknown) {
+function parsed(input: unknown): ParsedLibraryProposal {
   const proposal = readTeamProposal(input);
   expect(proposal).not.toBeNull();
-  return proposal!;
+  if (proposal === null || isRunProposal(proposal)) {
+    throw new Error('expected a library proposal');
+  }
+  return proposal;
 }
 
 describe('readTeamProposal', () => {
@@ -984,5 +992,162 @@ describe('a card raised while teams were node graphs', () => {
       expect(was.team.stages).toEqual(now.team.stages);
       expect(was.diff?.changedStages).toEqual(now.diff?.changedStages);
     }
+  });
+});
+
+describe('run_team cards', () => {
+  const runAgent = (agent: string) => (agent === 'codex' ? 'Codex' : 'Claude');
+
+  it('reads a start card: the plan, this chat as lead, and each member with its task', () => {
+    const proposal = readTeamProposal(RUN_START_PROPOSAL);
+    expect(proposal).not.toBeNull();
+    expect(proposal?.mode).toBe('run-start');
+    if (proposal === null || proposal.mode !== 'run-start') {
+      throw new Error('expected a start card');
+    }
+    expect(isRunProposal(proposal)).toBe(true);
+    expect(proposal.plan).toHaveLength(3);
+    expect(proposal.lead.memberId).toBe('agent');
+    expect(proposal.lead.model).toBeNull();
+    expect(proposal.members.map(({ task }) => task)).toEqual([
+      'Change the parser and the card',
+      'Read the diff and run the specs',
+    ]);
+    expect(proposal.members[1]?.member.approval).toBe('auto');
+  });
+
+  it('reads a change card: each add, removal and update line', () => {
+    const proposal = readTeamProposal(RUN_CHANGE_PROPOSAL);
+    if (proposal === null || proposal.mode !== 'run-change') {
+      throw new Error('expected a change card');
+    }
+    expect(proposal.changes.map((change) => change.op)).toEqual([
+      'add',
+      'remove',
+      'update',
+    ]);
+    const update = proposal.changes[2];
+    expect(
+      update?.op === 'update' && update.fields.map((f) => f.field),
+    ).toEqual(['role', 'instructions']);
+  });
+
+  it('answers null for a run card whose lines do not read', () => {
+    const badStart = { ...(RUN_START_PROPOSAL as object), plan: 'three steps' };
+    expect(readTeamProposal(badStart)).toBeNull();
+    const badChange = {
+      ...(RUN_CHANGE_PROPOSAL as object),
+      changes: [
+        {
+          op: 'update',
+          memberId: 'coder',
+          name: 'Coder',
+          fields: [{ field: 'name', before: null, after: 'x' }],
+          task: null,
+        },
+      ],
+    };
+    expect(readTeamProposal(badChange)).toBeNull();
+  });
+
+  it('reads each run outcome, and answers null for one that does not read', () => {
+    expect(readProposalOutcome({ kind: 'started' })).toEqual({
+      kind: 'started',
+    });
+    expect(
+      readProposalOutcome({
+        kind: 'not-started',
+        causes: ['a turn is running'],
+      }),
+    ).toEqual({ kind: 'not-started', causes: ['a turn is running'] });
+    expect(readProposalOutcome({ kind: 'changed' })).toEqual({
+      kind: 'changed',
+    });
+    expect(
+      readProposalOutcome({ kind: 'not-changed', reason: 'the team changed' }),
+    ).toEqual({ kind: 'not-changed', reason: 'the team changed' });
+    expect(readProposalOutcome({ kind: 'not-started' })).toBeNull();
+    expect(readProposalOutcome({ kind: 'not-changed' })).toBeNull();
+  });
+
+  it('scans the plan, the roster and the change text for hazards', () => {
+    const start = readTeamProposal(RUN_START_PROPOSAL)!;
+    expect(proposalScanText(start)).toContain(
+      'Coder changes the parser and the card',
+    );
+    const change = readTeamProposal(RUN_CHANGE_PROPOSAL)!;
+    const scanned = proposalScanText(change);
+    expect(scanned).toContain('Writes the change and its tests');
+    expect(scanned).toContain('ask before touching the daemon');
+  });
+
+  it('draws a change as a labelled row for each agent, and one row per field it sets', () => {
+    const proposal = readTeamProposal(RUN_CHANGE_PROPOSAL);
+    if (proposal === null || proposal.mode !== 'run-change') {
+      throw new Error('expected a change card');
+    }
+    const rows = runChangeRows(proposal.changes, runAgent);
+    expect(rows.map((row) => row.key)).toEqual([
+      'add:tester',
+      'remove:reviewer',
+      'update:coder:role',
+      'update:coder:instructions',
+    ]);
+    expect(rows[0]).toMatchObject({
+      marker: 'added',
+      toAuto: true,
+      label: 'Tester — Runs the checks · Claude · default',
+    });
+    expect(rows[0]?.entry).toEqual([
+      { field: 'task', value: 'Run the test suite after each change' },
+    ]);
+    expect(rows[1]).toMatchObject({
+      marker: 'removed',
+      label: 'Reviewer — finishes its current call, then leaves',
+    });
+    expect(rows[2]?.detail).toEqual({
+      field: 'role',
+      before: 'Writes the change',
+      after: 'Writes the change and its tests',
+    });
+  });
+
+  it('draws an unset value as (unset), and puts an unasked add first', () => {
+    const rows = runChangeRows(
+      [
+        {
+          op: 'update',
+          memberId: 'coder',
+          name: 'Coder',
+          fields: [{ field: 'model', before: null, after: 'opus' }],
+          task: 'Review the store',
+        },
+        {
+          op: 'add',
+          member: {
+            memberId: 'tester',
+            name: 'Tester',
+            role: '',
+            agent: 'codex',
+            model: 'o3',
+            approval: 'auto',
+          },
+          task: null,
+        },
+      ],
+      runAgent,
+    );
+    expect(rows.map((row) => row.key)).toEqual([
+      'add:tester',
+      'update:coder:model',
+      'task:coder',
+    ]);
+    expect(rows[0]?.label).toBe('Tester — Codex · o3');
+    expect(rows[1]?.detail).toEqual({
+      field: 'model',
+      before: '(unset)',
+      after: 'opus',
+    });
+    expect(rows[2]?.label).toBe('Coder — new task');
   });
 });

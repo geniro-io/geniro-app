@@ -76,6 +76,9 @@ export type GeniroCardKind =
 /** `propose_team` — its card stands across turns ({@link standsAcrossTurns}). */
 export const PROPOSE_TEAM = 'propose_team';
 
+/** `run_team` — starts a team in this chat or changes a running one; its card stands across turns too. TWIN: `HOST_RUN_TEAM_TOOL` in the daemon's `chat.types.ts`. */
+export const RUN_TEAM = 'run_team';
+
 /** `message_thread` — a send to another thread, whose card is its approval row. */
 export const MESSAGE_THREAD = 'message_thread';
 
@@ -162,6 +165,7 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // the call; `read_teams` draws nothing and stays visible.
   [PROPOSE_TEAM]: 'team',
   [LEGACY_PROPOSE_TEAM]: 'team',
+  [RUN_TEAM]: 'team',
 };
 
 /** The bare tool names, for the matching below. */
@@ -412,8 +416,8 @@ export function geniroCardKindOf(
 }
 
 /**
- * Whether an approval card for this tool stands ACROSS turns — `propose_team`
- * and the browser's new-host card — so it waits on the user only while no turn
+ * Whether an approval card for this tool stands ACROSS turns — `propose_team`,
+ * `run_team` and the browser's new-host card — so it waits on the user only while no turn
  * runs, the daemon's `awaitingOf` rule.
  *
  * TWIN PARSER: `PendingApproval.standing` in
@@ -428,9 +432,13 @@ export function standsAcrossTurns(toolName: string | null): boolean {
   );
 }
 
-/** Whether a row's tool is `propose_team`, under either of its names. */
+/** Whether a row's tool draws a team card: `propose_team` under either of its names, or `run_team`. */
 export function isTeamProposalTool(toolName: string | null): boolean {
-  return toolName === PROPOSE_TEAM || toolName === LEGACY_PROPOSE_TEAM;
+  return (
+    toolName === PROPOSE_TEAM ||
+    toolName === LEGACY_PROPOSE_TEAM ||
+    toolName === RUN_TEAM
+  );
 }
 
 /** Whether an approval row is one of geniro's proposed changes: a card with a heading of its own and a diff. */

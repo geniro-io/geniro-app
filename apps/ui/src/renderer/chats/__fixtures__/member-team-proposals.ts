@@ -337,3 +337,117 @@ export const MOVE_TO_PROJECT_PROPOSAL: unknown = {
     'diffText': BILLING_INSTRUCTIONS_DIFF,
   },
 };
+
+/**
+ * `run_team` card payloads: the `input` of the approval_request row in the
+ * shape the daemon writes (`RunStartProposalSchema` / `RunChangeProposalSchema`).
+ * The team is the one the run would have, its lead this chat's own agent.
+ */
+const CHAT_LEAD = {
+  memberId: 'agent',
+  name: 'Chat agent',
+  role: 'Coordinates the team',
+  agent: 'claude',
+  model: null,
+  approval: 'ask',
+};
+
+export const RUN_START_PROPOSAL: unknown = {
+  'mode': 'run-start',
+  'autoAgents': ['Reviewer'],
+  'summary':
+    'A coder writes the parser change; a reviewer checks it without asking.',
+  'reason': 'The change is split across two agents with separate jobs.',
+  'slug': '',
+  'team': {
+    'name': 'Chat team',
+    'mode': 'lead',
+    'members': [CODER_ASKS, { ...REVIEWER_ASKS, 'approval': 'auto' }],
+    'triggers': FIRST_MESSAGE_TO_CODER,
+    'instructionBlocks': [],
+  },
+  'plan': [
+    'Coder changes the parser and the card',
+    'Reviewer reads the diff and runs the specs',
+    'This chat merges the two results',
+  ],
+  'lead': CHAT_LEAD,
+  'members': [
+    {
+      'member': {
+        'memberId': 'coder',
+        'name': 'Coder',
+        'role': 'Writes the change',
+        'agent': 'claude',
+        'model': 'sonnet',
+        'approval': 'ask',
+      },
+      'task': 'Change the parser and the card',
+    },
+    {
+      'member': {
+        'memberId': 'reviewer',
+        'name': 'Reviewer',
+        'role': 'Reads the diff',
+        'agent': 'codex',
+        'model': null,
+        'approval': 'auto',
+      },
+      'task': 'Read the diff and run the specs',
+    },
+  ],
+};
+
+const COACH_INSTRUCTIONS_BEFORE =
+  'Keep the coder to the parser and the card; leave the store alone.';
+const COACH_INSTRUCTIONS_AFTER =
+  'Keep the coder to the parser, the card and their specs; leave the store alone and ask before touching the daemon.';
+
+export const RUN_CHANGE_PROPOSAL: unknown = {
+  'mode': 'run-change',
+  'autoAgents': ['Tester'],
+  'summary': 'Adds a tester, retires the reviewer and widens the coder.',
+  'reason': 'The specs need a runner before the change ships.',
+  'slug': 'chat-team',
+  'baseHash': 'a1b2c3',
+  'team': {
+    'name': 'Chat team',
+    'mode': 'lead',
+    'members': [CODER_ASKS],
+    'triggers': FIRST_MESSAGE_TO_CODER,
+    'instructionBlocks': [],
+  },
+  'changes': [
+    {
+      'op': 'add',
+      'member': {
+        'memberId': 'tester',
+        'name': 'Tester',
+        'role': 'Runs the checks',
+        'agent': 'claude',
+        'model': null,
+        'approval': 'auto',
+      },
+      'task': 'Run the test suite after each change',
+    },
+    { 'op': 'remove', 'memberId': 'reviewer', 'name': 'Reviewer' },
+    {
+      'op': 'update',
+      'memberId': 'coder',
+      'name': 'Coder',
+      'fields': [
+        {
+          'field': 'role',
+          'before': 'Writes the change',
+          'after': 'Writes the change and its tests',
+        },
+        {
+          'field': 'instructions',
+          'before': COACH_INSTRUCTIONS_BEFORE,
+          'after': COACH_INSTRUCTIONS_AFTER,
+        },
+      ],
+      'task': null,
+    },
+  ],
+};

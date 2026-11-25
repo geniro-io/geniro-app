@@ -59,6 +59,7 @@ import {
   type ArtifactUrlBuilder,
   ArtifactUrlContext,
 } from './published-artifact';
+import { QueuedMessagesContext } from './queued-messages-context';
 import {
   type RecommendationsApplier,
   RecommendationsApplyContext,
@@ -143,6 +144,7 @@ export function ChatProviders({
   signIn,
   retry,
   callContext,
+  queuedMessages = 0,
   callChannel,
   artifactUrl,
   artifactSharing = null,
@@ -194,6 +196,8 @@ export function ChatProviders({
    * team card), and this component wraps all of them.
    */
   callContext: CalleeContextResolver | null;
+  /** Messages the open chat's composer queue holds; a team card's Start waits on them. */
+  queuedMessages?: number;
   /** The direct line to a running call's callee — see `CallMessageBox`. */
   callChannel: CallMessageChannel | null;
   /**
@@ -323,7 +327,12 @@ export function ChatProviders({
                                                             value={
                                                               threadStartReader
                                                             }>
-                                                            {children}
+                                                            <QueuedMessagesContext.Provider
+                                                              value={
+                                                                queuedMessages
+                                                              }>
+                                                              {children}
+                                                            </QueuedMessagesContext.Provider>
                                                           </ThreadStartReaderContext.Provider>
                                                         </SurfaceHostContext.Provider>
                                                       </ThreadContextReaderContext.Provider>

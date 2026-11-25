@@ -202,6 +202,7 @@ const row = (over: Partial<WorkingAgentRow> = {}): WorkingAgentRow => ({
   callerKey: 'manager',
   title: 'Fix the drop zone',
   state: 'working',
+  departure: null,
   waitingFor: [],
   startedAt: Date.now() - 125_000,
   clocks: [],

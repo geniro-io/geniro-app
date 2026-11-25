@@ -212,6 +212,13 @@ export function WorkingAgentHead({
           <span className="truncate text-[13px] font-semibold text-foreground">
             {row.callee}
           </span>
+          {row.departure === null ? null : (
+            <span
+              data-slot="working-agent-departure"
+              className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              {row.departure}
+            </span>
+          )}
           <WorkingAgentElapsed row={row} />
         </span>
         <WorkingAgentStateLine row={row} />

@@ -132,7 +132,7 @@ const SAFE_DIFF = ['--no-ext-diff', '--no-textconv'];
 const EXIT_DIFFERENT = 1;
 
 /** One git command, tolerating the exit status `diff` uses to mean "differs". */
-async function git(
+export async function git(
   dir: string,
   args: string[],
   config: readonly string[],
@@ -203,7 +203,7 @@ const EXIT_NO = 1;
  * whose own filters cannot be neutralised is not read at all, since every diff would run them.
  * Shared by both readers, so a hardening of this step reaches both.
  */
-async function openRepository(
+export async function openRepository(
   dir: string,
 ): Promise<
   { config: readonly string[]; root: string } | 'unsafe' | 'not-repo'
@@ -433,6 +433,22 @@ export function countDiffLines(diff: string | null): {
     }
   }
   return { added, removed };
+}
+
+/** The full sha of the commit `ref` names, or null when it names none. */
+async function commitOf(
+  dir: string,
+  ref: string,
+  config: readonly string[],
+): Promise<string | null> {
+  const sha = (
+    await git(
+      dir,
+      ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      config,
+    )
+  )?.trim();
+  return sha === undefined || sha === '' ? null : sha;
 }
 
 async function refExists(
@@ -680,6 +696,7 @@ export async function readChangesSince(
     unavailableReason,
     movedOffStart: false,
     upstreamBase: null,
+    baseSha: null,
   });
   const repository = await openRepository(dir);
   if (repository === 'unsafe') {
@@ -733,7 +750,7 @@ export async function readChangesSince(
   // elsewhere in the repo vanished entirely, which is the exact loss pairing
   // `ls-files` with the diff exists to prevent. `--full-name` fixes the
   // language and the `:/` pathspec fixes the scope.
-  const [names, diff, untracked] = await Promise.all([
+  const [names, diff, untracked, baseSha] = await Promise.all([
     git(
       dir,
       ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, '--name-status', base],
@@ -741,6 +758,7 @@ export async function readChangesSince(
     ),
     git(dir, ['diff', ...SAFE_DIFF, IGNORE_SUBMODULE_WORKTREES, base], config),
     workFolder ? Promise.resolve([]) : listUntracked(dir, config),
+    commitOf(dir, base, config),
   ]);
   if (names === null || untracked === null) {
     return {
@@ -749,6 +767,7 @@ export async function readChangesSince(
       unavailableReason: 'git could not read this folder’s changes.',
       movedOffStart: false,
       upstreamBase: null,
+      baseSha: null,
     };
   }
 
@@ -758,18 +777,22 @@ export async function readChangesSince(
     if (line.trim() === '') {
       continue;
     }
-    // Tab-separated, and a RENAME carries two paths — the second is where the
-    // file is now, which is the one worth showing.
+    // Tab-separated, and a RENAME or COPY carries two paths: the first is where
+    // the file came from, the second is where it is now, which is the one worth
+    // showing.
     const parts = line.split('\t');
     const letter = parts[0] ?? '';
     const path = parts[parts.length - 1] ?? '';
     if (path === '') {
       continue;
     }
+    const status = statusOf(letter);
     const body = bodies.get(path) ?? null;
     changes.push({
       path,
-      status: statusOf(letter),
+      status,
+      oldPath:
+        status === 'renamed' || status === 'copied' ? (parts[1] ?? null) : null,
       diff: boundedDiff(body),
       // From the RAW body, ahead of the cap — see `countDiffLines`.
       ...countDiffLines(body),
@@ -808,6 +831,7 @@ export async function readChangesSince(
     changes.push({
       path,
       status: 'untracked',
+      oldPath: null,
       diff: boundedDiff(bodyList[index] ?? null),
       added,
       removed: added === null ? null : 0,
@@ -821,6 +845,7 @@ export async function readChangesSince(
     unavailableReason: null,
     movedOffStart: !descends && forkPoint === null,
     upstreamBase,
+    baseSha,
   };
 }
 

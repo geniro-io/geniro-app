@@ -6216,6 +6216,93 @@ describe('TeamExecutorService — follow-up messages', () => {
     expect(hostTurnSettles).toEqual([]);
   });
 
+  it('refuses a review while the lead’s turn runs, and writes nothing', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const lead = turnsOf(claude, 'role-a')[0]!;
+
+    await expect(
+      service.sendMessage(
+        run.id,
+        'Review of your changes',
+        [],
+        'review-1',
+        undefined,
+        undefined,
+        { payload: { note: null, comments: [] }, ownTurn: true },
+      ),
+    ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+    await drain();
+
+    expect(lead.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+    completeTurn(lead, 'A1');
+    await drain();
+  });
+
+  it('gives a review a lead turn of its own once the lead is idle, with the review on the user’s row', async () => {
+    const { service, claude, itemDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'side work',
+      agent: 'b',
+      message: 'do it',
+      mode: 'async',
+    });
+    await drain();
+    const b = turnsOf(claude, 'role-b')[0]!;
+    completeTurn(a, 'A1');
+    await drain();
+    const review = { note: 'look', comments: [] };
+
+    await service.sendMessage(
+      run.id,
+      'Review of your changes',
+      [],
+      'review-1',
+      undefined,
+      undefined,
+      { payload: review, ownTurn: true },
+    );
+    await drain();
+
+    const again = turnsOf(claude, 'role-a');
+    expect(again).toHaveLength(2);
+    expect(again[1]!.input.prompt).toBe('Review of your changes');
+    const row = itemDao.items.find(
+      (item) =>
+        item.runId === run.id &&
+        item.role === 'user' &&
+        (JSON.parse(item.payload) as { text: string }).text ===
+          'Review of your changes',
+    );
+    expect(JSON.parse(row!.payload)).toMatchObject({ review });
+
+    completeTurn(again[1]!, 'A2');
+    completeTurn(b, 'B1');
+    await drain();
+    for (const turn of claude.starts) {
+      if (!turn.settled) {
+        completeTurn(turn, 'done');
+      }
+    }
+    await drain();
+  });
+
   it('refuses a follow-up a working agent cannot take mid-turn, and writes nothing', async () => {
     const { service, claude, itemDao } = setup();
     const run = await service.startRun({

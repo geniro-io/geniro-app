@@ -19,6 +19,7 @@ import {
   type BrowserRunOutcome,
   HISTORY_RESULT_PREFACE,
   HOST_ANALYZED_THREAD_TOOL,
+  HOST_ANSWER_REVIEW_COMMENT_TOOL,
   HOST_ARTIFACT_TOOL,
   HOST_BOARD_TOOLS,
   HOST_BROWSER_CLICK_TOOL,
@@ -99,6 +100,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { SurfaceBroker } from '../../agents/services/surface.broker';
 import { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
@@ -303,6 +305,7 @@ function service(
       milestones,
       goals,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages,
       plans,
       notices,
@@ -1083,6 +1086,7 @@ describe('McpServerService', () => {
     expect(tools.map((t) => t.name)).toEqual([
       ...GENIRO_MCP_CALL_TOOLS,
       HOST_GOALS_TOOL,
+      HOST_ANSWER_REVIEW_COMMENT_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
       HOST_LIST_THREADS_TOOL,
@@ -1467,6 +1471,7 @@ describe('McpServerService', () => {
     const tools = (json().result as { tools: { name: string }[] }).tools;
     expect(tools.map((t) => t.name)).toEqual([
       HOST_GOALS_TOOL,
+      HOST_ANSWER_REVIEW_COMMENT_TOOL,
       HOST_QUESTION_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
@@ -4536,6 +4541,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     });
     const listing = tools.flatMap((tool) =>
@@ -4642,6 +4648,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     });
   };
@@ -4980,6 +4987,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       milestones: milestoneBroker(),
       goals: {} as GoalsService,
       goalWriters: new GoalWritersBroker(),
+      reviewComments: {} as ReviewCommentsService,
       stages: stageService(),
     }).find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
 
@@ -5104,6 +5112,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
+        reviewComments: {} as ReviewCommentsService,
         stages: stageService(),
       }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
       return {
@@ -5342,6 +5351,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         milestones: milestoneBroker(),
         goals: {} as GoalsService,
         goalWriters: new GoalWritersBroker(),
+        reviewComments: {} as ReviewCommentsService,
         stages: stageService(),
       });
     type ToolCallContext = Parameters<

@@ -14,6 +14,7 @@ const change = (
 ): GitChange => ({
   path,
   status: 'modified',
+  oldPath: null,
   diff: null,
   added,
   removed,

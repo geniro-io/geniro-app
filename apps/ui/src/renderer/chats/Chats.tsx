@@ -164,7 +164,7 @@ import {
 import type { CallConversationLoader } from './call-conversation';
 import type { CallMessageChannel } from './call-message-box';
 import { memberCallWaits } from './call-waits';
-import { ChatChangesDialog } from './chat-changes-dialog';
+import { ChangesReviewDialog } from './changes-review-dialog';
 import {
   chatContextFigures,
   type ContextFigures,
@@ -281,6 +281,7 @@ import type {
   SystemRecommendationsApplier,
 } from './recommendations-apply-context';
 import { formatClockTime } from './relative-time';
+import { OpenReviewCommentContext } from './review-message-card';
 import type { RunConfigDraft } from './run-config';
 import {
   applyRunConfig,
@@ -451,6 +452,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import type { TaskReader } from './use-live-task';
 import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
 import { ownPoolOf, useNodeDurableReadingsState } from './use-node-context';
+import { useReviewComments } from './use-review-comments';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunOutcomes } from './use-run-outcomes';
 import { useRunProcesses } from './use-run-processes';
@@ -3291,6 +3293,7 @@ export function Chats({
     arrived: boolean;
   } | null>(null);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [reviewFocus, setReviewFocus] = useState<number | null>(null);
   const chatSearch = useChatSearch(activeRunId, chatApi);
 
   // The jump state machine — reveal, mark, fetch-around, and what "Latest"
@@ -3448,10 +3451,14 @@ export function Chats({
   );
 
   const openChatSearch = useLatestCallback((): void => setSearchOpen(true), []);
-  const openChatChanges = useLatestCallback(
-    (): void => setChangesOpen(true),
-    [],
-  );
+  const openChatChanges = useLatestCallback((): void => {
+    setReviewFocus(null);
+    setChangesOpen(true);
+  }, []);
+  const openReviewComment = useLatestCallback((number: number): void => {
+    setReviewFocus(number);
+    setChangesOpen(true);
+  }, []);
   const closeChatChanges = useLatestCallback(
     (): void => setChangesOpen(false),
     [],
@@ -7455,6 +7462,18 @@ export function Chats({
           activeParkedReason,
           pausedQueues.has(activeRunId),
         );
+  const review = useReviewComments({
+    api: chatApi,
+    teamApi: activeTeamId === null ? null : teamApi,
+    client,
+    runId: activeRunId,
+    agentWorking:
+      activeTeamId === null
+        ? runState.turnStartedAt !== null
+        : activeFacts !== null &&
+          followUpDelivery({ ...activeFacts, queued: false }).action ===
+            'queue',
+  });
   /**
    * The open turn as a CHAT header (and each agent's figure) should measure it:
    * the hold counted as a parked stretch, exactly like an approval card's wait.
@@ -9885,82 +9904,84 @@ export function Chats({
 
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <ChatProviders
-        jumpMark={mark}
-        signIn={resolveSignIn}
-        retry={retryActiveRun}
-        callContext={resolveCallReading}
-        callChannel={callChannel}
-        artifactUrl={artifactUrl}
-        artifactAnswers={artifactAnswers}
-        artifactSharing={artifactSharing}
-        // What the reader folded and opened is remembered per THREAD — see
-        // `thread-ui-memory.ts`.
-        threadId={activeRunId}
-        runSettledAt={activeRunSettledAt}
-        callConversations={callConversations}
-        delegateConversations={delegateConversations}
-        liveText={liveText}
-        applyRecommendations={applyRecommendations}
-        applySystemRecommendations={applySystemRecommendations}
-        notSent={notSent}
-        chatActions={chatActions}
-        loadMemory={loadMemory}
-        loadKnowledge={loadKnowledge}
-        lessonsApi={apis.lessons}
-        lessonsKnowledgeApi={apis.knowledge}
-        agentsApi={agentsApi}
-        lessonsJump={jumpToSeq}
-        taskReader={taskReader}
-        threadStartReader={threadStartReader}
-        threadContext={threadContext}
-        surfaceHost={surfaceHost}>
-        <AttachmentLoaderContext.Provider value={loadAttachment}>
-          <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
-            <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
-              <BrowserGrid
-                runId={browserEnabled ? activeRunId : null}
-                className="relative grid h-full"
-                // The list's width is shared with the shell: the title bar's
-                // divider is placed from it, so the band above ends exactly on
-                // this column's border rather than near it.
-                //
-                // At phone width there is ONE column, and the list and the
-                // pane beside it take turns in it as separate pages: the one
-                // not on show is `hidden`, which takes it out of the grid.
-                //
-                // `minmax(0,1fr)`, NOT bare `1fr`, same as the desktop
-                // columns below: a bare `fr` track's automatic minimum is
-                // `auto` (its content's min-content size), so one long
-                // unbreakable line — a user message with no spaces, a cwd
-                // path — grows the TRACK past the window instead of wrapping
-                // or clipping inside it, and that growth cascades up through
-                // every ancestor `flex`/`grid` box (each shares the identical
-                // `min-width: auto` default) until something wide enough
-                // absorbs it.
-                style={{
-                  gridTemplateColumns: narrowViewport
-                    ? 'minmax(0,1fr)'
-                    : isHosted
-                      ? showAgentsPanel
-                        ? 'minmax(0,1fr) auto'
-                        : 'minmax(0,1fr)'
-                      : showAgentsPanel
-                        ? `${listWidth}px minmax(0,1fr)${browserTrack} auto`
-                        : `${listWidth}px minmax(0,1fr)${browserTrack}`,
-                }}>
-                {/* On a phone the list is a PAGE of its own: hidden (and its
+      <OpenReviewCommentContext.Provider
+        value={isHosted ? null : openReviewComment}>
+        <ChatProviders
+          jumpMark={mark}
+          signIn={resolveSignIn}
+          retry={retryActiveRun}
+          callContext={resolveCallReading}
+          callChannel={callChannel}
+          artifactUrl={artifactUrl}
+          artifactAnswers={artifactAnswers}
+          artifactSharing={artifactSharing}
+          // What the reader folded and opened is remembered per THREAD — see
+          // `thread-ui-memory.ts`.
+          threadId={activeRunId}
+          runSettledAt={activeRunSettledAt}
+          callConversations={callConversations}
+          delegateConversations={delegateConversations}
+          liveText={liveText}
+          applyRecommendations={applyRecommendations}
+          applySystemRecommendations={applySystemRecommendations}
+          notSent={notSent}
+          chatActions={chatActions}
+          loadMemory={loadMemory}
+          loadKnowledge={loadKnowledge}
+          lessonsApi={apis.lessons}
+          lessonsKnowledgeApi={apis.knowledge}
+          agentsApi={agentsApi}
+          lessonsJump={jumpToSeq}
+          taskReader={taskReader}
+          threadStartReader={threadStartReader}
+          threadContext={threadContext}
+          surfaceHost={surfaceHost}>
+          <AttachmentLoaderContext.Provider value={loadAttachment}>
+            <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
+              <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
+                <BrowserGrid
+                  runId={browserEnabled ? activeRunId : null}
+                  className="relative grid h-full"
+                  // The list's width is shared with the shell: the title bar's
+                  // divider is placed from it, so the band above ends exactly on
+                  // this column's border rather than near it.
+                  //
+                  // At phone width there is ONE column, and the list and the
+                  // pane beside it take turns in it as separate pages: the one
+                  // not on show is `hidden`, which takes it out of the grid.
+                  //
+                  // `minmax(0,1fr)`, NOT bare `1fr`, same as the desktop
+                  // columns below: a bare `fr` track's automatic minimum is
+                  // `auto` (its content's min-content size), so one long
+                  // unbreakable line — a user message with no spaces, a cwd
+                  // path — grows the TRACK past the window instead of wrapping
+                  // or clipping inside it, and that growth cascades up through
+                  // every ancestor `flex`/`grid` box (each shares the identical
+                  // `min-width: auto` default) until something wide enough
+                  // absorbs it.
+                  style={{
+                    gridTemplateColumns: narrowViewport
+                      ? 'minmax(0,1fr)'
+                      : isHosted
+                        ? showAgentsPanel
+                          ? 'minmax(0,1fr) auto'
+                          : 'minmax(0,1fr)'
+                        : showAgentsPanel
+                          ? `${listWidth}px minmax(0,1fr)${browserTrack} auto`
+                          : `${listWidth}px minmax(0,1fr)${browserTrack}`,
+                  }}>
+                  {/* On a phone the list is a PAGE of its own: hidden (and its
                     scroll position kept) while a thread or the composer is on
                     show, the whole screen otherwise. */}
-                {isHosted ? null : (
-                  <aside
-                    data-slot="chat-list"
-                    className={cn(
-                      'relative flex min-h-0 flex-col border-r border-border bg-sidebar',
-                      narrowViewport &&
-                        (phoneListPage ? 'border-r-0' : 'hidden'),
-                    )}>
-                    {/* `relative` on the aside above is what this needs: the
+                  {isHosted ? null : (
+                    <aside
+                      data-slot="chat-list"
+                      className={cn(
+                        'relative flex min-h-0 flex-col border-r border-border bg-sidebar',
+                        narrowViewport &&
+                          (phoneListPage ? 'border-r-0' : 'hidden'),
+                      )}>
+                      {/* `relative` on the aside above is what this needs: the
                       handle is absolutely positioned inside it, exactly as the
                       agents panel's is. On the RIGHT edge, because that is the
                       edge this column shares with the transcript — and the
@@ -9968,692 +9989,694 @@ export function Chats({
                       list grow it. Omitted at phone width, where the list is a
                       full-width page with nothing beside it to trade width
                       with. */}
-                    {narrowViewport ? null : (
-                      <PanelResizeHandle
-                        edge="right"
-                        label="Resize chat list"
-                        onMouseDown={startListResize}
-                        value={listWidth}
-                        min={listMinWidth}
-                        max={listMaxWidth}
-                        onResize={resizeListTo}
-                      />
-                    )}
-                    {/* A column heading, NOT part of the window's title bar —
+                      {narrowViewport ? null : (
+                        <PanelResizeHandle
+                          edge="right"
+                          label="Resize chat list"
+                          onMouseDown={startListResize}
+                          value={listWidth}
+                          min={listMinWidth}
+                          max={listMaxWidth}
+                          onResize={resizeListTo}
+                        />
+                      )}
+                      {/* A column heading, NOT part of the window's title bar —
                       that is one band above every column now (`title-bar.tsx`).
                       It keeps `h-11` so it still shares a baseline with the
                       transcript's header beside it. */}
-                    <div className="flex h-11 items-center justify-between pr-2 pl-3">
-                      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                        Chats
-                      </span>
-                      <span className="flex items-center gap-0.5">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="Search all chats"
-                          title="Search all chats (⌘⇧F / Ctrl+Shift+F)"
-                          onClick={() => setGlobalSearchOpen(true)}>
-                          <Search className="shrink-0" />
-                        </Button>
-                        {/* Before the add controls because it acts on the LIST
+                      <div className="flex h-11 items-center justify-between pr-2 pl-3">
+                        <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                          Chats
+                        </span>
+                        <span className="flex items-center gap-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            aria-label="Search all chats"
+                            title="Search all chats (⌘⇧F / Ctrl+Shift+F)"
+                            onClick={() => setGlobalSearchOpen(true)}>
+                            <Search className="shrink-0" />
+                          </Button>
+                          {/* Before the add controls because it acts on the LIST
                           the row sits above, where the three after it each add
                           something to that list. */}
-                        <ChatScopeFilter
-                          scope={chatScope}
-                          onChange={handleShowScope}
-                          window={activityWindow}
-                          preset={activityPreset}
-                          onWindowChange={handleActivityWindow}
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="New group"
-                          title="New group"
-                          onClick={handleNewGroup}>
-                          <FolderPlus className="shrink-0" />
-                        </Button>
-                        {/*
+                          <ChatScopeFilter
+                            scope={chatScope}
+                            onChange={handleShowScope}
+                            window={activityWindow}
+                            preset={activityPreset}
+                            onWindowChange={handleActivityWindow}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            aria-label="New group"
+                            title="New group"
+                            onClick={handleNewGroup}>
+                            <FolderPlus className="shrink-0" />
+                          </Button>
+                          {/*
                         Beside the +, not inside it. The + is a one-click new
                         thread and has to stay one; picking up an existing
                         conversation is a different act with a question attached
                         to it, so it gets its own control.
                       */}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="Continue a session"
-                          title="Continue a session you already have"
-                          onClick={() => {
-                            setSessionAgent(agentKind);
-                            setSessionPickerOpen(true);
-                          }}>
-                          <History className="shrink-0" />
-                        </Button>
-                        {/* The saved setups hang off the + itself: they are ways
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            aria-label="Continue a session"
+                            title="Continue a session you already have"
+                            onClick={() => {
+                              setSessionAgent(agentKind);
+                              setSessionPickerOpen(true);
+                            }}>
+                            <History className="shrink-0" />
+                          </Button>
+                          {/* The saved setups hang off the + itself: they are ways
                           of starting a new chat, so the control that starts one
                           is where the user is already aiming. A click still
                           means the plain new thread. */}
-                        <NewChatButton
-                          configs={runConfigs}
-                          projects={projects}
-                          onNewChat={() => {
-                            newChat();
-                            setMobileComposeOpen(true);
-                          }}
-                          onApply={(config) =>
-                            void applyRunConfigToComposer(config)
-                          }
-                          onCreate={() => {
-                            setRunConfigPickerMode('new');
-                            setRunConfigPickerOpen(true);
-                          }}
-                          onManage={() => {
-                            if (onOpenProject) {
-                              onOpenProject(composerProject.projectId);
-                              return;
+                          <NewChatButton
+                            configs={runConfigs}
+                            projects={projects}
+                            onNewChat={() => {
+                              newChat();
+                              setMobileComposeOpen(true);
+                            }}
+                            onApply={(config) =>
+                              void applyRunConfigToComposer(config)
                             }
-                            setRunConfigPickerMode('list');
-                            setRunConfigPickerOpen(true);
-                          }}
-                        />
-                      </span>
-                    </div>
-                    {/* The list's own actions (listing, groups, pins) report
+                            onCreate={() => {
+                              setRunConfigPickerMode('new');
+                              setRunConfigPickerOpen(true);
+                            }}
+                            onManage={() => {
+                              if (onOpenProject) {
+                                onOpenProject(composerProject.projectId);
+                                return;
+                              }
+                              setRunConfigPickerMode('list');
+                              setRunConfigPickerOpen(true);
+                            }}
+                          />
+                        </span>
+                      </div>
+                      {/* The list's own actions (listing, groups, pins) report
                       through the shared error, whose strip lives on the
                       composer and thread pages — off screen while a phone
                       shows this page, where a failed listing would otherwise
                       read as "No chats yet". */}
-                    {phoneListPage && error !== null ? (
-                      <ErrorBanner
-                        className="mx-3 mb-2"
-                        message={error}
-                        onDismiss={dismissError}
-                      />
-                    ) : null}
-                    <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
-                      {!runsLoaded && runs.length === 0 ? (
-                        <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                          Loading chats…
-                        </li>
-                      ) : (
-                        <>
-                          {sections.map(({ group, runs: sectionRuns }) => {
-                            // From the statuses the ROWS are showing, never from
-                            // the daemon column: a header computed from the row
-                            // would contradict its own children in exactly the
-                            // cases that matter (a live turn under a stale
-                            // `completed`, a parked question).
-                            const summary = runGroupSummary(
-                              sectionRuns.map(sidebarRunStatus),
-                            );
-                            const sectionId = group?.id ?? null;
-                            const sectionKey = sectionId ?? 'loose';
-                            const isDropTarget =
-                              drag?.kind === 'run' &&
-                              dropSectionId === sectionId;
-                            // A long section is folded to its WORKING set — the
-                            // threads that are running or waiting on the user,
-                            // plus the one that is open — and the rest go behind
-                            // "Show all". A group of a hundred finished chats
-                            // otherwise pushed every group below it off the
-                            // screen, so the next group could only be reached by
-                            // scrolling past conversations nobody was returning
-                            // to. The header's count stays the section's TOTAL,
-                            // so what the fold holds back is never in doubt.
-                            // The PINNED band leads the section and the fold is
-                            // computed over what is left. Two reasons it is
-                            // taken out first rather than kept and `keep`-ed
-                            // through: the fold preserves the caller's order, so
-                            // a pinned row would sit wherever activity had put
-                            // it — pinned and third — and `Show all` could
-                            // otherwise hide one, which is the one thing a pin
-                            // is a promise against.
-                            const { pinned, rest } =
-                              splitPinnedRuns(sectionRuns);
-                            const folded = previewSectionRuns(rest, {
-                              keep: (run) => {
-                                if (run.id === activeRunId) {
-                                  return true;
-                                }
-                                const status = sidebarRunStatus(run);
-                                return (
-                                  status === 'running' ||
-                                  status === 'needs-input'
-                                );
-                              },
-                            });
-                            const showingAll = expandedSections.has(sectionKey);
-                            const rows = [
-                              ...pinned,
-                              ...(showingAll ? rest : folded.visible),
-                            ].map((run) => (
-                              <ChatListItem
-                                key={run.id}
-                                runId={run.id}
-                                active={run.id === activeRunId}
-                                unseen={unseen.has(run.id)}
-                                naming={namingRunIds.has(run.id)}
-                                label={runLabel(run, teamNames)}
-                                isTeam={
-                                  run.teamId !== null &&
-                                  run.teamId !== undefined
-                                }
-                                teamName={
-                                  run.teamId
-                                    ? (teamNames.get(run.teamId) ?? null)
-                                    : null
-                                }
-                                status={sidebarRunStatus(run)}
-                                lastMessage={run.lastMessage}
-                                lastActivityAt={lastActivityOf(run)}
-                                createdAt={run.createdAt}
-                                archivedAt={run.archivedAt ?? null}
-                                activity={activities.get(run.id) ?? null}
-                                awaiting={run.awaiting}
-                                monitors={run.monitorsOpen}
-                                agentKind={run.agentKind}
-                                taskIdentifier={run.taskIdentifier}
-                                pullRequest={
-                                  rowPullRequestByRun.get(run.id) ?? null
-                                }
-                                dragging={
-                                  drag?.kind === 'run' && drag.id === run.id
-                                }
-                                onActivate={handleActivateRun}
-                                onRename={handleRenameRun}
-                                onDelete={handleDeleteRun}
-                                // Read off the ROW, never off the scope: under
-                                // `Show all` both kinds of row are listed
-                                // together, so a view-wide flag would offer
-                                // Unarchive on a live thread and Archive on a
-                                // shelved one, in the same list.
-                                archived={
-                                  run.archivedAt !== null &&
-                                  run.archivedAt !== undefined
-                                }
-                                // Both kinds. It was chats only for a release,
-                                // which left a finished team run with Delete
-                                // as its one row action — the thread whose
-                                // history is most worth keeping had no way off
-                                // the desk but destroying it.
-                                onArchive={handleArchiveRun}
-                                onUnarchive={handleUnarchiveRun}
-                                // An analysis is not itself analysed.
-                                onAnalyze={
-                                  !isAnalysisRun(run)
-                                    ? handleAnalyzeRun
-                                    : undefined
-                                }
-                                onReflect={
-                                  !isAnalysisRun(run) && !isHosted
-                                    ? handleReflectRun
-                                    : undefined
-                                }
-                                readLessonsMark={readLessonsMark}
-                                // Read off the ROW, like `archived` above and
-                                // for its reason: under `Show all` the band and
-                                // the rest are one list, so a flag derived from
-                                // where the row was drawn would offer Unpin to
-                                // whatever happened to come first.
-                                pinned={run.pinnedPosition !== null}
-                                notes={run.notes}
-                                onSetPinned={handleSetRunPinned}
-                                color={run.color}
-                                onSetColor={handleSetRunColor}
-                                onDragStartRun={handleRunDragStart}
-                                onDragOverRun={handleRunDragOver}
-                                onDragEndRun={handleDragEnd}
-                              />
-                            ));
-                            // Only when the fold is actually holding something
-                            // back — a short section shows every row and needs no
-                            // control saying so. It rides INSIDE the row list so
-                            // it sits against the group's rail, where it reads as
-                            // the end of these chats rather than as a stray
-                            // sidebar action.
-                            const foldRow =
-                              folded.hidden > 0 ? (
-                                <li key="fold" className="list-none">
-                                  <button
-                                    type="button"
-                                    data-slot="section-fold"
-                                    className="w-full cursor-pointer rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                    onClick={() =>
-                                      handleToggleSectionAll(sectionKey)
-                                    }>
-                                    {showingAll
-                                      ? 'Show fewer'
-                                      : `Show all ${sectionRuns.length}`}
-                                  </button>
-                                </li>
-                              ) : null;
-                            return (
-                              // The WHOLE section is the drop zone — its header, its
-                              // rail, its rows and the space between them. Hanging
-                              // the target off the header alone left the body of an
-                              // expanded group inert: a chat dragged into it lit
-                              // nothing up and landed nowhere, which is the reported
-                              // "gets selected, but doesn't drag". `dragover`
-                              // bubbles, so one handler here covers every child and
-                              // the rows need none of their own.
-                              <li
-                                key={group?.id ?? 'loose'}
-                                data-slot="group-section"
-                                data-section-id={sectionId ?? 'loose'}
-                                className={cn(
-                                  // The bottom padding is PERMANENT, not part of
-                                  // the highlight: it is what keeps the colour rail
-                                  // from running flush into the edge below it, and
-                                  // adding it only while a drag hovers would shift
-                                  // every row down at the moment the user is aiming
-                                  // at one.
-                                  'list-none rounded-lg pb-1.5',
-                                  // Soft and NEUTRAL: `muted` rather than `accent`,
-                                  // which is the palette's warm caramel and read as
-                                  // a coloured state rather than as a destination —
-                                  // and a hairline rather than a 2px ring, since a
-                                  // heavy outline on a block this size in a 260px
-                                  // sidebar reads as an error.
-                                  isDropTarget &&
-                                    'bg-muted/70 ring-1 ring-border',
-                                )}
-                                onDragOver={(event) => {
-                                  // Without preventDefault this is not a drop
-                                  // target at all, and the cursor shows the
-                                  // no-entry glyph over the whole list.
-                                  event.preventDefault();
-                                  if (dragRef.current?.kind === 'run') {
-                                    event.dataTransfer.dropEffect = 'move';
-                                    handleSectionDragOver(sectionId);
-                                  } else if (group !== null) {
-                                    handleGroupDragOver(group.id);
+                      {phoneListPage && error !== null ? (
+                        <ErrorBanner
+                          className="mx-3 mb-2"
+                          message={error}
+                          onDismiss={dismissError}
+                        />
+                      ) : null}
+                      <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
+                        {!runsLoaded && runs.length === 0 ? (
+                          <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                            Loading chats…
+                          </li>
+                        ) : (
+                          <>
+                            {sections.map(({ group, runs: sectionRuns }) => {
+                              // From the statuses the ROWS are showing, never from
+                              // the daemon column: a header computed from the row
+                              // would contradict its own children in exactly the
+                              // cases that matter (a live turn under a stale
+                              // `completed`, a parked question).
+                              const summary = runGroupSummary(
+                                sectionRuns.map(sidebarRunStatus),
+                              );
+                              const sectionId = group?.id ?? null;
+                              const sectionKey = sectionId ?? 'loose';
+                              const isDropTarget =
+                                drag?.kind === 'run' &&
+                                dropSectionId === sectionId;
+                              // A long section is folded to its WORKING set — the
+                              // threads that are running or waiting on the user,
+                              // plus the one that is open — and the rest go behind
+                              // "Show all". A group of a hundred finished chats
+                              // otherwise pushed every group below it off the
+                              // screen, so the next group could only be reached by
+                              // scrolling past conversations nobody was returning
+                              // to. The header's count stays the section's TOTAL,
+                              // so what the fold holds back is never in doubt.
+                              // The PINNED band leads the section and the fold is
+                              // computed over what is left. Two reasons it is
+                              // taken out first rather than kept and `keep`-ed
+                              // through: the fold preserves the caller's order, so
+                              // a pinned row would sit wherever activity had put
+                              // it — pinned and third — and `Show all` could
+                              // otherwise hide one, which is the one thing a pin
+                              // is a promise against.
+                              const { pinned, rest } =
+                                splitPinnedRuns(sectionRuns);
+                              const folded = previewSectionRuns(rest, {
+                                keep: (run) => {
+                                  if (run.id === activeRunId) {
+                                    return true;
                                   }
-                                }}
-                                onDrop={(event) => {
-                                  event.preventDefault();
-                                  handleDropInSection(sectionId);
-                                }}>
-                                {group ? (
-                                  <GroupHeader
-                                    group={group}
-                                    summary={summary}
-                                    unseen={sectionRuns.some((run) =>
-                                      unseen.has(run.id),
-                                    )}
-                                    dragging={
-                                      drag?.kind === 'group' &&
-                                      drag.id === group.id
+                                  const status = sidebarRunStatus(run);
+                                  return (
+                                    status === 'running' ||
+                                    status === 'needs-input'
+                                  );
+                                },
+                              });
+                              const showingAll =
+                                expandedSections.has(sectionKey);
+                              const rows = [
+                                ...pinned,
+                                ...(showingAll ? rest : folded.visible),
+                              ].map((run) => (
+                                <ChatListItem
+                                  key={run.id}
+                                  runId={run.id}
+                                  active={run.id === activeRunId}
+                                  unseen={unseen.has(run.id)}
+                                  naming={namingRunIds.has(run.id)}
+                                  label={runLabel(run, teamNames)}
+                                  isTeam={
+                                    run.teamId !== null &&
+                                    run.teamId !== undefined
+                                  }
+                                  teamName={
+                                    run.teamId
+                                      ? (teamNames.get(run.teamId) ?? null)
+                                      : null
+                                  }
+                                  status={sidebarRunStatus(run)}
+                                  lastMessage={run.lastMessage}
+                                  lastActivityAt={lastActivityOf(run)}
+                                  createdAt={run.createdAt}
+                                  archivedAt={run.archivedAt ?? null}
+                                  activity={activities.get(run.id) ?? null}
+                                  awaiting={run.awaiting}
+                                  monitors={run.monitorsOpen}
+                                  agentKind={run.agentKind}
+                                  taskIdentifier={run.taskIdentifier}
+                                  pullRequest={
+                                    rowPullRequestByRun.get(run.id) ?? null
+                                  }
+                                  dragging={
+                                    drag?.kind === 'run' && drag.id === run.id
+                                  }
+                                  onActivate={handleActivateRun}
+                                  onRename={handleRenameRun}
+                                  onDelete={handleDeleteRun}
+                                  // Read off the ROW, never off the scope: under
+                                  // `Show all` both kinds of row are listed
+                                  // together, so a view-wide flag would offer
+                                  // Unarchive on a live thread and Archive on a
+                                  // shelved one, in the same list.
+                                  archived={
+                                    run.archivedAt !== null &&
+                                    run.archivedAt !== undefined
+                                  }
+                                  // Both kinds. It was chats only for a release,
+                                  // which left a finished team run with Delete
+                                  // as its one row action — the thread whose
+                                  // history is most worth keeping had no way off
+                                  // the desk but destroying it.
+                                  onArchive={handleArchiveRun}
+                                  onUnarchive={handleUnarchiveRun}
+                                  // An analysis is not itself analysed.
+                                  onAnalyze={
+                                    !isAnalysisRun(run)
+                                      ? handleAnalyzeRun
+                                      : undefined
+                                  }
+                                  onReflect={
+                                    !isAnalysisRun(run) && !isHosted
+                                      ? handleReflectRun
+                                      : undefined
+                                  }
+                                  readLessonsMark={readLessonsMark}
+                                  // Read off the ROW, like `archived` above and
+                                  // for its reason: under `Show all` the band and
+                                  // the rest are one list, so a flag derived from
+                                  // where the row was drawn would offer Unpin to
+                                  // whatever happened to come first.
+                                  pinned={run.pinnedPosition !== null}
+                                  notes={run.notes}
+                                  onSetPinned={handleSetRunPinned}
+                                  color={run.color}
+                                  onSetColor={handleSetRunColor}
+                                  onDragStartRun={handleRunDragStart}
+                                  onDragOverRun={handleRunDragOver}
+                                  onDragEndRun={handleDragEnd}
+                                />
+                              ));
+                              // Only when the fold is actually holding something
+                              // back — a short section shows every row and needs no
+                              // control saying so. It rides INSIDE the row list so
+                              // it sits against the group's rail, where it reads as
+                              // the end of these chats rather than as a stray
+                              // sidebar action.
+                              const foldRow =
+                                folded.hidden > 0 ? (
+                                  <li key="fold" className="list-none">
+                                    <button
+                                      type="button"
+                                      data-slot="section-fold"
+                                      className="w-full cursor-pointer rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                                      onClick={() =>
+                                        handleToggleSectionAll(sectionKey)
+                                      }>
+                                      {showingAll
+                                        ? 'Show fewer'
+                                        : `Show all ${sectionRuns.length}`}
+                                    </button>
+                                  </li>
+                                ) : null;
+                              return (
+                                // The WHOLE section is the drop zone — its header, its
+                                // rail, its rows and the space between them. Hanging
+                                // the target off the header alone left the body of an
+                                // expanded group inert: a chat dragged into it lit
+                                // nothing up and landed nowhere, which is the reported
+                                // "gets selected, but doesn't drag". `dragover`
+                                // bubbles, so one handler here covers every child and
+                                // the rows need none of their own.
+                                <li
+                                  key={group?.id ?? 'loose'}
+                                  data-slot="group-section"
+                                  data-section-id={sectionId ?? 'loose'}
+                                  className={cn(
+                                    // The bottom padding is PERMANENT, not part of
+                                    // the highlight: it is what keeps the colour rail
+                                    // from running flush into the edge below it, and
+                                    // adding it only while a drag hovers would shift
+                                    // every row down at the moment the user is aiming
+                                    // at one.
+                                    'list-none rounded-lg pb-1.5',
+                                    // Soft and NEUTRAL: `muted` rather than `accent`,
+                                    // which is the palette's warm caramel and read as
+                                    // a coloured state rather than as a destination —
+                                    // and a hairline rather than a 2px ring, since a
+                                    // heavy outline on a block this size in a 260px
+                                    // sidebar reads as an error.
+                                    isDropTarget &&
+                                      'bg-muted/70 ring-1 ring-border',
+                                  )}
+                                  onDragOver={(event) => {
+                                    // Without preventDefault this is not a drop
+                                    // target at all, and the cursor shows the
+                                    // no-entry glyph over the whole list.
+                                    event.preventDefault();
+                                    if (dragRef.current?.kind === 'run') {
+                                      event.dataTransfer.dropEffect = 'move';
+                                      handleSectionDragOver(sectionId);
+                                    } else if (group !== null) {
+                                      handleGroupDragOver(group.id);
                                     }
-                                    autoFocusName={namingGroupId === group.id}
-                                    onNameFocused={clearNamingGroup}
-                                    onToggle={handleToggleGroup}
-                                    onRename={handleRenameGroup}
-                                    onCommand={handleGroupCommand}
-                                    teams={teams}
-                                    onDragStart={handleGroupDragStart}
-                                    onDragEnd={handleDragEnd}
-                                  />
-                                ) : groups.length > 0 &&
-                                  sectionRuns.length > 0 ? (
-                                  // Only once a group exists: with none, this label
-                                  // would restate the panel heading directly above
-                                  // it. The loose runs need a name of their own the
-                                  // moment anything sits above them.
-                                  <p
-                                    data-slot="ungrouped-label"
-                                    className="m-0 px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                                    Ungrouped
-                                  </p>
-                                ) : null}
-                                {group === null ? (
-                                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                                    {rows}
-                                    {foldRow}
-                                  </ul>
-                                ) : // An EMPTY group draws no rail: the container
-                                // exists to enclose rows, and with none it rendered
-                                // as a 4px orphan tick under the header. The
-                                // section is the drop target either way, so an
-                                // empty group can still be dropped into.
-                                group.collapsed || rows.length === 0 ? null : (
-                                  // The group's chats are ENCLOSED: indented, and
-                                  // hung off a rail in the group's own colour, so
-                                  // where one group's threads end and the next
-                                  // begins is visible without counting. Without it
-                                  // an expanded group ran straight into the one
-                                  // below and the whole list read as flat.
-                                  <ul
-                                    data-slot="group-runs"
-                                    className={cn(
-                                      'm-0 ml-3 flex list-none flex-col gap-1 border-l-2 py-1 pl-2',
-                                      GROUP_RAIL_CLASS[group.color],
-                                    )}>
-                                    {rows}
-                                    {foldRow}
-                                  </ul>
-                                )}
+                                  }}
+                                  onDrop={(event) => {
+                                    event.preventDefault();
+                                    handleDropInSection(sectionId);
+                                  }}>
+                                  {group ? (
+                                    <GroupHeader
+                                      group={group}
+                                      summary={summary}
+                                      unseen={sectionRuns.some((run) =>
+                                        unseen.has(run.id),
+                                      )}
+                                      dragging={
+                                        drag?.kind === 'group' &&
+                                        drag.id === group.id
+                                      }
+                                      autoFocusName={namingGroupId === group.id}
+                                      onNameFocused={clearNamingGroup}
+                                      onToggle={handleToggleGroup}
+                                      onRename={handleRenameGroup}
+                                      onCommand={handleGroupCommand}
+                                      teams={teams}
+                                      onDragStart={handleGroupDragStart}
+                                      onDragEnd={handleDragEnd}
+                                    />
+                                  ) : groups.length > 0 &&
+                                    sectionRuns.length > 0 ? (
+                                    // Only once a group exists: with none, this label
+                                    // would restate the panel heading directly above
+                                    // it. The loose runs need a name of their own the
+                                    // moment anything sits above them.
+                                    <p
+                                      data-slot="ungrouped-label"
+                                      className="m-0 px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                                      Ungrouped
+                                    </p>
+                                  ) : null}
+                                  {group === null ? (
+                                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                                      {rows}
+                                      {foldRow}
+                                    </ul>
+                                  ) : // An EMPTY group draws no rail: the container
+                                  // exists to enclose rows, and with none it rendered
+                                  // as a 4px orphan tick under the header. The
+                                  // section is the drop target either way, so an
+                                  // empty group can still be dropped into.
+                                  group.collapsed ||
+                                    rows.length === 0 ? null : (
+                                    // The group's chats are ENCLOSED: indented, and
+                                    // hung off a rail in the group's own colour, so
+                                    // where one group's threads end and the next
+                                    // begins is visible without counting. Without it
+                                    // an expanded group ran straight into the one
+                                    // below and the whole list read as flat.
+                                    <ul
+                                      data-slot="group-runs"
+                                      className={cn(
+                                        'm-0 ml-3 flex list-none flex-col gap-1 border-l-2 py-1 pl-2',
+                                        GROUP_RAIL_CLASS[group.color],
+                                      )}>
+                                      {rows}
+                                      {foldRow}
+                                    </ul>
+                                  )}
+                                </li>
+                              );
+                            })}
+                            {runs.length === 0 ? (
+                              <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                                {chatScope === 'archived'
+                                  ? 'Nothing archived yet'
+                                  : 'No chats yet'}
                               </li>
-                            );
-                          })}
-                          {runs.length === 0 ? (
-                            <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                              {chatScope === 'archived'
-                                ? 'Nothing archived yet'
-                                : 'No chats yet'}
-                            </li>
-                          ) : null}
-                          {hasOlderRuns ? (
-                            <li>
-                              <OlderMessagesControl
-                                slot="older-runs"
-                                className="px-1"
-                                loading={loadingOlderRuns}
-                                onLoad={loadOlderRuns}
-                                label="Load older chats"
-                                loadingLabel="Loading older chats…"
-                              />
-                            </li>
-                          ) : null}
-                        </>
-                      )}
-                    </ul>
-                  </aside>
-                )}
+                            ) : null}
+                            {hasOlderRuns ? (
+                              <li>
+                                <OlderMessagesControl
+                                  slot="older-runs"
+                                  className="px-1"
+                                  loading={loadingOlderRuns}
+                                  onLoad={loadOlderRuns}
+                                  label="Load older chats"
+                                  loadingLabel="Loading older chats…"
+                                />
+                              </li>
+                            ) : null}
+                          </>
+                        )}
+                      </ul>
+                    </aside>
+                  )}
 
-                {activeRunId === null && isHosted ? (
-                  <section
-                    data-slot="hosted-thread-opening"
-                    className="flex min-h-0 flex-col items-center justify-center gap-3 p-4 text-sm text-muted-foreground">
-                    {error === null ? (
-                      <span role="status" className="flex items-center gap-2">
-                        <Spinner />
-                        Opening the chat…
-                      </span>
-                    ) : (
-                      <ErrorBanner
-                        className="w-full max-w-xl"
-                        message={error}
-                        action={
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7 shrink-0"
-                            onClick={() => {
-                              setError(null);
-                              refreshRuns();
-                            }}>
-                            Try again
-                          </Button>
-                        }
-                        onDismiss={() => setError(null)}
-                      />
-                    )}
-                  </section>
-                ) : activeRunId === null ? (
-                  // The new-run composer — the landing view, one Cursor-style card: the
-                  // task text on top and, inside the same card, the graph/agent it
-                  // targets, the folder it runs in, and the trigger the run starts from
-                  // (a run only starts by firing one), with a round send control.
-                  // Every picker in this card is positioned against the
-                  // WINDOW rather than against its own trigger's wrapper. The
-                  // section scrolls, and a box that scrolls vertically cannot
-                  // keep `overflow-x: visible` — CSS forces both axes
-                  // non-visible together — so it clips a panel on BOTH edges.
-                  // Reported as "окошко заходит за края аппликэйшена, оно
-                  // срезается" against the branch picker, and measured at
-                  // 1000×640: the panel sat at `left: 447, top: 8` inside a
-                  // section whose own box starts at `left: 480, top: 41`, so
-                  // every branch name lost its first characters and the search
-                  // field was cut off the top. Declared HERE, on the container
-                  // that does the clipping, rather than passed through each
-                  // chip — the rule `Dialog` already follows for its scrolling
-                  // body.
-                  <MenuAnchorContext.Provider value="viewport">
+                  {activeRunId === null && isHosted ? (
                     <section
-                      className={cn(
-                        'flex min-h-0 flex-col overflow-y-auto',
-                        phoneListPage && 'hidden',
-                      )}>
-                      {mobileBack}
-                      {mobilePanelToggle}
-                      <div
-                        className="flex min-h-0 flex-1 flex-col items-center justify-center"
-                        style={{ padding: START_COLUMN_PAD }}>
-                        {/* Centred in the PANE it lives in — equal air either
+                      data-slot="hosted-thread-opening"
+                      className="flex min-h-0 flex-col items-center justify-center gap-3 p-4 text-sm text-muted-foreground">
+                      {error === null ? (
+                        <span role="status" className="flex items-center gap-2">
+                          <Spinner />
+                          Opening the chat…
+                        </span>
+                      ) : (
+                        <ErrorBanner
+                          className="w-full max-w-xl"
+                          message={error}
+                          action={
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0"
+                              onClick={() => {
+                                setError(null);
+                                refreshRuns();
+                              }}>
+                              Try again
+                            </Button>
+                          }
+                          onDismiss={() => setError(null)}
+                        />
+                      )}
+                    </section>
+                  ) : activeRunId === null ? (
+                    // The new-run composer — the landing view, one Cursor-style card: the
+                    // task text on top and, inside the same card, the graph/agent it
+                    // targets, the folder it runs in, and the trigger the run starts from
+                    // (a run only starts by firing one), with a round send control.
+                    // Every picker in this card is positioned against the
+                    // WINDOW rather than against its own trigger's wrapper. The
+                    // section scrolls, and a box that scrolls vertically cannot
+                    // keep `overflow-x: visible` — CSS forces both axes
+                    // non-visible together — so it clips a panel on BOTH edges.
+                    // Reported as "окошко заходит за края аппликэйшена, оно
+                    // срезается" against the branch picker, and measured at
+                    // 1000×640: the panel sat at `left: 447, top: 8` inside a
+                    // section whose own box starts at `left: 480, top: 41`, so
+                    // every branch name lost its first characters and the search
+                    // field was cut off the top. Declared HERE, on the container
+                    // that does the clipping, rather than passed through each
+                    // chip — the rule `Dialog` already follows for its scrolling
+                    // body.
+                    <MenuAnchorContext.Provider value="viewport">
+                      <section
+                        className={cn(
+                          'flex min-h-0 flex-col overflow-y-auto',
+                          phoneListPage && 'hidden',
+                        )}>
+                        {mobileBack}
+                        {mobilePanelToggle}
+                        <div
+                          className="flex min-h-0 flex-1 flex-col items-center justify-center"
+                          style={{ padding: START_COLUMN_PAD }}>
+                          {/* Centred in the PANE it lives in — equal air either
                           side of the card. It briefly carried a margin that
                           re-centred it on the whole WINDOW instead, derived
                           from `100vw - 100%`; that reads as shifted left,
                           because the chrome it compensates for is a column the
                           eye has already stopped counting as part of the page. */}
-                        <div
-                          className="flex w-full flex-col gap-5"
-                          style={{ maxWidth: START_COLUMN_WIDTH }}>
-                          <h2 className="text-center text-xl font-semibold tracking-tight">
-                            What are we building?
-                          </h2>
-                          <div className="relative">
-                            {skillMenuOpen ? (
-                              <SkillMenu
-                                skills={skillMatches}
-                                highlightIndex={highlightedIndex}
-                                onSelect={pickSkill}
-                                onHighlight={setSkillHighlight}
-                              />
-                            ) : null}
-                            <ComposerTopRow>
-                              <TargetSelect
-                                value={target}
-                                teams={teams}
-                                cliDetections={cliDetections}
-                                onChange={changeTarget}
-                              />
-                              <FolderSelect
-                                folder={folder}
-                                recentFolders={recentFolders}
-                                onChoose={chooseFolder}
-                                onBrowse={() => void pickFolder()}
-                              />
-                              <BranchSelect
-                                info={git.info}
-                                switching={git.switching}
-                                onSwitch={(branch) => {
-                                  void git.switchTo(branch);
-                                }}
-                              />
-                              {composerProject.source === 'manual' ||
-                              projects.some(
-                                (project) =>
-                                  project.id === composerProject.projectId,
-                              ) ? (
-                                <ProjectSelect
-                                  variant="ghost"
-                                  projects={projects}
-                                  value={composerProject.projectId}
-                                  noneLabel="No project"
-                                  aria-label="Project for the new run"
-                                  title="Its instructions go to every agent of the new run"
-                                  onChange={(projectId) => {
-                                    setComposerProject({
-                                      projectId,
-                                      source: 'manual',
-                                    });
-                                    const picked = projects.find(
-                                      (project) => project.id === projectId,
-                                    );
-                                    if (picked !== undefined) {
-                                      seedProjectTarget(picked);
-                                    }
+                          <div
+                            className="flex w-full flex-col gap-5"
+                            style={{ maxWidth: START_COLUMN_WIDTH }}>
+                            <h2 className="text-center text-xl font-semibold tracking-tight">
+                              What are we building?
+                            </h2>
+                            <div className="relative">
+                              {skillMenuOpen ? (
+                                <SkillMenu
+                                  skills={skillMatches}
+                                  highlightIndex={highlightedIndex}
+                                  onSelect={pickSkill}
+                                  onHighlight={setSkillHighlight}
+                                />
+                              ) : null}
+                              <ComposerTopRow>
+                                <TargetSelect
+                                  value={target}
+                                  teams={teams}
+                                  cliDetections={cliDetections}
+                                  onChange={changeTarget}
+                                />
+                                <FolderSelect
+                                  folder={folder}
+                                  recentFolders={recentFolders}
+                                  onChoose={chooseFolder}
+                                  onBrowse={() => void pickFolder()}
+                                />
+                                <BranchSelect
+                                  info={git.info}
+                                  switching={git.switching}
+                                  onSwitch={(branch) => {
+                                    void git.switchTo(branch);
                                   }}
                                 />
-                              ) : null}
-                              {!teamSlug ? (
-                                // The optional config directory (account / profile)
-                                // this chat's CLI runs as.
-                                // Beside the folder because it is the same kind of
-                                // fact — WHERE the run reads from — and above the text
-                                // because, like the folder, it is fixed the moment the
-                                // chat is created. A team's nodes each name their
-                                // own in its YAML, so the chip is a chat's alone.
-                                <ConfigDirSelect
-                                  configProfiles={configProfiles.filter(
-                                    (profile) => profile.agent === agentKind,
-                                  )}
-                                  configDir={configDir}
-                                  recentConfigDirs={recentConfigDirs}
-                                  unavailableReason={
-                                    composerConfigDirUnavailableReason
-                                  }
-                                  onChange={(chosen) =>
-                                    chooseConfigDir(agentKind, chosen)
-                                  }
-                                  onBrowse={() => void pickConfigDir()}
-                                />
-                              ) : null}
-                              {teamSlug && triggers.length > 0 ? (
-                                <Select
-                                  variant="ghost"
-                                  value={triggerId}
-                                  aria-label="Trigger the run starts from"
-                                  groups={[
-                                    {
-                                      items: triggers.map((entry) => ({
-                                        value: entry.id,
-                                        label: `${entry.name} · ${entry.trigger}`,
-                                        icon: <Zap />,
-                                      })),
-                                    },
-                                  ]}
-                                  onValueChange={setTriggerId}
-                                />
-                              ) : null}
-                            </ComposerTopRow>
-                            <MessageComposer
-                              attachments={attachments.attachments}
-                              onRemoveAttachment={attachments.remove}
-                              onAttachFiles={fileAttach.attach}
-                              onPasteImages={attachments.addFromClipboard}
-                              text={composerText}
-                              textareaProps={{
-                                ref: newChatInputRef,
-                                rows: 4,
-                                'aria-label': 'Task for the new run',
-                                className: 'min-h-24',
-                                placeholder: teamSlug
-                                  ? 'Describe the task for the team…'
-                                  : 'Message the agent…',
-                                onKeyDown: (event) => {
-                                  if (handleSkillMenuKeys(event)) {
-                                    return;
-                                  }
-                                  if (isComposerSendKey(event)) {
-                                    event.preventDefault();
-                                    void send();
-                                  }
-                                },
-                              }}
-                              actions={
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  className="size-8 shrink-0 rounded-full"
-                                  disabled={
-                                    (!hasContent && !attachBusy) || streaming
-                                  }
-                                  // Held while a paste is still being read,
-                                  // with the reason on hover — the follow-up
-                                  // composer's rule, for its reason.
-                                  aria-disabled={attachBusy}
-                                  aria-label={teamSlug ? 'Start run' : 'Send'}
-                                  title={
-                                    attachBusy
-                                      ? attachBusyTitle
-                                      : teamSlug
-                                        ? 'Start run'
-                                        : 'Send'
-                                  }
-                                  onClick={() => void send()}>
-                                  {attachBusy ? (
-                                    <Spinner className="size-4 text-primary-foreground" />
-                                  ) : teamSlug ? (
-                                    <Zap className="size-4 shrink-0" />
-                                  ) : (
-                                    <ArrowUp className="size-4 shrink-0" />
-                                  )}
-                                </Button>
-                              }>
-                              {/* ONE control for the model and everything it
+                                {composerProject.source === 'manual' ||
+                                projects.some(
+                                  (project) =>
+                                    project.id === composerProject.projectId,
+                                ) ? (
+                                  <ProjectSelect
+                                    variant="ghost"
+                                    projects={projects}
+                                    value={composerProject.projectId}
+                                    noneLabel="No project"
+                                    aria-label="Project for the new run"
+                                    title="Its instructions go to every agent of the new run"
+                                    onChange={(projectId) => {
+                                      setComposerProject({
+                                        projectId,
+                                        source: 'manual',
+                                      });
+                                      const picked = projects.find(
+                                        (project) => project.id === projectId,
+                                      );
+                                      if (picked !== undefined) {
+                                        seedProjectTarget(picked);
+                                      }
+                                    }}
+                                  />
+                                ) : null}
+                                {!teamSlug ? (
+                                  // The optional config directory (account / profile)
+                                  // this chat's CLI runs as.
+                                  // Beside the folder because it is the same kind of
+                                  // fact — WHERE the run reads from — and above the text
+                                  // because, like the folder, it is fixed the moment the
+                                  // chat is created. A team's nodes each name their
+                                  // own in its YAML, so the chip is a chat's alone.
+                                  <ConfigDirSelect
+                                    configProfiles={configProfiles.filter(
+                                      (profile) => profile.agent === agentKind,
+                                    )}
+                                    configDir={configDir}
+                                    recentConfigDirs={recentConfigDirs}
+                                    unavailableReason={
+                                      composerConfigDirUnavailableReason
+                                    }
+                                    onChange={(chosen) =>
+                                      chooseConfigDir(agentKind, chosen)
+                                    }
+                                    onBrowse={() => void pickConfigDir()}
+                                  />
+                                ) : null}
+                                {teamSlug && triggers.length > 0 ? (
+                                  <Select
+                                    variant="ghost"
+                                    value={triggerId}
+                                    aria-label="Trigger the run starts from"
+                                    groups={[
+                                      {
+                                        items: triggers.map((entry) => ({
+                                          value: entry.id,
+                                          label: `${entry.name} · ${entry.trigger}`,
+                                          icon: <Zap />,
+                                        })),
+                                      },
+                                    ]}
+                                    onValueChange={setTriggerId}
+                                  />
+                                ) : null}
+                              </ComposerTopRow>
+                              <MessageComposer
+                                attachments={attachments.attachments}
+                                onRemoveAttachment={attachments.remove}
+                                onAttachFiles={fileAttach.attach}
+                                onPasteImages={attachments.addFromClipboard}
+                                text={composerText}
+                                textareaProps={{
+                                  ref: newChatInputRef,
+                                  rows: 4,
+                                  'aria-label': 'Task for the new run',
+                                  className: 'min-h-24',
+                                  placeholder: teamSlug
+                                    ? 'Describe the task for the team…'
+                                    : 'Message the agent…',
+                                  onKeyDown: (event) => {
+                                    if (handleSkillMenuKeys(event)) {
+                                      return;
+                                    }
+                                    if (isComposerSendKey(event)) {
+                                      event.preventDefault();
+                                      void send();
+                                    }
+                                  },
+                                }}
+                                actions={
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    className="size-8 shrink-0 rounded-full"
+                                    disabled={
+                                      (!hasContent && !attachBusy) || streaming
+                                    }
+                                    // Held while a paste is still being read,
+                                    // with the reason on hover — the follow-up
+                                    // composer's rule, for its reason.
+                                    aria-disabled={attachBusy}
+                                    aria-label={teamSlug ? 'Start run' : 'Send'}
+                                    title={
+                                      attachBusy
+                                        ? attachBusyTitle
+                                        : teamSlug
+                                          ? 'Start run'
+                                          : 'Send'
+                                    }
+                                    onClick={() => void send()}>
+                                    {attachBusy ? (
+                                      <Spinner className="size-4 text-primary-foreground" />
+                                    ) : teamSlug ? (
+                                      <Zap className="size-4 shrink-0" />
+                                    ) : (
+                                      <ArrowUp className="size-4 shrink-0" />
+                                    )}
+                                  </Button>
+                                }>
+                                {/* ONE control for the model and everything it
                                   can be run with — see `ModelSettingsSelect`.
                                   Only a single-agent run picks any of it here;
                                   a team's nodes each name their own in its
                                   YAML. */}
-                              {!teamSlug ? (
-                                <ModelSettingsSelect
-                                  configProfiles={configProfiles.filter(
-                                    (profile) => profile.agent === agentKind,
-                                  )}
-                                  agentKind={agentKind}
-                                  models={agentModels}
-                                  loading={agentModelsLoading}
-                                  settingsLoading={modelSettingsLoading}
-                                  model={models[agentKind] ?? null}
-                                  onModelChange={(model) =>
-                                    changeModel(agentKind, model)
-                                  }
-                                  efforts={agentEfforts.efforts}
-                                  effort={efforts[agentKind] ?? null}
-                                  onEffortChange={(effort) =>
-                                    changeEffort(agentKind, effort)
-                                  }
-                                  // The approval posture of the NEXT chat,
-                                  // moved in here from a chip of its own —
-                                  // ASKED FOR as "add auto-approve option to
-                                  // model settings popover instead". A mode
-                                  // this CLI does not honour shows as the
-                                  // "cli default" placeholder rather than a
-                                  // lie: the user may have picked it while
-                                  // another agent was selected.
-                                  approvalCapability={
-                                    composerApprovalCapability
-                                  }
-                                  approval={
-                                    composerApprovalCapability?.modes.includes(
-                                      approvalMode,
-                                    )
-                                      ? approvalMode
-                                      : null
-                                  }
-                                  onApprovalChange={changeApprovalMode}
-                                  windows={agentContextWindows.windows}
-                                  contextWindow={
-                                    contextWindows[agentKind] ?? null
-                                  }
-                                  onContextWindowChange={(size) =>
-                                    changeContextWindow(agentKind, size)
-                                  }
-                                  autoCompactPercent={autoCompactPercent}
-                                  onAutoCompactChange={changeAutoCompact}
-                                  parameters={agentModelParameters.parameters}
-                                  parameterValues={
-                                    modelParameters[agentKind] ??
-                                    NO_PARAMETER_VALUES
-                                  }
-                                  onParameterChange={(id, next) =>
-                                    changeModelParameter(agentKind, id, next)
-                                  }
-                                />
-                              ) : null}
-                            </MessageComposer>
-                          </div>
-                          {/* The suggestion-chip row that sat here is gone. Both halves of it
+                                {!teamSlug ? (
+                                  <ModelSettingsSelect
+                                    configProfiles={configProfiles.filter(
+                                      (profile) => profile.agent === agentKind,
+                                    )}
+                                    agentKind={agentKind}
+                                    models={agentModels}
+                                    loading={agentModelsLoading}
+                                    settingsLoading={modelSettingsLoading}
+                                    model={models[agentKind] ?? null}
+                                    onModelChange={(model) =>
+                                      changeModel(agentKind, model)
+                                    }
+                                    efforts={agentEfforts.efforts}
+                                    effort={efforts[agentKind] ?? null}
+                                    onEffortChange={(effort) =>
+                                      changeEffort(agentKind, effort)
+                                    }
+                                    // The approval posture of the NEXT chat,
+                                    // moved in here from a chip of its own —
+                                    // ASKED FOR as "add auto-approve option to
+                                    // model settings popover instead". A mode
+                                    // this CLI does not honour shows as the
+                                    // "cli default" placeholder rather than a
+                                    // lie: the user may have picked it while
+                                    // another agent was selected.
+                                    approvalCapability={
+                                      composerApprovalCapability
+                                    }
+                                    approval={
+                                      composerApprovalCapability?.modes.includes(
+                                        approvalMode,
+                                      )
+                                        ? approvalMode
+                                        : null
+                                    }
+                                    onApprovalChange={changeApprovalMode}
+                                    windows={agentContextWindows.windows}
+                                    contextWindow={
+                                      contextWindows[agentKind] ?? null
+                                    }
+                                    onContextWindowChange={(size) =>
+                                      changeContextWindow(agentKind, size)
+                                    }
+                                    autoCompactPercent={autoCompactPercent}
+                                    onAutoCompactChange={changeAutoCompact}
+                                    parameters={agentModelParameters.parameters}
+                                    parameterValues={
+                                      modelParameters[agentKind] ??
+                                      NO_PARAMETER_VALUES
+                                    }
+                                    onParameterChange={(id, next) =>
+                                      changeModelParameter(agentKind, id, next)
+                                    }
+                                  />
+                                ) : null}
+                              </MessageComposer>
+                            </div>
+                            {/* The suggestion-chip row that sat here is gone. Both halves of it
                 are now rows in the composer's own menus — folders in the folder
                 chip, teams in the target chip, each searchable — so the
                 chips only restated, below the card, choices the card already
@@ -10662,151 +10685,151 @@ export function Chats({
                               What stands here now is not that row rebuilt: those chips
                               wrote a value the app already knew about into a chip, while a
                               fast action writes the user's OWN sentence into the message. */}
-                          <FastActionBar
-                            actions={fastActions}
-                            onPress={insertFastAction}
-                            onManage={
-                              onOpenSettings
-                                ? () => onOpenSettings('fast-actions')
-                                : undefined
-                            }
-                          />
-                          {/* A refused branch switch reports here — the guard says WHY
+                            <FastActionBar
+                              actions={fastActions}
+                              onPress={insertFastAction}
+                              onManage={
+                                onOpenSettings
+                                  ? () => onOpenSettings('fast-actions')
+                                  : undefined
+                              }
+                            />
+                            {/* A refused branch switch reports here — the guard says WHY
                 ("uncommitted changes…"), which is the whole point of it, and
                 offers the one thing the app can do about it. */}
-                          {composerNotice ? (
-                            <ErrorBanner
-                              message={composerNotice.message}
-                              tone={composerNotice.tone}
-                              action={
-                                noticeUseFolder !== null ? (
-                                  // The way out of a branch another worktree
-                                  // holds: git will never check it out twice, so
-                                  // the only route to that branch is the folder
-                                  // that already has it. Same clickable-string
-                                  // shape as Pull below, and the same reasoning —
-                                  // it is the rest of the sentence, not a second
-                                  // control.
-                                  <Button
-                                    type="button"
-                                    variant="link"
-                                    size="sm"
-                                    className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
-                                    title={`Run this chat in ${noticeUseFolder}`}
-                                    onClick={() => {
-                                      // Only the folder: the branch is already
-                                      // checked out there, so there is nothing
-                                      // left to switch, and `useGitInfo` re-reads
-                                      // on its own when the directory changes.
-                                      chooseFolder(noticeUseFolder);
-                                      git.clearError();
-                                    }}>
-                                    Use that folder
-                                  </Button>
-                                ) : (
-                                  <GitNoticeOffers
-                                    notice={composerNotice}
-                                    pulling={git.pulling}
-                                    carrying={git.carrying}
-                                    onPull={() => {
-                                      void git.pull();
-                                    }}
-                                    onCarry={() => {
-                                      void git.carry();
-                                    }}
-                                  />
-                                )
-                              }
-                              onDismiss={dismissError}
-                            />
-                          ) : null}
+                            {composerNotice ? (
+                              <ErrorBanner
+                                message={composerNotice.message}
+                                tone={composerNotice.tone}
+                                action={
+                                  noticeUseFolder !== null ? (
+                                    // The way out of a branch another worktree
+                                    // holds: git will never check it out twice, so
+                                    // the only route to that branch is the folder
+                                    // that already has it. Same clickable-string
+                                    // shape as Pull below, and the same reasoning —
+                                    // it is the rest of the sentence, not a second
+                                    // control.
+                                    <Button
+                                      type="button"
+                                      variant="link"
+                                      size="sm"
+                                      className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                      title={`Run this chat in ${noticeUseFolder}`}
+                                      onClick={() => {
+                                        // Only the folder: the branch is already
+                                        // checked out there, so there is nothing
+                                        // left to switch, and `useGitInfo` re-reads
+                                        // on its own when the directory changes.
+                                        chooseFolder(noticeUseFolder);
+                                        git.clearError();
+                                      }}>
+                                      Use that folder
+                                    </Button>
+                                  ) : (
+                                    <GitNoticeOffers
+                                      notice={composerNotice}
+                                      pulling={git.pulling}
+                                      carrying={git.carrying}
+                                      onPull={() => {
+                                        void git.pull();
+                                      }}
+                                      onCarry={() => {
+                                        void git.carry();
+                                      }}
+                                    />
+                                  )
+                                }
+                                onDismiss={dismissError}
+                              />
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    </section>
-                  </MenuAnchorContext.Provider>
-                ) : (
-                  <section className="flex min-h-0 flex-col">
-                    {mobileBack}
-                    {mobilePanelToggle}
-                    {activeRun && hosted?.hideHeader !== true ? (
-                      <ChatHeader
-                        label={runLabel(activeRun, teamNames)}
-                        analysisSource={analysisSourceOf(activeRun)}
-                        actions={
-                          hosted?.headerActions?.({
-                            discard:
-                              hosted.discard === undefined
-                                ? null
-                                : discardHosted,
-                          }) ?? null
-                        }
-                        isTeam={
-                          activeRun.teamId !== null &&
-                          activeRun.teamId !== undefined
-                        }
-                        agentKind={activeRun.agentKind}
-                        // Where this conversation happens. Beside the agent
-                        // because it is the same kind of fact — fixed for the
-                        // run's life — and after three rejected positions in the
-                        // composer below.
-                        cwd={
-                          hosted?.hideHeaderFolder === true
-                            ? null
-                            : activeRun.cwd
-                        }
-                        worktreeOf={taskWorktreeOf}
-                        // Which profile/account this conversation belongs to, when
-                        // it is not the CLI's default.
-                        configDir={activeRun.configDir}
-                        // And whichever profile the FOLDER pins over that one,
-                        // since the CLI applies its project settings over the
-                        // environment geniro hands it — so the row above is
-                        // what this chat asked for, not necessarily what it got.
-                        configDirPin={activeRun.configDirPin}
-                        status={activeRunStatus}
-                        lastActivityAt={lastActivityOf(activeRun)}
-                        workedMs={threadTotalsShown.ms}
-                        turnCount={threadTotalsShown.turns}
-                        // The recorded total plus what the running turns
-                        // have spent that no row carries yet.
-                        {...headerSpendOf(
-                          withLiveCost(
-                            {
-                              tokens: null,
-                              costUsd: threadTotals.costUsd,
-                              estimatedCostUsd: threadTotals.estimatedCostUsd,
-                            },
-                            liveRunCost(liveText),
-                          ),
-                        )}
-                        costedTurns={threadTotals.costedTurns}
-                        // Only while the run is actually live. A transcript
-                        // whose last row is a user message describes an open
-                        // turn whether or not one is still running — a daemon
-                        // that died mid-turn leaves exactly that — and a
-                        // counter reading off the rows alone would tick for
-                        // days on a thread nothing is working on. The status
-                        // is the authority on whether work is in flight; the
-                        // rows only say what it started from.
-                        openTurns={openTurnsShown}
-                        // A team's agents work at once, so its clock is the
-                        // UNION of their stretches — summed, it ran two seconds a
-                        // second while a Manager waited on its Engineer.
-                        activeSpans={
-                          activeRun.teamId !== null &&
-                          activeRun.teamId !== undefined
-                            ? threadTotals.activeSpans
-                            : null
-                        }
-                        pausedSpans={threadTotals.pausedSpans ?? undefined}
-                        // The delegate, task and terminal counters that used to
-                        // end this row are chips on the composer shelf now.
-                        // `sidePanelLive` still feeds all three from one place
-                        // — see the `ComposerShelf` below.
-                      />
-                    ) : null}
+                      </section>
+                    </MenuAnchorContext.Provider>
+                  ) : (
+                    <section className="flex min-h-0 flex-col">
+                      {mobileBack}
+                      {mobilePanelToggle}
+                      {activeRun && hosted?.hideHeader !== true ? (
+                        <ChatHeader
+                          label={runLabel(activeRun, teamNames)}
+                          analysisSource={analysisSourceOf(activeRun)}
+                          actions={
+                            hosted?.headerActions?.({
+                              discard:
+                                hosted.discard === undefined
+                                  ? null
+                                  : discardHosted,
+                            }) ?? null
+                          }
+                          isTeam={
+                            activeRun.teamId !== null &&
+                            activeRun.teamId !== undefined
+                          }
+                          agentKind={activeRun.agentKind}
+                          // Where this conversation happens. Beside the agent
+                          // because it is the same kind of fact — fixed for the
+                          // run's life — and after three rejected positions in the
+                          // composer below.
+                          cwd={
+                            hosted?.hideHeaderFolder === true
+                              ? null
+                              : activeRun.cwd
+                          }
+                          worktreeOf={taskWorktreeOf}
+                          // Which profile/account this conversation belongs to, when
+                          // it is not the CLI's default.
+                          configDir={activeRun.configDir}
+                          // And whichever profile the FOLDER pins over that one,
+                          // since the CLI applies its project settings over the
+                          // environment geniro hands it — so the row above is
+                          // what this chat asked for, not necessarily what it got.
+                          configDirPin={activeRun.configDirPin}
+                          status={activeRunStatus}
+                          lastActivityAt={lastActivityOf(activeRun)}
+                          workedMs={threadTotalsShown.ms}
+                          turnCount={threadTotalsShown.turns}
+                          // The recorded total plus what the running turns
+                          // have spent that no row carries yet.
+                          {...headerSpendOf(
+                            withLiveCost(
+                              {
+                                tokens: null,
+                                costUsd: threadTotals.costUsd,
+                                estimatedCostUsd: threadTotals.estimatedCostUsd,
+                              },
+                              liveRunCost(liveText),
+                            ),
+                          )}
+                          costedTurns={threadTotals.costedTurns}
+                          // Only while the run is actually live. A transcript
+                          // whose last row is a user message describes an open
+                          // turn whether or not one is still running — a daemon
+                          // that died mid-turn leaves exactly that — and a
+                          // counter reading off the rows alone would tick for
+                          // days on a thread nothing is working on. The status
+                          // is the authority on whether work is in flight; the
+                          // rows only say what it started from.
+                          openTurns={openTurnsShown}
+                          // A team's agents work at once, so its clock is the
+                          // UNION of their stretches — summed, it ran two seconds a
+                          // second while a Manager waited on its Engineer.
+                          activeSpans={
+                            activeRun.teamId !== null &&
+                            activeRun.teamId !== undefined
+                              ? threadTotals.activeSpans
+                              : null
+                          }
+                          pausedSpans={threadTotals.pausedSpans ?? undefined}
+                          // The delegate, task and terminal counters that used to
+                          // end this row are chips on the composer shelf now.
+                          // `sidePanelLive` still feeds all three from one place
+                          // — see the `ComposerShelf` below.
+                        />
+                      ) : null}
 
-                    {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
+                      {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
                   CSS resolves a `visible` axis to `auto` whenever the other
                   axis scrolls, so this box was a horizontal scroller by
                   omission — measured at 1100px wide: scrollWidth 759 against
@@ -10831,7 +10854,7 @@ export function Chats({
                   browser that it is inert: at 900px a horizontal wheel gesture
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
-                    {/* `overflow-anchor: none` is what keeps the tail FOLLOWING,
+                      {/* `overflow-anchor: none` is what keeps the tail FOLLOWING,
                   and it is the fix for a reported defect rather than a
                   precaution: "я делаю latest… он какое-то время работает, я
                   отхожу, и он перестаёт это делать", with the reporter's own
@@ -10866,7 +10889,7 @@ export function Chats({
                   the reader's place itself (`scrollTop += ` the height that
                   arrived) — with anchoring on, that adjustment was applied on
                   top of the browser's own. */}
-                    {/* `[&>*:first-child]:mt-auto` bottom-anchors a SHORT
+                      {/* `[&>*:first-child]:mt-auto` bottom-anchors a SHORT
                     conversation: the free space goes above the first row, so a
                     two-message thread sits just over the composer instead of
                     hanging from the top of the pane with the gap below it —
@@ -10879,248 +10902,248 @@ export function Chats({
                     container: in a scrolling flex box, end-justification pushes
                     overflow past the scroll origin, where it cannot be reached
                     by scrolling up. The margin has no such failure mode. */}
-                    <TranscriptContexts
-                      callAnswerPairs={callAnswerPairs}
-                      runOutcomes={activeRunOutcomes}
-                      runStages={activeRun?.stages ?? null}
-                      openTeamNote={
-                        activeRun?.teamId !== null &&
-                        activeRun?.teamId !== undefined
-                          ? openTeamNote
-                          : null
-                      }
-                      openThread={
-                        isHosted
-                          ? (hosted?.onOpenThread ?? null)
-                          : handleActivateRun
-                      }
-                      threadIdentities={hosted?.threadIdentities}
-                      openMemory={onOpenMemory ?? null}
-                      openKnowledge={onOpenKnowledge ? openKnowledge : null}
-                      collapseToolSteps={collapseToolSteps}
-                      runActivity={activeActivity}
-                      turnDurations={turnDurations}
-                      revealCallBlock={revealCallBlock}
-                      revealCall={revealCall}
-                      openSubagentDetail={openSubagentDetail}>
-                      <div
-                        data-slot="transcript"
-                        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
-                        {/* A chat opens on its newest 1,000 items, so a long one
+                      <TranscriptContexts
+                        callAnswerPairs={callAnswerPairs}
+                        runOutcomes={activeRunOutcomes}
+                        runStages={activeRun?.stages ?? null}
+                        openTeamNote={
+                          activeRun?.teamId !== null &&
+                          activeRun?.teamId !== undefined
+                            ? openTeamNote
+                            : null
+                        }
+                        openThread={
+                          isHosted
+                            ? (hosted?.onOpenThread ?? null)
+                            : handleActivateRun
+                        }
+                        threadIdentities={hosted?.threadIdentities}
+                        openMemory={onOpenMemory ?? null}
+                        openKnowledge={onOpenKnowledge ? openKnowledge : null}
+                        collapseToolSteps={collapseToolSteps}
+                        runActivity={activeActivity}
+                        turnDurations={turnDurations}
+                        revealCallBlock={revealCallBlock}
+                        revealCall={revealCall}
+                        openSubagentDetail={openSubagentDetail}>
+                        <div
+                          data-slot="transcript"
+                          className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
+                          {/* A chat opens on its newest 1,000 items, so a long one
                     begins part-way through itself. SAID, rather than left as a
                     conversation that appears to start mid-sentence — and it is
                     the top row precisely because that is where a reader who has
                     scrolled this far is looking. */}
-                        {/* A BUTTON as well as a caption: scrolling is the only
+                          {/* A BUTTON as well as a caption: scrolling is the only
                     other trigger, and a transcript that does not overflow its
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a team whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
-                        {threadOpening ? (
-                          <div
-                            data-slot="thread-loading"
-                            role="status"
-                            className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-                            <Spinner />
-                            Loading conversation…
-                          </div>
-                        ) : null}
-                        {hosted !== null &&
-                        !threadOpening &&
-                        transcriptEntries.length === 0 ? (
-                          <p
-                            data-slot="hosted-thread-empty"
-                            className="m-0 text-sm text-muted-foreground">
-                            {hosted.emptyText}
-                          </p>
-                        ) : null}
-                        {hasOlder && !threadOpening ? (
-                          <OlderMessagesControl
-                            slot="older-messages"
-                            className="justify-center"
-                            loading={loadingOlder}
-                            onLoad={() => {
-                              const scroller =
-                                transcriptEndRef.current?.parentElement;
-                              if (scroller) {
-                                void pageOlderUntilVisible(scroller);
-                              }
-                            }}
-                          />
-                        ) : null}
-                        {transcriptEntries.map((entry) => {
-                          const key = transcriptEntryKey(entry);
-                          const startSeq = entryStartSeq(entry);
-                          // The seq ANCHOR, which is what makes a search
-                          // hit reachable: `revealSeq` finds the last
-                          // anchor at or below the hit's seq and scrolls
-                          // to it. Here rather than inside
-                          // `TranscriptEntryView`, because that component
-                          // returns a different root per entry kind and
-                          // this is the one place they are all one list.
-                          //
-                          // `empty:hidden` is load-bearing twice over. An
-                          // entry CAN render nothing (`TranscriptItem`
-                          // answers null for ten kinds), and an empty flex
-                          // child would still consume the container's
-                          // `gap-2.5` — a stray 10px wherever one of those
-                          // rows falls. It is also exactly the condition
-                          // `revealSeq`'s `:not(:empty)` filters on, so
-                          // what is skipped and what is invisible cannot
-                          // drift apart.
-                          const wrap = (
-                            children: React.ReactNode,
-                          ): React.JSX.Element => (
-                            <TranscriptRow
-                              key={key}
-                              // `flex flex-col` is LOAD-BEARING, not
-                              // decoration: `align-self` resolves only
-                              // against a flex parent, and a bare
-                              // `MessageBubble` relies on it — the
-                              // `note` variant is `self-center`, which
-                              // is how the `✓ done · 21s` row at the
-                              // end of every turn is centred. As a plain
-                              // block wrapper this displaced every one
-                              // of them left; a one-child flex column
-                              // hands the alignment back untouched.
-                              // `display: contents` would too, and is
-                              // wrong — it generates no box, so the mark
-                              // below would not paint and `revealSeq`
-                              // would have nothing to measure.
-                              //
-                              // The landing mark is a WASH, and it was a
-                              // ring first — reported as not liked, and
-                              // the reason is visible the moment a user
-                              // message is the hit: this wrapper spans
-                              // the transcript's whole width while a
-                              // bubble is `self-end`, so an OUTLINE
-                              // draws a box around the empty half and
-                              // reads as a stray rectangle rather than
-                              // as "this row". A fill reads as the row
-                              // either way, which is also why the mark
-                              // stays on the wrapper rather than moving
-                              // onto the bubble: a tool group, a card
-                              // and a `note` are not bubbles and have no
-                              // one element to tint.
-                              //
-                              // The ring was chosen because it is a
-                              // box-shadow and costs no layout, and that
-                              // reasoning was right about padding and
-                              // wrong about the conclusion: `-my-1 py-1`
-                              // is net ZERO — the padding grows the
-                              // painted box, the negative margin takes
-                              // the same amount back off the margin box
-                              // flex actually lays out — so the wash
-                              // breathes without moving a single
-                              // neighbouring row. Both are in the marked
-                              // arm, so an unmarked row is untouched.
-                              // Only the colour transitions; the
-                              // geometry is instant, which is the right
-                              // way round for a flash.
-                              className={cn(
-                                mark?.key === `entry:${startSeq}` &&
-                                  JUMP_MARK_CLASS,
-                              )}
-                              {...jumpAnchorProps(
-                                'transcript',
-                                startSeq,
-                                `entry:${startSeq}`,
-                              )}>
-                              {children}
-                            </TranscriptRow>
-                          );
-                          if (
-                            entry.type !== 'item' ||
-                            entry.item.kind !== 'approval_request'
-                          ) {
-                            return wrap(
-                              <TranscriptEntryView
-                                entry={entry}
-                                nodes={nodeMeta}
-                                chatAgentName={activeRun?.agentKind ?? null}
-                                soloAgent={soloAgent}
-                                soloNodeId={
-                                  wfNodes.relay ? null : wfNodes.rootId
-                                }
-                              />,
-                            );
-                          }
-                          const item = entry.item;
-                          // EVERY open request's card lives above the composer, so
-                          // every one of them leaves a marker here. Keyed on openness
-                          // rather than on the pinned id: keying on the pin gave the
-                          // SECOND open question a fully live card in the scroller,
-                          // which is the failure the pin exists to end. Leaving the
-                          // live card here too would put two sets of buttons over one
-                          // one-shot verdict channel; leaving nothing would silently
-                          // drop a row out of the conversation's order.
-                          if (openRequestId(item) !== null) {
-                            return wrap(
-                              <MessageBubble variant="note">
-                                {pinnedRequest?.id === item.id
-                                  ? '❓ waiting on your answer — the card is pinned below'
-                                  : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                              </MessageBubble>,
-                            );
-                          }
-                          const askerName =
-                            (item.memberId
-                              ? (nodeMeta.get(item.memberId)?.name ??
-                                item.memberId)
-                              : activeRun?.agentKind) ?? 'agent';
-                          const card = (
-                            <div className="w-full">
-                              {approvalCardFor(item)}
+                          {threadOpening ? (
+                            <div
+                              data-slot="thread-loading"
+                              role="status"
+                              className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                              <Spinner />
+                              Loading conversation…
                             </div>
-                          );
-                          // A solo agent's card needs no identity frame either.
-                          return wrap(
-                            soloAgent ? (
-                              card
-                            ) : (
-                              <SenderRow
-                                name={askerName}
-                                colorKey={item.memberId ?? undefined}
-                                time={formatClockTime(item.createdAt)}>
-                                {card}
-                              </SenderRow>
-                            ),
-                          );
-                        })}
-                        <div ref={transcriptEndRef} />
-                      </div>
-                      {activeRun === null ? null : (
-                        <WorkingAgentsCard
-                          key={activeRun.id}
-                          rows={startedAgents}
-                          runId={activeRun.id}
-                          api={chatApi}
-                          client={client}
-                          onShowInChat={openCall}
-                          nodes={nodeMeta}
-                          chatAgentName={activeRun.agentKind}
-                          delegateState={runState}
-                          collapseToolSteps={collapseToolSteps}
-                          work={startedAgentsWork}
-                        />
-                      )}
+                          ) : null}
+                          {hosted !== null &&
+                          !threadOpening &&
+                          transcriptEntries.length === 0 ? (
+                            <p
+                              data-slot="hosted-thread-empty"
+                              className="m-0 text-sm text-muted-foreground">
+                              {hosted.emptyText}
+                            </p>
+                          ) : null}
+                          {hasOlder && !threadOpening ? (
+                            <OlderMessagesControl
+                              slot="older-messages"
+                              className="justify-center"
+                              loading={loadingOlder}
+                              onLoad={() => {
+                                const scroller =
+                                  transcriptEndRef.current?.parentElement;
+                                if (scroller) {
+                                  void pageOlderUntilVisible(scroller);
+                                }
+                              }}
+                            />
+                          ) : null}
+                          {transcriptEntries.map((entry) => {
+                            const key = transcriptEntryKey(entry);
+                            const startSeq = entryStartSeq(entry);
+                            // The seq ANCHOR, which is what makes a search
+                            // hit reachable: `revealSeq` finds the last
+                            // anchor at or below the hit's seq and scrolls
+                            // to it. Here rather than inside
+                            // `TranscriptEntryView`, because that component
+                            // returns a different root per entry kind and
+                            // this is the one place they are all one list.
+                            //
+                            // `empty:hidden` is load-bearing twice over. An
+                            // entry CAN render nothing (`TranscriptItem`
+                            // answers null for ten kinds), and an empty flex
+                            // child would still consume the container's
+                            // `gap-2.5` — a stray 10px wherever one of those
+                            // rows falls. It is also exactly the condition
+                            // `revealSeq`'s `:not(:empty)` filters on, so
+                            // what is skipped and what is invisible cannot
+                            // drift apart.
+                            const wrap = (
+                              children: React.ReactNode,
+                            ): React.JSX.Element => (
+                              <TranscriptRow
+                                key={key}
+                                // `flex flex-col` is LOAD-BEARING, not
+                                // decoration: `align-self` resolves only
+                                // against a flex parent, and a bare
+                                // `MessageBubble` relies on it — the
+                                // `note` variant is `self-center`, which
+                                // is how the `✓ done · 21s` row at the
+                                // end of every turn is centred. As a plain
+                                // block wrapper this displaced every one
+                                // of them left; a one-child flex column
+                                // hands the alignment back untouched.
+                                // `display: contents` would too, and is
+                                // wrong — it generates no box, so the mark
+                                // below would not paint and `revealSeq`
+                                // would have nothing to measure.
+                                //
+                                // The landing mark is a WASH, and it was a
+                                // ring first — reported as not liked, and
+                                // the reason is visible the moment a user
+                                // message is the hit: this wrapper spans
+                                // the transcript's whole width while a
+                                // bubble is `self-end`, so an OUTLINE
+                                // draws a box around the empty half and
+                                // reads as a stray rectangle rather than
+                                // as "this row". A fill reads as the row
+                                // either way, which is also why the mark
+                                // stays on the wrapper rather than moving
+                                // onto the bubble: a tool group, a card
+                                // and a `note` are not bubbles and have no
+                                // one element to tint.
+                                //
+                                // The ring was chosen because it is a
+                                // box-shadow and costs no layout, and that
+                                // reasoning was right about padding and
+                                // wrong about the conclusion: `-my-1 py-1`
+                                // is net ZERO — the padding grows the
+                                // painted box, the negative margin takes
+                                // the same amount back off the margin box
+                                // flex actually lays out — so the wash
+                                // breathes without moving a single
+                                // neighbouring row. Both are in the marked
+                                // arm, so an unmarked row is untouched.
+                                // Only the colour transitions; the
+                                // geometry is instant, which is the right
+                                // way round for a flash.
+                                className={cn(
+                                  mark?.key === `entry:${startSeq}` &&
+                                    JUMP_MARK_CLASS,
+                                )}
+                                {...jumpAnchorProps(
+                                  'transcript',
+                                  startSeq,
+                                  `entry:${startSeq}`,
+                                )}>
+                                {children}
+                              </TranscriptRow>
+                            );
+                            if (
+                              entry.type !== 'item' ||
+                              entry.item.kind !== 'approval_request'
+                            ) {
+                              return wrap(
+                                <TranscriptEntryView
+                                  entry={entry}
+                                  nodes={nodeMeta}
+                                  chatAgentName={activeRun?.agentKind ?? null}
+                                  soloAgent={soloAgent}
+                                  soloNodeId={
+                                    wfNodes.relay ? null : wfNodes.rootId
+                                  }
+                                />,
+                              );
+                            }
+                            const item = entry.item;
+                            // EVERY open request's card lives above the composer, so
+                            // every one of them leaves a marker here. Keyed on openness
+                            // rather than on the pinned id: keying on the pin gave the
+                            // SECOND open question a fully live card in the scroller,
+                            // which is the failure the pin exists to end. Leaving the
+                            // live card here too would put two sets of buttons over one
+                            // one-shot verdict channel; leaving nothing would silently
+                            // drop a row out of the conversation's order.
+                            if (openRequestId(item) !== null) {
+                              return wrap(
+                                <MessageBubble variant="note">
+                                  {pinnedRequest?.id === item.id
+                                    ? '❓ waiting on your answer — the card is pinned below'
+                                    : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                </MessageBubble>,
+                              );
+                            }
+                            const askerName =
+                              (item.memberId
+                                ? (nodeMeta.get(item.memberId)?.name ??
+                                  item.memberId)
+                                : activeRun?.agentKind) ?? 'agent';
+                            const card = (
+                              <div className="w-full">
+                                {approvalCardFor(item)}
+                              </div>
+                            );
+                            // A solo agent's card needs no identity frame either.
+                            return wrap(
+                              soloAgent ? (
+                                card
+                              ) : (
+                                <SenderRow
+                                  name={askerName}
+                                  colorKey={item.memberId ?? undefined}
+                                  time={formatClockTime(item.createdAt)}>
+                                  {card}
+                                </SenderRow>
+                              ),
+                            );
+                          })}
+                          <div ref={transcriptEndRef} />
+                        </div>
+                        {activeRun === null ? null : (
+                          <WorkingAgentsCard
+                            key={activeRun.id}
+                            rows={startedAgents}
+                            runId={activeRun.id}
+                            api={chatApi}
+                            client={client}
+                            onShowInChat={openCall}
+                            nodes={nodeMeta}
+                            chatAgentName={activeRun.agentKind}
+                            delegateState={runState}
+                            collapseToolSteps={collapseToolSteps}
+                            work={startedAgentsWork}
+                          />
+                        )}
 
-                      {/* Between the scroller and the composer, and drawn OVER
+                        {/* Between the scroller and the composer, and drawn OVER
                   the transcript from a zero-height row — see
                   `jump-to-latest.tsx` for why it cannot take part in the
                   column's sizing. */}
-                      {/* Offered whenever the newest message is not what is on
+                        {/* Offered whenever the newest message is not what is on
                     screen, which is TWO states rather than one. `aboveTail` is
                     the scroll position; `awayFromTail` is a window fetched
                     around a search hit, whose own bottom is somewhere in the
                     middle of the conversation — there the button is the only way
                     back, and it has to FETCH rather than scroll. */}
-                      <JumpToLatest
-                        visible={aboveTail || awayFromTail}
-                        onJump={awayFromTail ? backToTail : jumpToLatest}
-                      />
+                        <JumpToLatest
+                          visible={aboveTail || awayFromTail}
+                          onJump={awayFromTail ? backToTail : jumpToLatest}
+                        />
 
-                      {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
+                        {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
                   past and it overlaps the messages it floats above. Here the
                   card is a sibling of the transcript and the composer, which
@@ -11130,28 +11153,28 @@ export function Chats({
                   It sits ABOVE the composer because that is where the answer
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
-                      {pinnedRequest ? (
-                        <div
-                          data-slot="pinned-request"
-                          // Named and given a role that can CARRY a name, so a
-                          // screen-reader user typing into the composer learns the
-                          // turn has stopped on them. Deliberately NOT `aria-live`:
-                          // the card inside is a tablist full of interactive
-                          // controls, and announcing the whole region on every
-                          // keystroke inside it would be worse than saying nothing.
-                          role="region"
-                          aria-label="Question waiting on your answer"
-                          // Bounded and scrolling itself, so option previews stacked
-                          // above the options cannot push them, the answer field and
-                          // the composer off screen.
-                          className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
-                          {openRequests.length > 1 ? (
-                            <p className="m-0 mb-1.5 text-xs text-muted-foreground">
-                              {openRequests.length} questions waiting —
-                              answering this one opens the next
-                            </p>
-                          ) : null}
-                          {/* Every open request is rendered, and all but the newest are
+                        {pinnedRequest ? (
+                          <div
+                            data-slot="pinned-request"
+                            // Named and given a role that can CARRY a name, so a
+                            // screen-reader user typing into the composer learns the
+                            // turn has stopped on them. Deliberately NOT `aria-live`:
+                            // the card inside is a tablist full of interactive
+                            // controls, and announcing the whole region on every
+                            // keystroke inside it would be worse than saying nothing.
+                            role="region"
+                            aria-label="Question waiting on your answer"
+                            // Bounded and scrolling itself, so option previews stacked
+                            // above the options cannot push them, the answer field and
+                            // the composer off screen.
+                            className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
+                            {openRequests.length > 1 ? (
+                              <p className="m-0 mb-1.5 text-xs text-muted-foreground">
+                                {openRequests.length} questions waiting —
+                                answering this one opens the next
+                              </p>
+                            ) : null}
+                            {/* Every open request is rendered, and all but the newest are
                       `hidden`. Rendering only the pinned one would unmount the
                       card being typed into the moment a newer question arrived,
                       resetting its picks, its text and every staged attachment
@@ -11159,48 +11182,48 @@ export function Chats({
                       also keeps the concealed cards out of the tab order and
                       the accessibility tree, which `display:none` via a class
                       would not guarantee against a utility being overridden. */}
-                          {openRequests.map((request) => (
-                            <div
-                              key={request.id}
-                              hidden={request.id !== pinnedRequest.id}>
-                              {approvalCardFor(request)}
-                            </div>
-                          ))}
-                        </div>
+                            {openRequests.map((request) => (
+                              <div
+                                key={request.id}
+                                hidden={request.id !== pinnedRequest.id}>
+                                {approvalCardFor(request)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </TranscriptContexts>
+
+                      {transcriptError ? (
+                        <ErrorBanner
+                          // Was a full-bleed band with its own rule, drawn that
+                          // way because the strip had no surface to be seen by.
+                          // It has one now, so this is an inset card and the
+                          // rule would be a second separator around it.
+                          className="mx-4 mb-2"
+                          message={transcriptError}
+                          // The run outlived the team it ran: there is nothing to
+                          // retry and nothing to fix, so the only thing left to offer
+                          // is removing the run. It opens the same confirm every other
+                          // delete does — this is a shortcut to that action, not a
+                          // second, quieter way to destroy history.
+                          action={
+                            missingTeam && activeRun ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 shrink-0"
+                                onClick={() => handleDeleteRun(activeRun.id)}>
+                                <Trash2 className="size-3.5 shrink-0" />
+                                Delete this run
+                              </Button>
+                            ) : null
+                          }
+                          onDismiss={dismissError}
+                        />
                       ) : null}
-                    </TranscriptContexts>
 
-                    {transcriptError ? (
-                      <ErrorBanner
-                        // Was a full-bleed band with its own rule, drawn that
-                        // way because the strip had no surface to be seen by.
-                        // It has one now, so this is an inset card and the
-                        // rule would be a second separator around it.
-                        className="mx-4 mb-2"
-                        message={transcriptError}
-                        // The run outlived the team it ran: there is nothing to
-                        // retry and nothing to fix, so the only thing left to offer
-                        // is removing the run. It opens the same confirm every other
-                        // delete does — this is a shortcut to that action, not a
-                        // second, quieter way to destroy history.
-                        action={
-                          missingTeam && activeRun ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 shrink-0"
-                              onClick={() => handleDeleteRun(activeRun.id)}>
-                              <Trash2 className="size-3.5 shrink-0" />
-                              Delete this run
-                            </Button>
-                          ) : null
-                        }
-                        onDismiss={dismissError}
-                      />
-                    ) : null}
-
-                    {/* The ACCOUNT sign-in the transcript's error row started,
+                      {/* The ACCOUNT sign-in the transcript's error row started,
                         pinned here rather than drawn on that row. The row is
                         somewhere in a scrollback the user is free to leave, and
                         this flow needs a place they can still see when the
@@ -11211,35 +11234,35 @@ export function Chats({
 
                         The MCP half of the same controller renders in the dialog
                         it was pressed in; `server` is which one this is. */}
-                    {login.login && login.login.server === null ? (
-                      // `px-4` for the panel's own `-mx-4` to cancel against:
-                      // it is built as a full-bleed band inside a card that
-                      // pads its content, and dropped into an unpadded column
-                      // the negative margin hangs it over both edges.
-                      <div className="shrink-0 px-4">
-                        <CliLoginProgress
-                          session={login.login.session}
-                          onSubmitCode={(code) => void login.submitCode(code)}
-                          onCancel={() => void login.cancel()}
-                          onDismiss={login.dismiss}
-                          error={login.error}
-                        />
-                      </div>
-                    ) : null}
+                      {login.login && login.login.server === null ? (
+                        // `px-4` for the panel's own `-mx-4` to cancel against:
+                        // it is built as a full-bleed band inside a card that
+                        // pads its content, and dropped into an unpadded column
+                        // the negative margin hangs it over both edges.
+                        <div className="shrink-0 px-4">
+                          <CliLoginProgress
+                            session={login.login.session}
+                            onSubmitCode={(code) => void login.submitCode(code)}
+                            onCancel={() => void login.cancel()}
+                            onDismiss={login.dismiss}
+                            error={login.error}
+                          />
+                        </div>
+                      ) : null}
 
-                    {/* No rule above the composer. The card below already has
+                      {/* No rule above the composer. The card below already has
                         its own border and its own shadow, so the hairline was
                         a second edge a few pixels above the first — it read as
                         a stray line across the pane rather than as the
                         boundary of anything. The transcript's own scroll and
                         the card's elevation are what separate the two. */}
-                    <div className="flex flex-col gap-2 p-3">
-                      <WaitingMessagesStrip
-                        messages={waitingMessages.messages}
-                        onDeliver={waitingMessages.deliver}
-                        onRemove={waitingMessages.remove}
-                      />
-                      {/* The queue and the shelf share ONE reserved line. The
+                      <div className="flex flex-col gap-2 p-3">
+                        <WaitingMessagesStrip
+                          messages={waitingMessages.messages}
+                          onDeliver={waitingMessages.deliver}
+                          onRemove={waitingMessages.remove}
+                        />
+                        {/* The queue and the shelf share ONE reserved line. The
                           shelf keeps its row's height even when it holds no
                           chip (so a chip coming or going never moves the
                           transcript), and a queue under it used to leave that
@@ -11248,44 +11271,46 @@ export function Chats({
                           ride in the queue's own header line, which is held at
                           the same height: the reservation is always filled by
                           something, and a chip still cannot resize it. */}
-                      <QueuedStrip
-                        messages={queued}
-                        paused={
-                          activeRun ? pausedQueues.has(activeRun.id) : false
-                        }
-                        turnInFlight={streaming}
-                        // Only a running turn's ending releases the head; with
-                        // none — after Stop, or a send that failed — nothing
-                        // will until the user does.
-                        advancing={streaming}
-                        postingIds={postingIds}
-                        steerUnavailableReason={steerUnavailableReason}
-                        steerInterrupts={steerInterrupts}
-                        steerStatus={steerStatus}
-                        onEdit={messageQueue.edit}
-                        onRemove={messageQueue.remove}
-                        onReorder={messageQueue.reorder}
-                        onSteer={(id) => void messageQueue.steer(id)}
-                        onTogglePause={messageQueue.togglePause}
-                        leading={(control) =>
-                          renderComposerShelf(true, control)
-                        }
-                      />
-                      {queued.length === 0 ? renderComposerShelf(false) : null}
+                        <QueuedStrip
+                          messages={queued}
+                          paused={
+                            activeRun ? pausedQueues.has(activeRun.id) : false
+                          }
+                          turnInFlight={streaming}
+                          // Only a running turn's ending releases the head; with
+                          // none — after Stop, or a send that failed — nothing
+                          // will until the user does.
+                          advancing={streaming}
+                          postingIds={postingIds}
+                          steerUnavailableReason={steerUnavailableReason}
+                          steerInterrupts={steerInterrupts}
+                          steerStatus={steerStatus}
+                          onEdit={messageQueue.edit}
+                          onRemove={messageQueue.remove}
+                          onReorder={messageQueue.reorder}
+                          onSteer={(id) => void messageQueue.steer(id)}
+                          onTogglePause={messageQueue.togglePause}
+                          leading={(control) =>
+                            renderComposerShelf(true, control)
+                          }
+                        />
+                        {queued.length === 0
+                          ? renderComposerShelf(false)
+                          : null}
 
-                      {/* The SAME composer card as the new-run screen, with the run's
+                        {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
                 chips — a run's identity can't change after creation. */}
-                      <div className="relative">
-                        {skillMenuOpen ? (
-                          <SkillMenu
-                            skills={skillMatches}
-                            highlightIndex={highlightedIndex}
-                            onSelect={pickSkill}
-                            onHighlight={setSkillHighlight}
-                          />
-                        ) : null}
-                        {/* There is NO top row on an open run any more, and the
+                        <div className="relative">
+                          {skillMenuOpen ? (
+                            <SkillMenu
+                              skills={skillMatches}
+                              highlightIndex={highlightedIndex}
+                              onSelect={pickSkill}
+                              onHighlight={setSkillHighlight}
+                            />
+                          ) : null}
+                          {/* There is NO top row on an open run any more, and the
                     last chip to leave it was the team's trigger — it is
                     inside the card now, in the slot the model chip holds on a
                     chat (see `ComposerBottomRow` below). REPORTED as "i see
@@ -11308,56 +11333,56 @@ export function Chats({
                     naming live repo state under a transcript whose turns all run
                     against the tree the run STARTED on only invited a switch the
                     control could not perform. */}
-                        <MessageComposer
-                          attachments={attachments.attachments}
-                          onRemoveAttachment={attachments.remove}
-                          onAttachFiles={fileAttach.attach}
-                          onPasteImages={attachments.addFromClipboard}
-                          // Only between turns of a live chat: a running turn is
-                          // re-warming the cache as it goes, and an archived
-                          // chat takes no next message to warn about.
-                          notice={
-                            activeRun &&
-                            !streaming &&
-                            !activeRunArchived &&
-                            !activeRun.teamId ? (
-                              <PromptCacheNotice
-                                expiresAt={activeRun.promptCacheExpiresAt}
-                                ttlMs={activeRun.promptCacheTtlMs}
-                                ttlReason={activeRun.promptCacheTtlReason}
-                                contextTokens={activeRun.contextTokens}
-                              />
-                            ) : null
-                          }
-                          text={composerText}
-                          textareaProps={{
-                            rows: 2,
-                            'aria-label':
-                              hosted?.composerLabel ?? 'Message the agent',
-                            disabled: activeRunArchived,
-                            placeholder:
-                              hosted !== null && !streaming
-                                ? hosted.composerPlaceholder
-                                : followUpPlaceholder({
-                                    archived: activeRunArchived,
-                                    working: streaming && !activeRunHeld,
-                                    team: Boolean(activeRun?.teamId),
-                                    narrow: narrowViewport,
-                                    lead: relayLeadName,
-                                  }),
-                            onKeyDown: (event) => {
-                              if (handleSkillMenuKeys(event)) {
-                                return;
-                              }
-                              if (isComposerSendKey(event)) {
-                                event.preventDefault();
-                                void sendFollowUp();
-                              }
-                            },
-                          }}
-                          actions={
-                            <>
-                              {/* The run's FOLDER is not here any more — it is
+                          <MessageComposer
+                            attachments={attachments.attachments}
+                            onRemoveAttachment={attachments.remove}
+                            onAttachFiles={fileAttach.attach}
+                            onPasteImages={attachments.addFromClipboard}
+                            // Only between turns of a live chat: a running turn is
+                            // re-warming the cache as it goes, and an archived
+                            // chat takes no next message to warn about.
+                            notice={
+                              activeRun &&
+                              !streaming &&
+                              !activeRunArchived &&
+                              !activeRun.teamId ? (
+                                <PromptCacheNotice
+                                  expiresAt={activeRun.promptCacheExpiresAt}
+                                  ttlMs={activeRun.promptCacheTtlMs}
+                                  ttlReason={activeRun.promptCacheTtlReason}
+                                  contextTokens={activeRun.contextTokens}
+                                />
+                              ) : null
+                            }
+                            text={composerText}
+                            textareaProps={{
+                              rows: 2,
+                              'aria-label':
+                                hosted?.composerLabel ?? 'Message the agent',
+                              disabled: activeRunArchived,
+                              placeholder:
+                                hosted !== null && !streaming
+                                  ? hosted.composerPlaceholder
+                                  : followUpPlaceholder({
+                                      archived: activeRunArchived,
+                                      working: streaming && !activeRunHeld,
+                                      team: Boolean(activeRun?.teamId),
+                                      narrow: narrowViewport,
+                                      lead: relayLeadName,
+                                    }),
+                              onKeyDown: (event) => {
+                                if (handleSkillMenuKeys(event)) {
+                                  return;
+                                }
+                                if (isComposerSendKey(event)) {
+                                  event.preventDefault();
+                                  void sendFollowUp();
+                                }
+                              },
+                            }}
+                            actions={
+                              <>
+                                {/* The run's FOLDER is not here any more — it is
                           INSIDE the card, at its top right (see that chip for
                           the two positions it held before this one). It led the
                           actions for a while, on the reading that a cwd fixed
@@ -11373,41 +11398,41 @@ export function Chats({
                           about what the conversation IS rather than where this
                           message goes. Two chips for one fact only invited them
                           to disagree. */}
-                              {/* Drawn while idle always (disabled when
+                                {/* Drawn while idle always (disabled when
                                     empty), and while a turn runs only once
                                     there is something to send — beside Stop. */}
-                              {!streaming || hasContent || attachBusy ? (
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  className="size-8 rounded-full"
-                                  // It QUEUES while a turn is running, and the
-                                  // label says so: a message sent into the
-                                  // turn in flight leaves no moment at which
-                                  // the user can still edit or withdraw it.
-                                  // Mid-turn delivery is the strip's own
-                                  // "send now", one click away.
-                                  //
-                                  // …EXCEPT while the turn is merely held for
-                                  // background work, where there is no turn in
-                                  // flight to redirect — and it QUEUES with no
-                                  // turn at all when earlier messages are still
-                                  // waiting. `composerButton` is the one reading
-                                  // of all of it, the send path's own.
-                                  aria-label={composerButton?.label ?? 'Send'}
-                                  // A paste still being read: `aria-disabled`
-                                  // rather than `disabled`, because the reason
-                                  // is the hover sentence and a disabled button
-                                  // never shows one.
-                                  aria-disabled={attachBusy}
-                                  disabled={!hasContent && !attachBusy}
-                                  title={
-                                    attachBusy
-                                      ? attachBusyTitle
-                                      : (composerButton?.title ?? 'Send')
-                                  }
-                                  onClick={() => void sendFollowUp()}>
-                                  {/* NOT the ArrowUp that Send uses when it
+                                {!streaming || hasContent || attachBusy ? (
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    className="size-8 rounded-full"
+                                    // It QUEUES while a turn is running, and the
+                                    // label says so: a message sent into the
+                                    // turn in flight leaves no moment at which
+                                    // the user can still edit or withdraw it.
+                                    // Mid-turn delivery is the strip's own
+                                    // "send now", one click away.
+                                    //
+                                    // …EXCEPT while the turn is merely held for
+                                    // background work, where there is no turn in
+                                    // flight to redirect — and it QUEUES with no
+                                    // turn at all when earlier messages are still
+                                    // waiting. `composerButton` is the one reading
+                                    // of all of it, the send path's own.
+                                    aria-label={composerButton?.label ?? 'Send'}
+                                    // A paste still being read: `aria-disabled`
+                                    // rather than `disabled`, because the reason
+                                    // is the hover sentence and a disabled button
+                                    // never shows one.
+                                    aria-disabled={attachBusy}
+                                    disabled={!hasContent && !attachBusy}
+                                    title={
+                                      attachBusy
+                                        ? attachBusyTitle
+                                        : (composerButton?.title ?? 'Send')
+                                    }
+                                    onClick={() => void sendFollowUp()}>
+                                    {/* NOT the ArrowUp that Send uses when it
                                       queues. The one thing the user has to
                                       understand before clicking is that this
                                       does not reach the agent, and an identical
@@ -11415,37 +11440,37 @@ export function Chats({
                                       is what the strip above already marks a
                                       waiting message with, so the button and its
                                       result read as the same thing. */}
-                                  {attachBusy ? (
-                                    <Spinner className="size-4 text-primary-foreground" />
-                                  ) : composerButton?.label === 'Queue' ? (
-                                    <Clock className="size-4 shrink-0" />
-                                  ) : (
-                                    <ArrowUp className="size-4 shrink-0" />
-                                  )}
-                                </Button>
-                              ) : null}
-                              {streaming ? (
-                                <Button
-                                  type="button"
-                                  // Red, not outline: Stop ABORTS the turn the user
-                                  // is watching, and the one control in the composer
-                                  // that destroys work should not read the same as
-                                  // the pickers beside it.
-                                  variant="destructive"
-                                  size="icon"
-                                  className="size-8 rounded-full"
-                                  aria-label="Stop"
-                                  title="Stop the current turn"
-                                  onClick={() => void cancel()}>
-                                  <Square className="size-3.5 shrink-0" />
-                                </Button>
-                              ) : null}
-                            </>
-                          }>
-                          {activeRun &&
-                          activeRun.teamId === null &&
-                          activeRun.agentKind ? (
-                            /* How THIS turn thinks — the two settings that sit
+                                    {attachBusy ? (
+                                      <Spinner className="size-4 text-primary-foreground" />
+                                    ) : composerButton?.label === 'Queue' ? (
+                                      <Clock className="size-4 shrink-0" />
+                                    ) : (
+                                      <ArrowUp className="size-4 shrink-0" />
+                                    )}
+                                  </Button>
+                                ) : null}
+                                {streaming ? (
+                                  <Button
+                                    type="button"
+                                    // Red, not outline: Stop ABORTS the turn the user
+                                    // is watching, and the one control in the composer
+                                    // that destroys work should not read the same as
+                                    // the pickers beside it.
+                                    variant="destructive"
+                                    size="icon"
+                                    className="size-8 rounded-full"
+                                    aria-label="Stop"
+                                    title="Stop the current turn"
+                                    onClick={() => void cancel()}>
+                                    <Square className="size-3.5 shrink-0" />
+                                  </Button>
+                                ) : null}
+                              </>
+                            }>
+                            {activeRun &&
+                            activeRun.teamId === null &&
+                            activeRun.agentKind ? (
+                              /* How THIS turn thinks — the two settings that sit
                         below the text, beside the actions, rather than above
                         with the run's identity.
 
@@ -11455,126 +11480,126 @@ export function Chats({
                         turn streams, because a control that silently did
                         nothing for the thing you are watching would be worse
                         than one that announces the delay. */
-                            <>
-                              <ModelSettingsSelect
-                                configProfiles={configProfiles.filter(
-                                  (profile) =>
-                                    profile.agent === activeRun.agentKind,
-                                )}
-                                agentKind={activeRun.agentKind}
-                                models={agentModels}
-                                loading={agentModelsLoading}
-                                settingsLoading={modelSettingsLoading}
-                                model={activeRun.model}
-                                nextTurnOnly={streaming}
-                                onModelChange={(model) =>
-                                  void changeRunSettings({ model })
-                                }
-                                efforts={agentEfforts.efforts}
-                                effort={activeRun.effort}
-                                onEffortChange={(effort) =>
-                                  void changeRunSettings({ effort })
-                                }
-                                // Approval rides the same popover as the rest
-                                // now. Unlike model and effort it does NOT
-                                // wait for the next turn — the CLI accepts a
-                                // mode change on a turn already in flight —
-                                // which is why the trigger's `nextTurnOnly`
-                                // wording stays about the model settings and
-                                // this row is simply always live.
-                                approvalCapability={approvalCapabilityFor(
-                                  activeRun.agentKind,
-                                )}
-                                approval={activeRun.approval}
-                                onApprovalChange={(approval) =>
-                                  void changeRunSettings({ approval })
-                                }
-                                windows={agentContextWindows.windows}
-                                contextWindow={activeRun.contextWindow}
-                                // The window the AGENT reported for this
-                                // thread — the ring's own denominator, so the
-                                // panel and the meter beside it cannot state
-                                // two different windows for one model.
-                                windowTokens={chatContext.window}
-                                onContextWindowChange={(contextWindow) =>
-                                  void changeRunSettings({ contextWindow })
-                                }
-                                autoCompactPercent={
-                                  activeRun.autoCompactPercent
-                                }
-                                onAutoCompactChange={(percent) =>
-                                  void changeRunSettings({
-                                    autoCompactPercent: percent,
-                                  })
-                                }
-                                parameters={agentModelParameters.parameters}
-                                parameterValues={activeRun.modelParameters}
-                                sessionStarted={activeRun.sessionStarted}
-                                onParameterChange={(id, next) =>
-                                  void changeRunSettings({
-                                    modelParameters: withModelParameter(
-                                      activeRun.modelParameters,
-                                      id,
-                                      next,
-                                    ),
-                                  })
-                                }
-                                // WHICH ACCOUNT the next turns run as — a row
-                                // of this panel now rather than a chip beside
-                                // it, ASKED FOR as "давай еще Default profile
-                                // тоже засунем в Opus Submenu". It is here at
-                                // all, rather than stated in the header,
-                                // because it CHANGES something: the report
-                                // that made it live was "I wanna have ability
-                                // to dynamically change config directory for
-                                // current claude threads to have an ability
-                                // continue thread with other account".
-                                //
-                                // It carries no `nextTurnOnly`: the daemon
-                                // REFUSES the change mid-turn rather than
-                                // deferring it, because switching profiles
-                                // moves the CLI's own conversation and retires
-                                // the run's process — neither safe underneath
-                                // a turn writing into the profile being left.
-                                // The refusal arrives as the daemon's own
-                                // sentence through `changeRunSettings`.
-                                //
-                                // This chat's OWN profile, which is what the
-                                // turn runs as. Two releases said otherwise on
-                                // the strength of an override MEASUREMENT says
-                                // does not exist — a folder's
-                                // `.claude/settings.local.json`
-                                // `env.CLAUDE_CONFIG_DIR` neither outranks
-                                // what geniro sets nor applies when it sets
-                                // nothing (the three readings are in the
-                                // `Profile` row of `chat-header.tsx`). The
-                                // report behind that ("Its again showing
-                                // different account plan", `Plan limits ·
-                                // TEAM` under a chip reading `-personal`) had
-                                // no override in it either: a directory
-                                // decides which credentials, settings, MCP
-                                // servers and history a turn uses, while the
-                                // PLAN comes from whatever account those
-                                // credentials are. Probing both of the
-                                // reporter's profiles returned
-                                // `subscription_type: "team"` with the same
-                                // five-hour bucket at the same 65%. A
-                                // directory is not a subscription.
-                                configDir={activeRun.configDir}
-                                recentConfigDirs={
-                                  recentConfigDirsByAgent[
-                                    activeRun.agentKind
-                                  ] ?? EMPTY_RECENT_CONFIG_DIRS
-                                }
-                                configDirUnavailableReason={configDirReasonFor(
-                                  activeRun.agentKind,
-                                )}
-                                onConfigDirChange={changeRunConfigDir}
-                                onBrowseConfigDir={() =>
-                                  void pickRunConfigDir()
-                                }
-                              />
-                              {/* The context readout, DIRECTLY after the effort
+                              <>
+                                <ModelSettingsSelect
+                                  configProfiles={configProfiles.filter(
+                                    (profile) =>
+                                      profile.agent === activeRun.agentKind,
+                                  )}
+                                  agentKind={activeRun.agentKind}
+                                  models={agentModels}
+                                  loading={agentModelsLoading}
+                                  settingsLoading={modelSettingsLoading}
+                                  model={activeRun.model}
+                                  nextTurnOnly={streaming}
+                                  onModelChange={(model) =>
+                                    void changeRunSettings({ model })
+                                  }
+                                  efforts={agentEfforts.efforts}
+                                  effort={activeRun.effort}
+                                  onEffortChange={(effort) =>
+                                    void changeRunSettings({ effort })
+                                  }
+                                  // Approval rides the same popover as the rest
+                                  // now. Unlike model and effort it does NOT
+                                  // wait for the next turn — the CLI accepts a
+                                  // mode change on a turn already in flight —
+                                  // which is why the trigger's `nextTurnOnly`
+                                  // wording stays about the model settings and
+                                  // this row is simply always live.
+                                  approvalCapability={approvalCapabilityFor(
+                                    activeRun.agentKind,
+                                  )}
+                                  approval={activeRun.approval}
+                                  onApprovalChange={(approval) =>
+                                    void changeRunSettings({ approval })
+                                  }
+                                  windows={agentContextWindows.windows}
+                                  contextWindow={activeRun.contextWindow}
+                                  // The window the AGENT reported for this
+                                  // thread — the ring's own denominator, so the
+                                  // panel and the meter beside it cannot state
+                                  // two different windows for one model.
+                                  windowTokens={chatContext.window}
+                                  onContextWindowChange={(contextWindow) =>
+                                    void changeRunSettings({ contextWindow })
+                                  }
+                                  autoCompactPercent={
+                                    activeRun.autoCompactPercent
+                                  }
+                                  onAutoCompactChange={(percent) =>
+                                    void changeRunSettings({
+                                      autoCompactPercent: percent,
+                                    })
+                                  }
+                                  parameters={agentModelParameters.parameters}
+                                  parameterValues={activeRun.modelParameters}
+                                  sessionStarted={activeRun.sessionStarted}
+                                  onParameterChange={(id, next) =>
+                                    void changeRunSettings({
+                                      modelParameters: withModelParameter(
+                                        activeRun.modelParameters,
+                                        id,
+                                        next,
+                                      ),
+                                    })
+                                  }
+                                  // WHICH ACCOUNT the next turns run as — a row
+                                  // of this panel now rather than a chip beside
+                                  // it, ASKED FOR as "давай еще Default profile
+                                  // тоже засунем в Opus Submenu". It is here at
+                                  // all, rather than stated in the header,
+                                  // because it CHANGES something: the report
+                                  // that made it live was "I wanna have ability
+                                  // to dynamically change config directory for
+                                  // current claude threads to have an ability
+                                  // continue thread with other account".
+                                  //
+                                  // It carries no `nextTurnOnly`: the daemon
+                                  // REFUSES the change mid-turn rather than
+                                  // deferring it, because switching profiles
+                                  // moves the CLI's own conversation and retires
+                                  // the run's process — neither safe underneath
+                                  // a turn writing into the profile being left.
+                                  // The refusal arrives as the daemon's own
+                                  // sentence through `changeRunSettings`.
+                                  //
+                                  // This chat's OWN profile, which is what the
+                                  // turn runs as. Two releases said otherwise on
+                                  // the strength of an override MEASUREMENT says
+                                  // does not exist — a folder's
+                                  // `.claude/settings.local.json`
+                                  // `env.CLAUDE_CONFIG_DIR` neither outranks
+                                  // what geniro sets nor applies when it sets
+                                  // nothing (the three readings are in the
+                                  // `Profile` row of `chat-header.tsx`). The
+                                  // report behind that ("Its again showing
+                                  // different account plan", `Plan limits ·
+                                  // TEAM` under a chip reading `-personal`) had
+                                  // no override in it either: a directory
+                                  // decides which credentials, settings, MCP
+                                  // servers and history a turn uses, while the
+                                  // PLAN comes from whatever account those
+                                  // credentials are. Probing both of the
+                                  // reporter's profiles returned
+                                  // `subscription_type: "team"` with the same
+                                  // five-hour bucket at the same 65%. A
+                                  // directory is not a subscription.
+                                  configDir={activeRun.configDir}
+                                  recentConfigDirs={
+                                    recentConfigDirsByAgent[
+                                      activeRun.agentKind
+                                    ] ?? EMPTY_RECENT_CONFIG_DIRS
+                                  }
+                                  configDirUnavailableReason={configDirReasonFor(
+                                    activeRun.agentKind,
+                                  )}
+                                  onConfigDirChange={changeRunConfigDir}
+                                  onBrowseConfigDir={() =>
+                                    void pickRunConfigDir()
+                                  }
+                                />
+                                {/* The context readout, DIRECTLY after the effort
                           chip rather than over beside Send.
 
                           It reads as one of this turn's settings, because that
@@ -11586,52 +11611,52 @@ export function Chats({
                           readout panel opened against the send button. Here it
                           also wraps with the chips instead of squeezing the
                           actions. */}
-                              <ContextMeter
-                                // The row's `gap-x-0.5` is 2px because every
-                                // OTHER child of it is a chip carrying `px-2`
-                                // inside its own box — so two chips read as
-                                // 18px apart while their fills sit 2px apart.
-                                // The ring carries no padding at all, so that
-                                // same gap put it 2px from the model chip's
-                                // edge and it read as stuck to it. `ml-1.5`
-                                // makes 8px in total: the ring stands off the
-                                // chip by exactly the chip's own inner
-                                // padding, so it is as far from that box as
-                                // the word inside it is. A margin here rather
-                                // than a wider row gap, which would space the
-                                // chips from each other as well and undo the
-                                // one-line rule above.
-                                className="ml-1.5"
-                                // The expanded readout is about ONE agent's
-                                // window, so it is offered for a chat and not
-                                // for a team run, whose nodes each hold one
-                                // of their own.
-                                runId={activeRun.teamId ? null : activeRun.id}
-                                contextTokens={chatContext.tokens}
-                                contextWindowTokens={chatContext.window}
-                                contextEstimated={chatContext.estimated}
-                                awaitingReading={awaitingReading}
-                                // Whether the readout has to keep itself
-                                // current. The BADGE reading, not the run
-                                // row — the same authority the header and
-                                // the sidebar use, so a panel that keeps
-                                // re-reading and a chat that says it is
-                                // running cannot disagree about whether
-                                // anything is happening.
-                                live={isWorkingRunStatus(activeRunStatus)}
-                                runningCost={liveRunCost(liveText)}
-                                // Opens UPWARD. This row sits at the bottom of the
-                                // composer, inside the app shell's
-                                // `overflow-hidden` main — roughly 20px below a
-                                // panel that is 50-68px tall — so a downward
-                                // readout is clipped, and the ring shows no figures
-                                // of its own to fall back on.
-                                side="top"
-                              />
-                            </>
-                          ) : activeRun?.teamId &&
-                            wfNodes.triggers.length > 0 ? (
-                            /* A team run's one fact of this kind, in the
+                                <ContextMeter
+                                  // The row's `gap-x-0.5` is 2px because every
+                                  // OTHER child of it is a chip carrying `px-2`
+                                  // inside its own box — so two chips read as
+                                  // 18px apart while their fills sit 2px apart.
+                                  // The ring carries no padding at all, so that
+                                  // same gap put it 2px from the model chip's
+                                  // edge and it read as stuck to it. `ml-1.5`
+                                  // makes 8px in total: the ring stands off the
+                                  // chip by exactly the chip's own inner
+                                  // padding, so it is as far from that box as
+                                  // the word inside it is. A margin here rather
+                                  // than a wider row gap, which would space the
+                                  // chips from each other as well and undo the
+                                  // one-line rule above.
+                                  className="ml-1.5"
+                                  // The expanded readout is about ONE agent's
+                                  // window, so it is offered for a chat and not
+                                  // for a team run, whose nodes each hold one
+                                  // of their own.
+                                  runId={activeRun.teamId ? null : activeRun.id}
+                                  contextTokens={chatContext.tokens}
+                                  contextWindowTokens={chatContext.window}
+                                  contextEstimated={chatContext.estimated}
+                                  awaitingReading={awaitingReading}
+                                  // Whether the readout has to keep itself
+                                  // current. The BADGE reading, not the run
+                                  // row — the same authority the header and
+                                  // the sidebar use, so a panel that keeps
+                                  // re-reading and a chat that says it is
+                                  // running cannot disagree about whether
+                                  // anything is happening.
+                                  live={isWorkingRunStatus(activeRunStatus)}
+                                  runningCost={liveRunCost(liveText)}
+                                  // Opens UPWARD. This row sits at the bottom of the
+                                  // composer, inside the app shell's
+                                  // `overflow-hidden` main — roughly 20px below a
+                                  // panel that is 50-68px tall — so a downward
+                                  // readout is clipped, and the ring shows no figures
+                                  // of its own to fall back on.
+                                  side="top"
+                                />
+                              </>
+                            ) : activeRun?.teamId &&
+                              wfNodes.triggers.length > 0 ? (
+                              /* A team run's one fact of this kind, in the
                         slot the model chip holds on a chat. It is a STATIC
                         chip, not a picker: a run's trigger is decided when the
                         run is created and there is nothing here to change —
@@ -11642,14 +11667,14 @@ export function Chats({
                         nodes each carry their own model, effort and approval in
                         the graph), so the chip costs the row nothing and the
                         band above the card goes away entirely. */
-                            <>
-                              <Chip>
-                                <Zap />
-                                <span className="max-w-52 truncate">
-                                  {`${wfNodes.triggers[0]!.name} · ${wfNodes.triggers[0]!.trigger}`}
-                                </span>
-                              </Chip>
-                              {/* The run-level ring, drawn from the ROOT
+                              <>
+                                <Chip>
+                                  <Zap />
+                                  <span className="max-w-52 truncate">
+                                    {`${wfNodes.triggers[0]!.name} · ${wfNodes.triggers[0]!.trigger}`}
+                                  </span>
+                                </Chip>
+                                {/* The run-level ring, drawn from the ROOT
                           agent — the node the user prompted. `chatContext`
                           resolves it and answers nulls where the graph names no
                           single root, so this draws nothing rather than a
@@ -11659,519 +11684,537 @@ export function Chats({
                           a team run holds one process per node, so the run
                           alone names no agent. REPORTED as "i cant see full
                           context info for team" while this was withheld. */}
-                              {chatContext.tokens === null ? null : (
-                                <ContextMeter
-                                  className="ml-1.5"
-                                  runId={runLead === null ? null : activeRun.id}
-                                  memberId={runLead}
-                                  contextTokens={chatContext.tokens}
-                                  contextWindowTokens={chatContext.window}
-                                  contextEstimated={chatContext.estimated}
-                                  live={isWorkingRunStatus(activeRunStatus)}
-                                  runningCost={
-                                    runLead === null
-                                      ? null
-                                      : liveNodeCost(liveText, runLead)
-                                  }
-                                  side="top"
-                                />
-                              )}
-                            </>
-                          ) : null}
-                        </MessageComposer>
+                                {chatContext.tokens === null ? null : (
+                                  <ContextMeter
+                                    className="ml-1.5"
+                                    runId={
+                                      runLead === null ? null : activeRun.id
+                                    }
+                                    memberId={runLead}
+                                    contextTokens={chatContext.tokens}
+                                    contextWindowTokens={chatContext.window}
+                                    contextEstimated={chatContext.estimated}
+                                    live={isWorkingRunStatus(activeRunStatus)}
+                                    runningCost={
+                                      runLead === null
+                                        ? null
+                                        : liveNodeCost(liveText, runLead)
+                                    }
+                                    side="top"
+                                  />
+                                )}
+                              </>
+                            ) : null}
+                          </MessageComposer>
+                        </div>
                       </div>
-                    </div>
-                  </section>
-                )}
+                    </section>
+                  )}
 
-                {browserEnabled ? (
-                  <BrowserColumn
-                    key={activeRunId}
-                    narrow={narrowViewport}
-                    chatTitle={
-                      activeRun ? runLabel(activeRun, teamNames) : 'Chat'
-                    }
-                  />
-                ) : null}
+                  {browserEnabled ? (
+                    <BrowserColumn
+                      key={activeRunId}
+                      narrow={narrowViewport}
+                      chatTitle={
+                        activeRun ? runLabel(activeRun, teamNames) : 'Chat'
+                      }
+                    />
+                  ) : null}
 
-                {showAgentsPanel || showPanelDrawer ? (
-                  /* ONE panel, two hosts — a grid column at `sm` and wider,
+                  {showAgentsPanel || showPanelDrawer ? (
+                    /* ONE panel, two hosts — a grid column at `sm` and wider,
                      a right-edge drawer below it. A second call site would
                      mean this prop list twice, which is how one host comes
                      to be handed a reading the other has. */
-                  <PanelHost
-                    drawer={showPanelDrawer}
-                    open={mobilePanelOpen}
-                    onClose={() => setMobilePanelOpen(false)}>
-                    <AgentsPanel
-                      // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
-                      // agent id, and every single-agent chat's agent carries the same
-                      // sentinel — so without this the list stayed open across a chat
-                      // switch and the gate stayed raised, dialling the NEW folder's MCP
-                      // servers unprompted. That is the very defect the disclosure exists
-                      // to prevent, merely moved to the second chat.
-                      key={activeRun?.id ?? 'no-run'}
-                      agents={agents}
-                      nodes={nodeMeta}
-                      // Both act on the WHOLE conversation, which is what the
-                      // panel's own control row is already for — and being on
-                      // its rail is what keeps them reachable with the column
-                      // folded.
-                      onSearch={openChatSearch}
-                      timeline={timelinePanel}
-                      artifacts={artifacts}
-                      publishedArtifacts={publishedArtifacts}
-                      threadPullRequests={openedByActiveThread}
-                      pullRequestOutcomes={pullRequestOutcomes}
-                      workflows={runWorkflows}
-                      onRevealWorkflow={revealWorkflow}
-                      goals={runGoals}
-                      onOpenProgress={openProgressGoals}
-                      stages={
-                        activeRun?.stages
-                          ? {
-                              progress: activeRun.stages,
-                              definitions: runStageDefinitions,
-                              archived: activeRun.archivedAt !== null,
-                              onMove: (moveTeamRunStageDto) =>
-                                teamApi.moveTeamRunStage({
-                                  runId: activeRun.id,
-                                  moveTeamRunStageDto,
-                                }),
-                            }
-                          : undefined
-                      }
-                      tasksByAgent={tasksByAgent}
-                      shellsByAgent={shellsByAgent}
-                      workByAgent={workByAgent}
-                      // The SAME guarded list the header counts — keyed per
-                      // agent by `scanTurns`, so each card adds the turn in
-                      // flight that belongs to it.
-                      openTurns={openTurnsShown}
-                      browserRunId={
-                        browserEnabled && activeRun ? activeRun.id : null
-                      }
-                      onOpenShell={setOpenShell}
-                      onKillShell={handleKillShell}
-                      leftRunningOf={sidePanelLive.shellsLeftRunning}
-                      // Withheld for a run with no working directory, and where
-                      // no terminal panel hosts it — the panel itself never
-                      // sees the path.
-                      onOpenFolderTerminal={
-                        activeRun?.cwd && onOpenTerminal
-                          ? openFolderTerminal
-                          : undefined
-                      }
-                      // The panel is per-OPEN-run, so the control is only ever
-                      // about the thread on screen — which is also why the handler
-                      // is bound to that run's id here rather than the panel being
-                      // handed one to look up.
-                      onExportChat={
-                        activeRun
-                          ? () => handleExportRun(activeRun.id)
-                          : undefined
-                      }
-                      onAnalyzeThread={
-                        activeRun && !isAnalysisRun(activeRun) && !isHosted
-                          ? () => handleAnalyzeRun(activeRun.id)
-                          : undefined
-                      }
-                      analysisMark={analysisMark}
-                      onReflectLessons={
-                        activeRun && !isAnalysisRun(activeRun) && !isHosted
-                          ? () => handleReflectRun(activeRun.id)
-                          : undefined
-                      }
-                      lessonsMark={lessonsMark}
-                      terminalReasons={terminalReasons}
-                      // In the drawer the panel owns no column, so it drops
-                      // the stored width, the resize handle and the fold —
-                      // see `fill` in `agents-panel.tsx`.
-                      fill={showPanelDrawer}
-                      // A team run's readouts are asked per NODE, each
-                      // holding its own process; a chat's is its one agent's.
-                      metricsRunId={activeRun?.id ?? null}
-                      metricsByNode={Boolean(activeRun?.teamId)}
-                      waterfall={activeRun ? runWaterfall : undefined}
-                      processes={activeRun ? runProcesses : undefined}
-                      onPopupChange={setPanelPopup}
-                      popupRequest={
-                        processesRequest !== null &&
-                        processesRequest === activeRun?.id
-                          ? 'processes'
-                          : null
-                      }
-                      onPopupRequestHandled={onProcessesOpened}
-                      notes={
-                        activeRun
-                          ? {
-                              written:
-                                hasThreadNotes(activeRun.notes) ||
-                                teamNotes.length > 0,
-                              onOpen: () => setNotesView({ selected: null }),
-                            }
-                          : undefined
-                      }
-                      // The HOVER half of the same resolution the button acts on.
-                      // Never passed until now, so the hint it feeds — the invocation,
-                      // selectable, with a copy control — could not open on this
-                      // screen at all: `OpenInCliButton` treats a missing resolver as
-                      // "nothing to show" and stays silent. That copyable line is the
-                      // documented way out for anyone whose terminal geniro cannot
-                      // launch (a remote host, an open tmux pane), and it was
-                      // unreachable.
-                      onResolveHandoff={resolveHandoff}
-                      onSetPoolMember={
-                        activeRun?.teamId ? setOwnPoolMember : undefined
-                      }
-                      // The HOVER half of the same resolution the button acts on.
-                      // Never passed until now, so the hint it feeds — the invocation,
-                      // selectable, with a copy control — could not open on this
-                      // screen at all: `OpenInCliButton` treats a missing resolver as
-                      // "nothing to show" and stays silent. That copyable line is the
-                      // documented way out for anyone whose terminal geniro cannot
-                      // launch (a remote host, an open tmux pane), and it was
-                      // unreachable.
-                      mcpByScope={mcp.byScope}
-                      mcpLoading={mcp.loading}
-                      onRefreshMcp={mcp.refresh}
-                      onSetMcpEnabled={mcp.setEnabled}
-                      onAddMcpPluginServer={mcp.addPluginServer}
-                      // The profile the dialog's rows came from, written at
-                      // USER scope — so the builder's node dialog, a pool
-                      // member's and this one all add to the same file.
-                      mcpConfigActionsFor={(scope) =>
-                        mcpConfigActions(agentsApi, scope)
-                      }
-                      onSignInMcp={(scope, server) => {
-                        void signInToMcpServer(scope, server);
-                      }}
-                      // Busy for the WHOLE flow, which is two windows end to end.
-                      // The first is before the panel below can exist: the daemon
-                      // holds its first reply until the CLI prints a URL —
-                      // measured at 4001ms in the running app — and until then
-                      // there is no session to render, which is the reported
-                      // "I press Sign In and there is no loader, nothing".
-                      //
-                      // The second is longer and was not covered: `mcp login`
-                      // EXITS as soon as it has handed the browser the challenge,
-                      // so `starting` clears while the user is still authorizing
-                      // — measured at 15–20s on a real connector, during which
-                      // the row offered a live Sign in button. Pressing it again
-                      // there opens a second challenge and invalidates the first,
-                      // which is the one thing this control must not invite. The
-                      // panel is on screen for exactly that stretch, so its own
-                      // server is what marks the row busy; it comes down when the
-                      // listing says the server is authorized.
-                      mcpSigningIn={
-                        login.starting?.server ?? login.login?.server ?? null
-                      }
-                      mcpLoginServer={
-                        login.login?.server ??
-                        // A refusal never becomes a session, so without this
-                        // the dialog has nothing to place and the press reads
-                        // as doing nothing. The row it was pressed on is
-                        // where the sentence belongs.
-                        (login.error !== null
-                          ? (login.errorTarget?.server ?? null)
-                          : null)
-                      }
-                      mcpLoginPanel={
-                        // The SERVER half of the one controller. An account
-                        // sign-in shares its lifecycle but not its home: it is
-                        // started from a failed turn in the transcript and shown
-                        // there (see the band above the composer), so routing it
-                        // here would put the progress inside a dialog the user
-                        // never opened.
-                        login.login && login.login.server !== null ? (
-                          <CliLoginProgress
-                            session={login.login.session}
-                            onSubmitCode={(code) => void login.submitCode(code)}
-                            onCancel={() => void login.cancel()}
-                            onDismiss={login.dismiss}
-                            error={login.error}
-                            // Among rows rather than across the foot of a card,
-                            // so it does not cancel padding it is not inside —
-                            // the negative margin took the pasted-code field off
-                            // the dialog's edge, which is the second half of the
-                            // reported "broken UI".
-                            variant="inline"
-                            // The one SERVER sign-in in the app — this branch is
-                            // already gated on `server !== null`. It is what
-                            // stops a clean exit reading as "Sign-in finished"
-                            // over a row that still says needs sign-in.
-                            scope="server"
-                          />
-                        ) : login.error !== null &&
-                          login.errorTarget?.server !== null &&
-                          login.errorTarget?.server !== undefined ? (
-                          // The refusal itself, on the row it was pressed
-                          // on. `CliLoginProgress` needs a session and there
-                          // is none, so the sentence is the whole panel.
-                          <ErrorBanner
-                            message={login.error}
-                            onDismiss={login.dismiss}
-                          />
-                        ) : null
-                      }
-                      mcpToggleError={mcp.toggleError}
-                      onDismissMcpToggleError={mcp.dismissToggleError}
-                      onMcpOpenChange={(open) =>
-                        setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
-                      }
-                      onOpenThread={(agent, thread) =>
-                        void openThreadTerminal(agent, thread)
-                      }
-                      onOpenSubagent={openSubagentById}
-                    />
-                  </PanelHost>
-                ) : null}
-
-                <Dialog
-                  open={detailSubagent !== null}
-                  onClose={() => setDetailSubagentId(null)}
-                  title={
-                    // The category prefix is dropped for a delegate that has no
-                    // name of its own, because the fallback title already opens
-                    // with it — reported as the title reading
-                    // `Sub-agent · sub-agent`, which names nothing twice.
-                    detailSubagent
-                      ? subagentNamed(detailSubagent)
-                        ? `Sub-agent · ${subagentTitle(detailSubagent)}`
-                        : subagentTitle(detailSubagent)
-                      : 'Sub-agent'
-                  }
-                  className="max-w-2xl">
-                  {detailSubagent ? (
-                    // The dialog is a SIBLING subtree of the transcript, so it
-                    // inherits none of the transcript's providers. Without this it
-                    // read the context default (`false`) and drew a pulsing "is
-                    // working…" for a delegate the block behind it correctly
-                    // showed as stopped — the original bug, surviving on the new
-                    // surface.
-                    <SubagentDetail
-                      block={detailSubagent}
-                      nodes={nodeMeta}
-                      chatAgentName={activeRun?.agentKind ?? null}
-                    />
+                    <PanelHost
+                      drawer={showPanelDrawer}
+                      open={mobilePanelOpen}
+                      onClose={() => setMobilePanelOpen(false)}>
+                      <AgentsPanel
+                        // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+                        // agent id, and every single-agent chat's agent carries the same
+                        // sentinel — so without this the list stayed open across a chat
+                        // switch and the gate stayed raised, dialling the NEW folder's MCP
+                        // servers unprompted. That is the very defect the disclosure exists
+                        // to prevent, merely moved to the second chat.
+                        key={activeRun?.id ?? 'no-run'}
+                        agents={agents}
+                        nodes={nodeMeta}
+                        // Both act on the WHOLE conversation, which is what the
+                        // panel's own control row is already for — and being on
+                        // its rail is what keeps them reachable with the column
+                        // folded.
+                        onSearch={openChatSearch}
+                        timeline={timelinePanel}
+                        artifacts={artifacts}
+                        publishedArtifacts={publishedArtifacts}
+                        threadPullRequests={openedByActiveThread}
+                        pullRequestOutcomes={pullRequestOutcomes}
+                        workflows={runWorkflows}
+                        onRevealWorkflow={revealWorkflow}
+                        goals={runGoals}
+                        onOpenProgress={openProgressGoals}
+                        stages={
+                          activeRun?.stages
+                            ? {
+                                progress: activeRun.stages,
+                                definitions: runStageDefinitions,
+                                archived: activeRun.archivedAt !== null,
+                                onMove: (moveTeamRunStageDto) =>
+                                  teamApi.moveTeamRunStage({
+                                    runId: activeRun.id,
+                                    moveTeamRunStageDto,
+                                  }),
+                              }
+                            : undefined
+                        }
+                        tasksByAgent={tasksByAgent}
+                        shellsByAgent={shellsByAgent}
+                        workByAgent={workByAgent}
+                        // The SAME guarded list the header counts — keyed per
+                        // agent by `scanTurns`, so each card adds the turn in
+                        // flight that belongs to it.
+                        openTurns={openTurnsShown}
+                        browserRunId={
+                          browserEnabled && activeRun ? activeRun.id : null
+                        }
+                        onOpenShell={setOpenShell}
+                        onKillShell={handleKillShell}
+                        leftRunningOf={sidePanelLive.shellsLeftRunning}
+                        // Withheld for a run with no working directory, and where
+                        // no terminal panel hosts it — the panel itself never
+                        // sees the path.
+                        onOpenFolderTerminal={
+                          activeRun?.cwd && onOpenTerminal
+                            ? openFolderTerminal
+                            : undefined
+                        }
+                        // The panel is per-OPEN-run, so the control is only ever
+                        // about the thread on screen — which is also why the handler
+                        // is bound to that run's id here rather than the panel being
+                        // handed one to look up.
+                        onExportChat={
+                          activeRun
+                            ? () => handleExportRun(activeRun.id)
+                            : undefined
+                        }
+                        onAnalyzeThread={
+                          activeRun && !isAnalysisRun(activeRun) && !isHosted
+                            ? () => handleAnalyzeRun(activeRun.id)
+                            : undefined
+                        }
+                        analysisMark={analysisMark}
+                        onReflectLessons={
+                          activeRun && !isAnalysisRun(activeRun) && !isHosted
+                            ? () => handleReflectRun(activeRun.id)
+                            : undefined
+                        }
+                        lessonsMark={lessonsMark}
+                        terminalReasons={terminalReasons}
+                        // In the drawer the panel owns no column, so it drops
+                        // the stored width, the resize handle and the fold —
+                        // see `fill` in `agents-panel.tsx`.
+                        fill={showPanelDrawer}
+                        // A team run's readouts are asked per NODE, each
+                        // holding its own process; a chat's is its one agent's.
+                        metricsRunId={activeRun?.id ?? null}
+                        metricsByNode={Boolean(activeRun?.teamId)}
+                        waterfall={activeRun ? runWaterfall : undefined}
+                        processes={activeRun ? runProcesses : undefined}
+                        onPopupChange={setPanelPopup}
+                        popupRequest={
+                          processesRequest !== null &&
+                          processesRequest === activeRun?.id
+                            ? 'processes'
+                            : null
+                        }
+                        onPopupRequestHandled={onProcessesOpened}
+                        notes={
+                          activeRun
+                            ? {
+                                written:
+                                  hasThreadNotes(activeRun.notes) ||
+                                  teamNotes.length > 0,
+                                onOpen: () => setNotesView({ selected: null }),
+                              }
+                            : undefined
+                        }
+                        // The HOVER half of the same resolution the button acts on.
+                        // Never passed until now, so the hint it feeds — the invocation,
+                        // selectable, with a copy control — could not open on this
+                        // screen at all: `OpenInCliButton` treats a missing resolver as
+                        // "nothing to show" and stays silent. That copyable line is the
+                        // documented way out for anyone whose terminal geniro cannot
+                        // launch (a remote host, an open tmux pane), and it was
+                        // unreachable.
+                        onResolveHandoff={resolveHandoff}
+                        onSetPoolMember={
+                          activeRun?.teamId ? setOwnPoolMember : undefined
+                        }
+                        // The HOVER half of the same resolution the button acts on.
+                        // Never passed until now, so the hint it feeds — the invocation,
+                        // selectable, with a copy control — could not open on this
+                        // screen at all: `OpenInCliButton` treats a missing resolver as
+                        // "nothing to show" and stays silent. That copyable line is the
+                        // documented way out for anyone whose terminal geniro cannot
+                        // launch (a remote host, an open tmux pane), and it was
+                        // unreachable.
+                        mcpByScope={mcp.byScope}
+                        mcpLoading={mcp.loading}
+                        onRefreshMcp={mcp.refresh}
+                        onSetMcpEnabled={mcp.setEnabled}
+                        onAddMcpPluginServer={mcp.addPluginServer}
+                        // The profile the dialog's rows came from, written at
+                        // USER scope — so the builder's node dialog, a pool
+                        // member's and this one all add to the same file.
+                        mcpConfigActionsFor={(scope) =>
+                          mcpConfigActions(agentsApi, scope)
+                        }
+                        onSignInMcp={(scope, server) => {
+                          void signInToMcpServer(scope, server);
+                        }}
+                        // Busy for the WHOLE flow, which is two windows end to end.
+                        // The first is before the panel below can exist: the daemon
+                        // holds its first reply until the CLI prints a URL —
+                        // measured at 4001ms in the running app — and until then
+                        // there is no session to render, which is the reported
+                        // "I press Sign In and there is no loader, nothing".
+                        //
+                        // The second is longer and was not covered: `mcp login`
+                        // EXITS as soon as it has handed the browser the challenge,
+                        // so `starting` clears while the user is still authorizing
+                        // — measured at 15–20s on a real connector, during which
+                        // the row offered a live Sign in button. Pressing it again
+                        // there opens a second challenge and invalidates the first,
+                        // which is the one thing this control must not invite. The
+                        // panel is on screen for exactly that stretch, so its own
+                        // server is what marks the row busy; it comes down when the
+                        // listing says the server is authorized.
+                        mcpSigningIn={
+                          login.starting?.server ?? login.login?.server ?? null
+                        }
+                        mcpLoginServer={
+                          login.login?.server ??
+                          // A refusal never becomes a session, so without this
+                          // the dialog has nothing to place and the press reads
+                          // as doing nothing. The row it was pressed on is
+                          // where the sentence belongs.
+                          (login.error !== null
+                            ? (login.errorTarget?.server ?? null)
+                            : null)
+                        }
+                        mcpLoginPanel={
+                          // The SERVER half of the one controller. An account
+                          // sign-in shares its lifecycle but not its home: it is
+                          // started from a failed turn in the transcript and shown
+                          // there (see the band above the composer), so routing it
+                          // here would put the progress inside a dialog the user
+                          // never opened.
+                          login.login && login.login.server !== null ? (
+                            <CliLoginProgress
+                              session={login.login.session}
+                              onSubmitCode={(code) =>
+                                void login.submitCode(code)
+                              }
+                              onCancel={() => void login.cancel()}
+                              onDismiss={login.dismiss}
+                              error={login.error}
+                              // Among rows rather than across the foot of a card,
+                              // so it does not cancel padding it is not inside —
+                              // the negative margin took the pasted-code field off
+                              // the dialog's edge, which is the second half of the
+                              // reported "broken UI".
+                              variant="inline"
+                              // The one SERVER sign-in in the app — this branch is
+                              // already gated on `server !== null`. It is what
+                              // stops a clean exit reading as "Sign-in finished"
+                              // over a row that still says needs sign-in.
+                              scope="server"
+                            />
+                          ) : login.error !== null &&
+                            login.errorTarget?.server !== null &&
+                            login.errorTarget?.server !== undefined ? (
+                            // The refusal itself, on the row it was pressed
+                            // on. `CliLoginProgress` needs a session and there
+                            // is none, so the sentence is the whole panel.
+                            <ErrorBanner
+                              message={login.error}
+                              onDismiss={login.dismiss}
+                            />
+                          ) : null
+                        }
+                        mcpToggleError={mcp.toggleError}
+                        onDismissMcpToggleError={mcp.dismissToggleError}
+                        onMcpOpenChange={(open) =>
+                          setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+                        }
+                        onOpenThread={(agent, thread) =>
+                          void openThreadTerminal(agent, thread)
+                        }
+                        onOpenSubagent={openSubagentById}
+                      />
+                    </PanelHost>
                   ) : null}
-                </Dialog>
 
-                <ShellOutputDialog
-                  shell={openShell}
-                  onClose={() => setOpenShell(null)}
-                  load={loadShellOutput}
-                />
+                  <Dialog
+                    open={detailSubagent !== null}
+                    onClose={() => setDetailSubagentId(null)}
+                    title={
+                      // The category prefix is dropped for a delegate that has no
+                      // name of its own, because the fallback title already opens
+                      // with it — reported as the title reading
+                      // `Sub-agent · sub-agent`, which names nothing twice.
+                      detailSubagent
+                        ? subagentNamed(detailSubagent)
+                          ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                          : subagentTitle(detailSubagent)
+                        : 'Sub-agent'
+                    }
+                    className="max-w-2xl">
+                    {detailSubagent ? (
+                      // The dialog is a SIBLING subtree of the transcript, so it
+                      // inherits none of the transcript's providers. Without this it
+                      // read the context default (`false`) and drew a pulsing "is
+                      // working…" for a delegate the block behind it correctly
+                      // showed as stopped — the original bug, surviving on the new
+                      // surface.
+                      <SubagentDetail
+                        block={detailSubagent}
+                        nodes={nodeMeta}
+                        chatAgentName={activeRun?.agentKind ?? null}
+                      />
+                    ) : null}
+                  </Dialog>
 
-                <ConfirmDialog
-                  open={subagentCancelAsk !== null}
-                  title="Send now and stop the sub-agents?"
-                  confirmLabel="Stop them and send"
-                  busyLabel="Sending…"
-                  onCancel={() => answerCancelAsk(false)}
-                  onConfirm={() => answerCancelAsk(true)}>
-                  {subagentCancelAsk?.detail ??
-                    'Sending this now cancels the sub-agents still running, and whatever they have not finished is lost.'}{' '}
-                  Keep it queued and it goes out when this turn ends.
-                </ConfirmDialog>
+                  <ShellOutputDialog
+                    shell={openShell}
+                    onClose={() => setOpenShell(null)}
+                    load={loadShellOutput}
+                  />
 
-                {archiveFlow.dialog}
+                  <ConfirmDialog
+                    open={subagentCancelAsk !== null}
+                    title="Send now and stop the sub-agents?"
+                    confirmLabel="Stop them and send"
+                    busyLabel="Sending…"
+                    onCancel={() => answerCancelAsk(false)}
+                    onConfirm={() => answerCancelAsk(true)}>
+                    {subagentCancelAsk?.detail ??
+                      'Sending this now cancels the sub-agents still running, and whatever they have not finished is lost.'}{' '}
+                    Keep it queued and it goes out when this turn ends.
+                  </ConfirmDialog>
 
-                <ConfirmDialog
-                  open={deleting !== null}
-                  busy={deleteBusy}
-                  error={deleteError}
-                  title={deleting?.teamId ? 'Delete run' : 'Delete chat'}
-                  confirmLabel="Delete"
-                  busyLabel="Deleting…"
-                  onCancel={() => setDeleting(null)}
-                  onConfirm={() => void confirmDelete()}>
-                  <>
-                    Delete{' '}
-                    <strong>
-                      {deleting ? runLabel(deleting, teamNames) : ''}
-                    </strong>
-                    ? Its transcript, attachments and any live terminal go with
-                    it, and so does the agent’s own saved copy of the
-                    conversation — except one you imported from your terminal,
-                    which stays there. This cannot be undone — unlike archiving,
-                    nothing is kept. Its token and cost totals stay on the Stats
-                    page.
-                    {deleting?.teamId
-                      ? ' The team itself stays in your library.'
-                      : ''}
-                  </>
-                </ConfirmDialog>
+                  {archiveFlow.dialog}
 
-                <ConfirmDialog
-                  open={deletingGroup !== null}
-                  busy={deleteGroupBusy}
-                  error={deleteGroupError}
-                  title="Delete group"
-                  confirmLabel="Delete group"
-                  busyLabel="Deleting…"
-                  onCancel={() => setDeletingGroup(null)}
-                  onConfirm={() => void confirmDeleteGroup()}>
-                  <>
-                    Delete the group <strong>{deletingGroup?.name}</strong>?
-                    {/* What is NOT deleted is the whole point, and it is said
+                  <ConfirmDialog
+                    open={deleting !== null}
+                    busy={deleteBusy}
+                    error={deleteError}
+                    title={deleting?.teamId ? 'Delete run' : 'Delete chat'}
+                    confirmLabel="Delete"
+                    busyLabel="Deleting…"
+                    onCancel={() => setDeleting(null)}
+                    onConfirm={() => void confirmDelete()}>
+                    <>
+                      Delete{' '}
+                      <strong>
+                        {deleting ? runLabel(deleting, teamNames) : ''}
+                      </strong>
+                      ? Its transcript, attachments and any live terminal go
+                      with it, and so does the agent’s own saved copy of the
+                      conversation — except one you imported from your terminal,
+                      which stays there. This cannot be undone — unlike
+                      archiving, nothing is kept. Its token and cost totals stay
+                      on the Stats page.
+                      {deleting?.teamId
+                        ? ' The team itself stays in your library.'
+                        : ''}
+                    </>
+                  </ConfirmDialog>
+
+                  <ConfirmDialog
+                    open={deletingGroup !== null}
+                    busy={deleteGroupBusy}
+                    error={deleteGroupError}
+                    title="Delete group"
+                    confirmLabel="Delete group"
+                    busyLabel="Deleting…"
+                    onCancel={() => setDeletingGroup(null)}
+                    onConfirm={() => void confirmDeleteGroup()}>
+                    <>
+                      Delete the group <strong>{deletingGroup?.name}</strong>?
+                      {/* What is NOT deleted is the whole point, and it is said
                       first: "delete" reads as final, and the chats are the
                       thing a user would be afraid of losing. */}
-                    <span className="mt-2 block">
-                      {deletingGroupCount === 0
-                        ? 'It holds no chats.'
-                        : `Its ${deletingGroupCount} ${deletingGroupCount === 1 ? 'chat is' : 'chats are'} kept — they move to Ungrouped with all their history.`}{' '}
-                      Only the group itself is removed.
-                    </span>
-                  </>
-                </ConfirmDialog>
-                <RunConfigPicker
-                  open={runConfigPickerOpen}
-                  openTo={runConfigPickerMode}
-                  configs={runConfigs}
-                  agentsApi={agentsApi}
-                  teams={teams}
-                  projects={projects}
-                  cliDetections={cliDetections}
-                  recentFolders={recentFolders}
-                  // Asked about the CONFIGURATION's own agent, not the
-                  // composer's — a saved setup routinely names a different CLI.
-                  recentConfigDirsFor={(kind) =>
-                    recentConfigDirsByAgent[kind] ?? []
-                  }
-                  configProfilesFor={(kind) =>
-                    configProfiles.filter((profile) => profile.agent === kind)
-                  }
-                  approvalCapabilityFor={approvalCapabilityFor}
-                  configDirReasonFor={configDirReasonFor}
-                  captureCurrent={captureCurrentRunConfig}
-                  onApply={(config) => void applyRunConfigToComposer(config)}
-                  onSave={saveRunConfig}
-                  onDelete={deleteRunConfig}
-                  onReorder={reorderRunConfigs}
-                  onClose={() => setRunConfigPickerOpen(false)}
-                />
-                <AnalysisDialog
-                  key={`${analysisOf?.id ?? ''}:${analysisGeneration}`}
-                  subject={
-                    analysisOf ? { kind: 'thread', run: analysisOf } : null
-                  }
-                  sourceLabel={
-                    analysisOf ? runLabel(analysisOf, teamNames) : ''
-                  }
-                  apis={apis}
-                  renderThread={(thread) => (
-                    <Chats client={client} handle={handle} hosted={thread} />
-                  )}
-                  onNewAnalysis={() => setAnalyzingRun(analysisOf)}
-                  onClose={() => {
-                    setAnalysisOf(null);
-                    setAnalysisGeneration((n) => n + 1);
-                  }}
-                />
-                <AnalyzeThreadDialog
-                  subject={
-                    analyzingRun ? { kind: 'thread', run: analyzingRun } : null
-                  }
-                  replaces={
-                    analyzingRun !== null && analysisOf?.id === analyzingRun.id
-                  }
-                  sourceLabel={
-                    analyzingRun ? runLabel(analyzingRun, teamNames) : ''
-                  }
-                  chatApi={chatApi}
-                  agentsApi={agentsApi}
-                  cliDetections={cliDetections}
-                  composerSetup={{
-                    agent: agentKind,
-                    configDir: configDirs[agentKind] ?? null,
-                    model: models[agentKind] ?? null,
-                    effort: efforts[agentKind] ?? null,
-                    contextWindow: contextWindows[agentKind] ?? null,
-                    autoCompactPercent,
-                    modelParameters: modelParameters[agentKind] ?? {},
-                    // Never the composer's mode: an analysis starts on auto.
-                    approval: null,
-                  }}
-                  recentConfigDirsFor={(kind) =>
-                    recentConfigDirsByAgent[kind] ?? []
-                  }
-                  configProfilesFor={(kind) =>
-                    configProfiles.filter((profile) => profile.agent === kind)
-                  }
-                  configDirReasonFor={configDirReasonFor}
-                  approvalCapabilityFor={approvalCapabilityFor}
-                  runSettings={currentRunSettings}
-                  onClose={() => setAnalyzingRun(null)}
-                  onStarted={() => {
-                    // Opened in its popup over the thread, never as a sidebar
-                    // chat; the bump makes it a new conversation there.
-                    setAnalysisOf(analyzingRun);
-                    setAnalyzingRun(null);
-                    setAnalysisGeneration((n) => n + 1);
-                  }}
-                />
-                <GlobalChatSearchDialog
-                  open={globalSearchOpen}
-                  chatApi={chatApi}
-                  embeddingsApi={apis.embeddings}
-                  onClose={() => setGlobalSearchOpen(false)}
-                  onJump={openGlobalSearchHit}
-                />
-                <SessionPicker
-                  open={sessionPickerOpen}
-                  agent={sessionAgent}
-                  onAgentChange={setSessionAgent}
-                  profiles={sessionProfileDirs}
-                  query={sessionQuery}
-                  onQueryChange={setSessionQuery}
-                  listing={sessionListing}
-                  loading={sessionsLoading}
-                  error={sessionsError}
-                  busyId={resumingSessionId}
-                  onClose={() => setSessionPickerOpen(false)}
-                  onResume={(row) => void resumeSession(row)}
-                />
-                {/* Beside the session picker because they are the same kind of
+                      <span className="mt-2 block">
+                        {deletingGroupCount === 0
+                          ? 'It holds no chats.'
+                          : `Its ${deletingGroupCount} ${deletingGroupCount === 1 ? 'chat is' : 'chats are'} kept — they move to Ungrouped with all their history.`}{' '}
+                        Only the group itself is removed.
+                      </span>
+                    </>
+                  </ConfirmDialog>
+                  <RunConfigPicker
+                    open={runConfigPickerOpen}
+                    openTo={runConfigPickerMode}
+                    configs={runConfigs}
+                    agentsApi={agentsApi}
+                    teams={teams}
+                    projects={projects}
+                    cliDetections={cliDetections}
+                    recentFolders={recentFolders}
+                    // Asked about the CONFIGURATION's own agent, not the
+                    // composer's — a saved setup routinely names a different CLI.
+                    recentConfigDirsFor={(kind) =>
+                      recentConfigDirsByAgent[kind] ?? []
+                    }
+                    configProfilesFor={(kind) =>
+                      configProfiles.filter((profile) => profile.agent === kind)
+                    }
+                    approvalCapabilityFor={approvalCapabilityFor}
+                    configDirReasonFor={configDirReasonFor}
+                    captureCurrent={captureCurrentRunConfig}
+                    onApply={(config) => void applyRunConfigToComposer(config)}
+                    onSave={saveRunConfig}
+                    onDelete={deleteRunConfig}
+                    onReorder={reorderRunConfigs}
+                    onClose={() => setRunConfigPickerOpen(false)}
+                  />
+                  <AnalysisDialog
+                    key={`${analysisOf?.id ?? ''}:${analysisGeneration}`}
+                    subject={
+                      analysisOf ? { kind: 'thread', run: analysisOf } : null
+                    }
+                    sourceLabel={
+                      analysisOf ? runLabel(analysisOf, teamNames) : ''
+                    }
+                    apis={apis}
+                    renderThread={(thread) => (
+                      <Chats client={client} handle={handle} hosted={thread} />
+                    )}
+                    onNewAnalysis={() => setAnalyzingRun(analysisOf)}
+                    onClose={() => {
+                      setAnalysisOf(null);
+                      setAnalysisGeneration((n) => n + 1);
+                    }}
+                  />
+                  <AnalyzeThreadDialog
+                    subject={
+                      analyzingRun
+                        ? { kind: 'thread', run: analyzingRun }
+                        : null
+                    }
+                    replaces={
+                      analyzingRun !== null &&
+                      analysisOf?.id === analyzingRun.id
+                    }
+                    sourceLabel={
+                      analyzingRun ? runLabel(analyzingRun, teamNames) : ''
+                    }
+                    chatApi={chatApi}
+                    agentsApi={agentsApi}
+                    cliDetections={cliDetections}
+                    composerSetup={{
+                      agent: agentKind,
+                      configDir: configDirs[agentKind] ?? null,
+                      model: models[agentKind] ?? null,
+                      effort: efforts[agentKind] ?? null,
+                      contextWindow: contextWindows[agentKind] ?? null,
+                      autoCompactPercent,
+                      modelParameters: modelParameters[agentKind] ?? {},
+                      // Never the composer's mode: an analysis starts on auto.
+                      approval: null,
+                    }}
+                    recentConfigDirsFor={(kind) =>
+                      recentConfigDirsByAgent[kind] ?? []
+                    }
+                    configProfilesFor={(kind) =>
+                      configProfiles.filter((profile) => profile.agent === kind)
+                    }
+                    configDirReasonFor={configDirReasonFor}
+                    approvalCapabilityFor={approvalCapabilityFor}
+                    runSettings={currentRunSettings}
+                    onClose={() => setAnalyzingRun(null)}
+                    onStarted={() => {
+                      // Opened in its popup over the thread, never as a sidebar
+                      // chat; the bump makes it a new conversation there.
+                      setAnalysisOf(analyzingRun);
+                      setAnalyzingRun(null);
+                      setAnalysisGeneration((n) => n + 1);
+                    }}
+                  />
+                  <GlobalChatSearchDialog
+                    open={globalSearchOpen}
+                    chatApi={chatApi}
+                    embeddingsApi={apis.embeddings}
+                    onClose={() => setGlobalSearchOpen(false)}
+                    onJump={openGlobalSearchHit}
+                  />
+                  <SessionPicker
+                    open={sessionPickerOpen}
+                    agent={sessionAgent}
+                    onAgentChange={setSessionAgent}
+                    profiles={sessionProfileDirs}
+                    query={sessionQuery}
+                    onQueryChange={setSessionQuery}
+                    listing={sessionListing}
+                    loading={sessionsLoading}
+                    error={sessionsError}
+                    busyId={resumingSessionId}
+                    onClose={() => setSessionPickerOpen(false)}
+                    onResume={(row) => void resumeSession(row)}
+                  />
+                  {/* Beside the session picker because they are the same kind of
                     surface — a search whose answer is a place to go — and the
                     two must not grow different ideas of what one looks like.
                     Rendered only with a thread open: without one there is no
                     conversation to search. */}
-                {activeRunId === null ? null : (
-                  <ChatSearchDialog
-                    open={searchOpen}
-                    search={chatSearch}
-                    onClose={closeChatSearch}
-                    onJump={jumpToHit}
-                  />
-                )}
-                {/* Mounted only while OPEN — but it no longer READS: the header
+                  {activeRunId === null ? null : (
+                    <ChatSearchDialog
+                      open={searchOpen}
+                      search={chatSearch}
+                      onClose={closeChatSearch}
+                      onJump={jumpToHit}
+                    />
+                  )}
+                  {/* Mounted only while OPEN — but it no longer READS: the header
                     chip states the same figures, so one `useChatChanges` feeds
                     both and the two cannot disagree about a folder they are
                     describing at the same instant. Opening still asks for a
                     fresh read (`refresh(true)`, past the freshness floor), which
                     is the behaviour the dialog documented for itself. */}
-                {changesOpen && activeRun ? (
-                  <ChatChangesDialog
-                    open
-                    startSha={activeRun.startSha}
-                    changes={chatChanges.changes}
-                    elsewhere={chatChanges.elsewhere}
-                    truncated={chatChanges.truncated}
-                    unavailableReason={chatChanges.unavailableReason}
-                    movedOffStart={chatChanges.movedOffStart}
-                    upstreamBase={chatChanges.upstreamBase}
-                    error={chatChanges.error}
-                    loading={chatChanges.loading}
-                    onRefresh={readChangesNow}
-                    onClose={closeChatChanges}
-                  />
-                ) : null}
-              </BrowserGrid>
-            </LocalImageLoaderContext.Provider>
-          </ChatMetricsLoaderContext.Provider>
-        </AttachmentLoaderContext.Provider>
-      </ChatProviders>
+                  {changesOpen && activeRun ? (
+                    <ChangesReviewDialog
+                      open
+                      folder={activeRun.cwd ?? ''}
+                      threadId={activeRun.id}
+                      startSha={activeRun.startSha}
+                      baseSha={chatChanges.baseSha}
+                      review={review}
+                      readFileLines={
+                        isRemoteRuntime()
+                          ? undefined
+                          : (request) => window.geniro.readFileLines(request)
+                      }
+                      focusComment={reviewFocus}
+                      changes={chatChanges.changes}
+                      elsewhere={chatChanges.elsewhere}
+                      truncated={chatChanges.truncated}
+                      unavailableReason={chatChanges.unavailableReason}
+                      movedOffStart={chatChanges.movedOffStart}
+                      upstreamBase={chatChanges.upstreamBase}
+                      error={chatChanges.error}
+                      loading={chatChanges.loading}
+                      onRefresh={readChangesNow}
+                      onClose={closeChatChanges}
+                    />
+                  ) : null}
+                </BrowserGrid>
+              </LocalImageLoaderContext.Provider>
+            </ChatMetricsLoaderContext.Provider>
+          </AttachmentLoaderContext.Provider>
+        </ChatProviders>
+      </OpenReviewCommentContext.Provider>
     </CardBackedRequestsContext.Provider>
   );
 }

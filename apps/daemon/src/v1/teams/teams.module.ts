@@ -44,6 +44,7 @@ import { TeamLiveWorkSources } from './services/team-live-work.service';
 import { TeamOverlayService } from './services/team-overlay.service';
 import { TeamOverlayStoreService } from './services/team-overlay-store.service';
 import { TeamProposalService } from './services/team-proposal.service';
+import { TeamReviewService } from './services/team-review.service';
 import { TeamStoreService } from './services/team-store.service';
 import { ThreadDeliveryService } from './services/thread-delivery.service';
 
@@ -114,6 +115,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeLogDao,
     TeamChangeLogService,
     TeamActionsService,
+    TeamReviewService,
     TeamProposalService,
     TeamCardsService,
     TeamHealthService,

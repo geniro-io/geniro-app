@@ -523,6 +523,7 @@ function makeClient(): {
     },
     onSharesChanged: () => () => undefined,
     onThreadMessagesChanged: () => () => undefined,
+    onReviewCommentsChanged: () => () => undefined,
     onProjectsChanged: (
       l: (event: { projectId: string; textsOnly: boolean }) => void,
     ) => {
@@ -3767,6 +3768,7 @@ describe('Chats — the changes chip', () => {
         {
           path: 'mine.ts',
           status: 'modified' as const,
+          oldPath: null,
           diff: null,
           added: 1,
           removed: 0,
@@ -3776,6 +3778,7 @@ describe('Chats — the changes chip', () => {
       unavailableReason: null,
       movedOffStart: false,
       upstreamBase: null,
+      baseSha: null,
     }));
     window.geniro.getChangesSince = getChangesSince;
     window.geniro.getPullRequestsByRef = vi.fn(

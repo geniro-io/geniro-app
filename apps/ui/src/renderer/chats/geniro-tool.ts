@@ -146,6 +146,8 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // The step is its own `milestone` row.
   milestone: null,
   move_stage: null,
+  // The answer shows under its comment on the review screen.
+  answer_review_comment: null,
   // The card is the `lessons` row the reflection writes into the thread.
   propose_lessons: null,
   // The send is the sender's own `threadMessageSent` row; a refused one keeps

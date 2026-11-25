@@ -1388,6 +1388,27 @@ export function parseSharesChanged(data: unknown): SharesChangedEvent | null {
   };
 }
 
+/** A thread's review comments changed: its review screen re-reads them. */
+export interface ReviewCommentsChangedEvent {
+  runId: string;
+}
+
+/**
+ * Read a `review_comments_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `ReviewCommentsChange`
+ * (`apps/daemon/src/v1/agents/chat.types.ts`). Change one and change the other.
+ */
+export function parseReviewCommentsChanged(
+  data: unknown,
+): ReviewCommentsChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runId } = data as Record<string, unknown>;
+  return typeof runId === 'string' ? { runId } : null;
+}
+
 /** A thread's waiting messages changed: its chip re-reads them. */
 export interface ThreadMessagesChangedEvent {
   runId: string;
@@ -1553,6 +1574,9 @@ export class DaemonClient {
   >();
   private readonly threadMessagesChangedListeners = new Set<
     (event: ThreadMessagesChangedEvent) => void
+  >();
+  private readonly reviewCommentsChangedListeners = new Set<
+    (event: ReviewCommentsChangedEvent) => void
   >();
   private readonly commandCenterChangedListeners = new Set<
     (event: CommandCenterChangedEvent) => void
@@ -1825,6 +1849,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'review_comments_changed') {
+        const change = parseReviewCommentsChanged(data);
+        if (change) {
+          for (const listener of this.reviewCommentsChangedListeners) {
+            listener(change);
+          }
+        }
+      }
       if (event === 'thread_messages_changed') {
         const change = parseThreadMessagesChanged(data);
         if (change) {
@@ -2082,6 +2114,16 @@ export class DaemonClient {
    * Subscribe to every thread's waiting messages changing, client-wide, as
    * {@link onSharesChanged} does: the open thread keeps the events of its own run.
    */
+  /** Subscribe to every thread's review comments changing, client-wide. */
+  onReviewCommentsChanged(
+    listener: (event: ReviewCommentsChangedEvent) => void,
+  ): () => void {
+    this.reviewCommentsChangedListeners.add(listener);
+    return () => {
+      this.reviewCommentsChangedListeners.delete(listener);
+    };
+  }
+
   onThreadMessagesChanged(
     listener: (event: ThreadMessagesChangedEvent) => void,
   ): () => void {

@@ -26,6 +26,7 @@ export interface WorkFolderChanges {
   changes: GitChange[];
   /** What this folder is measured against, which the run folder's may not be. */
   upstreamBase: GitChanges['upstreamBase'];
+  baseSha: string | null;
 }
 
 export interface ChatChanges {
@@ -51,6 +52,8 @@ export interface ChatChanges {
    * shares newer history with the remote than the start — null otherwise.
    */
   upstreamBase: GitChanges['upstreamBase'];
+  /** The commit `changes` is measured against, for reading a removed line's file. */
+  baseSha: string | null;
   /** An IPC failure, which is a different thing from git having no answer. */
   error: string | null;
   loading: boolean;
@@ -105,6 +108,7 @@ export function useChatChanges(
   const [movedOffStart, setMovedOffStart] = useState(false);
   const [upstreamBase, setUpstreamBase] =
     useState<GitChanges['upstreamBase']>(null);
+  const [baseSha, setBaseSha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [read, setRead] = useState(false);
@@ -148,6 +152,7 @@ export function useChatChanges(
                           folder,
                           changes: result.changes,
                           upstreamBase: result.upstreamBase,
+                          baseSha: result.baseSha,
                         },
                         truncated: result.truncated,
                       }
@@ -170,6 +175,7 @@ export function useChatChanges(
           setReason(result.unavailableReason);
           setMovedOffStart(result.movedOffStart);
           setUpstreamBase(result.upstreamBase);
+          setBaseSha(result.baseSha);
           setRead(true);
         })
         .catch((err: unknown) => {
@@ -197,6 +203,7 @@ export function useChatChanges(
     setReason(null);
     setMovedOffStart(false);
     setUpstreamBase(null);
+    setBaseSha(null);
     setError(null);
     setRead(false);
     lastReadAt.current = 0;
@@ -237,6 +244,7 @@ export function useChatChanges(
     unavailableReason,
     movedOffStart,
     upstreamBase,
+    baseSha,
     error,
     loading,
     summary,

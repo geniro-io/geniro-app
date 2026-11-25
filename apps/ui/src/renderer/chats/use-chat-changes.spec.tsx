@@ -17,6 +17,7 @@ const START_SHA = 'f3c7ca6ae198cadd2dab94b76591b67a2184d844';
 const change = (path: string, added: number, removed: number): GitChange => ({
   path,
   status: 'modified',
+  oldPath: null,
   diff: null,
   added,
   removed,
@@ -28,6 +29,7 @@ const reading = (changes: GitChange[]): GitChanges => ({
   unavailableReason: null,
   movedOffStart: false,
   upstreamBase: null,
+  baseSha: START_SHA,
 });
 
 let root: Root | null = null;
@@ -223,6 +225,7 @@ describe('useChatChanges', () => {
         folder: AGENT_WORKTREE,
         changes: [change('apps/web/card-padding.ts', 2, 2)],
         upstreamBase: null,
+        baseSha: START_SHA,
       },
     ]);
   });

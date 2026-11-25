@@ -53,8 +53,11 @@ export function ExpandableTextarea({
   onFocus,
   onBlur,
   invalid,
+  expandable = true,
 }: {
   id?: string;
+  /** False keeps the text in the field itself: no ⤢ and no editor popup. */
+  expandable?: boolean;
   invalid?: boolean;
   /** The inline field's accessible name, for a field with no `<label>`. */
   ariaLabel?: string;
@@ -151,32 +154,36 @@ export function ExpandableTextarea({
         onFocus={onFocus}
         onBlur={onBlur}
         // pr-9 keeps typed text from running under the expand button.
-        className={cn('pr-9', className)}
+        className={cn(expandable && 'pr-9', className)}
         onPaste={onPaste}
         onChange={(event) => onChange(event.target.value)}
       />
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label={`Expand ${title}`}
-        title="Open in editor"
-        className="absolute top-1 right-1 size-7 text-muted-foreground [&_svg]:size-3.5"
-        onClick={() => setExpanded(true)}>
-        <Maximize2 />
-      </Button>
-      <MarkdownEditorDialog
-        open={expanded}
-        title={title}
-        value={value}
-        placeholder={placeholder}
-        maxLength={maxLength}
-        onCancel={() => setExpanded(false)}
-        onSave={(next) => {
-          onChange(next);
-          setExpanded(false);
-        }}
-      />
+      {expandable ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Expand ${title}`}
+            title="Open in editor"
+            className="absolute top-1 right-1 size-7 text-muted-foreground [&_svg]:size-3.5"
+            onClick={() => setExpanded(true)}>
+            <Maximize2 />
+          </Button>
+          <MarkdownEditorDialog
+            open={expanded}
+            title={title}
+            value={value}
+            placeholder={placeholder}
+            maxLength={maxLength}
+            onCancel={() => setExpanded(false)}
+            onSave={(next) => {
+              onChange(next);
+              setExpanded(false);
+            }}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

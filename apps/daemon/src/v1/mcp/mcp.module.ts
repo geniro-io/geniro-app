@@ -26,6 +26,7 @@ import { PlanBroker } from '../agents/services/plan.broker';
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
+import { ReviewCommentsService } from '../agents/services/review-comments.service';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
 import { SurfaceBroker } from '../agents/services/surface.broker';
 import { TeamBuilderBroker } from '../agents/services/team-builder.broker';
@@ -136,6 +137,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         commandCenters: CommandCenterBroker,
         commandCenterOps: CommandCenterOpsBroker,
         surfaces: SurfaceBroker,
+        reviewComments: ReviewCommentsService,
       ) =>
         createMcpTools({
           calls,
@@ -185,6 +187,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           commandCenters,
           commandCenterOps,
           surfaces,
+          reviewComments,
         }),
       inject: [
         CallBroker,
@@ -234,6 +237,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         CommandCenterBroker,
         CommandCenterOpsBroker,
         SurfaceBroker,
+        ReviewCommentsService,
       ],
     },
     McpServerService,

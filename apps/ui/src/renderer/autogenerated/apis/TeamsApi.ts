@@ -36,12 +36,14 @@ import type {
   PressSurfaceDto,
   ProjectTeamOverlaysDto,
   ResetWakesCancelledDto,
+  ReviewSendDto,
   RunDto,
   RunTeamDto,
   RunTeamSnapshotDto,
   SaveTeamDto,
   SaveTeamOverlayDto,
   SendMessageDto,
+  SendReviewDto,
   SetPoolMemberResultDto,
   SetTeamRunPoolMemberDto,
   StageMoveResultDto,
@@ -226,6 +228,11 @@ export interface TeamsApiSendTeamCallMessageRequest {
     memberId: string;
     callId: string;
     sendMessageDto: SendMessageDto;
+}
+
+export interface TeamsApiSendTeamReviewRequest {
+    runId: string;
+    sendReviewDto: SendReviewDto;
 }
 
 export interface TeamsApiSendTeamRunMessageRequest {
@@ -2024,6 +2031,61 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async sendTeamCallMessage(requestParameters: TeamsApiSendTeamCallMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
         const response = await this.sendTeamCallMessageRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async sendTeamReviewRaw(requestParameters: TeamsApiSendTeamReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ReviewSendDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling sendTeamReview().'
+            );
+        }
+
+        if (requestParameters['sendReviewDto'] == null) {
+            throw new runtime.RequiredError(
+                'sendReviewDto',
+                'Required parameter "sendReviewDto" was null or undefined when calling sendTeamReview().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/runs/{runId}/review-comments/send`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['sendReviewDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async sendTeamReview(requestParameters: TeamsApiSendTeamReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ReviewSendDto> {
+        const response = await this.sendTeamReviewRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

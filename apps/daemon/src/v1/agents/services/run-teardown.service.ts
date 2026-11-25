@@ -7,6 +7,7 @@ import { BrowserHostApprovals } from '../../browser/services/browser-host-approv
 import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
+import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
 import { UiSurfaceDao } from '../dao/ui-surface.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
@@ -91,6 +92,7 @@ export class RunTeardownService {
     @Optional() private readonly browserBridge?: BrowserBridgeService,
     @Optional() private readonly browserApprovals?: BrowserHostApprovals,
     @Optional() private readonly surfaces?: UiSurfaceDao,
+    @Optional() private readonly reviewComments?: ReviewCommentDao,
   ) {}
 
   /**
@@ -251,6 +253,7 @@ export class RunTeardownService {
       // its agents' worked time, unlike the usage ledgers that outlive a delete.
       await this.wallTurns.hardDeleteIncludingSoftDeleted({ runId }, em);
       await this.surfaces?.hardDeleteIncludingSoftDeleted({ runId }, em);
+      await this.reviewComments?.hardDeleteIncludingSoftDeleted({ runId }, em);
       await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
       this.attachments.removeRun(runId);
       this.artifacts.removeRun(runId);

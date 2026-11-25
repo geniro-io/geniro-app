@@ -38,6 +38,8 @@ import { callFollowUpId, NotSentMessagesContext } from './not-sent-messages';
 import { NotSentNotice } from './not-sent-notice';
 import { formatClockTime } from './relative-time';
 import { RetryContext } from './retry-context';
+import { ReviewMessageCard } from './review-message-card';
+import { readReviewPayload } from './review-payload';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
@@ -241,6 +243,8 @@ export const TranscriptItem = memo(function TranscriptItem({
       const attachments = messageAttachments(item.payload);
       const deliveryId =
         item.role === 'user' ? payloadString(item.payload, 'deliveryId') : null;
+      const review =
+        item.role === 'user' ? readReviewPayload(item.payload) : null;
       const bubble = (
         <MessageBubble
           variant={item.role === 'user' ? 'user' : 'assistant'}
@@ -256,7 +260,9 @@ export const TranscriptItem = memo(function TranscriptItem({
           <MessageAttachments runId={item.runId} attachments={attachments} />
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
-          {text ? (
+          {review !== null ? (
+            <ReviewMessageCard review={review} />
+          ) : text ? (
             <MarkdownContent content={text} className={MESSAGE_TEXT_CLASS} />
           ) : null}
         </MessageBubble>

@@ -23,6 +23,7 @@ import type { PlanBroker } from '../../agents/services/plan.broker';
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { SurfaceBroker } from '../../agents/services/surface.broker';
 import type { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
@@ -47,6 +48,7 @@ import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
+import { AnswerReviewCommentTool } from './answer-review-comment/answer-review-comment.tool';
 import { ArchiveThreadsTool } from './archive-threads/archive-threads.tool';
 import { ArtifactAnswersTool } from './artifact-answers/artifact-answers.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
@@ -129,6 +131,7 @@ export interface McpToolDeps {
   milestones: MilestoneBroker;
   goals: GoalsService;
   goalWriters: GoalWritersBroker;
+  reviewComments: ReviewCommentsService;
   stages: StageService;
   plans: PlanBroker;
   notices: NotifyBroker;
@@ -188,6 +191,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new MoveStageTool(deps.stages, deps.calls),
     new MilestoneTool(deps.milestones),
     new GoalsTool(deps.goals, deps.goalWriters),
+    new AnswerReviewCommentTool(deps.reviewComments),
     new FlagIssueTool(deps.flags),
     new AskUserQuestionTool(deps.questions),
     new ShowChartTool(deps.charts),

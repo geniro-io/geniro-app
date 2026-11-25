@@ -214,15 +214,36 @@ function controlHits(
   return hits;
 }
 
+/** The `bidi` and `invisible` hits alone, in offset order: the characters that draw as nothing or reorder text. */
+export function hiddenCharHits(text: string): HazardHit[] {
+  return [
+    ...controlHits(text, BIDI_PATTERN, 'bidi'),
+    ...controlHits(text, INVISIBLE_PATTERN, 'invisible'),
+  ].sort((a, b) => a.offset - b.offset);
+}
+
+const HAZARD_CLASS_LABEL: Record<HazardClass, string> = {
+  bidi: 'Bidirectional override',
+  invisible: 'Invisible character',
+  mixedScript: 'Look-alike character from another script',
+};
+
+/** `U+202E` — the codepoint, never the character. */
+export function codePointName(codePoint: number): string {
+  return `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
+/** `Bidirectional override — U+202E` — the codepoint, never the character. */
+export function hazardHitLabel(hit: HazardHit): string {
+  return `${HAZARD_CLASS_LABEL[hit.class]} — ${codePointName(hit.codePoint)}`;
+}
+
 /**
  * Scans `text` for the three hazard classes above and returns every hit —
  * class, codepoint, UTF-16 offset — plus whether the result gates.
  */
 export function scanTextHazards(text: string): HazardScanResult {
-  const hits: HazardHit[] = [
-    ...controlHits(text, BIDI_PATTERN, 'bidi'),
-    ...controlHits(text, INVISIBLE_PATTERN, 'invisible'),
-  ];
+  const hits: HazardHit[] = hiddenCharHits(text);
   for (const match of text.matchAll(TOKEN_PATTERN)) {
     if (match.index === undefined) {
       continue;

@@ -30,6 +30,7 @@ import {
   type DeferredCard,
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
+  HOST_RUN_TEAM_TOOL,
   type TeamProposalOutcome,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
@@ -456,7 +457,10 @@ describe('TeamProposalService', () => {
       expect(chats.raiseOwnedCard).toHaveBeenCalledWith(
         'run-1',
         expect.any(String),
-        expect.objectContaining({ input: runTeam }),
+        expect.objectContaining({
+          toolName: HOST_RUN_TEAM_TOOL,
+          input: runTeam,
+        }),
         expect.any(Function),
       );
       const card = standingCard('run-1');

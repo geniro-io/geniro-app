@@ -12369,6 +12369,12 @@ export interface PluginBlock {
      */
     folder: string;
     /**
+     * The folder's name to show: the repository's for a worktree cut from one
+     * @type {string}
+     * @memberof PluginBlock
+     */
+    folderName: string;
+    /**
      * 
      * @type {Array<{ [key: string]: any; }>}
      * @memberof PluginBlock
@@ -12752,6 +12758,12 @@ export interface PluginSummary {
      * @memberof PluginSummary
      */
     lastRunAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    lastRunError: string | null;
 }
 
 

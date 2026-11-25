@@ -27,6 +27,8 @@ export const PLUGIN_BUTTON_TIMEOUT_MINUTES_MAX = 60;
 export const PLUGIN_OUTPUT_MAX_CHARS = 1024 * 1024;
 export const PLUGIN_ENV_VALUE_MAX = 1024;
 export const PLUGIN_MIN_REFRESH_MS = 60_000;
+/** How early a timer refresh may arrive and still run: ticks and request latency drift by milliseconds. */
+export const PLUGIN_REFRESH_SLACK_MS = 5_000;
 export const PLUGIN_ERROR_TEXT_MAX = 4096;
 export const PLUGIN_NOT_JSON_HEAD = 2048;
 export const PLUGIN_BUTTON_OUTPUT_TAIL_MAX = 4096;
@@ -165,6 +167,12 @@ export const PluginSummarySchema = z
     hash: z.string(),
     path: z.string().describe("The file's absolute path"),
     lastRunAt: z.string().nullable(),
+    lastRunError: z
+      .string()
+      .nullable()
+      .describe(
+        'Why the newest run failed, or null when it succeeded or none ran',
+      ),
   })
   .meta({ id: 'PluginSummary' });
 export type PluginSummary = z.infer<typeof PluginSummarySchema>;
@@ -180,6 +188,11 @@ export const PluginBlockSchema = z
     name: z.string(),
     state: z.enum(PLUGIN_STATES),
     folder: z.string().describe('The folder the command runs in for this run'),
+    folderName: z
+      .string()
+      .describe(
+        "The folder's name to show: the repository's for a worktree cut from one",
+      ),
     view: z.array(z.record(z.string(), z.unknown())),
     refreshMinutes: z.number().int(),
     buttons: z.array(PluginButtonWireSchema),

@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+
 import { Injectable } from '@nestjs/common';
 import {
   BadRequestException,
@@ -29,6 +31,7 @@ import {
   PLUGIN_MIN_REFRESH_MS,
   PLUGIN_NOT_JSON_HEAD,
   PLUGIN_OUTPUT_MAX_CHARS,
+  PLUGIN_REFRESH_SLACK_MS,
   type PluginBlock,
   type PluginPressResult,
   type PluginRunResult,
@@ -53,6 +56,7 @@ interface RunPlace {
 interface CachedRun {
   result: PluginRunResult;
   hash: string;
+  startedAt: number;
 }
 
 function keyOf(...parts: string[]): string {
@@ -105,14 +109,14 @@ export class PluginRunnerService {
   }
 
   /** The newest result of `slug` in any folder, for the Settings list. */
-  lastRunAt(slug: string): string | null {
-    let newest: string | null = null;
+  lastRun(slug: string): PluginRunResult | null {
+    let newest: PluginRunResult | null = null;
     for (const [key, cached] of this.cache) {
       if (
         key.startsWith(keyOf(slug, '')) &&
-        (newest === null || cached.result.at > newest)
+        (newest === null || cached.result.at > newest.at)
       ) {
-        newest = cached.result.at;
+        newest = cached.result;
       }
     }
     return newest;
@@ -139,6 +143,7 @@ export class PluginRunnerService {
         name: plugin.name,
         state: stored.state,
         folder: place.folder,
+        folderName: basename(place.candidates.at(-1) ?? place.folder),
         view: plugin.view,
         refreshMinutes: plugin.refresh_minutes,
         buttons: plugin.buttons.map(({ id, command, confirm }) => ({
@@ -154,9 +159,11 @@ export class PluginRunnerService {
   }
 
   /**
-   * The plugin's data in this run's folder: the cached result while it is
-   * fresh (never older than `refresh_minutes`, never re-run within a
-   * minute), else a run of its approved command.
+   * The plugin's data in this run's folder. `force` (the user's ↻ or Run
+   * now) always runs, joining a run already in flight; otherwise the cached
+   * result answers while it is fresh — counted from when its run started,
+   * `refresh_minutes` and never under a minute, less a few seconds' slack
+   * so a timer tick on the dot still runs.
    */
   async run(
     slug: string,
@@ -200,23 +207,24 @@ export class PluginRunnerService {
     }
     const cached = this.cache.get(key);
     if (
-      !options.skipCache &&
+      options.force !== true &&
+      options.skipCache !== true &&
       cached !== undefined &&
       cached.hash === stored.hash
     ) {
-      const age = Date.now() - Date.parse(cached.result.at);
-      const fresh = options.force
-        ? age < PLUGIN_MIN_REFRESH_MS
-        : age <
-          Math.max(plugin.refresh_minutes * 60_000, PLUGIN_MIN_REFRESH_MS);
-      if (fresh) {
+      const period = Math.max(
+        plugin.refresh_minutes * 60_000,
+        PLUGIN_MIN_REFRESH_MS,
+      );
+      if (Date.now() - cached.startedAt < period - PLUGIN_REFRESH_SLACK_MS) {
         return cached.result;
       }
     }
+    const startedAt = Date.now();
     const running = this.runData(slug, plugin, place.folder)
       .then((result) => {
         if (this.inFlight.get(key) === running) {
-          this.cache.set(key, { result, hash: stored.hash });
+          this.cache.set(key, { result, hash: stored.hash, startedAt });
         }
         return result;
       })

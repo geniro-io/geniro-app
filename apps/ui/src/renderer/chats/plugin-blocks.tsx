@@ -1,11 +1,5 @@
-import {
-  Folder,
-  Loader2,
-  MessageSquarePlus,
-  RefreshCw,
-  Settings2,
-} from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Folder, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   PluginBlock,
@@ -15,6 +9,7 @@ import type {
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { PanelSection } from '../components/panel-section';
 import { Button } from '../components/ui/button';
+import { Menu } from '../components/ui/menu';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import {
@@ -131,6 +126,8 @@ export function PluginBlockSection({
   const [pressNote, setPressNote] = useState<PressNote | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLButtonElement>(null);
   const visible = useDocumentVisible();
   const approved = block.state === 'approved';
 
@@ -235,7 +232,7 @@ export function PluginBlockSection({
   return (
     <PanelSection
       label={label}
-      count={open ? undefined : (count ?? undefined)}
+      count={count ?? undefined}
       open={open}
       onToggle={() => setOpen((current) => !current)}
       action={
@@ -243,12 +240,12 @@ export function PluginBlockSection({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground [&_svg]:size-3.5"
+            size="sm"
+            className="h-6 px-2 text-xs text-muted-foreground"
             title="Put this block's data in the message box"
             aria-label={`Ask about ${label}`}
             onClick={() => onAsk(pluginAskText(block, result))}>
-            <MessageSquarePlus aria-hidden />
+            Ask
           </Button>
           <Button
             type="button"
@@ -262,16 +259,45 @@ export function PluginBlockSection({
             <RefreshCw aria-hidden className={cn(loading && 'animate-spin')} />
           </Button>
           {onOpenSettings === undefined ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-6 text-muted-foreground [&_svg]:size-3.5"
-              title="Plugin settings"
-              aria-label="Plugin settings"
-              onClick={onOpenSettings}>
-              <Settings2 aria-hidden />
-            </Button>
+            <>
+              <Button
+                ref={menuRef}
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6 text-muted-foreground [&_svg]:size-3.5"
+                title="Plugin settings"
+                aria-label={`More for ${label}`}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((current) => !current)}>
+                <MoreHorizontal aria-hidden />
+              </Button>
+              <Menu
+                open={menuOpen}
+                align="end"
+                side="bottom"
+                anchor="viewport"
+                triggerRef={menuRef}
+                className="w-44 min-w-0"
+                groups={[
+                  {
+                    items: [
+                      {
+                        value: 'settings',
+                        label: 'Open settings',
+                        action: true,
+                      },
+                    ],
+                  },
+                ]}
+                onSelect={() => {
+                  setMenuOpen(false);
+                  onOpenSettings();
+                }}
+                onClose={() => setMenuOpen(false)}
+              />
+            </>
           )}
         </div>
       }>
@@ -282,7 +308,7 @@ export function PluginBlockSection({
               className="flex min-w-0 items-center gap-1 truncate rounded-control bg-muted px-1.5 py-0.5"
               title={block.folder}>
               <Folder aria-hidden className="size-3 shrink-0" />
-              <span className="truncate">{block.folder.split('/').pop()}</span>
+              <span className="truncate">{block.folderName}</span>
             </span>
             <span className="shrink-0">
               {result === null

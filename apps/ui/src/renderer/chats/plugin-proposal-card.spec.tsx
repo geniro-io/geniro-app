@@ -155,16 +155,28 @@ describe('PluginProposalCard', () => {
     const el = renderCard(CARD);
 
     expect(el.textContent).toContain('node weather.js');
-    expect(el.textContent).toContain('every folder');
-    expect(el.textContent).toContain('at most 30 s');
-    expect(el.textContent).toContain('every 5 min while shown');
+    expect(el.textContent).toContain('every chat');
+    expect(el.textContent).toContain('stopped after 30 s');
+    expect(el.textContent).toContain('on open, every 5 min while visible, ↻');
   });
 
-  it('lists the folders the plugin shows in, in place of every folder', () => {
-    const el = renderCard({ ...CARD, folders: ['/Users/me/proj'] });
+  it('asks to save the plugin by name, with the agent summary under it', () => {
+    const el = renderCard(CARD);
 
-    expect(itemWith(el, '/Users/me/proj').textContent).toBe('/Users/me/proj');
-    expect(el.textContent).not.toContain('every folder');
+    expect(el.textContent).toContain(`Save plugin “${CARD.name}”?`);
+    expect(el.textContent).toContain('Weather for the open folder');
+  });
+
+  it('lists the folders the plugin shows in, shortened, in place of every chat', () => {
+    const el = renderCard({
+      ...CARD,
+      folders: ['/Users/me/Projects/shop/apps/web'],
+    });
+
+    const item = itemWith(el, 'chats under');
+    expect(item.textContent).toBe('chats under …/shop/apps/web');
+    expect(item.title).toBe('/Users/me/Projects/shop/apps/web');
+    expect(el.textContent).not.toContain('every chat');
   });
 
   it('marks each button as asking first or running at once', () => {

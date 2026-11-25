@@ -51,7 +51,7 @@ describe('PluginsService', () => {
     broker = new PluginProposalBroker();
     service = new PluginsService(
       store,
-      { forget, lastRunAt: () => null } as unknown as PluginRunnerService,
+      { forget, lastRun: () => null } as unknown as PluginRunnerService,
       broker,
     );
     service.onModuleInit();

@@ -122,6 +122,7 @@ export class PluginsService implements OnModuleInit {
 
   private summaryOf(stored: StoredPlugin): PluginSummary {
     const plugin = stored.plugin;
+    const lastRun = this.runner.lastRun(stored.slug);
     return {
       slug: stored.slug,
       name: plugin?.name ?? null,
@@ -138,7 +139,8 @@ export class PluginsService implements OnModuleInit {
       error: stored.error,
       hash: stored.hash,
       path: this.store.pathOf(stored.slug),
-      lastRunAt: this.runner.lastRunAt(stored.slug),
+      lastRunAt: lastRun?.at ?? null,
+      lastRunError: lastRun?.error ?? null,
     };
   }
 }

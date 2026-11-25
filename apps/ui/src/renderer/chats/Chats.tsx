@@ -11763,6 +11763,11 @@ export function Chats({
                                   appendDraft(current, text),
                                 )
                               }
+                              onOpenSettings={
+                                onOpenSettings
+                                  ? () => onOpenSettings('plugins')
+                                  : undefined
+                              }
                             />
                           ) : null
                         }

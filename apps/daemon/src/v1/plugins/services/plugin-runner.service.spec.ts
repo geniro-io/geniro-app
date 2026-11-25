@@ -158,6 +158,9 @@ describe('PluginRunnerService', () => {
 
       expect(calls).toHaveLength(1);
       expect(calls[0]?.cwd).toBe(worktree);
+      expect(await runner.blocksForRun('card-1')).toMatchObject([
+        { folder: worktree, folderName: 'work' },
+      ]);
     });
 
     it('matches a listed folder that differs from the run folder only in case', async () => {
@@ -324,19 +327,72 @@ describe('PluginRunnerService', () => {
       expect(calls).toHaveLength(2);
     });
 
-    it('re-runs a forced run only once the last result is older than a minute', async () => {
+    it('runs a forced run every time, even seconds after the last one', async () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-11-25T10:00:00Z'));
       await approvedPlugin('deploys');
       await runner.run('deploys', 'run-1');
 
-      vi.setSystemTime(new Date('2026-11-25T10:00:30Z'));
+      vi.setSystemTime(new Date('2026-11-25T10:00:05Z'));
       await runner.run('deploys', 'run-1', { force: true });
+      vi.setSystemTime(new Date('2026-11-25T10:00:10Z'));
+      await runner.run('deploys', 'run-1', { force: true });
+
+      expect(calls).toHaveLength(3);
+    });
+
+    it('joins a run already in flight for a forced run instead of starting a second', async () => {
+      const gate = deferred<ManagedCommandResult>();
+      respond = () => gate.promise;
+      await approvedPlugin('deploys');
+      const first = runner.run('deploys', 'run-1');
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+      const read = vi.spyOn(store, 'getOrThrow');
+      const forced = runner.run('deploys', 'run-1', { force: true });
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await read.mock.results[0]?.value;
+      gate.resolve(result());
+
+      expect(await forced).toEqual(await first);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('runs a timer refresh that arrives on the minute although the last run ended later than it started', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-25T10:00:00.000Z'));
+      respond = async () => {
+        vi.setSystemTime(new Date(Date.now() + 15));
+        return result();
+      };
+      await approvedPlugin('deploys', { refresh_minutes: 1 });
+      await runner.run('deploys', 'run-1');
+
+      vi.setSystemTime(new Date('2026-11-25T10:00:30.000Z'));
+      await runner.run('deploys', 'run-1');
       expect(calls).toHaveLength(1);
 
-      vi.setSystemTime(new Date('2026-11-25T10:01:01Z'));
-      await runner.run('deploys', 'run-1', { force: true });
+      vi.setSystemTime(new Date('2026-11-25T10:01:00.000Z'));
+      await runner.run('deploys', 'run-1');
       expect(calls).toHaveLength(2);
+    });
+
+    it('gives the Settings list the newest result in any folder, its error included', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      await approvedPlugin('deploys', { folders: [] });
+      runs.set('run-2', { id: 'run-2', cwd: other });
+      expect(runner.lastRun('deploys')).toBeNull();
+
+      vi.setSystemTime(new Date('2026-11-25T10:00:00Z'));
+      await runner.run('deploys', 'run-1');
+      vi.setSystemTime(new Date('2026-11-25T10:01:00Z'));
+      respond = async () => result({ code: 3, stdout: '' });
+      await runner.run('deploys', 'run-2');
+
+      expect(runner.lastRun('deploys')).toMatchObject({
+        at: '2026-11-25T10:01:00.000Z',
+        error: 'exit 3',
+      });
     });
   });
 

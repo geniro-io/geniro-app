@@ -74,6 +74,7 @@ function aPlugin(overrides: Partial<PluginSummary> = {}): PluginSummary {
     hash: 'h1',
     path: '/Users/me/Library/Application Support/Geniro/plugins/deploys.plugin.yaml',
     lastRunAt: null,
+    lastRunError: null,
     ...overrides,
   };
 }
@@ -275,6 +276,66 @@ describe('PluginsSettings', () => {
     await settle();
 
     expect(api.listPlugins).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a failed last run with its error in the error colour', async () => {
+    api.listPlugins.mockResolvedValue({
+      plugins: [
+        aPlugin({
+          lastRunAt: new Date().toISOString(),
+          lastRunError: 'exit 127',
+        }),
+      ],
+    });
+    await mount();
+
+    const line = row('deploys').querySelector<HTMLElement>(
+      '[data-slot="plugin-last-run"]',
+    );
+    expect(line?.textContent).toMatch(/^Failed .+: exit 127$/);
+    expect(line?.className).toContain('text-destructive');
+  });
+
+  it('lists the buttons and marks the ones that ask first', async () => {
+    api.listPlugins.mockResolvedValue({
+      plugins: [
+        aPlugin({
+          buttons: [
+            {
+              id: 'redeploy',
+              command: 'gh workflow run deploy',
+              confirm: true,
+            },
+            { id: 'smoke', command: 'gh workflow run smoke', confirm: false },
+          ],
+        }),
+      ],
+    });
+    await mount();
+
+    expect(
+      row('deploys').querySelector('[data-slot="plugin-buttons"]')?.textContent,
+    ).toBe('Buttons: redeploy (asks first) · smoke');
+  });
+
+  it('suggests the recent chat folders when adding a folder', async () => {
+    api.listPlugins.mockResolvedValue({ plugins: [aPlugin()] });
+    await mount();
+
+    await openMenu('Prod deploys');
+    await pressOption('Edit folders');
+    await act(async () => {
+      document
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"] button[aria-label="Add folder"]',
+        )
+        ?.click();
+    });
+    await settle();
+
+    expect(optionLabels().some((label) => label.includes('recent-chat'))).toBe(
+      true,
+    );
   });
 
   it('saves the folders left after a removal through updatePlugin', async () => {

@@ -71,6 +71,7 @@ const SUMMARY: PluginSummary = {
   hash: 'h2',
   path: '/Users/me/plugins/weather.plugin.yaml',
   lastRunAt: AT,
+  lastRunError: null,
 };
 
 const TITLE_VIEW = [
@@ -110,6 +111,7 @@ function blockOf(overrides: Partial<PluginBlock> = {}): PluginBlock {
     name: 'Weather',
     state: 'approved',
     folder: '/Users/me/proj',
+    folderName: 'proj',
     view: TITLE_VIEW,
     refreshMinutes: 5,
     buttons: [],
@@ -161,6 +163,7 @@ function renderBlock(
   block: PluginBlock,
   api: FakeApi,
   onAsk: (text: string) => void = vi.fn(),
+  onOpenSettings?: () => void,
 ): void {
   act(() => {
     root.render(
@@ -170,6 +173,7 @@ function renderBlock(
           api={api}
           runId="run-1"
           onAsk={onAsk}
+          onOpenSettings={onOpenSettings}
         />
       </ThreadUiMemoryContext.Provider>,
     );
@@ -373,6 +377,51 @@ describe('PluginBlockSection', () => {
     const text = onAsk.mock.calls[0]?.[0] ?? '';
     expect(text).toContain('Plugin "Weather" in /Users/me/proj');
     expect(text).toContain('"title": "Rain at noon"');
+  });
+
+  it('shows how many rows the data holds beside the name while open', async () => {
+    const api = fakeApi(async () => resultOf({ deploys: [1, 2, 3] }));
+    renderBlock(blockOf({ view: TITLE_VIEW }), api);
+    await flush();
+
+    expect(
+      container.querySelector('[data-slot="panel-section-count"]')?.textContent,
+    ).toBe('3');
+  });
+
+  it('names the repository in the folder chip of a worktree, the full path on its tooltip', async () => {
+    const api = fakeApi();
+    renderBlock(
+      blockOf({
+        folder: '/Users/me/geniro/worktrees/909f674e-a3ad',
+        folderName: 'shop',
+      }),
+      api,
+    );
+    await flush();
+
+    const chip = container.querySelector<HTMLElement>(
+      '[title="/Users/me/geniro/worktrees/909f674e-a3ad"]',
+    );
+    expect(chip?.textContent).toBe('shop');
+  });
+
+  it('opens Plugins settings from the ⋯ menu', async () => {
+    const onOpenSettings = vi.fn();
+    const api = fakeApi();
+    renderBlock(blockOf({ view: TITLE_VIEW }), api, vi.fn(), onOpenSettings);
+    await flush();
+
+    click(buttonLabelled('More for Weather'));
+    const item = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((node) => node.textContent?.trim() === 'Open settings');
+    if (item === undefined) {
+      throw new Error('no Open settings item');
+    }
+    click(item);
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   it('folds the body and remembers the fold for this thread only', async () => {

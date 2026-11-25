@@ -38,7 +38,10 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 
 - Runs `["/bin/sh", "-c", command]` through `runManagedCommand` in the folder, with the plugin's timeout, 1 MiB output kept from the head, `endGroupOnExit`, `buildChildEnv` inside the runner and ProcessRegistry label `plugin:<slug>`. No run-tag env: a plugin's command is not the run's work.
 - Single flight per (slug, folder): a second caller joins the first run.
-- The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart. Without `force`, a call within `refresh_minutes` returns it, and no run starts less than a minute after the previous one — except the refresh right after a button press, which skips the cache (and waits for a run already in flight, then runs again).
+- The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart.
+- `force` is the user's own ask — ↻, Try again, Settings' Run now (user decision): it always runs, never answered from the cache, and joins a run already in flight instead of starting a second.
+- Without `force` (the block's open and its timer), the cached result answers while it is fresh: younger than `refresh_minutes`, never under a minute (`PLUGIN_MIN_REFRESH_MS`), counted from when its run STARTED, less `PLUGIN_REFRESH_SLACK_MS` so a tick that arrives on the minute still runs. Counting from `at` (when the command ended) let a 1-minute timer run every 2 minutes.
+- The refresh right after a button press skips the cache and waits for a run already in flight, then runs again.
 - stdout must parse as JSON; otherwise the result's `error` says so, with the first 2 KB. A failed run is a result with `data: null` and its `error`, never a thrown error. stderr and error text pass `redactSecrets` and are cut to 4 KB.
 - Checks at run and press, in order: folder, approval (`PLUGIN_NOT_APPROVED`), `PLUGIN_DISABLED`.
 
@@ -71,8 +74,9 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 - `chats/plugin-blocks.tsx`, `chats/use-plugin-blocks.ts`, `chats/plugin-surface.ts`. `Chats.tsx` reads for-run on open, on `plugins_changed` and after a reconnect; `AgentsPanel` shows one section per plugin under the agent cards, folded per thread.
 - A block draws only through `SurfaceBody`, over a `SurfaceDto` that `plugin-surface.ts` fills in full; its press maps a Button event to the plugin's button. A link opens only when its resolved URL is http(s).
 - The timer runs only while the section is open and the document visible, every `refresh_minutes`. The data and its time come from the daemon's result, so a remount loses nothing.
+- Header: fold chevron, name and row count, Ask, ↻ (forced), ⋯ with Open settings (Settings → Plugins). The folder chip names the run's repository for a worktree cut from one (`folderName`), the full path on its tooltip.
 - Ask appends the block's name, folder, time and data (JSON, ≤ 8 KB) to the composer through `appendDraft`. Nothing is sent by Ask.
 - A button with `confirm: true` opens the confirm dialog with its command line, folder and plugin; the others run at once.
 - States: loading, error (with Try again), empty, file changed (last data dimmed, "Plugin file changed · not run since", Review).
 - Review shows the approved text against the current one as a diff; Approve posts `{hash}`.
-- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, Run now in a folder, Edit folders, Show file in Finder (desktop only) and Delete. Run now offers the plugin's folders, then the recent chat folders (`Settings.recentFolders`), and Choose a folder…; it is unavailable for a plugin that is off or not approved. Its result is shown in the dialog.
+- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its folders, last run (a failed one with its error, in the error colour), its buttons with the ones that ask first marked, its switch, Run now in a folder, Edit folders, Show file in Finder (desktop only) and Delete. Edit folders suggests the recent chat folders. Run now offers the plugin's folders, then the recent chat folders (`Settings.recentFolders`), and Choose a folder…; it is unavailable for a plugin that is off or not approved. Its result is shown in the dialog.

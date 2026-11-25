@@ -17,6 +17,7 @@ const block = (slug: string): PluginBlock => ({
   name: slug,
   state: 'approved',
   folder: '/repo',
+  folderName: 'repo',
   view: [],
   refreshMinutes: 5,
   buttons: [],

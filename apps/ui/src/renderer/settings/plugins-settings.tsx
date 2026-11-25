@@ -45,9 +45,13 @@ function foldersLabel(folders: string[]): string {
 }
 
 function lastRunLabel(plugin: PluginSummary): string {
-  return plugin.lastRunAt === null
-    ? 'Not run yet'
-    : `Last run ${formatRelativeTime(plugin.lastRunAt)}`;
+  if (plugin.lastRunAt === null) {
+    return 'Not run yet';
+  }
+  const when = formatRelativeTime(plugin.lastRunAt);
+  return plugin.lastRunError === null
+    ? `Last run ${when}`
+    : `Failed ${when}: ${plugin.lastRunError}`;
 }
 
 export function PluginsSettings({
@@ -164,7 +168,7 @@ export function PluginsSettings({
       <SettingsGroup
         icon={<Puzzle />}
         title="Plugins"
-        description="Panels that show a command’s result beside a chat."
+        description="Blocks in a chat’s right panel. Ask an agent to make one."
         hint="An agent makes a plugin when you ask for one in a chat. Its command runs only once you approve it in that chat’s Plugins block, and only in the folders you pick.">
         <SettingsPanel>
           {plugins === null ? null : plugins.length === 0 ? (
@@ -199,6 +203,7 @@ export function PluginsSettings({
       {editing === null ? null : (
         <FoldersDialog
           plugin={editing}
+          recentFolders={recentFolders}
           onSave={(folders) => apply(editing, { folders })}
           onClose={() => setEditing(null)}
         />
@@ -325,9 +330,30 @@ function PluginRow({
           title={plugin.folders.join('\n') || undefined}>
           {foldersLabel(plugin.folders)}
         </span>
-        <span className="text-xs text-muted-foreground">
+        <span
+          data-slot="plugin-last-run"
+          className={cn(
+            'text-xs break-words',
+            plugin.lastRunError === null
+              ? 'text-muted-foreground'
+              : 'text-destructive',
+          )}>
           {lastRunLabel(plugin)}
         </span>
+        {plugin.buttons.length === 0 ? null : (
+          <span
+            data-slot="plugin-buttons"
+            className="text-xs break-words text-muted-foreground">
+            {'Buttons: '}
+            {plugin.buttons.map((button, index) => (
+              <span key={button.id}>
+                {index === 0 ? null : ' · '}
+                {button.id}
+                {button.confirm ? ' (asks first)' : null}
+              </span>
+            ))}
+          </span>
+        )}
         {plugin.state === 'changed' ? (
           <span className="text-xs text-muted-foreground">
             Review it in a chat’s Plugins block.
@@ -370,10 +396,12 @@ function PluginRow({
 
 function FoldersDialog({
   plugin,
+  recentFolders,
   onSave,
   onClose,
 }: {
   plugin: PluginSummary;
+  recentFolders: string[];
   onSave: (folders: string[]) => Promise<string | null>;
   onClose: () => void;
 }): React.JSX.Element {
@@ -442,7 +470,7 @@ function FoldersDialog({
         )}
         <DirectorySelect
           value={null}
-          recents={[]}
+          recents={recentFolders.filter((folder) => !folders.includes(folder))}
           placeholder="Add folder"
           searchPlaceholder="Search folders"
           browseLabel="Choose a folder…"

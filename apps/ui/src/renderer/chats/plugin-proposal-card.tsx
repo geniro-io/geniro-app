@@ -6,6 +6,7 @@ import { Card } from '../components/ui/card';
 import { cn } from '../components/ui/utils';
 import { SurfaceBody } from './a2ui-components';
 import { DiffView } from './diff-view';
+import { shortenPath } from './directory-select';
 import { SAVE_PLUGIN } from './geniro-tool';
 import {
   opensPluginLink,
@@ -159,12 +160,17 @@ export function PluginProposalCard({
       <div className="flex items-center gap-2">
         <Puzzle aria-hidden className="size-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          {card.summary}
+          {card.oldText === null
+            ? `Save plugin “${card.name}”?`
+            : `Save changes to plugin “${card.name}”?`}
         </span>
         <Badge variant="secondary" className="shrink-0">
           {SAVE_PLUGIN}
         </Badge>
       </div>
+      {card.summary === '' ? null : (
+        <p className="m-0 text-xs text-muted-foreground">{card.summary}</p>
+      )}
       <HazardWarning hazards={gate.hazards} subject="this plugin" />
       <div className="flex flex-col gap-1.5">
         <Row label="Runs">
@@ -182,21 +188,28 @@ export function PluginProposalCard({
             </button>
           ) : null}
         </Row>
-        <Row label="Runs in">
-          the open chat’s folder, at most {card.timeoutSeconds} s
+        <Row label="In folder">
+          the open chat’s folder, stopped after {card.timeoutSeconds} s
         </Row>
-        <Row label="Shows in">
+        <Row label="Shown in">
           {card.folders.length === 0 ? (
-            'every folder'
+            'every chat'
           ) : (
-            <ul className="m-0 flex list-none flex-col p-0 font-mono break-all">
+            <ul className="m-0 flex list-none flex-col p-0">
               {card.folders.map((folder) => (
-                <li key={folder}>{folder}</li>
+                <li key={folder} title={folder}>
+                  chats under{' '}
+                  <code className="font-mono break-all">
+                    {shortenPath(folder)}
+                  </code>
+                </li>
               ))}
             </ul>
           )}
         </Row>
-        <Row label="Refreshes">every {card.refreshMinutes} min while shown</Row>
+        <Row label="Refresh">
+          on open, every {card.refreshMinutes} min while visible, ↻
+        </Row>
         {card.buttons.length === 0 ? null : (
           <Row label="Buttons">
             <ul className="m-0 flex list-none flex-col gap-1 p-0">

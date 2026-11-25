@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { GeniroApi } from '../../shared/contracts';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import {
   type LocalImageLoader,
@@ -205,6 +207,110 @@ describe('an image an agent referenced from its own markdown', () => {
   });
 });
 
+describe('a markdown image naming a file that is not a picture', () => {
+  let showInFinder: ReturnType<typeof vi.fn<GeniroApi['showInFinder']>>;
+  let preload: GeniroApi;
+
+  beforeEach(() => {
+    preload = window.geniro;
+    Object.defineProperty(navigator, 'userActivation', {
+      configurable: true,
+      get: () => ({ isActive: true }),
+    });
+    showInFinder = vi.fn<GeniroApi['showInFinder']>(() =>
+      Promise.resolve({ shown: 'revealed' }),
+    );
+    window.geniro = createPreloadStub({ showInFinder });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'userActivation');
+    window.geniro = preload;
+  });
+
+  const link = (): HTMLAnchorElement | null => container.querySelector('a');
+
+  async function press(anchor: HTMLAnchorElement): Promise<void> {
+    await act(async () => {
+      anchor.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+      );
+      await Promise.resolve();
+    });
+  }
+
+  it('links an absolute path to the file, shown in Finder, instead of reporting it unreadable', async () => {
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![spec](/tmp/plan-pages/dynamic-workflows.html)', load);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('could not read');
+    expect(unavailable()).toBeNull();
+    expect(link()?.textContent).toBe('spec');
+    expect(link()?.title).toBe('Show in Finder');
+
+    await press(link()!);
+
+    expect(showInFinder.mock.calls).toEqual([
+      ['/tmp/plan-pages/dynamic-workflows.html'],
+    ]);
+  });
+
+  it('names the link by its path when the image has no alt text', async () => {
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![](/tmp/plan-pages/notes)', load);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(link()?.textContent).toBe('/tmp/plan-pages/notes');
+  });
+
+  it('shows a path with a space by the name the file really has', async () => {
+    await render(
+      '![plan](/Users/me/Library/Application Support/plan.html)',
+      vi.fn(async () => 'data:image/png;base64,AAA'),
+    );
+
+    await press(link()!);
+
+    expect(showInFinder.mock.calls).toEqual([
+      ['/Users/me/Library/Application Support/plan.html'],
+    ]);
+  });
+
+  it('says a relative path is not a picture rather than that it could not be read', async () => {
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![page](out/page.html)', load);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(link()).toBeNull();
+    expect(unavailable()).toContain('not a picture');
+    expect(unavailable()).toContain('out/page.html');
+    expect(container.textContent).not.toContain('could not read');
+  });
+
+  it('does not link a path Finder cannot be given', async () => {
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![share](//host/share/page.html)', load);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(link()).toBeNull();
+    expect(unavailable()).toContain('not a picture');
+  });
+
+  it('still loads a picture whose extension is written in capitals', async () => {
+    const load = vi.fn(async () => 'data:image/png;base64,CAP');
+
+    await render('![shot](/tmp/shots/SHOT.PNG)', load);
+
+    expect(load).toHaveBeenCalledWith('/tmp/shots/SHOT.PNG');
+    expect(src()).toBe('data:image/png;base64,CAP');
+  });
+});
+
 describe('a chat image takes a line of its own', () => {
   // jsdom computes no layout, so the classes that decide whether a box sits in
   // the text line or on its own line are the fact pinned here.
@@ -240,6 +346,21 @@ describe('a chat image takes a line of its own', () => {
     const notice = classTokens('[data-slot="markdown-image-unavailable"]');
     expect(notice).toContain('block');
     expect(notice).not.toContain('inline-block');
+  });
+
+  it('keeps a file link a block box, off the text the image sat between', async () => {
+    await render(
+      'Plan page attached:\n![spec](/tmp/plan-pages/page.html)\nScreenshot:',
+      vi.fn(async () => 'data:image/png;base64,AAA'),
+    );
+
+    const box = classTokens('[data-slot="markdown-image-file"]');
+    expect(box).toContain('block');
+    expect(box).not.toContain('inline-block');
+    expect(
+      container.querySelector('[data-slot="markdown-image-file"] a')
+        ?.textContent,
+    ).toBe('spec');
   });
 
   it('keeps a read that failed a block box', async () => {

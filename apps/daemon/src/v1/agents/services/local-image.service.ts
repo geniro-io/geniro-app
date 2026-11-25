@@ -11,7 +11,13 @@ import {
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
 
-/** File extension → the media type a data URL must declare for it. */
+/**
+ * File extension → the media type a data URL must declare for it.
+ *
+ * TWIN PARSER: `PICTURE_EXTENSIONS` in
+ * `apps/ui/src/renderer/chats/markdown-paths.ts`, which links any other file
+ * instead of asking for it here.
+ */
 const IMAGE_EXTENSIONS: Record<string, AttachmentMediaType> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

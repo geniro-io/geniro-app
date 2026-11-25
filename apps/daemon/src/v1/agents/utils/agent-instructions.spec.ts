@@ -136,6 +136,14 @@ describe('GENIRO_UI_PREAMBLE', () => {
     expect(GENIRO_UI_PREAMBLE).toContain('![alt](/full/path/to/file.png)');
   });
 
+  it('keeps a file that is not a picture out of image markdown, and says how to name it', () => {
+    const imageBullet = lineStartingWith('- Images');
+    expect(imageBullet).toContain(
+      'Only a picture file (png, jpg, gif or webp) goes in `![]()`',
+    );
+    expect(imageBullet).toContain('[name](/full/path/to/page.html)');
+  });
+
   it('asks for the FULL path, and says what a relative one is measured against', () => {
     // REPORTED against a real transcript: an agent embedded
     // `out/ci723-assignee-rail.png` and the row drew `could not read` it. The

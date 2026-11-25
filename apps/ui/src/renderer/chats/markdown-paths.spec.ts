@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { localPathOf, wrapSpacedImagePaths } from './markdown-paths';
+import {
+  localPathOf,
+  namesPicture,
+  PICTURE_EXTENSIONS,
+  wrapSpacedImagePaths,
+} from './markdown-paths';
 
 const SPACED = '/Users/me/Library/Application Support/Geniro/shot.png';
 
@@ -116,5 +124,33 @@ describe('localPathOf', () => {
     expect(localPathOf('data:image/png;base64,aGk%3D')).toBe(
       'data:image/png;base64,aGk%3D',
     );
+  });
+});
+
+describe('namesPicture', () => {
+  it('reads the extension of the file name, in any case', () => {
+    expect(namesPicture('/tmp/shots/a.png')).toBe(true);
+    expect(namesPicture('shots/a.JPEG')).toBe(true);
+    expect(namesPicture('/tmp/plan-pages/page.html')).toBe(false);
+  });
+
+  it('knows exactly the extensions the daemon image route serves', () => {
+    const daemon = readFileSync(
+      join(
+        __dirname,
+        '../../../../daemon/src/v1/agents/services/local-image.service.ts',
+      ),
+      'utf8',
+    );
+    const map =
+      /const IMAGE_EXTENSIONS[^{]*\{([^}]*)\}/.exec(daemon)?.[1] ?? '';
+    const served = [...map.matchAll(/'(\.[a-z]+)':/g)].map((m) => m[1]);
+    expect(served.length).toBeGreaterThan(0);
+    expect([...PICTURE_EXTENSIONS].sort()).toEqual(served.sort());
+  });
+
+  it('takes a dot in a folder name or a leading dot for no extension', () => {
+    expect(namesPicture('/tmp/shots.png/notes')).toBe(false);
+    expect(namesPicture('/tmp/.png')).toBe(false);
   });
 });

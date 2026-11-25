@@ -12631,11 +12631,11 @@ export interface PluginRunResult {
      */
     at: string;
     /**
-     * The command's stdout parsed as JSON, or null when it failed
-     * @type {}
+     * 
+     * @type {any}
      * @memberof PluginRunResult
      */
-    data:  | null;
+    data: any | null;
     /**
      * 
      * @type {string}

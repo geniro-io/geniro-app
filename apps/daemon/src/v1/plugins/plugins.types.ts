@@ -135,7 +135,6 @@ export const PluginRunResultSchema = z
     at: z.string().describe('When the command finished (ISO 8601)'),
     data: z
       .unknown()
-      .nullable()
       .describe("The command's stdout parsed as JSON, or null when it failed"),
     error: z.string().nullable(),
     exitCode: z.number().int().nullable(),

@@ -214,7 +214,7 @@ export function PluginBlockSection({
     void press(button.id);
   };
 
-  const data = result?.data ?? null;
+  const data: unknown = result?.data ?? null;
   const surface = useMemo(
     () => pluginSurfaceOf(block.slug, block.view, data),
     [block.slug, block.view, data],

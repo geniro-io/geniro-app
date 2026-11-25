@@ -26,7 +26,6 @@ import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 const AT = '2026-11-25T10:00:00.000Z';
 
-/** The generated type narrows `data` to null; the wire carries any JSON. */
 function resultOf(
   data: unknown,
   overrides: Partial<PluginRunResult> = {},
@@ -38,7 +37,7 @@ function resultOf(
     exitCode: 0,
     stderrTail: '',
     ...overrides,
-  } as PluginRunResult;
+  };
 }
 
 const RESULT = resultOf({ title: 'Rain at noon' });

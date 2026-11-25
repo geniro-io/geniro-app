@@ -188,7 +188,9 @@ export class PluginRunnerService {
     }
     const running = this.runData(slug, plugin, place.folder)
       .then((result) => {
-        this.cache.set(key, { result, hash: stored.hash });
+        if (this.inFlight.get(key) === running) {
+          this.cache.set(key, { result, hash: stored.hash });
+        }
         return result;
       })
       .finally(() => {
@@ -310,9 +312,12 @@ export class PluginRunnerService {
 
   /** Forget every result of `slug`, as after a delete. */
   forget(slug: string): void {
-    for (const key of [...this.cache.keys()]) {
-      if (key.startsWith(keyOf(slug, ''))) {
-        this.cache.delete(key);
+    const prefix = keyOf(slug, '');
+    for (const map of [this.cache, this.inFlight]) {
+      for (const key of [...map.keys()]) {
+        if (key.startsWith(prefix)) {
+          map.delete(key);
+        }
       }
     }
   }

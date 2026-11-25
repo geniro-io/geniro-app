@@ -475,4 +475,18 @@ describe('PluginRunnerService', () => {
       );
     });
   });
+
+  it('keeps no result from a run that was in flight when its plugin was forgotten', async () => {
+    const gate = deferred<ManagedCommandResult>();
+    respond = () => gate.promise;
+    await approvedPlugin('deploys');
+    const pending = runner.run('deploys', 'run-1');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    runner.forget('deploys');
+    gate.resolve(result());
+    await pending;
+
+    expect((await runner.blocksForRun('run-1'))[0]?.result).toBeNull();
+  });
 });

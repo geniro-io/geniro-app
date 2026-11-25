@@ -2583,7 +2583,11 @@ export class TeamExecutorService
         severity: 'error',
         message: `This chat is now a team, but its first pass could not start (${reason}). Your next message starts it.`,
         chatTeam: { phase: 'started' },
-      }).catch(() => undefined);
+      }).catch((noteError: unknown) => {
+        this.logger.error(
+          `run ${runId}: the note that its team did not start was not written: ${noteError instanceof Error ? noteError.message : String(noteError)}`,
+        );
+      });
       return null;
     }
   }

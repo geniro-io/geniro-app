@@ -507,14 +507,14 @@ export class ChatTeamService {
         return false;
       });
     if (!flipped) {
-      const failed = ['the chat could not become a team'];
+      const cause = 'the chat could not become a team';
       await cards.deliverOwnedCardVerdict(
         runId,
         requestId,
         true,
-        `(Not started — ${failed[0]}. Propose the team again with run_team.${noted})`,
+        `(Not started — ${cause}. Propose the team again with run_team.${noted})`,
         answer,
-        { kind: 'not-started', causes: failed },
+        { kind: 'not-started', causes: [cause] },
       );
       return;
     }

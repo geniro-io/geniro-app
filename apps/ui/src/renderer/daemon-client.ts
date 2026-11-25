@@ -2095,9 +2095,7 @@ export class DaemonClient {
   }
 
   /** Subscribe to every plugin file geniro writes, client-wide. */
-  onPluginsChanged(
-    listener: (event: PluginsChangedEvent) => void,
-  ): () => void {
+  onPluginsChanged(listener: (event: PluginsChangedEvent) => void): () => void {
     this.pluginsChangedListeners.add(listener);
     return () => {
       this.pluginsChangedListeners.delete(listener);

@@ -8,6 +8,7 @@ import {
   ListChecks,
   ListPlus,
   PanelsTopLeft,
+  Puzzle,
   Sparkles,
   Table2,
   UsersRound as TeamIcon,
@@ -64,6 +65,7 @@ const KIND_META: Record<
   },
   patch: { icon: FileDiff, noun: 'a change', label: 'Proposed change' },
   plan: { icon: ListChecks, noun: 'a plan', label: 'Proposed plan' },
+  plugin: { icon: Puzzle, noun: 'a plugin', label: 'Proposed plugin' },
   team: { icon: TeamIcon, noun: 'a team', label: 'Proposed team' },
   'thread-start': { icon: ListPlus, noun: 'a new thread', label: 'New thread' },
 };
@@ -190,6 +192,7 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
         </div>
       );
     case 'surface':
+    case 'plugin':
       return (
         <div className="flex flex-col gap-1.5">
           <Bar className="h-3 w-1/3" />

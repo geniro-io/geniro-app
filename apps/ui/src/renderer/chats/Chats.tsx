@@ -261,6 +261,7 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
+import { PluginBlocks } from './plugin-blocks';
 import {
   ProgressChip,
   ProgressDialog,
@@ -452,6 +453,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import type { TaskReader } from './use-live-task';
 import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
 import { ownPoolOf, useNodeDurableReadingsState } from './use-node-context';
+import { type PluginBlocksEvents, usePluginBlocks } from './use-plugin-blocks';
 import { useReviewComments } from './use-review-comments';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunOutcomes } from './use-run-outcomes';
@@ -7273,6 +7275,18 @@ export function Chats({
    * when a note arrives: a note is append-only, so that is the only way the
    * list moves.
    */
+  const pluginEvents = useMemo<PluginBlocksEvents>(
+    () => ({
+      onPluginsChanged: (listener) => client.onPluginsChanged(() => listener()),
+      onReconnect: (listener) => client.onReconnect(() => listener()),
+    }),
+    [client],
+  );
+  const pluginBlocks = usePluginBlocks(
+    apis.plugins,
+    pluginEvents,
+    activeRun?.id ?? null,
+  );
   const { notes: teamNotes } = useRunTeamNotes(
     chatApi,
     activeRun?.teamId !== null && activeRun?.teamId !== undefined
@@ -11738,6 +11752,20 @@ export function Chats({
                         // servers unprompted. That is the very defect the disclosure exists
                         // to prevent, merely moved to the second chat.
                         key={activeRun?.id ?? 'no-run'}
+                        pluginBlocks={
+                          activeRun ? (
+                            <PluginBlocks
+                              blocks={pluginBlocks}
+                              api={apis.plugins}
+                              runId={activeRun.id}
+                              onAsk={(text) =>
+                                setInput((current) =>
+                                  appendDraft(current, text),
+                                )
+                              }
+                            />
+                          ) : null
+                        }
                         agents={agents}
                         nodes={nodeMeta}
                         // Both act on the WHOLE conversation, which is what the

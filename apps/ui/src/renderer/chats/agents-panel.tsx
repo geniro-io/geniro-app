@@ -1956,6 +1956,7 @@ export function AgentsPanel({
   onOpenThread,
   onOpenSubagent,
   onSearch,
+  pluginBlocks,
   timeline,
   browserRunId,
   onOpenFolderTerminal,
@@ -2184,6 +2185,12 @@ export function AgentsPanel({
    */
   /** Find a message inside this conversation. */
   onSearch?: () => void;
+  /**
+   * The thread's plugin blocks, drawn as their own sections under the agent
+   * cards. A node rather than data: the owner holds the folder, the reads and
+   * the composer they reach, none of which this column is told.
+   */
+  pluginBlocks?: React.ReactNode;
   /**
    * The conversation timeline, as DATA rather than a node.
    *
@@ -3251,6 +3258,7 @@ export function AgentsPanel({
           between that heading and its first card read as part of the list —
           "agents, then artifact, then agent". Below the scroller and outside
           it, so it keeps its place while the agent list scrolls. */}
+        {pluginBlocks}
         {publishedArtifacts.length > 0 ? (
           <PanelSection label="Pages" count={publishedArtifacts.length}>
             <ul className="m-0 flex list-none flex-col gap-1 p-0">

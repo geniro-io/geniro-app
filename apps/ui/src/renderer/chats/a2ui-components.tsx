@@ -210,6 +210,7 @@ interface SurfaceRender {
   touched: ReadonlySet<string>;
   touch: (pointers: readonly string[]) => void;
   inert: boolean;
+  opensLink: (url: string) => boolean;
 }
 
 const RenderContext = createContext<SurfaceRender | null>(null);
@@ -218,10 +219,13 @@ export function SurfaceBody({
   surface,
   state,
   inert,
+  opensLink = () => true,
 }: {
   surface: SurfaceDto;
   state: SurfaceState;
   inert: boolean;
+  /** Which resolved link a Button may open; a refused one draws disabled. */
+  opensLink?: (url: string) => boolean;
 }): React.JSX.Element {
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const byId = new Map(
@@ -236,6 +240,7 @@ export function SurfaceBody({
     byId,
     touched,
     inert,
+    opensLink,
     touch: (pointers) =>
       setTouched((current) => new Set([...current, ...pointers])),
   };
@@ -981,7 +986,7 @@ function ButtonView({
       typeof opened === 'object' && opened !== null && 'url' in opened
         ? String(opened.url)
         : null;
-    return url === null ? (
+    return url === null || !render.opensLink(url) ? (
       <Button variant={variant} size="sm" disabled>
         {label}
       </Button>

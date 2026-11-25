@@ -109,6 +109,7 @@ import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
 import { MilestoneBroker } from '../../agents/services/milestone.broker';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
@@ -174,6 +175,7 @@ import {
   type HealthProblem,
   type InstructionBlock,
   type Team,
+  type TeamMember,
 } from '../teams.types';
 import { probeCallEndpoint } from '../utils/call-endpoint-self-check';
 import {
@@ -1282,6 +1284,8 @@ function setup(
     projectInstructionCards?: ProjectInstructionsBroker;
     /** Who writes the run's goals, when a test reads it. */
     goalWriters?: GoalWritersBroker;
+    /** The lead's `save_plugin` gate, when a test reads it. */
+    pluginCards?: PluginProposalBroker;
     /** Wakes for members' commands that end after their turn, when a test drives them. */
     commandEndWakes?: CommandEndWakeService;
     /** geniro's own `ask_user_question`, when a test drives it. */
@@ -1846,6 +1850,7 @@ function setup(
     milestones,
     surfaceSinks,
     surfaces,
+    opts.pluginCards,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -8390,25 +8395,29 @@ describe('TeamExecutorService — agent calls', () => {
   });
 
   describe("the lead's team and project tools", () => {
-    function leadSetup(cursorLead = false) {
+    function leadSetup(lead: Partial<TeamMember> = {}) {
       const teamProposals = new TeamProposalBroker();
       const projectInstructionCards = new ProjectInstructionsBroker();
       const goalWriters = new GoalWritersBroker();
+      const pluginCards = new PluginProposalBroker();
       const harness = setup(4870, {
         teamProposals,
         projectInstructionCards,
         goalWriters,
+        pluginCards,
       });
       const raised: string[] = [];
       harness.service.useLeadProjectCards(async (runId) => {
         raised.push(runId);
         return { status: 'posted' };
       });
+      const raisedPlugins: string[] = [];
+      harness.service.useLeadPluginCards(async (runId) => {
+        raisedPlugins.push(runId);
+        return { status: 'posted' };
+      });
       const team = teamOf(
-        [
-          member('a', cursorLead ? { agent: 'cursor-agent' } : {}),
-          member('b', { name: 'Reviewer' }),
-        ],
+        [member('a', lead), member('b', { name: 'Reviewer' })],
         { name: 'lead' },
       );
       return {
@@ -8416,10 +8425,38 @@ describe('TeamExecutorService — agent calls', () => {
         teamProposals,
         projectInstructionCards,
         goalWriters,
+        pluginCards,
         raised,
+        raisedPlugins,
         team,
       };
     }
+
+    const PROJECT_CHANGE = {
+      projectId: 'p1',
+      project: 'P',
+      previous: null,
+      next: 'x',
+      blocks: [],
+      baseRevision: 0,
+      ids: [],
+      cardSeq: null,
+    };
+
+    const PLUGIN = {
+      slug: 'ci',
+      name: 'CI',
+      text: 'name: CI',
+      previousText: null,
+      baseHash: null,
+      command: 'gh run list',
+      folders: [],
+      refreshMinutes: 5,
+      timeoutSeconds: 30,
+      buttons: [],
+      view: [],
+      sample: null,
+    };
 
     it('offers them to the lead in its own conversation only, never another member, and drops them with the run', async () => {
       const { service, teamProposals, projectInstructionCards, raised, team } =
@@ -8442,16 +8479,7 @@ describe('TeamExecutorService — agent calls', () => {
       expect(teamProposals.canPropose(run.id, 'b', null)).toBe(false);
       expect(projectInstructionCards.canPropose(run.id, 'b', null)).toBe(false);
 
-      await projectInstructionCards.propose(run.id, 'a', {
-        projectId: 'p1',
-        project: 'P',
-        previous: null,
-        next: 'x',
-        blocks: [],
-        baseRevision: 0,
-        ids: [],
-        cardSeq: null,
-      });
+      await projectInstructionCards.propose(run.id, 'a', PROJECT_CHANGE);
       expect(raised).toEqual([run.id]);
 
       await service.deleteRun(run.id);
@@ -8481,20 +8509,57 @@ describe('TeamExecutorService — agent calls', () => {
       expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(true);
     });
 
-    it('withholds save_project_instructions from a lead on a CLI that will not hold a call open, and keeps the team tools', async () => {
-      const { service, teamProposals, projectInstructionCards, team } =
-        leadSetup(true);
-      const run = await service.startRun({
-        slug: 'lead',
-        team,
-        cwd: dir,
-        prompt: 'go',
-      });
-      await drain();
+    it.each([
+      [
+        'a lead on a CLI that will not hold a call open',
+        { agent: 'cursor-agent' as const },
+      ],
+      [
+        'a claude lead whose pool falls back to one',
+        { pool: [{ agent: 'cursor-agent' as const }] },
+      ],
+    ])(
+      'offers save_project_instructions and save_plugin to %s, each raising its deferred team card',
+      async (_, lead) => {
+        const {
+          service,
+          teamProposals,
+          projectInstructionCards,
+          pluginCards,
+          raised,
+          raisedPlugins,
+          team,
+        } = leadSetup(lead);
+        const run = await service.startRun({
+          slug: 'lead',
+          team,
+          cwd: dir,
+          prompt: 'go',
+        });
+        await drain();
 
-      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
-      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
-    });
+        expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
+        expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(
+          true,
+        );
+        expect(projectInstructionCards.answersAtOnce(run.id, 'a')).toBe(true);
+        expect(pluginCards.canPropose(run.id, 'a', null)).toBe(true);
+        expect(pluginCards.answersAtOnce(run.id, 'a')).toBe(true);
+        expect(projectInstructionCards.canPropose(run.id, 'b', null)).toBe(
+          false,
+        );
+        expect(pluginCards.canPropose(run.id, 'a', 'call-1')).toBe(false);
+
+        await expect(
+          projectInstructionCards.propose(run.id, 'a', PROJECT_CHANGE),
+        ).resolves.toEqual({ status: 'posted' });
+        await expect(pluginCards.propose(run.id, 'a', PLUGIN)).resolves.toEqual(
+          { status: 'posted' },
+        );
+        expect(raised).toEqual([run.id]);
+        expect(raisedPlugins).toEqual([run.id]);
+      },
+    );
 
     it("lets only the lead write the run's goals, in its own conversation while its turn runs", async () => {
       const { service, claude, goalWriters, team } = leadSetup();

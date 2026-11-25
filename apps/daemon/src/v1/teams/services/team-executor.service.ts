@@ -3321,8 +3321,6 @@ export class TeamExecutorService
    * user talks to; between turns it is refused as an idle chat's is. Every
    * member gets a goal writer's sink on the same terms, so only the lead
    * writes the run's goals and the rest are known as the team's.
-   * The project and plugin tools also need every pool member on a CLI that
-   * holds a call open; a cursor lead is not offered them yet.
    */
   private registerLeadCardSinks(
     runId: string,
@@ -3355,20 +3353,7 @@ export class TeamExecutorService
         );
       }
       const propose = this.leadProjectCards;
-      const holdsCallsOpen = Array.from(
-        { length: poolSize(node) },
-        (_, index) => (index === 0 ? node : poolMemberNode(node, index + 1)),
-      ).every(
-        (member) =>
-          member !== null &&
-          this.adapterFor(member.agent).getConfig()
-            .hostQuestionDeferredReason === null,
-      );
-      if (
-        this.projectInstructionCards !== undefined &&
-        propose !== null &&
-        holdsCallsOpen
-      ) {
+      if (this.projectInstructionCards !== undefined && propose !== null) {
         disposers.push(
           this.projectInstructionCards.register(
             runId,
@@ -3379,11 +3364,7 @@ export class TeamExecutorService
         );
       }
       const proposePlugin = this.leadPluginCards;
-      if (
-        this.pluginCards !== undefined &&
-        proposePlugin !== null &&
-        holdsCallsOpen
-      ) {
+      if (this.pluginCards !== undefined && proposePlugin !== null) {
         disposers.push(
           this.pluginCards.register(
             runId,

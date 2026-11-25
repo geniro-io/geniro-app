@@ -60,6 +60,10 @@ export const TeamWaitingOnYou: Story = {
   },
 };
 
+export const Compact: Story = {
+  args: { compact: true },
+};
+
 export const UnknownThread: Story = {
   args: {
     identity: bareThreadIdentity('A thread this view does not know'),

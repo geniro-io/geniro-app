@@ -58,6 +58,18 @@ export const MemberEmoji: Story = {
   },
 };
 
+export const MemberSmall: Story = {
+  args: {
+    size: 'sm',
+    look: {
+      kind: 'member',
+      name: 'Senior Engineer',
+      avatar: { kind: 'initials', value: 'SE' },
+      colorKey: 'senior',
+    },
+  },
+};
+
 export const Manager: Story = {
   args: { look: { kind: 'manager' } },
 };

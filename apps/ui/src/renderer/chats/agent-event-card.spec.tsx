@@ -17,6 +17,7 @@ import {
 import { RevealCallContext } from './call-block';
 import type { MonitorEnd, MonitorEntry } from './monitor-payload';
 import { ThreadEventCard } from './thread-event-card';
+import { ThreadOpenContext } from './thread-title';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -407,6 +408,66 @@ describe('MemberEventCard', () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it('draws Open call on the event line, not in a row of its own at the foot', () => {
+    const el = render(
+      <RevealCallContext.Provider value={() => vi.fn()}>
+        <MemberEventCard
+          kind="finished"
+          name="Researcher"
+          memberId="m-researcher"
+          callId="call-7"
+        />
+      </RevealCallContext.Provider>,
+    );
+    const top = card(el).firstElementChild as HTMLElement;
+    const open = el.querySelector<HTMLElement>(
+      '[data-slot="agent-event-open-call"]',
+    );
+    expect(top.dataset.slot).toBe('agent-event-top');
+    expect(top.contains(open)).toBe(true);
+    expect(card(el).lastElementChild?.contains(open)).toBe(false);
+    expect(
+      el.querySelectorAll('[data-slot="agent-event-actions"]'),
+    ).toHaveLength(1);
+  });
+
+  it('heads the event on one line: a small face, the name, then its labels on the same line', () => {
+    const el = render(
+      <AgentIdentityContext.Provider value={[CLAUDE]}>
+        <MemberEventCard
+          kind="finished"
+          name="Researcher"
+          memberId="m-researcher"
+          callId="call-7"
+          meta={{ name: 'Researcher', kind: 'agent', agent: 'claude' }}
+        />
+      </AgentIdentityContext.Provider>,
+    );
+    const title = el.querySelector('[data-slot="agent-event-title"]');
+    const labels = el.querySelector('[data-slot="agent-event-labels"]');
+    expect(labels).not.toBeNull();
+    expect(labels?.parentElement).toBe(title?.parentElement);
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="agent-event-face"]')?.dataset
+        .size,
+    ).toBe('sm');
+  });
+
+  it('gives the member tail its full text as a title, for when the action cuts it', () => {
+    const el = render(
+      <MemberEventCard
+        kind="finished"
+        name="Researcher"
+        memberId="m-researcher"
+        callId="call-7"
+        tail="told Manager mid-turn"
+      />,
+    );
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="agent-event-member"]')?.title,
+    ).toBe('told Manager mid-turn');
+  });
+
   it('draws no open button for an event that belongs to no call', () => {
     const el = render(
       <RevealCallContext.Provider value={() => vi.fn()}>
@@ -715,6 +776,47 @@ describe('ThreadEventCard', () => {
     );
     expect(el.querySelector('[data-slot="thread-event-card"]')).not.toBeNull();
     expect(el.querySelector('[data-slot="thread-event-status"]')).toBeNull();
+  });
+});
+
+describe('compact event cards', () => {
+  it('pads a card with a head at py-2 with gap-1.5, and keeps the one-line monitor card at py-1.5', () => {
+    const headed = render(
+      <MemberEventCard
+        kind="finished"
+        name="Researcher"
+        memberId="m-researcher"
+        callId="call-7"
+      />,
+    );
+    expect(card(headed).classList.contains('py-2')).toBe(true);
+    expect(card(headed).classList.contains('gap-1.5')).toBe(true);
+
+    const folded = render(
+      <MonitorEventCard
+        entry={monitor()}
+        woke
+        agent={null}
+        memoryKey="monitor-compact"
+      />,
+    );
+    expect(card(folded, 'monitor-event').classList.contains('py-1.5')).toBe(
+      true,
+    );
+  });
+
+  it('draws Open chat on the event line of a finished thread', () => {
+    const el = render(
+      <ThreadOpenContext.Provider value={vi.fn()}>
+        <ThreadEventCard kind="done" runId="run-9" title="Billing fixes" />
+      </ThreadOpenContext.Provider>,
+    );
+    const top = card(el, 'thread-event').firstElementChild as HTMLElement;
+    const open = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-open"]',
+    );
+    expect(top.dataset.slot).toBe('thread-event-top');
+    expect(top.contains(open)).toBe(true);
   });
 });
 

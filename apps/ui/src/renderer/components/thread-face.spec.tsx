@@ -3,7 +3,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ThreadFace, type ThreadFaceLook } from './thread-face';
+import {
+  ThreadFace,
+  type ThreadFaceLook,
+  type ThreadFaceSize,
+} from './thread-face';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -23,8 +27,10 @@ afterEach(() => {
   container.remove();
 });
 
-function faceOf(look: ThreadFaceLook): HTMLElement {
-  act(() => root.render(<ThreadFace look={look} slot="thread-face" />));
+function faceOf(look: ThreadFaceLook, size?: ThreadFaceSize): HTMLElement {
+  act(() =>
+    root.render(<ThreadFace look={look} slot="thread-face" size={size} />),
+  );
   const face = container.querySelector<HTMLElement>(
     '[data-slot="thread-face"]',
   );
@@ -46,6 +52,44 @@ describe('ThreadFace', () => {
     expect(face.dataset.face).toBe('member');
     expect(face.title).toBe('Senior Engineer');
     expect(face.textContent).toBe('SE');
+  });
+
+  it('draws the default face at size md', () => {
+    expect(faceOf({ kind: 'monitor' }).dataset.size).toBe('md');
+  });
+
+  it('draws a member at size sm as a 24px face', () => {
+    const face = faceOf(
+      {
+        kind: 'member',
+        name: 'Senior Engineer',
+        avatar: { kind: 'initials', value: 'SE' },
+        colorKey: 'senior',
+      },
+      'sm',
+    );
+
+    expect(face.dataset.size).toBe('sm');
+    expect(face.className).toContain('size-6');
+    expect(face.className).not.toContain('size-8');
+  });
+
+  it('draws a team at size sm in a 24px row', () => {
+    const face = faceOf(
+      {
+        kind: 'team',
+        total: 3,
+        people: [
+          { key: 'lead', name: 'Lead' },
+          { key: 'senior', name: 'Senior Engineer' },
+        ],
+      },
+      'sm',
+    );
+
+    expect(face.dataset.face).toBe('team');
+    expect(face.dataset.size).toBe('sm');
+    expect(face.className).toContain('h-6');
   });
 
   it('draws a monitor as a glyph in a muted circle', () => {

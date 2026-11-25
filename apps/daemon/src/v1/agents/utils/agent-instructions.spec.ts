@@ -191,6 +191,17 @@ describe('GENIRO_UI_PREAMBLE', () => {
 });
 
 describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
+  it('sends a request for a team to do a job now to run_team, and only a team to save to propose_team', () => {
+    const lineOf = (name: string) =>
+      toolsSection()
+        .split('\n')
+        .find((line) => line.includes(`\`${name}\`:`)) ?? '';
+
+    expect(lineOf(HOST_RUN_TEAM_TOOL)).toContain('собери команду');
+    expect(lineOf(HOST_RUN_TEAM_TOOL)).toContain('in plan mode too');
+    expect(lineOf(HOST_PROPOSE_TEAM_TOOL)).toContain('SAVE');
+  });
+
   it('names every tool it points to by its wire name', () => {
     // claude lists MCP tools by name only, so this section is the one place
     // in its context that says when each is the move; a name that drifted

@@ -41,24 +41,12 @@ export class RunTeamTool extends BaseMcpTool {
     return this.gate.runTeamFormOf(runId, memberId, conversationId) !== null;
   }
 
-  protected instructions({
-    runId,
-    memberId,
-    conversationId,
-  }: McpListContext): string {
-    return runTeamInstructions(
-      this.gate.runTeamFormOf(runId, memberId, conversationId) ?? 'start',
-    );
+  protected instructions(): string {
+    return runTeamInstructions();
   }
 
-  protected inputSchema({
-    runId,
-    memberId,
-    conversationId,
-  }: McpListContext): Record<string, unknown> {
-    return runTeamSchema(
-      this.gate.runTeamFormOf(runId, memberId, conversationId) ?? 'start',
-    );
+  protected inputSchema(): Record<string, unknown> {
+    return runTeamSchema();
   }
 
   protected async run(
@@ -91,12 +79,18 @@ export class RunTeamTool extends BaseMcpTool {
       return this.invalidArgs(read.error);
     }
     const remark = await this.chatTeams.applyRemarkChange(runId, read.query);
-    if (remark !== null) {
-      return this.text(remark, remark.startsWith('Not applied'));
+    if (remark !== null && (remark.refused || remark.rest.length === 0)) {
+      return this.text(remark.text, remark.refused);
     }
+    const query =
+      remark === null ? read.query : { ...read.query, edits: remark.rest };
     const outcome = await this.proposals.proposeRunTeam(runId, () =>
-      this.chatTeams.prepareChange(runId, read.query),
+      this.chatTeams.prepareChange(runId, query),
     );
-    return this.text(runTeamResultText(outcome), outcome.status === 'refused');
+    const card = runTeamResultText(outcome);
+    return this.text(
+      remark === null ? card : `${remark.text}\n${card}`,
+      remark === null && outcome.status === 'refused',
+    );
   }
 }

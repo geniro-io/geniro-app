@@ -1339,9 +1339,9 @@ export class TeamExecutorService
   private readonly leadWatchers = new Map<string, (lead: string) => void>();
 
   /**
-   * Each run's newest pass's hook for a change to its team (`changeRunTeam`):
-   * `now` when the change reaches the running pass, `next-pass` when only the
-   * next one can serve it.
+   * Each run's newest pass's hook for a change to its team (`changeRunTeam`),
+   * kept after the pass ends, since a wake continues the lead in it. A run with
+   * no pass since the daemon started has none: its next pass reads the change.
    */
   private readonly liveRosters = new Map<
     string,
@@ -2681,10 +2681,9 @@ export class TeamExecutorService
         );
       }
     }
-    const live = this.liveRuns.has(runId)
-      ? this.liveRosters.get(runId)
-      : undefined;
-    const reaches = live?.(resolved, new Set(departedIds)) ?? 'next-pass';
+    const reaches =
+      this.liveRosters.get(runId)?.(resolved, new Set(departedIds)) ??
+      'next-pass';
     const fresh = await this.runDao.getById(runId, this.em.fork());
     if (fresh !== null) {
       this.bus.publishRunsChanged([runToWire(fresh)]);
@@ -10338,39 +10337,6 @@ export class TeamExecutorService
       );
     };
     registerMemberTools();
-    const callsAtStart = calleesOf.size > 0;
-    // A change to this run's team while the pass runs (`changeRunTeam`): the
-    // members, the callees, the blocks and the tools every member is offered
-    // move together, so an added member is launchable and callable at once.
-    this.liveRosters.set(runId, (next, left) => {
-      for (const member of next.members) {
-        const at = nodes.findIndex((node) => node.id === member.id);
-        if (at === -1) {
-          nodes.push(member);
-        } else {
-          nodes[at] = member;
-        }
-        nodesById.set(member.id, member);
-      }
-      departed.clear();
-      for (const id of left) {
-        departed.add(id);
-      }
-      calleesOf.clear();
-      for (const [caller, callees] of calleeMapOf(nodes, departed)) {
-        calleesOf.set(caller, callees);
-      }
-      onDemand.clear();
-      for (const id of onDemandMemberIds(team)) {
-        onDemand.add(id);
-      }
-      blocksOf.clear();
-      for (const [memberId, blocks] of instructionBlocksByMember(team)) {
-        blocksOf.set(memberId, blocks);
-      }
-      registerMemberTools();
-      return callsAtStart || calleesOf.size === 0 ? 'now' : 'next-pass';
-    });
     /**
      * Open a turn of a member's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now
@@ -10486,7 +10452,9 @@ export class TeamExecutorService
     };
     // The broker gets a capability only when the team can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
-    if (calleesOf.size > 0) {
+    let callsRegistered = false;
+    const registerCalls = (): void => {
+      callsRegistered = true;
       // Mint one call token per call-capable caller member up front — the token
       // must exist before the caller turn spawns and reads its config (the
       // claude mcp-config file / the merged .cursor/mcp.json entry). A
@@ -10686,7 +10654,46 @@ export class TeamExecutorService
           });
         },
       );
+    };
+    if (calleesOf.size > 0) {
+      registerCalls();
     }
+    // A change to this run's team (`changeRunTeam`), made while this pass runs
+    // or after it ended and before the next one: a wake continues the lead in
+    // this pass, so its members, callees, blocks and tools move together, and a
+    // pass that started with nobody to call registers its calls now.
+    this.liveRosters.set(runId, (next, left) => {
+      for (const member of next.members) {
+        const at = nodes.findIndex((node) => node.id === member.id);
+        if (at === -1) {
+          nodes.push(member);
+        } else {
+          nodes[at] = member;
+        }
+        nodesById.set(member.id, member);
+      }
+      departed.clear();
+      for (const id of left) {
+        departed.add(id);
+      }
+      calleesOf.clear();
+      for (const [caller, callees] of calleeMapOf(nodes, departed)) {
+        calleesOf.set(caller, callees);
+      }
+      onDemand.clear();
+      for (const id of onDemandMemberIds(team)) {
+        onDemand.add(id);
+      }
+      blocksOf.clear();
+      for (const [memberId, blocks] of instructionBlocksByMember(team)) {
+        blocksOf.set(memberId, blocks);
+      }
+      registerMemberTools();
+      if (!callsRegistered && calleesOf.size > 0) {
+        registerCalls();
+      }
+      return 'now';
+    });
 
     // Ahead of the seed, because these are facts about the run's CONFIGURATION
     // rather than about anything an agent did: a member named a setting its CLI

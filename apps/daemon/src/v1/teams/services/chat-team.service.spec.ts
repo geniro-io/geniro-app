@@ -847,9 +847,13 @@ describe('ChatTeamService.applyRemarkChange', () => {
 
     const answer = await t.service.applyRemarkChange('run-1', addRequest);
 
-    expect(answer).toContain(
-      "Applied per the user's note, with no card: + Rev joins.",
-    );
+    expect(answer).toEqual({
+      text: expect.stringContaining(
+        "Applied per the user's note, with no card: + Rev joins.",
+      ),
+      refused: false,
+      rest: [],
+    });
     expect(t.executor.writeRunNote).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
@@ -877,7 +881,7 @@ describe('ChatTeamService.applyRemarkChange', () => {
     expect(await t.service.applyRemarkChange('run-1', addRequest)).toBeNull();
   });
 
-  it('answers null for a remove, which always goes on a card', async () => {
+  it('leaves a call that only removes to its card, and keeps the grant for the add that follows', async () => {
     const t = build();
     await startedWithNote(t);
 
@@ -889,36 +893,52 @@ describe('ChatTeamService.applyRemarkChange', () => {
       }),
     ).toBeNull();
     expect(t.executor.changeRunTeam).not.toHaveBeenCalled();
-  });
-
-  it('answers null for two edits in one call', async () => {
-    const t = build();
-    await startedWithNote(t);
-
     expect(
-      await t.service.applyRemarkChange('run-1', {
-        summary: 's',
-        reason: 'r',
-        edits: [
-          addRequest.edits[0]!,
-          { op: 'update', memberId: 'dev', role: 'x' },
-        ],
-      }),
-    ).toBeNull();
+      (await t.service.applyRemarkChange('run-1', addRequest))?.refused,
+    ).toBe(false);
   });
 
-  it('answers null once the lead has made another tool call in its turn', async () => {
+  it('applies exactly one of two changes at once and hands the other back for a card', async () => {
     const t = build();
     await startedWithNote(t);
-    t.rows.push({
-      seq: 8,
-      kind: 'tool_call',
-      memberId: 'agent',
-      inCall: null,
-      toolNameLower: 'mcp__geniro__call_agent',
+    const update = { op: 'update' as const, memberId: 'dev', role: 'Checks' };
+
+    const answer = await t.service.applyRemarkChange('run-1', {
+      summary: 's',
+      reason: 'r',
+      edits: [{ op: 'remove', memberId: 'dev' }, addRequest.edits[0]!, update],
     });
 
-    expect(await t.service.applyRemarkChange('run-1', addRequest)).toBeNull();
+    expect(answer).toMatchObject({
+      refused: false,
+      rest: [{ op: 'remove', memberId: 'dev' }, update],
+    });
+    expect(t.executor.changeRunTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('still applies after other tool calls of the lead’s turn, a refused run_team among them', async () => {
+    const t = build();
+    await startedWithNote(t);
+    t.rows.push(
+      {
+        seq: 8,
+        kind: 'tool_call',
+        memberId: 'agent',
+        inCall: null,
+        toolNameLower: RUN_TEAM,
+      },
+      {
+        seq: 9,
+        kind: 'tool_call',
+        memberId: 'agent',
+        inCall: null,
+        toolNameLower: 'toolsearch',
+      },
+    );
+
+    expect(
+      (await t.service.applyRemarkChange('run-1', addRequest))?.text,
+    ).toContain("Applied per the user's note");
   });
 
   it('answers null once the lead’s turn has completed', async () => {
@@ -935,23 +955,7 @@ describe('ChatTeamService.applyRemarkChange', () => {
     expect(await t.service.applyRemarkChange('run-1', addRequest)).toBeNull();
   });
 
-  it('still applies when the only tool call before it was run_team', async () => {
-    const t = build();
-    await startedWithNote(t);
-    t.rows.push({
-      seq: 8,
-      kind: 'tool_call',
-      memberId: 'agent',
-      inCall: null,
-      toolNameLower: RUN_TEAM,
-    });
-
-    expect(await t.service.applyRemarkChange('run-1', addRequest)).toContain(
-      "Applied per the user's note",
-    );
-  });
-
-  it('leaves a refused change unwritten and says it was not applied', async () => {
+  it('leaves a refused change unwritten, says it was not applied, and keeps the grant', async () => {
     const t = build();
     await startedWithNote(t);
     t.executor.changeRunTeam!.mockResolvedValueOnce({
@@ -961,10 +965,15 @@ describe('ChatTeamService.applyRemarkChange', () => {
 
     const answer = await t.service.applyRemarkChange('run-1', addRequest);
 
-    expect(answer).toBe(
-      'Not applied — the team is being changed by another request. No card was shown.',
-    );
+    expect(answer).toEqual({
+      text: 'Not applied — the team is being changed by another request. No card was shown.',
+      refused: true,
+      rest: [],
+    });
     expect(t.executor.writeRunNote).not.toHaveBeenCalled();
+    expect(
+      (await t.service.applyRemarkChange('run-1', addRequest))?.refused,
+    ).toBe(false);
   });
 
   it('writes the remark’s row only after the change lands', async () => {

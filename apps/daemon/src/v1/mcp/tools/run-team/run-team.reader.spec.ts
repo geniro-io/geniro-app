@@ -131,6 +131,30 @@ describe('readRunTeamStartArgs', () => {
   });
 });
 
+describe('the form a call is read in', () => {
+  it('tells a plain chat sending edits that it runs no team yet', () => {
+    const read = readRunTeamStartArgs({
+      summary: 'Add a tester',
+      reason: 'asked',
+      edits: [{ op: 'remove', memberId: 'dev' }],
+    });
+
+    expect(read).toEqual({
+      ok: false,
+      error: expect.stringContaining('this chat runs no team yet'),
+    });
+  });
+
+  it('tells a lead sending the start form that it changes its team with edits', () => {
+    const read = readRunTeamChangeArgs(startArgs());
+
+    expect(read).toEqual({
+      ok: false,
+      error: expect.stringContaining('change it with edits'),
+    });
+  });
+});
+
 describe('readRunTeamChangeArgs', () => {
   it('accepts an add, a remove and an update, each for its own agent', () => {
     const read = readRunTeamChangeArgs(

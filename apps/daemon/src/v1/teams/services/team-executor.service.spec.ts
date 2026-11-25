@@ -23640,6 +23640,71 @@ describe('TeamExecutorService — chat teams', () => {
     expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual(['c']);
   });
 
+  it('lets a member added after the lead’s turn ended be called when the lead is woken in that pass', async () => {
+    const { service, claude, runDao, callBroker } = setup();
+    const team = teamOf([member('a'), member('b')], { name: 'one' });
+    const run = await service.startRun({
+      slug: 'one',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: 'card raised',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+    const before = runDao.runs.get(run.id)!;
+
+    const applied = await service.changeRunTeam(
+      run.id,
+      teamOf(
+        [
+          member('a'),
+          member('b', { instructions: 'Answer in capitals.' }),
+          member('c'),
+        ],
+        { name: 'one' },
+      ),
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+
+    expect(applied).toMatchObject({ status: 'changed', reaches: 'now' });
+    const callees = callBroker.listCallees(run.id, 'a');
+    expect(callees.map((c) => c.id)).toEqual(['b', 'c']);
+    expect(callees.find((c) => c.id === 'b')?.instructions).toBe(
+      'Answer in capitals.',
+    );
+  });
+
+  it('gives a lead that had nobody to call its calls once a member is added', async () => {
+    const { service, runDao, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'solo',
+      team: teamOf([member('a')], { name: 'solo' }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(callBroker.listCallees(run.id, 'a')).toEqual([]);
+    const before = runDao.runs.get(run.id)!;
+
+    const applied = await service.changeRunTeam(
+      run.id,
+      teamOf([member('a'), member('b')], { name: 'solo' }),
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+
+    expect(applied).toMatchObject({ status: 'changed', reaches: 'now' });
+    expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual(['b']);
+  });
+
   it('answers null for a chat that was never promoted, and says in its own flow that the next message starts it', async () => {
     const { service, runDao, itemDao } = setup();
     const chat = await runDao.create({

@@ -4422,7 +4422,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     });
   });
 
-  it('offers run_team as a start to an ordinary chat, as a change to a team run, and to no sink without it', async () => {
+  it('offers run_team to an ordinary chat and to a team run with ONE listing, so a chat that became a team keeps the schema it loaded, and to no sink without it', async () => {
     const listed = async (gate: TeamProposalBroker) => {
       const { json } = await post(
         service(
@@ -4472,13 +4472,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const startTool = runTeamOf(await listed(start));
     expect(startTool?.inputSchema.properties).toHaveProperty('plan');
     expect(startTool?.inputSchema.properties).toHaveProperty('team');
-    expect(startTool?.inputSchema.properties).not.toHaveProperty('edits');
+    expect(startTool?.inputSchema.properties).toHaveProperty('edits');
 
     const change = new TeamProposalBroker();
     change.register('run-1', 'agent', { runId: 'run-1', runTeam: 'change' });
     const changeTool = runTeamOf(await listed(change));
-    expect(changeTool?.inputSchema.properties).toHaveProperty('edits');
-    expect(changeTool?.inputSchema.properties).not.toHaveProperty('plan');
+    expect(changeTool).toEqual(startTool);
 
     const plain = new TeamProposalBroker();
     plain.register('run-1', 'agent', { runId: 'run-1' });
@@ -4526,6 +4525,48 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(describe_(HOST_RUN_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(describe_(HOST_PROPOSE_TEAM_TOOL)).toContain(HOST_RUN_TEAM_TOOL);
+  });
+
+  it('routes a request to build a team for a job now to run_team, and only a team to save to propose_team', async () => {
+    const gate = new TeamProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        gate,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const describe_ = (name: string) =>
+      tools.find((tool) => tool.name === name)?.description ?? '';
+    const runTeam = describe_(HOST_RUN_TEAM_TOOL);
+    const proposeTeam = describe_(HOST_PROPOSE_TEAM_TOOL);
+
+    expect(runTeam).toContain('собери команду');
+    expect(runTeam).toContain('If the request already says what the job is');
+    expect(runTeam).toContain('in plan mode call it directly');
+    expect(proposeTeam).toContain('SAVE a team of agents in their library');
+    expect(proposeTeam).toContain('собери команду');
   });
 
   it('refuses an unlisted read_teams call', async () => {

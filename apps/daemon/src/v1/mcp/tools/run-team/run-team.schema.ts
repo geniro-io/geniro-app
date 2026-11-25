@@ -3,10 +3,7 @@ import {
   MAX_RUN_TEAM_PLAN_LINES,
 } from '../../../teams/teams.types';
 import { toolInputSchema } from '../tool-args';
-import { ChangeArgsSchema, StartArgsSchema } from './run-team.reader';
-
-/** Which form a turn is offered: an ordinary chat starts, a team's lead changes. */
-export type RunTeamForm = 'start' | 'change';
+import { ListedArgsSchema } from './run-team.reader';
 
 const MEMBER_FIELDS: Record<string, string> = {
   id: "Short id, unique in the team (letters, digits, dashes); never 'agent', which is this chat",
@@ -38,28 +35,24 @@ function described(
 }
 
 /**
- * `run_team`'s arguments for the form this turn is offered, GENERATED from the
- * schemas a call is read with, so the shape shown cannot drift from the one
- * held.
+ * `run_team`'s arguments, GENERATED from the schema a call is read against, so
+ * the shape shown cannot drift from the one held. ONE schema for both forms: a
+ * claude chat that becomes a team keeps the schema it loaded as a chat, and a
+ * schema per form left its lead calling the start form's.
  */
-export function runTeamSchema(form: RunTeamForm): Record<string, unknown> {
-  if (form === 'start') {
-    const schema = described(toolInputSchema(StartArgsSchema), {
-      summary: 'One line for the card: what this team will do',
-      reason: 'Why a team, for the card: what the user asked for',
-      plan: `The plan, one short step per line, at most ${MAX_RUN_TEAM_PLAN_LINES}`,
-      team: `The team: a short name, and the agents who join this chat (at most ${MAX_CHAT_TEAM_MEMBERS}). This chat leads them; do not list it`,
-    });
-    const team = (schema.properties as Record<string, Record<string, unknown>>)
-      .team as Record<string, unknown>;
-    const members = (team.properties as Record<string, Record<string, unknown>>)
-      .members as Record<string, unknown>;
-    described(members.items as Record<string, unknown>, MEMBER_FIELDS);
-    return schema;
-  }
-  return described(toolInputSchema(ChangeArgsSchema), {
-    summary: 'One line for the card: what the change does',
+export function runTeamSchema(): Record<string, unknown> {
+  const schema = described(toolInputSchema(ListedArgsSchema), {
+    summary:
+      'One line for the card: what the team will do, or what the change does',
     reason: 'Why, for the card: what the user asked for',
-    edits: `What changes, one edit per agent: {op: 'add', member} with the same fields a start takes; {op: 'remove', memberId}; {op: 'update', memberId, role?, task?, instructions?, model?, effort?} — only the fields that change. Ids are the ones your "May call" block names`,
+    plan: `To START a team from an ordinary chat: the plan, one short step per line, at most ${MAX_RUN_TEAM_PLAN_LINES}. Never sent by a team's lead`,
+    team: `To START a team from an ordinary chat: a short name, and the agents who join this chat (at most ${MAX_CHAT_TEAM_MEMBERS}). This chat leads them; do not list it. Never sent by a team's lead`,
+    edits: `To CHANGE the team you lead: one edit per agent — {op: 'add', member} with the same fields a team member takes; {op: 'remove', memberId}; {op: 'update', memberId, role?, task?, instructions?, model?, effort?} with only the fields that change. Ids are the ones your "May call" block names. Never sent from an ordinary chat`,
   });
+  const team = (schema.properties as Record<string, Record<string, unknown>>)
+    .team as Record<string, unknown>;
+  const members = (team.properties as Record<string, Record<string, unknown>>)
+    .members as Record<string, unknown>;
+  described(members.items as Record<string, unknown>, MEMBER_FIELDS);
+  return schema;
 }

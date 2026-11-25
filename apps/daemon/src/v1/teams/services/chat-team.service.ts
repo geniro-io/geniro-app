@@ -25,6 +25,7 @@ import {
   type RunTeamCardMember,
   type RunTeamChange,
   type RunTeamChangeRequest,
+  type RunTeamEdit,
   type RunTeamMemberRequest,
   type RunTeamProposal,
   type RunTeamStartRequest,
@@ -59,9 +60,10 @@ export class ChatTeamService {
 
   /**
    * A start pressed with a note grants the lead's first team turn ONE change
-   * without a card (user decision): only `add` or `update`, before any other
-   * tool call of that turn. Keyed by run, holding the seq of the row that
-   * opened that turn; in memory, so a restart only means the change gets a card.
+   * without a card (user decision): the first `add` or `update` it sends
+   * while that turn runs, whatever else it called first. Keyed by run, holding
+   * the seq of the row that opened that turn; in memory, so a restart only
+   * means the change gets a card.
    */
   private readonly remarkGrants = new Map<string, number>();
 
@@ -319,30 +321,37 @@ export class ChatTeamService {
   }
 
   /**
-   * The remark change (user decision): the lead's first team turn after a
-   * start pressed with a note may apply ONE `add` or `update` without a card,
-   * before any other tool call of that turn. Answers the applied change's
-   * receipt, or null when no grant covers this call — then it goes on a card.
+   * The remark change (user decision): while the lead's first team turn after a
+   * start pressed with a note still runs, its first `add` or `update` is
+   * applied at once, with no card — exactly one. Answers that edit's receipt
+   * and the call's other edits, which go on a card; null when no grant covers
+   * this call. A refused edit keeps the grant, so a corrected call can use it.
    */
   async applyRemarkChange(
     runId: string,
     request: RunTeamChangeRequest,
-  ): Promise<string | null> {
+  ): Promise<RemarkOutcome | null> {
     const openedAt = this.remarkGrants.get(runId);
     if (openedAt === undefined) {
       return null;
     }
-    this.remarkGrants.delete(runId);
-    if (
-      request.edits.length !== 1 ||
-      request.edits[0]?.op === 'remove' ||
-      !(await this.firstToolCallOfTurn(runId, openedAt))
-    ) {
+    if (!(await this.leadTurnStillRuns(runId, openedAt))) {
+      this.remarkGrants.delete(runId);
       return null;
     }
-    const planned = await this.planChange(runId, request);
+    const at = request.edits.findIndex((edit) => edit.op !== 'remove');
+    const edit = request.edits[at];
+    if (edit === undefined) {
+      return null;
+    }
+    const rest = request.edits.filter((_, index) => index !== at);
+    const planned = await this.planChange(runId, { ...request, edits: [edit] });
     if (!planned.ok) {
-      return `Not applied — ${planned.code}: ${planned.message}. No card was shown.`;
+      return {
+        text: `Not applied — ${planned.code}: ${planned.message}. No card was shown.`,
+        refused: true,
+        rest: [],
+      };
     }
     const applied = await this.executor.changeRunTeam(
       runId,
@@ -351,8 +360,13 @@ export class ChatTeamService {
       planned.removed,
     );
     if (applied.status === 'refused') {
-      return `Not applied — ${applied.reason}. No card was shown.`;
+      return {
+        text: `Not applied — ${applied.reason}. No card was shown.`,
+        refused: true,
+        rest: [],
+      };
     }
+    this.remarkGrants.delete(runId);
     await this.executor.writeRunNote(runId, {
       severity: 'info',
       message: `Changed per the user's note: ${changeLines(planned.proposal.changes).join('; ')}`,
@@ -362,28 +376,28 @@ export class ChatTeamService {
         changes: planned.proposal.changes,
       },
     });
-    return `Applied per the user's note, with no card: ${changeLines(planned.proposal.changes).join('; ')}. ${rosterText(applied.team, applied.departed, planned.removed)}`;
+    return {
+      text: `Applied per the user's note, with no card: ${changeLines(planned.proposal.changes).join('; ')}. ${rosterText(applied.team, applied.departed, planned.removed)}`,
+      refused: false,
+      rest,
+    };
   }
 
-  /** Whether the lead has made no tool call but `run_team` since its turn opened, and that turn still runs. */
-  private async firstToolCallOfTurn(
+  /** Whether the lead's own turn that opened at `openedAt` has not ended yet. */
+  private async leadTurnStillRuns(
     runId: string,
     openedAt: number,
   ): Promise<boolean> {
     const rows = await this.itemDao.rowsOfKindsBetween(
       runId,
-      ['tool_call', 'turn_complete', 'turn_cancelled', 'error'],
+      ['turn_complete', 'turn_cancelled', 'error'],
       openedAt,
       Number.MAX_SAFE_INTEGER,
       this.em.fork(),
     );
-    const own = rows.filter(
+    return !rows.some(
       (row) => row.memberId === SINGLE_AGENT_NODE && (row.inCall ?? '') === '',
     );
-    if (own.some((row) => row.kind !== 'tool_call')) {
-      return false;
-    }
-    return own.every((row) => (row.toolNameLower ?? '').endsWith('run_team'));
   }
 
   /**
@@ -668,4 +682,11 @@ function rosterText(
         `${member.name} (id ${member.id})${left.has(member.id) ? ' — finishes its current call, then leaves' : ''}`,
     );
   return `The team now: ${lines.join('; ')}.`;
+}
+
+/** A remark change: its receipt, whether it was refused, and the edits of the same call that still need a card. */
+export interface RemarkOutcome {
+  text: string;
+  refused: boolean;
+  rest: RunTeamEdit[];
 }

@@ -90,10 +90,28 @@ export const ChangeArgsSchema = z
   })
   .strict();
 
+/** Both forms' arguments in one shape: what the tool lists, whatever the form. */
+export const ListedArgsSchema = z
+  .object({
+    summary: summaryField,
+    reason: reasonField,
+    plan: StartArgsSchema.shape.plan.optional(),
+    team: StartArgsSchema.shape.team.optional(),
+    edits: ChangeArgsSchema.shape.edits.optional(),
+  })
+  .strict();
+
 /** The start form's arguments, or what is wrong with them. Never throws. */
 export function readRunTeamStartArgs(
   args: Record<string, unknown>,
 ): ToolArgs<RunTeamStartRequest> {
+  if ('edits' in args) {
+    return {
+      ok: false,
+      error:
+        'this chat runs no team yet — to start one send plan and team; edits change a running team, from its lead only',
+    };
+  }
   const read = readToolArgs(StartArgsSchema, args);
   if (!read.ok) {
     return read;
@@ -110,6 +128,13 @@ export function readRunTeamStartArgs(
 export function readRunTeamChangeArgs(
   args: Record<string, unknown>,
 ): ToolArgs<RunTeamChangeRequest> {
+  if ('plan' in args || 'team' in args) {
+    return {
+      ok: false,
+      error:
+        'you lead a running team — change it with edits (one per agent); plan and team only start a team from an ordinary chat',
+    };
+  }
   const read = readToolArgs(ChangeArgsSchema, args);
   if (!read.ok) {
     return read;

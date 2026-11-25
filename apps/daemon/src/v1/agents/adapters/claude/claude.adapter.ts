@@ -425,6 +425,8 @@ export class ClaudeAdapter extends AgentAdapter {
        * PARKING host tool this CLI is handed, not only the question one.
        */
       hostQuestionDeferredReason: null,
+      resumeKeepsInstructionsReason:
+        'a resumed claude session keeps the system prompt its transcript recorded when it started (its prompt_snapshot) and sends nothing of a new --append-system-prompt (measured on 2.1.331)',
       // MEASURED on 2.1.295 (2026-10-21) against a stub MCP server: a call
       // under `default` and `acceptEdits` is held for permission (answered on
       // the stdio permission channel), and `plan` refuses it outright.

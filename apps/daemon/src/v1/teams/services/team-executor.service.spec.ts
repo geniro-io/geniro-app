@@ -183,6 +183,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
+import { changedInstructionsNote } from '../utils/member-instructions';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
@@ -8205,6 +8206,142 @@ describe('TeamExecutorService — agent calls', () => {
       conversationId: 'call-1',
       callId: 'call-2',
     });
+  });
+
+  it('tells a continued conversation its member’s changed instructions once, on a CLI whose resume keeps the old ones', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'first',
+      agent: 'helper',
+      message: 'remember ZEBRA',
+      mode: 'async',
+    });
+    await drain();
+    const first = claude.starts.at(-1)!;
+    first.emit({ type: 'session', sessionId: 's-helper' });
+    completeTurn(first, 'noted');
+    await drain();
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' });
+    const before = runDao.runs.get(run.id)!;
+    const changed = await service.changeRunTeam(
+      run.id,
+      {
+        ...CALL_WF,
+        members: CALL_WF.members.map((node) =>
+          node.id === 'helper'
+            ? { ...node, instructions: 'End every reply with BANANA.' }
+            : node,
+        ),
+      },
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+    expect(changed).toMatchObject({ status: 'changed' });
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'second',
+      agent: 'helper',
+      message: 'which word?',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+    const continued = claude.starts.at(-1)!;
+    expect(continued.input.resumeSessionId).toBe('s-helper');
+    expect(continued.input.systemPrompt).toBe('End every reply with BANANA.');
+    expect(continued.input.prompt).toBe(
+      `${changedInstructionsNote('End every reply with BANANA.')}\n\nwhich word?`,
+    );
+    completeTurn(continued, 'ZEBRA. BANANA');
+    await drain();
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-2' });
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'third',
+      agent: 'helper',
+      message: 'and again?',
+      thread: 'call-2',
+      mode: 'async',
+    });
+    await drain();
+    expect(claude.starts.at(-1)!.input.prompt).toBe('and again?');
+    completeTurn(claude.starts.at(-1)!, 'ZEBRA. BANANA');
+    await drain();
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'fresh',
+      agent: 'helper',
+      message: 'new topic',
+      mode: 'async',
+    });
+    await drain();
+    const fresh = claude.starts.at(-1)!;
+    expect(fresh.input.resumeSessionId).toBeNull();
+    expect(fresh.input.systemPrompt).toBe('End every reply with BANANA.');
+    expect(fresh.input.prompt).toBe('new topic');
+  });
+
+  it('adds no note for a CLI that hands a resumed conversation its changed instructions itself', async () => {
+    const { service, cursor, callBroker, runDao } = setup();
+    const team: Team = {
+      ...CALL_WF,
+      members: CALL_WF.members.map((node) =>
+        node.id === 'helper' ? { ...node, agent: 'cursor-agent' } : node,
+      ),
+    };
+    const run = await service.startRun({
+      slug: 'c',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    void callBroker.callAgent(run.id, 'orch', {
+      title: 'first',
+      agent: 'helper',
+      message: 'remember ZEBRA',
+      mode: 'async',
+    });
+    await drain();
+    const first = cursor.starts.at(-1)!;
+    first.emit({ type: 'session', sessionId: 's-helper' });
+    completeTurn(first, 'noted');
+    await drain();
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' });
+    const before = runDao.runs.get(run.id)!;
+    await service.changeRunTeam(
+      run.id,
+      {
+        ...team,
+        members: team.members.map((node) =>
+          node.id === 'helper'
+            ? { ...node, instructions: 'End every reply with BANANA.' }
+            : node,
+        ),
+      },
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+
+    await callBroker.callAgent(run.id, 'orch', {
+      title: 'second',
+      agent: 'helper',
+      message: 'which word?',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    await drain();
+    const continued = cursor.starts.at(-1)!;
+    expect(continued.input.resumeSessionId).toBe('s-helper');
+    expect(continued.input.systemPrompt).toBe('End every reply with BANANA.');
+    expect(continued.input.prompt).toBe('which word?');
   });
 
   it('lets an agent that has made no call write a team note another agent reads, until the run is deleted', async () => {

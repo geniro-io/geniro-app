@@ -360,6 +360,7 @@ import {
 } from '../utils/caller-key';
 import {
   callToolsAdmitted,
+  changedInstructionsNote,
   instructionBlocksByMember,
   memberInstructionFields,
 } from '../utils/member-instructions';
@@ -1233,6 +1234,13 @@ export class TeamExecutorService
    * old session, which is intact — the conversation is merely not compacted.
    */
   private readonly carriedSummaries = new Map<string, string>();
+
+  /**
+   * Per session key, the member instructions its conversation last ran under,
+   * so a resumed turn on a CLI that keeps the old ones is told the new text
+   * (`changedInstructionsNote`). In memory: after a restart nothing is owed.
+   */
+  private readonly conversationInstructions = new Map<string, string | null>();
 
   /**
    * Per session key, the context a conversation held when it was first
@@ -3741,6 +3749,11 @@ export class TeamExecutorService
     for (const key of [...this.carriedSummaries.keys()]) {
       if (key.startsWith(prefix)) {
         this.carriedSummaries.delete(key);
+      }
+    }
+    for (const key of [...this.conversationInstructions.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.conversationInstructions.delete(key);
       }
     }
     for (const key of [...this.compactionBaselines.keys()]) {
@@ -6527,12 +6540,29 @@ export class TeamExecutorService
       const liveStream = await adapter
         .liveStreamSupport()
         .catch(() => NO_LIVE_STREAM);
+      // Never the session a carried compaction replaced: resuming it would
+      // hand the summary to the conversation it summarised.
+      const resumeSessionId =
+        carried !== null
+          ? null
+          : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null);
+      const ownInstructions = node.instructions ?? null;
+      const ranWith = this.conversationInstructions.get(sessionKey);
+      const instructionsChanged =
+        plainTurn &&
+        resumeSessionId !== null &&
+        ranWith !== undefined &&
+        ranWith !== ownInstructions &&
+        adapter.getConfig().resumeKeepsInstructionsReason !== null;
       const input: AgentTurnInput = {
         ...(liveStream.partials ? { streamPartials: true } : {}),
         ...(liveStream.reasoning ? { streamReasoning: true } : {}),
         prompt: withCarriedContext(
           carried,
           [
+            instructionsChanged
+              ? changedInstructionsNote(ownInstructions)
+              : null,
             deliveryNotice?.prompt ?? null,
             prompt,
             threadMessages.length === 0
@@ -6570,12 +6600,7 @@ export class TeamExecutorService
               },
             }
           : {}),
-        // Never the session a carried compaction replaced: resuming it would
-        // hand the summary to the conversation it summarised.
-        resumeSessionId:
-          carried !== null
-            ? null
-            : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null),
+        resumeSessionId,
         // The member's instructions and character, the blocks addressed to it,
         // the answering-a-call note and "May call" block — built by the helper
         // the inspector's size readout measures with. Blocks are joined there
@@ -7863,6 +7888,9 @@ export class TeamExecutorService
           onOffTurnEvent,
         );
         turnSession = this.sessions.peek(sessionKey);
+        if (plainTurn || resumeSessionId === null) {
+          this.conversationInstructions.set(sessionKey, ownInstructions);
+        }
       } catch (err) {
         disposeQuestions?.();
         restoreCarried();

@@ -9,8 +9,8 @@ import {
   type SavePluginInput,
 } from '../plugins.types';
 import {
-  type PluginFileInput,
   pluginFileFields,
+  type PluginFileInput,
   pluginFileText,
   readPluginText,
 } from '../utils/plugin-file';
@@ -90,12 +90,8 @@ export class PluginProposalService {
         ? { enabled: false }
         : {}),
       folders,
-      ...(refresh === undefined
-        ? {}
-        : { refresh_minutes: refresh as number }),
-      ...(timeout === undefined
-        ? {}
-        : { timeout_seconds: timeout as number }),
+      ...(refresh === undefined ? {} : { refresh_minutes: refresh as number }),
+      ...(timeout === undefined ? {} : { timeout_seconds: timeout as number }),
       command: input.command,
       view: input.view,
       ...(!Array.isArray(buttons) || buttons.length === 0

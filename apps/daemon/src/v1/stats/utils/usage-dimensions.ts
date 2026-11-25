@@ -1,9 +1,9 @@
 import type { TurnMember } from '../../agents/chat.types';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
 import type { UsageEventInput } from '../stats.types';
-import { isChatTeamId } from '../../agents/utils/run-kind';
 
 /** The run columns {@link usageDimensions} reads. */
 export type UsageDimensionRun = Pick<

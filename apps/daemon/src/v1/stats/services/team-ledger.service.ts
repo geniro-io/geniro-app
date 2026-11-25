@@ -1,5 +1,4 @@
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
-import { isChatTeamId } from '../../agents/utils/run-kind';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
@@ -7,6 +6,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunFacts } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
 import {
   parseTeamSnapshot,

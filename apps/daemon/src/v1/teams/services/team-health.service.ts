@@ -116,7 +116,9 @@ export class TeamHealthService {
     const missing = new Set<AgentKind>();
     for (const member of team.members) {
       for (const settings of poolMembersOf(member)) {
-        if ((await this.installOf(settings.agent, gathering)).state === 'missing') {
+        if (
+          (await this.installOf(settings.agent, gathering)).state === 'missing'
+        ) {
           missing.add(settings.agent);
         }
       }

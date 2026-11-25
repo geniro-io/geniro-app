@@ -13,8 +13,8 @@ import {
   SLUG_RE,
 } from '../../../teams/teams.types';
 import type { ToolArgs } from '../../mcp.types';
-import { readToolArgs } from '../tool-args';
 import { reasonField, summaryField } from '../propose-team/propose-team.reader';
+import { readToolArgs } from '../tool-args';
 
 export const RUN_TEAM_TASK_MAX = 4000;
 export const RUN_TEAM_TEXT_MAX = 20_000;
@@ -83,7 +83,10 @@ export const ChangeArgsSchema = z
   .object({
     summary: summaryField,
     reason: reasonField,
-    edits: z.array(EditArgsSchema).min(1).max(MAX_CHAT_TEAM_MEMBERS * 2),
+    edits: z
+      .array(EditArgsSchema)
+      .min(1)
+      .max(MAX_CHAT_TEAM_MEMBERS * 2),
   })
   .strict();
 

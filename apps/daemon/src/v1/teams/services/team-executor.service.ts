@@ -162,6 +162,7 @@ import {
   asksForSecret,
 } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
+import { readTeamDepartures } from '../../agents/utils/chat-team';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import { effortListed } from '../../agents/utils/effort-listed';
 import {
@@ -236,7 +237,6 @@ import {
 } from '../../agents/utils/polled-spend-ledger';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { readTeamDepartures } from '../../agents/utils/chat-team';
 import {
   assertTeamRun,
   CHAT_TEAM_ORIGIN,
@@ -2635,7 +2635,8 @@ export class TeamExecutorService
       runId,
       {
         teamSnapshot: teamSnapshotOf(next),
-        teamDeparted: departures.length === 0 ? null : JSON.stringify(departures),
+        teamDeparted:
+          departures.length === 0 ? null : JSON.stringify(departures),
       },
       em,
     );
@@ -2656,13 +2657,20 @@ export class TeamExecutorService
         );
       }
     }
-    const live = this.liveRuns.has(runId) ? this.liveRosters.get(runId) : undefined;
+    const live = this.liveRuns.has(runId)
+      ? this.liveRosters.get(runId)
+      : undefined;
     const reaches = live?.(resolved, new Set(departedIds)) ?? 'next-pass';
     const fresh = await this.runDao.getById(runId, this.em.fork());
     if (fresh !== null) {
       this.bus.publishRunsChanged([runToWire(fresh)]);
     }
-    return { status: 'changed', reaches, team: resolved, departed: departedIds };
+    return {
+      status: 'changed',
+      reaches,
+      team: resolved,
+      departed: departedIds,
+    };
   }
 
   /** A user retry can replay its row after the addressed call has settled. */
@@ -10262,48 +10270,48 @@ export class TeamExecutorService
     };
     this.leadWatchers.set(runId, watchLead);
     const registerMemberTools = (): void => {
-    for (const node of nodes) {
-      if (callCapable(node)) {
-        this.callTokens.ensure(runId, node.id);
+      for (const node of nodes) {
+        if (callCapable(node)) {
+          this.callTokens.ensure(runId, node.id);
+        }
       }
-    }
-    const hostToolNodes = nodes.filter((node) => callCapable(node));
-    this.registerArtifactPublishers(
-      runId,
-      hostToolNodes.map((node) => node.id),
-      persistItem,
-    );
-    // A relay run's press goes to whoever leads at the press, so every
-    // publisher says who it is.
-    this.registerActionPublishers(
-      runId,
-      hostToolNodes,
-      team.mode === 'relay' ? new Set() : leadIds,
-    );
-    this.registerSurfacePublishers(
-      runId,
-      hostToolNodes,
-      team.mode === 'relay' ? new Set() : leadIds,
-      persistItem,
-    );
-    this.registerMonitorSinks(
-      runId,
-      hostToolNodes,
-      () => cwd,
-      (node) => resolveApproval(node).mode,
-    );
-    this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
-    this.registerRunOutcomeSinks(runId, hostToolNodes, persistItem);
-    this.registerFlagSinks(runId, hostToolNodes);
-    this.registerBrowserSinks(
-      runId,
-      hostToolNodes,
-      (node) => resolveApproval(node).mode,
-      persistItem,
-    );
-    this.registerLeadCardSinks(runId, team, hostToolNodes, (memberId) =>
-      liveConversations.has(memberId),
-    );
+      const hostToolNodes = nodes.filter((node) => callCapable(node));
+      this.registerArtifactPublishers(
+        runId,
+        hostToolNodes.map((node) => node.id),
+        persistItem,
+      );
+      // A relay run's press goes to whoever leads at the press, so every
+      // publisher says who it is.
+      this.registerActionPublishers(
+        runId,
+        hostToolNodes,
+        team.mode === 'relay' ? new Set() : leadIds,
+      );
+      this.registerSurfacePublishers(
+        runId,
+        hostToolNodes,
+        team.mode === 'relay' ? new Set() : leadIds,
+        persistItem,
+      );
+      this.registerMonitorSinks(
+        runId,
+        hostToolNodes,
+        () => cwd,
+        (node) => resolveApproval(node).mode,
+      );
+      this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
+      this.registerRunOutcomeSinks(runId, hostToolNodes, persistItem);
+      this.registerFlagSinks(runId, hostToolNodes);
+      this.registerBrowserSinks(
+        runId,
+        hostToolNodes,
+        (node) => resolveApproval(node).mode,
+        persistItem,
+      );
+      this.registerLeadCardSinks(runId, team, hostToolNodes, (memberId) =>
+        liveConversations.has(memberId),
+      );
     };
     registerMemberTools();
     const callsAtStart = calleesOf.size > 0;

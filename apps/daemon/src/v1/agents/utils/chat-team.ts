@@ -12,14 +12,14 @@ export const RunTeamDepartureSchema = z.object({
 export type RunTeamDeparture = z.infer<typeof RunTeamDepartureSchema>;
 
 /** `Run.teamDeparted` as it stands; an unreadable column reads as none. */
-export function readTeamDepartures(
-  column: string | null,
-): RunTeamDeparture[] {
+export function readTeamDepartures(column: string | null): RunTeamDeparture[] {
   if (column === null) {
     return [];
   }
   try {
-    const parsed = z.array(RunTeamDepartureSchema).safeParse(JSON.parse(column));
+    const parsed = z
+      .array(RunTeamDepartureSchema)
+      .safeParse(JSON.parse(column));
     return parsed.success ? parsed.data : [];
   } catch {
     return [];
@@ -43,7 +43,9 @@ export function chatTeamSizeOf(
   }
   let members: { id: string }[];
   try {
-    const parsed = SnapshotMembersSchema.safeParse(JSON.parse(run.teamSnapshot));
+    const parsed = SnapshotMembersSchema.safeParse(
+      JSON.parse(run.teamSnapshot),
+    );
     if (!parsed.success) {
       return null;
     }

@@ -13,7 +13,8 @@ const MEMBER_FIELDS: Record<string, string> = {
   name: 'Display name, how the other agents address it',
   role: 'What it does, in one or two sentences — every other agent reads this to decide whom to call',
   task: 'Its own part of this job, shown to the user on the card and handed to it when you call it',
-  instructions: 'How it works: its private standing instructions, its own turns only',
+  instructions:
+    'How it works: its private standing instructions, its own turns only',
   agent: 'The CLI it runs — an installed one; pick the one that fits the work',
   model: 'A model that CLI knows; leave it out for the CLI default',
   effort: 'Reasoning effort that CLI takes; leave it out for its default',
@@ -24,7 +25,10 @@ function described(
   schema: Record<string, unknown>,
   descriptions: Record<string, string>,
 ): Record<string, unknown> {
-  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  const properties = schema.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
   for (const [key, description] of Object.entries(descriptions)) {
     if (properties[key] !== undefined) {
       properties[key] = { ...properties[key], description };

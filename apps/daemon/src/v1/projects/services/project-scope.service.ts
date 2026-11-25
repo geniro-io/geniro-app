@@ -1,9 +1,9 @@
 import { homedir } from 'node:os';
-import { isChatTeamId } from '../../agents/utils/run-kind';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
+import { isChatTeamId } from '../../agents/utils/run-kind';
 import type { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { ProjectDao } from '../dao/project.dao';

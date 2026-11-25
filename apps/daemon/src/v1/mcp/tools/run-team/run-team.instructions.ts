@@ -18,7 +18,7 @@ export function runTeamInstructions(form: RunTeamForm): string {
     ].join('\n');
   }
   return [
-    'Change the team you lead, for this run only: add an agent, remove one, or change an agent\'s role, task, instructions, model or effort. Use it when the user asks for such a change in their own words; never change the team any other way.',
+    "Change the team you lead, for this run only: add an agent, remove one, or change an agent's role, task, instructions, model or effort. Use it when the user asks for such a change in their own words; never change the team any other way.",
     'The user sees every change on a card — added, leaving and changed agents, with each changed text before and after — and nothing changes until they press Apply. A removed agent finishes its current call, then leaves. A changed agent keeps its memory and works by the new instructions from its next call. An added agent can be called once the change is applied.',
     `The saved team in the library is never changed by this — to change that, use ${HOST_PROPOSE_TEAM_TOOL}. When the user's note on Start asked to add or change one agent, your FIRST call this turn applies that one change at once, with no card; any other change, and every removal, goes on a card. ${ANSWER_ARRIVES}`,
   ].join('\n');

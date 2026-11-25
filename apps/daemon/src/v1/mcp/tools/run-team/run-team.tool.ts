@@ -81,7 +81,10 @@ export class RunTeamTool extends BaseMcpTool {
       const outcome = await this.proposals.proposeRunTeam(runId, () =>
         this.chatTeams.prepareStart(runId, read.query),
       );
-      return this.text(runTeamResultText(outcome), outcome.status === 'refused');
+      return this.text(
+        runTeamResultText(outcome),
+        outcome.status === 'refused',
+      );
     }
     const read = readRunTeamChangeArgs(args);
     if (!read.ok) {

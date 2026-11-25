@@ -36,9 +36,9 @@ import { diffTeams } from '../utils/team-diff';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { agentsThatRunAuto } from '../utils/unattended';
 import { RunTeamService } from './run-team.service';
-import type { PreparedProposal } from './team-proposal.service';
 import { TeamExecutorService } from './team-executor.service';
 import { TeamHealthService } from './team-health.service';
+import type { PreparedProposal } from './team-proposal.service';
 
 /** What a chat's lead is called on the team and on the card. */
 const CHAT_LEAD_NAME = 'This chat';
@@ -174,7 +174,10 @@ export class ChatTeamService {
     if (run === null || run.teamId === null) {
       return refused('NOT_A_TEAM_RUN', 'only a running team can be changed');
     }
-    const current = await this.runTeams.teamOf(run as Run & { teamId: string }, em);
+    const current = await this.runTeams.teamOf(
+      run as Run & { teamId: string },
+      em,
+    );
     const departed = new Set(
       readTeamDepartures(run.teamDeparted).map((left) => left.memberId),
     );
@@ -223,7 +226,12 @@ export class ChatTeamService {
         continue;
       }
       const fields: Extract<RunTeamChange, { op: 'update' }>['fields'] = [];
-      for (const field of ['role', 'instructions', 'model', 'effort'] as const) {
+      for (const field of [
+        'role',
+        'instructions',
+        'model',
+        'effort',
+      ] as const) {
         const after = edit[field];
         if (after === undefined || after === (target[field] ?? null)) {
           continue;
@@ -335,7 +343,11 @@ export class ChatTeamService {
     await this.executor.writeRunNote(runId, {
       severity: 'info',
       message: `Changed per the user's note: ${changeLines(planned.proposal.changes).join('; ')}`,
-      chatTeam: { phase: 'changed', remark: true, changes: planned.proposal.changes },
+      chatTeam: {
+        phase: 'changed',
+        remark: true,
+        changes: planned.proposal.changes,
+      },
     });
     const applied = await this.executor.changeRunTeam(
       runId,
@@ -434,7 +446,9 @@ export class ChatTeamService {
     }
     const tasks = proposal.changes.flatMap((change) =>
       change.op !== 'remove' && change.task !== null
-        ? [`${change.op === 'add' ? change.member.name : change.name}: ${change.task}`]
+        ? [
+            `${change.op === 'add' ? change.member.name : change.name}: ${change.task}`,
+          ]
         : [],
     );
     await cards.deliverOwnedCardVerdict(
@@ -446,9 +460,7 @@ export class ChatTeamService {
           ? ' The agents added can be called from your next turn.'
           : ''
       }${
-        tasks.length === 0
-          ? ''
-          : ` Hand each its task: ${tasks.join('; ')}.`
+        tasks.length === 0 ? '' : ` Hand each its task: ${tasks.join('; ')}.`
       }${noted})`,
       answer,
       { kind: 'changed' },
@@ -465,7 +477,8 @@ export class ChatTeamService {
     cards: OwnedCardHost,
   ): Promise<void> {
     const causes = await this.chats.promotionBlockers(runId, requestId, true);
-    const unfit = causes.length > 0 ? null : await this.teamRefusal(proposal.team);
+    const unfit =
+      causes.length > 0 ? null : await this.teamRefusal(proposal.team);
     if (unfit !== null) {
       causes.push(unfit.message);
     }

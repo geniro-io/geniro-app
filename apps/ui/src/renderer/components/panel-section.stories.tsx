@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { FileText, Filter } from 'lucide-react';
+import { type ComponentProps, useState } from 'react';
 
 import { PanelLinkRow } from './panel-link-row';
 import { PanelSection } from './panel-section';
@@ -47,4 +48,33 @@ export const WithAction: Story = {
       </Button>
     ),
   },
+};
+
+function FoldableSection({
+  initiallyOpen,
+  ...section
+}: { initiallyOpen: boolean } & Omit<
+  ComponentProps<typeof PanelSection>,
+  'open' | 'onToggle'
+>): React.JSX.Element {
+  const [open, setOpen] = useState(initiallyOpen);
+  return (
+    <PanelSection
+      {...section}
+      open={open}
+      onToggle={() => setOpen((current) => !current)}
+    />
+  );
+}
+
+/** A foldable section, open by default: its heading folds the body. */
+export const Foldable: Story = {
+  args: { label: 'Weather', count: 2 },
+  render: (args) => <FoldableSection {...args} initiallyOpen />,
+};
+
+/** Folded, the heading still says how much the section holds. */
+export const Folded: Story = {
+  args: { label: 'Weather', count: 2 },
+  render: (args) => <FoldableSection {...args} initiallyOpen={false} />,
 };

@@ -134,6 +134,7 @@ import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { WriteFailureNotices } from '../../agents/services/write-failure.notices';
 import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
+import { joinTurnInstructionParts } from '../../agents/utils/agent-instructions';
 import {
   type AgentOptionsSnapshot,
   readAgentOptions,
@@ -359,8 +360,12 @@ import {
   callerNodeOf,
 } from '../utils/caller-key';
 import {
-  callToolsAdmitted,
   changedInstructionsNote,
+  readConversationInstructions,
+  teamInstructionsHashOf,
+} from '../utils/conversation-instructions';
+import {
+  callToolsAdmitted,
   instructionBlocksByMember,
   memberInstructionFields,
 } from '../utils/member-instructions';
@@ -1234,13 +1239,6 @@ export class TeamExecutorService
    * old session, which is intact — the conversation is merely not compacted.
    */
   private readonly carriedSummaries = new Map<string, string>();
-
-  /**
-   * Per session key, the member instructions its conversation last ran under,
-   * so a resumed turn on a CLI that keeps the old ones is told the new text
-   * (`changedInstructionsNote`). In memory: after a restart nothing is owed.
-   */
-  private readonly conversationInstructions = new Map<string, string | null>();
 
   /**
    * Per session key, the context a conversation held when it was first
@@ -2531,6 +2529,32 @@ export class TeamExecutorService
    * or is archived; the caller has checked everything else. No row is written:
    * `openChatTeamPass` starts the team.
    */
+  /**
+   * Record that the conversation on `sessionKey` now runs under team
+   * instructions hashing to `hash` (`Run.conversationInstructions`).
+   */
+  private async recordConversationInstructions(
+    runId: string,
+    sessionKey: string,
+    hash: string,
+    em: EntityManager,
+  ): Promise<void> {
+    const run = await this.runDao.getById(runId, em);
+    if (run === null) {
+      return;
+    }
+    await this.runDao.updateWithoutActivity(
+      runId,
+      {
+        conversationInstructions: JSON.stringify({
+          ...readConversationInstructions(run.conversationInstructions),
+          [sessionKey]: hash,
+        }),
+      },
+      em,
+    );
+  }
+
   async promoteChat(runId: string, team: Team): Promise<boolean> {
     const em = this.em.fork();
     const snapshot = teamSnapshotOf(team);
@@ -2547,6 +2571,12 @@ export class TeamExecutorService
         currentLead: SINGLE_AGENT_NODE,
         agentKind: null,
         approval: null,
+        // The chat's session ran with no team instructions, so the lead's
+        // first team turn is told them (`changedInstructionsNote`).
+        conversationInstructions: JSON.stringify({
+          [nodeSessionKey(runId, SINGLE_AGENT_NODE)]:
+            teamInstructionsHashOf(''),
+        }),
       },
       em,
     );
@@ -3749,11 +3779,6 @@ export class TeamExecutorService
     for (const key of [...this.carriedSummaries.keys()]) {
       if (key.startsWith(prefix)) {
         this.carriedSummaries.delete(key);
-      }
-    }
-    for (const key of [...this.conversationInstructions.keys()]) {
-      if (key.startsWith(prefix)) {
-        this.conversationInstructions.delete(key);
       }
     }
     for (const key of [...this.compactionBaselines.keys()]) {
@@ -6546,13 +6571,39 @@ export class TeamExecutorService
         carried !== null
           ? null
           : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null);
-      const ownInstructions = node.instructions ?? null;
-      const ranWith = this.conversationInstructions.get(sessionKey);
+      // The member's instructions and character, the blocks addressed to it,
+      // the answering-a-call note and "May call" block — built by the helper
+      // the inspector's size readout measures with. Blocks are joined there
+      // because the order of several blocks is the team's, which no adapter
+      // could recover; the rest are peers ranked by `turnInstructionParts`.
+      const teamFields = memberInstructionFields(node, {
+        blocks: blocksOf.get(node.id),
+        callees: calleesOf.get(node.id),
+        answeringACall: callContext !== undefined,
+        config: adapter.getConfig(),
+        stageMap,
+        serverName: hostMcpServerName(runId),
+      });
+      const mcpEndpoint = mcpEndpointFor(
+        node,
+        callContext?.conversationId ?? null,
+      );
+      const teamInstructions = joinTurnInstructionParts(
+        adapter.turnInstructionParts(
+          { ...teamFields, internalProbe: true },
+          mcpEndpoint !== null,
+        ),
+      );
+      const teamInstructionsHash = teamInstructionsHashOf(teamInstructions);
+      const ranUnder = readConversationInstructions(
+        (await this.runDao.getById(runId, this.em.fork()))
+          ?.conversationInstructions ?? null,
+      )[sessionKey];
       const instructionsChanged =
         plainTurn &&
         resumeSessionId !== null &&
-        ranWith !== undefined &&
-        ranWith !== ownInstructions &&
+        ranUnder !== undefined &&
+        ranUnder !== teamInstructionsHash &&
         adapter.getConfig().resumeKeepsInstructionsReason !== null;
       const input: AgentTurnInput = {
         ...(liveStream.partials ? { streamPartials: true } : {}),
@@ -6561,7 +6612,7 @@ export class TeamExecutorService
           carried,
           [
             instructionsChanged
-              ? changedInstructionsNote(ownInstructions)
+              ? changedInstructionsNote(teamInstructions)
               : null,
             deliveryNotice?.prompt ?? null,
             prompt,
@@ -6601,19 +6652,7 @@ export class TeamExecutorService
             }
           : {}),
         resumeSessionId,
-        // The member's instructions and character, the blocks addressed to it,
-        // the answering-a-call note and "May call" block — built by the helper
-        // the inspector's size readout measures with. Blocks are joined there
-        // because the order of several blocks is the team's, which no adapter
-        // could recover; the rest are peers ranked by `turnInstructionParts`.
-        ...memberInstructionFields(node, {
-          blocks: blocksOf.get(node.id),
-          callees: calleesOf.get(node.id),
-          answeringACall: callContext !== undefined,
-          config: adapter.getConfig(),
-          stageMap,
-          serverName: hostMcpServerName(runId),
-        }),
+        ...teamFields,
         // A PEER of the member's instructions rather than something joined
         // into them: the two are composed by `AgentAdapter.composeSystemPrompt`,
         // which ranks the member's instructions after this so a member
@@ -6643,7 +6682,7 @@ export class TeamExecutorService
           adapter.getConfig().questionsCostAskPosture
             ? 'ask'
             : approval,
-        mcpEndpoint: mcpEndpointFor(node, callContext?.conversationId ?? null),
+        mcpEndpoint,
         // Per MEMBER, not per run: two members pointed at different plugin
         // directories are meant to run with different tools. Already refused
         // at startRun if unusable.
@@ -7888,8 +7927,18 @@ export class TeamExecutorService
           onOffTurnEvent,
         );
         turnSession = this.sessions.peek(sessionKey);
-        if (plainTurn || resumeSessionId === null) {
-          this.conversationInstructions.set(sessionKey, ownInstructions);
+        if (
+          (plainTurn || resumeSessionId === null) &&
+          ranUnder !== teamInstructionsHash
+        ) {
+          enqueue(async () => {
+            await this.recordConversationInstructions(
+              runId,
+              sessionKey,
+              teamInstructionsHash,
+              em,
+            );
+          });
         }
       } catch (err) {
         disposeQuestions?.();
@@ -10709,11 +10758,11 @@ export class TeamExecutorService
         calleesOf.set(caller, callees);
       }
       onDemand.clear();
-      for (const id of onDemandMemberIds(team)) {
+      for (const id of onDemandMemberIds(next)) {
         onDemand.add(id);
       }
       blocksOf.clear();
-      for (const [memberId, blocks] of instructionBlocksByMember(team)) {
+      for (const [memberId, blocks] of instructionBlocksByMember(next)) {
         blocksOf.set(memberId, blocks);
       }
       registerMemberTools();

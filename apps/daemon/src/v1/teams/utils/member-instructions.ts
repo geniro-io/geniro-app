@@ -162,15 +162,3 @@ export function memberInstructionFields(
       : null,
   };
 }
-
-/**
- * The note that opens a resumed conversation's turn when its member's own
- * instructions changed since it last ran, on a CLI whose resumed session keeps
- * the instructions it started with (`AdapterConfig.resumeKeepsInstructionsReason`).
- */
-export function changedInstructionsNote(instructions: string | null): string {
-  const text = instructions?.trim() ?? '';
-  return text === ''
-    ? 'Your own instructions in this team were removed: disregard the instructions you were given when this conversation started.'
-    : `Your instructions in this team have changed. They replace the instructions you were given when this conversation started; follow them from now on:\n<changed-instructions>\n${text}\n</changed-instructions>`;
-}

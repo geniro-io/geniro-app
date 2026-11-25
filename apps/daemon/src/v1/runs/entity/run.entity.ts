@@ -1008,6 +1008,15 @@ export class Run extends TimestampsEntity {
   teamDeparted: string | null = null;
 
   /**
+   * JSON `{[sessionKey]: hash}` of the team instructions each of a team run's
+   * conversations last ran under (`readConversationInstructions`), so a
+   * conversation resumed on a CLI that keeps its first instructions is told
+   * changed ones, across a restart too.
+   */
+  @Property({ type: 'text', nullable: true })
+  conversationInstructions: string | null = null;
+
+  /**
    * What this run's POLLED conversations have cost, in CENTS, as the account
    * behind their CLI reports it — for a CLI whose turns carry no price
    * (`AdapterConfig.usage.polledSpend`). Null for every run nothing has

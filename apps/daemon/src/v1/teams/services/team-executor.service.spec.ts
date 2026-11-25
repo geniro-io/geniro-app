@@ -45,6 +45,7 @@ import type {
   InstalledApprovalSupport,
   LiveStreamSupport,
   SessionCloseCause,
+  TurnInstructionInput,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
@@ -134,6 +135,7 @@ import type { TurnFolderService } from '../../agents/services/turn-folder.servic
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import type { WriteFailureNotices } from '../../agents/services/write-failure.notices';
+import type { TurnInstructionPart } from '../../agents/utils/agent-instructions';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import {
   callMembershipLookupOf,
@@ -148,7 +150,10 @@ import {
   readAttention,
 } from '../../agents/utils/run-attention';
 import { readRestartContinuation } from '../../agents/utils/run-restart-continuation';
-import { callSessionKey } from '../../agents/utils/session-keys';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
 import { serializeMemberQuestions } from '../../agents/utils/team-member-questions';
@@ -183,7 +188,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
-import { changedInstructionsNote } from '../utils/member-instructions';
+import { teamInstructionsHashOf } from '../utils/conversation-instructions';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
@@ -955,6 +960,12 @@ class FakeAdapter {
   /** The SHIPPED adapter's answer, over the catalog the setup hands it. */
   catalogWindow(model: string): number | null {
     return this.real.catalogWindow(model);
+  }
+  turnInstructionParts(
+    input: TurnInstructionInput,
+    granted: boolean,
+  ): TurnInstructionPart[] {
+    return this.real.turnInstructionParts(input, granted);
   }
   /**
    * When true, this CLI's MCP client is modelled as holding a call open for a
@@ -8256,9 +8267,14 @@ describe('TeamExecutorService — agent calls', () => {
     const continued = claude.starts.at(-1)!;
     expect(continued.input.resumeSessionId).toBe('s-helper');
     expect(continued.input.systemPrompt).toBe('End every reply with BANANA.');
-    expect(continued.input.prompt).toBe(
-      `${changedInstructionsNote('End every reply with BANANA.')}\n\nwhich word?`,
+    expect(continued.input.prompt).toMatch(
+      /^Your team instructions have changed\./,
     );
+    expect(continued.input.prompt).toContain('End every reply with BANANA.');
+    expect(continued.input.prompt).toContain(
+      continued.input.callSurfacePrompt!,
+    );
+    expect(continued.input.prompt.endsWith('\n\nwhich word?')).toBe(true);
     completeTurn(continued, 'ZEBRA. BANANA');
     await drain();
     await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-2' });
@@ -23677,6 +23693,170 @@ describe('TeamExecutorService — chat teams', () => {
     );
     expect(started).toHaveLength(1);
     expect(claude.starts[0]!.input.resumeSessionId).toBe('sess-chat');
+  });
+
+  it('tells a promoted chat’s lead its team instructions in its first team turn, since the resumed chat session keeps the chat’s', async () => {
+    const { service, claude, runDao, nodeDao } = setup();
+    const chat = await runDao.create({
+      teamId: null,
+      status: 'completed',
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    await nodeDao.createPending(chat.id, 'agent');
+    await nodeDao.saveSessionId(chat.id, 'agent', 'sess-chat');
+    const team = teamOf(
+      [member('agent', { name: 'This chat' }), member('dev', { name: 'Dev' })],
+      { name: 'Chat team' },
+    );
+
+    expect(await service.promoteChat(chat.id, team)).toBe(true);
+    await service.openChatTeamPass(
+      chat.id,
+      'the plan',
+      'This chat is now a team',
+    );
+    await drain();
+
+    const lead = claude.starts[0]!;
+    expect(lead.input.resumeSessionId).toBe('sess-chat');
+    expect(lead.input.callSurfacePrompt).toContain('Dev');
+    expect(lead.input.prompt).toMatch(/^Your team instructions have changed\./);
+    expect(lead.input.prompt).toContain(lead.input.callSurfacePrompt!);
+    completeTurn(lead, 'on it');
+    await drain();
+
+    await service.sendMessage(chat.id, 'and now?');
+    await drain();
+    expect(claude.starts.at(-1)!.input.prompt).toBe('and now?');
+  });
+
+  it('tells a resumed lead its new "May call" block once a member is added', async () => {
+    const { service, claude, runDao } = setup();
+    const team = teamOf(
+      [member('a', { instructions: 'You lead.' }), member('b')],
+      { name: 'one' },
+    );
+    const run = await service.startRun({
+      slug: 'one',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    const before = runDao.runs.get(run.id)!;
+    await service.changeRunTeam(
+      run.id,
+      teamOf(
+        [
+          member('a', { instructions: 'You lead.' }),
+          member('b'),
+          member('c', { name: 'Checker' }),
+        ],
+        { name: 'one' },
+      ),
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+
+    await service.sendMessage(run.id, 'go on');
+    await drain();
+
+    const resumed = claude.starts.at(-1)!;
+    expect(resumed.input.resumeSessionId).toBe('sess-a');
+    expect(resumed.input.callSurfacePrompt).toContain('Checker');
+    expect(resumed.input.prompt).toMatch(
+      /^Your team instructions have changed\./,
+    );
+    expect(resumed.input.prompt).toContain('You lead.');
+    expect(resumed.input.prompt).toContain(resumed.input.callSurfacePrompt!);
+    expect(resumed.input.prompt.endsWith('\n\ngo on')).toBe(true);
+  });
+
+  it('owes the note from what the run row recorded, so a change made before a restart still reaches the resumed conversation', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'solo',
+      team: teamOf([member('a', { instructions: 'You review.' })], {
+        name: 'solo',
+      }),
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    const key = nodeSessionKey(run.id, 'a');
+    const recorded = JSON.parse(
+      runDao.runs.get(run.id)!.conversationInstructions!,
+    ) as Record<string, string>;
+    expect(Object.keys(recorded)).toEqual([key]);
+    // What the daemon before the restart recorded: the conversation last ran
+    // under the instructions the change replaced.
+    runDao.runs.get(run.id)!.conversationInstructions = JSON.stringify({
+      [key]: teamInstructionsHashOf('You write.'),
+    });
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    const resumed = claude.starts[1]!;
+    expect(resumed.input.resumeSessionId).toBe('sess-a');
+    expect(resumed.input.prompt).toBe(
+      'Your team instructions have changed. The block below replaces the team instructions you were given earlier in this conversation, if any; follow it from now on:\n<team-instructions>\nYou review.\n</team-instructions>\n\nagain',
+    );
+    expect(
+      JSON.parse(runDao.runs.get(run.id)!.conversationInstructions!),
+    ).toEqual(recorded);
+  });
+
+  it('gives a member added mid-run the blocks addressed to everyone, as a call-only member', async () => {
+    const { service, claude, runDao, callBroker } = setup();
+    const blocks: InstructionBlock[] = [
+      {
+        id: 'house',
+        title: 'house',
+        text: 'HOUSE RULES',
+        audience: 'everyone',
+      },
+    ];
+    const run = await service.startRun({
+      slug: 'one',
+      team: teamOf([member('a'), member('b')], {
+        name: 'one',
+        instructionBlocks: blocks,
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const before = runDao.runs.get(run.id)!;
+    await service.changeRunTeam(
+      run.id,
+      teamOf([member('a'), member('b'), member('c')], {
+        name: 'one',
+        instructionBlocks: blocks,
+      }),
+      runTeamHashOf(before.teamSnapshot),
+      [],
+    );
+
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'check',
+      agent: 'c',
+      message: 'check it',
+      mode: 'async',
+    });
+    await drain();
+
+    const called = claude.starts.at(-1)!;
+    expect(called.input.prompt).toBe('check it');
+    expect(called.input.instructionBlocks).toBe('HOUSE RULES');
+    expect(called.input.answeringACallPrompt).not.toBeNull();
   });
 
   it('refuses a second promotion of the same chat', async () => {

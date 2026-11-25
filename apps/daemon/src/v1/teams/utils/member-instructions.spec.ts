@@ -6,7 +6,6 @@ import type { InstructionBlock } from '../teams.types';
 import { ANSWERING_WITH_CALLS_OUT } from './callee-text';
 import {
   callSurfaceText,
-  changedInstructionsNote,
   instructionBlocksByMember,
   joinInstructionBlocks,
   memberInstructionFields,
@@ -209,20 +208,5 @@ describe('memberInstructionFields', () => {
 
   it('gives no call surface to a member with nobody to call', () => {
     expect(fieldsOf({ callees: [] }).callSurfacePrompt).toBeNull();
-  });
-});
-
-describe('changedInstructionsNote', () => {
-  it('hands over the new instructions, trimmed, as replacing the old ones', () => {
-    expect(changedInstructionsNote('  End with BANANA.\n')).toBe(
-      'Your instructions in this team have changed. They replace the instructions you were given when this conversation started; follow them from now on:\n<changed-instructions>\nEnd with BANANA.\n</changed-instructions>',
-    );
-  });
-
-  it('says the old instructions no longer hold when the new ones are empty', () => {
-    expect(changedInstructionsNote('   ')).toBe(changedInstructionsNote(null));
-    expect(changedInstructionsNote(null)).toContain(
-      'disregard the instructions you were given',
-    );
   });
 });

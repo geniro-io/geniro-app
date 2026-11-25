@@ -30,7 +30,24 @@ export function ReviewQuote({ quote }: { quote: string }): React.JSX.Element {
   );
 }
 
-/** The field a comment is written in: Cmd/Ctrl+Enter adds it, Esc closes it. */
+/** The keys of a review text field: Cmd/Ctrl+Enter submits it, Esc closes it without closing the screen. */
+export function reviewFieldKeys(
+  onSubmit: () => void,
+  onCancel: () => void,
+): (event: React.KeyboardEvent) => void {
+  return (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      onSubmit();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      onCancel();
+    }
+  };
+}
+
+/** The field a comment is written in, in the diff under its lines: Cmd/Ctrl+Enter adds it, Esc closes it. */
 export function ReviewCommentEditor({
   heading,
   initial = '',
@@ -65,16 +82,7 @@ export function ReviewCommentEditor({
     <div
       data-slot="review-comment-editor"
       className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 font-sans"
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault();
-          void submit();
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          onCancel();
-        }
-      }}>
+      onKeyDown={reviewFieldKeys(() => void submit(), onCancel)}>
       <p className="text-xs text-muted-foreground">{heading}</p>
       <ExpandableTextarea
         ariaLabel="Review comment"
@@ -83,6 +91,7 @@ export function ReviewCommentEditor({
         onChange={setBody}
         rows={3}
         autoFocus
+        expandable={false}
         placeholder="Leave a comment for the agent"
       />
       {failed === null ? null : (

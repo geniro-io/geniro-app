@@ -190,7 +190,7 @@ After an update, Geniro opens a page over nearly the whole window with the versi
 <td valign="top">
 
 <b>🔍 Review changes</b><br>
-Press a thread's changes chip to read everything it changed as a GitHub-style diff with line numbers and highlighting. Tick files Viewed, comment on a line, a range or a whole file, and send the comments to the agent as one review; it answers under each one. Comments stay in Geniro, never in git.
+Press a thread's changes chip to read everything it changed as a GitHub-style diff with line numbers and highlighting. Tick files Viewed, comment on a line, a range or a whole file right in the diff, and send the comments to the agent as one review; it answers under each one. Comments stay in Geniro, never in git.
 
 </td>
 </tr>

@@ -20,7 +20,11 @@ import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { buildChangesTree, type ChangeTreeNode } from './changes-tree';
 import { folderName } from './directory-select';
-import { ReviewCommentThread, reviewLineLabel } from './review-comment-thread';
+import {
+  ReviewCommentThread,
+  reviewFieldKeys,
+  reviewLineLabel,
+} from './review-comment-thread';
 import { ReviewFileCard, STATUS_META } from './review-file-card';
 import { useThreadFlags } from './thread-ui-memory';
 import type { WorkFolderChanges } from './use-chat-changes';
@@ -148,7 +152,8 @@ export function ChangesReviewDialog({
   const [filter, setFilter] = useState('');
   const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [current, setCurrent] = useState<string | null>(null);
-  const [sendOpen, setSendOpen] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  const [note, setNote] = useState('');
   const scroller = useRef<HTMLDivElement | null>(null);
 
   const sections = useMemo<FolderSection[]>(
@@ -311,8 +316,10 @@ export function ChangesReviewDialog({
           <Button
             type="button"
             size="sm"
+            aria-expanded={finishing && drafts.length > 0}
+            aria-controls="finish-review"
             disabled={drafts.length === 0 || review.sending === 'sending'}
-            onClick={() => setSendOpen(true)}>
+            onClick={() => setFinishing((was) => !was)}>
             {`Send review · ${drafts.length}`}
           </Button>
         )}
@@ -331,6 +338,20 @@ export function ChangesReviewDialog({
         ) : null}
         {review.error ? (
           <ErrorText className="shrink-0 px-5 py-2">{review.error}</ErrorText>
+        ) : null}
+        {finishing && drafts.length > 0 && review.sending === 'idle' ? (
+          <FinishReview
+            drafts={drafts}
+            note={note}
+            onNoteChange={setNote}
+            onClose={() => setFinishing(false)}
+            onSend={() => {
+              const text = note.trim();
+              setFinishing(false);
+              setNote('');
+              void review.send(text === '' ? null : text);
+            }}
+          />
         ) : null}
         {focusComment !== null &&
         !review.comments.some((comment) => comment.number === focusComment) ? (
@@ -491,15 +512,6 @@ export function ChangesReviewDialog({
           </div>
         </div>
       </div>
-      <SendReviewDialog
-        open={sendOpen}
-        drafts={drafts}
-        onClose={() => setSendOpen(false)}
-        onSend={async (note) => {
-          setSendOpen(false);
-          await review.send(note);
-        }}
-      />
     </Dialog>
   );
 }
@@ -587,25 +599,29 @@ function FileTree({
   );
 }
 
-function SendReviewDialog({
-  open,
+/** GitHub's "Finish your review", in the screen under its header rather than over it. */
+function FinishReview({
   drafts,
+  note,
+  onNoteChange,
   onClose,
   onSend,
 }: {
-  open: boolean;
   drafts: readonly ReviewComment[];
+  note: string;
+  onNoteChange: (note: string) => void;
   onClose: () => void;
-  onSend: (note: string | null) => Promise<void>;
+  onSend: () => void;
 }): React.JSX.Element {
-  const [note, setNote] = useState('');
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title="Send the review to the agent"
-      className="max-w-xl">
-      <div className="flex flex-col gap-3">
+    <section
+      id="finish-review"
+      aria-label="Finish your review"
+      data-slot="finish-review"
+      className="flex max-h-[60%] shrink-0 flex-col gap-3 overflow-y-auto border-b border-border bg-card px-5 py-3"
+      onKeyDown={reviewFieldKeys(onSend, onClose)}>
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-medium">Finish your review</h3>
         <p className="text-sm text-muted-foreground">
           {drafts.length === 1
             ? 'One comment goes'
@@ -613,41 +629,37 @@ function SendReviewDialog({
           to the agent as one message. If it is working, the review waits for
           its turn to end.
         </p>
-        <ul className="m-0 flex max-h-72 list-none flex-col gap-2 overflow-y-auto p-0">
-          {drafts.map((draft) => (
-            <li
-              key={draft.id}
-              className="rounded-md border border-border px-3 py-2 text-sm">
-              <p className="font-mono text-xs break-all text-muted-foreground">
-                {`#${draft.number} · ${draft.path} · ${reviewLineLabel(draft.side, draft.startLine, draft.endLine)}`}
-              </p>
-              <p className="break-words whitespace-pre-wrap">{draft.body}</p>
-            </li>
-          ))}
-        </ul>
-        <ExpandableTextarea
-          ariaLabel="Review note"
-          title="Note for the review"
-          value={note}
-          onChange={setNote}
-          rows={2}
-          placeholder="A note for the whole review (optional)"
-        />
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={() => {
-              const text = note.trim();
-              setNote('');
-              void onSend(text === '' ? null : text);
-            }}>
-            Send review
-          </Button>
-        </div>
       </div>
-    </Dialog>
+      <ul className="m-0 flex max-h-48 list-none flex-col gap-2 overflow-y-auto p-0">
+        {drafts.map((draft) => (
+          <li
+            key={draft.id}
+            className="rounded-md border border-border px-3 py-2 text-sm">
+            <p className="font-mono text-xs break-all text-muted-foreground">
+              {`#${draft.number} · ${draft.path} · ${reviewLineLabel(draft.side, draft.startLine, draft.endLine)}`}
+            </p>
+            <p className="break-words whitespace-pre-wrap">{draft.body}</p>
+          </li>
+        ))}
+      </ul>
+      <ExpandableTextarea
+        ariaLabel="Review note"
+        title="Note for the review"
+        value={note}
+        onChange={onNoteChange}
+        rows={2}
+        autoFocus
+        expandable={false}
+        placeholder="A note for the whole review (optional)"
+      />
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={onSend}>
+          Send review
+        </Button>
+      </div>
+    </section>
   );
 }

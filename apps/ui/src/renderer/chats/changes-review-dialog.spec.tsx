@@ -633,6 +633,86 @@ describe('ChangesReviewDialog — Send review', () => {
 
     expect(sendHeader().disabled).toBe(true);
   });
+
+  it('finishes the review in the screen under its header, not in a dialog over it', async () => {
+    const ctl = review({ comments: [comment()] });
+    await mount(screen({ changes: [FILE_A], review: ctl }));
+
+    await press(sendHeader());
+
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    const panel = document.querySelector('[data-slot="finish-review"]');
+    expect(panel?.getAttribute('aria-label')).toBe('Finish your review');
+    expect(panel?.closest('[role="dialog"]')).not.toBeNull();
+    expect(sendHeader().getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(
+      'Review note',
+    );
+    expect(control('Expand Note for the review')).toBeNull();
+
+    await press(sendHeader());
+    expect(document.querySelector('[data-slot="finish-review"]')).toBeNull();
+  });
+
+  it('closes the panel on Escape and keeps the screen and its note', async () => {
+    const onClose = vi.fn();
+    const ctl = review({ comments: [comment()] });
+    await mount(screen({ changes: [FILE_A], review: ctl, onClose }));
+    await press(sendHeader());
+    const note = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Review note"]',
+    )!;
+    await typeInto(note, 'Half written');
+
+    await keyDown(note, { key: 'Escape' });
+
+    expect(document.querySelector('[data-slot="finish-review"]')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    await press(sendHeader());
+    expect(
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Review note"]',
+      )!.value,
+    ).toBe('Half written');
+  });
+
+  it('sends the review with Cmd+Enter in the note', async () => {
+    const ctl = review({ comments: [comment()] });
+    await mount(screen({ changes: [FILE_A], review: ctl }));
+    await press(sendHeader());
+    const note = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Review note"]',
+    )!;
+    await typeInto(note, 'All of them');
+
+    await keyDown(note, { key: 'Enter', metaKey: true });
+
+    expect(ctl.send).toHaveBeenCalledWith('All of them');
+    expect(document.querySelector('[data-slot="finish-review"]')).toBeNull();
+  });
+
+  it('writes a line comment in the diff under its line, with no editor popup', async () => {
+    await mount(screen({ changes: [FILE_A] }));
+
+    await press(must('Comment on new line 21'));
+
+    const field = editor();
+    expect(field.closest('[data-slot="review-diff"]')).not.toBeNull();
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(
+      [...document.querySelectorAll('button')].some((button) =>
+        (button.getAttribute('aria-label') ?? '').startsWith('Expand'),
+      ),
+    ).toBe(false);
+    expect(
+      must('Comment on new line 21').compareDocumentPosition(field) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      must('Comment on new line 22').compareDocumentPosition(field) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
 });
 
 describe('ChangesReviewDialog — the agent’s answers', () => {

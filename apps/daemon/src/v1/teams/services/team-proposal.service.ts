@@ -12,6 +12,7 @@ import {
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  HOST_RUN_TEAM_TOOL,
   type OwnedCardHost,
   type RecommendationApply,
   type TeamProposalOutcome,
@@ -339,14 +340,14 @@ export class TeamProposalService {
         await cards.retireOwnedCard(
           runId,
           done.standing.requestId,
-          HOST_PROPOSE_TEAM_TOOL,
+          cardToolOf(done.standing.proposal),
         );
         done.retire = 'done';
       }
       await cards.raiseOwnedCard(
         runId,
         requestId,
-        { toolName: HOST_PROPOSE_TEAM_TOOL, input: proposal },
+        { toolName: cardToolOf(proposal), input: proposal },
         this.responderFor(runId, requestId, proposal),
       );
       done.raised = true;
@@ -372,7 +373,7 @@ export class TeamProposalService {
       this.logger.error(
         `run ${runId} could not put a team proposal on screen: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await this.undoRaise(cards, runId, requestId, done);
+      await this.undoRaise(cards, runId, requestId, cardToolOf(proposal), done);
       return {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
@@ -393,18 +394,19 @@ export class TeamProposalService {
     cards: OwnedCardHost,
     runId: string,
     requestId: string,
+    raisedTool: string,
     done: RaiseProgress,
   ): Promise<void> {
     try {
       if (done.raised) {
-        await cards.retireOwnedCard(runId, requestId, HOST_PROPOSE_TEAM_TOOL);
+        await cards.retireOwnedCard(runId, requestId, raisedTool);
       }
       if (done.retire === 'started' && done.standing !== null) {
         await cards.trackOwnedCard(
           runId,
           done.standing.requestId,
           {
-            toolName: HOST_PROPOSE_TEAM_TOOL,
+            toolName: cardToolOf(done.standing.proposal),
             input: done.standing.proposal,
           },
           this.responderFor(
@@ -490,7 +492,7 @@ export class TeamProposalService {
     await cards.trackOwnedCard(
       runId,
       pending.requestId,
-      { toolName: HOST_PROPOSE_TEAM_TOOL, input: pending.proposal },
+      { toolName: cardToolOf(pending.proposal), input: pending.proposal },
       this.responderFor(runId, pending.requestId, pending.proposal),
     );
     return true;
@@ -1449,4 +1451,11 @@ function refusalOf(
 
 function isConflict(error: unknown, code: string): boolean {
   return error instanceof ConflictException && error.errorCode === code;
+}
+
+/** The tool a proposal card is raised under: a chat team's own `run_team`, else `propose_team`. */
+function cardToolOf(proposal: TeamProposal): string {
+  return isRunTeamProposal(proposal)
+    ? HOST_RUN_TEAM_TOOL
+    : HOST_PROPOSE_TEAM_TOOL;
 }

@@ -17,7 +17,11 @@ import { PanelSection } from '../components/panel-section';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { describeDaemonError } from '../daemon-api';
+import {
+  describeDaemonError,
+  PLUGIN_PRESS_TIMEOUT_MS,
+  PLUGIN_RUN_TIMEOUT_MS,
+} from '../daemon-api';
 import { SurfaceBody } from './a2ui-components';
 import { PluginReviewDialog } from './plugin-review-dialog';
 import {
@@ -136,10 +140,10 @@ export function PluginBlockSection({
       setRequestError(null);
       try {
         setOwnResult(
-          await api.runPlugin({
-            slug: block.slug,
-            pluginRunRequestDto: { runId, force },
-          }),
+          await api.runPlugin(
+            { slug: block.slug, pluginRunRequestDto: { runId, force } },
+            { signal: AbortSignal.timeout(PLUGIN_RUN_TIMEOUT_MS) },
+          ),
         );
       } catch (err) {
         setRequestError(describeDaemonError(err));
@@ -174,11 +178,14 @@ export function PluginBlockSection({
     setPhase({ kind: 'pressing', componentId });
     setPressNote(null);
     try {
-      const outcome = await api.pressPluginButton({
-        slug: block.slug,
-        buttonId,
-        pluginPressRequestDto: { runId, dataAt: result.at },
-      });
+      const outcome = await api.pressPluginButton(
+        {
+          slug: block.slug,
+          buttonId,
+          pluginPressRequestDto: { runId, dataAt: result.at },
+        },
+        { signal: AbortSignal.timeout(PLUGIN_PRESS_TIMEOUT_MS) },
+      );
       setPressNote(
         outcome.error === null
           ? { buttonId, ok: true }
@@ -351,7 +358,7 @@ export function PluginBlockSection({
             </div>
           ) : null}
           {data !== null ? (
-            count === 0 ? (
+            Array.isArray(data) && data.length === 0 ? (
               <p
                 data-slot="plugin-empty"
                 className="text-xs text-muted-foreground">

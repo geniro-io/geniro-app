@@ -226,10 +226,13 @@ describe('PluginBlockSection', () => {
     await flush();
 
     expect(api.runPlugin).toHaveBeenCalledTimes(1);
-    expect(api.runPlugin).toHaveBeenCalledWith({
-      slug: 'weather',
-      pluginRunRequestDto: { runId: 'run-1', force: false },
-    });
+    expect(api.runPlugin).toHaveBeenCalledWith(
+      {
+        slug: 'weather',
+        pluginRunRequestDto: { runId: 'run-1', force: false },
+      },
+      expect.anything(),
+    );
     expect(container.textContent).toContain('Rain at noon');
   });
 
@@ -256,10 +259,13 @@ describe('PluginBlockSection', () => {
     click(buttonNamed('Try again'));
     await flush();
 
-    expect(api.runPlugin).toHaveBeenLastCalledWith({
-      slug: 'weather',
-      pluginRunRequestDto: { runId: 'run-1', force: true },
-    });
+    expect(api.runPlugin).toHaveBeenLastCalledWith(
+      {
+        slug: 'weather',
+        pluginRunRequestDto: { runId: 'run-1', force: true },
+      },
+      expect.anything(),
+    );
     expect(container.textContent).toContain('Rain at noon');
   });
 
@@ -297,10 +303,13 @@ describe('PluginBlockSection', () => {
     click(buttonLabelled('Refresh Weather'));
     await flush();
 
-    expect(api.runPlugin).toHaveBeenLastCalledWith({
-      slug: 'weather',
-      pluginRunRequestDto: { runId: 'run-1', force: true },
-    });
+    expect(api.runPlugin).toHaveBeenLastCalledWith(
+      {
+        slug: 'weather',
+        pluginRunRequestDto: { runId: 'run-1', force: true },
+      },
+      expect.anything(),
+    );
   });
 
   it('asks before a confirm button runs, then presses with the data time the user saw', async () => {
@@ -320,11 +329,14 @@ describe('PluginBlockSection', () => {
     await flush();
 
     expect(api.pressPluginButton).toHaveBeenCalledTimes(1);
-    expect(api.pressPluginButton).toHaveBeenCalledWith({
-      slug: 'weather',
-      buttonId: 'publish',
-      pluginPressRequestDto: { runId: 'run-1', dataAt: AT },
-    });
+    expect(api.pressPluginButton).toHaveBeenCalledWith(
+      {
+        slug: 'weather',
+        buttonId: 'publish',
+        pluginPressRequestDto: { runId: 'run-1', dataAt: AT },
+      },
+      expect.anything(),
+    );
   });
 
   it('presses an unmarked button at once, with no confirmation', async () => {
@@ -339,11 +351,14 @@ describe('PluginBlockSection', () => {
     await flush();
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(api.pressPluginButton).toHaveBeenCalledWith({
-      slug: 'weather',
-      buttonId: 'restart',
-      pluginPressRequestDto: { runId: 'run-1', dataAt: AT },
-    });
+    expect(api.pressPluginButton).toHaveBeenCalledWith(
+      {
+        slug: 'weather',
+        buttonId: 'restart',
+        pluginPressRequestDto: { runId: 'run-1', dataAt: AT },
+      },
+      expect.anything(),
+    );
   });
 
   it('puts its name, folder and data into the message box with Ask', async () => {

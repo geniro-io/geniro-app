@@ -12,7 +12,7 @@ export const DETACHED_WORK_MS = 60 * 60_000;
  * by the bare run id). Every other prefixed key is the daemon's own errand —
  * a model listing, a version probe, a sign-in.
  */
-const WORK_KEY_PREFIXES = ['monitor:', 'action:'];
+const WORK_KEY_PREFIXES = ['monitor:', 'action:', 'plugin-button:'];
 
 /**
  * Is an agent at work: a run's turn not blocked on the user, a monitor, a

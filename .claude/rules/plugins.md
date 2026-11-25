@@ -38,7 +38,7 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 
 - Runs `["/bin/sh", "-c", command]` through `runManagedCommand` in the folder, with the plugin's timeout, 1 MiB output kept from the head, `endGroupOnExit`, `buildChildEnv` inside the runner and ProcessRegistry label `plugin:<slug>`. No run-tag env: a plugin's command is not the run's work.
 - Single flight per (slug, folder): a second caller joins the first run.
-- The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart. Without `force`, a call within `refresh_minutes` returns it, and no run starts less than a minute after the previous one.
+- The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart. Without `force`, a call within `refresh_minutes` returns it, and no run starts less than a minute after the previous one — except the refresh right after a button press, which skips the cache (and waits for a run already in flight, then runs again).
 - stdout must parse as JSON; otherwise the result's `error` says so, with the first 2 KB. A failed run is a result with `data: null` and its `error`, never a thrown error. stderr and error text pass `redactSecrets` and are cut to 4 KB.
 - Checks at run and press, in order: folder, approval (`PLUGIN_NOT_APPROVED`), `PLUGIN_DISABLED`.
 
@@ -46,7 +46,7 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 
 - A press sends `{runId, dataAt}`. Env values are read by the daemon from its own cached result, never from the client; a pointer the data lacks refuses `PLUGIN_NO_DATA`. Values are stringified, ≤ 1024 chars, no NUL (`PLUGIN_VALUE_TOO_LONG`).
 - Env names match `^PLUGIN_[A-Z0-9_]{1,57}$` only: `buildChildEnv` merges extra keys last, so any other name would let the data pick what runs.
-- `dataAt` is when the user read the data. A cache that has moved on refuses `PLUGIN_DATA_CHANGED` (409); the block refreshes and the user presses again.
+- `dataAt` is when the user read the data. A cache that has moved on, or that an earlier text of the file produced, refuses `PLUGIN_DATA_CHANGED` (409); the block refreshes and the user presses again.
 - One press at a time per (slug, button, folder); a second is `PLUGIN_BUSY`. Label `plugin-button:<slug>:<id>`, `endGroupOnExit`, the button's `timeout_minutes`, output tail masked, then cut as command actions are (`maskedTail`, shared with them). `plugin-button:` counts as work; data runs do not. After a press the data command runs again, skipping the cache.
 - Confirmation is the renderer's (`confirm-dialog`). The daemon runs a press it is sent.
 

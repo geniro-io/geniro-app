@@ -427,5 +427,52 @@ describe('PluginRunnerService', () => {
 
       expect(pressed.outputTail).toBe(output.slice(-4096));
     });
+
+    it('refuses a press on data an earlier text of the file produced', async () => {
+      await approvedPlugin('deploys', {
+        buttons: [{ id: 'retry', command: 'echo retry' }],
+      });
+      const seen = await runner.run('deploys', 'run-1');
+      await approvedPlugin('deploys', {
+        command: 'echo {"other":true}',
+        buttons: [{ id: 'retry', command: 'echo retry' }],
+      });
+
+      await expect(
+        runner.press('deploys', 'retry', 'run-1', seen.at),
+      ).rejects.toMatchObject({ errorCode: 'PLUGIN_DATA_CHANGED' });
+      expect(
+        calls.filter((call) => call.label.startsWith('plugin-button')),
+      ).toEqual([]);
+    });
+
+    it('refreshes after a press with a run that starts after the press, even with one in flight', async () => {
+      const inFlight = deferred<ManagedCommandResult>();
+      let dataRuns = 0;
+      respond = (options) => {
+        if (options.label.startsWith('plugin-button:')) {
+          return Promise.resolve(result({ stdout: '', output: 'ok\n' }));
+        }
+        dataRuns += 1;
+        return dataRuns === 2
+          ? inFlight.promise
+          : Promise.resolve(result({ stdout: `{"run":${dataRuns}}` }));
+      };
+      await approvedPlugin('deploys', {
+        buttons: [{ id: 'retry', command: 'echo retry' }],
+      });
+      const seen = await runner.run('deploys', 'run-1');
+      const timer = runner.run('deploys', 'run-1', { skipCache: true });
+
+      await runner.press('deploys', 'retry', 'run-1', seen.at);
+      inFlight.resolve(result({ stdout: '{"run":2}' }));
+      await timer;
+      await vi.waitFor(() => expect(dataRuns).toBe(3));
+      await vi.waitFor(async () =>
+        expect((await runner.blocksForRun('run-1'))[0]?.result?.data).toEqual({
+          run: 3,
+        }),
+      );
+    });
   });
 });

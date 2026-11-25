@@ -259,7 +259,7 @@ pnpm commit             # conventional commit via commitizen
 9. **A plugin command the user approved** (`apps/daemon/src/v1/plugins/`; user decisions): the command line of a Geniro Plugin, run on this Mac through `/bin/sh -c` in the open thread's folder, by the user's own CLIs under the user's own login, only while its block is shown (on open, on ↻, on its timer while visible) or on a button press. geniro holds no credential for it and stores no output: the last result lives in memory per (plugin, folder) and is lost on restart.
    - The exact text is approved (`<userData>/plugins/.approved/<slug>.plugin.yaml`). A file whose text differs from that copy runs nothing, and so does a plugin never approved.
    - Commands and buttons come only from the approved file, never from command output. Data reaches a button command only as `PLUGIN_*` environment variables, read from the daemon's own cached result at the press.
-   - A run has a 30 s default timeout (120 s at most) and 1 MB of output, and at most one runs per plugin and folder at a time, never more often than once a minute.
+   - A run has a 30 s default timeout (120 s at most) and 1 MB of output, and at most one runs per plugin and folder at a time, never more often than once a minute except the refresh right after a button press.
    - A secret a command prints is masked only if it is registered (`redactSecrets`), so an unregistered one can show in the block.
 
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network. Mechanics: `apps/ui/src/main/AGENTS.md` → **LAN gateway**.

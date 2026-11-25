@@ -71,6 +71,12 @@ export const MCP_ROUTE_TIMEOUT_MS = 60_000;
  */
 export const BULK_REVOKE_TIMEOUT_MS = 10 * 60_000;
 
+/** A plugin's data run: past the longest command timeout a plugin may set (120 s). */
+export const PLUGIN_RUN_TIMEOUT_MS = 150_000;
+
+/** A plugin button's press: past the longest button timeout (60 min). */
+export const PLUGIN_PRESS_TIMEOUT_MS = 61 * 60_000;
+
 /**
  * The budget for one batch of the memory import's AI sort: the daemon gives
  * the CLI's one-off turn three minutes (`CLAUDE_ASK_TIMEOUT_MS`,

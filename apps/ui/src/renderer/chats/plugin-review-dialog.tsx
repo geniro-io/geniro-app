@@ -36,6 +36,7 @@ export function PluginReviewDialog({
     }
     let cancelled = false;
     setDetail(null);
+    setError(null);
     api
       .readPlugin({ slug })
       .then((read) => {

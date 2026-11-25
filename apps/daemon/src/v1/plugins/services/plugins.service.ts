@@ -89,7 +89,9 @@ export class PluginsService implements OnModuleInit {
   }
 
   async approve(slug: string, hash: string): Promise<PluginSummary> {
-    return this.summaryOf(await this.store.approve(slug, hash));
+    const approved = await this.store.approve(slug, hash);
+    this.runner.forget(slug);
+    return this.summaryOf(approved);
   }
 
   async patch(
@@ -97,11 +99,11 @@ export class PluginsService implements OnModuleInit {
     change: { enabled?: boolean; folders?: string[]; baseHash: string },
   ): Promise<PluginSummary> {
     const { baseHash, ...settings } = change;
-    return this.summaryOf(
-      await this.store.update(slug, baseHash, (text) =>
-        withPluginSettings(text, settings),
-      ),
+    const updated = await this.store.update(slug, baseHash, (text) =>
+      withPluginSettings(text, settings),
     );
+    this.runner.forget(slug);
+    return this.summaryOf(updated);
   }
 
   async delete(slug: string): Promise<boolean> {

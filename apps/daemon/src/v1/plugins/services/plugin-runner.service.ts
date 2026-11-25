@@ -165,7 +165,11 @@ export class PluginRunnerService {
     const key = keyOf(slug, place.folder);
     const joined = this.inFlight.get(key);
     if (joined !== undefined) {
-      return joined;
+      return options.skipCache
+        ? joined
+            .catch(() => undefined)
+            .then(() => this.run(slug, runId, options))
+        : joined;
     }
     const cached = this.cache.get(key);
     if (
@@ -221,7 +225,11 @@ export class PluginRunnerService {
       );
     }
     const cached = this.cache.get(keyOf(slug, place.folder));
-    if (cached === undefined || cached.result.at !== dataAt) {
+    if (
+      cached === undefined ||
+      cached.result.at !== dataAt ||
+      cached.hash !== stored.hash
+    ) {
       throw new ConflictException(
         'PLUGIN_DATA_CHANGED',
         'The plugin refreshed since you saw it; look again and press once more',

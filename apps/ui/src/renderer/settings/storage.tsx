@@ -105,6 +105,11 @@ const GROUP_TEXT: Record<StorageGroupIdEnum, { title: string; about: string }> =
       about:
         'Copies saved before a team was replaced, changed by an analysis or restored. Safe to delete.',
     },
+    [StorageGroupIdEnum.Plugins]: {
+      title: 'Plugins',
+      about:
+        'Your plugins, the copies you approved and backups of earlier versions. Managed in Settings → Plugins.',
+    },
     [StorageGroupIdEnum.Logs]: {
       title: 'Logs',
       about:

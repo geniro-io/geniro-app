@@ -13,6 +13,7 @@ import {
   GroupsApi,
   HandoffApi,
   KnowledgeApi,
+  PluginsApi,
   LabelInstructionsApi,
   LessonsApi,
   MemoriesApi,
@@ -298,6 +299,8 @@ export interface DaemonApis {
   memories: MemoriesApi;
   /** The documents agents read on demand (`/v1/knowledge`). */
   knowledge: KnowledgeApi;
+  /** The user's plugins and their blocks in a thread's right panel (`/v1/plugins`). */
+  plugins: PluginsApi;
   /** Search by meaning's status and index (`/v1/embeddings`); its writes are desktop only. */
   embeddings: EmbeddingsApi;
   /** Lessons reflections and the user's save or reject of their lessons (`/v1/lessons`). */
@@ -367,6 +370,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     shares: new SharesApi(config),
     memories: new MemoriesApi(config),
     knowledge: new KnowledgeApi(config),
+    plugins: new PluginsApi(config),
     embeddings: new EmbeddingsApi(config),
     lessons: new LessonsApi(config),
     storage: new StorageApi(config),

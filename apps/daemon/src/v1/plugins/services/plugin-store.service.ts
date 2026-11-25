@@ -121,7 +121,9 @@ export class PluginStoreService {
       return storedOf(
         slug,
         text,
-        options.approve ? text : await this.readSource(this.approvedPathOf(slug)),
+        options.approve
+          ? text
+          : await this.readSource(this.approvedPathOf(slug)),
       );
     });
   }

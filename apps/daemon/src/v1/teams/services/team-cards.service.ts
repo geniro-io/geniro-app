@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import {
   type DeferredCard,
   type DeferredCardResponder,
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_QUESTION_TOOL,
+  type HostPluginOutcome,
+  type HostPluginProposal,
   type HostProjectInstructions,
   type HostProjectInstructionsOutcome,
   type HostQuestion,
@@ -24,7 +32,14 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
+import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import {
+  hostPluginResultText,
+  pluginCardInput,
+  pluginCardKey,
+  pluginVerdict,
+} from '../../agents/utils/host-plugin';
 import {
   hostProjectInstructionsResultText,
   projectInstructionsCardInput,
@@ -49,15 +64,17 @@ import {
   serializeMemberQuestions,
 } from '../../agents/utils/team-member-questions';
 import {
+  type PendingTeamProjectCard,
   readTeamProjectCard,
   serializeTeamProjectCard,
   teamProjectCardId,
+  teamProjectCardTool,
 } from '../../agents/utils/team-project-card';
 import type { ItemKind } from '../../runs/runs.types';
 import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
 
-const LEAD_CARD_POSTED: HostProjectInstructionsOutcome = {
+const LEAD_CARD_POSTED: { status: 'posted'; buttons: string } = {
   status: 'posted',
   buttons: 'Approve or Deny',
 };
@@ -77,7 +94,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
   /** The project card being raised per run, claimed before the first await. */
   private readonly raising = new Map<
     string,
-    { key: string; outcome: Promise<HostProjectInstructionsOutcome> }
+    { key: string; outcome: Promise<LeadCardRaised> }
   >();
   /** The member question being raised per run and member, claimed before the first await. */
   private readonly asking = new Map<
@@ -101,11 +118,15 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     private readonly executor: TeamExecutorService,
     private readonly stageWakes: StageWakeService,
     private readonly changes: ProjectInstructionsChangeService,
+    @Optional() private readonly pluginCards?: PluginProposalBroker,
   ) {}
 
   onModuleInit(): void {
     this.executor.useLeadProjectCards((runId, change) =>
       this.proposeProjectInstructions(runId, change),
+    );
+    this.executor.useLeadPluginCards((runId, proposal) =>
+      this.proposePlugin(runId, proposal),
     );
     this.executor.useMemberQuestionCards({
       ask: (runId, memberId, questions, title, onScreen) =>
@@ -221,14 +242,30 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
 
   /**
    * The lead's `save_project_instructions`: put the card up and answer at
-   * once. One standing per run — the same change adopts it, another is
-   * refused — claimed synchronously, so two racing calls never both draw one.
+   * once. One lead card standing per run — the same change adopts it,
+   * another is refused — claimed synchronously, so two racing calls never
+   * both draw one.
    */
   proposeProjectInstructions(
     runId: string,
     change: HostProjectInstructions,
   ): Promise<HostProjectInstructionsOutcome> {
-    const key = projectInstructionsCardKey(change);
+    return this.proposeLeadCard(runId, { kind: 'project', change });
+  }
+
+  /** The lead's `save_plugin`, on {@link proposeProjectInstructions}' terms. */
+  proposePlugin(
+    runId: string,
+    proposal: HostPluginProposal,
+  ): Promise<HostPluginOutcome> {
+    return this.proposeLeadCard(runId, { kind: 'plugin', proposal });
+  }
+
+  private proposeLeadCard(
+    runId: string,
+    card: LeadCardBody,
+  ): Promise<LeadCardRaised> {
+    const key = leadCardKey(card);
     const inFlight = this.raising.get(runId);
     if (inFlight !== undefined) {
       return inFlight.key === key
@@ -238,7 +275,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
             reason: QUESTION_ALREADY_STANDING,
           });
     }
-    const outcome = this.raiseProjectCard(runId, key, change);
+    const outcome = this.raiseLeadCard(runId, key, card);
     this.raising.set(runId, { key, outcome });
     return outcome.finally(() => {
       if (this.raising.get(runId)?.outcome === outcome) {
@@ -247,35 +284,35 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     });
   }
 
-  private async raiseProjectCard(
+  private async raiseLeadCard(
     runId: string,
     key: string,
-    change: HostProjectInstructions,
-  ): Promise<HostProjectInstructionsOutcome> {
+    body: LeadCardBody,
+  ): Promise<LeadCardRaised> {
     const em = this.em.fork();
     const standing = readTeamProjectCard(
       (await this.runDao.getById(runId, em))?.pendingTeamProjectCard ?? null,
     );
     if (standing !== null) {
-      return projectInstructionsCardKey(standing.change) === key
+      return leadCardKey(standing) === key
         ? LEAD_CARD_POSTED
         : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
     }
-    const requestId = randomUUID();
+    const card = { ...body, requestId: randomUUID() } as PendingTeamProjectCard;
     let raised = false;
     try {
       await this.raiseOwnedCard(
         runId,
-        requestId,
-        projectCard(change),
-        this.projectResponder(runId, requestId, change),
+        card.requestId,
+        leadCard(card),
+        this.leadResponder(runId, card),
       );
       raised = true;
       // AFTER the row: a pointer written first would survive a failed write as
       // a card nothing ever drew.
       await this.runDao.setPendingTeamProjectCard(
         runId,
-        serializeTeamProjectCard({ requestId, change }),
+        serializeTeamProjectCard(card),
         em,
       );
       // Again after the column: an archive that read it before this write
@@ -288,10 +325,10 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       }
     } catch (error) {
       this.logger.error(
-        `team run ${runId} could not put a project-instructions card on screen: ${error instanceof Error ? error.message : String(error)}`,
+        `team run ${runId} could not put a ${leadCardNoun(card)} card on screen: ${error instanceof Error ? error.message : String(error)}`,
       );
       if (raised) {
-        await this.undoRaise(runId, requestId);
+        await this.undoRaise(runId, card);
       }
       return {
         status: 'unavailable',
@@ -304,28 +341,30 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     return LEAD_CARD_POSTED;
   }
 
-  private async undoRaise(runId: string, requestId: string): Promise<void> {
+  private async undoRaise(
+    runId: string,
+    card: PendingTeamProjectCard,
+  ): Promise<void> {
     try {
       await this.retireOwnedCard(
         runId,
-        requestId,
-        HOST_PROJECT_INSTRUCTIONS_TOOL,
+        card.requestId,
+        leadCard(card).toolName,
       );
       await this.runDao.setPendingTeamProjectCard(runId, null, this.em.fork());
     } catch (error) {
       this.logger.error(
-        `team run ${runId} could not take back a project-instructions card: ${error instanceof Error ? error.message : String(error)}`,
+        `team run ${runId} could not take back a ${leadCardNoun(card)} card: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
 
-  private projectResponder(
+  private leadResponder(
     runId: string,
-    requestId: string,
-    change: HostProjectInstructions,
+    card: PendingTeamProjectCard,
   ): DeferredCardResponder {
     return (allow) => {
-      void this.carryOutProjectVerdict(runId, requestId, change, allow);
+      void this.carryOutLeadVerdict(runId, card, allow);
     };
   }
 
@@ -334,10 +373,9 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
    * crash between the two reads at the next boot as a card that expired,
    * never as a second write.
    */
-  private async carryOutProjectVerdict(
+  private async carryOutLeadVerdict(
     runId: string,
-    requestId: string,
-    change: HostProjectInstructions,
+    card: PendingTeamProjectCard,
     allow: boolean,
   ): Promise<void> {
     let cleared = true;
@@ -346,10 +384,10 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     } catch (error) {
       cleared = false;
       this.logger.error(
-        `team run ${runId} could not close a project-instructions card: ${error instanceof Error ? error.message : String(error)}`,
+        `team run ${runId} could not close a ${leadCardNoun(card)} card: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    let outcome: HostProjectInstructionsOutcome = { status: 'declined' };
+    let outcome: LeadCardOutcome = { status: 'declined' };
     if (allow && !cleared) {
       outcome = {
         status: 'stale',
@@ -357,28 +395,63 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       };
     } else if (allow) {
       try {
-        outcome = await this.changes.write(runId, change);
+        outcome =
+          card.kind === 'project'
+            ? await this.changes.write(runId, card.change)
+            : await this.writePlugin(card.proposal);
       } catch (error) {
         this.logger.error(
-          `team run ${runId} could not write project instructions: ${error instanceof Error ? error.message : String(error)}`,
+          `team run ${runId} could not write its ${leadCardNoun(card)}: ${error instanceof Error ? error.message : String(error)}`,
         );
         outcome = {
           status: 'stale',
-          reason: 'the instructions could not be written',
+          reason:
+            card.kind === 'project'
+              ? 'the instructions could not be written'
+              : 'the plugin could not be written',
         };
       }
     }
+    if (card.kind === 'project') {
+      const projectOutcome = outcome as HostProjectInstructionsOutcome;
+      await this.writeVerdict(
+        runId,
+        card.requestId,
+        allow,
+        projectInstructionsVerdict(projectOutcome),
+      );
+      await this.wakeLead(
+        runId,
+        card.requestId,
+        hostProjectInstructionsResultText(projectOutcome, true),
+        'Told the lead what became of the project instructions',
+      );
+      return;
+    }
+    const pluginOutcome = outcome as HostPluginOutcome;
     await this.writeVerdict(
       runId,
-      requestId,
+      card.requestId,
       allow,
-      projectInstructionsVerdict(outcome),
+      pluginVerdict(pluginOutcome),
     );
     await this.wakeLead(
       runId,
-      requestId,
-      hostProjectInstructionsResultText(outcome, true),
-      'Told the lead what became of the project instructions',
+      card.requestId,
+      hostPluginResultText(pluginOutcome),
+      'Told the lead what became of the plugin',
+    );
+  }
+
+  private writePlugin(
+    proposal: HostPluginProposal,
+  ): Promise<HostPluginOutcome> {
+    return (
+      this.pluginCards?.write(proposal) ??
+      Promise.resolve({
+        status: 'stale',
+        reason: 'this daemon cannot write plugins',
+      })
     );
   }
 
@@ -419,7 +492,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     const closed = cardId !== null && (await this.closed(runId, cardId));
     const card = readTeamProjectCard(column);
     if (cardId !== null && !closed && card === null) {
-      await this.retireOwnedCard(runId, cardId, HOST_PROJECT_INSTRUCTIONS_TOOL);
+      await this.retireOwnedCard(runId, cardId, teamProjectCardTool(column));
     }
     if (card === null || closed) {
       await this.runDao.setPendingTeamProjectCard(runId, null, this.em.fork());
@@ -428,8 +501,8 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     await this.trackOwnedCard(
       runId,
       card.requestId,
-      projectCard(card.change),
-      this.projectResponder(runId, card.requestId, card.change),
+      leadCard(card),
+      this.leadResponder(runId, card),
     );
   }
 
@@ -828,9 +901,33 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
   }
 }
 
-function projectCard(change: HostProjectInstructions): DeferredCard {
-  return {
-    toolName: HOST_PROJECT_INSTRUCTIONS_TOOL,
-    input: projectInstructionsCardInput(change),
-  };
+/** A lead card's body before it has an id. */
+type LeadCardBody =
+  | { kind: 'project'; change: HostProjectInstructions }
+  | { kind: 'plugin'; proposal: HostPluginProposal };
+
+type LeadCardOutcome = HostProjectInstructionsOutcome | HostPluginOutcome;
+
+/** What raising a lead card answers at once: it is on screen, or why not. */
+type LeadCardRaised =
+  | { status: 'posted'; buttons: string }
+  | { status: 'unavailable'; reason: string };
+
+function leadCardKey(card: LeadCardBody): string {
+  return card.kind === 'project'
+    ? projectInstructionsCardKey(card.change)
+    : pluginCardKey(card.proposal);
+}
+
+function leadCardNoun(card: LeadCardBody): string {
+  return card.kind === 'project' ? 'project-instructions' : 'plugin';
+}
+
+function leadCard(card: LeadCardBody): DeferredCard {
+  return card.kind === 'project'
+    ? {
+        toolName: HOST_PROJECT_INSTRUCTIONS_TOOL,
+        input: projectInstructionsCardInput(card.change),
+      }
+    : { toolName: HOST_PLUGIN_TOOL, input: pluginCardInput(card.proposal) };
 }

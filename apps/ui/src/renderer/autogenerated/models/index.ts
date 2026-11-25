@@ -12328,6 +12328,427 @@ export interface PlanWindow {
 /**
  * 
  * @export
+ * @interface PluginApproveRequestDto
+ */
+export interface PluginApproveRequestDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginApproveRequestDto
+     */
+    hash: string;
+}
+/**
+ * 
+ * @export
+ * @interface PluginBlock
+ */
+export interface PluginBlock {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginBlock
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginBlock
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginBlock
+     */
+    state: PluginBlockStateEnum;
+    /**
+     * The folder the command runs in for this run
+     * @type {string}
+     * @memberof PluginBlock
+     */
+    folder: string;
+    /**
+     * 
+     * @type {Array<{ [key: string]: any; }>}
+     * @memberof PluginBlock
+     */
+    view: Array<{ [key: string]: any; }>;
+    /**
+     * 
+     * @type {number}
+     * @memberof PluginBlock
+     */
+    refreshMinutes: number;
+    /**
+     * 
+     * @type {Array<PluginButton>}
+     * @memberof PluginBlock
+     */
+    buttons: Array<PluginButton>;
+    /**
+     * 
+     * @type {PluginRunResult}
+     * @memberof PluginBlock
+     */
+    result: PluginRunResult | null;
+}
+
+
+/**
+ * @export
+ */
+export const PluginBlockStateEnum = {
+    Approved: 'approved',
+    Changed: 'changed',
+    Invalid: 'invalid'
+} as const;
+export type PluginBlockStateEnum = typeof PluginBlockStateEnum[keyof typeof PluginBlockStateEnum];
+
+/**
+ * 
+ * @export
+ * @interface PluginBlockListDto
+ */
+export interface PluginBlockListDto {
+    /**
+     * 
+     * @type {Array<PluginBlock>}
+     * @memberof PluginBlockListDto
+     */
+    blocks: Array<PluginBlock>;
+}
+/**
+ * 
+ * @export
+ * @interface PluginButton
+ */
+export interface PluginButton {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginButton
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginButton
+     */
+    command: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginButton
+     */
+    confirm: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface PluginDetailDto
+ */
+export interface PluginDetailDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    text: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    approvedText: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    hash: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    state: PluginDetailDtoStateEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    error: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginDetailDto
+     */
+    path: string;
+}
+
+
+/**
+ * @export
+ */
+export const PluginDetailDtoStateEnum = {
+    Approved: 'approved',
+    Changed: 'changed',
+    Invalid: 'invalid'
+} as const;
+export type PluginDetailDtoStateEnum = typeof PluginDetailDtoStateEnum[keyof typeof PluginDetailDtoStateEnum];
+
+/**
+ * 
+ * @export
+ * @interface PluginListDto
+ */
+export interface PluginListDto {
+    /**
+     * 
+     * @type {Array<PluginSummary>}
+     * @memberof PluginListDto
+     */
+    plugins: Array<PluginSummary>;
+}
+/**
+ * 
+ * @export
+ * @interface PluginPatchRequestDto
+ */
+export interface PluginPatchRequestDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginPatchRequestDto
+     */
+    enabled?: boolean;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof PluginPatchRequestDto
+     */
+    folders?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginPatchRequestDto
+     */
+    baseHash: string;
+}
+/**
+ * 
+ * @export
+ * @interface PluginPressRequestDto
+ */
+export interface PluginPressRequestDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginPressRequestDto
+     */
+    runId: string;
+    /**
+     * The `at` of the result the user saw when pressing
+     * @type {string}
+     * @memberof PluginPressRequestDto
+     */
+    dataAt: string;
+}
+/**
+ * 
+ * @export
+ * @interface PluginPressResultDto
+ */
+export interface PluginPressResultDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof PluginPressResultDto
+     */
+    exitCode: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginPressResultDto
+     */
+    outputTail: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginPressResultDto
+     */
+    error: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface PluginRemovedDto
+ */
+export interface PluginRemovedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginRemovedDto
+     */
+    removed: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface PluginRunRequestDto
+ */
+export interface PluginRunRequestDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginRunRequestDto
+     */
+    runId: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginRunRequestDto
+     */
+    force?: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface PluginRunResult
+ */
+export interface PluginRunResult {
+    /**
+     * When the command finished (ISO 8601)
+     * @type {string}
+     * @memberof PluginRunResult
+     */
+    at: string;
+    /**
+     * The command's stdout parsed as JSON, or null when it failed
+     * @type {}
+     * @memberof PluginRunResult
+     */
+    data:  | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginRunResult
+     */
+    error: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof PluginRunResult
+     */
+    exitCode: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginRunResult
+     */
+    stderrTail: string;
+}
+/**
+ * 
+ * @export
+ * @interface PluginSummary
+ */
+export interface PluginSummary {
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    name: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginSummary
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof PluginSummary
+     */
+    folders: Array<string>;
+    /**
+     * 
+     * @type {number}
+     * @memberof PluginSummary
+     */
+    refreshMinutes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    command: string | null;
+    /**
+     * 
+     * @type {Array<PluginButton>}
+     * @memberof PluginSummary
+     */
+    buttons: Array<PluginButton>;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    state: PluginSummaryStateEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    error: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    hash: string;
+    /**
+     * The file's absolute path
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    path: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof PluginSummary
+     */
+    lastRunAt: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const PluginSummaryStateEnum = {
+    Approved: 'approved',
+    Changed: 'changed',
+    Invalid: 'invalid'
+} as const;
+export type PluginSummaryStateEnum = typeof PluginSummaryStateEnum[keyof typeof PluginSummaryStateEnum];
+
+/**
+ * 
+ * @export
  * @interface PressActionDto
  */
 export interface PressActionDto {
@@ -17878,6 +18299,7 @@ export const StorageGroupIdEnum = {
     TaskFiles: 'taskFiles',
     Teams: 'teams',
     TeamBackups: 'teamBackups',
+    Plugins: 'plugins',
     Logs: 'logs',
     Caches: 'caches',
     AppState: 'appState',

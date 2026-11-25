@@ -23,6 +23,7 @@ import { MilestoneBroker } from '../agents/services/milestone.broker';
 import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { PluginProposalBroker } from '../agents/services/plugin-proposal.broker';
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
@@ -41,6 +42,8 @@ import { LessonCheckService } from '../lessons/services/lesson-check.service';
 import { LessonFilingService } from '../lessons/services/lesson-filing.service';
 import { MemoryModule } from '../memory/memory.module';
 import { MemoryService } from '../memory/services/memory.service';
+import { PluginsModule } from '../plugins/plugins.module';
+import { PluginProposalService } from '../plugins/services/plugin-proposal.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
 import { TeamHistoryService } from '../stats/services/team-history.service';
@@ -84,6 +87,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
     StatsModule,
     LessonsModule,
     SystemAnalysisModule,
+    PluginsModule,
   ],
   controllers: [McpController],
   providers: [
@@ -138,6 +142,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         commandCenterOps: CommandCenterOpsBroker,
         surfaces: SurfaceBroker,
         reviewComments: ReviewCommentsService,
+        pluginCards: PluginProposalBroker,
+        pluginProposals: PluginProposalService,
       ) =>
         createMcpTools({
           calls,
@@ -188,6 +194,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           commandCenterOps,
           surfaces,
           reviewComments,
+          pluginCards,
+          pluginProposals,
         }),
       inject: [
         CallBroker,
@@ -238,6 +246,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         CommandCenterOpsBroker,
         SurfaceBroker,
         ReviewCommentsService,
+        PluginProposalBroker,
+        PluginProposalService,
       ],
     },
     McpServerService,

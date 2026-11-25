@@ -13,6 +13,7 @@ apis/KnowledgeApi.ts
 apis/LabelInstructionsApi.ts
 apis/LessonsApi.ts
 apis/MemoriesApi.ts
+apis/PluginsApi.ts
 apis/ProjectsApi.ts
 apis/SharesApi.ts
 apis/StatsApi.ts

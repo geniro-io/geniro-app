@@ -4,6 +4,7 @@ import { AgentsModule } from '../agents/agents.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { PluginsController } from './controllers/plugins.controller';
 import { PluginEventBus } from './services/plugin-events.bus';
+import { PluginProposalService } from './services/plugin-proposal.service';
 import { PluginRunnerService } from './services/plugin-runner.service';
 import { PluginStoreService } from './services/plugin-store.service';
 import { PluginsService } from './services/plugins.service';
@@ -28,7 +29,13 @@ import { PluginsService } from './services/plugins.service';
     },
     PluginRunnerService,
     PluginsService,
+    PluginProposalService,
   ],
-  exports: [PluginStoreService, PluginEventBus, PluginRunnerService],
+  exports: [
+    PluginStoreService,
+    PluginEventBus,
+    PluginRunnerService,
+    PluginProposalService,
+  ],
 })
 export class PluginsModule {}

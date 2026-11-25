@@ -105,7 +105,9 @@ export function readHostPluginProposal(
     typeof record.slug !== 'string' ||
     typeof record.name !== 'string' ||
     typeof record.text !== 'string' ||
-    !(record.previousText === null || typeof record.previousText === 'string') ||
+    !(
+      record.previousText === null || typeof record.previousText === 'string'
+    ) ||
     !(record.baseHash === null || typeof record.baseHash === 'string') ||
     typeof record.command !== 'string' ||
     !Array.isArray(record.folders) ||
@@ -128,7 +130,7 @@ export function readHostPluginProposal(
     previousText: record.previousText,
     baseHash: record.baseHash,
     command: record.command,
-    folders: record.folders as string[],
+    folders: record.folders,
     refreshMinutes: record.refreshMinutes,
     timeoutSeconds: record.timeoutSeconds,
     buttons: record.buttons,

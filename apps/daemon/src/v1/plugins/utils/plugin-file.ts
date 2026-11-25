@@ -9,16 +9,15 @@ import { MAX_UI_COMPONENTS } from '../../agents/chat.types';
 import { readA2uiMessages } from '../../agents/utils/a2ui/a2ui-validate';
 import {
   type Plugin,
+  PLUGIN_REFUSED_COMPONENTS,
   type PluginFile,
   PluginFileSchema,
-  PLUGIN_REFUSED_COMPONENTS,
 } from '../plugins.types';
 
 export type PluginFileInput = z.input<typeof PluginFileSchema>;
 
 export type PluginRead =
-  | { ok: true; plugin: Plugin }
-  | { ok: false; error: string };
+  { ok: true; plugin: Plugin } | { ok: false; error: string };
 
 const VIEW_SURFACE_ID = 'plugin';
 const KEY_ORDER = [
@@ -149,7 +148,10 @@ export function readPluginValue(value: unknown): PluginRead {
 export function readPluginText(text: string): PluginRead {
   const doc = parseDocument(text);
   if (doc.errors.length > 0) {
-    return { ok: false, error: `/: YAML parse error: ${doc.errors[0]!.message}` };
+    return {
+      ok: false,
+      error: `/: YAML parse error: ${doc.errors[0]!.message}`,
+    };
   }
   return readPluginValue(doc.toJS());
 }

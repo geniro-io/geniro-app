@@ -21,11 +21,11 @@ import {
   MIGRATION_ERROR_FILE,
 } from '../../migrations/migrations.types';
 import { LEGACY_LIBRARY_DIR } from '../../migrations/utils/m0003-team-library-files';
+import { PLUGINS_DIR_NAME } from '../../plugins/plugins.types';
 import { SYSTEM_ANALYSIS_DIR_NAME } from '../../system-analysis/utils/system-analysis-folder';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
 import { AVATARS_DIR_NAME } from '../../teams/services/avatar-store.service';
 import { TEAMS_DIR_NAME } from '../../teams/services/team-store.service';
-import { PLUGINS_DIR_NAME } from '../../plugins/plugins.types';
 import type { StorageClassifier, StorageGroupId } from '../storage.types';
 
 export { TEAMS_DIR_NAME };

@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@packages/common';
 
-import { redactSecrets } from '../../diagnostics/utils/redact';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { pointerGet } from '../../agents/utils/a2ui/a2ui-apply';
@@ -17,6 +16,7 @@ import {
 import { maskedTail, SECRET_MARGIN } from '../../agents/utils/masked-tail';
 import { isWithinDirectory } from '../../agents/utils/path-within';
 import { existingDirectory } from '../../agents/utils/resolve-directory';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import {
   type Plugin,
@@ -104,7 +104,10 @@ export class PluginRunnerService {
   lastRunAt(slug: string): string | null {
     let newest: string | null = null;
     for (const [key, cached] of this.cache) {
-      if (key.startsWith(keyOf(slug, '')) && (newest === null || cached.result.at > newest)) {
+      if (
+        key.startsWith(keyOf(slug, '')) &&
+        (newest === null || cached.result.at > newest)
+      ) {
         newest = cached.result.at;
       }
     }
@@ -139,7 +142,8 @@ export class PluginRunnerService {
           command,
           confirm,
         })),
-        result: this.cache.get(keyOf(stored.slug, place.folder))?.result ?? null,
+        result:
+          this.cache.get(keyOf(stored.slug, place.folder))?.result ?? null,
       });
     }
     return blocks;
@@ -153,7 +157,7 @@ export class PluginRunnerService {
   async run(
     slug: string,
     runId: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; skipCache?: boolean } = {},
   ): Promise<PluginRunResult> {
     const place = await this.requirePlace(runId);
     const stored = await this.store.getOrThrow(slug);
@@ -164,11 +168,16 @@ export class PluginRunnerService {
       return joined;
     }
     const cached = this.cache.get(key);
-    if (cached !== undefined && cached.hash === stored.hash) {
+    if (
+      !options.skipCache &&
+      cached !== undefined &&
+      cached.hash === stored.hash
+    ) {
       const age = Date.now() - Date.parse(cached.result.at);
       const fresh = options.force
         ? age < PLUGIN_MIN_REFRESH_MS
-        : age < Math.max(plugin.refresh_minutes * 60_000, PLUGIN_MIN_REFRESH_MS);
+        : age <
+          Math.max(plugin.refresh_minutes * 60_000, PLUGIN_MIN_REFRESH_MS);
       if (fresh) {
         return cached.result;
       }
@@ -202,7 +211,9 @@ export class PluginRunnerService {
     const place = await this.requirePlace(runId);
     const stored = await this.store.getOrThrow(slug);
     const plugin = this.runnable(stored, place);
-    const button = plugin.buttons.find((candidate) => candidate.id === buttonId);
+    const button = plugin.buttons.find(
+      (candidate) => candidate.id === buttonId,
+    );
     if (button === undefined) {
       throw new NotFoundException(
         'PLUGIN_BUTTON_NOT_FOUND',
@@ -228,7 +239,7 @@ export class PluginRunnerService {
       const text = typeof value === 'string' ? value : JSON.stringify(value);
       if (text.length > PLUGIN_ENV_VALUE_MAX || text.includes('\u0000')) {
         throw new BadRequestException(
-          'PLUGIN_NO_DATA',
+          'PLUGIN_VALUE_TOO_LONG',
           `The value at ${pointer || '/'} for ${name} is longer than ${PLUGIN_ENV_VALUE_MAX} characters`,
         );
       }
@@ -259,7 +270,7 @@ export class PluginRunnerService {
         result.output ?? '',
         PLUGIN_BUTTON_OUTPUT_TAIL_MAX,
       );
-      void this.run(slug, runId, { force: true }).catch(() => undefined);
+      void this.run(slug, runId, { skipCache: true }).catch(() => undefined);
       if (result.spawnError !== undefined) {
         return {
           exitCode: null,

@@ -65,6 +65,7 @@ import {
   type HistoryWindow,
   HOST_BROWSER_HOST_CARD,
   HOST_PLAN_TOOL,
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_QUESTION_TOOL,
@@ -82,6 +83,8 @@ import {
   type HostNotifyOutcome,
   type HostPlan,
   type HostPlanOutcome,
+  type HostPluginOutcome,
+  type HostPluginProposal,
   type HostProjectInstructions,
   type HostProjectInstructionsOutcome,
   type HostQuestion,
@@ -171,6 +174,13 @@ import { isHostMilestoneCall } from '../utils/host-milestone';
 import { isHostNotifyCall } from '../utils/host-notify';
 import { hostPlanResultText, isHostPlanCall } from '../utils/host-plan';
 import {
+  hostPluginResultText,
+  isHostPluginCall,
+  pluginCardInput,
+  pluginCardKey,
+  pluginVerdict,
+} from '../utils/host-plugin';
+import {
   hostProjectInstructionsResultText,
   isHostProjectInstructionsCall,
   projectInstructionsCardInput,
@@ -244,7 +254,10 @@ import {
   TURN_ENDED_UNANSWERED,
 } from '../utils/standing-questions';
 import { memberQuestionIds } from '../utils/team-member-questions';
-import { teamProjectCardId } from '../utils/team-project-card';
+import {
+  teamProjectCardId,
+  teamProjectCardTool,
+} from '../utils/team-project-card';
 import {
   threadMessageReturnedRow,
   threadMessagesPrompt,
@@ -299,6 +312,7 @@ import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PlanBroker } from './plan.broker';
+import { PluginProposalBroker } from './plugin-proposal.broker';
 import { ProcessRegistry } from './process-registry';
 import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
@@ -396,6 +410,8 @@ function deferredCardInput(snapshot: PendingCardSnapshot): unknown {
       return { title: snapshot.title, steps: snapshot.steps };
     case 'project':
       return projectInstructionsCardInput(snapshot.change);
+    case 'plugin':
+      return pluginCardInput(snapshot.proposal);
   }
 }
 
@@ -408,6 +424,8 @@ function deferredCardTool(snapshot: PendingCardSnapshot): string {
       return HOST_PLAN_TOOL;
     case 'project':
       return HOST_PROJECT_INSTRUCTIONS_TOOL;
+    case 'plugin':
+      return HOST_PLUGIN_TOOL;
   }
 }
 
@@ -429,6 +447,8 @@ function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
       );
     case 'project':
       return projectInstructionsCardKey(standing.change) === key;
+    case 'plugin':
+      return pluginCardKey(standing.proposal) === key;
   }
 }
 
@@ -631,7 +651,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     {
       key: string;
       outcome: Promise<
-        HostQuestionOutcome | HostPlanOutcome | HostProjectInstructionsOutcome
+        | HostQuestionOutcome
+        | HostPlanOutcome
+        | HostProjectInstructionsOutcome
+        | HostPluginOutcome
       >;
     }
   >();
@@ -946,6 +969,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     /** `show_ui`'s sink, kept with the other render tools. Optional for the positional specs. */
     @Optional() private readonly surfaceSinks?: SurfaceBroker,
     @Optional() private readonly surfaces?: SurfaceService,
+    /** `save_plugin`'s sink and the writer behind its Approve. Optional for the positional specs. */
+    @Optional() private readonly pluginCards?: PluginProposalBroker,
   ) {}
 
   /**
@@ -1354,6 +1379,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           ...projectInstructionsVerdict(outcome),
         };
       }
+      case 'plugin': {
+        const outcome: HostPluginOutcome = allow
+          ? await this.writePlugin(snapshot.proposal)
+          : { status: 'declined' };
+        return {
+          message: hostPluginResultText(outcome),
+          ...pluginVerdict(outcome),
+        };
+      }
     }
   }
 
@@ -1367,6 +1401,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       Promise.resolve({
         status: 'stale',
         reason: 'this daemon cannot write project instructions',
+      })
+    );
+  }
+
+  /** A plugin card's Approve, through the writer `v1/plugins` installs. */
+  private writePlugin(
+    proposal: HostPluginProposal,
+  ): Promise<HostPluginOutcome> {
+    return (
+      this.pluginCards?.write(proposal) ??
+      Promise.resolve({
+        status: 'stale',
+        reason: 'this daemon cannot write plugins',
       })
     );
   }
@@ -2022,7 +2069,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.retireOwnedCard(
           runId,
           projectCardId,
-          HOST_PROJECT_INSTRUCTIONS_TOOL,
+          teamProjectCardTool(run?.pendingTeamProjectCard ?? null),
         );
         await this.runDao.setPendingTeamProjectCard(runId, null, em);
       }
@@ -2127,6 +2174,21 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     );
   }
 
+  private proposePluginDeferred(
+    em: EntityManager,
+    runId: string,
+    proposal: HostPluginProposal,
+  ): Promise<HostPluginOutcome> {
+    const key = pluginCardKey(proposal);
+    return this.withDeferredClaim(runId, key, () =>
+      this.raiseDeferredCard(em, runId, key, async (requestId) => ({
+        kind: 'plugin',
+        requestId,
+        proposal,
+      })),
+    );
+  }
+
   /**
    * Claim the run's one deferred slot SYNCHRONOUSLY, before the first await.
    *
@@ -2137,7 +2199,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private withDeferredClaim<
     T extends
-      HostQuestionOutcome | HostPlanOutcome | HostProjectInstructionsOutcome,
+      | HostQuestionOutcome
+      | HostPlanOutcome
+      | HostProjectInstructionsOutcome
+      | HostPluginOutcome,
   >(runId: string, key: string, raise: () => Promise<T>): Promise<T> {
     const inFlight = this.deferredAsks.get(runId);
     if (inFlight !== undefined) {
@@ -6513,6 +6578,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // asks for is not something a permission card meaningfully guards.
         isHostNotifyCall(hostServerName, toolName) ||
         isHostProjectInstructionsCall(hostServerName, toolName) ||
+        // `save_plugin` on the same reading: the call writes nothing, and its
+        // card showing the command is the gate.
+        isHostPluginCall(hostServerName, toolName) ||
         // The plan tool, on the same reading and one step further from the
         // disk: proposing a plan does not even offer to change a file. Its card
         // is the gate; a permission card in front of it would ask the user to
@@ -7018,6 +7086,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const outstandingProjectChanges = new Set<
         (outcome: HostProjectInstructionsOutcome) => boolean
       >();
+      /** And for {@link HOST_PLUGIN_TOOL}. */
+      const outstandingPlugins = new Set<
+        (outcome: HostPluginOutcome) => boolean
+      >();
       /**
        * Close a parked host-tool card whose CALLER has given up on it.
        *
@@ -7324,6 +7396,30 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         });
       };
       /**
+       * A chat's new or changed plugin: a card showing its command, folders
+       * and buttons in every approval mode, and the write behind Approve —
+       * {@link proposeProjectInstructions}'s terms exactly.
+       */
+      const proposePlugin = async (
+        proposal: HostPluginProposal,
+        signal?: AbortSignal,
+      ): Promise<HostPluginOutcome> => {
+        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
+          return this.proposePluginDeferred(em, runId, proposal);
+        }
+        return parkWriteCard({
+          toolName: HOST_PLUGIN_TOOL,
+          input: pluginCardInput(proposal),
+          what: 'a plugin card',
+          outstanding: outstandingPlugins,
+          write: () => this.writePlugin(proposal),
+          verdictOf: pluginVerdict,
+          declined: { status: 'declined' },
+          unavailable: (reason) => ({ status: 'unavailable', reason }),
+          signal,
+        });
+      };
+      /**
        * geniro's own plan channel: the agent shows how it means to carry a
        * request out, and waits.
        *
@@ -7571,6 +7667,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               { answersAtOnce },
             )
           : null;
+      const disposePluginCards =
+        mcpEndpoint && this.pluginCards !== undefined
+          ? this.pluginCards.register(runId, SINGLE_AGENT_NODE, proposePlugin, {
+              answersAtOnce,
+            })
+          : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -7587,6 +7689,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           disposeAnalysis?.();
         }
         disposeProjectCards?.();
+        disposePluginCards?.();
         disposeProjectChat?.();
         disposeCommandCenter?.();
       };
@@ -8543,6 +8646,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             settle({
               status: 'unavailable',
               reason: 'the turn ended before the change was answered',
+            });
+          }
+          for (const settle of [...outstandingPlugins]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the plugin was answered',
             });
           }
           // Sweep BEFORE the branches below — the failure path early-returns,

@@ -6,15 +6,14 @@ import type {
   HostPluginProposal,
 } from '../../agents/chat.types';
 import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
-
 import {
   type PluginBlockList,
   type PluginDetail,
   type PluginList,
   type PluginPressResult,
   type PluginRunResult,
-  type StoredPlugin,
   type PluginSummary,
+  type StoredPlugin,
 } from '../plugins.types';
 import { withPluginSettings } from '../utils/plugin-file';
 import { PluginRunnerService } from './plugin-runner.service';

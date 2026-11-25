@@ -35,9 +35,9 @@ import { CommandCenterEventBus } from '../../command-center/services/command-cen
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
-import { PluginEventBus } from '../../plugins/services/plugin-events.bus';
 import { LessonsEventBus } from '../../lessons/services/lessons-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
+import { PluginEventBus } from '../../plugins/services/plugin-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';

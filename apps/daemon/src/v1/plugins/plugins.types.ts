@@ -231,7 +231,10 @@ export const PluginApproveRequestSchema = z.object({
 
 export const PluginPatchRequestSchema = z.object({
   enabled: z.boolean().optional(),
-  folders: z.array(z.string().min(1).max(4096)).max(PLUGIN_FOLDERS_MAX).optional(),
+  folders: z
+    .array(z.string().min(1).max(4096))
+    .max(PLUGIN_FOLDERS_MAX)
+    .optional(),
   baseHash: z.string().min(1),
 });
 
@@ -241,3 +244,24 @@ export const PluginRemovedSchema = z.object({ removed: z.boolean() });
 export interface PluginsChangedEvent {
   slug: string | null;
 }
+
+/** What `save_plugin` is called with, read by its tool. */
+export interface SavePluginInput {
+  slug?: string;
+  name: string;
+  folders?: string[];
+  refresh_minutes?: number;
+  timeout_seconds?: number;
+  command: string;
+  view: Record<string, unknown>[];
+  buttons?: {
+    id: string;
+    command: string;
+    confirm?: boolean;
+    timeout_minutes?: number;
+    env?: Record<string, string>;
+  }[];
+  sample?: unknown;
+}
+
+export const PLUGIN_SAMPLE_MAX_CHARS = 256 * 1024;

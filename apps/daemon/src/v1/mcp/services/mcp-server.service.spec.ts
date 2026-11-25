@@ -53,6 +53,7 @@ import {
   HOST_MOVE_STAGE_TOOL,
   HOST_NOTIFY_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
@@ -96,6 +97,7 @@ import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
+import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
@@ -145,6 +147,7 @@ import type {
 } from '../../memory/memory.types';
 import { DEFAULT_MEMORY_CONFIG } from '../../memory/memory.types';
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { PluginProposalService } from '../../plugins/services/plugin-proposal.service';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
@@ -279,6 +282,7 @@ function service(
   // Never asked by the cases that pass none: no sink, so the tool is not listed.
   milestones = milestoneBroker(),
   surfaces = new SurfaceBroker(),
+  pluginCards = new PluginProposalBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -316,6 +320,8 @@ function service(
       teamChanges,
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards,
+      pluginCards,
+      pluginProposals: {} as PluginProposalService,
       // Never asked by the cases that list tools.
       teamHistory: {} as TeamHistoryService,
       systemHistory: {} as SystemAnalysisHistoryService,
@@ -377,6 +383,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   projectCards.register('run-1', 'agent', noop);
   const surfaces = new SurfaceBroker();
   surfaces.register('run-1', 'agent', noop);
+  const pluginCards = new PluginProposalBroker();
+  pluginCards.register('run-1', 'agent', noop);
   for (const broker of [
     questions,
     charts,
@@ -450,6 +458,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
     flags,
     milestones,
     surfaces,
+    pluginCards,
   );
   const listedOn = async (runId: string): Promise<ToolListing[]> =>
     (
@@ -4282,6 +4291,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_TEAM_CHANGE_TOOL,
       HOST_PROJECT_INSTRUCTIONS_TOOL,
+      HOST_PLUGIN_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
       HOST_REMOVE_ACTION_TOOL,
       HOST_READ_TEAMS_TOOL,
@@ -4306,6 +4316,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_TEAM_CHANGE_TOOL,
       HOST_PROJECT_INSTRUCTIONS_TOOL,
+      HOST_PLUGIN_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
       ...HOST_BOARD_TOOLS,
@@ -4520,6 +4531,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamChanges: {} as TeamChangeService,
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
+      pluginCards: new PluginProposalBroker(),
+      pluginProposals: {} as PluginProposalService,
       teamHistory: {} as TeamHistoryService,
       systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: openGate(),
@@ -4627,6 +4640,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamChanges: {} as TeamChangeService,
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: cards,
+      pluginCards: new PluginProposalBroker(),
+      pluginProposals: {} as PluginProposalService,
       teamHistory: {} as TeamHistoryService,
       systemHistory: {} as SystemAnalysisHistoryService,
       teamGate,
@@ -4944,6 +4959,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamChanges: {} as TeamChangeService,
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
+      pluginCards: new PluginProposalBroker(),
+      pluginProposals: {} as PluginProposalService,
       teamHistory: {} as TeamHistoryService,
       systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: openGate(),
@@ -5091,6 +5108,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamChanges: {} as TeamChangeService,
         projectInstructions: {} as ProjectInstructionsChangeService,
         projectInstructionCards: new ProjectInstructionsBroker(),
+        pluginCards: new PluginProposalBroker(),
+        pluginProposals: {} as PluginProposalService,
         teamHistory: {} as TeamHistoryService,
         systemHistory: {} as SystemAnalysisHistoryService,
         teamGate: openGate(),
@@ -5243,6 +5262,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamChanges: {} as TeamChangeService,
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: new ProjectInstructionsBroker(),
+      pluginCards: new PluginProposalBroker(),
+      pluginProposals: {} as PluginProposalService,
       teamHistory: {} as TeamHistoryService,
       systemHistory: {} as SystemAnalysisHistoryService,
       teamGate: gate,
@@ -5313,6 +5334,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamChanges: {} as TeamChangeService,
         projectInstructions: {} as ProjectInstructionsChangeService,
         projectInstructionCards: new ProjectInstructionsBroker(),
+        pluginCards: new PluginProposalBroker(),
+        pluginProposals: {} as PluginProposalService,
         teamHistory: {} as TeamHistoryService,
         systemHistory: {} as SystemAnalysisHistoryService,
         teamGate: gate,

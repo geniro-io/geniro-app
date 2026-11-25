@@ -25,6 +25,7 @@ import { SYSTEM_ANALYSIS_DIR_NAME } from '../../system-analysis/utils/system-ana
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
 import { AVATARS_DIR_NAME } from '../../teams/services/avatar-store.service';
 import { TEAMS_DIR_NAME } from '../../teams/services/team-store.service';
+import { PLUGINS_DIR_NAME } from '../../plugins/plugins.types';
 import type { StorageClassifier, StorageGroupId } from '../storage.types';
 
 export { TEAMS_DIR_NAME };
@@ -66,6 +67,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [TASK_ATTACHMENTS_DIR_NAME]: 'taskFiles',
   [TEAMS_DIR_NAME]: 'teams',
   [AVATARS_DIR_NAME]: 'teams',
+  [PLUGINS_DIR_NAME]: 'plugins',
   [DEBUG_LOG_DIR_NAME]: 'logs',
   [FOLDERLESS_DIR_NAME]: 'caches',
   [SKILL_HARVEST_FILE_NAME]: 'caches',

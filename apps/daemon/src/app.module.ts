@@ -23,6 +23,7 @@ import { McpModule } from './v1/mcp/mcp.module';
 import { MemoryModule } from './v1/memory/memory.module';
 import { MigrationsModule } from './v1/migrations/migrations.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
+import { PluginsModule } from './v1/plugins/plugins.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
 import { ProjectsModule } from './v1/projects/projects.module';
 import { RunsModule } from './v1/runs/runs.module';
@@ -70,6 +71,7 @@ export class AppModule {
         KnowledgeModule,
         EmbeddingsModule,
         StorageModule,
+        PluginsModule,
         MigrationsModule,
         SystemAnalysisModule,
       ],

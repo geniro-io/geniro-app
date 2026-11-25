@@ -7,6 +7,7 @@ import { CommandCenterModule } from '../command-center/command-center.module';
 import { DiagnosticsModule } from '../diagnostics/diagnostics.module';
 import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { PluginsModule } from '../plugins/plugins.module';
 import { LessonsModule } from '../lessons/lessons.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
@@ -45,6 +46,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     SharesModule,
     MemoryModule,
     KnowledgeModule,
+    PluginsModule,
     EmbeddingsModule,
     ProjectsModule,
     BrowserModule,

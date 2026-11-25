@@ -35,6 +35,7 @@ import { CommandCenterEventBus } from '../../command-center/services/command-cen
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { EmbeddingIndexService } from '../../embeddings/services/embedding-index.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
+import { PluginEventBus } from '../../plugins/services/plugin-events.bus';
 import { LessonsEventBus } from '../../lessons/services/lessons-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
@@ -163,6 +164,7 @@ export class NotificationsGateway
   private backgroundJobsSubscription?: Subscription;
   private systemAnalysesSubscription?: Subscription;
   private knowledgeSubscription?: Subscription;
+  private pluginsSubscription?: Subscription;
   private embeddingsSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
   private reviewCommentsSubscription?: Subscription;
@@ -201,6 +203,7 @@ export class NotificationsGateway
     @Optional() private readonly backgroundJobs?: BackgroundJobsRegistry,
     @Optional() private readonly systemAnalyses?: SystemAnalysisEventBus,
     @Optional() private readonly embeddings?: EmbeddingIndexService,
+    @Optional() private readonly plugins?: PluginEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -462,6 +465,22 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`knowledge event bus errored: ${String(err)}`),
     });
+    // A plugin file write goes to EVERY client, paired devices included: the
+    // chat's right panel and Settings → Plugins re-read on it. It names the
+    // plugin only.
+    this.pluginsSubscription = this.plugins?.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.emit('plugins_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast plugins_changed (${change.slug ?? 'many'}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`plugin event bus errored: ${String(err)}`),
+    });
     // Settings → Search re-reads the status on it; it carries only why.
     this.embeddingsSubscription = this.embeddings?.changes().subscribe({
       next: (change) => {
@@ -618,6 +637,7 @@ export class NotificationsGateway
     this.backgroundJobsSubscription?.unsubscribe();
     this.systemAnalysesSubscription?.unsubscribe();
     this.knowledgeSubscription?.unsubscribe();
+    this.pluginsSubscription?.unsubscribe();
     this.embeddingsSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
     this.reviewCommentsSubscription?.unsubscribe();

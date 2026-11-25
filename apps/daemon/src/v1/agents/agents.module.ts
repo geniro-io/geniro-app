@@ -138,6 +138,7 @@ import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
 import { ProjectChatBroker } from './services/project-chat.broker';
+import { PluginProposalBroker } from './services/plugin-proposal.broker';
 import { ProjectInstructionsBroker } from './services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
 import { PromptCacheKeepAliveService } from './services/prompt-cache-keep-alive.service';
@@ -301,6 +302,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ProjectInstructionsChangeService,
     KnowledgeItemsService,
     ProjectInstructionsBroker,
+    PluginProposalBroker,
     ProjectChatBroker,
     CommandCenterBroker,
     CommandCenterOpsBroker,
@@ -734,6 +736,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // that can actually persist the row registers here.
     ChartBroker,
     ProjectInstructionsBroker,
+    // For `v1/plugins`, which writes an approved plugin through it, and the
+    // MCP host's `save_plugin`.
+    PluginProposalBroker,
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,

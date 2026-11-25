@@ -13,6 +13,7 @@ import {
   type LucideIcon,
   MessageSquareText,
   Palette,
+  Puzzle,
   RadioTower,
   ScanSearch,
   ScrollText,
@@ -111,6 +112,7 @@ import {
   NewConfigProfileDialog,
   type NewConfigProfileRequest,
 } from './new-config-profile-dialog';
+import { PluginsSettings } from './plugins-settings';
 import { RemoteAccess } from './remote-access';
 import { SearchSettings } from './search';
 import { Sharing } from './sharing';
@@ -251,6 +253,7 @@ export type SettingsSection =
   | 'sharing'
   | 'memory'
   | 'knowledge'
+  | 'plugins'
   | 'search'
   | 'system-analysis'
   | 'storage'
@@ -276,6 +279,7 @@ const SECTION_ICON: Record<SettingsSection, LucideIcon> = {
   sharing: Share2,
   memory: Brain,
   knowledge: BookOpen,
+  plugins: Puzzle,
   search: Search,
   'system-analysis': ScanSearch,
   storage: HardDrive,
@@ -302,6 +306,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   sharing: 'Sharing',
   memory: 'Memory',
   knowledge: 'Knowledge',
+  plugins: 'Plugins',
   search: 'Search',
   'system-analysis': 'System analysis',
   storage: 'Storage',
@@ -324,6 +329,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'The notes every agent shares, whatever its CLI — saved by agents as they work, or by you. New chats list the ones you wrote, imported or approved.',
   knowledge:
     'The documents agents read and save, whatever their CLI. How they may save is set below.',
+  plugins:
+    'Panels an agent builds for a chat’s right side. Each runs a command you approved and shows its result. Turn one on or off, choose its folders, or delete it.',
   search:
     'How agents find notes, knowledge documents and chats — by their words and by what they mean.',
   'system-analysis':
@@ -344,6 +351,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sharing',
   'memory',
   'knowledge',
+  'plugins',
   'search',
   'system-analysis',
   'storage',
@@ -1563,6 +1571,8 @@ export function Settings({
             />
           ) : section === 'knowledge' ? (
             <Knowledge />
+          ) : section === 'plugins' ? (
+            <PluginsSettings api={apis?.plugins ?? null} client={client} />
           ) : section === 'search' ? (
             <SearchSettings api={apis?.embeddings ?? null} events={client} />
           ) : section === 'changelog' ? (

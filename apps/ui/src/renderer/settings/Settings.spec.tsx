@@ -1693,11 +1693,19 @@ describe('Settings — sections', () => {
       'Sharing',
       'Memory',
       'Knowledge',
+      'Plugins',
       'Search',
       'System analysis',
       'Storage',
       'What’s new',
     ]);
+  });
+
+  it('opens the Plugins section on its own page', async () => {
+    await mount('plugins');
+    expect(
+      container.querySelector('section[aria-label="Plugins"]'),
+    ).not.toBeNull();
   });
 
   it('opens the Knowledge section on its switch and its agent-writes choice', async () => {
@@ -2390,7 +2398,7 @@ describe('Settings explains itself', () => {
         'nav[aria-label="Settings sections"] button',
       ),
     ];
-    expect(items).toHaveLength(10);
+    expect(items).toHaveLength(11);
     for (const item of items) {
       // The section's own icon, beside the phone-only chevron.
       expect(item.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(2);

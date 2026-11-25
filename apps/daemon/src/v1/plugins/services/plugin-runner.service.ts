@@ -15,7 +15,10 @@ import {
 } from '../../agents/utils/managed-command';
 import { maskedTail, SECRET_MARGIN } from '../../agents/utils/masked-tail';
 import { isWithinDirectory } from '../../agents/utils/path-within';
-import { existingDirectory } from '../../agents/utils/resolve-directory';
+import {
+  existingDirectory,
+  resolveValidDirectory,
+} from '../../agents/utils/resolve-directory';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import {
@@ -31,6 +34,7 @@ import {
   type PluginRunResult,
   type StoredPlugin,
 } from '../plugins.types';
+import { resolvePluginFolder } from '../utils/plugin-file';
 import { PluginStoreService } from './plugin-store.service';
 
 /** The shell line form every plugin command and button runs as. */
@@ -159,7 +163,30 @@ export class PluginRunnerService {
     runId: string,
     options: { force?: boolean; skipCache?: boolean } = {},
   ): Promise<PluginRunResult> {
-    const place = await this.requirePlace(runId);
+    return this.runAt(slug, await this.requirePlace(runId), options);
+  }
+
+  /** The same run in a folder the user picked, as from Settings; it fills the cache the chats there read. */
+  async runInFolder(
+    slug: string,
+    folder: string,
+    options: { force?: boolean } = {},
+  ): Promise<PluginRunResult> {
+    const resolved = resolveValidDirectory(
+      resolvePluginFolder(folder) ?? folder,
+      {
+        errorCode: 'PLUGIN_FOLDER_INVALID',
+        noun: 'folder',
+      },
+    );
+    return this.runAt(slug, await this.placeAt(resolved), options);
+  }
+
+  private async runAt(
+    slug: string,
+    place: RunPlace,
+    options: { force?: boolean; skipCache?: boolean },
+  ): Promise<PluginRunResult> {
     const stored = await this.store.getOrThrow(slug);
     const plugin = this.runnable(stored, place);
     const key = keyOf(slug, place.folder);
@@ -168,7 +195,7 @@ export class PluginRunnerService {
       return options.skipCache
         ? joined
             .catch(() => undefined)
-            .then(() => this.run(slug, runId, options))
+            .then(() => this.runAt(slug, place, options))
         : joined;
     }
     const cached = this.cache.get(key);
@@ -370,9 +397,10 @@ export class PluginRunnerService {
     const run = await this.runs.getById(runId);
     const folder =
       run === null || run.cwd === null ? null : existingDirectory(run.cwd);
-    if (folder === null) {
-      return null;
-    }
+    return folder === null ? null : this.placeAt(folder);
+  }
+
+  private async placeAt(folder: string): Promise<RunPlace> {
     const roots = await this.roots.rootsOf([folder]);
     const root = roots.get(folder);
     const rootFolder = root === undefined ? null : existingDirectory(root);

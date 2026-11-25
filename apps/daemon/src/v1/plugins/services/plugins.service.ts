@@ -79,6 +79,14 @@ export class PluginsService implements OnModuleInit {
     return this.runner.run(slug, runId, { force });
   }
 
+  runInFolder(
+    slug: string,
+    folder: string,
+    force: boolean,
+  ): Promise<PluginRunResult> {
+    return this.runner.runInFolder(slug, folder, { force });
+  }
+
   press(
     slug: string,
     buttonId: string,

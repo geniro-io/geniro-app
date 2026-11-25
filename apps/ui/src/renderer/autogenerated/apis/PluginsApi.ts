@@ -18,6 +18,7 @@ import type {
   PluginApproveRequestDto,
   PluginBlockListDto,
   PluginDetailDto,
+  PluginFolderRunRequestDto,
   PluginListDto,
   PluginPatchRequestDto,
   PluginPressRequestDto,
@@ -54,6 +55,11 @@ export interface PluginsApiReadPluginRequest {
 export interface PluginsApiRunPluginRequest {
     slug: string;
     pluginRunRequestDto: PluginRunRequestDto;
+}
+
+export interface PluginsApiRunPluginInFolderRequest {
+    slug: string;
+    pluginFolderRunRequestDto: PluginFolderRunRequestDto;
 }
 
 export interface PluginsApiUpdatePluginRequest {
@@ -408,6 +414,61 @@ export class PluginsApi extends runtime.BaseAPI {
      */
     async runPlugin(requestParameters: PluginsApiRunPluginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<PluginRunResult> {
         const response = await this.runPluginRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async runPluginInFolderRaw(requestParameters: PluginsApiRunPluginInFolderRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<PluginRunResult>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling runPluginInFolder().'
+            );
+        }
+
+        if (requestParameters['pluginFolderRunRequestDto'] == null) {
+            throw new runtime.RequiredError(
+                'pluginFolderRunRequestDto',
+                'Required parameter "pluginFolderRunRequestDto" was null or undefined when calling runPluginInFolder().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/plugins/{slug}/run-in-folder`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['pluginFolderRunRequestDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async runPluginInFolder(requestParameters: PluginsApiRunPluginInFolderRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<PluginRunResult> {
+        const response = await this.runPluginInFolderRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

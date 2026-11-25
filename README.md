@@ -351,7 +351,7 @@ Ask an agent for a block that shows something from your Mac, such as "last prod 
 - **Fresh when you look.** The block refreshes when you open it, when you press ↻, and on its own timer (every 5 minutes by default) while it is on screen. Its last result is kept only until Geniro restarts.
 - **Ask puts its data in the message box.** Ask adds the block's data to what you are typing, so the agent can act on it.
 - **Buttons run commands.** A block can carry buttons, such as one that re-runs a check. A button marked to ask first opens a confirmation with its command line; the others run at once.
-- **Settings → Plugins** switches a plugin off, changes the folders it shows in or deletes it.
+- **Settings → Plugins** switches a plugin off, runs it now in a folder you pick (its result shows there and in that folder's chats), changes the folders it shows in or deletes it.
 
 ## 🎯 Goals and outcomes
 

@@ -15,6 +15,7 @@ import {
   PluginApproveRequestDto,
   PluginBlockListDto,
   PluginDetailDto,
+  PluginFolderRunRequestDto,
   PluginListDto,
   PluginPatchRequestDto,
   PluginPressRequestDto,
@@ -36,7 +37,7 @@ import { PluginsService } from '../services/plugins.service';
 
 /**
  * The user's plugins: list, read, approve, switch, re-folder, delete, and run
- * in a thread's folder. Open to paired devices on every route — the user
+ * in a thread's folder or one the user picks. Open to paired devices on every route — the user
  * decided a phone or tablet may do all of it, approving a command included.
  */
 @Controller('v1/plugins')
@@ -75,6 +76,17 @@ export class PluginsController {
     @Body() body: PluginRunRequestDto,
   ): Promise<PluginRunResult> {
     return this.plugins.run(slug, body.runId, body.force ?? false);
+  }
+
+  @Post(':slug/run-in-folder')
+  @HttpCode(200)
+  @ApiOperation({ operationId: 'runPluginInFolder' })
+  @ZodResponse({ status: 200, type: PluginRunResultDto })
+  runInFolder(
+    @Param('slug') slug: string,
+    @Body() body: PluginFolderRunRequestDto,
+  ): Promise<PluginRunResult> {
+    return this.plugins.runInFolder(slug, body.folder, body.force ?? false);
   }
 
   @Post(':slug/buttons/:buttonId/press')

@@ -5,6 +5,7 @@ import {
   PluginApproveRequestSchema,
   PluginBlockListSchema,
   PluginDetailSchema,
+  PluginFolderRunRequestSchema,
   PluginListSchema,
   PluginPatchRequestSchema,
   PluginPressRequestSchema,
@@ -26,6 +27,10 @@ export class PluginSummaryDto extends createZodDto(
 ) {}
 
 export class PluginRunRequestDto extends createZodDto(PluginRunRequestSchema) {}
+
+export class PluginFolderRunRequestDto extends createZodDto(
+  PluginFolderRunRequestSchema,
+) {}
 
 export class PluginRunResultDto extends createZodDto(
   z.object(PluginRunResultSchema.shape),

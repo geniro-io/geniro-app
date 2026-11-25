@@ -48,7 +48,7 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 ## Routes and events
 
 - All token-gated with no `DesktopOnlyGuard`: a paired device may refresh, press, approve, re-folder and delete (user decisions 10 and 10.1). Only Show file in Finder stays desktop-only.
-- `controllers/plugins.controller.ts`; `GET /v1/plugins/for-run/:runId` is declared before `:slug`. A route change means `pnpm generate:api` with the regenerated client committed.
+- `controllers/plugins.controller.ts`; `GET /v1/plugins/for-run/:runId` is declared before `:slug`. `POST :slug/run` runs in a thread's folder; `POST :slug/run-in-folder {folder, force?}` runs in a folder the user picked in Settings, with the same checks (an absolute folder that exists, `~/` expanded, else `PLUGIN_FOLDER_INVALID`; then folder match, approval, enabled) and the same per-(slug, folder) cache, so chats in that folder show its result. A route change means `pnpm generate:api` with the regenerated client committed.
 - `plugins_changed {slug | null}` goes out after every store write geniro makes.
 
 ## save_plugin
@@ -70,4 +70,4 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 - A button with `confirm: true` opens the confirm dialog with its command line, folder and plugin; the others run at once.
 - States: loading, error (with Try again), empty, file changed (last data dimmed, "Plugin file changed · not run since", Review).
 - Review shows the approved text against the current one as a diff; Approve posts `{hash}`.
-- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, Edit folders, Show file in Finder (desktop only) and Delete. Running is the block's ↻; no route runs a plugin by folder.
+- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, Run now in a folder, Edit folders, Show file in Finder (desktop only) and Delete. Run now offers the plugin's folders, then the recent chat folders (`Settings.recentFolders`), and Choose a folder…; it is unavailable for a plugin that is off or not approved. Its result is shown in the dialog.

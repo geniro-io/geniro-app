@@ -209,6 +209,14 @@ export const PluginRunRequestSchema = z.object({
   force: z.boolean().optional(),
 });
 
+export const PluginFolderRunRequestSchema = z.object({
+  folder: z
+    .string()
+    .min(1)
+    .describe('The absolute folder to run the command in'),
+  force: z.boolean().optional(),
+});
+
 export const PluginPressRequestSchema = z.object({
   runId: z.string().min(1),
   dataAt: z

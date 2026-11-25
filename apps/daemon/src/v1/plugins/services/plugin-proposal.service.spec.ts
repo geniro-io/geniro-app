@@ -120,6 +120,38 @@ view:
     });
   });
 
+  it('never lets a second new plugin whose name has no Latin letters replace the first', async () => {
+    const proposals = proposalsIn(chatFolder);
+    const first = await proposals.prepare('run-1', { ...SAVE, name: 'Деплои' });
+    const second = await proposals.prepare('run-1', {
+      ...SAVE,
+      name: 'Сборки',
+    });
+    if (!first.ok || !second.ok) {
+      throw new Error('a proposal was refused');
+    }
+    expect([first.proposal.slug, second.proposal.slug]).toEqual([
+      'plugin',
+      'plugin',
+    ]);
+    expect(second.proposal.baseHash).toBeNull();
+
+    await store.write(first.proposal.slug, first.proposal.text, {
+      baseHash: first.proposal.baseHash,
+      approve: true,
+    });
+
+    await expect(
+      store.write(second.proposal.slug, second.proposal.text, {
+        baseHash: second.proposal.baseHash,
+        approve: true,
+      }),
+    ).rejects.toMatchObject({ errorCode: 'PLUGIN_CHANGED' });
+    expect((await store.get('plugin'))?.plugin?.name).toBe('Деплои');
+    const third = await proposals.prepare('run-1', { ...SAVE, name: 'Сборки' });
+    expect(third).toMatchObject({ ok: true, proposal: { slug: 'plugin-2' } });
+  });
+
   it('reads an existing slug as an update quoting the stored hash and text', async () => {
     await storePlugin('prod-deploys', STORED_WITH_COMMENT);
     const stored = await store.getOrThrow('prod-deploys');

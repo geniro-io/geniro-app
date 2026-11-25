@@ -12507,6 +12507,25 @@ export type PluginDetailDtoStateEnum = typeof PluginDetailDtoStateEnum[keyof typ
 /**
  * 
  * @export
+ * @interface PluginFolderRunRequestDto
+ */
+export interface PluginFolderRunRequestDto {
+    /**
+     * The absolute folder to run the command in
+     * @type {string}
+     * @memberof PluginFolderRunRequestDto
+     */
+    folder: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof PluginFolderRunRequestDto
+     */
+    force?: boolean;
+}
+/**
+ * 
+ * @export
  * @interface PluginListDto
  */
 export interface PluginListDto {

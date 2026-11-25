@@ -252,6 +252,62 @@ describe('PluginRunnerService', () => {
     });
   });
 
+  describe('running in a folder the user picks', () => {
+    it('runs the approved command in that folder', async () => {
+      await approvedPlugin('deploys');
+
+      const run = await runner.runInFolder('deploys', work, { force: true });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        label: 'plugin:deploys',
+        args: ['-c', COMMAND],
+        cwd: work,
+      });
+      expect(run).toMatchObject({ data: { ok: true }, error: null });
+    });
+
+    it('fills the result a chat in that folder shows', async () => {
+      await approvedPlugin('deploys');
+
+      const run = await runner.runInFolder('deploys', work);
+      const [block] = await runner.blocksForRun('run-1');
+
+      expect(block?.result).toEqual(run);
+    });
+
+    it('refuses a folder the plugin is not set to show in', async () => {
+      await approvedPlugin('deploys');
+
+      await expect(runner.runInFolder('deploys', other)).rejects.toMatchObject({
+        errorCode: 'PLUGIN_FOLDER_MISMATCH',
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it('refuses a folder that does not exist', async () => {
+      await approvedPlugin('deploys', { folders: [] });
+
+      await expect(
+        runner.runInFolder('deploys', join(root, 'gone')),
+      ).rejects.toMatchObject({ errorCode: 'PLUGIN_FOLDER_INVALID' });
+      expect(calls).toEqual([]);
+    });
+
+    it('refuses a plugin file edited by hand until it is approved again', async () => {
+      await approvedPlugin('deploys');
+      await writeFile(
+        join(root, 'plugins', 'deploys.plugin.yaml'),
+        plugin({ command: 'echo {"changed":true}' }),
+      );
+
+      await expect(runner.runInFolder('deploys', work)).rejects.toMatchObject({
+        errorCode: 'PLUGIN_NOT_APPROVED',
+      });
+      expect(calls).toEqual([]);
+    });
+  });
+
   describe('caching', () => {
     it('serves a second run inside refresh_minutes from the cache, and runs again after it', async () => {
       vi.useFakeTimers({ toFake: ['Date'] });

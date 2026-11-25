@@ -63,7 +63,7 @@ describe('pluginButtonOf', () => {
         child: 'open_label',
         action: {
           functionCall: {
-            call: 'openUrl',
+            '@call': 'openUrl',
             args: { url: 'https://example.com' },
           },
         },

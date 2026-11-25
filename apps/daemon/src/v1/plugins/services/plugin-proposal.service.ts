@@ -10,6 +10,7 @@ import {
 } from '../plugins.types';
 import {
   type PluginFileInput,
+  pluginFileFields,
   pluginFileText,
   readPluginText,
 } from '../utils/plugin-file';

@@ -155,6 +155,27 @@ view:
     });
   });
 
+  it('keeps the buttons and timings of an update that leaves them out', async () => {
+    await storePlugin(
+      'prod-deploys',
+      STORED_WITH_COMMENT.replace('refresh_minutes: 5', 'refresh_minutes: 15') +
+        'buttons:\n  - id: redeploy\n    command: echo redeploy\n    confirm: true\n',
+    );
+
+    const read = await proposalsIn(chatFolder).prepare('run-1', {
+      ...SAVE,
+      slug: 'prod-deploys',
+    });
+
+    expect(read).toMatchObject({
+      ok: true,
+      proposal: {
+        refreshMinutes: 15,
+        buttons: [{ id: 'redeploy', command: 'echo redeploy', confirm: true }],
+      },
+    });
+  });
+
   it('keeps a YAML comment of the existing file in the text it proposes', async () => {
     await storePlugin('prod-deploys', STORED_WITH_COMMENT);
 

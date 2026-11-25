@@ -480,6 +480,8 @@ describe('MemberEventCard', () => {
       </RevealCallContext.Provider>,
     );
     expect(el.querySelector('[data-slot="agent-event-open-call"]')).toBeNull();
+    expect(el.querySelector('[data-slot="agent-event-actions"]')).toBeNull();
+    expect(el.querySelector('[data-slot="agent-event-top"]')).toBeNull();
   });
 
   it('draws no open button where no call can be shown', () => {
@@ -507,6 +509,12 @@ describe('MemberEventCard', () => {
     );
     expect(
       declined.querySelector('[data-slot="agent-event-open-call"]'),
+    ).toBeNull();
+    expect(
+      noProvider.querySelector('[data-slot="agent-event-actions"]'),
+    ).toBeNull();
+    expect(
+      declined.querySelector('[data-slot="agent-event-actions"]'),
     ).toBeNull();
   });
 
@@ -567,6 +575,7 @@ describe('MonitorEventCard', () => {
     expect(article.dataset.kind).toBe('monitor-reported');
     expect(article.dataset.monitor).toBe('m1');
     expect(article.children).toHaveLength(1);
+    expect(line(el).parentElement).toBe(article);
     expect(line(el).getAttribute('aria-expanded')).toBe('false');
     expect(line(el).title).toBe('Monitor reported: dev server log\npnpm dev');
     expect(slotText(el, 'monitor-event-title')).toBe('dev server log');

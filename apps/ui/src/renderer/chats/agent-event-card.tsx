@@ -294,6 +294,17 @@ export function AgentEventCard({
   data,
 }: AgentEventCardProps): React.JSX.Element {
   const meta = KIND_META[kind];
+  const top = line ?? (
+    <EventLine
+      icon={meta.icon}
+      tone={meta.tone}
+      label={label ?? meta.label}
+      slot={slot}
+      handle={handle}
+      member={member}
+      waiting={waiting}
+    />
+  );
   return (
     <article
       data-slot={`${slot}-card`}
@@ -303,30 +314,20 @@ export function AgentEventCard({
         'flex w-full min-w-0 flex-col gap-1.5 rounded-lg border border-border/70 bg-card px-3 text-sm',
         line === undefined ? 'py-2' : 'py-1.5',
       )}>
-      <div
-        data-slot={`${slot}-top`}
-        className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
-          {line ?? (
-            <EventLine
-              icon={meta.icon}
-              tone={meta.tone}
-              label={label ?? meta.label}
-              slot={slot}
-              handle={handle}
-              member={member}
-              waiting={waiting}
-            />
-          )}
-        </div>
-        {actions === undefined || actions === null ? null : (
+      {actions === undefined || actions === null ? (
+        top
+      ) : (
+        <div
+          data-slot={`${slot}-top`}
+          className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">{top}</div>
           <div
             data-slot={`${slot}-actions`}
             className="flex shrink-0 items-center gap-1">
             {actions}
           </div>
-        )}
-      </div>
+        </div>
+      )}
       {line === undefined && identity !== undefined ? (
         <ThreadHead
           identity={identity}
@@ -413,17 +414,13 @@ function memberIdentity(
   };
 }
 
-/** Opens the card of `callId` where one is loaded; nothing where none is. */
 function OpenCallButton({
   callId,
+  open,
 }: {
-  callId: string | null;
-}): React.JSX.Element | null {
-  const reveal = useContext(RevealCallContext);
-  const open = callId === null ? null : (reveal?.(callId) ?? null);
-  if (open === null) {
-    return null;
-  }
+  callId: string;
+  open: () => void;
+}): React.JSX.Element {
   return (
     <ThreadActionButton
       slot="agent-event-open-call"
@@ -471,6 +468,8 @@ export const MemberEventCard = memo(function MemberEventCard({
   memoryKey,
 }: MemberEventCardProps): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
+  const reveal = useContext(RevealCallContext);
+  const open = callId === null ? null : (reveal?.(callId) ?? null);
   const agentLabel =
     meta?.agent === null || meta?.agent === undefined
       ? null
@@ -493,7 +492,11 @@ export const MemberEventCard = memo(function MemberEventCard({
       options={options}
       outcome={outcome}
       memoryKey={memoryKey}
-      actions={<OpenCallButton callId={callId} />}
+      actions={
+        callId === null || open === null ? null : (
+          <OpenCallButton callId={callId} open={open} />
+        )
+      }
       data={{
         'data-member': memberId ?? undefined,
         'data-call': callId ?? undefined,

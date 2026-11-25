@@ -74,6 +74,19 @@ describe('ThreadFace', () => {
     expect(face.className).not.toContain('size-8');
   });
 
+  it('draws an agent at size sm with the glyph its siblings draw at sm', () => {
+    const agent = faceOf({ kind: 'agent', icon: 'bot', name: 'claude' }, 'sm');
+    expect(agent.dataset.face).toBe('agent');
+    const agentGlyph = agent.querySelector('svg')?.getAttribute('class');
+
+    const monitor = faceOf({ kind: 'monitor' }, 'sm');
+    const monitorGlyph = monitor.querySelector('svg')?.getAttribute('class');
+
+    expect(agentGlyph).toContain('size-3.5');
+    expect(agentGlyph).not.toContain('size-4');
+    expect(monitorGlyph).toContain('size-3.5');
+  });
+
   it('draws a team at size sm in a 24px row', () => {
     const face = faceOf(
       {

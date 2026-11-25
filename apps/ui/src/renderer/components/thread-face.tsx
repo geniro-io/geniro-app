@@ -145,7 +145,7 @@ export function ThreadFace({
           data-size={size}
           title={look.name}
           className={cn(faceVariants({ size }), 'bg-accent text-foreground')}>
-          <AgentGlyph icon={look.icon} />
+          <AgentGlyph icon={look.icon} className={glyph} />
         </span>
       );
     case 'monitor':

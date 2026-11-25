@@ -30,7 +30,7 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 
 ## Folders
 
-- A run matches a plugin when one of its candidates lies inside one of the plugin's folders. Candidates: the run's folder (`Run.cwd`) and its real roots — the card's worktree, else its project's roots (`ProjectRootsService.rootsOf`).
+- A run matches a plugin when one of its candidates lies inside one of the plugin's folders. Candidates: the run's folder (`Run.cwd`) and its root (`ProjectRootsService.rootsOf`) — a board card's worktree maps to its card's folder (else its project's), another git worktree to its main repository.
 - Plugin folders are canonicalized (realpath) at read. Both sides compare case-insensitively, segment by segment (`isWithinDirectory`).
 - Empty `folders` = everywhere. A run with no folder gets no blocks; a run whose candidates match none is refused `PLUGIN_FOLDER_MISMATCH`.
 
@@ -39,15 +39,15 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 - Runs `["/bin/sh", "-c", command]` through `runManagedCommand` in the folder, with the plugin's timeout, 1 MiB output kept from the head, `endGroupOnExit`, `buildChildEnv` inside the runner and ProcessRegistry label `plugin:<slug>`. No run-tag env: a plugin's command is not the run's work.
 - Single flight per (slug, folder): a second caller joins the first run.
 - The last result per (slug, folder), `{at, data, error, exitCode, stderrTail}`, lives in memory only and is lost on restart. Without `force`, a call within `refresh_minutes` returns it, and no run starts less than a minute after the previous one.
-- stdout must parse as JSON (`PLUGIN_OUTPUT_NOT_JSON`, with the first 2 KB). stderr and error text pass `redactSecrets` and are cut to 4 KB.
+- stdout must parse as JSON; otherwise the result's `error` says so, with the first 2 KB. A failed run is a result with `data: null` and its `error`, never a thrown error. stderr and error text pass `redactSecrets` and are cut to 4 KB.
 - Checks at run and press, in order: folder, approval (`PLUGIN_NOT_APPROVED`), `PLUGIN_DISABLED`.
 
 ## Buttons
 
-- A press sends `{runId, dataAt}`. Env values are read by the daemon from its own cached result, never from the client; a pointer the data lacks refuses `PLUGIN_NO_DATA`. Values are stringified, ≤ 1024 chars, no NUL.
+- A press sends `{runId, dataAt}`. Env values are read by the daemon from its own cached result, never from the client; a pointer the data lacks refuses `PLUGIN_NO_DATA`. Values are stringified, ≤ 1024 chars, no NUL (`PLUGIN_VALUE_TOO_LONG`).
 - Env names match `^PLUGIN_[A-Z0-9_]{1,57}$` only: `buildChildEnv` merges extra keys last, so any other name would let the data pick what runs.
 - `dataAt` is when the user read the data. A cache that has moved on refuses `PLUGIN_DATA_CHANGED` (409); the block refreshes and the user presses again.
-- One press at a time per (slug, button, folder); a second is `PLUGIN_BUSY`. Label `plugin-button:<slug>:<id>`, `endGroupOnExit`, the plugin's timeout, output tail masked, then cut as command actions are. `plugin-button:` counts as work; data runs do not. The data command runs again (forced) after a press.
+- One press at a time per (slug, button, folder); a second is `PLUGIN_BUSY`. Label `plugin-button:<slug>:<id>`, `endGroupOnExit`, the button's `timeout_minutes`, output tail masked, then cut as command actions are (`maskedTail`, shared with them). `plugin-button:` counts as work; data runs do not. After a press the data command runs again, skipping the cache.
 - Confirmation is the renderer's (`confirm-dialog`). The daemon runs a press it is sent.
 
 ## Routes and events
@@ -59,8 +59,8 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 ## save_plugin
 
 - `HOST_PLUGIN_TOOL = 'save_plugin'` (`agents/chat.types.ts`), module `mcp/tools/save-plugin/`. Arguments: `{slug?, name, folders?, refresh_minutes?, timeout_seconds?, command, view, buttons?, sample?}`. A refusal answers `INVALID_ARGS: <pointer>: <reason>` and parks nothing.
-- Every valid call parks a card (`PluginProposalBroker`, `parkWriteCard`) in every approval mode. Only Approve writes, file then approved copy; Reject tells the agent nothing was saved. The receipt names the slug and the file's path.
-- `folders` absent = the chat's folder. A `slug` naming an existing plugin is an update: the card shows a diff, and the write quotes the hash it was read at.
+- Every valid call parks a card (`PluginProposalBroker`, `parkWriteCard`) in every approval mode; a team lead's card is the run's one standing lead card (`Run.pendingTeamProjectCard`, kind `plugin`), shared with `save_project_instructions`. Only Approve writes, file then approved copy; Reject tells the agent nothing was saved. The receipt names the slug and the file's path.
+- `folders` absent = the chat's folder. A `slug` naming an existing plugin is an update: what the call leaves out (folders, buttons, timings) is kept, the card shows a diff, and the write quotes the hash it was read at.
 - `sample` is output the agent got by running the command itself; the card previews from it. The daemon never runs an unapproved command to make a preview.
 - Offered to a chat and to a team's lead in its own conversation. A CLI that cannot hold a tool call open (`hostQuestionDeferredReason`) gets a deferred card that survives a restart, as project instructions do.
 - `v1/plugins` imports `v1/agents`, so `v1/agents` never imports `v1/plugins`: the store writer reaches the agent side through a seam the plugins module provides.
@@ -75,4 +75,4 @@ A Geniro Plugin is a block in the chat's right panel, under the agent cards: one
 - A button with `confirm: true` opens the confirm dialog with its command line, folder and plugin; the others run at once.
 - States: loading, error (with Try again), empty, file changed (last data dimmed, "Plugin file changed · not run since", Review).
 - Review shows the approved text against the current one as a diff; Approve posts `{hash}`.
-- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, folders, Run now, Show file in Finder and Delete.
+- Settings → Plugins (`settings/plugins-settings.tsx`): one row per plugin with its switch, Edit folders, Show file in Finder (desktop only) and Delete. Running is the block's ↻; no route runs a plugin by folder.

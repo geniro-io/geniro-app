@@ -23729,4 +23729,63 @@ describe('TeamExecutorService — chat teams', () => {
       message: expect.stringContaining('Your next message starts it'),
     });
   });
+
+  it('applies a removal pressed while the lead is blocked in a sync call, at once and without waiting for the call', async () => {
+    const { service, claude, callBroker, approvals, nodeDao, runDao } = setup();
+    const team = teamOf([member('orch'), member('helper'), member('extra')], {
+      name: 'calls and removes',
+    });
+    const run = await service.startRun({
+      slug: 'calls-and-removes',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'summarize',
+    });
+    await drain();
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('running');
+
+    const before = runDao.runs.get(run.id)!;
+    const next = teamOf([member('orch'), member('helper')], {
+      name: 'calls and removes',
+    });
+    let applied: unknown = null;
+    approvals.track({
+      runId: run.id,
+      memberId: 'orch',
+      requestId: 'card-remove',
+      toolName: 'run_team',
+      input: {},
+      question: false,
+      deferred: true,
+      standing: true,
+      respond: () => {
+        void service
+          .changeRunTeam(run.id, next, runTeamHashOf(before.teamSnapshot), [
+            'extra',
+          ])
+          .then((result) => {
+            applied = result;
+          });
+        return true;
+      },
+    });
+    expect(approvals.listByRun(run.id).map((p) => p.requestId)).toContain(
+      'card-remove',
+    );
+
+    expect(approvals.resolve(run.id, 'card-remove', true)).toBe(true);
+    await drain();
+
+    expect(applied).toMatchObject({ status: 'changed', departed: ['extra'] });
+    expect(nodeDao.row(run.id, 'helper')?.status).toBe('running');
+
+    completeTurn(claude.starts[1]!, 'summary text');
+    expect((await envelope).status).toBe('ok');
+  });
 });

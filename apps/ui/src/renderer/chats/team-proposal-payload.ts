@@ -15,12 +15,14 @@ import {
 } from '../teams/member-schema';
 
 /**
- * The `propose_team` card's payload: the `input` of its `approval_request`
- * row, and the `outcome` its verdict row carries once approved.
+ * The `propose_team` and `run_team` cards' payload: the `input` of their
+ * `approval_request` row, and the `outcome` their verdict row carries once
+ * answered.
  *
  * TWIN PARSER: `TeamProposalSchema` (`apps/daemon/src/v1/teams/teams.types.ts`),
- * `TeamDiff` (`apps/daemon/src/v1/teams/utils/team-diff.ts`) and
- * `TeamProposalOutcome` (`apps/daemon/src/v1/agents/chat.types.ts`); the
+ * with its run arms `RunStartProposalSchema`, `RunChangeProposalSchema` and
+ * `RunTeamChangeSchema`, `TeamDiff` (`apps/daemon/src/v1/teams/utils/team-diff.ts`)
+ * and `TeamProposalOutcome` (`apps/daemon/src/v1/agents/chat.types.ts`); the
  * replace arm's optional `overlay` and `project` are read tolerantly, each
  * dropped whole when any part of it does not read, and never make the card
  * unreadable. The
@@ -89,10 +91,13 @@ export interface ProposalProject {
   diffText: string;
 }
 
-export interface ParsedTeamProposal {
-  mode: 'create' | 'replace';
+const RUN_CHANGE_FIELDS = ['role', 'instructions', 'model', 'effort'] as const;
+
+/** What every card carries, whatever its mode. */
+interface ProposalCommon {
+  /** A library card's team, or a run's team as the run would have it. */
   team: Team;
-  /** The library file an approval writes, fixed when the card was raised. */
+  /** The library file an approval writes, fixed when the card was raised; empty on a run card. */
   slug: string;
   /** The agent's own line, never trusted as a description of the change. */
   summary: string | null;
@@ -100,6 +105,11 @@ export interface ParsedTeamProposal {
   reason: string | null;
   /** Every agent that runs tools without asking, as the daemon names them. */
   autoAgents: string[];
+}
+
+/** A propose_team card: a new library team, or a replacement of a saved one. */
+export interface ParsedLibraryProposal extends ProposalCommon {
+  mode: 'create' | 'replace';
   /** Replace only: the name of the team being overwritten. */
   replacesName: string | null;
   /** Replace only; null on a new team. */
@@ -108,6 +118,63 @@ export interface ParsedTeamProposal {
   overlay: ProposalOverlay | null;
   /** Replace only; null when the card leaves every project's instructions alone. */
   project: ProposalProject | null;
+}
+
+/** One agent a run_team card names: the daemon's own row for it. */
+export interface RunCardMember {
+  memberId: string;
+  name: string;
+  role: string;
+  agent: AgentKind;
+  /** null: the CLI's default model. */
+  model: string | null;
+  approval: ApprovalMode;
+}
+
+export type RunChangeField = (typeof RUN_CHANGE_FIELDS)[number];
+
+/** One field of a running agent a change sets: what it reads now and what it would read. */
+export interface RunChangeValue {
+  field: RunChangeField;
+  /** null: the field was unset. */
+  before: string | null;
+  after: string | null;
+}
+
+/** One line of a run_team change card. */
+export type RunChange =
+  | { op: 'add'; member: RunCardMember; task: string | null }
+  | { op: 'remove'; memberId: string; name: string }
+  | {
+      op: 'update';
+      memberId: string;
+      name: string;
+      fields: RunChangeValue[];
+      task: string | null;
+    };
+
+/** A run_team start card: this chat becomes the team, led by its own agent. */
+export interface ParsedRunStart extends ProposalCommon {
+  mode: 'run-start';
+  plan: string[];
+  lead: RunCardMember;
+  members: { member: RunCardMember; task: string }[];
+}
+
+/** A run_team change card: the running team's roster or instructions, for this run only. */
+export interface ParsedRunChange extends ProposalCommon {
+  mode: 'run-change';
+  changes: RunChange[];
+}
+
+export type ParsedRunProposal = ParsedRunStart | ParsedRunChange;
+
+export type ParsedTeamProposal = ParsedLibraryProposal | ParsedRunProposal;
+
+export function isRunProposal(
+  proposal: ParsedTeamProposal,
+): proposal is ParsedRunProposal {
+  return proposal.mode === 'run-start' || proposal.mode === 'run-change';
 }
 
 const NOT_SAVED_CAUSES = [
@@ -123,7 +190,11 @@ export type NotSavedCause = (typeof NOT_SAVED_CAUSES)[number];
 export type ProposalOutcome =
   | { kind: 'saved'; slug: string }
   /** `cause` null: a cause this build does not know. */
-  | { kind: 'not-saved'; cause: NotSavedCause | null };
+  | { kind: 'not-saved'; cause: NotSavedCause | null }
+  | { kind: 'started' }
+  | { kind: 'not-started'; causes: string[] }
+  | { kind: 'changed' }
+  | { kind: 'not-changed'; reason: string };
 
 function isNotSavedCause(value: unknown): value is NotSavedCause {
   return (NOT_SAVED_CAUSES as readonly unknown[]).includes(value);
@@ -532,6 +603,120 @@ function readProject(value: unknown): ProposalProject | null {
   };
 }
 
+function nullableString(value: unknown): value is string | null {
+  return value === null || isString(value);
+}
+
+function isRunChangeField(value: unknown): value is RunChangeField {
+  return (RUN_CHANGE_FIELDS as readonly unknown[]).includes(value);
+}
+
+function readRunMember(raw: unknown): RunCardMember | null {
+  const member = record(raw);
+  if (member === null) {
+    return null;
+  }
+  const { agent, approval, model } = member;
+  if (
+    !isString(member.memberId) ||
+    !isString(member.name) ||
+    !isString(member.role) ||
+    !oneOf(AgentKind, agent) ||
+    !nullableString(model) ||
+    !oneOf(ApprovalMode, approval)
+  ) {
+    return null;
+  }
+  return {
+    memberId: member.memberId,
+    name: member.name,
+    role: member.role,
+    agent,
+    model,
+    approval,
+  };
+}
+
+function readRunStartMember(
+  raw: unknown,
+): { member: RunCardMember; task: string } | null {
+  const entry = record(raw);
+  if (entry === null || !isString(entry.task)) {
+    return null;
+  }
+  const member = readRunMember(entry.member);
+  return member === null ? null : { member, task: entry.task };
+}
+
+function readRunChangeValue(raw: unknown): RunChangeValue | null {
+  const value = record(raw);
+  if (
+    value === null ||
+    !isRunChangeField(value.field) ||
+    !nullableString(value.before) ||
+    !nullableString(value.after)
+  ) {
+    return null;
+  }
+  return {
+    field: value.field,
+    before: value.before,
+    after: value.after,
+  };
+}
+
+function readRunChange(raw: unknown): RunChange | null {
+  const change = record(raw);
+  if (change === null) {
+    return null;
+  }
+  if (change.op === 'add') {
+    const member = readRunMember(change.member);
+    return member === null || !nullableString(change.task)
+      ? null
+      : { op: 'add', member, task: change.task };
+  }
+  if (change.op === 'remove') {
+    return isString(change.memberId) && isString(change.name)
+      ? { op: 'remove', memberId: change.memberId, name: change.name }
+      : null;
+  }
+  if (
+    change.op !== 'update' ||
+    !isString(change.memberId) ||
+    !isString(change.name) ||
+    !nullableString(change.task)
+  ) {
+    return null;
+  }
+  const fields = readList(change.fields, readRunChangeValue);
+  return fields === null
+    ? null
+    : {
+        op: 'update',
+        memberId: change.memberId,
+        name: change.name,
+        fields,
+        task: change.task,
+      };
+}
+
+function readRunProposal(
+  proposal: Fields,
+  common: ProposalCommon,
+): ParsedRunProposal | null {
+  if (proposal.mode === 'run-start') {
+    const plan = stringList(proposal.plan);
+    const lead = readRunMember(proposal.lead);
+    const members = readList(proposal.members, readRunStartMember);
+    return plan === null || lead === null || members === null
+      ? null
+      : { ...common, mode: 'run-start', plan, lead, members };
+  }
+  const changes = readList(proposal.changes, readRunChange);
+  return changes === null ? null : { ...common, mode: 'run-change', changes };
+}
+
 function trimmedText(value: unknown): string | null {
   return isString(value) && value.trim() !== '' ? value.trim() : null;
 }
@@ -551,16 +736,20 @@ export function readTeamProposal(input: unknown): ParsedTeamProposal | null {
   if (team === null || autoAgents === null) {
     return null;
   }
-  const summary = trimmedText(proposal.summary);
-  const reason = trimmedText(proposal.reason);
+  const common: ProposalCommon = {
+    team,
+    slug: proposal.slug,
+    summary: trimmedText(proposal.summary),
+    reason: trimmedText(proposal.reason),
+    autoAgents,
+  };
+  if (proposal.mode === 'run-start' || proposal.mode === 'run-change') {
+    return readRunProposal(proposal, common);
+  }
   if (proposal.mode === 'create') {
     return {
+      ...common,
       mode: 'create',
-      team,
-      slug: proposal.slug,
-      summary,
-      reason,
-      autoAgents,
       replacesName: null,
       diff: null,
       overlay: null,
@@ -575,12 +764,8 @@ export function readTeamProposal(input: unknown): ParsedTeamProposal | null {
     return null;
   }
   return {
+    ...common,
     mode: 'replace',
-    team,
-    slug: proposal.slug,
-    summary,
-    reason,
-    autoAgents,
     replacesName: proposal.replacesName,
     diff,
     overlay: readOverlay(proposal.overlay),
@@ -603,6 +788,19 @@ export function readProposalOutcome(raw: unknown): ProposalOutcome | null {
       cause: isNotSavedCause(outcome.cause) ? outcome.cause : null,
     };
   }
+  if (outcome.kind === 'started') {
+    return { kind: 'started' };
+  }
+  if (outcome.kind === 'not-started') {
+    const causes = stringList(outcome.causes);
+    return causes === null ? null : { kind: 'not-started', causes };
+  }
+  if (outcome.kind === 'changed') {
+    return { kind: 'changed' };
+  }
+  if (outcome.kind === 'not-changed' && isString(outcome.reason)) {
+    return { kind: 'not-changed', reason: outcome.reason };
+  }
   return null;
 }
 
@@ -618,6 +816,24 @@ function collectStrings(value: unknown, into: string[]): void {
       into.push(key);
       collectStrings(entry, into);
     }
+  }
+}
+
+/** The strings only one mode's card draws: a run's plan, lead, members or changes; a library card's diff and overlays. */
+function scanPartsOf(proposal: ParsedTeamProposal): unknown[] {
+  switch (proposal.mode) {
+    case 'run-start':
+      return [proposal.plan, proposal.lead, proposal.members];
+    case 'run-change':
+      return [proposal.changes];
+    case 'create':
+    case 'replace':
+      return [
+        proposal.diff,
+        proposal.replacesName,
+        proposal.overlay,
+        proposal.project,
+      ];
   }
 }
 
@@ -637,20 +853,17 @@ export function proposalScanText(proposal: ParsedTeamProposal): string {
   collectStrings(
     [
       proposal.team,
-      proposal.diff,
       proposal.summary,
       proposal.reason,
-      proposal.replacesName,
       proposal.autoAgents,
-      proposal.overlay,
-      proposal.project,
+      scanPartsOf(proposal),
     ],
     strings,
   );
   // A quoted value arrives JSON-quoted and is drawn decoded (`shown`), so the
   // decoded form is scanned too: the quoted form hides a control character
   // behind its `\u` escape.
-  const diff = proposal.diff;
+  const diff = isRunProposal(proposal) ? null : proposal.diff;
   const quoted = [
     ...(diff?.teamFields ?? []).flatMap(({ values }) =>
       values === null ? [] : [values],
@@ -729,6 +942,8 @@ export interface DiffRow {
   detail: { field: string; before: string; after: string } | null;
   /** For an added or removed entry: each field it holds or held. */
   entry: DiffEntryField[];
+  /** The whole line, when the generic wording does not fit a run's roster change. */
+  label?: string;
   /** The change makes an agent run tools without asking. */
   toAuto: boolean;
 }
@@ -896,6 +1111,86 @@ export function diffRows(diff: ProposalDiff, team: Team): DiffRow[] {
     ...changed('stage', diff.changedStages),
     ...removed('stage', diff.removedStages),
   ];
+  return [
+    ...rows.filter((row) => row.toAuto),
+    ...rows.filter((row) => !row.toAuto),
+  ];
+}
+
+/**
+ * A run's change as the change list draws it: each agent it adds with its
+ * task, each field of each agent it updates, each task it sets, and each agent
+ * it removes. Those that run tools unasked come first, as {@link diffRows} orders them.
+ */
+export function runChangeRows(
+  changes: readonly RunChange[],
+  agentName: (agent: AgentKind) => string,
+): DiffRow[] {
+  const rows = changes.flatMap((change): DiffRow[] => {
+    switch (change.op) {
+      case 'add': {
+        const { member, task } = change;
+        const who = [
+          member.role,
+          `${agentName(member.agent)} · ${member.model ?? 'default'}`,
+        ]
+          .filter((part) => part !== '')
+          .join(' · ');
+        return [
+          {
+            key: `add:${member.memberId}`,
+            marker: 'added',
+            scope: 'member',
+            subject: member.name,
+            detail: null,
+            label: `${member.name} — ${who}`,
+            entry: task === null ? [] : [{ field: 'task', value: task }],
+            toAuto: member.approval === 'auto',
+          },
+        ];
+      }
+      case 'remove':
+        return [
+          {
+            key: `remove:${change.memberId}`,
+            marker: 'removed',
+            scope: 'member',
+            subject: change.name,
+            detail: null,
+            label: `${change.name} — finishes its current call, then leaves`,
+            entry: [],
+            toAuto: false,
+          },
+        ];
+      case 'update': {
+        const { memberId, name, fields, task } = change;
+        const fieldRows = fields.map(({ field, before, after }): DiffRow => ({
+          key: `update:${memberId}:${field}`,
+          marker: 'changed',
+          scope: 'member',
+          subject: name,
+          detail: { field, before: before ?? UNSET, after: after ?? UNSET },
+          entry: [],
+          toAuto: false,
+        }));
+        return task === null
+          ? fieldRows
+          : [
+              ...fieldRows,
+              {
+                key: `task:${memberId}`,
+                marker: 'changed',
+                scope: 'member',
+                subject: name,
+                detail: null,
+                label: `${name} — new task`,
+                entry: [{ field: 'task', value: task }],
+                toAuto: false,
+              },
+            ];
+      }
+    }
+  });
   return [
     ...rows.filter((row) => row.toAuto),
     ...rows.filter((row) => !row.toAuto),

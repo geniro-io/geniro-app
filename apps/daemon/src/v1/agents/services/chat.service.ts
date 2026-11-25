@@ -634,6 +634,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * unaware of a verdict the transcript still shows.
    */
   private readonly heldVerdicts = new Map<string, string[]>();
+  /** Work an owned card's verdict waits to do until the chat's turn ends ({@link whenTurnEnds}). */
+  private readonly heldActions = new Map<string, (() => Promise<void>)[]>();
   /** Told each time a chat's turn has ended — how held host turns are released. */
   private readonly turnSettledListeners = new Set<(runId: string) => void>();
   /** Told when the user stops a chat — how held host turns are dropped. */
@@ -1967,12 +1969,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * still standing keeps them waiting for the turn its answer starts.
    */
   private releaseHeldVerdicts(runId: string): void {
+    this.releaseHeldActions(runId);
     const held = this.heldVerdicts.get(runId);
     if (held === undefined) {
       return;
     }
     if (this.deleting.has(runId) || this.archiving.has(runId)) {
       this.heldVerdicts.delete(runId);
+      this.heldActions.delete(runId);
       return;
     }
     if (this.mustHoldVerdict(runId)) {
@@ -1980,6 +1984,114 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     this.heldVerdicts.delete(runId);
     void this.sendOwnedVerdict(runId, held.join('\n\n'));
+  }
+
+  /**
+   * Run `action` once no turn of this chat runs: now, or when the running one
+   * ends however it ends. Dropped when the chat is archived or deleted first.
+   */
+  whenTurnEnds(runId: string, action: () => Promise<void>): void {
+    if (!this.registry.has(runId)) {
+      this.runHeldAction(runId, action);
+      return;
+    }
+    this.heldActions.set(runId, [
+      ...(this.heldActions.get(runId) ?? []),
+      action,
+    ]);
+  }
+
+  private releaseHeldActions(runId: string): void {
+    const held = this.heldActions.get(runId);
+    if (held === undefined || this.registry.has(runId)) {
+      return;
+    }
+    this.heldActions.delete(runId);
+    if (this.deleting.has(runId) || this.archiving.has(runId)) {
+      return;
+    }
+    for (const action of held) {
+      this.runHeldAction(runId, action);
+    }
+  }
+
+  private runHeldAction(runId: string, action: () => Promise<void>): void {
+    void action().catch((err: unknown) => {
+      this.logger.error(
+        `run ${runId} could not carry out a held card answer: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  /**
+   * What stops this chat from becoming a team right now, each in words the
+   * agent and the card can say; empty when nothing does. `exceptCard` is the
+   * card being answered, which the promotion itself retires. Only `atPress`
+   * does a running turn count: the agent asks from inside one.
+   */
+  async promotionBlockers(
+    runId: string,
+    exceptCard: string | null,
+    atPress: boolean,
+  ): Promise<string[]> {
+    const run = await this.runDao.getById(runId, this.em.fork());
+    if (run === null) {
+      return ['the chat is gone'];
+    }
+    const causes: string[] = [];
+    if (run.teamId !== null) {
+      causes.push('this chat already runs a team');
+    }
+    if (run.archivedAt !== null || this.archiving.has(runId)) {
+      causes.push('the chat is archived');
+    }
+    if (atPress && this.registry.has(runId)) {
+      causes.push('a turn of this chat is still running');
+    }
+    const monitors = this.monitors?.list(runId).length ?? 0;
+    if (monitors > 0) {
+      causes.push(
+        `${monitors} monitor${monitors === 1 ? ' is' : 's are'} still running — stop ${monitors === 1 ? 'it' : 'them'} with stop_monitor`,
+      );
+    }
+    const shells = this.backgroundWork.shellsOpen(runId);
+    if (shells > 0) {
+      causes.push(
+        `${shells} background command${shells === 1 ? ' is' : 's are'} still running — stop ${shells === 1 ? 'it' : 'them'} or wait for ${shells === 1 ? 'it' : 'them'} to finish`,
+      );
+    }
+    const delegates = this.backgroundWork.subagentsOut(runId);
+    if (delegates > 0) {
+      causes.push(
+        `${delegates} background sub-agent${delegates === 1 ? ' is' : 's are'} still working — wait for ${delegates === 1 ? 'it' : 'them'} to finish`,
+      );
+    }
+    const otherCards = this.approvals
+      .listByRun(runId)
+      .filter((entry) => entry.requestId !== exceptCard).length;
+    if (otherCards > 0 || run.pendingQuestion !== null) {
+      causes.push(
+        'another card is waiting for the user — let them answer it first',
+      );
+    }
+    if (run.restartContinuation !== null) {
+      causes.push('work cut off by a restart is still being continued');
+    }
+    return causes;
+  }
+
+  /**
+   * Let go of everything this service holds for a chat that has just become a
+   * team run: its kept CLI process (the team's lead resumes the same session
+   * in a process of its own), the host tools kept past its turns and the
+   * approval posture. Its rows and its session id stay.
+   */
+  releaseForTeam(runId: string): void {
+    this.dropKeptHostTools(runId);
+    this.heldVerdicts.delete(runId);
+    this.heldActions.delete(runId);
+    this.runPosture.delete(runId);
+    this.sessions.close(runId, 'the chat became a team');
   }
 
   private async sendOwnedVerdict(
@@ -4162,6 +4274,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // An archived run refuses messages, so a verdict held for it would only
       // be refused at release.
       this.heldVerdicts.delete(runId);
+      this.heldActions.delete(runId);
       const archivedAt = new Date();
       // Shelving is not activity: the archive lists threads by when they were
       // last WORKED in, so this must not re-date the row to the moment it was
@@ -4405,6 +4518,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // into has just been destroyed.
       this.approvals.sweepDeferred(runId);
       this.heldVerdicts.delete(runId);
+      this.heldActions.delete(runId);
       this.offTurnToolCalls.delete(runId);
       this.holds.forget(runId);
       // The run is gone, so its posture has nothing left to govern — and the
@@ -7603,6 +7717,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const disposeTeamProposals = mcpEndpoint
         ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
             runId,
+            ...(isAnalysisRun(run) ||
+            run.editsTeamSlug !== null ||
+            isProjectChat(run) ||
+            isCommandCenterChat(run)
+              ? {}
+              : { runTeam: 'start' as const }),
           })
         : null;
       const editsTeamSlug = run.editsTeamSlug;

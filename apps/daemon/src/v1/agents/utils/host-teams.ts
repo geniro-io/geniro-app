@@ -1,6 +1,7 @@
 import {
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  HOST_RUN_TEAM_TOOL,
   HOST_TEAM_CHANGE_TOOL,
   MAX_ANSWER_LENGTH,
   PendingOwnedCardSchema,
@@ -9,17 +10,23 @@ import {
 import { isHostToolCall } from './host-tool';
 
 /**
- * Whether a permission request names geniro's own `propose_team`.
+ * Whether a permission request names geniro's own `propose_team` or
+ * `run_team`.
  *
- * Auto-approved because proposing writes nothing: it puts a card on screen,
- * and the file is written only behind that card's Approve — a permission card
- * in front of it would ask the user to approve being asked.
+ * Auto-approved because proposing changes nothing: it puts a card on screen,
+ * and the file is written, the team started or changed only behind that
+ * card's button — a permission card in front of it would ask the user to
+ * approve being asked. `run_team`'s one change a start's note grants is the
+ * user's own note.
  */
 export function isHostTeamProposalCall(
   serverName: string | null,
   toolName: string,
 ): boolean {
-  return isHostToolCall(serverName, toolName, HOST_PROPOSE_TEAM_TOOL);
+  return (
+    isHostToolCall(serverName, toolName, HOST_PROPOSE_TEAM_TOOL) ||
+    isHostToolCall(serverName, toolName, HOST_RUN_TEAM_TOOL)
+  );
 }
 
 /**

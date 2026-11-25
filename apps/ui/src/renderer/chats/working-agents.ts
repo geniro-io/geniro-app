@@ -29,6 +29,8 @@ export interface WorkingAgentRow {
   callerAvatar?: AvatarLook;
   title: string | null;
   state: WorkingAgentState;
+  /** A member the run removed mid-run: leaving while its call is out, left after. */
+  departure: DepartureLabel | null;
   /** Who the calls this conversation made and has not heard back from went to, by name. */
   waitingFor: readonly string[];
   /** When the newest call started, epoch ms, null when nothing recorded it. */
@@ -37,13 +39,29 @@ export interface WorkingAgentRow {
 }
 
 /** Whether the agent is still out: a queued call is out too, though nobody works on it. */
-export function isWorkingAgentLive(row: WorkingAgentRow): boolean {
+export function isWorkingAgentLive(
+  row: Pick<WorkingAgentRow, 'state'>,
+): boolean {
   return (
     row.state === 'working' ||
     row.state === 'waiting' ||
     row.state === 'queued' ||
     row.state === 'quiet'
   );
+}
+
+export type DepartureLabel = 'leaving' | 'left';
+
+/** How a member the run removed mid-run reads: leaving while its call is still out, left once it is not. */
+function departureOf(
+  calleeKey: string,
+  state: WorkingAgentState,
+  departed: ReadonlySet<string>,
+): DepartureLabel | null {
+  if (!departed.has(calleeKey)) {
+    return null;
+  }
+  return isWorkingAgentLive({ state }) ? 'leaving' : 'left';
 }
 
 const SETTLED_STATE: Record<
@@ -70,6 +88,7 @@ export function workingAgentRows({
   runSettled,
   nodes,
   clocks,
+  departedMembers = [],
 }: {
   calls: readonly RunCallState[];
   chains: ReadonlyMap<string, readonly string[]>;
@@ -80,7 +99,10 @@ export function workingAgentRows({
   runSettled: boolean;
   nodes: ReadonlyMap<string, TranscriptNodeMeta>;
   clocks: ReadonlyMap<string, CallClock>;
+  /** The members the run removed mid-run; a row of one reads leaving or left. */
+  departedMembers?: readonly string[];
 }): WorkingAgentRow[] {
+  const departed = new Set(departedMembers);
   const callsById = new Map(calls.map((call) => [call.callId, call] as const));
   const openBlockOf = new Map(
     blocks.open.flatMap((block) =>
@@ -171,19 +193,22 @@ export function workingAgentRows({
       const block = chain
         .map((callId) => openBlockOf.get(callId))
         .find((open) => open !== undefined);
+      const callee = faces(newest.calleeMemberId, newest.callerMemberId);
+      const state = stateOf(newest, block);
       return {
         order: newest.startSeq,
         row: {
           conversationId: chain[0]!,
           callId: newest.callId,
           callIds: chain,
-          ...faces(newest.calleeMemberId, newest.callerMemberId),
+          ...callee,
           title:
             [...known]
               .reverse()
               .map((callId) => callsById.get(callId)!.title)
               .find((title) => title !== null) ?? null,
-          state: stateOf(newest, block),
+          state,
+          departure: departureOf(callee.calleeKey, state, departed),
           waitingFor: waitingFor(chain[0]!),
           startedAt: parsedAt(newest.startedAt),
           clocks: conversationClocks(clocks, chain),
@@ -196,20 +221,25 @@ export function workingAgentRows({
       block.callIds
         .map((callId) => chains.get(callId))
         .find((known) => known !== undefined) ?? block.callIds;
-    add(chain, () => ({
-      order: Number.MAX_SAFE_INTEGER,
-      row: {
-        conversationId: chain[0]!,
-        callId: block.callId,
-        callIds: chain,
-        ...faces(block.calleeMemberId, block.callerMemberId),
-        title: block.title,
-        state: stateOf(undefined, block),
-        waitingFor: waitingFor(chain[0]!),
-        startedAt: parsedAt(block.createdAt),
-        clocks: conversationClocks(clocks, chain),
-      },
-    }));
+    add(chain, () => {
+      const callee = faces(block.calleeMemberId, block.callerMemberId);
+      const state = stateOf(undefined, block);
+      return {
+        order: Number.MAX_SAFE_INTEGER,
+        row: {
+          conversationId: chain[0]!,
+          callId: block.callId,
+          callIds: chain,
+          ...callee,
+          title: block.title,
+          state,
+          departure: departureOf(callee.calleeKey, state, departed),
+          waitingFor: waitingFor(chain[0]!),
+          startedAt: parsedAt(block.createdAt),
+          clocks: conversationClocks(clocks, chain),
+        },
+      };
+    });
   }
   return [...rows.values()]
     .sort((a, b) => b.order - a.order)

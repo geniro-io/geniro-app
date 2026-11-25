@@ -102,6 +102,30 @@ export class TeamHealthService {
     return memberHealthOf(memberId, facts.get(memberId) as MemberFacts, member);
   }
 
+  /**
+   * The CLIs a team names (pool members included) that are not installed on
+   * this Mac — what a chat team refuses for any member, where a library run
+   * refuses only for the member it starts with.
+   */
+  async missingClis(team: Team): Promise<AgentKind[]> {
+    const gathering: Gathering = {
+      mcp: 'none',
+      installs: new Map(),
+      listings: new Map(),
+    };
+    const missing = new Set<AgentKind>();
+    for (const member of team.members) {
+      for (const settings of poolMembersOf(member)) {
+        if (
+          (await this.installOf(settings.agent, gathering)).state === 'missing'
+        ) {
+          missing.add(settings.agent);
+        }
+      }
+    }
+    return [...missing];
+  }
+
   /** The problems that stop a run from starting; the cheap path only, no MCP read. */
   async blockingProblems(team: Team): Promise<HealthProblem[]> {
     return blockingProblemsOf(

@@ -453,6 +453,9 @@ export class CursorAcpAdapter extends AgentAdapter {
        */
       hostQuestionDeferredReason:
         'cursor-agent gives every MCP tool call a fixed 60-second deadline it offers no way to raise, so a question left open on screen is abandoned before most people have finished reading it',
+      // The ACP driver re-sends the composed block whenever its text differs
+      // from the one the conversation holds (`composePrompt`).
+      resumeKeepsInstructionsReason: null,
       // `ask`, the only other mode, asks about every permission request — an
       // MCP call included (`isHostToolCall`'s measured title form) — and geniro
       // starts cursor with no shell sandbox.

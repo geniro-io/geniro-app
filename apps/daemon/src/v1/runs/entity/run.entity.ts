@@ -992,6 +992,31 @@ export class Run extends TimestampsEntity {
   teamOverlaySnapshot: string | null = null;
 
   /**
+   * `'chat'` for a chat promoted in place into a team run it leads (a chat
+   * team, `teamId` `chat:<runId>`): its team lives only in this run and is
+   * never a library team. Null for every other run.
+   */
+  @Property({ type: 'string', nullable: true })
+  teamOrigin: string | null = null;
+
+  /**
+   * JSON `[{memberId, leftAt}]` of the members removed from this run's team
+   * while it ran (`RunTeamDeparture`). They stay in {@link teamSnapshot} so
+   * their rows still resolve, and are never offered as callees again.
+   */
+  @Property({ type: 'text', nullable: true })
+  teamDeparted: string | null = null;
+
+  /**
+   * JSON `{[sessionKey]: hash}` of the team instructions each of a team run's
+   * conversations last ran under (`readConversationInstructions`), so a
+   * conversation resumed on a CLI that keeps its first instructions is told
+   * changed ones, across a restart too.
+   */
+  @Property({ type: 'text', nullable: true })
+  conversationInstructions: string | null = null;
+
+  /**
    * What this run's POLLED conversations have cost, in CENTS, as the account
    * behind their CLI reports it — for a CLI whose turns carry no price
    * (`AdapterConfig.usage.polledSpend`). Null for every run nothing has

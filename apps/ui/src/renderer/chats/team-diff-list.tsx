@@ -38,6 +38,9 @@ function subjectText(row: DiffRow): string {
 
 /** One change, in words — the marker glyph is decoration beside them. */
 function rowText(row: DiffRow): string {
+  if (row.label !== undefined) {
+    return row.label;
+  }
   if (row.detail === null) {
     return `${subjectText(row)} ${MARKER[row.marker].word}`;
   }

@@ -17,6 +17,7 @@ import { AnalysisJudgeService } from './services/analysis-judge.service';
 import { AvatarStoreService } from './services/avatar-store.service';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
+import { ChatTeamService } from './services/chat-team.service';
 import { FreshSessionBaseService } from './services/fresh-session-base.service';
 import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
 import { InstructionSizesService } from './services/instruction-sizes.service';
@@ -118,6 +119,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamReviewService,
     TeamProposalService,
     TeamCardsService,
+    ChatTeamService,
     TeamHealthService,
   ],
   // `TeamExecutorService` is exported for `TasksModule`, whose cards may name
@@ -151,6 +153,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeLogService,
     TeamProposalService,
     TeamCardsService,
+    ChatTeamService,
   ],
 })
 export class TeamsModule {}

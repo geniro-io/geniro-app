@@ -20,16 +20,22 @@ import { Card } from '../components/ui/card';
 import { cn } from '../components/ui/utils';
 import { type PreviewMark, RUNS_UNASKED_LABEL } from '../teams/member-schema';
 import { UnifiedDiff } from './diff-view';
+import { QueuedMessagesContext } from './queued-messages-context';
 import { TeamDiffList } from './team-diff-list';
 import {
   diffRows,
+  isRunProposal,
   type NotSavedCause,
+  type ParsedLibraryProposal,
+  type ParsedRunProposal,
   type ParsedTeamProposal,
   previewMarks,
   type ProposalOutcome,
   proposalScanText,
   rosterOf,
   type RosterRow,
+  type RunCardMember,
+  runChangeRows,
   stageMarksOf,
 } from './team-proposal-payload';
 import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
@@ -54,7 +60,7 @@ function plural(count: number, one: string, many: string): string {
 /** Why an approval wrote nothing, in the user's terms. */
 function notSavedText(
   cause: NotSavedCause | null,
-  proposal: ParsedTeamProposal,
+  proposal: ParsedLibraryProposal,
 ): string {
   const name = proposal.replacesName ?? proposal.team.name;
   switch (cause) {
@@ -293,7 +299,7 @@ function StageList({
 }
 
 /** What one Approve writes, said under a replacement: every file it changes and what is kept. */
-function approvalNote(proposal: ParsedTeamProposal): string {
+function approvalNote(proposal: ParsedLibraryProposal): string {
   const { overlay, project, replacesName } = proposal;
   const teamChanges = proposal.diff?.identical !== true;
   const changes = [
@@ -325,7 +331,7 @@ function joinedChanges(changes: readonly string[]): string {
 }
 
 /** What an approval saved, naming the team file only when it wrote one. */
-function savedText(proposal: ParsedTeamProposal, slug: string): string {
+function savedText(proposal: ParsedLibraryProposal, slug: string): string {
   const { diff, overlay, project } = proposal;
   const saved = [
     overlay === null ? null : `${overlay.projectName}’s overlay`,
@@ -336,27 +342,8 @@ function savedText(proposal: ParsedTeamProposal, slug: string): string {
     : `✓ Saved as “${slug}”`;
 }
 
-/**
- * A whole team an agent proposes for the library — `propose_team`'s
- * card. Approve writes it (the daemon does, never the agent); Decline writes
- * nothing; a note typed beside either reaches the agent with the verdict.
- *
- * It shows what an approval commits to: every member and whether it
- * asks before running tools — any that would not are named in a strip above
- * all else — and, for a replacement, what changes against the saved file.
- * Once answered it keeps the roster and the changes, and says what became of an approval: saved (with a way to open it) or not.
- */
-export function TeamProposalCard({
-  proposal,
-  verdict,
-  note = null,
-  outcome = null,
-  expired,
-  memoryKey,
-  onRespond,
-  onOpenTeam,
-  onOpenProject,
-}: {
+/** The props every team card takes, whatever its mode. */
+interface TeamProposalCardProps {
   proposal: ParsedTeamProposal;
   /** null while pending; the user's decision once the verdict item arrived. */
   verdict: boolean | null;
@@ -373,6 +360,44 @@ export function TeamProposalCard({
   onOpenTeam?: (slug: string) => void;
   /** Open the project a card saved without touching the team; absent, nothing offers to. */
   onOpenProject?: (projectId: string) => void;
+}
+
+/**
+ * A team an agent proposes: propose_team's card for the library, or the
+ * run_team card that starts a team in this chat or changes a running one.
+ * Approve writes it (the daemon does, never the agent); Decline writes
+ * nothing; a note typed beside either reaches the agent with the verdict.
+ */
+export function TeamProposalCard({
+  proposal,
+  ...rest
+}: TeamProposalCardProps): React.JSX.Element {
+  return isRunProposal(proposal) ? (
+    <RunTeamCard proposal={proposal} {...rest} />
+  ) : (
+    <LibraryTeamCard proposal={proposal} {...rest} />
+  );
+}
+
+/**
+ * A library card. It shows what an approval commits to: every member and
+ * whether it asks before running tools — any that would not are named in a
+ * strip above all else — and, for a replacement, what changes against the
+ * saved file. Once answered it keeps the roster and the changes, and says what
+ * became of an approval: saved (with a way to open it) or not.
+ */
+function LibraryTeamCard({
+  proposal,
+  verdict,
+  note = null,
+  outcome = null,
+  expired,
+  memoryKey,
+  onRespond,
+  onOpenTeam,
+  onOpenProject,
+}: Omit<TeamProposalCardProps, 'proposal'> & {
+  proposal: ParsedLibraryProposal;
 }): React.JSX.Element {
   const { team, diff, overlay, project } = proposal;
   const savedProject = diff?.identical === true ? (overlay ?? project) : null;
@@ -388,7 +413,7 @@ export function TeamProposalCard({
     remembered('team-roster'),
     false,
   );
-  const { draft, setDraft, tooLong, send } = useVerdictNote(respond);
+  const verdictNote = useVerdictNote(respond);
   const titleId = useId();
 
   const roster = useMemo(() => rosterOf(team), [team]);
@@ -478,29 +503,7 @@ export function TeamProposalCard({
             : null}
         </span>
       </div>
-      {proposal.summary !== null || proposal.reason !== null ? (
-        <div className="flex flex-col gap-1.5">
-          {proposal.summary !== null ? (
-            <ClampedText
-              text={proposal.summary}
-              lines={3}
-              slot="team-proposal-summary"
-              className="text-sm"
-            />
-          ) : null}
-          {proposal.reason !== null ? (
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-xs font-medium">Why</span>
-              <ClampedText
-                text={proposal.reason}
-                lines={3}
-                slot="team-proposal-reason"
-                className="text-xs text-muted-foreground"
-              />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <ProposalWords proposal={proposal} />
       <HazardWarning hazards={gate.hazards} subject="this proposal" />
       {overlay === null && project === null ? (
         teamBody
@@ -534,43 +537,18 @@ export function TeamProposalCard({
       ) : sending ? (
         <p className="m-0 text-xs text-muted-foreground">Sending…</p>
       ) : verdict === null ? (
-        <div className="flex flex-col gap-2">
-          {proposal.mode === 'replace' ? (
-            <p className="m-0 text-xs text-muted-foreground">
-              {approvalNote(proposal)}
-            </p>
-          ) : null}
-          <VerdictNoteField
-            draft={draft}
-            onChange={setDraft}
-            tooLong={tooLong}
-            placeholder="Optional — what to change, or why not"
-          />
-          {gate.hazards.gates ? (
-            <HazardAck
-              id={gate.ackId}
-              checked={gate.acknowledged}
-              onCheckedChange={gate.setAcknowledged}
-            />
-          ) : null}
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              className="max-sm:min-h-11"
-              onClick={() => send(true)}
-              disabled={tooLong || gate.blocksApprove}>
-              Approve
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="max-sm:min-h-11"
-              onClick={() => send(false)}
-              disabled={tooLong}>
-              Decline
-            </Button>
-          </div>
-        </div>
+        <VerdictForm
+          above={
+            proposal.mode === 'replace' ? (
+              <p className="m-0 text-xs text-muted-foreground">
+                {approvalNote(proposal)}
+              </p>
+            ) : null
+          }
+          note={verdictNote}
+          gate={gate}
+          approveLabel="Approve"
+        />
       ) : (
         <div aria-live="polite" className="flex flex-col gap-1.5">
           {!verdict ? (
@@ -613,6 +591,298 @@ export function TeamProposalCard({
             </>
           ) : (
             <p className="m-0 text-xs text-success">✓ Approved</p>
+          )}
+          <VerdictNoteEcho note={note} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** The agent's own summary and why, as a card shows them: neither is trusted. */
+function ProposalWords({
+  proposal,
+}: {
+  proposal: Pick<ParsedTeamProposal, 'summary' | 'reason'>;
+}): React.JSX.Element | null {
+  const { summary, reason } = proposal;
+  if (summary === null && reason === null) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      {summary === null ? null : (
+        <ClampedText
+          text={summary}
+          lines={3}
+          slot="team-proposal-summary"
+          className="text-sm"
+        />
+      )}
+      {reason === null ? null : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-xs font-medium">Why</span>
+          <ClampedText
+            text={reason}
+            lines={3}
+            slot="team-proposal-reason"
+            className="text-xs text-muted-foreground"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+type VerdictNote = ReturnType<typeof useVerdictNote>;
+type HazardGate = ReturnType<typeof useHazardGate>;
+
+/**
+ * The note box and the two verdict buttons every team card ends with. Approve
+ * is held by an unacknowledged hazard, a note too long to send, or
+ * `approveHeld`; `approveHint` says why, in one line under the buttons.
+ */
+function VerdictForm({
+  note,
+  gate,
+  approveLabel,
+  above = null,
+  approveHeld = false,
+  approveHint = null,
+}: {
+  note: VerdictNote;
+  gate: HazardGate;
+  approveLabel: string;
+  above?: React.ReactNode;
+  approveHeld?: boolean;
+  approveHint?: string | null;
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-2">
+      {above}
+      <VerdictNoteField
+        draft={note.draft}
+        onChange={note.setDraft}
+        tooLong={note.tooLong}
+        placeholder="Optional — what to change, or why not"
+      />
+      {gate.hazards.gates ? (
+        <HazardAck
+          id={gate.ackId}
+          checked={gate.acknowledged}
+          onCheckedChange={gate.setAcknowledged}
+        />
+      ) : null}
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          className="max-sm:min-h-11"
+          onClick={() => note.send(true)}
+          disabled={note.tooLong || gate.blocksApprove || approveHeld}>
+          {approveLabel}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-sm:min-h-11"
+          onClick={() => note.send(false)}
+          disabled={note.tooLong}>
+          Decline
+        </Button>
+      </div>
+      {approveHint === null ? null : (
+        <p className="m-0 text-xs text-muted-foreground">{approveHint}</p>
+      )}
+    </div>
+  );
+}
+
+/** One agent of a run card: the chat's own lead, or a member the run joins. */
+function RunRow({
+  label,
+  member,
+  task = null,
+}: {
+  label: string;
+  member: RunCardMember;
+  task?: string | null;
+}): React.JSX.Element {
+  const identities = useContext(AgentIdentityContext);
+  return (
+    <li
+      data-agent={member.memberId}
+      className="flex min-w-0 flex-col gap-1 border-t border-border/60 py-2 first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 font-medium break-words">{label}</span>
+        <span className="ml-auto text-right">
+          <ApprovalText mode={member.approval} />
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-wrap gap-1">
+        <Chip>
+          {[
+            agentShortName(identities, member.agent),
+            member.model ?? 'default',
+          ].join(' · ')}
+        </Chip>
+      </div>
+      {member.role === '' ? null : (
+        <p className="m-0 line-clamp-2 break-words text-muted-foreground">
+          {member.role}
+        </p>
+      )}
+      {task === null || task.trim() === '' ? null : (
+        <p className="m-0 break-words text-muted-foreground">
+          <span className="text-foreground">Task</span> {task}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** What a settled run card says of its approval, in the user's terms. */
+function runOutcomeLine(outcome: ProposalOutcome | null): {
+  text: string;
+  failed: boolean;
+} {
+  if (outcome?.kind === 'started') {
+    return { text: '✓ Team started', failed: false };
+  }
+  if (outcome?.kind === 'not-started') {
+    return {
+      text: '✗ Not started: ' + outcome.causes.join('; '),
+      failed: true,
+    };
+  }
+  if (outcome?.kind === 'changed') {
+    return { text: '✓ Applied', failed: false };
+  }
+  if (outcome?.kind === 'not-changed') {
+    return { text: '✗ Not applied: ' + outcome.reason, failed: true };
+  }
+  return { text: '✓ Approved', failed: false };
+}
+
+/**
+ * A run_team card. Start makes this chat the team, its own agent the lead, and
+ * the members below join it; Apply changes the running team for this run only.
+ * Start waits while this chat's composer queue holds messages, which the daemon
+ * cannot see.
+ */
+function RunTeamCard({
+  proposal,
+  verdict,
+  note = null,
+  outcome = null,
+  expired,
+  memoryKey,
+  onRespond,
+}: Omit<TeamProposalCardProps, 'proposal'> & {
+  proposal: ParsedRunProposal;
+}): React.JSX.Element {
+  const identities = useContext(AgentIdentityContext);
+  const queued = useContext(QueuedMessagesContext);
+  const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
+  const verdictNote = useVerdictNote(respond);
+  const titleId = useId();
+  const scanText = useMemo(() => proposalScanText(proposal), [proposal]);
+  const gate = useHazardGate(scanText);
+  const changeRows = useMemo(
+    () =>
+      proposal.mode === 'run-change'
+        ? runChangeRows(proposal.changes, (agent) =>
+            agentShortName(identities, agent),
+          )
+        : [],
+    [proposal, identities],
+  );
+  const memoryName =
+    memoryKey === undefined ? undefined : 'run-change:' + memoryKey;
+  const queueHold = proposal.mode === 'run-start' && queued > 0;
+  const outcomeLine = runOutcomeLine(outcome);
+
+  return (
+    <Card
+      role="group"
+      aria-labelledby={titleId}
+      data-slot="team-proposal-card"
+      data-mode={proposal.mode}
+      className="flex min-w-0 flex-col gap-3 border-primary/40 p-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <TeamIcon aria-hidden="true" className="size-4 shrink-0 text-primary" />
+        <span id={titleId} className="min-w-0 text-sm font-medium break-words">
+          {proposal.mode === 'run-start'
+            ? 'Run a team in this chat'
+            : 'Change the running team'}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {proposal.mode === 'run-start'
+            ? plural(proposal.members.length, 'agent', 'agents') +
+              ' beside this chat'
+            : plural(proposal.changes.length, 'change', 'changes')}
+        </span>
+      </div>
+      <ProposalWords proposal={proposal} />
+      <HazardWarning hazards={gate.hazards} subject="this proposal" />
+      {proposal.mode === 'run-start' ? (
+        <>
+          <ProposalSection title="Plan" slot="run-team-plan">
+            <ol className="m-0 flex list-decimal flex-col gap-1 pl-4 text-xs break-words">
+              {proposal.plan.map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ol>
+          </ProposalSection>
+          <ProposalSection title="Agents" slot="run-team-roster">
+            <ul
+              aria-label="Agents in this chat team"
+              className="m-0 flex list-none flex-col p-0 text-xs">
+              <RunRow label="This chat — manager" member={proposal.lead} />
+              {proposal.members.map(({ member, task }) => (
+                <RunRow
+                  key={member.memberId}
+                  label={member.name}
+                  member={member}
+                  task={task}
+                />
+              ))}
+            </ul>
+          </ProposalSection>
+        </>
+      ) : (
+        <TeamDiffList rows={changeRows} memoryKey={memoryName} />
+      )}
+      {expired && verdict === null ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          ⏱ expired — a newer proposal replaced it, or the chat was archived
+        </p>
+      ) : sending ? (
+        <p className="m-0 text-xs text-muted-foreground">Sending…</p>
+      ) : verdict === null ? (
+        <VerdictForm
+          note={verdictNote}
+          gate={gate}
+          approveLabel={proposal.mode === 'run-start' ? 'Start' : 'Apply'}
+          approveHeld={queueHold}
+          approveHint={
+            queueHold ? 'Send or clear the queued messages first' : null
+          }
+        />
+      ) : (
+        <div aria-live="polite" className="flex flex-col gap-1.5">
+          {verdict ? (
+            <p
+              data-slot="run-team-outcome"
+              className={cn(
+                'm-0 text-xs',
+                outcomeLine.failed
+                  ? 'rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-destructive'
+                  : 'text-success',
+              )}>
+              {outcomeLine.text}
+            </p>
+          ) : (
+            <p className="m-0 text-xs text-destructive">✗ Declined</p>
           )}
           <VerdictNoteEcho note={note} />
         </div>

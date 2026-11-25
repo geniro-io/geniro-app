@@ -239,6 +239,8 @@ export class CodexAdapter extends AgentAdapter {
       // geniro sets the tool timeout on its own server entry to a day, so a
       // question can wait on screen until it is answered.
       hostQuestionDeferredReason: null,
+      resumeKeepsInstructionsReason:
+        'a resumed codex thread keeps the developer instructions its rollout recorded when it started and records nothing of new developer_instructions (measured on 0.172.0 through codex exec resume)',
       // Every MCP call outside approval policy `never` arrives as an
       // `mcp_tool_call` elicitation (`CODEX_MCP_TOOL_APPROVAL_KIND`).
       hostToolCallUngatedReason: null,

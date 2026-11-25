@@ -64,6 +64,7 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_RECORD_OUTCOME_TOOL,
   HOST_REMOVE_ACTION_TOOL,
+  HOST_RUN_TEAM_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   HOST_STOP_MONITOR_TOOL,
   HOST_TEAM_CHANGE_TOOL,
@@ -156,6 +157,7 @@ import type { SystemAnalysisHistoryService } from '../../system-analysis/service
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { CallBroker } from '../../teams/services/call-broker.service';
+import type { ChatTeamService } from '../../teams/services/chat-team.service';
 import type { StageService } from '../../teams/services/stage.service';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
@@ -332,6 +334,7 @@ function service(
       teamOverlays: {} as TeamOverlayService,
       // Never asked by the cases that list tools.
       teamProposals: {} as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares,
       memory,
       knowledge,
@@ -4419,6 +4422,153 @@ describe('McpServerService — what the descriptions tell a model', () => {
     });
   });
 
+  it('offers run_team to an ordinary chat and to a team run with ONE listing, so a chat that became a team keeps the schema it loaded, and to no sink without it', async () => {
+    const listed = async (gate: TeamProposalBroker) => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (
+        json().result as {
+          tools: {
+            name: string;
+            description: string;
+            inputSchema: { properties: Record<string, unknown> };
+          }[];
+        }
+      ).tools;
+    };
+    const runTeamOf = (tools: { name: string }[]) =>
+      tools.find((tool) => tool.name === HOST_RUN_TEAM_TOOL) as
+        | {
+            name: string;
+            description: string;
+            inputSchema: { properties: Record<string, unknown> };
+          }
+        | undefined;
+
+    const start = new TeamProposalBroker();
+    start.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const startTool = runTeamOf(await listed(start));
+    expect(startTool?.inputSchema.properties).toHaveProperty('plan');
+    expect(startTool?.inputSchema.properties).toHaveProperty('team');
+    expect(startTool?.inputSchema.properties).toHaveProperty('edits');
+
+    const change = new TeamProposalBroker();
+    change.register('run-1', 'agent', { runId: 'run-1', runTeam: 'change' });
+    const changeTool = runTeamOf(await listed(change));
+    expect(changeTool).toEqual(startTool);
+
+    const plain = new TeamProposalBroker();
+    plain.register('run-1', 'agent', { runId: 'run-1' });
+    const plainTools = await listed(plain);
+    expect(plainTools.map((tool) => tool.name)).toContain(
+      HOST_PROPOSE_TEAM_TOOL,
+    );
+    expect(plainTools.map((tool) => tool.name)).not.toContain(
+      HOST_RUN_TEAM_TOOL,
+    );
+  });
+
+  it('makes run_team and propose_team name each other', async () => {
+    const gate = new TeamProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        gate,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const describe_ = (name: string) =>
+      tools.find((tool) => tool.name === name)?.description ?? '';
+
+    expect(describe_(HOST_RUN_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
+    expect(describe_(HOST_PROPOSE_TEAM_TOOL)).toContain(HOST_RUN_TEAM_TOOL);
+  });
+
+  it('routes a request to build a team for a job now to run_team, and only a team to save to propose_team', async () => {
+    const gate = new TeamProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        gate,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const describe_ = (name: string) =>
+      tools.find((tool) => tool.name === name)?.description ?? '';
+    const runTeam = describe_(HOST_RUN_TEAM_TOOL);
+    const proposeTeam = describe_(HOST_PROPOSE_TEAM_TOOL);
+
+    expect(runTeam).toContain('собери команду');
+    expect(runTeam).toContain('If the request already says what the job is');
+    expect(runTeam).toContain('in plan mode call it directly');
+    expect(proposeTeam).toContain('SAVE a team of agents in their library');
+    expect(proposeTeam).toContain('собери команду');
+  });
+
   it('refuses an unlisted read_teams call', async () => {
     const { json } = await post(
       service(),
@@ -4541,6 +4691,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore: {} as TeamStoreService,
       teamOverlays: {} as TeamOverlayService,
       teamProposals: {} as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -4650,6 +4801,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore,
       teamOverlays,
       teamProposals,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -4991,6 +5143,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
             },
           ]),
       } as unknown as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -5118,6 +5271,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamStore: {} as TeamStoreService,
         teamOverlays: {} as TeamOverlayService,
         teamProposals: proposals as unknown as TeamProposalService,
+        chatTeams: {} as ChatTeamService,
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
@@ -5272,6 +5426,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore: {} as TeamStoreService,
       teamOverlays: {} as TeamOverlayService,
       teamProposals: { propose } as unknown as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -5361,6 +5516,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
             ]),
         } as unknown as TeamOverlayService,
         teamProposals: teamProposals as TeamProposalService,
+        chatTeams: {} as ChatTeamService,
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,

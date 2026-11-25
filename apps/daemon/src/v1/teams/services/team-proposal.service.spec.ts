@@ -30,6 +30,7 @@ import {
   type DeferredCard,
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
+  HOST_RUN_TEAM_TOOL,
   type TeamProposalOutcome,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
@@ -41,7 +42,12 @@ import type { ProjectInstructionBlock } from '../../projects/projects.types';
 import type { ProjectsService } from '../../projects/services/projects.service';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
-import type { Team, TeamChangeLogRecord, TeamProposal } from '../teams.types';
+import type {
+  RunTeamProposal,
+  Team,
+  TeamChangeLogRecord,
+  TeamProposal,
+} from '../teams.types';
 import {
   configDirToken,
   redactConfigDirs,
@@ -49,6 +55,7 @@ import {
 import { TEAM_BACKUP_DIR } from '../utils/team-backup';
 import type { TeamEdit } from '../utils/team-edits';
 import { teamVersionOf } from '../utils/team-version';
+import type { ChatTeamService } from './chat-team.service';
 import type { TeamCardsService } from './team-cards.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import type { TeamExecutorService } from './team-executor.service';
@@ -242,7 +249,10 @@ describe('TeamProposalService', () => {
   let logged: TeamChangeLogRecord[];
   let overlayStore: TeamOverlayStoreService;
   let service: TeamProposalService;
-  let build: (teamCards?: ReturnType<typeof fakeChats>) => TeamProposalService;
+  let build: (
+    teamCards?: ReturnType<typeof fakeChats>,
+    chatTeams?: { carryOutVerdict: Mock },
+  ) => TeamProposalService;
   let projectRows: Map<string, FakeProject>;
   let projectsFake: ProjectsService;
 
@@ -300,7 +310,7 @@ describe('TeamProposalService', () => {
       ],
     ]);
     projectsFake = fakeProjects(projectRows);
-    build = (teamCards) =>
+    build = (teamCards, chatTeams) =>
       new TeamProposalService(
         store,
         { assertRunnable } as unknown as TeamExecutorService,
@@ -334,6 +344,7 @@ describe('TeamProposalService', () => {
         overlays,
         projectsFake,
         teamCards as unknown as TeamCardsService | undefined,
+        chatTeams as unknown as ChatTeamService | undefined,
       );
     service = build();
   });
@@ -394,6 +405,82 @@ describe('TeamProposalService', () => {
     );
     expect(chats.deliverOwnedCardVerdict).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'run-start',
+      {
+        mode: 'run-start',
+        team: TEAM,
+        slug: '',
+        summary: 'Two agents',
+        reason: 'The user asked for a team',
+        autoAgents: [],
+        plan: ['Read the spec'],
+        lead: {
+          memberId: 'agent',
+          name: 'This chat',
+          role: '',
+          agent: 'claude',
+          model: null,
+          approval: 'ask',
+        },
+        members: [],
+      },
+    ],
+    [
+      'run-change',
+      {
+        mode: 'run-change',
+        team: TEAM,
+        slug: 'team',
+        summary: 'Drop the reviewer',
+        reason: 'It is not needed',
+        autoAgents: [],
+        baseHash: 'base-hash',
+        changes: [{ op: 'remove', memberId: 'dev', name: 'Dev' }],
+        diff: { members: [] },
+      },
+    ],
+  ])(
+    'raises a %s proposal of a chat team on the card, and hands its verdict to the chat team service, never to the library',
+    async (_mode, proposal) => {
+      const chatTeams = { carryOutVerdict: vi.fn(async () => undefined) };
+      const chatService = build(undefined, chatTeams);
+      const runTeam = proposal as unknown as RunTeamProposal;
+
+      const outcome = await chatService.proposeRunTeam('run-1', () =>
+        Promise.resolve({ ok: true, proposal: runTeam }),
+      );
+
+      expect(outcome.status).toBe('shown');
+      expect(chats.raiseOwnedCard).toHaveBeenCalledWith(
+        'run-1',
+        expect.any(String),
+        expect.objectContaining({
+          toolName: HOST_RUN_TEAM_TOOL,
+          input: runTeam,
+        }),
+        expect.any(Function),
+      );
+      const card = standingCard('run-1');
+
+      approvals.resolve('run-1', card, true);
+      await vi.waitFor(() =>
+        expect(chatTeams.carryOutVerdict).toHaveBeenCalled(),
+      );
+      expect(chatTeams.carryOutVerdict).toHaveBeenCalledWith(
+        'run-1',
+        card,
+        runTeam,
+        true,
+        undefined,
+        expect.anything(),
+      );
+      expect(chats.deliverOwnedCardVerdict).not.toHaveBeenCalled();
+      await expect(readdir(dir)).resolves.toEqual([]);
+    },
+  );
 
   it('refuses a proposal whose member omits approval, rather than defaulting it to auto', async () => {
     const { approval: _omitted, ...bare } = TEAM.members[1]!;

@@ -4565,6 +4565,13 @@ export interface AdapterConfig {
    */
   readonly hostQuestionDeferredReason: string | null;
   /**
+   * Why a resumed conversation keeps the instructions it started with, or null
+   * when this adapter delivers changed instructions to a resumed conversation
+   * itself. Non-null: a team member whose instructions changed mid-run is told
+   * the new text in its next turn's prompt (`changedInstructionsNote`).
+   */
+  readonly resumeKeepsInstructionsReason: string | null;
+  /**
    * Why a call of one of geniro's own MCP tools could run outside `auto`
    * without the user being asked first, or null when it cannot: every such
    * call is put to the user, or refused, before it runs.

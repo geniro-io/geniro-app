@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { type LegacyTeamGraph, type Team, TeamSchema } from '../teams.types';
 import {
   isLegacyTeamGraph,
@@ -14,6 +16,13 @@ import {
 /** The copy of a team a run keeps — see `Run.teamSnapshot`. */
 export function teamSnapshotOf(team: Team): string {
   return JSON.stringify(team);
+}
+
+/** What a change to a running team is pinned to: the run's team copy as it was read. */
+export function runTeamHashOf(snapshot: string | null): string {
+  return createHash('sha256')
+    .update(snapshot ?? '')
+    .digest('hex');
 }
 
 /**

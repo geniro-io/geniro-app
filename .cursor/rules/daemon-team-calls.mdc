@@ -47,3 +47,4 @@ alwaysApply: false
 - A caller is a conversation (`callerKey(nodeId, conversationId)`); everything the broker keys uses that pair. Never wake a node in a fresh process with no session.
 - A superseded pass refuses calls `RUN_BUSY` before minting ids, and numbering continues.
 - `rootsWorking` (what decides whether a team message queues) stops counting the run's lead (`leadIds`) while its own turn is HELD for background sub-agents (`turn_held` open > 0) and counts it again when the hold ends (`open: 0`): its reply is over, and a message delivered into it ends the hold.
+- The capability's `calleesOf` is read live per call, so a run-only team change refills it in place (`liveRosters`, Teams and passes) rather than registering the run again; a departed member is nobody's callee from the change on.

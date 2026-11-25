@@ -6,6 +6,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { quoteIn } from '../../agents/utils/memory-check-prompt';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { placeKeyOf } from '../../knowledge/utils/knowledge-text';
@@ -187,7 +188,10 @@ export class LessonFilingService {
       );
     }
     const project = await this.projectScope.projectOfRun(source);
-    const place = { projectId: project?.id ?? null, teamSlug: source.teamId };
+    const place = {
+      projectId: project?.id ?? null,
+      teamSlug: librarySlugOf(source.teamId),
+    };
     const places = placesOfRun(place, source);
     const visible = await this.memory.listVisible(place);
     const seen = new Set(

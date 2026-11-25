@@ -485,3 +485,33 @@ describe('leadWorkingAgent', () => {
     expect(leadWorkingAgent(rows, nothingUnseen)?.others).toBe(2);
   });
 });
+
+describe('a member the run removed mid-run', () => {
+  it('reads leaving while its call is out, and left once it is not', () => {
+    const leaving = rowsOf({
+      calls: [call({ callId: 'call-1', status: 'running' })],
+      departedMembers: ['engineer'],
+    });
+    expect(leaving[0]?.departure).toBe('leaving');
+
+    const left = rowsOf({
+      calls: [
+        call({
+          callId: 'call-1',
+          status: 'completed',
+          endedAt: '2026-11-08T12:04:00.000Z',
+        }),
+      ],
+      departedMembers: ['engineer'],
+    });
+    expect(left[0]?.departure).toBe('left');
+  });
+
+  it('reads nothing for a member still in the team', () => {
+    const rows = rowsOf({
+      calls: [call({ callId: 'call-1', status: 'running' })],
+      departedMembers: ['reviewer'],
+    });
+    expect(rows[0]?.departure).toBeNull();
+  });
+});

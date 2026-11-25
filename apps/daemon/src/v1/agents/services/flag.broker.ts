@@ -17,6 +17,7 @@ import {
   newAgentFlagHandle,
 } from '../utils/agent-flags';
 import { KeyedChain } from '../utils/keyed-chain';
+import { librarySlugOf } from '../utils/run-kind';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
 /** Who raises a flag: what only the pass running the agent knows. */
@@ -125,7 +126,7 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
       callId: raiser.callId,
       agentKind: raiser.agentKind ?? run?.agentKind ?? null,
       model: raiser.model ?? run?.model ?? null,
-      teamSlug: run?.teamId ?? null,
+      teamSlug: librarySlugOf(run?.teamId ?? null),
       projectId: run?.projectId ?? null,
       runKind: run === null ? 'chat' : agentFlagRunKindOf(run),
       runTitle:

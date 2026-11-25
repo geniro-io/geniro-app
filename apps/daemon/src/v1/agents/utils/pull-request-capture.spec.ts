@@ -429,10 +429,12 @@ describe('textNamesPullRequest', () => {
 
   it('answers a megabyte of repeated gh pr text in linear time', () => {
     const flood = row(`${'gh pr x '.repeat(130_000)} 72071`);
-    const started = performance.now();
+    const started = process.threadCpuUsage();
     expect(textNamesPullRequest(flood, pr)).toBe(false);
-    // A backtracking pattern took ~4 s on a quarter of this; linear is ~ms.
-    expect(performance.now() - started).toBeLessThan(500);
+    const spent = process.threadCpuUsage(started);
+    // This thread's CPU time, not the wall clock, which other test workers on a
+    // busy runner stretch. A backtracking pattern took ~4 s on a quarter of this.
+    expect((spent.user + spent.system) / 1000).toBeLessThan(500);
   });
 
   it('never accepts text the database prefilter would not return', () => {

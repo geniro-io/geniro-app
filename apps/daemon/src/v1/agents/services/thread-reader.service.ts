@@ -53,6 +53,7 @@ import {
   lifecycleSummary,
 } from '../utils/pull-request-lifecycle';
 import { threadOutcomeOf } from '../utils/run-goals';
+import { librarySlugOf } from '../utils/run-kind';
 import { runSnapshotOf } from '../utils/run-snapshots';
 import { foldTeamNotes } from '../utils/team-note-fold';
 import {
@@ -946,11 +947,12 @@ export class ThreadReaderService {
    */
   async teamOf(sourceRunId: string): Promise<AnalysedTeamRef | null> {
     const run = await this.runDao.getById(sourceRunId, this.em.fork());
-    if (run === null || run.teamId === null) {
+    const slug = librarySlugOf(run?.teamId ?? null);
+    if (run === null || slug === null) {
       return null;
     }
     return {
-      slug: run.teamId,
+      slug,
       snapshot: run.teamSnapshot,
       baseSnapshot: baseTeamSnapshotOf(run),
       overlaySnapshot: run.teamOverlaySnapshot,

@@ -595,7 +595,7 @@ function runLabel(run: ChatRun, teamNames: Map<string, string>): string {
   if (run.title) {
     return run.title;
   }
-  if (run.teamId) {
+  if (run.teamId && run.teamOrigin !== 'chat') {
     return teamNames.get(run.teamId) ?? run.teamId;
   }
   return run.agentKind ?? 'chat';
@@ -5287,6 +5287,8 @@ export function Chats({
   // A hosted surface shows one conversation; a queue left under any other run
   // (one thrown away, an analysis replaced) can never be drawn or sent.
   const { forgetRun, queues: queuedByRun } = messageQueue;
+  const openQueued =
+    activeRunId === null ? 0 : (queuedByRun[activeRunId]?.length ?? 0);
   useEffect(() => {
     if (!isHosted || activeRunId === null) {
       return;
@@ -6416,11 +6418,14 @@ export function Chats({
     readonly TeamStage[] | null
   >(null);
   useEffect(() => {
+    setMissingTeam(null);
+    setRunStageDefinitions(null);
+  }, [activeRun?.id, activeRun?.teamId]);
+  const activeTeamHash = activeRun?.teamHash ?? null;
+  useEffect(() => {
     let cancelled = false;
     const teamId = activeRun?.teamId;
     const runId = activeRun?.id;
-    setMissingTeam(null);
-    setRunStageDefinitions(null);
     if (!teamId || !runId) {
       setWfNodes({
         agents: [],
@@ -6478,7 +6483,7 @@ export function Chats({
     return () => {
       cancelled = true;
     };
-  }, [activeRun?.id, activeRun?.teamId, teamApi]);
+  }, [activeRun?.id, activeRun?.teamId, activeTeamHash, teamApi]);
 
   /**
    * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
@@ -7056,10 +7061,12 @@ export function Chats({
       runSettled: isSettledRunStatus(activeRun.status),
       nodes: nodeMeta,
       clocks: callClocks,
+      departedMembers: activeRun?.departedMembers,
     });
   }, [
     activeRun?.teamId,
     activeRun?.status,
+    activeRun?.departedMembers,
     durableEntries,
     callBlockIndex,
     callChains,
@@ -9922,6 +9929,7 @@ export function Chats({
         value={isHosted ? null : openReviewComment}>
         <ChatProviders
           jumpMark={mark}
+          queuedMessages={openQueued}
           signIn={resolveSignIn}
           retry={retryActiveRun}
           callContext={resolveCallReading}
@@ -10187,6 +10195,7 @@ export function Chats({
                                       ? (teamNames.get(run.teamId) ?? null)
                                       : null
                                   }
+                                  chatTeamSize={run.chatTeamSize}
                                   status={sidebarRunStatus(run)}
                                   lastMessage={run.lastMessage}
                                   lastActivityAt={lastActivityOf(run)}
@@ -11772,6 +11781,7 @@ export function Chats({
                           ) : null
                         }
                         agents={agents}
+                        departedMembers={activeRun?.departedMembers}
                         nodes={nodeMeta}
                         // Both act on the WHOLE conversation, which is what the
                         // panel's own control row is already for — and being on

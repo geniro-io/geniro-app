@@ -12,6 +12,7 @@ import {
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  HOST_RUN_TEAM_TOOL,
   type OwnedCardHost,
   type RecommendationApply,
   type TeamProposalOutcome,
@@ -38,6 +39,8 @@ import {
   checkedProjectChange,
 } from '../../projects/utils/project-instruction-blocks';
 import {
+  isRunTeamProposal,
+  type LibraryTeamProposal,
   type PendingTeamProposal,
   PendingTeamProposalSchema,
   type ProposalOutcome,
@@ -62,6 +65,7 @@ import { checkTeam } from '../utils/team-check';
 import { diffTeams } from '../utils/team-diff';
 import { parseTeamYaml } from '../utils/team-yaml';
 import { agentsThatRunAuto } from '../utils/unattended';
+import { ChatTeamService } from './chat-team.service';
 import { TeamCardsService } from './team-cards.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamExecutorService } from './team-executor.service';
@@ -139,6 +143,8 @@ export class TeamProposalService {
     private readonly projects: ProjectsService,
     /** A team run's cards; optional only so specs that build no team run need not supply it. */
     @Optional() private readonly teamCards?: TeamCardsService,
+    /** `run_team`'s cards; optional for the same reason. */
+    @Optional() private readonly chatTeams?: ChatTeamService,
   ) {}
 
   /** Who raises and answers this run's card: its lead's host for a team run, else the chat. */
@@ -161,6 +167,17 @@ export class TeamProposalService {
     request: TeamProposalRequest,
   ): Promise<ProposalOutcome> {
     return this.raiseSerialized(runId, () => this.prepare(request));
+  }
+
+  /**
+   * A `run_team` card (`ChatTeamService` prepares it), raised on the same
+   * terms as every card here: one standing per run, replacing the one before.
+   */
+  proposeRunTeam(
+    runId: string,
+    prepare: () => Promise<PreparedProposal>,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, prepare);
   }
 
   /**
@@ -323,14 +340,14 @@ export class TeamProposalService {
         await cards.retireOwnedCard(
           runId,
           done.standing.requestId,
-          HOST_PROPOSE_TEAM_TOOL,
+          cardToolOf(done.standing.proposal),
         );
         done.retire = 'done';
       }
       await cards.raiseOwnedCard(
         runId,
         requestId,
-        { toolName: HOST_PROPOSE_TEAM_TOOL, input: proposal },
+        { toolName: cardToolOf(proposal), input: proposal },
         this.responderFor(runId, requestId, proposal),
       );
       done.raised = true;
@@ -356,7 +373,7 @@ export class TeamProposalService {
       this.logger.error(
         `run ${runId} could not put a team proposal on screen: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await this.undoRaise(cards, runId, requestId, done);
+      await this.undoRaise(cards, runId, requestId, cardToolOf(proposal), done);
       return {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
@@ -377,18 +394,19 @@ export class TeamProposalService {
     cards: OwnedCardHost,
     runId: string,
     requestId: string,
+    raisedTool: string,
     done: RaiseProgress,
   ): Promise<void> {
     try {
       if (done.raised) {
-        await cards.retireOwnedCard(runId, requestId, HOST_PROPOSE_TEAM_TOOL);
+        await cards.retireOwnedCard(runId, requestId, raisedTool);
       }
       if (done.retire === 'started' && done.standing !== null) {
         await cards.trackOwnedCard(
           runId,
           done.standing.requestId,
           {
-            toolName: HOST_PROPOSE_TEAM_TOOL,
+            toolName: cardToolOf(done.standing.proposal),
             input: done.standing.proposal,
           },
           this.responderFor(
@@ -474,7 +492,7 @@ export class TeamProposalService {
     await cards.trackOwnedCard(
       runId,
       pending.requestId,
-      { toolName: HOST_PROPOSE_TEAM_TOOL, input: pending.proposal },
+      { toolName: cardToolOf(pending.proposal), input: pending.proposal },
       this.responderFor(runId, pending.requestId, pending.proposal),
     );
     return true;
@@ -522,6 +540,17 @@ export class TeamProposalService {
       this.logger.error(
         `run ${runId} could not close a team proposal card: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+    if (isRunTeamProposal(proposal)) {
+      await this.chatTeams?.carryOutVerdict(
+        runId,
+        requestId,
+        proposal,
+        allow && cleared,
+        answer,
+        await this.cardsOf(runId),
+      );
+      return;
     }
     if (allow && !cleared) {
       // A card still standing in the column comes back at the next boot, so a
@@ -914,6 +943,9 @@ export class TeamProposalService {
     proposal: TeamProposal,
     by: { runId: string; note: string | null } | null = null,
   ): Promise<AppliedProposal> {
+    if (isRunTeamProposal(proposal)) {
+      throw new Error('a run_team card writes no library file');
+    }
     if (proposal.mode === 'create') {
       try {
         await this.store.create(proposal.team, proposal.slug);
@@ -1066,7 +1098,7 @@ export class TeamProposalService {
     half: TeamProposalProject,
     before: ProjectWire,
     by: { runId: string; note: string | null } | null,
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     writeTeam: () => Promise<T>,
   ): Promise<{ team: T; revision: number }> {
     const recommendationIds = (proposal.recommendationIds ?? []).filter((id) =>
@@ -1134,7 +1166,7 @@ export class TeamProposalService {
   }
 
   private async logApprovedOverlay(
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     overlay: TeamProposalOverlay,
     written: { hash: string; backup: string | null },
     by: { runId: string; note: string | null } | null,
@@ -1166,7 +1198,7 @@ export class TeamProposalService {
    * summary or reason (a builder chat's standing from before), read from there.
    */
   private async logApproved(
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     before: Team | null,
     backup: string | null,
     by: { runId: string; note: string | null } | null,
@@ -1275,7 +1307,7 @@ function summarizedFor(
 }
 
 function verdictOf(
-  proposal: TeamProposal,
+  proposal: LibraryTeamProposal,
   applied: AppliedProposal,
   note: string | null,
 ): TeamProposalVerdict {
@@ -1341,7 +1373,7 @@ class ProjectLeftChangedError extends Error {
 
 /** Why a card's project half no longer held when the user approved it. */
 function projectChangedReason(
-  proposal: TeamProposal,
+  proposal: LibraryTeamProposal,
   cause: 'changed' | 'inactive' | 'gone',
 ): string {
   const name =
@@ -1419,4 +1451,11 @@ function refusalOf(
 
 function isConflict(error: unknown, code: string): boolean {
   return error instanceof ConflictException && error.errorCode === code;
+}
+
+/** The tool a proposal card is raised under: a chat team's own `run_team`, else `propose_team`. */
+function cardToolOf(proposal: TeamProposal): string {
+  return isRunTeamProposal(proposal)
+    ? HOST_RUN_TEAM_TOOL
+    : HOST_PROPOSE_TEAM_TOOL;
 }

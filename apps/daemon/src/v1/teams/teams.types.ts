@@ -34,6 +34,7 @@ import {
 } from '../projects/projects.types';
 import type { ProjectBlockInput } from '../projects/utils/project-instruction-blocks';
 import {
+  type AgentKind,
   AgentKindSchema,
   type ItemKind,
   NodeStatusSchema,
@@ -99,7 +100,7 @@ export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
  * edit from persisting. Add a field here, add it there.
  */
 const NO_CONTROL_CHARACTERS = 'must not contain a NUL character';
-function argvSafe(value: string): boolean {
+export function argvSafe(value: string): boolean {
   return !value.includes('\u0000');
 }
 
@@ -1009,22 +1010,161 @@ const TeamProposalBaseSchema = z.object({
  * TWIN PARSER: `readTeamProposal` in
  * `apps/ui/src/renderer/chats/team-proposal-payload.ts`.
  */
-export const TeamProposalSchema = z.discriminatedUnion('mode', [
-  TeamProposalBaseSchema.extend({ mode: z.literal('create') }),
-  TeamProposalBaseSchema.extend({
-    mode: z.literal('replace'),
-    replacesName: z.string(),
-    baseHash: z.string(),
-    diff: z.custom<TeamDiff>(
-      (value) => typeof value === 'object' && value !== null,
+const CreateTeamProposalSchema = TeamProposalBaseSchema.extend({
+  mode: z.literal('create'),
+});
+
+const ReplaceTeamProposalSchema = TeamProposalBaseSchema.extend({
+  mode: z.literal('replace'),
+  replacesName: z.string(),
+  baseHash: z.string(),
+  diff: z.custom<TeamDiff>(
+    (value) => typeof value === 'object' && value !== null,
+  ),
+  /** The bound project's overlay the same approval writes, before the team. */
+  overlay: TeamProposalOverlaySchema.optional(),
+  /** A project's instructions the same approval writes, before the team. */
+  project: TeamProposalProjectSchema.optional(),
+});
+
+/** One member of a `run_team` card, as the card names it. */
+export const RunTeamCardMemberSchema = z.object({
+  memberId: z.string(),
+  name: z.string(),
+  role: z.string(),
+  agent: AgentKindSchema,
+  model: z.string().nullable(),
+  approval: ApprovalModeSchema,
+});
+export type RunTeamCardMember = z.infer<typeof RunTeamCardMemberSchema>;
+
+/** One line of a `run_team` change card: an agent added, leaving, or changed. */
+export const RunTeamChangeSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('add'),
+    member: RunTeamCardMemberSchema,
+    task: z.string().nullable(),
+  }),
+  z.object({ op: z.literal('remove'), memberId: z.string(), name: z.string() }),
+  z.object({
+    op: z.literal('update'),
+    memberId: z.string(),
+    name: z.string(),
+    /** Each changed field as it reads now and as the change writes it. */
+    fields: z.array(
+      z.object({
+        field: z.enum(['role', 'instructions', 'model', 'effort']),
+        before: z.string().nullable(),
+        after: z.string().nullable(),
+      }),
     ),
-    /** The bound project's overlay the same approval writes, before the team. */
-    overlay: TeamProposalOverlaySchema.optional(),
-    /** A project's instructions the same approval writes, before the team. */
-    project: TeamProposalProjectSchema.optional(),
+    task: z.string().nullable(),
   }),
 ]);
+export type RunTeamChange = z.infer<typeof RunTeamChangeSchema>;
+
+/**
+ * A `run_team` start card: this chat becomes the team's lead (member
+ * `agent`) and the members below join it. Started only by the user's press.
+ */
+const RunStartProposalSchema = TeamProposalBaseSchema.extend({
+  mode: z.literal('run-start'),
+  plan: z.array(z.string()),
+  /** The lead's row: this chat's own agent. */
+  lead: RunTeamCardMemberSchema,
+  members: z.array(
+    z.object({ member: RunTeamCardMemberSchema, task: z.string() }),
+  ),
+});
+
+/**
+ * A `run_team` change card: the running team's roster or instructions,
+ * changed for this run only — never the library, an overlay or the run's base
+ * copy. Pinned to the run's team copy it was computed from (`baseHash`).
+ */
+const RunChangeProposalSchema = TeamProposalBaseSchema.extend({
+  mode: z.literal('run-change'),
+  baseHash: z.string(),
+  changes: z.array(RunTeamChangeSchema),
+  diff: z.custom<TeamDiff>(
+    (value) => typeof value === 'object' && value !== null,
+  ),
+});
+
+/** A card that writes the team library: a new team, or a replacement. */
+export const LibraryTeamProposalSchema = z.discriminatedUnion('mode', [
+  CreateTeamProposalSchema,
+  ReplaceTeamProposalSchema,
+]);
+export type LibraryTeamProposal = z.infer<typeof LibraryTeamProposalSchema>;
+
+/** A `run_team` card: start a chat team, or change a running team for its run. */
+export type RunTeamProposal =
+  | z.infer<typeof RunStartProposalSchema>
+  | z.infer<typeof RunChangeProposalSchema>;
+export type RunStartProposal = z.infer<typeof RunStartProposalSchema>;
+export type RunChangeProposal = z.infer<typeof RunChangeProposalSchema>;
+
+export const TeamProposalSchema = z.discriminatedUnion('mode', [
+  CreateTeamProposalSchema,
+  ReplaceTeamProposalSchema,
+  RunStartProposalSchema,
+  RunChangeProposalSchema,
+]);
 export type TeamProposal = z.infer<typeof TeamProposalSchema>;
+
+/** At most this many agents join a chat team beside the chat's own (user decision). */
+export const MAX_CHAT_TEAM_MEMBERS = 12;
+/** At most this many lines in a `run_team` plan. */
+export const MAX_RUN_TEAM_PLAN_LINES = 12;
+
+/** One agent `run_team` asks for, as the model sends it. */
+export interface RunTeamMemberRequest {
+  id: string;
+  name: string;
+  role: string;
+  task: string;
+  instructions: string;
+  agent: AgentKind;
+  model?: string;
+  effort?: string;
+}
+
+/** `run_team`'s start form: this chat becomes a team with these agents. */
+export interface RunTeamStartRequest {
+  summary: string;
+  reason: string;
+  plan: string[];
+  team: { name: string; members: RunTeamMemberRequest[] };
+}
+
+/** One change `run_team`'s change form makes to a running team. */
+export type RunTeamEdit =
+  | { op: 'add'; member: RunTeamMemberRequest }
+  | { op: 'remove'; memberId: string }
+  | {
+      op: 'update';
+      memberId: string;
+      role?: string;
+      task?: string;
+      instructions?: string;
+      model?: string;
+      effort?: string;
+    };
+
+/** `run_team`'s change form: the running team, changed for this run only. */
+export interface RunTeamChangeRequest {
+  summary: string;
+  reason: string;
+  edits: RunTeamEdit[];
+}
+
+/** Whether a card is one of `run_team`'s rather than a library write. */
+export function isRunTeamProposal(
+  proposal: TeamProposal,
+): proposal is RunTeamProposal {
+  return proposal.mode === 'run-start' || proposal.mode === 'run-change';
+}
 
 /** What an agent sends `propose_team`. */
 export interface TeamProposalRequest {

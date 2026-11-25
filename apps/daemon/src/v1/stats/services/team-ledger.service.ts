@@ -6,6 +6,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunFacts } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
 import {
   parseTeamSnapshot,
@@ -142,7 +143,7 @@ export class TeamLedgerService implements OnModuleInit {
     snapshot: string | null,
     em: EntityManager,
   ): Promise<void> {
-    if (run.teamId === null) {
+    if (run.teamId === null || isChatTeamId(run.teamId)) {
       return;
     }
     const reading = parseTeamSnapshot(snapshot);

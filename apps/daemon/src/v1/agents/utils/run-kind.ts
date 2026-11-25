@@ -37,3 +37,34 @@ export function assertTeamRun(run: Run | null, runId: string): TeamRun {
   }
   return run;
 }
+
+/** The `teamId` of a chat promoted into a team run: never a library slug, since `SLUG_RE` refuses `:`. */
+export function chatTeamIdOf(runId: string): string {
+  return `${CHAT_TEAM_ID_PREFIX}${runId}`;
+}
+
+/** Whether a run is a chat promoted in place into a team run (a chat team). */
+export function isChatTeamRun(run: Pick<Run, 'teamOrigin'>): boolean {
+  return run.teamOrigin === CHAT_TEAM_ORIGIN;
+}
+
+export const CHAT_TEAM_ORIGIN = 'chat';
+
+const CHAT_TEAM_ID_PREFIX = 'chat:';
+
+/**
+ * Whether a run's `teamId` names a chat team rather than a library slug —
+ * for readers that hold the id but not the run's `teamOrigin`.
+ */
+export function isChatTeamId(teamId: string | null): boolean {
+  return teamId !== null && teamId.startsWith(CHAT_TEAM_ID_PREFIX);
+}
+
+/**
+ * The library team a run's `teamId` names, or null for a chat and for a chat
+ * team, whose team lives only in that run — what every reader that files,
+ * scopes or counts by a library slug takes.
+ */
+export function librarySlugOf(teamId: string | null): string | null {
+  return isChatTeamId(teamId) ? null : teamId;
+}

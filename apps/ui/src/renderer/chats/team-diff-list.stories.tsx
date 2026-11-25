@@ -6,10 +6,17 @@ import {
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import { TeamDiffList } from './team-diff-list';
-import { diffRows, readTeamProposal } from './team-proposal-payload';
+import {
+  diffRows,
+  isRunProposal,
+  readTeamProposal,
+} from './team-proposal-payload';
 
 function rowsOf(input: unknown) {
-  const proposal = readTeamProposal(input)!;
+  const proposal = readTeamProposal(input);
+  if (proposal === null || isRunProposal(proposal)) {
+    throw new Error('expected a library proposal');
+  }
   return diffRows(proposal.diff!, proposal.team);
 }
 

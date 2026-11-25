@@ -338,6 +338,11 @@ export const HOST_PLUGIN_TOOL = 'save_plugin';
  */
 export const HOST_READ_TEAMS_TOOL = 'read_teams';
 export const HOST_PROPOSE_TEAM_TOOL = 'propose_team';
+/**
+ * Run a team from a chat without creating it first (this chat becomes the
+ * team), or change a running team for that run only — both on a card.
+ */
+export const HOST_RUN_TEAM_TOOL = 'run_team';
 
 /**
  * What every owned card's durable column holds at least — the card's id. The
@@ -435,7 +440,15 @@ export type TeamNotSavedCause =
  */
 export type TeamProposalOutcome =
   | { kind: 'saved'; slug: string }
-  | { kind: 'not-saved'; cause: TeamNotSavedCause };
+  | { kind: 'not-saved'; cause: TeamNotSavedCause }
+  /** A `run_team` start card: this chat became the team. */
+  | { kind: 'started' }
+  /** A `run_team` start card that could not start, each cause in words. */
+  | { kind: 'not-started'; causes: string[] }
+  /** A `run_team` change card: the running team changed. */
+  | { kind: 'changed' }
+  /** A `run_team` change card that changed nothing, and why. */
+  | { kind: 'not-changed'; reason: string };
 
 export const ANALYSIS_VIEWS = [
   'overview',
@@ -8593,6 +8606,31 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe('Team slug for a team run; null for a single-agent chat'),
+  teamOrigin: z
+    .enum(['chat'])
+    .nullable()
+    .describe(
+      "'chat' for a chat promoted in place into a team run it leads (its team lives only in this run); null otherwise",
+    ),
+  chatTeamSize: z
+    .number()
+    .int()
+    .min(0)
+    .nullable()
+    .describe(
+      "How many agents a chat team runs beside the chat's own, removed ones left out; null for any other run",
+    ),
+  departedMembers: z
+    .array(z.string())
+    .describe(
+      "Member ids removed from a team run's team while it ran — each finishes its running call, then leaves; empty for a chat",
+    ),
+  teamHash: z
+    .string()
+    .nullable()
+    .describe(
+      'Hash of the team this run runs now, its own copy; changes whenever that team is changed while it runs. Null for a chat',
+    ),
   cwd: z.string().nullable(),
   /**
    * The commit the folder had checked out when this chat was created, and

@@ -3611,6 +3611,30 @@ export interface CommandCenterCardRun {
      * @type {string}
      * @memberof CommandCenterCardRun
      */
+    teamOrigin: CommandCenterCardRunTeamOriginEnum | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CommandCenterCardRun
+     */
+    chatTeamSize: number | null;
+    /**
+     * Member ids removed from a team run's team while it ran — each finishes its running call, then leaves; empty for a chat
+     * @type {Array<string>}
+     * @memberof CommandCenterCardRun
+     */
+    departedMembers: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterCardRun
+     */
+    teamHash: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CommandCenterCardRun
+     */
     cwd: string | null;
     /**
      * 
@@ -3878,6 +3902,14 @@ export interface CommandCenterCardRun {
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
+
+/**
+ * @export
+ */
+export const CommandCenterCardRunTeamOriginEnum = {
+    Chat: 'chat'
+} as const;
+export type CommandCenterCardRunTeamOriginEnum = typeof CommandCenterCardRunTeamOriginEnum[keyof typeof CommandCenterCardRunTeamOriginEnum];
 
 /**
  * @export
@@ -14672,6 +14704,30 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    teamOrigin: RunDtoTeamOriginEnum | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    chatTeamSize: number | null;
+    /**
+     * Member ids removed from a team run's team while it ran — each finishes its running call, then leaves; empty for a chat
+     * @type {Array<string>}
+     * @memberof RunDto
+     */
+    departedMembers: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    teamHash: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     cwd: string | null;
     /**
      * 
@@ -14939,6 +14995,14 @@ export interface RunDto {
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
+
+/**
+ * @export
+ */
+export const RunDtoTeamOriginEnum = {
+    Chat: 'chat'
+} as const;
+export type RunDtoTeamOriginEnum = typeof RunDtoTeamOriginEnum[keyof typeof RunDtoTeamOriginEnum];
 
 /**
  * @export
@@ -21114,6 +21178,30 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @type {string}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
+    teamOrigin: ThreadOverviewDtoAnalysisAnalysisTeamOriginEnum | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    chatTeamSize: number | null;
+    /**
+     * Member ids removed from a team run's team while it ran — each finishes its running call, then leaves; empty for a chat
+     * @type {Array<string>}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    departedMembers: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    teamHash: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
     cwd: string | null;
     /**
      * 
@@ -21381,6 +21469,14 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     promptCacheTtlReason: PromptCacheTtlReason | null;
 }
 
+
+/**
+ * @export
+ */
+export const ThreadOverviewDtoAnalysisAnalysisTeamOriginEnum = {
+    Chat: 'chat'
+} as const;
+export type ThreadOverviewDtoAnalysisAnalysisTeamOriginEnum = typeof ThreadOverviewDtoAnalysisAnalysisTeamOriginEnum[keyof typeof ThreadOverviewDtoAnalysisAnalysisTeamOriginEnum];
 
 /**
  * @export

@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { runTeamHashOf } from '../../teams/utils/team-snapshot';
 import {
   type ConfigDirPinWire,
   type ItemWire,
@@ -16,6 +17,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import type { ItemCallIndexService } from '../services/item-call-index.service';
 import type { ItemSeqAllocator } from '../services/item-seq.allocator';
+import { chatTeamSizeOf, readTeamDepartures } from './chat-team';
 import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
@@ -229,6 +231,15 @@ export function runToWire(
     title: run.title,
     agentKind: run.agentKind,
     teamId: run.teamId,
+    teamOrigin: run.teamOrigin === 'chat' ? 'chat' : null,
+    chatTeamSize: chatTeamSizeOf(run),
+    departedMembers: readTeamDepartures(run.teamDeparted).map(
+      (left) => left.memberId,
+    ),
+    teamHash:
+      run.teamId === null || run.teamSnapshot === null
+        ? null
+        : runTeamHashOf(run.teamSnapshot),
     cwd: run.cwd,
     startSha: run.startSha,
     startDirty: run.startDirty,

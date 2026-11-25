@@ -21,6 +21,7 @@ import {
   threadOutcomeOf,
   writeThreadOutcome,
 } from '../utils/run-goals';
+import { librarySlugOf } from '../utils/run-kind';
 import {
   parsePullRequestUrl,
   type PullRequestIdentity,
@@ -154,7 +155,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     const payload: ThreadOutcomePayload = {
       kind: input.kind,
       summary: input.summary,
-      teamSlug: run.teamId,
+      teamSlug: librarySlugOf(run.teamId),
       nodeId: recorder.memberId,
       conversationId: recorder.conversationId,
       ...(recorder.callId === null ? {} : { callId: recorder.callId }),
@@ -253,7 +254,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       acceptance: input.acceptance,
       questionsAsked,
       ...(input.summary === null ? {} : { summary: input.summary }),
-      teamSlug: run.teamId,
+      teamSlug: librarySlugOf(run.teamId),
       nodeId: recorder.memberId,
       conversationId: recorder.conversationId,
       ...(recorder.callId === null ? {} : { callId: recorder.callId }),

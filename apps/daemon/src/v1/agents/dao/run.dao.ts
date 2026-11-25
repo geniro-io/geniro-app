@@ -1564,6 +1564,33 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Make a chat run a team run in place, only while it is still a chat and not
+   * archived — a compare-and-set, so two presses never promote twice. True
+   * when this write did it. Like {@link updateWithoutActivity}, the managed
+   * copy is patched and re-snapshotted.
+   */
+  async promoteToTeam(
+    runId: string,
+    data: Partial<Run>,
+    em: EntityManager,
+  ): Promise<boolean> {
+    const changed = await em.nativeUpdate(
+      Run,
+      { id: runId, teamId: null, archivedAt: null },
+      data,
+    );
+    if (changed === 0) {
+      return false;
+    }
+    const managed = em.getUnitOfWork().getById<Run>(Run, runId);
+    if (managed) {
+      Object.assign(managed, data);
+      em.getUnitOfWork().merge(managed);
+    }
+    return true;
+  }
+
+  /**
    * Write BOOKKEEPING columns on a run without claiming the run did anything.
    *
    * `updatedAt` is the sidebar's "last activity" — its order and the time each

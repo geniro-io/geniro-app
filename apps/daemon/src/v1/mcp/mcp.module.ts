@@ -51,6 +51,7 @@ import { StatsModule } from '../stats/stats.module';
 import { SystemAnalysisHistoryService } from '../system-analysis/services/system-analysis-history.service';
 import { SystemAnalysisModule } from '../system-analysis/system-analysis.module';
 import { CallBroker } from '../teams/services/call-broker.service';
+import { ChatTeamService } from '../teams/services/chat-team.service';
 import { StageService } from '../teams/services/stage.service';
 import { TaskBoardBroker } from '../teams/services/task-board.broker';
 import { TeamChangeService } from '../teams/services/team-change.service';
@@ -144,6 +145,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         reviewComments: ReviewCommentsService,
         pluginCards: PluginProposalBroker,
         pluginProposals: PluginProposalService,
+        chatTeams: ChatTeamService,
       ) =>
         createMcpTools({
           calls,
@@ -196,6 +198,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           reviewComments,
           pluginCards,
           pluginProposals,
+          chatTeams,
         }),
       inject: [
         CallBroker,
@@ -248,6 +251,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ReviewCommentsService,
         PluginProposalBroker,
         PluginProposalService,
+        ChatTeamService,
       ],
     },
     McpServerService,

@@ -1458,3 +1458,26 @@ describe('a title being worked out', () => {
     });
   });
 });
+
+describe('ChatListItem — a chat that became a team', () => {
+  it('keeps the chat title and names its team by the agents beside the lead', async () => {
+    const container = await mount(
+      <ChatListItem
+        {...props({ isTeam: true, label: 'Plan the release', chatTeamSize: 2 })}
+      />,
+    );
+    expect(container.textContent).toContain('Plan the release');
+    expect(
+      container.querySelector('[data-slot="agent-kind"]')?.textContent,
+    ).toBe('team · 2 agents');
+  });
+
+  it('reads a single agent in the singular', async () => {
+    const container = await mount(
+      <ChatListItem {...props({ isTeam: true, chatTeamSize: 1 })} />,
+    );
+    expect(
+      container.querySelector('[data-slot="agent-kind"]')?.textContent,
+    ).toBe('team · 1 agent');
+  });
+});

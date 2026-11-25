@@ -5,6 +5,7 @@ import {
   RecommendationMarksSchema,
 } from '../../agents/chat.types';
 import { parseRecommendationsPayload } from '../../agents/utils/recommendations-card';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import type { Run } from '../../runs/entity/run.entity';
 import type {
   FiledRecommendation,
@@ -51,10 +52,11 @@ export function assessmentSourceOf(
   if (own !== null) {
     return { ...own, judge };
   }
-  return analysedRun?.teamId
+  const slug = librarySlugOf(analysedRun?.teamId ?? null);
+  return slug
     ? {
         chatRunId: run.id,
-        slug: analysedRun.teamId,
+        slug,
         chatKind: 'thread',
         judge,
       }

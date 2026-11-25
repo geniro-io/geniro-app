@@ -12,6 +12,7 @@ import {
   agentFlagRunKindOf,
   agentFlagWire,
 } from '../../agents/utils/agent-flags';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import { runSnapshotOf } from '../../agents/utils/run-snapshots';
 import { LessonProposalDao } from '../../lessons/dao/lesson-proposal.dao';
 import { readLessonSignals } from '../../lessons/utils/read-lesson-signals';
@@ -157,7 +158,7 @@ export class SystemDigestService {
       runId: run.id,
       title: run.title,
       kind: agentFlagRunKindOf(run),
-      teamSlug: run.teamId,
+      teamSlug: librarySlugOf(run.teamId),
       projectId: run.projectId,
       archived: run.archivedAt !== null,
       lastActivityAt: run.updatedAt,

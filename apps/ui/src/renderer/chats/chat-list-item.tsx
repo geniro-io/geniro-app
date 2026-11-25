@@ -76,7 +76,13 @@ function agentLabel(
   isTeam: boolean,
   teamName: string | null,
   identities: readonly AgentIdentityCapability[],
+  chatTeamSize: number | null,
 ): string {
+  if (chatTeamSize !== null) {
+    return (
+      'team · ' + (chatTeamSize === 1 ? '1 agent' : chatTeamSize + ' agents')
+    );
+  }
   if (isTeam) {
     // The TEAM's own name when this client knows it, and `graph` only when
     // it does not (a run of a team since deleted from the library).
@@ -141,6 +147,7 @@ export const ChatListItem = memo(function ChatListItem({
   label,
   isTeam,
   teamName = null,
+  chatTeamSize = null,
   status,
   lastMessage,
   lastActivityAt,
@@ -183,6 +190,11 @@ export const ChatListItem = memo(function ChatListItem({
    * for a 1:1 chat, and for a run whose team this client cannot name.
    */
   teamName?: string | null;
+  /**
+   * The agents a chat's own team runs beside its lead, for a chat that became a
+   * team; null for every other row. The label reads it instead of a team name.
+   */
+  chatTeamSize?: number | null;
   /**
    * The DISPLAY status, not the daemon's row value — wider than `RunStatus`
    * because `needs-input` is derived in the renderer (`displayRunStatus`) and
@@ -892,11 +904,13 @@ export const ChatListItem = memo(function ChatListItem({
           variant="muted"
           title={
             isTeam
-              ? 'A team of agents running as a graph'
+              ? chatTeamSize === null
+                ? 'A team of agents running as a graph'
+                : 'A chat that runs a team of agents'
               : `Driven by ${agentKind ?? 'an unrecorded CLI'}`
           }
           className="min-w-0 shrink gap-1 truncate px-1.5 py-0 font-normal">
-          {agentLabel(agentKind, isTeam, teamName, identities)}
+          {agentLabel(agentKind, isTeam, teamName, identities, chatTeamSize)}
         </Badge>
       </span>
       <span className="flex items-center gap-1 text-xs">

@@ -1,4 +1,5 @@
 import type { TurnMember } from '../../agents/chat.types';
+import { librarySlugOf } from '../../agents/utils/run-kind';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
@@ -109,8 +110,9 @@ export function forTurn(
  * written: those recorded while the title was the source keep what they say.
  */
 function teamNameOf(run: UsageDimensionRun | null): string | null {
-  if (!run || run.teamId === null) {
+  const slug = librarySlugOf(run?.teamId ?? null);
+  if (!run || slug === null) {
     return null;
   }
-  return readTeamSnapshot(run.teamSnapshot)?.name ?? run.teamId;
+  return readTeamSnapshot(run.teamSnapshot)?.name ?? slug;
 }

@@ -348,6 +348,21 @@ describe('a chat image takes a line of its own', () => {
     expect(notice).not.toContain('inline-block');
   });
 
+  it('keeps a file link a block box, off the text the image sat between', async () => {
+    await render(
+      'Plan page attached:\n![spec](/tmp/plan-pages/page.html)\nScreenshot:',
+      vi.fn(async () => 'data:image/png;base64,AAA'),
+    );
+
+    const box = classTokens('[data-slot="markdown-image-file"]');
+    expect(box).toContain('block');
+    expect(box).not.toContain('inline-block');
+    expect(
+      container.querySelector('[data-slot="markdown-image-file"] a')
+        ?.textContent,
+    ).toBe('spec');
+  });
+
   it('keeps a read that failed a block box', async () => {
     const load = vi.fn(async () => {
       throw new Error('no file at /tmp/shots/gone.png');

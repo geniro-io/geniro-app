@@ -66,7 +66,11 @@ export function MarkdownImage({
   }, [load, reference, refusal, inline]);
 
   if (notPicture && localPathOfHref(written) !== null) {
-    return <TranscriptLink href={written}>{alt || reference}</TranscriptLink>;
+    return (
+      <span data-slot="markdown-image-file" className="my-1 block w-fit">
+        <TranscriptLink href={written}>{alt || reference}</TranscriptLink>
+      </span>
+    );
   }
   if (refusal !== null) {
     return (

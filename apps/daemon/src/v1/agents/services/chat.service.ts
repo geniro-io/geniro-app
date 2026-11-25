@@ -2026,11 +2026,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   /**
    * What stops this chat from becoming a team right now, each in words the
    * agent and the card can say; empty when nothing does. `exceptCard` is the
-   * card being answered, which the promotion itself retires.
+   * card being answered, which the promotion itself retires. Only `atPress`
+   * does a running turn count: the agent asks from inside one.
    */
   async promotionBlockers(
     runId: string,
     exceptCard: string | null,
+    atPress: boolean,
   ): Promise<string[]> {
     const run = await this.runDao.getById(runId, this.em.fork());
     if (run === null) {
@@ -2043,7 +2045,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (run.archivedAt !== null || this.archiving.has(runId)) {
       causes.push('the chat is archived');
     }
-    if (this.registry.has(runId)) {
+    if (atPress && this.registry.has(runId)) {
       causes.push('a turn of this chat is still running');
     }
     const monitors = this.monitors?.list(runId).length ?? 0;

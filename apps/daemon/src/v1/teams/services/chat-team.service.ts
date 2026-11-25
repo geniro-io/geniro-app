@@ -126,7 +126,7 @@ export class ChatTeamService {
     if (unfit !== null) {
       return unfit;
     }
-    const blockers = await this.chats.promotionBlockers(runId, null);
+    const blockers = await this.chats.promotionBlockers(runId, null, false);
     if (blockers.length > 0) {
       return refused('NOT_STARTABLE_NOW', blockers.join('; '));
     }
@@ -464,7 +464,7 @@ export class ChatTeamService {
     answer: string | undefined,
     cards: OwnedCardHost,
   ): Promise<void> {
-    const causes = await this.chats.promotionBlockers(runId, requestId);
+    const causes = await this.chats.promotionBlockers(runId, requestId, true);
     const unfit = causes.length > 0 ? null : await this.teamRefusal(proposal.team);
     if (unfit !== null) {
       causes.push(unfit.message);

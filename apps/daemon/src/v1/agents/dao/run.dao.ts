@@ -1581,6 +1581,33 @@ export class RunDao extends BaseDao<Run> {
    * copy differ from its snapshot, write the columns a second time and stamp
    * `updatedAt` anyway.
    */
+  /**
+   * Make a chat run a team run in place, only while it is still a chat and not
+   * archived — a compare-and-set, so two presses never promote twice. True
+   * when this write did it. Like {@link updateWithoutActivity}, the managed
+   * copy is patched and re-snapshotted.
+   */
+  async promoteToTeam(
+    runId: string,
+    data: Partial<Run>,
+    em: EntityManager,
+  ): Promise<boolean> {
+    const changed = await em.nativeUpdate(
+      Run,
+      { id: runId, teamId: null, archivedAt: null },
+      data,
+    );
+    if (changed === 0) {
+      return false;
+    }
+    const managed = em.getUnitOfWork().getById<Run>(Run, runId);
+    if (managed) {
+      Object.assign(managed, data);
+      em.getUnitOfWork().merge(managed);
+    }
+    return true;
+  }
+
   async updateWithoutActivity(
     runId: string,
     data: Partial<Run>,

@@ -16,6 +16,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import type { ItemCallIndexService } from '../services/item-call-index.service';
 import type { ItemSeqAllocator } from '../services/item-seq.allocator';
+import { chatTeamSizeOf, readTeamDepartures } from './chat-team';
 import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
@@ -229,6 +230,11 @@ export function runToWire(
     title: run.title,
     agentKind: run.agentKind,
     teamId: run.teamId,
+    teamOrigin: run.teamOrigin === 'chat' ? 'chat' : null,
+    chatTeamSize: chatTeamSizeOf(run),
+    departedMembers: readTeamDepartures(run.teamDeparted).map(
+      (left) => left.memberId,
+    ),
     cwd: run.cwd,
     startSha: run.startSha,
     startDirty: run.startDirty,

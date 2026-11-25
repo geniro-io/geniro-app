@@ -3,6 +3,7 @@ import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
 import type { UsageEventInput } from '../stats.types';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 
 /** The run columns {@link usageDimensions} reads. */
 export type UsageDimensionRun = Pick<
@@ -109,7 +110,7 @@ export function forTurn(
  * written: those recorded while the title was the source keep what they say.
  */
 function teamNameOf(run: UsageDimensionRun | null): string | null {
-  if (!run || run.teamId === null) {
+  if (!run || run.teamId === null || isChatTeamId(run.teamId)) {
     return null;
   }
   return readTeamSnapshot(run.teamSnapshot)?.name ?? run.teamId;

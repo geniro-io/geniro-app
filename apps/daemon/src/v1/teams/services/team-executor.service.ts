@@ -67,6 +67,7 @@ import {
   type RunListPage,
   type RunWire,
   type SendMessageImage,
+  SINGLE_AGENT_NODE,
   type StandingHostQuestion,
 } from '../../agents/chat.types';
 import {
@@ -235,7 +236,13 @@ import {
 } from '../../agents/utils/polled-spend-ledger';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { assertTeamRun, type TeamRun } from '../../agents/utils/run-kind';
+import { readTeamDepartures } from '../../agents/utils/chat-team';
+import {
+  assertTeamRun,
+  CHAT_TEAM_ORIGIN,
+  chatTeamIdOf,
+  type TeamRun,
+} from '../../agents/utils/run-kind';
 import {
   readPersistedResetWakes,
   resetWakesWire,
@@ -374,13 +381,13 @@ import { resetWakePrompt } from '../utils/reset-wake-prompt';
 import { initialStageProgress } from '../utils/stage-fold';
 import { stageLabel, stageMapOf, stageNotice } from '../utils/stage-text';
 import {
-  calleesOf as calleesOfTeam,
+  calleeMapOf,
   onDemandMemberIds,
   possibleLeadsOf,
   startingLeadOf,
   triggerMemberId,
 } from '../utils/team-roster';
-import { teamSnapshotOf } from '../utils/team-snapshot';
+import { runTeamHashOf, teamSnapshotOf } from '../utils/team-snapshot';
 import { assertValidTeam } from '../utils/team-validate';
 import { createTurnSemaphore, type TurnSlot } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
@@ -1332,6 +1339,19 @@ export class TeamExecutorService
   private readonly leadWatchers = new Map<string, (lead: string) => void>();
 
   /**
+   * Each run's newest pass's hook for a change to its team (`changeRunTeam`):
+   * `now` when the change reaches the running pass, `next-pass` when only the
+   * next one can serve it.
+   */
+  private readonly liveRosters = new Map<
+    string,
+    (next: Team, departed: ReadonlySet<string>) => 'now' | 'next-pass'
+  >();
+
+  /** The members removed from each run's team while it ran, read off the run each pass. */
+  private readonly departedMembers = new Map<string, readonly string[]>();
+
+  /**
    * Who leads a run now — the member a message, a press and a pass go to:
    * the trigger's member in `lead` mode, the current stage's lead in `relay`
    * mode (`StageService` holds it with the progress).
@@ -1353,6 +1373,8 @@ export class TeamExecutorService
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
       this.leadWatchers.delete(runId);
+      this.liveRosters.delete(runId);
+      this.departedMembers.delete(runId);
       this.disposeHostPublishers(runId);
       // `deleteRun` forgets these itself; the archive sweep reaches this run
       // only through the shared teardown, so without this line a swept run's
@@ -2494,6 +2516,155 @@ export class TeamExecutorService
     );
   }
 
+  /**
+   * Turn a chat into a team run it leads, in place (a chat team): the chat's
+   * own agent is the lead member `agent`, so its session, its transcript and
+   * its `node_state` row carry over. Refused `NOT_A_CHAT_RUN` when the run
+   * already names a team or is archived; the caller has checked everything
+   * else. Then the team's first pass starts with `prompt` as the lead's turn,
+   * shown as `notice`, never as the user's words.
+   */
+  async promoteChat(
+    runId: string,
+    team: Team,
+    prompt: string,
+    notice: string,
+  ): Promise<number> {
+    const em = this.em.fork();
+    const snapshot = teamSnapshotOf(team);
+    const flipped = await this.runDao.promoteToTeam(
+      runId,
+      {
+        teamId: chatTeamIdOf(runId),
+        teamOrigin: CHAT_TEAM_ORIGIN,
+        teamSnapshot: snapshot,
+        teamBaseSnapshot: snapshot,
+        teamOverlaySnapshot: null,
+        teamDeparted: null,
+        stageProgress: initialStageProgress(team),
+        currentLead: SINGLE_AGENT_NODE,
+        agentKind: null,
+        approval: null,
+      },
+      em,
+    );
+    if (!flipped) {
+      throw new ConflictException(
+        'NOT_A_CHAT_RUN',
+        'the chat already runs a team or is archived',
+      );
+    }
+    this.departedMembers.set(runId, []);
+    const run = assertTeamRun(
+      await this.runDao.getById(runId, this.em.fork()),
+      runId,
+    );
+    this.bus.publishRunsChanged([runToWire(run)]);
+    const opened = await this.walkAgain(this.em.fork(), run, prompt, [], {
+      severity: 'info',
+      message: notice,
+      chatTeam: { phase: 'started' },
+    });
+    return opened.seq;
+  }
+
+  /** Write one system row into a team run's own flow, outside any pass. */
+  async writeRunNote(
+    runId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const em = this.em.fork();
+    await this.persist(
+      em,
+      runId,
+      null,
+      await this.seqs.reserve(runId),
+      'system',
+      null,
+      payload,
+    );
+  }
+
+  /**
+   * Change a running team for this run only: `Run.teamSnapshot` and
+   * `Run.teamDeparted`, never the library, an overlay or the run's base copy.
+   * Refused when the run's team copy moved since `baseHash` was read. A live
+   * pass takes the change at once (`liveRosters`); otherwise the next pass
+   * reads it from the run.
+   */
+  async changeRunTeam(
+    runId: string,
+    next: Team,
+    baseHash: string,
+    removed: readonly string[],
+  ): Promise<
+    | {
+        status: 'changed';
+        reaches: 'now' | 'next-pass';
+        team: Team;
+        departed: string[];
+      }
+    | { status: 'refused'; reason: string }
+  > {
+    const em = this.em.fork();
+    const run = assertTeamRun(await this.runDao.getById(runId, em), runId);
+    if (run.archivedAt !== null) {
+      return { status: 'refused', reason: 'the run is archived' };
+    }
+    if (runTeamHashOf(run.teamSnapshot) !== baseHash) {
+      return {
+        status: 'refused',
+        reason: 'the team changed since the card was raised',
+      };
+    }
+    let resolved: Team;
+    try {
+      resolved = (await this.assertRunnable(next)).team;
+    } catch (error) {
+      return {
+        status: 'refused',
+        reason: error instanceof Error ? error.message : 'the team cannot run',
+      };
+    }
+    const leftAt = new Date().toISOString();
+    const departures = [
+      ...readTeamDepartures(run.teamDeparted),
+      ...removed.map((memberId) => ({ memberId, leftAt })),
+    ];
+    await this.runDao.updateWithoutActivity(
+      runId,
+      {
+        teamSnapshot: teamSnapshotOf(next),
+        teamDeparted: departures.length === 0 ? null : JSON.stringify(departures),
+      },
+      em,
+    );
+    const departedIds = departures.map((left) => left.memberId);
+    this.departedMembers.set(runId, departedIds);
+    const known = new Set(
+      (await this.nodeStateDao.listByRun(runId, em)).map(
+        (state) => state.memberId,
+      ),
+    );
+    for (const member of next.members) {
+      if (!known.has(member.id)) {
+        await this.nodeStateDao.setStatus(
+          runId,
+          member.id,
+          { status: 'pending' },
+          em,
+        );
+      }
+    }
+    const live = this.liveRuns.has(runId) ? this.liveRosters.get(runId) : undefined;
+    const reaches = live?.(resolved, new Set(departedIds)) ?? 'next-pass';
+    const fresh = await this.runDao.getById(runId, this.em.fork());
+    if (fresh !== null) {
+      this.bus.publishRunsChanged([runToWire(fresh)]);
+    }
+    return { status: 'changed', reaches, team: resolved, departed: departedIds };
+  }
+
   /** A user retry can replay its row after the addressed call has settled. */
   async sendCallMessage(
     runId: string,
@@ -2634,6 +2805,10 @@ export class TeamExecutorService
     }
     const stored = await this.runTeams.teamOf(run, em);
     const { team, dropped } = await this.assertRunnable(stored);
+    this.departedMembers.set(
+      run.id,
+      readTeamDepartures(run.teamDeparted).map((left) => left.memberId),
+    );
     const cwd = await this.turnFolderOf(run.id, run.cwd);
     const resumeSessions = new Map<string, string>();
     const nodePoolMembers = new Map<string, number>();
@@ -3349,7 +3524,12 @@ export class TeamExecutorService
       }
       if (this.teamProposals !== undefined) {
         disposers.push(
-          this.teamProposals.register(runId, node.id, { runId }, { offeredTo }),
+          this.teamProposals.register(
+            runId,
+            node.id,
+            { runId, runTeam: 'change' },
+            { offeredTo },
+          ),
         );
       }
       const propose = this.leadProjectCards;
@@ -4596,8 +4776,11 @@ export class TeamExecutorService
       void this.stages?.current(runId);
     }
     // Caller → every other member. Drives the broker's dispatch, each
-    // caller's MCP endpoint grant, and its "May call" block.
-    const calleesOf = calleesOfTeam(team.members);
+    // caller's MCP endpoint grant, and its "May call" block. A member removed
+    // from the run's team is never a callee again; the broker reads this map
+    // live, so a change while the pass runs refills it in place.
+    const departed = new Set(this.departedMembers.get(runId) ?? []);
+    const calleesOf = new Map(calleeMapOf(team.members, departed));
 
     const settled = new Map<string, NodeOutcome>();
     const runningHandles = new Map<string, AgentTurnHandle>();
@@ -10039,30 +10222,6 @@ export class TeamExecutorService
     // every tool call after the first of them was refused by the guard.
     //
     // Every call-capable agent, not only a board task's — see `holdsEndpoint`.
-    for (const node of nodes) {
-      if (callCapable(node)) {
-        this.callTokens.ensure(runId, node.id);
-      }
-    }
-    const hostToolNodes = nodes.filter((node) => callCapable(node));
-    this.registerArtifactPublishers(
-      runId,
-      hostToolNodes.map((node) => node.id),
-      persistItem,
-    );
-    // A relay run's press goes to whoever leads at the press, so every
-    // publisher says who it is.
-    this.registerActionPublishers(
-      runId,
-      hostToolNodes,
-      team.mode === 'relay' ? new Set() : leadIds,
-    );
-    this.registerSurfacePublishers(
-      runId,
-      hostToolNodes,
-      team.mode === 'relay' ? new Set() : leadIds,
-      persistItem,
-    );
     const watchLead = (lead: string): void => {
       if (leadIds.has(lead) || !nodesById.has(lead)) {
         return;
@@ -10102,6 +10261,31 @@ export class TeamExecutorService
       handingOver.set(lead, timer);
     };
     this.leadWatchers.set(runId, watchLead);
+    const registerMemberTools = (): void => {
+    for (const node of nodes) {
+      if (callCapable(node)) {
+        this.callTokens.ensure(runId, node.id);
+      }
+    }
+    const hostToolNodes = nodes.filter((node) => callCapable(node));
+    this.registerArtifactPublishers(
+      runId,
+      hostToolNodes.map((node) => node.id),
+      persistItem,
+    );
+    // A relay run's press goes to whoever leads at the press, so every
+    // publisher says who it is.
+    this.registerActionPublishers(
+      runId,
+      hostToolNodes,
+      team.mode === 'relay' ? new Set() : leadIds,
+    );
+    this.registerSurfacePublishers(
+      runId,
+      hostToolNodes,
+      team.mode === 'relay' ? new Set() : leadIds,
+      persistItem,
+    );
     this.registerMonitorSinks(
       runId,
       hostToolNodes,
@@ -10120,6 +10304,41 @@ export class TeamExecutorService
     this.registerLeadCardSinks(runId, team, hostToolNodes, (memberId) =>
       liveConversations.has(memberId),
     );
+    };
+    registerMemberTools();
+    const callsAtStart = calleesOf.size > 0;
+    // A change to this run's team while the pass runs (`changeRunTeam`): the
+    // members, the callees, the blocks and the tools every member is offered
+    // move together, so an added member is launchable and callable at once.
+    this.liveRosters.set(runId, (next, left) => {
+      for (const member of next.members) {
+        const at = nodes.findIndex((node) => node.id === member.id);
+        if (at === -1) {
+          nodes.push(member);
+        } else {
+          nodes[at] = member;
+        }
+        nodesById.set(member.id, member);
+      }
+      departed.clear();
+      for (const id of left) {
+        departed.add(id);
+      }
+      calleesOf.clear();
+      for (const [caller, callees] of calleeMapOf(nodes, departed)) {
+        calleesOf.set(caller, callees);
+      }
+      onDemand.clear();
+      for (const id of onDemandMemberIds(team)) {
+        onDemand.add(id);
+      }
+      blocksOf.clear();
+      for (const [memberId, blocks] of instructionBlocksByMember(team)) {
+        blocksOf.set(memberId, blocks);
+      }
+      registerMemberTools();
+      return callsAtStart || calleesOf.size === 0 ? 'now' : 'next-pass';
+    });
     /**
      * Open a turn of a member's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now

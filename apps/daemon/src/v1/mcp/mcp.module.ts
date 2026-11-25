@@ -55,6 +55,7 @@ import { StageService } from '../teams/services/stage.service';
 import { TaskBoardBroker } from '../teams/services/task-board.broker';
 import { TeamChangeService } from '../teams/services/team-change.service';
 import { TeamOverlayService } from '../teams/services/team-overlay.service';
+import { ChatTeamService } from '../teams/services/chat-team.service';
 import { TeamProposalService } from '../teams/services/team-proposal.service';
 import { TeamStoreService } from '../teams/services/team-store.service';
 import { ThreadDeliveryService } from '../teams/services/thread-delivery.service';
@@ -144,6 +145,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         reviewComments: ReviewCommentsService,
         pluginCards: PluginProposalBroker,
         pluginProposals: PluginProposalService,
+        chatTeams: ChatTeamService,
       ) =>
         createMcpTools({
           calls,
@@ -196,6 +198,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           reviewComments,
           pluginCards,
           pluginProposals,
+          chatTeams,
         }),
       inject: [
         CallBroker,
@@ -248,6 +251,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ReviewCommentsService,
         PluginProposalBroker,
         PluginProposalService,
+        ChatTeamService,
       ],
     },
     McpServerService,

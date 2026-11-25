@@ -6,6 +6,7 @@ import {
 } from '../../../agents/chat.types';
 import { hasHiddenText } from '../../../agents/utils/hidden-text';
 import {
+  isRunTeamProposal,
   type ProposalOutcome,
   TEAM_REASON_MAX,
   TEAM_SUMMARY_MAX,
@@ -19,7 +20,7 @@ import { readToolArgs } from '../tool-args';
 
 // One line, capped: the card prints this ahead of the slug and the team,
 // so an unbounded one could push them out of sight.
-const summaryField = z
+export const summaryField = z
   .string()
   .max(TEAM_SUMMARY_MAX)
   .refine(
@@ -28,7 +29,7 @@ const summaryField = z
   );
 
 // Capped for the same reason; line breaks are kept, the card draws them.
-const reasonField = z
+export const reasonField = z
   .string()
   .max(TEAM_REASON_MAX)
   .refine(
@@ -226,6 +227,9 @@ export function proposeTeamResultText(outcome: ProposalOutcome): string {
 
 /** What one approval of the card writes, in the card's own order. */
 function whatTheCardWrites(proposal: TeamProposal): string {
+  if (isRunTeamProposal(proposal)) {
+    return 'a change to the running team';
+  }
   if (proposal.mode === 'create') {
     return `a new team, to be saved as '${proposal.slug}'`;
   }

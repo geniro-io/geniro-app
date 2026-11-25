@@ -160,6 +160,7 @@ import type { StageService } from '../../teams/services/stage.service';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
 import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
+import type { ChatTeamService } from '../../teams/services/chat-team.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
@@ -332,6 +333,7 @@ function service(
       teamOverlays: {} as TeamOverlayService,
       // Never asked by the cases that list tools.
       teamProposals: {} as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares,
       memory,
       knowledge,
@@ -4541,6 +4543,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore: {} as TeamStoreService,
       teamOverlays: {} as TeamOverlayService,
       teamProposals: {} as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -4650,6 +4653,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore,
       teamOverlays,
       teamProposals,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -4991,6 +4995,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
             },
           ]),
       } as unknown as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -5118,6 +5123,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamStore: {} as TeamStoreService,
         teamOverlays: {} as TeamOverlayService,
         teamProposals: proposals as unknown as TeamProposalService,
+        chatTeams: {} as ChatTeamService,
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
@@ -5272,6 +5278,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamStore: {} as TeamStoreService,
       teamOverlays: {} as TeamOverlayService,
       teamProposals: { propose } as unknown as TeamProposalService,
+      chatTeams: {} as ChatTeamService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
@@ -5361,6 +5368,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
             ]),
         } as unknown as TeamOverlayService,
         teamProposals: teamProposals as TeamProposalService,
+        chatTeams: {} as ChatTeamService,
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,

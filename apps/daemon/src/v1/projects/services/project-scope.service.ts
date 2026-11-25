@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
@@ -134,7 +135,7 @@ export class ProjectScopeService {
   async placeOf(run: RunPlaceColumns): Promise<RunPlace> {
     return {
       projectId: (await this.projectOfRun(run))?.id ?? null,
-      teamSlug: run.teamId,
+      teamSlug: isChatTeamId(run.teamId) ? null : run.teamId,
     };
   }
 

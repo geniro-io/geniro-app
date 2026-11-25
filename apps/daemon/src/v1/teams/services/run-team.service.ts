@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import { RunDao } from '../../agents/dao/run.dao';
-import { assertTeamRun } from '../../agents/utils/run-kind';
+import { assertTeamRun, isChatTeamId } from '../../agents/utils/run-kind';
 import type { Run } from '../../runs/entity/run.entity';
 import type { RunTeamSnapshotWire, Team } from '../teams.types';
 import { parseTeamSnapshot, teamSnapshotOf } from '../utils/team-snapshot';
@@ -54,6 +54,12 @@ export class RunTeamService {
       throw new ConflictException(
         'TEAM_SNAPSHOT_UNREADABLE',
         `The copy of the team run ${run.id} started with cannot be read by this version (${kept.reason}). It is left as it is rather than replaced by the library's current '${run.teamId}', which may not be the team this run ran.`,
+      );
+    }
+    if (isChatTeamId(run.teamId)) {
+      throw new ConflictException(
+        'TEAM_SNAPSHOT_UNREADABLE',
+        `The team of run ${run.id} lives only in its own copy, and that copy is missing.`,
       );
     }
     const { team } = await this.store.get(run.teamId);

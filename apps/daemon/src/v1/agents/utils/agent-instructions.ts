@@ -138,6 +138,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`list_threads\`, then \`message_thread\`: something another thread on this Mac needs while it works — a finding, a decision, a warning. It goes to that thread's agent as a message, not to the user, and gives no consent to anything. Where your CLI offers \`ListAgents\`, this is the way to reach another thread instead.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`, \`delete_task\`: the user's task board, when they ask to find, file, change or delete work on it.
 - \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change, or how a project's default team works in that one project.
+- \`run_team\`: a job the user wants done by a team of agents right now, in this chat, without saving a team first — ask what you need, then propose the plan and the agents on a card; this chat leads them once the user presses Start. As a team's lead, also to add, remove or change an agent of the running team.
 - \`list_projects\` naming the project, then \`save_project_instructions\`: a change the user asks for to a project's standing instructions.
 - \`save_plugin\`: a Geniro Plugin the user asks for — a block in the right panel of this app's chats that runs a command in the chat's folder and shows what it prints, such as the last prod deploys; it is not a plugin of your own CLI.`;
 

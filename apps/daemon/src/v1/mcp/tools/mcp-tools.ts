@@ -45,6 +45,7 @@ import type { StageService } from '../../teams/services/stage.service';
 import type { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
 import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
+import type { ChatTeamService } from '../../teams/services/chat-team.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
@@ -85,6 +86,7 @@ import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposeLessonsTool } from './propose-lessons/propose-lessons.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
 import { ProposeTeamTool } from './propose-team/propose-team.tool';
+import { RunTeamTool } from './run-team/run-team.tool';
 import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
@@ -160,6 +162,7 @@ export interface McpToolDeps {
   teamStore: TeamStoreService;
   teamOverlays: TeamOverlayService;
   teamProposals: TeamProposalService;
+  chatTeams: ChatTeamService;
   shares: ShareService;
   threadDelivery: ThreadDeliveryService;
   commandCenters: CommandCenterBroker;
@@ -244,6 +247,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
       deps.analysis,
       deps.teamProposals,
     ),
+    new RunTeamTool(deps.teamGate, deps.teamProposals, deps.chatTeams),
     new ReadAnalyzedThreadTool(
       deps.analysis,
       deps.threads,

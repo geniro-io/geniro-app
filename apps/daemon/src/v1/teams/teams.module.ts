@@ -34,6 +34,7 @@ import { StageWakeService } from './services/stage-wake.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { TeamActionsService } from './services/team-actions.service';
 import { TeamAnalysisService } from './services/team-analysis.service';
+import { ChatTeamService } from './services/chat-team.service';
 import { TeamCardsService } from './services/team-cards.service';
 import { TeamChangeService } from './services/team-change.service';
 import { TeamChangeLogService } from './services/team-change-log.service';
@@ -118,6 +119,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamReviewService,
     TeamProposalService,
     TeamCardsService,
+    ChatTeamService,
     TeamHealthService,
   ],
   // `TeamExecutorService` is exported for `TasksModule`, whose cards may name
@@ -151,6 +153,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeLogService,
     TeamProposalService,
     TeamCardsService,
+    ChatTeamService,
   ],
 })
 export class TeamsModule {}

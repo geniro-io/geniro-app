@@ -38,6 +38,8 @@ import {
   checkedProjectChange,
 } from '../../projects/utils/project-instruction-blocks';
 import {
+  isRunTeamProposal,
+  type LibraryTeamProposal,
   type PendingTeamProposal,
   PendingTeamProposalSchema,
   type ProposalOutcome,
@@ -62,6 +64,7 @@ import { checkTeam } from '../utils/team-check';
 import { diffTeams } from '../utils/team-diff';
 import { parseTeamYaml } from '../utils/team-yaml';
 import { agentsThatRunAuto } from '../utils/unattended';
+import { ChatTeamService } from './chat-team.service';
 import { TeamCardsService } from './team-cards.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamExecutorService } from './team-executor.service';
@@ -139,6 +142,8 @@ export class TeamProposalService {
     private readonly projects: ProjectsService,
     /** A team run's cards; optional only so specs that build no team run need not supply it. */
     @Optional() private readonly teamCards?: TeamCardsService,
+    /** `run_team`'s cards; optional for the same reason. */
+    @Optional() private readonly chatTeams?: ChatTeamService,
   ) {}
 
   /** Who raises and answers this run's card: its lead's host for a team run, else the chat. */
@@ -161,6 +166,17 @@ export class TeamProposalService {
     request: TeamProposalRequest,
   ): Promise<ProposalOutcome> {
     return this.raiseSerialized(runId, () => this.prepare(request));
+  }
+
+  /**
+   * A `run_team` card (`ChatTeamService` prepares it), raised on the same
+   * terms as every card here: one standing per run, replacing the one before.
+   */
+  proposeRunTeam(
+    runId: string,
+    prepare: () => Promise<PreparedProposal>,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, prepare);
   }
 
   /**
@@ -522,6 +538,17 @@ export class TeamProposalService {
       this.logger.error(
         `run ${runId} could not close a team proposal card: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+    if (isRunTeamProposal(proposal)) {
+      await this.chatTeams?.carryOutVerdict(
+        runId,
+        requestId,
+        proposal,
+        allow && cleared,
+        answer,
+        await this.cardsOf(runId),
+      );
+      return;
     }
     if (allow && !cleared) {
       // A card still standing in the column comes back at the next boot, so a
@@ -914,6 +941,9 @@ export class TeamProposalService {
     proposal: TeamProposal,
     by: { runId: string; note: string | null } | null = null,
   ): Promise<AppliedProposal> {
+    if (isRunTeamProposal(proposal)) {
+      throw new Error('a run_team card writes no library file');
+    }
     if (proposal.mode === 'create') {
       try {
         await this.store.create(proposal.team, proposal.slug);
@@ -1066,7 +1096,7 @@ export class TeamProposalService {
     half: TeamProposalProject,
     before: ProjectWire,
     by: { runId: string; note: string | null } | null,
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     writeTeam: () => Promise<T>,
   ): Promise<{ team: T; revision: number }> {
     const recommendationIds = (proposal.recommendationIds ?? []).filter((id) =>
@@ -1134,7 +1164,7 @@ export class TeamProposalService {
   }
 
   private async logApprovedOverlay(
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     overlay: TeamProposalOverlay,
     written: { hash: string; backup: string | null },
     by: { runId: string; note: string | null } | null,
@@ -1166,7 +1196,7 @@ export class TeamProposalService {
    * summary or reason (a builder chat's standing from before), read from there.
    */
   private async logApproved(
-    proposal: TeamProposal,
+    proposal: LibraryTeamProposal,
     before: Team | null,
     backup: string | null,
     by: { runId: string; note: string | null } | null,
@@ -1275,7 +1305,7 @@ function summarizedFor(
 }
 
 function verdictOf(
-  proposal: TeamProposal,
+  proposal: LibraryTeamProposal,
   applied: AppliedProposal,
   note: string | null,
 ): TeamProposalVerdict {
@@ -1341,7 +1371,7 @@ class ProjectLeftChangedError extends Error {
 
 /** Why a card's project half no longer held when the user approved it. */
 function projectChangedReason(
-  proposal: TeamProposal,
+  proposal: LibraryTeamProposal,
   cause: 'changed' | 'inactive' | 'gone',
 ): string {
   const name =

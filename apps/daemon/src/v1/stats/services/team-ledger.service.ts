@@ -1,4 +1,5 @@
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+import { isChatTeamId } from '../../agents/utils/run-kind';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
@@ -142,7 +143,7 @@ export class TeamLedgerService implements OnModuleInit {
     snapshot: string | null,
     em: EntityManager,
   ): Promise<void> {
-    if (run.teamId === null) {
+    if (run.teamId === null || isChatTeamId(run.teamId)) {
       return;
     }
     const reading = parseTeamSnapshot(snapshot);

@@ -8,10 +8,10 @@ import remarkGfm from 'remark-gfm';
 import { CodeBlock } from '../components/ui/code-block';
 import { languageForFence } from '../components/ui/code-language';
 import { cn } from '../components/ui/utils';
-import { ChatLink } from './browser/chat-link';
 import { MarkdownImage } from './markdown-image';
 import { type HastNode, markdownImageBlocks } from './markdown-image-blocks';
 import { wrapSpacedImagePaths } from './markdown-paths';
+import { TranscriptLink } from './transcript-link';
 
 /**
  * A fenced code block's source and language, read off the `pre`'s hast node.
@@ -113,32 +113,6 @@ export function alignClass(
     default:
       return 'text-left';
   }
-}
-
-/**
- * A transcript link, with the chat's link rules (`chats/browser/chat-link.tsx`).
- */
-function TranscriptLink({
-  href,
-  title,
-  children,
-}: {
-  href: string | undefined;
-  title: string | undefined;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    // `break-all` for the same reason as inline code, and this one was
-    // measured as the widest offender in a real transcript: an autolinked
-    // URL is a single unbreakable token whose link TEXT is the URL, and one
-    // of them pushed the transcript 139px past its pane.
-    <ChatLink
-      href={href}
-      title={title}
-      className="text-primary underline underline-offset-2 break-all">
-      {children}
-    </ChatLink>
-  );
 }
 
 /**

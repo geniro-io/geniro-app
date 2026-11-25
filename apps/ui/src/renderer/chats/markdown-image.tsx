@@ -1,8 +1,10 @@
 import { useContext, useEffect, useState } from 'react';
 
 import { ZoomableImage } from '../components/ui/image-viewer';
+import { localPathOfHref } from './browser/chat-link';
 import { LocalImageLoaderContext, refusalFor } from './local-image-loader';
-import { localPathOf } from './markdown-paths';
+import { localPathOf, namesPicture } from './markdown-paths';
+import { TranscriptLink } from './transcript-link';
 
 /**
  * One image an agent referenced from its own markdown.
@@ -30,9 +32,14 @@ export function MarkdownImage({
   const load = useContext(LocalImageLoaderContext);
   // `src` is typed loosely by the markdown renderer's HTML props; only a string
   // is a reference we can do anything with.
-  const reference = typeof src === 'string' ? localPathOf(src.trim()) : '';
-  const refusal = reference === '' ? 'no image source' : refusalFor(reference);
+  const written = typeof src === 'string' ? src.trim() : '';
+  const reference = localPathOf(written);
+  const schemeRefusal =
+    reference === '' ? 'no image source' : refusalFor(reference);
   const inline = reference.startsWith('data:');
+  const notPicture =
+    schemeRefusal === null && !inline && !namesPicture(reference);
+  const refusal = schemeRefusal ?? (notPicture ? 'not a picture' : null);
   const [resolved, setResolved] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -58,6 +65,9 @@ export function MarkdownImage({
     };
   }, [load, reference, refusal, inline]);
 
+  if (notPicture && localPathOfHref(written) !== null) {
+    return <TranscriptLink href={written}>{alt || reference}</TranscriptLink>;
+  }
   if (refusal !== null) {
     return (
       <span

@@ -49,6 +49,22 @@ export function localPathOf(reference: string): string {
   }
 }
 
+/**
+ * The extensions the daemon's image route serves, lower case.
+ *
+ * TWIN PARSER: `IMAGE_EXTENSIONS` in
+ * `apps/daemon/src/v1/agents/services/local-image.service.ts`, which refuses
+ * any other extension before opening the file.
+ */
+export const PICTURE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+
+/** Whether a local path names a file the daemon's image route would serve. */
+export function namesPicture(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && PICTURE_EXTENSIONS.includes(name.slice(dot).toLowerCase());
+}
+
 /** Fenced blocks and inline code spans — ONE capturing group, see above. */
 const CODE = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/;
 

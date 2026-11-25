@@ -195,6 +195,15 @@ export function pluginFileText(
   return new Document(ordered).toString();
 }
 
+/** The top-level keys a plugin file's text holds as written, or {} when it is no YAML map. */
+export function pluginFileFields(text: string): Record<string, unknown> {
+  const doc = parseDocument(text);
+  const value: unknown = doc.errors.length === 0 ? doc.toJS() : null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 /** `text` with only `enabled` and `folders` changed, comments kept. */
 export function withPluginSettings(
   text: string,

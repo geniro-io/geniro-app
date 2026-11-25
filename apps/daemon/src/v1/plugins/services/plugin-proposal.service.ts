@@ -79,23 +79,27 @@ export class PluginProposalService {
         error: `/sample: at most ${PLUGIN_SAMPLE_MAX_CHARS / 1024} KB; trim it to a few rows`,
       };
     }
+    const kept = existing === null ? {} : pluginFileFields(existing.text);
+    const refresh = input.refresh_minutes ?? kept.refresh_minutes;
+    const timeout = input.timeout_seconds ?? kept.timeout_seconds;
+    const buttons = input.buttons ?? kept.buttons;
     const file: PluginFileInput = {
       name: input.name,
       ...(existing?.plugin && !existing.plugin.enabled
         ? { enabled: false }
         : {}),
       folders,
-      ...(input.refresh_minutes === undefined
+      ...(refresh === undefined
         ? {}
-        : { refresh_minutes: input.refresh_minutes }),
-      ...(input.timeout_seconds === undefined
+        : { refresh_minutes: refresh as number }),
+      ...(timeout === undefined
         ? {}
-        : { timeout_seconds: input.timeout_seconds }),
+        : { timeout_seconds: timeout as number }),
       command: input.command,
       view: input.view,
-      ...(input.buttons === undefined || input.buttons.length === 0
+      ...(!Array.isArray(buttons) || buttons.length === 0
         ? {}
-        : { buttons: input.buttons }),
+        : { buttons: buttons as NonNullable<SavePluginInput['buttons']> }),
     };
     const text = pluginFileText(file, existing?.text ?? null);
     const read = readPluginText(text);

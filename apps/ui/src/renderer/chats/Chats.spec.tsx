@@ -485,6 +485,7 @@ function makeClient(): {
         reconnectListeners.delete(l);
       };
     },
+    onPluginsChanged: () => () => undefined,
     onDisconnect: (l: () => void) => {
       disconnectListeners.add(l);
       return () => {

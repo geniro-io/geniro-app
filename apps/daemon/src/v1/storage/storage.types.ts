@@ -8,6 +8,7 @@ export const STORAGE_GROUP_IDS = [
   'taskFiles',
   'teams',
   'teamBackups',
+  'plugins',
   'logs',
   'caches',
   'appState',

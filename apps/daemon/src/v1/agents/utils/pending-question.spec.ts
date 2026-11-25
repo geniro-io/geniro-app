@@ -19,6 +19,21 @@ describe('pending question snapshots', () => {
     ],
   };
 
+  const PLUGIN_PROPOSAL = {
+    slug: 'prod-deploys',
+    name: 'Prod deploys',
+    text: 'name: Prod deploys\ncommand: echo 2\n',
+    previousText: null,
+    baseHash: null,
+    command: 'echo 2',
+    folders: ['/srv/deploys'],
+    refreshMinutes: 5,
+    timeoutSeconds: 30,
+    buttons: [],
+    view: [{ id: 'root', component: 'Column', children: [] }],
+    sample: null,
+  };
+
   it('round-trips what re-tracking a standing card needs', () => {
     expect(readPendingQuestion(serializePendingQuestion(SNAPSHOT))).toEqual(
       SNAPSHOT,
@@ -106,6 +121,25 @@ describe('pending question snapshots', () => {
     ).toBeNull();
   });
 
+  it('round-trips a plugin card, and drops one whose proposal does not read', () => {
+    const plugin = {
+      kind: 'plugin' as const,
+      requestId: 'req-plugin',
+      proposal: PLUGIN_PROPOSAL,
+    };
+    expect(readPendingQuestion(serializePendingQuestion(plugin))).toEqual(
+      plugin,
+    );
+    expect(
+      readPendingQuestion(
+        JSON.stringify({
+          ...plugin,
+          proposal: { ...PLUGIN_PROPOSAL, refreshMinutes: 0 },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('writes a question with its kind, so every row names what it is', () => {
     expect(JSON.parse(serializePendingQuestion(SNAPSHOT))).toMatchObject({
       kind: 'question',
@@ -142,6 +176,14 @@ describe('pending question snapshots', () => {
     [
       'a plan with no readable step',
       '{"kind":"plan","requestId":"req-1","title":"T","steps":[]}',
+    ],
+    [
+      'a plugin card whose proposal does not read',
+      JSON.stringify({
+        kind: 'plugin',
+        requestId: 'req-1',
+        proposal: { ...PLUGIN_PROPOSAL, buttons: [{ id: 'x', command: 'y' }] },
+      }),
     ],
     [
       'a patch card stored by a build that still raised one',

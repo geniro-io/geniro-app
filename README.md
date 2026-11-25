@@ -343,6 +343,16 @@ Agents can also search your past chats and read the conversation around any hit.
 </tr>
 </table>
 
+## 🔌 Plugins
+
+Ask an agent for a block that shows something from your Mac, such as "last prod deploys". The agent proposes a plugin: a shell command and how its result is laid out. Its card shows the exact command, and nothing is saved until you press Approve. After that the block sits under the agent cards in the right panel of every chat in the folders you gave it.
+
+- **Only what you approved runs.** The command runs as the exact text you approved. If the plugin's text changes, its block stops running until you review and approve the new version.
+- **Fresh when you look.** The block refreshes when you open it, when you press ↻, and on its own timer (every 5 minutes by default) while it is on screen. Its last result is kept only until Geniro restarts.
+- **Ask puts its data in the message box.** Ask adds the block's data to what you are typing, so the agent can act on it.
+- **Buttons run commands.** A block can carry buttons, such as one that re-runs a check. A button marked to ask first opens a confirmation with its command line; the others run at once.
+- **Settings → Plugins** switches a plugin off, runs it now in a folder you pick (its result shows there and in that folder's chats), changes the folders it shows in or deletes it.
+
 ## 🎯 Goals and outcomes
 
 Every chat and team run can say what it set out to do and whether it did it.

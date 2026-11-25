@@ -41,6 +41,7 @@ export type GeniroCardKind =
   | 'screenshot'
   | 'artifact'
   | 'patch'
+  | 'plugin'
   | 'plan'
   | 'team'
   | 'thread-start';
@@ -84,6 +85,9 @@ export const MESSAGE_THREAD = 'message_thread';
  * daemon's `chat.types.ts`.
  */
 export const SAVE_PROJECT_INSTRUCTIONS = 'save_project_instructions';
+
+/** TWIN: the daemon's `HOST_PLUGIN_TOOL` in `chat.types.ts`. */
+export const SAVE_PLUGIN = 'save_plugin';
 
 /**
  * `browser_screenshot` — the one browser tool that draws a card, built from its
@@ -133,6 +137,7 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   [START_THREAD]: 'thread-start',
   show_artifact: 'artifact',
   [SAVE_PROJECT_INSTRUCTIONS]: 'patch',
+  [SAVE_PLUGIN]: 'plugin',
   propose_plan: 'plan',
   // The action card is drawn from the `action` / `action_outcome` rows the
   // daemon writes, so these calls need no loader of their own.

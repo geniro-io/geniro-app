@@ -133,6 +133,16 @@ describe('AgentActivityService', () => {
     expect(service.working).toBe(true);
   });
 
+  it("counts a plugin button's command as work, never a plugin's data run", () => {
+    const { service, processes } = setup();
+
+    processes.tryClaim('plugin:deploys:abc');
+    expect(service.working).toBe(false);
+
+    processes.tryClaim('plugin-button:deploys:redeploy:abc');
+    expect(service.working).toBe(true);
+  });
+
   it('counts work between turns, asking for detached commands within the hour', () => {
     const { service, betweenTurns } = setup();
 

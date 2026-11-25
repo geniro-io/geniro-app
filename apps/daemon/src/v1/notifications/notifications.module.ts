@@ -9,6 +9,7 @@ import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { LessonsModule } from '../lessons/lessons.module';
 import { MemoryModule } from '../memory/memory.module';
+import { PluginsModule } from '../plugins/plugins.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SharesModule } from '../shares/shares.module';
 import { StatsModule } from '../stats/stats.module';
@@ -45,6 +46,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     SharesModule,
     MemoryModule,
     KnowledgeModule,
+    PluginsModule,
     EmbeddingsModule,
     ProjectsModule,
     BrowserModule,

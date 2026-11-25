@@ -70,6 +70,10 @@ paths:
   - The banner names codepoints and never prints the character.
   - Join scanned parts with spaces, never newlines. Ordinary emoji are exempt.
 
+A `save_plugin` card (kind `plugin`, `SAVE_PLUGIN` in `geniro-tool.ts`) draws `PluginProposalCard` (`chats/plugin-proposal-card.tsx`): what it runs, where it shows, each button's asks-first, a preview from the sample, the change for an update. `pluginCardOf` is the twin of the daemon's `pluginCardInput`.
+
+`VerdictFooter` (`chats/verdict-footer.tsx`) is the one Approve/Deny footer of the approval card and the plugin card: the hazard gate and the verdict line live there.
+
 **Artifacts** (`published-artifact.ts`, `artifact-frame.tsx`):
 
 - The frame's sandbox is the root `AGENTS.md`'s (_Constraints_, the artifact page's outbound call). The page is served by the daemon, never put in `srcdoc`, and loaded with `referrerPolicy="no-referrer"`.

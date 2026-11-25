@@ -21,6 +21,7 @@ import {
   MIGRATION_ERROR_FILE,
 } from '../../migrations/migrations.types';
 import { LEGACY_LIBRARY_DIR } from '../../migrations/utils/m0003-team-library-files';
+import { PLUGINS_DIR_NAME } from '../../plugins/plugins.types';
 import { SYSTEM_ANALYSIS_DIR_NAME } from '../../system-analysis/utils/system-analysis-folder';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
 import { AVATARS_DIR_NAME } from '../../teams/services/avatar-store.service';
@@ -66,6 +67,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [TASK_ATTACHMENTS_DIR_NAME]: 'taskFiles',
   [TEAMS_DIR_NAME]: 'teams',
   [AVATARS_DIR_NAME]: 'teams',
+  [PLUGINS_DIR_NAME]: 'plugins',
   [DEBUG_LOG_DIR_NAME]: 'logs',
   [FOLDERLESS_DIR_NAME]: 'caches',
   [SKILL_HARVEST_FILE_NAME]: 'caches',

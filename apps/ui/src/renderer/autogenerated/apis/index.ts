@@ -14,6 +14,7 @@ export * from './KnowledgeApi';
 export * from './LabelInstructionsApi';
 export * from './LessonsApi';
 export * from './MemoriesApi';
+export * from './PluginsApi';
 export * from './ProjectsApi';
 export * from './SharesApi';
 export * from './StatsApi';

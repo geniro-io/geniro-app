@@ -1,9 +1,11 @@
 import type {
   HostPlanStep,
+  HostPluginProposal,
   HostProjectInstructions,
   HostQuestion,
 } from '../chat.types';
 import { readHostPlan } from './host-plan';
+import { readHostPluginProposal } from './host-plugin';
 import { readHostProjectInstructions } from './host-project-instructions';
 import { readHostQuestions } from './host-question';
 
@@ -17,7 +19,7 @@ import { readHostQuestions } from './host-question';
  * registry entry itself carries, since `PendingApproval.input` is what the
  * verdict path and the badge read.
  *
- * One column, three cards, each naming its `kind`.
+ * One column, four cards, each naming its `kind`.
  */
 export interface PendingQuestionSnapshot {
   kind: 'question';
@@ -44,15 +46,23 @@ export interface PendingProjectInstructionsSnapshot {
   change: HostProjectInstructions;
 }
 
+/** A deferred `save_plugin` card; Approve writes `proposal`. */
+export interface PendingPluginSnapshot {
+  kind: 'plugin';
+  requestId: string;
+  proposal: HostPluginProposal;
+}
+
 export type PendingCardSnapshot =
   | PendingQuestionSnapshot
   | PendingPlanSnapshot
-  | PendingProjectInstructionsSnapshot;
+  | PendingProjectInstructionsSnapshot
+  | PendingPluginSnapshot;
 
 /**
  * What an agent is told when it raises a DIFFERENT card while one is already
  * standing — or is still being put up. One per run: a chat's durable half is a
- * single column, shared by a question, a plan and a project card.
+ * single column, shared by a question, a plan, a project card and a plugin card.
  */
 export const QUESTION_ALREADY_STANDING =
   'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
@@ -81,6 +91,12 @@ export function serializePendingQuestion(
         kind: 'project',
         requestId: snapshot.requestId,
         change: snapshot.change,
+      });
+    case 'plugin':
+      return JSON.stringify({
+        kind: 'plugin',
+        requestId: snapshot.requestId,
+        proposal: snapshot.proposal,
       });
   }
 }
@@ -139,6 +155,7 @@ export function readPendingQuestion(
     questions?: unknown;
     steps?: unknown;
     change?: unknown;
+    proposal?: unknown;
   };
   if (typeof record.requestId !== 'string' || record.requestId.length === 0) {
     return null;
@@ -160,6 +177,12 @@ export function readPendingQuestion(
     return change === null
       ? null
       : { kind: 'project', requestId: record.requestId, change };
+  }
+  if (record.kind === 'plugin') {
+    const proposal = readHostPluginProposal(record.proposal);
+    return proposal === null
+      ? null
+      : { kind: 'plugin', requestId: record.requestId, proposal };
   }
   if (record.kind !== 'question') {
     return null;

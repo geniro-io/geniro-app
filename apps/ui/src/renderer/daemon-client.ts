@@ -1197,6 +1197,25 @@ export function parseKnowledgeChanged(
   return { documentId, change, place };
 }
 
+/** A plugin file geniro wrote; `slug` is null for several at once. */
+export interface PluginsChangedEvent {
+  slug: string | null;
+}
+
+/**
+ * Read a `plugins_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `PluginsChangedEvent`
+ * (`apps/daemon/src/v1/plugins/plugins.types.ts`). Change one and change the other.
+ */
+export function parsePluginsChanged(data: unknown): PluginsChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { slug } = data as Record<string, unknown>;
+  return slug === null || typeof slug === 'string' ? { slug } : null;
+}
+
 /**
  * A change to the search index that may have moved its status. Carries no
  * figures: a reader asks `GET /v1/embeddings/status` for those.
@@ -1572,6 +1591,9 @@ export class DaemonClient {
   private readonly embeddingsChangedListeners = new Set<
     (event: EmbeddingsChangedEvent) => void
   >();
+  private readonly pluginsChangedListeners = new Set<
+    (event: PluginsChangedEvent) => void
+  >();
   private readonly threadMessagesChangedListeners = new Set<
     (event: ThreadMessagesChangedEvent) => void
   >();
@@ -1793,6 +1815,14 @@ export class DaemonClient {
         if (embeddings) {
           for (const listener of this.embeddingsChangedListeners) {
             listener(embeddings);
+          }
+        }
+      }
+      if (event === 'plugins_changed') {
+        const plugins = parsePluginsChanged(data);
+        if (plugins) {
+          for (const listener of this.pluginsChangedListeners) {
+            listener(plugins);
           }
         }
       }
@@ -2061,6 +2091,14 @@ export class DaemonClient {
     this.embeddingsChangedListeners.add(listener);
     return () => {
       this.embeddingsChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every plugin file geniro writes, client-wide. */
+  onPluginsChanged(listener: (event: PluginsChangedEvent) => void): () => void {
+    this.pluginsChangedListeners.add(listener);
+    return () => {
+      this.pluginsChangedListeners.delete(listener);
     };
   }
 

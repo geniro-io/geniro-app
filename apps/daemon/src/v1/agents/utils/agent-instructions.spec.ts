@@ -36,6 +36,7 @@ import {
   HOST_MONITOR_TOOL,
   HOST_NOTIFY_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
@@ -231,6 +232,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       HOST_READ_TEAMS_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
       HOST_PROJECT_INSTRUCTIONS_TOOL,
+      HOST_PLUGIN_TOOL,
     ]) {
       expect(section).toContain(`\`${name}\``);
     }

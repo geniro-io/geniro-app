@@ -214,7 +214,7 @@ pnpm commit             # conventional commit via commitizen
 
 ## Constraints (local-first & security)
 
-**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly eight kinds of outbound call are allowed:
+**No cloud service of geniro's own and no remote code paths.** No geniro backend, telemetry, account or sync. geniro never holds a credential of its own, syncs user data anywhere, or talks to a machine on someone else's say-so. Exactly nine kinds of outbound call are allowed:
 
 1. **The user's own login, the user's own data.**
    - `main/github-prs.ts` runs the user's `gh` CLI; geniro holds no token and degrades to silence without login or network.
@@ -256,6 +256,12 @@ pnpm commit             # conventional commit via commitizen
    - Agents drive tabs only through `webContents.debugger` inside main; no remote-debugging port, no second Chromium. The daemon reaches the desktop window through one registered socket (`browser_request` / `browser_reply`), never a room, and a paired device can neither open nor drive the browser (every browser IPC channel is `denyRemotely`).
    - Page permissions are denied; downloads go to `~/Downloads`; a certificate error is passed only by the user's "Continue anyway", never by an agent.
 
+9. **A plugin command the user approved** (`apps/daemon/src/v1/plugins/`; user decisions): the command line of a Geniro Plugin, run on this Mac through `/bin/sh -c` in the open thread's folder, by the user's own CLIs under the user's own login, only while its block is shown (on open, on ↻, on its timer while visible), on a button press, or on Settings → Plugins' Run now in a folder the user picks there. geniro holds no credential for it and stores no output: the last result lives in memory per (plugin, folder) and is lost on restart.
+   - The exact text is approved (`<userData>/plugins/.approved/<slug>.plugin.yaml`). A file whose text differs from that copy runs nothing, and so does a plugin never approved.
+   - Commands and buttons come only from the approved file, never from command output. Data reaches a button command only as `PLUGIN_*` environment variables, read from the daemon's own cached result at the press.
+   - A run has a 30 s default timeout (120 s at most) and 1 MB of output, and at most one runs per plugin and folder at a time. The timer refreshes at most once a minute; the user's own ↻ or Run now always runs, and so does the refresh right after a button press.
+   - A secret a command prints is masked only if it is registered (`redactSecrets`), so an unregistered one can show in the block.
+
 **LAN gateway** (`apps/ui/src/main/remote/`, `Settings.remoteAccessEnabled`) is the one inbound exception: the Mac serves the app to the user's own devices on the same network. Mechanics: `apps/ui/src/main/AGENTS.md` → **LAN gateway**.
 
 - The daemon still binds `127.0.0.1` only; every LAN-facing byte goes through that directory, which reverse-proxies to loopback (the listener binds IPv4 only).
@@ -263,6 +269,7 @@ pnpm commit             # conventional commit via commitizen
 - The daemon token never leaves the machine: the gateway injects `Authorization`, strips whatever the browser sent and rewrites the token in a `/ws` upgrade URL. Reading the daemon handle is `denyRemotely`; the status read has the token blanked.
 - Pairing is a 6-digit code shown on the Mac, rate-limited per address and globally; the global limit rotates the code.
 - A `Host` geniro would not hand out is refused (only loopback, private IPv4, link-local/unique-local IPv6, `*.local`).
+- User decisions: a paired device may refresh plugins, press their buttons, approve a plugin (its card or Review), change its folders and delete it — so whoever holds a paired device can make an approved command run on the Mac; only Show file in Finder stays on the Mac.
 
 **Public tunnel** (`apps/ui/src/main/remote/tunnel.ts`): a third-party client the user already has (`cloudflared`, else `ngrok`) pointed at the gateway's loopback side.
 
@@ -300,6 +307,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`mcp-tools.md`](.claude/rules/mcp-tools.md) | `apps/daemon/src/v1/mcp/**`, `apps/daemon/src/v1/agents/utils/host-*.ts` | geniro's own MCP tools: one directory per tool, shared base class and interface |
 | [`changelog.md`](.claude/rules/changelog.md) | `CHANGELOG.md`, `changelog/**`, `apps/ui/scripts/changelog*`, `apps/ui/src/shared/changelog*`, `apps/ui/src/renderer/changelog/**`, `apps/ui/src/renderer/settings/changelog*`, `apps/ui/src/renderer/components/changelog-*` | The changelog: one fragment per PR, the strict format, versions resolved from git tags, folding, the What's new dialog and Settings page |
 | [`shares.md`](.claude/rules/shares.md) | `apps/daemon/src/v1/shares/**` | Encrypted share links: destinations, sign-in waits, revoke and auto-revoke |
+| [`plugins.md`](.claude/rules/plugins.md) | `apps/daemon/src/v1/plugins/**`, `apps/daemon/src/v1/mcp/tools/save-plugin/**`, `apps/daemon/src/v1/agents/**/{plugin-proposal*,host-plugin*}`, `apps/ui/src/renderer/chats/plugin-*`, `apps/ui/src/renderer/settings/plugins-*` | Custom plugins: the plugin file, approval by exact copy, the command runner, buttons, `save_plugin` and the chat block |
 | [`renderer-components.md`](.claude/rules/renderer-components.md) | `apps/ui/src/renderer/**` | Reuse layers (token → primitive → shared component), no duplicates, the component catalog |
 | [`renderer-design-system.md`](.claude/rules/renderer-design-system.md) | `apps/ui/src/renderer/**`, `apps/ui/.storybook/**` | Styling from design tokens only, never a hardcoded colour; one file per theme |
 | [`renderer-overlay-primitives.md`](.claude/rules/renderer-overlay-primitives.md) | `apps/ui/src/renderer/components/ui/{menu,popover,dialog,context-menu}.tsx` | Placement internals of the menu/popover/dialog primitives |
@@ -388,6 +396,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
   - Team backups → `<userData>/teams/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies (`TeamChangeService`) and before an approved `propose_team` replaces a file (`TeamProposalService`), and before a version restore (`TeamVersionsService.restore`). Never named `*.team.yaml`, so the library never lists them; restore by copying one over `<slug>.team.yaml`.
   - Project overlays of a team → `<userData>/teams/overlays/<slug>/<projectId>.overlay.yaml` (`TeamOverlayStoreService`, schema `TeamOverlaySchema`), hash-guarded (`TEAM_OVERLAY_CHANGED`), each replace and delete backed up to `overlays/.backups/<slug>/<projectId>.<ts>.yaml`; removed (after a backup) with their team or project. Applied only to a run of the project's DEFAULT team (`Project.teamSlug`); never in SQLite and never in a team export.
   - The library lived in `<userData>/workflows/` as `*.geniro.yaml` before the rename; migration `0003-team-library-files` moved it and keeps the originals in `<userData>/workflows/.migrated/`.
+- **Plugins → `<userData>/plugins/<slug>.plugin.yaml`**, the approved copy in `.approved/`, backups in `.backups/` (newest 20 per plugin); YAML files, never SQLite or settings.json (`.claude/rules/plugins.md`).
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
   - Removing or renaming a schema key destroys what it held (`readSettings` keeps only known keys; `writeSettings` rewrites the file). Migrate or export the data first.
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.

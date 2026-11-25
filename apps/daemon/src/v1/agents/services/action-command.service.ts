@@ -4,7 +4,6 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import { redactSecrets } from '../../diagnostics/utils/redact';
 import {
   ACTION_OUTPUT_TAIL_MAX,
   type ActionCommandSpec,
@@ -12,6 +11,7 @@ import {
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
 import { runManagedCommand } from '../utils/managed-command';
+import { maskedTail, SECRET_MARGIN } from '../utils/masked-tail';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { runTagEnv } from '../utils/run-process-scan';
 import type { ActionCommandAbortReason } from './action-command.registry';
@@ -108,7 +108,7 @@ export class ActionCommandService {
       endGroupOnExit: true,
       signal,
     });
-    const outputTail = tailOf(result.output ?? '');
+    const outputTail = maskedTail(result.output ?? '', ACTION_OUTPUT_TAIL_MAX);
     const output = outputTail === '' ? {} : { outputTail };
     if (signal.aborted) {
       return {
@@ -161,25 +161,4 @@ export class ActionCommandService {
       aborted: false,
     };
   }
-}
-
-/**
- * Output read past the tail that is kept, so a registered secret the cut
- * would split is still whole when it is masked.
- */
-const SECRET_MARGIN = 4096;
-
-/**
- * The end of what the command printed, masked before it is cut — it is
- * written to the transcript and may be handed to the agent's model.
- */
-function tailOf(output: string): string {
-  const masked = redactSecrets(output);
-  // Masks are shorter than what they hide: past the cap, the margin's start
-  // (possibly a secret the window cut through) must never move into the tail.
-  return (
-    output.length >= ACTION_OUTPUT_TAIL_MAX + SECRET_MARGIN
-      ? masked.slice(SECRET_MARGIN)
-      : masked
-  ).slice(-ACTION_OUTPUT_TAIL_MAX);
 }

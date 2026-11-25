@@ -20,6 +20,7 @@ import type { MilestoneBroker } from '../../agents/services/milestone.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
@@ -35,6 +36,7 @@ import type { KnowledgeService } from '../../knowledge/services/knowledge.servic
 import type { LessonCheckService } from '../../lessons/services/lesson-check.service';
 import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { PluginProposalService } from '../../plugins/services/plugin-proposal.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
 import type { SystemAnalysisHistoryService } from '../../system-analysis/services/system-analysis-history.service';
@@ -91,6 +93,7 @@ import { ReadTeamsTool } from './read-teams/read-teams.tool';
 import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
+import { SavePluginTool } from './save-plugin/save-plugin.tool';
 import { SaveProjectInstructionsTool } from './save-project-instructions/save-project-instructions.tool';
 import { SaveTeamChangeTool } from './save-team-change/save-team-change.tool';
 import { SearchChatsTool } from './search-chats/search-chats.tool';
@@ -147,6 +150,8 @@ export interface McpToolDeps {
   teamChanges: TeamChangeService;
   projectInstructions: ProjectInstructionsChangeService;
   projectInstructionCards: ProjectInstructionsBroker;
+  pluginCards: PluginProposalBroker;
+  pluginProposals: PluginProposalService;
   teamHistory: TeamHistoryService;
   systemHistory: SystemAnalysisHistoryService;
   teamGate: TeamProposalBroker;
@@ -267,6 +272,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
       deps.projectInstructions,
       deps.projectInstructionCards,
     ),
+    new SavePluginTool(deps.pluginCards, deps.pluginProposals),
     new NotifyUserTool(deps.notices),
   ];
 }

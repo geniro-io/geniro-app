@@ -328,6 +328,9 @@ export const HOST_TEAM_CHANGE_TOOL = 'save_team_change';
 /** An analysis's write of applied project-instructions (`P-`) items. */
 export const HOST_PROJECT_INSTRUCTIONS_TOOL = 'save_project_instructions';
 
+/** geniro's own tool that creates or updates a Geniro Plugin through an approval card. */
+export const HOST_PLUGIN_TOOL = 'save_plugin';
+
 /**
  * The team tools of every chat: read the library, and propose a team or a
  * change to one on a card the user approves. The daemon writes the file, never
@@ -2588,6 +2591,42 @@ export type HostProjectInstructionsOutcome =
       /** The card's two buttons as its host draws them; absent is a chat's Apply or Reject. */
       buttons?: string;
     }
+  | { status: 'unavailable'; reason: string };
+
+/** One button of a proposed plugin, as its card lists it. */
+export interface HostPluginButton {
+  id: string;
+  command: string;
+  confirm: boolean;
+}
+
+/**
+ * A plugin `save_plugin` puts on a card. `text` is the file Approve writes,
+ * the rest is what the card shows of it; `baseHash` is the version an update
+ * was read at (null for a new plugin), so an Approve over a file edited since
+ * is refused rather than overwriting it.
+ */
+export interface HostPluginProposal {
+  slug: string;
+  name: string;
+  text: string;
+  previousText: string | null;
+  baseHash: string | null;
+  command: string;
+  folders: string[];
+  refreshMinutes: number;
+  timeoutSeconds: number;
+  buttons: HostPluginButton[];
+  view: Record<string, unknown>[];
+  /** JSON the agent got by running the command itself; the card's preview. */
+  sample: unknown;
+}
+
+export type HostPluginOutcome =
+  | { status: 'saved'; slug: string; path: string }
+  | { status: 'declined' }
+  | { status: 'stale'; reason: string }
+  | { status: 'posted'; buttons?: string }
   | { status: 'unavailable'; reason: string };
 
 /**

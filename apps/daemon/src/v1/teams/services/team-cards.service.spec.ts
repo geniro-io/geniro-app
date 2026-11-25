@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { fakeEntityManager } from '../../agents/__tests__/fake-entity-manager';
 import {
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_QUESTION_TOOL,
+  type HostPluginProposal,
   type HostProjectInstructions,
   type HostProjectInstructionsOutcome,
 } from '../../agents/chat.types';
@@ -15,6 +17,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
+import type { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import { QUESTION_ALREADY_STANDING } from '../../agents/utils/pending-question';
 import { serializeTeamProjectCard } from '../../agents/utils/team-project-card';
@@ -85,6 +88,13 @@ function harness(
   const writeChange = vi.fn(write);
   const announceAwaiting = vi.fn();
   const useLeadProjectCards = vi.fn();
+  const writePlugin = vi.fn(() =>
+    Promise.resolve({
+      status: 'saved' as const,
+      slug: 'deploys',
+      path: '/data/plugins/deploys.plugin.yaml',
+    }),
+  );
   const runDao = {
     getById: (id: string) => Promise.resolve(runs.get(id) ?? null),
     setPendingTeamProjectCard: (id: string, value: string | null) => {
@@ -153,10 +163,12 @@ function harness(
       currentLead: () => Promise.resolve('lead'),
       announceAwaiting,
       useLeadProjectCards,
+      useLeadPluginCards: vi.fn(),
       useMemberQuestionCards: vi.fn(),
     } as unknown as TeamExecutorService,
     { wakeLead } as unknown as StageWakeService,
     { write: writeChange } as unknown as ProjectInstructionsChangeService,
+    { write: writePlugin } as unknown as PluginProposalBroker,
   );
   const rowsOf = (kind: string) => rows.filter((row) => row.kind === kind);
   return {
@@ -167,6 +179,7 @@ function harness(
     approvals,
     wakeLead,
     writeChange,
+    writePlugin,
     announceAwaiting,
     useLeadProjectCards,
     knobs,
@@ -292,6 +305,7 @@ describe('TeamCardsService', () => {
   it('tracks a standing card again at boot, so a press after a restart still writes', async () => {
     const { service, runs, approvals, writeChange, wakeLead } = harness();
     runs.get(RUN)!.pendingTeamProjectCard = serializeTeamProjectCard({
+      kind: 'project',
       requestId: 'card-1',
       change: CHANGE,
     });
@@ -306,6 +320,7 @@ describe('TeamCardsService', () => {
   it('forgets at boot a card the transcript already closed, and closes one whose change no longer reads', async () => {
     const closedRun = harness();
     closedRun.runs.get(RUN)!.pendingTeamProjectCard = serializeTeamProjectCard({
+      kind: 'project',
       requestId: 'card-1',
       change: CHANGE,
     });
@@ -414,6 +429,50 @@ describe('TeamCardsService', () => {
       outcome: 'not-saved',
       answer: 'the card could not be closed, so nothing was written',
     });
+  });
+
+  it("puts the lead's plugin card up, and its Approve writes the plugin and wakes the lead", async () => {
+    const { service, runs, rowsOf, approvals, writePlugin, wakeLead } =
+      harness();
+    const proposal: HostPluginProposal = {
+      slug: 'deploys',
+      name: 'Deploys',
+      text: 'name: Deploys\n',
+      previousText: null,
+      baseHash: null,
+      command: 'gh run list --json name',
+      folders: ['/repo'],
+      refreshMinutes: 5,
+      timeoutSeconds: 30,
+      buttons: [],
+      view: [{ id: 'root', component: 'Text', text: 'hi' }],
+      sample: null,
+    };
+
+    expect(await service.proposePlugin(RUN, proposal)).toEqual(POSTED);
+    const [request] = rowsOf('approval_request');
+    expect(request!.payload).toMatchObject({ toolName: HOST_PLUGIN_TOOL });
+    expect(runs.get(RUN)!.pendingTeamProjectCard).toContain('"kind":"plugin"');
+    expect(await service.proposeProjectInstructions(RUN, CHANGE)).toMatchObject(
+      { status: 'unavailable' },
+    );
+
+    approvals.resolve(RUN, request!.payload.id as string, true);
+    await settle(wakeLead);
+
+    expect(writePlugin).toHaveBeenCalledWith(proposal);
+    expect(runs.get(RUN)!.pendingTeamProjectCard).toBeNull();
+    expect(rowsOf('approval_verdict')[0]!.payload).toMatchObject({
+      outcome: 'saved',
+      answer: 'saved as deploys',
+    });
+    expect(wakeLead).toHaveBeenCalledWith(
+      RUN,
+      'lead',
+      expect.any(String),
+      expect.stringContaining('/data/plugins/deploys.plugin.yaml'),
+      expect.any(String),
+    );
   });
 
   it('answers stale when the write itself fails', async () => {

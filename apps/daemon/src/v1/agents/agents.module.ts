@@ -135,6 +135,7 @@ import { OneShotAskService } from './services/one-shot-ask.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
 import { PlanBroker } from './services/plan.broker';
+import { PluginProposalBroker } from './services/plugin-proposal.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
 import { ProjectChatBroker } from './services/project-chat.broker';
@@ -301,6 +302,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ProjectInstructionsChangeService,
     KnowledgeItemsService,
     ProjectInstructionsBroker,
+    PluginProposalBroker,
     ProjectChatBroker,
     CommandCenterBroker,
     CommandCenterOpsBroker,
@@ -734,6 +736,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // that can actually persist the row registers here.
     ChartBroker,
     ProjectInstructionsBroker,
+    // For `v1/plugins`, which writes an approved plugin through it, and the
+    // MCP host's `save_plugin`.
+    PluginProposalBroker,
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,

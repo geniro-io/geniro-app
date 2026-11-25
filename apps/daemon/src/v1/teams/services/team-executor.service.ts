@@ -50,6 +50,8 @@ import {
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
+  type HostPluginOutcome,
+  type HostPluginProposal,
   type HostProjectInstructions,
   type HostProjectInstructionsOutcome,
   type HostQuestion,
@@ -111,6 +113,7 @@ import {
   partialOwnerKey,
   PartialStreamService,
 } from '../../agents/services/partial-stream.service';
+import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
@@ -1061,6 +1064,8 @@ export class TeamExecutorService
     /** `show_ui`, optional on `artifacts`' terms. */
     @Optional() private readonly surfaceSinks?: SurfaceBroker,
     @Optional() private readonly surfaces?: SurfaceService,
+    /** The lead's `save_plugin`, optional on `artifacts`' terms. */
+    @Optional() private readonly pluginCards?: PluginProposalBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1144,6 +1149,14 @@ export class TeamExecutorService
         runId: string,
         change: HostProjectInstructions,
       ) => Promise<HostProjectInstructionsOutcome>)
+    | null = null;
+
+  /** How the lead's `save_plugin` card is raised — set by `TeamCardsService`. */
+  private leadPluginCards:
+    | ((
+        runId: string,
+        proposal: HostPluginProposal,
+      ) => Promise<HostPluginOutcome>)
     | null = null;
 
   /** How a member's deferred question card is raised and retired — set by `TeamCardsService`. */
@@ -3302,14 +3315,14 @@ export class TeamExecutorService
   }
 
   /**
-   * Give each member that can lead this run `read_teams`, `propose_team` and
-   * `save_project_instructions` (user decision: only the lead), offered while
+   * Give each member that can lead this run `read_teams`, `propose_team`,
+   * `save_project_instructions` and `save_plugin` (user decision: only the lead), offered while
    * it leads and only inside a turn of its own conversation — the one the
    * user talks to; between turns it is refused as an idle chat's is. Every
    * member gets a goal writer's sink on the same terms, so only the lead
    * writes the run's goals and the rest are known as the team's.
-   * The project tool also needs every pool member on a CLI that holds a call
-   * open; a cursor lead is not offered it yet.
+   * The project and plugin tools also need every pool member on a CLI that
+   * holds a call open; a cursor lead is not offered them yet.
    */
   private registerLeadCardSinks(
     runId: string,
@@ -3365,6 +3378,21 @@ export class TeamExecutorService
           ),
         );
       }
+      const proposePlugin = this.leadPluginCards;
+      if (
+        this.pluginCards !== undefined &&
+        proposePlugin !== null &&
+        holdsCallsOpen
+      ) {
+        disposers.push(
+          this.pluginCards.register(
+            runId,
+            node.id,
+            (proposal) => proposePlugin(runId, proposal),
+            { offeredTo, answersAtOnce: true },
+          ),
+        );
+      }
     }
     this.leadCardDisposers.set(runId, disposers);
   }
@@ -3390,6 +3418,16 @@ export class TeamExecutorService
     ) => Promise<HostProjectInstructionsOutcome>,
   ): void {
     this.leadProjectCards = propose;
+  }
+
+  /** Install how the lead's plugin card is raised (`TeamCardsService`). */
+  useLeadPluginCards(
+    propose: (
+      runId: string,
+      proposal: HostPluginProposal,
+    ) => Promise<HostPluginOutcome>,
+  ): void {
+    this.leadPluginCards = propose;
   }
 
   useMemberQuestionCards(cards: MemberQuestionCards): void {

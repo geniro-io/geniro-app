@@ -62,6 +62,7 @@ import type {
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
+  HostPluginProposal,
   HostRowWire,
   HostWake,
   PromptCacheTtlReason,
@@ -84,6 +85,7 @@ import {
   HOST_METRICS_TOOL,
   HOST_MILESTONE_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PLUGIN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
@@ -102,8 +104,12 @@ import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { WallTurnDao } from '../dao/wall-turn.dao';
+import { hostPluginResultText } from '../utils/host-plugin';
 import { hostCardQuestions, hostMcpServerName } from '../utils/host-question';
-import { serializePendingQuestion } from '../utils/pending-question';
+import {
+  readPendingQuestion,
+  serializePendingQuestion,
+} from '../utils/pending-question';
 import { NO_ATTENTION_MEMORY, readAttention } from '../utils/run-attention';
 import { readRestartContinuation } from '../utils/run-restart-continuation';
 import {
@@ -156,6 +162,7 @@ import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PlanBroker } from './plan.broker';
+import { PluginProposalBroker } from './plugin-proposal.broker';
 import { ProcessRegistry } from './process-registry';
 import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
@@ -1259,6 +1266,8 @@ function setup(
     analysisSink?: AnalysisReportsService['sinkFor'];
     /** What a project-instructions card's Apply writes. */
     projectWrites?: Pick<ProjectInstructionsChangeService, 'write'>;
+    /** The save_plugin card broker, for a case that raises one. */
+    pluginCards?: PluginProposalBroker;
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -1554,6 +1563,9 @@ function setup(
     undefined,
     milestones,
     opts.modelParameterListings as ModelParametersService | undefined,
+    undefined,
+    undefined,
+    opts.pluginCards,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -1617,6 +1629,21 @@ afterAll(() => {
 });
 
 describe('ChatService', () => {
+  const PLUGIN_PATH = '/plugins/prod-deploys.plugin.yaml';
+  const PLUGIN_PROPOSAL: HostPluginProposal = {
+    slug: 'prod-deploys',
+    name: 'Prod deploys',
+    text: 'name: Prod deploys\ncommand: echo 2\n',
+    previousText: null,
+    baseHash: null,
+    command: 'echo 2',
+    folders: ['/srv/deploys'],
+    refreshMinutes: 5,
+    timeoutSeconds: 30,
+    buttons: [],
+    view: [{ id: 'root', component: 'Column', children: [] }],
+    sample: null,
+  };
   let dir: string;
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'geniro-chat-'));
@@ -4324,6 +4351,58 @@ describe('ChatService', () => {
           outcome: 'saved',
           answer: 'saved as revision 2',
         });
+      });
+
+      it('posts a plugin card on a CLI that will not wait, and writes it after a restart on Approve', async () => {
+        const writes: HostPluginProposal[] = [];
+        const pluginCards = new PluginProposalBroker();
+        pluginCards.useWriter(async (proposal) => {
+          writes.push(proposal);
+          return { status: 'saved', slug: proposal.slug, path: PLUGIN_PATH };
+        });
+        const ctx = setup({ pluginCards });
+        const run = await asking(ctx.service);
+        const outcome = await postedOrPending(
+          ctx.itemDao,
+          pluginCards.propose(run.id, SINGLE_AGENT_NODE, PLUGIN_PROPOSAL),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(ctx.cursor);
+        const requestId = ctx.approvals.listByRun(run.id)[0]!.requestId;
+        expect(
+          readPendingQuestion(
+            ctx.runDao.runs.get(run.id)?.pendingQuestion ?? null,
+          ),
+        ).toEqual({ kind: 'plugin', requestId, proposal: PLUGIN_PROPOSAL });
+        expect(writes).toEqual([]);
+
+        ctx.approvals.sweepDeferred(run.id);
+        await ctx.service.rehydrateDeferredQuestions();
+        expect(ctx.approvals.listByRun(run.id)[0]?.requestId).toBe(requestId);
+
+        const sent = vi
+          .spyOn(ctx.service, 'sendMessage')
+          .mockResolvedValueOnce(undefined as never);
+        expect(ctx.approvals.resolve(run.id, requestId, true)).toBe(true);
+        await vi.waitFor(() => {
+          expect(sent).toHaveBeenCalledTimes(1);
+        });
+
+        expect(writes).toEqual([PLUGIN_PROPOSAL]);
+        expect(sent.mock.calls[0]?.[1]).toBe(
+          hostPluginResultText({
+            status: 'saved',
+            slug: 'prod-deploys',
+            path: PLUGIN_PATH,
+          }),
+        );
+        expect(
+          ctx.itemDao.items.some(
+            (item) =>
+              item.kind === 'approval_verdict' &&
+              item.payload.includes('saved as prod-deploys'),
+          ),
+        ).toBe(true);
       });
 
       it('leaves alone a DIFFERENT card that went up before the delivery cleared its own', async () => {
@@ -7940,6 +8019,88 @@ describe('ChatService', () => {
           item.payload.includes('"outcome":"saved"'),
       ),
     ).toBe(true);
+    claude.finish();
+    await drain();
+  });
+
+  it('parks a save_plugin card on a CLI that holds the call, and writes the plugin on Approve', async () => {
+    const writes: HostPluginProposal[] = [];
+    const pluginCards = new PluginProposalBroker();
+    pluginCards.useWriter(async (proposal) => {
+      writes.push(proposal);
+      return { status: 'saved', slug: proposal.slug, path: PLUGIN_PATH };
+    });
+    const { service, approvals, itemDao, claude } = setup({ pluginCards });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'make a plugin');
+
+    const proposed = pluginCards.propose(
+      run.id,
+      SINGLE_AGENT_NODE,
+      PLUGIN_PROPOSAL,
+    );
+    await vi.waitFor(() => expect(approvals.listByRun(run.id)).toHaveLength(1));
+    const card = itemDao.items.find(
+      (item) => item.runId === run.id && item.kind === 'approval_request',
+    );
+    expect(JSON.parse(card!.payload)).toMatchObject({
+      toolName: HOST_PLUGIN_TOOL,
+      input: { slug: 'prod-deploys', new_string: PLUGIN_PROPOSAL.text },
+    });
+    expect(writes).toEqual([]);
+
+    const [pending] = approvals.listByRun(run.id);
+    expect(approvals.resolve(run.id, pending!.requestId, true)).toBe(true);
+    await drain();
+    await expect(proposed).resolves.toEqual({
+      status: 'saved',
+      slug: 'prod-deploys',
+      path: PLUGIN_PATH,
+    });
+    expect(writes).toEqual([PLUGIN_PROPOSAL]);
+    const verdict = itemDao.items.find(
+      (item) => item.runId === run.id && item.kind === 'approval_verdict',
+    );
+    expect(JSON.parse(verdict!.payload)).toEqual({
+      id: pending!.requestId,
+      allow: true,
+      outcome: 'saved',
+      answer: 'saved as prod-deploys',
+    });
+    claude.finish();
+    await drain();
+  });
+
+  it('records a rejected save_plugin card as declined, and writes nothing', async () => {
+    const writes: HostPluginProposal[] = [];
+    const pluginCards = new PluginProposalBroker();
+    pluginCards.useWriter(async (proposal) => {
+      writes.push(proposal);
+      return { status: 'saved', slug: proposal.slug, path: PLUGIN_PATH };
+    });
+    const { service, approvals, itemDao, claude } = setup({ pluginCards });
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'make a plugin');
+
+    const proposed = pluginCards.propose(
+      run.id,
+      SINGLE_AGENT_NODE,
+      PLUGIN_PROPOSAL,
+    );
+    await vi.waitFor(() => expect(approvals.listByRun(run.id)).toHaveLength(1));
+
+    const [pending] = approvals.listByRun(run.id);
+    expect(approvals.resolve(run.id, pending!.requestId, false)).toBe(true);
+    await drain();
+    await expect(proposed).resolves.toEqual({ status: 'declined' });
+    expect(writes).toEqual([]);
+    const verdict = itemDao.items.find(
+      (item) => item.runId === run.id && item.kind === 'approval_verdict',
+    );
+    expect(JSON.parse(verdict!.payload)).toEqual({
+      id: pending!.requestId,
+      allow: false,
+    });
     claude.finish();
     await drain();
   });

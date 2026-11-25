@@ -17,6 +17,7 @@ import {
   LessonsApi,
   MemoriesApi,
   type Middleware,
+  PluginsApi,
   ProjectsApi,
   SharesApi,
   StatsApi,
@@ -69,6 +70,12 @@ export const MCP_ROUTE_TIMEOUT_MS = 60_000;
  * the daemon carries on and the list re-read shows what it got done.
  */
 export const BULK_REVOKE_TIMEOUT_MS = 10 * 60_000;
+
+/** A plugin's data run: past the longest command timeout a plugin may set (120 s). */
+export const PLUGIN_RUN_TIMEOUT_MS = 150_000;
+
+/** A plugin button's press: past the longest button timeout (60 min). */
+export const PLUGIN_PRESS_TIMEOUT_MS = 61 * 60_000;
 
 /**
  * The budget for one batch of the memory import's AI sort: the daemon gives
@@ -298,6 +305,8 @@ export interface DaemonApis {
   memories: MemoriesApi;
   /** The documents agents read on demand (`/v1/knowledge`). */
   knowledge: KnowledgeApi;
+  /** The user's plugins and their blocks in a thread's right panel (`/v1/plugins`). */
+  plugins: PluginsApi;
   /** Search by meaning's status and index (`/v1/embeddings`); its writes are desktop only. */
   embeddings: EmbeddingsApi;
   /** Lessons reflections and the user's save or reject of their lessons (`/v1/lessons`). */
@@ -367,6 +376,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     shares: new SharesApi(config),
     memories: new MemoriesApi(config),
     knowledge: new KnowledgeApi(config),
+    plugins: new PluginsApi(config),
     embeddings: new EmbeddingsApi(config),
     lessons: new LessonsApi(config),
     storage: new StorageApi(config),

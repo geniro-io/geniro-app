@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamStage } from '../teams.types';
 import { foldStages } from './stage-fold';
-import { currentLeadOf, leadOf, possibleLeadsOf } from './team-roster';
+import {
+  calleeMapOf,
+  calleesOf,
+  currentLeadOf,
+  leadOf,
+  possibleLeadsOf,
+} from './team-roster';
 
 const MEMBERS = [
   member('ada', { name: 'Ada' }),
@@ -66,5 +72,25 @@ describe('team leads', () => {
       'ada',
     );
     expect([...possibleLeadsOf(relay)].sort()).toEqual(['ada', 'bob', 'cy']);
+  });
+});
+
+describe('calleeMapOf', () => {
+  const trio = [member('a'), member('b'), member('c')];
+
+  it('equals calleesOf when no member has departed', () => {
+    expect(calleeMapOf(trio, new Set())).toEqual(calleesOf(trio));
+  });
+
+  it('calls nobody who has departed, and keeps the departed member’s own callees', () => {
+    const map = calleeMapOf(trio, new Set(['b']));
+
+    for (const [caller, callees] of map) {
+      if (caller !== 'b') {
+        expect(callees.map((callee) => callee.id)).not.toContain('b');
+      }
+    }
+    expect(map.get('b')?.map((callee) => callee.id)).toEqual(['a', 'c']);
+    expect(map.get('a')?.map((callee) => callee.id)).toEqual(['c']);
   });
 });

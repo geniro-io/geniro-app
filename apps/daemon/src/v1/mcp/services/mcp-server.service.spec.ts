@@ -64,6 +64,7 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_RECORD_OUTCOME_TOOL,
   HOST_REMOVE_ACTION_TOOL,
+  HOST_RUN_TEAM_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   HOST_STOP_MONITOR_TOOL,
   HOST_TEAM_CHANGE_TOOL,
@@ -156,11 +157,11 @@ import type { SystemAnalysisHistoryService } from '../../system-analysis/service
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { CallBroker } from '../../teams/services/call-broker.service';
+import type { ChatTeamService } from '../../teams/services/chat-team.service';
 import type { StageService } from '../../teams/services/stage.service';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
 import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
-import type { ChatTeamService } from '../../teams/services/chat-team.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
@@ -4419,6 +4420,112 @@ describe('McpServerService — what the descriptions tell a model', () => {
       ],
       isError: true,
     });
+  });
+
+  it('offers run_team as a start to an ordinary chat, as a change to a team run, and to no sink without it', async () => {
+    const listed = async (gate: TeamProposalBroker) => {
+      const { json } = await post(
+        service(
+          new CallBroker(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          gate,
+        ),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (
+        json().result as {
+          tools: {
+            name: string;
+            description: string;
+            inputSchema: { properties: Record<string, unknown> };
+          }[];
+        }
+      ).tools;
+    };
+    const runTeamOf = (tools: { name: string }[]) =>
+      tools.find((tool) => tool.name === HOST_RUN_TEAM_TOOL) as
+        | {
+            name: string;
+            description: string;
+            inputSchema: { properties: Record<string, unknown> };
+          }
+        | undefined;
+
+    const start = new TeamProposalBroker();
+    start.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const startTool = runTeamOf(await listed(start));
+    expect(startTool?.inputSchema.properties).toHaveProperty('plan');
+    expect(startTool?.inputSchema.properties).toHaveProperty('team');
+    expect(startTool?.inputSchema.properties).not.toHaveProperty('edits');
+
+    const change = new TeamProposalBroker();
+    change.register('run-1', 'agent', { runId: 'run-1', runTeam: 'change' });
+    const changeTool = runTeamOf(await listed(change));
+    expect(changeTool?.inputSchema.properties).toHaveProperty('edits');
+    expect(changeTool?.inputSchema.properties).not.toHaveProperty('plan');
+
+    const plain = new TeamProposalBroker();
+    plain.register('run-1', 'agent', { runId: 'run-1' });
+    const plainTools = await listed(plain);
+    expect(plainTools.map((tool) => tool.name)).toContain(
+      HOST_PROPOSE_TEAM_TOOL,
+    );
+    expect(plainTools.map((tool) => tool.name)).not.toContain(
+      HOST_RUN_TEAM_TOOL,
+    );
+  });
+
+  it('makes run_team and propose_team name each other', async () => {
+    const gate = new TeamProposalBroker();
+    gate.register('run-1', 'agent', { runId: 'run-1', runTeam: 'start' });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        gate,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as { tools: { name: string; description: string }[] }
+    ).tools;
+    const describe_ = (name: string) =>
+      tools.find((tool) => tool.name === name)?.description ?? '';
+
+    expect(describe_(HOST_RUN_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
+    expect(describe_(HOST_PROPOSE_TEAM_TOOL)).toContain(HOST_RUN_TEAM_TOOL);
   });
 
   it('refuses an unlisted read_teams call', async () => {

@@ -183,6 +183,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
+import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
 import { InstructionSizesService } from './instruction-sizes.service';
@@ -303,6 +304,15 @@ class FakeRunDao {
       Object.assign(run, data);
     }
   }
+  async promoteToTeam(id: string, data: Partial<Run>): Promise<boolean> {
+    const run = this.runs.get(id);
+    if (run === undefined || run.teamId !== null || run.archivedAt !== null) {
+      return false;
+    }
+    Object.assign(run, data);
+    return true;
+  }
+
   async listEndedTeamRuns(ids: readonly string[]): Promise<Run[]> {
     return [...this.runs.values()].filter(
       (run) =>
@@ -23486,5 +23496,149 @@ describe('TeamExecutorService — a callee started in a subfolder', () => {
       expect(continued.error).toContain('FOLDER_NOT_FOUND');
     }
     expect(claude.starts).toHaveLength(2);
+  });
+});
+
+describe('TeamExecutorService — chat teams', () => {
+  it('promotes a chat run in place: the chat becomes its own team, led by its agent with its session kept', async () => {
+    const { service, claude, runDao, nodeDao, itemDao } = setup();
+    const chat = await runDao.create({
+      teamId: null,
+      status: 'completed',
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    await nodeDao.createPending(chat.id, 'agent');
+    await nodeDao.saveSessionId(chat.id, 'agent', 'sess-chat');
+    const team = teamOf(
+      [member('agent', { name: 'This chat' }), member('dev', { name: 'Dev' })],
+      { name: 'Chat team' },
+    );
+
+    const opened = await service.promoteChat(
+      chat.id,
+      team,
+      'the plan',
+      'This chat is now a team',
+    );
+    await drain();
+
+    const promoted = runDao.runs.get(chat.id);
+    expect(promoted).toMatchObject({
+      teamId: `chat:${chat.id}`,
+      teamOrigin: 'chat',
+      currentLead: 'agent',
+    });
+    expect(promoted?.teamSnapshot).toBe(promoted?.teamBaseSnapshot);
+    expect(typeof opened).toBe('number');
+    expect(nodeDao.row(chat.id, 'agent')?.agentSessionId).toBe('sess-chat');
+    const started = itemDao.items.filter(
+      (item) =>
+        item.kind === 'system' &&
+        (JSON.parse(String(item.payload)) as { chatTeam?: { phase?: string } })
+          .chatTeam?.phase === 'started',
+    );
+    expect(started).toHaveLength(1);
+    expect(claude.starts[0]!.input.resumeSessionId).toBe('sess-chat');
+  });
+
+  it('refuses a second promotion of the same chat as NOT_A_CHAT_RUN', async () => {
+    const { service, runDao } = setup();
+    const chat = await runDao.create({
+      teamId: null,
+      status: 'completed',
+      agentKind: 'claude',
+      cwd: dir,
+    });
+    const team = teamOf(
+      [member('agent', { name: 'This chat' }), member('dev')],
+      { name: 'Chat team' },
+    );
+    await service.promoteChat(chat.id, team, 'the plan', 'started');
+
+    await expect(
+      service.promoteChat(chat.id, team, 'the plan again', 'started'),
+    ).rejects.toMatchObject({ errorCode: 'NOT_A_CHAT_RUN' });
+  });
+
+  it('changes the run’s own copy of its team, never the base copy it was started from', async () => {
+    const { service, runDao } = setup();
+    const team = teamOf([member('a'), member('b')], { name: 'one' });
+    const run = await service.startRun({
+      slug: 'one',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const before = runDao.runs.get(run.id)!;
+    const baseBefore = before.teamBaseSnapshot;
+
+    const next = teamOf([member('a'), member('c')], { name: 'one' });
+    const applied = await service.changeRunTeam(
+      run.id,
+      next,
+      runTeamHashOf(before.teamSnapshot),
+      ['b'],
+    );
+
+    const after = runDao.runs.get(run.id)!;
+    expect(applied).toMatchObject({ status: 'changed', departed: ['b'] });
+    expect(
+      (
+        JSON.parse(after.teamSnapshot!) as { members: { id: string }[] }
+      ).members.map((m) => m.id),
+    ).toEqual(['a', 'c']);
+    expect(JSON.parse(after.teamDeparted!)).toEqual([
+      expect.objectContaining({ memberId: 'b' }),
+    ]);
+    expect(after.teamBaseSnapshot).toBe(baseBefore);
+  });
+
+  it('refuses a change made against a team copy that has moved since the card was raised', async () => {
+    const { service, runDao } = setup();
+    const team = teamOf([member('a'), member('b')], { name: 'one' });
+    const run = await service.startRun({
+      slug: 'one',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const next = teamOf([member('a'), member('c')], { name: 'one' });
+
+    const applied = await service.changeRunTeam(run.id, next, 'stale-hash', []);
+
+    expect(applied).toEqual({
+      status: 'refused',
+      reason: 'the team changed since the card was raised',
+    });
+    expect(runDao.runs.get(run.id)?.teamDeparted ?? null).toBeNull();
+  });
+
+  it('lets a member added while a pass runs be called in that pass, and stops a removed one being called', async () => {
+    const { service, claude, runDao, callBroker } = setup();
+    const team = teamOf([member('a'), member('b')], { name: 'one' });
+    const run = await service.startRun({
+      slug: 'one',
+      team,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(claude.starts[0]).toBeDefined();
+    const before = runDao.runs.get(run.id)!;
+    expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual(['b']);
+
+    const next = teamOf([member('a'), member('c')], { name: 'one' });
+    const applied = await service.changeRunTeam(
+      run.id,
+      next,
+      runTeamHashOf(before.teamSnapshot),
+      ['b'],
+    );
+
+    expect(applied).toMatchObject({ status: 'changed', reaches: 'now' });
+    expect(callBroker.listCallees(run.id, 'a').map((c) => c.id)).toEqual(['c']);
   });
 });

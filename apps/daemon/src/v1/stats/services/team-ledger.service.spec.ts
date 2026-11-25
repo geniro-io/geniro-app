@@ -173,6 +173,14 @@ describe('TeamLedgerService (in-memory sqlite)', () => {
       expect(await row('chat-1')).toBeUndefined();
     });
 
+    it('writes no team version and no team stamp for a chat team run', async () => {
+      await teamRun('chat-team', { teamId: 'chat:chat-team' });
+      await created('chat-team');
+
+      expect(await row('chat-team')).toBeUndefined();
+      expect(await versionDao.graphsOf('chat:chat-team')).toEqual([]);
+    });
+
     it('writes nothing for a run deleted before its announce was handled', async () => {
       await created('gone');
 

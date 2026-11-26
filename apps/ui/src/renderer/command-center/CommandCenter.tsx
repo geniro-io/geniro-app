@@ -11,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -149,6 +150,8 @@ export function CommandCenter({
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();
   const [chatOpen, setChatOpen] = useState(false);
+  const [front, setFront] = useState<'manager' | 'cards'>('manager');
+  const cardOpeners = useRef(new Map<string, Element | null>());
   const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
@@ -394,15 +397,26 @@ export function CommandCenter({
   const toggleCard = (runId: string): void => {
     const card = board.cards?.find((entry) => entry.run.id === runId);
     if (card !== undefined) {
+      cardOpeners.current.delete(runId);
       cards.toggle(runId, bandOf(card));
+      setFront('cards');
     }
   };
-  const showThread = useLatestCallback((runId: string): void => {
+  const closeCard = useLatestCallback((runId: string): void => {
+    cards.close(runId);
+    const opener = cardOpeners.current.get(runId);
+    cardOpeners.current.delete(runId);
+    if (opener instanceof HTMLElement && opener.isConnected) {
+      opener.focus({ preventScroll: true });
+    }
+  }, []);
+  const openThread = (runId: string, fromWindow: boolean): void => {
     if (board.cards === null) {
       return;
     }
     if (runId === managerRunId) {
       setChatOpen(true);
+      setFront('manager');
       return;
     }
     const card = board.cards.find((entry) => entry.run.id === runId);
@@ -421,9 +435,23 @@ export function CommandCenter({
     ) {
       setProjectFilter(card.run.project?.id ?? ALL_PROJECTS);
     }
-    cards.open(runId, bandOf(card));
+    if (!cards.cards.some((open) => open.runId === runId)) {
+      cardOpeners.current.set(runId, document.activeElement);
+    }
+    cards.open(runId, bandOf(card), fromWindow);
+    if (!fromWindow) {
+      setFront('cards');
+    }
     setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
-  }, []);
+  };
+  const showThread = useLatestCallback(
+    (runId: string): void => openThread(runId, false),
+    [],
+  );
+  const showThreadFromWindow = useLatestCallback(
+    (runId: string): void => openThread(runId, true),
+    [],
+  );
   const replyFrom = (
     runId: string,
     anchor: HTMLElement,
@@ -604,7 +632,7 @@ export function CommandCenter({
               ...card,
               size: cards.sizeOf(card.runId),
             }))}
-            onCloseCard={cards.close}
+            onCloseCard={closeCard}
             onResizeCard={cards.resize}
             positions={nodePositions.offsets}
             onPlaceNode={nodePositions.place}
@@ -615,6 +643,8 @@ export function CommandCenter({
             onOrderBlock={blockOrders.order}
             onResetLayout={resetLayout}
             renderCardChat={renderCardChat}
+            cardsInFront={front === 'cards'}
+            onActivateCards={() => setFront('cards')}
             focus={focus}
             onFocused={(seq) =>
               setFocus((last) => (last?.seq === seq ? null : last))
@@ -720,7 +750,10 @@ export function CommandCenter({
                   aria-pressed={chatOpen}
                   title={chatOpen ? 'Close the chat' : 'Chat with the manager'}
                   className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
-                  onClick={() => setChatOpen((open) => !open)}>
+                  onClick={() => {
+                    setChatOpen((open) => !open);
+                    setFront('manager');
+                  }}>
                   <MessageSquare aria-hidden="true" className="size-5" />
                   {manager?.working === true ? (
                     <span
@@ -747,6 +780,7 @@ export function CommandCenter({
                 open={chatOpen}
                 phone={narrow}
                 initialRect={managerWindowRect}
+                onActivate={() => setFront('manager')}
                 onClose={() => setChatOpen(false)}>
                 {managerRunId === null ? (
                   managerChoice.choice === null ? null : (
@@ -772,7 +806,7 @@ export function CommandCenter({
                     hidden={!chatOpen}
                     active={active}
                     threadIdentities={threadIdentities}
-                    onOpenThread={showThread}
+                    onOpenThread={showThreadFromWindow}
                     onTurnSettled={board.reload}
                     onDiscarded={board.reload}
                   />

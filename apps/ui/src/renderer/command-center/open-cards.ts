@@ -26,6 +26,8 @@ export interface CardBand {
 export interface OpenCard {
   runId: string;
   band: CardBand;
+  /** Opened from inside the manager's window, so it stands over that window until it closes. */
+  aboveWindow: boolean;
 }
 
 export const CARD_SIZES_KEY = 'commandCenter.cardSizes';
@@ -57,7 +59,7 @@ export interface OpenCards {
   /** In the order they opened. */
   cards: readonly OpenCard[];
   isOpen: (runId: string) => boolean;
-  open: (runId: string, band: CardBand) => void;
+  open: (runId: string, band: CardBand, aboveWindow?: boolean) => void;
   close: (runId: string) => void;
   toggle: (runId: string, band: CardBand) => void;
   /** Close every card whose thread left the board, and forget their sizes. */
@@ -76,13 +78,19 @@ export function useOpenCards(narrow: boolean): OpenCards {
   const [sizes, setSizes] = useState<CardSizes>(readCardSizes);
 
   const open = useLatestCallback(
-    (runId: string, band: CardBand): void =>
+    (runId: string, band: CardBand, aboveWindow = false): void =>
       setCards((rows) => {
-        const kept = rows.filter((row) => row.runId === runId);
-        if (kept.length > 0) {
-          return narrow ? kept : rows;
+        const kept = rows.find((row) => row.runId === runId);
+        if (kept === undefined) {
+          return [...(narrow ? [] : rows), { runId, band, aboveWindow }];
         }
-        return [...(narrow ? [] : rows), { runId, band }];
+        const marked =
+          aboveWindow && !kept.aboveWindow
+            ? rows.map((row) =>
+                row === kept ? { ...row, aboveWindow: true } : row,
+              )
+            : rows;
+        return narrow ? marked.filter((row) => row.runId === runId) : marked;
       }),
     [narrow],
   );

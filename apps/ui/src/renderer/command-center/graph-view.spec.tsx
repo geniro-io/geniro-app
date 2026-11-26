@@ -1888,5 +1888,6 @@ function openCard(
     runId,
     band: { attention: 'working', lastAt: new Date(FIXTURE_NOW).toISOString() },
     size,
+    aboveWindow: false,
   };
 }

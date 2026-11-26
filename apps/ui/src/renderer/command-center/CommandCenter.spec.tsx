@@ -84,7 +84,16 @@ vi.mock('./graph-view', () => ({
 vi.mock('./manager-dock', () => ({
   ManagerDock: (props: { onOpenThread: (runId: string) => void }) => {
     probes.dock = props;
-    return <div data-slot="stub-manager-dock" />;
+    return (
+      <div data-slot="stub-manager-dock">
+        <button
+          type="button"
+          data-slot="stub-open-chat"
+          onClick={() => props.onOpenThread('run-b')}>
+          Open chat
+        </button>
+      </div>
+    );
   },
 }));
 vi.mock('../components/ui/select', async (importOriginal) => ({
@@ -397,6 +406,237 @@ describe('CommandCenter — showing a thread on the canvas', () => {
     });
     expect(probes.graph!.openCards).toEqual([]);
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('CommandCenter — a thread opened from the manager’s window', () => {
+  const managerWindow = (): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-slot="command-center-chat"]')!;
+
+  async function openManager(): Promise<void> {
+    await renderPage();
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+  }
+
+  const aboveWindowOf = (runId: string): boolean | undefined =>
+    probes.graph!.openCards.find((card) => card.runId === runId)?.aboveWindow;
+
+  it('keeps the opened card over the manager’s window while the user presses, minimises, restores, maximises and reopens the window', async () => {
+    await openManager();
+
+    clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-b',
+    ]);
+    expect(aboveWindowOf('run-b')).toBe(true);
+
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+    expect(aboveWindowOf('run-b')).toBe(true);
+
+    for (const control of [
+      'command-center-chat-minimise',
+      'command-center-chat-minimise',
+      'command-center-chat-maximise',
+      'command-center-chat-maximise',
+    ]) {
+      clickOn(container.querySelector(`[data-slot="${control}"]`));
+    }
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+    expect(managerWindow().hidden).toBe(false);
+    expect(aboveWindowOf('run-b')).toBe(true);
+  });
+
+  it('leaves a card opened on the graph under the window once the window is pressed, until the window opens it', async () => {
+    await openManager();
+    act(() => {
+      probes.graph!.onToggleCard('run-b');
+    });
+    expect(aboveWindowOf('run-b')).toBe(false);
+    expect(probes.graph!.cardsInFront).toBe(true);
+
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+
+    clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
+    expect(aboveWindowOf('run-b')).toBe(true);
+  });
+
+  it('puts a card shown from a link in another card in front without keeping it over the window', async () => {
+    await openManager();
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+
+    act(() => {
+      (
+        probes.graph!.renderCardChat(
+          'run-a',
+        ) as React.ReactElement<ThreadCardChatProps>
+      ).props.onOpenThread('run-b');
+    });
+
+    expect(aboveWindowOf('run-b')).toBe(false);
+    expect(probes.graph!.cardsInFront).toBe(true);
+  });
+
+  it('keeps a maximised manager’s window maximised while the opened card stands over it', async () => {
+    await openManager();
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-maximise"]'),
+    );
+    expect(managerWindow().dataset.state).toBe('maximised');
+
+    clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
+
+    expect(aboveWindowOf('run-b')).toBe(true);
+    expect(managerWindow().dataset.state).toBe('maximised');
+    expect(
+      container.querySelector<HTMLElement>(
+        '[data-slot="command-center-chat-bounds"]',
+      )!.hidden,
+    ).toBe(false);
+  });
+
+  it('gives the keyboard back to the window’s Open chat once the card it opened is closed', async () => {
+    await openManager();
+    const opener = container.querySelector<HTMLButtonElement>(
+      '[data-slot="stub-open-chat"]',
+    )!;
+    act(() => {
+      opener.focus();
+    });
+    clickOn(opener);
+    act(() => {
+      opener.blur();
+    });
+    expect(document.activeElement).not.toBe(opener);
+
+    act(() => {
+      probes.graph!.onCloseCard('run-b');
+    });
+
+    expect(probes.graph!.openCards).toEqual([]);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('keeps the first opener when an open card is shown again, and leaves another open card where it stood', async () => {
+    await openManager();
+    const opener = container.querySelector<HTMLButtonElement>(
+      '[data-slot="stub-open-chat"]',
+    )!;
+    act(() => {
+      opener.focus();
+    });
+    clickOn(opener);
+    act(() => {
+      opener.blur();
+      probes.dock!.onOpenThread('run-b');
+      probes.graph!.onToggleCard('run-a');
+    });
+
+    act(() => {
+      probes.graph!.onCloseCard('run-b');
+    });
+
+    expect(document.activeElement).toBe(opener);
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-a',
+    ]);
+    expect(aboveWindowOf('run-a')).toBe(false);
+    expect(probes.graph!.cardsInFront).toBe(true);
+  });
+
+  function outsideButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    outsideButtons.push(button);
+    return button;
+  }
+  const outsideButtons: HTMLButtonElement[] = [];
+  afterEach(() => {
+    for (const button of outsideButtons.splice(0)) {
+      button.remove();
+    }
+  });
+
+  it('moves no focus on close when the control that opened the card is gone', async () => {
+    await openManager();
+    const outside = outsideButton();
+    act(() => {
+      outside.focus();
+      probes.dock!.onOpenThread('run-b');
+    });
+    outside.remove();
+    const other = outsideButton();
+    act(() => {
+      other.focus();
+      probes.graph!.onCloseCard('run-b');
+    });
+    expect(document.activeElement).toBe(other);
+  });
+
+  it('moves no focus on close when the card was last opened from its node', async () => {
+    await openManager();
+    const other = outsideButton();
+    act(() => {
+      other.focus();
+      probes.dock!.onOpenThread('run-a');
+    });
+    act(() => {
+      probes.graph!.onToggleCard('run-a');
+    });
+    act(() => {
+      probes.graph!.onToggleCard('run-a');
+    });
+    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
+      'run-a',
+    ]);
+    const elsewhere = outsideButton();
+    act(() => {
+      elsewhere.focus();
+      probes.graph!.onCloseCard('run-a');
+    });
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it('puts the manager’s window on top when it is opened, or its own thread is shown, while cards are in front', async () => {
+    await renderPage();
+    act(() => {
+      probes.graph!.onToggleCard('run-a');
+    });
+    expect(probes.graph!.cardsInFront).toBe(true);
+
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+    expect(probes.graph!.cardsInFront).toBe(false);
+
+    act(() => {
+      probes.graph!.onActivateCards!();
+    });
+    act(() => {
+      probes.dock!.onOpenThread('manager-run');
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
   });
 });
 

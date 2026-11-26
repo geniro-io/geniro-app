@@ -72,8 +72,8 @@ describe('useOpenCards — which threads stand open', () => {
     act(() => latest.open('b', OTHER_BAND));
 
     expect(latest.cards).toEqual([
-      { runId: 'a', band: BAND },
-      { runId: 'b', band: OTHER_BAND },
+      { runId: 'a', band: BAND, aboveWindow: false },
+      { runId: 'b', band: OTHER_BAND, aboveWindow: false },
     ]);
     expect(latest.isOpen('a')).toBe(true);
   });
@@ -98,7 +98,26 @@ describe('useOpenCards — which threads stand open', () => {
     act(() => latest.open('a', BAND));
     act(() => latest.open('a', OTHER_BAND));
 
-    expect(latest.cards).toEqual([{ runId: 'a', band: BAND }]);
+    expect(latest.cards).toEqual([
+      { runId: 'a', band: BAND, aboveWindow: false },
+    ]);
+  });
+
+  it('keeps a card over the manager’s window from its first open there until it closes', () => {
+    mount();
+
+    act(() => latest.open('a', BAND));
+    act(() => latest.open('a', BAND, true));
+    act(() => latest.open('a', BAND));
+    expect(latest.cards).toEqual([
+      { runId: 'a', band: BAND, aboveWindow: true },
+    ]);
+
+    act(() => latest.close('a'));
+    act(() => latest.toggle('a', BAND));
+    expect(latest.cards).toEqual([
+      { runId: 'a', band: BAND, aboveWindow: false },
+    ]);
   });
 
   it('on a phone keeps only the card opened last', () => {

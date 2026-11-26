@@ -108,6 +108,7 @@ export const OpenCard: Story = {
           lastAt: new Date(FIXTURE_NOW).toISOString(),
         },
         size: { width: 420, height: 300 },
+        aboveWindow: false,
       },
     ],
   },

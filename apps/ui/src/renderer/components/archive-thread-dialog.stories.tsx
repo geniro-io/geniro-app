@@ -24,6 +24,8 @@ const LESSONS: ThreadLessonEstimateDto = {
   toSeq: 120,
 };
 
+const IDLE = { running: false, subagents: 0, commands: 0, monitors: 0 };
+
 const meta = {
   title: 'Components/ArchiveThreadDialog',
   component: ArchiveThreadDialog,
@@ -32,9 +34,10 @@ const meta = {
     target: {
       id: 'run-1',
       label: 'Fix the login redirect',
-      running: false,
+      work: IDLE,
       isTeam: false,
     },
+    workers: null,
     busy: false,
     error: null,
     lessons: null,
@@ -56,7 +59,7 @@ export const RunningChat: Story = {
     target: {
       id: 'run-1',
       label: 'Fix the login redirect',
-      running: true,
+      work: { ...IDLE, running: true },
       isTeam: false,
     },
   },
@@ -67,9 +70,65 @@ export const RunningTeamRun: Story = {
     target: {
       id: 'run-2',
       label: 'Release team',
-      running: true,
+      work: { ...IDLE, running: true, subagents: 1 },
       isTeam: true,
     },
+    workers: ['Tony Stark · Senior Engineer', 'Groot · Handyman'],
+  },
+};
+
+export const FinishedTeamRun: Story = {
+  args: {
+    target: {
+      id: 'run-3',
+      label: 'Name the required arguments',
+      work: IDLE,
+      isTeam: true,
+    },
+  },
+};
+
+export const FinishedRunWithBackgroundWork: Story = {
+  args: {
+    target: {
+      id: 'run-4',
+      label: 'Release team',
+      work: { ...IDLE, commands: 1, monitors: 1 },
+      isTeam: true,
+    },
+  },
+};
+
+export const FinishedRunWithNamedProcesses: Story = {
+  args: {
+    target: {
+      id: 'run-5',
+      label: 'Release team',
+      work: { ...IDLE, subagents: 1, commands: 2, monitors: 1 },
+      isTeam: true,
+    },
+    processes: [
+      {
+        kind: 'subagent',
+        name: 'Map the archive flow',
+        owner: 'Tony Stark · Senior Engineer',
+      },
+      {
+        kind: 'command',
+        name: 'pnpm --filter @geniro/ui dev --port 5176 --strictPort -- --remote-debugging-port=9444 2>&1 | tee /tmp/geniro-stand-681/stand.log',
+        owner: 'Peter Parker · Middle Engineer',
+      },
+      {
+        kind: 'command',
+        name: 'sleep 600',
+        owner: 'Groot · Handyman',
+      },
+      {
+        kind: 'monitor',
+        name: 'CI on #681',
+        owner: 'Nick Fury · Manager',
+      },
+    ],
   },
 };
 

@@ -13991,7 +13991,7 @@ describe('Chats sidebar list', () => {
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
     expect(dialog.textContent).toContain('nothing is deleted');
-    expect(dialog.textContent).not.toContain('stops the turn');
+    expect(dialog.textContent).not.toContain('Still running');
     expect(api.archiveChat).not.toHaveBeenCalled();
 
     const confirm = [...dialog.querySelectorAll('button')].find(
@@ -14204,7 +14204,11 @@ describe('Chats sidebar list', () => {
 
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
-    expect(dialog.textContent).toContain('stops the turn');
+    expect(
+      [
+        ...dialog.querySelectorAll('[data-slot="archive-still-running"] li'),
+      ].map((item) => item.textContent),
+    ).toEqual(['Its turn']);
     expect(api.archiveChat).not.toHaveBeenCalled();
 
     const confirm = [...dialog.querySelectorAll('button')].find(

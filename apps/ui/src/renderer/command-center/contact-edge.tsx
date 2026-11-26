@@ -80,8 +80,8 @@ const flowVariants = cva(
   {
     variants: {
       state: {
-        lit: 'cc-wire-flow stroke-foreground/80',
-        awaiting: 'cc-wire-flow-back stroke-warning',
+        lit: 'stroke-foreground/80',
+        awaiting: 'stroke-warning',
       },
     },
   },
@@ -156,16 +156,12 @@ export function ContactEdgeLine({
         aria-hidden="true"
         d={path}
         style={pathStyle(path)}
-        className={cn(
-          edgeVariants({ state }),
-          state === 'idle' && !reducedMotion && !moving && 'cc-wire-drift',
-          moving && 'transition-none',
-        )}
+        className={cn(edgeVariants({ state }), moving && 'transition-none')}
         strokeWidth={state === 'idle' ? 1.25 : 2}
         strokeDasharray={state === 'idle' ? '4 4' : undefined}
         strokeLinecap="round"
       />
-      {state === 'idle' || reducedMotion ? null : (
+      {state === 'idle' ? null : (
         <path
           aria-hidden="true"
           data-slot="contact-flow"
@@ -173,6 +169,7 @@ export function ContactEdgeLine({
           style={pathStyle(path)}
           className={cn(flowVariants({ state }), moving && 'transition-none')}
           strokeWidth={2.5}
+          strokeDasharray="2 10"
           strokeLinecap="round"
         />
       )}

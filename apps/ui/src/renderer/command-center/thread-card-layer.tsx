@@ -17,6 +17,7 @@ import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
 import { PALETTE_DOT_CLASS } from '../components/ui/palette';
+import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
@@ -121,7 +122,7 @@ const cardVariants = cva(
     variants: {
       attention: {
         blocked: 'border-destructive/50',
-        working: 'border-success/50 cc-running-border',
+        working: 'border-success/50',
         question: 'border-warning/60',
         quiet: 'border-border-strong',
         inactive: 'border-border-strong',
@@ -245,6 +246,9 @@ function CardHead({
           identity={card.identity}
           aside={
             <>
+              {card.attention === 'working' ? (
+                <Spinner className="size-3.5 text-success" />
+              ) : null}
               {open ? (
                 <ShowChatIcon title={title} open onToggle={onClose} />
               ) : null}

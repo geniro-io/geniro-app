@@ -29,6 +29,7 @@ import type {
 } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
 import { PALETTE_DOT_CLASS } from '../components/ui/palette';
+import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 
 export type ThreadCardStatus =
@@ -177,7 +178,7 @@ export const attentionFrameVariants = cva('border', {
   variants: {
     attention: {
       blocked: 'border-destructive/50 bg-destructive/5',
-      working: 'border-success/50 bg-success/5 cc-running-border',
+      working: 'border-success/50 bg-success/5',
       question: 'border-warning/50 bg-warning/10',
       quiet: 'border-border bg-card',
       inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
@@ -316,11 +317,7 @@ export function ThreadCard({
       data-slot="thread-card"
       data-status={status}
       data-attention={attention}
-      className={cn(
-        CARD_CLASS,
-        attentionFrameVariants({ attention }),
-        onAnswer !== undefined && 'cc-breathe-warning',
-      )}
+      className={cn(CARD_CLASS, attentionFrameVariants({ attention }))}
       style={{
         width: THREAD_CARD_WIDTH,
         minHeight: Math.max(ownHeight, height ?? 0),
@@ -355,6 +352,11 @@ export function ThreadCard({
             projectColor,
           })}
           onOpen={onToggleCard}
+          aside={
+            attention === 'working' ? (
+              <Spinner className="size-3.5 text-success" />
+            ) : undefined
+          }
           ringClassName="ring-card"
         />
       </div>

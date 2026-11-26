@@ -302,7 +302,7 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
     ).toBe('chat of a');
   });
 
-  it('gives the card of a working thread the running border, and no other attention one', () => {
+  it("shows the loader in the head of a working thread's card, and of no other attention", () => {
     drawLayer({
       cards: [
         card('a', 400, 300),
@@ -318,8 +318,13 @@ describe('ThreadCardLayer — the cards over the canvas', () => {
       container.querySelector<HTMLElement>(
         `[data-slot="thread-canvas-card"][data-run-id="${runId}"]`,
       )!;
-    expect(cardOf('a').classList.contains('cc-running-border')).toBe(true);
-    expect(cardOf('b').classList.contains('cc-running-border')).toBe(false);
+    const loaderOf = (runId: string): Element | null =>
+      cardOf(runId).querySelector(
+        '[data-slot="thread-canvas-card-head"] svg.animate-spin',
+      );
+    expect(loaderOf('a')).not.toBeNull();
+    expect(loaderOf('b')).toBeNull();
+    expect(cardOf('a').className).not.toContain('cc-running-border');
   });
 
   it('draws no layer when no open thread has a slot', () => {

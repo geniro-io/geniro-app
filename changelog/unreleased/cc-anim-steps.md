@@ -1,3 +1,3 @@
 ### Improved
 
-- The command center uses much less GPU while threads work: its running borders, glows and wire dots now update a little less often and look the same.
+- The command center uses much less GPU and CPU while threads work: a working thread and the manager now show a small spinner instead of running borders, glows and flowing wire dots.

@@ -794,108 +794,7 @@
   }
 }
 
-/*
- * The command center's graph — `command-center/contact-edge.tsx`,
- * `thread-card.tsx`, `graph-view.tsx`.
- *
- * A wire carries a stream of dots that flows the way the talk goes: out from
- * the manager while the wire is lit after a message, back towards it while
- * the manager awaits that thread's reply. An idle wire only drifts. A node at
- * work runs a bright segment round its border, the manager breathes a glow
- * while it works, and a node waiting on the user glows in the warning token,
- * so the eye finds what moves without reading.
- * Colours come from tokens through `color-mix`, so every theme keeps them.
- * The loops step at 24, 12 and 6 updates a second: the GPU idles between.
- */
-@keyframes cc-wire-flow {
-  to {
-    stroke-dashoffset: -24;
-  }
-}
-
-@keyframes cc-wire-drift {
-  to {
-    stroke-dashoffset: -16;
-  }
-}
-
-.cc-wire-flow {
-  stroke-dasharray: 2 10;
-  animation: cc-wire-flow 900ms steps(22) infinite;
-}
-
-.cc-wire-flow-back {
-  stroke-dasharray: 2 10;
-  animation: cc-wire-flow 1400ms steps(34) infinite reverse;
-}
-
-.cc-wire-drift {
-  animation: cc-wire-drift 6s steps(36) infinite;
-}
-
-@keyframes cc-breathe-warning {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--warning) 0%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in oklab, var(--warning) 30%, transparent);
-  }
-}
-
-@keyframes cc-breathe-primary {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 6px color-mix(in oklab, var(--primary) 25%, transparent);
-  }
-}
-
-@property --cc-orbit-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
-@keyframes cc-running-orbit {
-  to {
-    --cc-orbit-angle: 360deg;
-  }
-}
-
-.cc-running-border::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  padding: 2px;
-  border-radius: inherit;
-  pointer-events: none;
-  background: conic-gradient(
-    from var(--cc-orbit-angle),
-    transparent 0deg 260deg,
-    var(--success) 340deg,
-    transparent 360deg
-  );
-  /* The mask reads only alpha: the token stands in for an opaque layer. */
-  mask-image:
-    linear-gradient(var(--success) 0 0),
-    linear-gradient(var(--success) 0 0);
-  mask-clip: content-box, border-box;
-  mask-composite: exclude;
-  animation: cc-running-orbit 2s steps(48) infinite;
-}
-
-.cc-breathe-warning {
-  animation: cc-breathe-warning 2.4s steps(15) infinite;
-}
-
-.cc-breathe-primary {
-  animation: cc-breathe-primary 2.8s steps(17) infinite;
-}
-
+/* The command center's graph: a node's entrance and a shown card's flash, each played once. */
 @keyframes cc-node-in {
   from {
     opacity: 0;
@@ -939,18 +838,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cc-wire-flow,
-  .cc-wire-flow-back,
-  .cc-wire-drift,
-  .cc-breathe-warning,
-  .cc-breathe-primary,
   .cc-node-in,
-  .cc-flash,
-  .cc-running-border::before {
+  .cc-flash {
     animation: none;
-  }
-
-  .cc-running-border::before {
-    background: var(--success);
   }
 }

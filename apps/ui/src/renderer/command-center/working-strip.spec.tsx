@@ -138,14 +138,14 @@ describe('WorkingStrip', () => {
     expect(facesOf()).toEqual(['run-b', 'run-a']);
   });
 
-  it("frames a working face in its card's working colours and running border", () => {
+  it("frames a working face in its card's working colours, with no looping border", () => {
     draw([threadOf('run-a', 'First')]);
     const face = container.querySelector<HTMLElement>(
       '[data-slot="working-strip-thread"]',
     )!;
     const cardFrame = frameClassesOfCard('working');
-    expect(cardFrame).toContain('cc-running-border');
     expect(cardFrame).toContain('border-success/50');
+    expect(face.className).not.toContain('cc-running-border');
     expect(face.className.split(' ')).toEqual(
       expect.arrayContaining(cardFrame),
     );

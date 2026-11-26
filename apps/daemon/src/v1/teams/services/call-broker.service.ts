@@ -214,6 +214,15 @@ interface AsyncCallEntry {
   outcome?: CallSettleOutcome;
 }
 
+/** A call its caller stopped itself, once the stopped turn has settled: what the caller collects of it. */
+interface OwnCancellation {
+  owner: string;
+  calleeId: string;
+  reason: string;
+  /** Whether await_agent with no call_id has handed it over — once. */
+  reported: boolean;
+}
+
 /** Lets a wait that gave up (timed out, abandoned) stop listening for questions. */
 interface WaitLease {
   release: () => void;
@@ -290,6 +299,12 @@ interface ActiveCall {
    * {@link turnEnded} for the window in which that race is usually lost.
    */
   failReason: string | null;
+  /**
+   * The reason the caller that started this call gave when it stopped the call
+   * with cancel_agent, or null. Such a call is collected as it settles stopped
+   * (see {@link RunCallState.ownCancellations}), and the caller is not told.
+   */
+  ownCancelReason: string | null;
   /**
    * The callee's turn has ENDED — its result exists — while the executor still
    * holds the call open for the turn's bookkeeping: draining its rows, closing
@@ -487,6 +502,11 @@ interface RunCallState {
   activeCalls: Map<string, ActiveCall>;
   /** Results retained until their caller collects them via await_agent. */
   pendingAsync: Map<string, AsyncCallEntry>;
+  /**
+   * Calls their caller stopped itself, collected as they settled. Answered to
+   * the caller from here, for the life of the run.
+   */
+  ownCancellations: Map<string, OwnCancellation>;
   messageFailures: Map<string, MessageDeliveryFailure>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
@@ -1012,6 +1032,7 @@ export class CallBroker implements OnModuleInit {
       settledMadeIn: new Map(),
       newestCallOf: new Map(),
       pendingAsync: new Map(),
+      ownCancellations: new Map(),
       messageFailures,
       threads,
       blockedOwners: new Map(),
@@ -1713,6 +1734,7 @@ export class CallBroker implements OnModuleInit {
       parked: null,
       questionWaiters: [],
       failReason: null,
+      ownCancelReason: null,
       turnEnded: false,
       silence: null,
       saidStalled: false,
@@ -1893,6 +1915,20 @@ export class CallBroker implements OnModuleInit {
           ...cacheResultFields(threadCache),
           ...final,
         } satisfies CallResultPayload);
+        const ownReason = call.ownCancelReason;
+        if (
+          ownReason !== null &&
+          final.status !== 'ok' &&
+          state.pendingAsync.has(callId)
+        ) {
+          state.ownCancellations.set(callId, {
+            owner: caller,
+            calleeId: callee.id,
+            reason: ownReason,
+            reported: false,
+          });
+          this.collect(state, caller, callId, final);
+        }
         // The conversation that made this call may be HELD waiting for it —
         // and only now, with it gone from `activeCalls`, can that wait see it
         // is over. After the result row, so the wake reads below it.
@@ -2100,7 +2136,10 @@ export class CallBroker implements OnModuleInit {
     const callId = args.call_id;
     const entry = state.pendingAsync.get(callId);
     if (!entry || entry.owner !== caller) {
-      return this.unknownCall(state, null, callId, 'un-collected async call');
+      return (
+        this.ownCancelledAnswer(state, caller, callId) ??
+        this.unknownCall(state, null, callId, 'un-collected async call')
+      );
     }
     const lease: WaitLease = { release: () => {} };
     // A request already gone must not reach `waitForOutcome`, which would hand
@@ -2172,11 +2211,23 @@ export class CallBroker implements OnModuleInit {
     // non-consuming reads), so the loser is told the call is gone rather
     // than duplicating the await_collected row.
     return (
-      this.collect(state, caller, callId, envelope) ?? {
+      this.collect(state, caller, callId, envelope) ??
+      this.ownCancelledAnswer(state, caller, callId) ?? {
         status: 'error',
         error: `UNKNOWN_CALL: no un-collected async call '${callId}' started by you`,
       }
     );
+  }
+
+  private ownCancelledAnswer(
+    state: RunCallState,
+    caller: string,
+    callId: string,
+  ): CallEnvelope | null {
+    const record = state.ownCancellations.get(callId);
+    return record !== undefined && record.owner === caller
+      ? ownCancelledEnvelope(callId, record)
+      : null;
   }
 
   /**
@@ -2236,7 +2287,10 @@ export class CallBroker implements OnModuleInit {
       const open = [...state.pendingAsync].filter(
         ([, entry]) => entry.owner === caller,
       );
-      if (open.length === 0) {
+      const ownCancelled = [...state.ownCancellations].filter(
+        ([, record]) => record.owner === caller && !record.reported,
+      );
+      if (open.length === 0 && ownCancelled.length === 0) {
         return {
           status: 'error',
           error:
@@ -2265,6 +2319,12 @@ export class CallBroker implements OnModuleInit {
         open.every(([callId]) => state.activeCalls.get(callId)?.parked)
       ) {
         return questionEnvelope(parkedCall[0], parkedCall[1]!);
+      }
+      const ownCancellation = ownCancelled[0];
+      if (ownCancellation !== undefined) {
+        const [ownCallId, record] = ownCancellation;
+        record.reported = true;
+        return ownCancelledEnvelope(ownCallId, record);
       }
       let collectedSettled: CallEnvelope | null = null;
       for (const [callId, entry] of open) {
@@ -2427,6 +2487,7 @@ export class CallBroker implements OnModuleInit {
     // chain reads `failReason` the moment the turn resolves, and a cancel can
     // resolve it synchronously.
     call.failReason = `CALLEE_CANCELLED: ${agent} was stopped by ${callerNodeOf(caller)} — ${args.reason}`;
+    call.ownCancelReason = args.reason;
     this.dropPendingMessages(state, args.call_id, call);
     // A question parked on this call dies with the turn, and its row must not be
     // left dangling unresolved in the transcript. Same two steps `failParked`
@@ -3518,6 +3579,9 @@ export class CallBroker implements OnModuleInit {
       entry.outcome = call.outcome;
     }
     if (!state || !call || !entry || entry.told) {
+      return;
+    }
+    if (call.ownCancelReason !== null && outcome.status !== 'completed') {
       return;
     }
     // A live caller is told inside its running turn; one that then ends
@@ -5651,6 +5715,22 @@ function openSubCalls(
   return [...state.activeCalls].filter(
     ([, call]) => call.owner === owner && call.mode !== 'fire_and_forget',
   );
+}
+
+function ownCancelledEnvelope(
+  callId: string,
+  record: OwnCancellation,
+): CallEnvelope {
+  return {
+    status: 'ok',
+    result: {
+      call_id: callId,
+      agent: record.calleeId,
+      state: 'cancelled',
+      by: 'you',
+      reason: record.reason,
+    },
+  };
 }
 
 /** Results `owner` is owed and has not been woken for: settled, uncollected. */

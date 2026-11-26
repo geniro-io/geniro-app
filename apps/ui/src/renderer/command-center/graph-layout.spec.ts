@@ -521,6 +521,27 @@ describe('layoutBlocks', () => {
     expect(overlapping(geometry, blocks)).toEqual([]);
   });
 
+  it('keeps the lines under a line whose only block was placed out of it where they stand', () => {
+    const blocks = [blockOf('A', 1), blockOf('B', 1)];
+    const free = layoutBlocks(ROOT, blocks, 1);
+    expect(free.boxes.get('block:B')!.y).toBeGreaterThan(
+      free.boxes.get('block:A')!.y,
+    );
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      1,
+      new Map(),
+      undefined,
+      new Map([['block:A', { x: 2000, y: 0 }]]),
+    );
+
+    expect(geometry.boxes.get('block:B')).toMatchObject({
+      x: free.boxes.get('block:B')!.x,
+      y: free.boxes.get('block:B')!.y,
+    });
+  });
+
   it('keeps the other blocks of a line where they stand while one is placed out of it', () => {
     const blocks = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
     const free = layoutBlocks(ROOT, blocks, 4);

@@ -281,7 +281,18 @@ export function layoutBlocks(
             },
           ];
     });
+    const held = line.flatMap((slot) => {
+      const shape = shapes.get(slot.id);
+      return shape !== undefined &&
+        shape.items.length > 0 &&
+        placed.has(shape.id)
+        ? [top + shape.height]
+        : [];
+    });
     if (slots.length === 0) {
+      if (held.length > 0) {
+        top = Math.max(...held) + LINE_GAP;
+      }
       continue;
     }
     const fixed = [...obstacles, ...placedBlocks];
@@ -313,7 +324,8 @@ export function layoutBlocks(
     inLine.forEach(setBlock);
     inLine.sort((a, b) => a.x - b.x);
     placedLines.push(inLine);
-    top = Math.max(...inLine.map((box) => box.y + box.height)) + LINE_GAP;
+    top =
+      Math.max(...inLine.map((box) => box.y + box.height), ...held) + LINE_GAP;
   }
 
   placedLines.forEach((line, lineIndex) => {

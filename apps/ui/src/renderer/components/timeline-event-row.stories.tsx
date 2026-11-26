@@ -3,6 +3,7 @@ import { GitPullRequest, MessageSquare, Play, ShieldAlert } from 'lucide-react';
 import { fn } from 'storybook/test';
 
 import { TimelineEventRow, type TimelineTone } from './timeline-event-row';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 
 const AT = new Date('2026-11-23T10:58:00').toISOString();
@@ -85,6 +86,34 @@ export const Live: Story = {
       </>
     ),
     live: true,
+  },
+};
+
+export const WithMeta: Story = {
+  args: {
+    sentence: (
+      <>
+        <Badge
+          variant="muted"
+          className="shrink-0 px-1.5 py-0 font-mono font-normal">
+          GEN-409
+        </Badge>
+        <span className="min-w-0 truncate font-medium">
+          Fix the login redirect
+        </span>
+      </>
+    ),
+    meta: (
+      <>
+        <span data-slot="timeline-project" className="min-w-0 truncate">
+          Geniro
+        </span>
+        {' · '}
+        <span className="shrink-0 whitespace-nowrap">started</span>
+      </>
+    ),
+    onActivate: fn(),
+    activateLabel: 'Show Fix the login redirect on the canvas',
   },
 };
 

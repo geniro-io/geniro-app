@@ -6,7 +6,6 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { TaskDao } from '../../tasks/dao/task.dao';
-import type { Task } from '../../tasks/entity/task.entity';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
 import {
   type CommandCenterBoard,
@@ -18,6 +17,7 @@ import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
+import { cardsByRun, taskRefOf } from '../utils/task-ref';
 
 const ACTIVITY_MAX = 140;
 
@@ -35,14 +35,6 @@ function activityOf(run: RunWire): string | null {
   return line.length > ACTIVITY_MAX
     ? `${line.slice(0, ACTIVITY_MAX - 1)}…`
     : line;
-}
-
-function cardsByRun(tasks: readonly Task[]): Map<string, Task> {
-  return new Map(
-    tasks.flatMap((task) =>
-      task.runId === null ? [] : [[task.runId, task] as const],
-    ),
-  );
 }
 
 /**
@@ -175,15 +167,7 @@ export class CommandCenterService {
       const task = taskOf.get(run.id) ?? null;
       return {
         run,
-        task:
-          task === null
-            ? null
-            : {
-                id: task.id,
-                identifier: run.taskIdentifier,
-                title: task.title,
-                status: task.status,
-              },
+        task: taskRefOf(run, task),
         handle: entry?.handle ?? null,
         note: entry?.note ?? null,
         column: boardColumnOf(run, task?.status ?? null),

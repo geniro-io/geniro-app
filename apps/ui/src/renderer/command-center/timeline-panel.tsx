@@ -181,26 +181,69 @@ function RowActions({
   );
 }
 
-function sentenceNodes(event: TimelineEvent): React.JSX.Element {
-  const sentence = sentenceOf(event);
-  const title = event.threadTitle ?? 'Untitled thread';
+function namesThread(event: TimelineEvent, sentence: Sentence): boolean {
+  return sentence.named && event.threadRunId !== null;
+}
+
+function sentenceNodes(
+  event: TimelineEvent,
+  sentence: Sentence,
+): React.JSX.Element {
+  const name = event.task?.title ?? event.threadTitle ?? 'Untitled thread';
+  const identifier = event.task?.identifier ?? null;
+  const labelOnMeta = namesThread(event, sentence);
   return (
     <>
       {sentence.before === '' ? null : (
         <span className="shrink-0 whitespace-nowrap">{sentence.before}</span>
       )}
+      {identifier === null ? null : (
+        <Badge
+          data-slot="timeline-task-identifier"
+          variant="muted"
+          className="shrink-0 px-1.5 py-0 font-mono font-normal">
+          {identifier}
+        </Badge>
+      )}
       {sentence.named ? (
         <span
           data-slot="timeline-thread-title"
-          title={title}
+          title={name}
           className="min-w-0 truncate font-medium">
-          {title}
+          {name}
         </span>
       ) : null}
-      {sentence.after === '' ? null : (
+      {sentence.after === '' || labelOnMeta ? null : (
         <span className="shrink-0 whitespace-nowrap text-muted-foreground">
           {sentence.after}
         </span>
+      )}
+    </>
+  );
+}
+
+function metaNodes(
+  event: TimelineEvent,
+  sentence: Sentence,
+): React.JSX.Element | null {
+  if (!namesThread(event, sentence)) {
+    return null;
+  }
+  const project = event.project?.name ?? null;
+  const label = sentence.after === '' ? null : sentence.after;
+  if (project === null && label === null) {
+    return null;
+  }
+  return (
+    <>
+      {project === null ? null : (
+        <span data-slot="timeline-project" className="min-w-0 truncate">
+          {project}
+        </span>
+      )}
+      {project === null || label === null ? null : ' · '}
+      {label === null ? null : (
+        <span className="shrink-0 whitespace-nowrap">{label}</span>
       )}
     </>
   );
@@ -220,11 +263,12 @@ function TimelineRow({
   const runId = event.threadRunId;
   const title = event.threadTitle ?? 'Untitled thread';
   const awaiting = event.kind === 'manager_message' && event.awaitingReply;
+  const sentence = sentenceOf(event);
   return (
     <TimelineEventRow
       icon={KIND_META[event.kind].icon}
       tone={toneOf(event)}
-      sentence={sentenceNodes(event)}
+      sentence={sentenceNodes(event, sentence)}
       at={event.at}
       badge={
         awaiting ? (
@@ -235,6 +279,7 @@ function TimelineRow({
           </Badge>
         ) : null
       }
+      meta={metaNodes(event, sentence)}
       detail={event.text}
       actions={
         <RowActions event={event} answerable={answerable} onReply={onReply} />

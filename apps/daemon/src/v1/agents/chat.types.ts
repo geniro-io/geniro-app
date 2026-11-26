@@ -8539,6 +8539,7 @@ export type PromptCacheTtlReason = z.infer<typeof PromptCacheTtlReasonSchema>;
 export const RunProjectRefSchema = z
   .object({ id: z.string(), name: z.string() })
   .meta({ id: 'RunProjectRef' });
+export type RunProjectRef = z.infer<typeof RunProjectRefSchema>;
 
 export const RunWireSchema = z.object({
   id: z.string(),

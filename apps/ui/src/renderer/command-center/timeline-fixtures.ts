@@ -2,11 +2,26 @@ import type { TimelineEvent } from './timeline-panel';
 
 export const TIMELINE_FIXTURE_NOW = new Date('2026-11-17T12:00:00').getTime();
 
+type FixtureCard = NonNullable<TimelineEvent['task']>;
+
+const APP = { id: 'project-app', name: 'Geniro' };
+const LOGIN_CARD: FixtureCard = {
+  id: 'card-login',
+  identifier: 'GEN-409',
+  title: 'Fix the login redirect',
+  status: 'in_review',
+};
 const LOGIN = {
   threadRunId: 'run-login',
   threadTitle: 'Fix the login redirect',
+  task: LOGIN_CARD,
+  project: APP,
 };
-const RELEASE = { threadRunId: 'run-release', threadTitle: 'Release notes' };
+const RELEASE = {
+  threadRunId: 'run-release',
+  threadTitle: 'Release notes',
+  project: APP,
+};
 const BILLING = { threadRunId: 'run-billing', threadTitle: 'Billing export' };
 const SESSIONS = {
   threadRunId: 'run-sessions',
@@ -25,6 +40,8 @@ function event(
     at: new Date(when).toISOString(),
     threadRunId: null,
     threadTitle: null,
+    task: null,
+    project: null,
     text: null,
     detail: null,
     awaitingReply: false,

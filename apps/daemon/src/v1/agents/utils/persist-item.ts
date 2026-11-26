@@ -24,6 +24,7 @@ import { readModelParameters } from './model-parameters';
 import { readDisplayedPullRequests } from './pull-request-capture';
 import { readRunGoals, readThreadOutcome, threadOutcomeOf } from './run-goals';
 import { readRunOutcomes } from './run-outcomes';
+import { runProjectRefOf } from './run-project-ref';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
 import { readRunStageProgress } from './stage-progress';
@@ -263,10 +264,7 @@ export function runToWire(
     groupId: run.groupId,
     taskId: run.taskId,
     taskIdentifier: run.taskIdentifier,
-    project:
-      run.projectId !== null && projectName !== null
-        ? { id: run.projectId, name: projectName }
-        : null,
+    project: runProjectRefOf(run.projectId, projectName),
     analysisSourceRunId: run.analysisSourceRunId,
     analysisSourceSeq: run.analysisSourceSeq,
     analysisTeamSlug: run.analysisTeamSlug,

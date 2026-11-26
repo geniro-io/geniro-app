@@ -1,12 +1,18 @@
 import { Injectable } from '@nestjs/common';
 
+import type { RunProjectRef } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
+import { runProjectRefOf } from '../../agents/utils/run-project-ref';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { TaskDao } from '../../tasks/dao/task.dao';
 import type {
+  CommandCenterTaskRef,
   CommandCenterTimeline,
   CommandCenterTimelineEvent,
 } from '../command-center.types';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import { CommandCenterTimelineDao } from '../dao/command-center-timeline.dao';
+import { cardsByRun, taskRefOf } from '../utils/task-ref';
 import {
   approvalEvent,
   errorLineOf,
@@ -27,6 +33,12 @@ import { CommandCenterService } from './command-center.service';
 const FAR_FUTURE = new Date(8.64e15);
 const UNTITLED_THREAD = 'Untitled thread';
 
+interface TimelineThread {
+  title: string | null;
+  task: CommandCenterTaskRef | null;
+  project: RunProjectRef | null;
+}
+
 /**
  * The command center's timeline: what the manager said and was told, and what
  * its threads did, merged newest first. Its threads are every run on the
@@ -39,6 +51,8 @@ export class CommandCenterTimelineService {
     private readonly roster: CommandCenterRosterDao,
     private readonly items: ItemDao,
     private readonly timeline: CommandCenterTimelineDao,
+    private readonly tasks: TaskDao,
+    private readonly projects: ProjectScopeService,
   ) {}
 
   async page(
@@ -104,7 +118,7 @@ export class CommandCenterTimelineService {
     ];
 
     const page = pageOf(candidates, limit);
-    const titles = await this.titlesOf(
+    const threads = await this.threadsOf(
       page.rows.flatMap((row) =>
         row.threadRunId === null ? [] : [row.threadRunId],
       ),
@@ -113,6 +127,8 @@ export class CommandCenterTimelineService {
     return {
       events: page.rows.map((row): CommandCenterTimelineEvent => {
         const threadRunId = row.threadRunId;
+        const thread =
+          threadRunId === null ? undefined : threads.get(threadRunId);
         return {
           id: row.id,
           at: row.at.toISOString(),
@@ -121,9 +137,9 @@ export class CommandCenterTimelineService {
           threadTitle:
             threadRunId === null
               ? null
-              : (titles.get(threadRunId) ??
-                row.fallbackTitle ??
-                UNTITLED_THREAD),
+              : (thread?.title ?? row.fallbackTitle ?? UNTITLED_THREAD),
+          task: thread?.task ?? null,
+          project: thread?.project ?? null,
           text: row.text,
           detail: row.detail,
           awaitingReply: row.awaitingReply,
@@ -157,12 +173,31 @@ export class CommandCenterTimelineService {
     });
   }
 
-  private async titlesOf(runIds: string[]): Promise<Map<string, string>> {
-    const runs = await this.timeline.titlesOf([...new Set(runIds)]);
+  private async threadsOf(
+    runIds: string[],
+  ): Promise<Map<string, TimelineThread>> {
+    const ids = [...new Set(runIds)];
+    const runs = await this.timeline.threadRefsOf(ids);
+    const [cards, projectNames] = await Promise.all([
+      this.tasks.listByRunIds(ids),
+      this.projects.liveNamesOf(runs.map((run) => run.projectId)),
+    ]);
+    const cardOf = cardsByRun(cards);
     return new Map(
-      runs.flatMap((run): [string, string][] =>
-        run.title === null ? [] : [[run.id, run.title]],
-      ),
+      runs.map((run): [string, TimelineThread] => {
+        const projectName =
+          run.projectId === null
+            ? null
+            : (projectNames.get(run.projectId) ?? null);
+        return [
+          run.id,
+          {
+            title: run.title,
+            task: taskRefOf(run, cardOf.get(run.id) ?? null),
+            project: runProjectRefOf(run.projectId, projectName),
+          },
+        ];
+      }),
     );
   }
 }

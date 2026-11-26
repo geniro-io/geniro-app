@@ -4259,6 +4259,18 @@ export interface CommandCenterTimelineEvent {
     threadTitle: string | null;
     /**
      * 
+     * @type {CommandCenterTaskRef}
+     * @memberof CommandCenterTimelineEvent
+     */
+    task: CommandCenterTaskRef | null;
+    /**
+     * 
+     * @type {RunProjectRef}
+     * @memberof CommandCenterTimelineEvent
+     */
+    project: RunProjectRef | null;
+    /**
+     * 
      * @type {string}
      * @memberof CommandCenterTimelineEvent
      */

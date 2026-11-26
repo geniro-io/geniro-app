@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import { UsageActivity } from '../../stats/entity/usage-activity.entity';
+import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
 import { commandCenterDb } from '../__tests__/command-center-db';
 import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
@@ -48,12 +50,14 @@ describe('CommandCenterTimelineService', () => {
   let db: Db;
   let managerRunId: string | null;
   let activeRunIds: string[];
+  let liveProjects: Map<string, string>;
   let service: CommandCenterTimelineService;
 
   beforeEach(async () => {
     db = await commandCenterDb();
     managerRunId = 'manager';
     activeRunIds = [];
+    liveProjects = new Map([['project-1', 'Geniro']]);
     const board = {
       managerRunId: vi.fn(async () => managerRunId),
       activeThreads: vi.fn(async () => ({
@@ -61,11 +65,19 @@ describe('CommandCenterTimelineService', () => {
         runs: activeRunIds.map((id) => ({ id }) as unknown as RunWire),
       })),
     };
+    const projects = {
+      liveNamesOf: vi.fn(async (ids: Iterable<string | null>) => {
+        const wanted = new Set(ids);
+        return new Map([...liveProjects].filter(([id]) => wanted.has(id)));
+      }),
+    };
     service = new CommandCenterTimelineService(
       board as unknown as CommandCenterService,
       new CommandCenterRosterDao(db.em),
       new ItemDao(db.em),
       new CommandCenterTimelineDao(db.em),
+      new TaskDao(db.em),
+      projects as unknown as ProjectScopeService,
     );
   });
 
@@ -461,6 +473,145 @@ describe('CommandCenterTimelineService', () => {
       .map((event) => event.awaitingReply);
 
     expect(replies).toEqual([false, false, true]);
+  });
+
+  describe('rows name their board card and project', () => {
+    const CARD = {
+      id: 'card-12',
+      identifier: 'GEN-12',
+      title: 'Ship the export',
+      status: 'in_progress',
+    };
+
+    beforeEach(async () => {
+      await db.seedRun('manager', {
+        commandCenter: true,
+        title: 'Manager',
+        status: 'running',
+        createdAt: at(0),
+      });
+      await db.seedRun('card-thread', {
+        title: 'Build the export',
+        status: 'running',
+        createdAt: at(100),
+        projectId: 'project-1',
+        taskId: 'card-12',
+        taskIdentifier: 'GEN-12',
+      });
+      await db.seedTask('card-thread', 'in_progress', {
+        id: 'card-12',
+        title: 'Ship the export',
+      });
+      await db.seedRun('loose-thread', {
+        title: 'Loose chat',
+        status: 'running',
+        createdAt: at(110),
+        projectId: 'project-1',
+      });
+      await db.seedRun('orphan-thread', {
+        title: 'Orphan chat',
+        status: 'running',
+        createdAt: at(120),
+        projectId: 'project-deleted',
+      });
+      await db.seedRoster('manager', 'card-thread', 't1', {
+        joinedAt: at(100),
+      });
+      await db.seedRoster('manager', 'loose-thread', 't2', {
+        joinedAt: at(110),
+      });
+      await db.seedRoster('manager', 'orphan-thread', 't3', {
+        joinedAt: at(120),
+      });
+      await db.seedItem(
+        'card-thread',
+        1,
+        at(200),
+        'stage_change',
+        stagePayload('complete', 'Build', 'shipped'),
+      );
+      await db.seedItem(
+        'loose-thread',
+        1,
+        at(210),
+        'stage_change',
+        stagePayload('complete', 'Review', 'looks fine'),
+      );
+      await db.seedItem(
+        'orphan-thread',
+        1,
+        at(220),
+        'stage_change',
+        stagePayload('complete', 'Build', 'built'),
+      );
+      await db.seedItem(
+        'manager',
+        1,
+        at(230),
+        'message',
+        { text: 'hello' },
+        {
+          role: 'user',
+        },
+      );
+      await persist(
+        message({
+          fromRunId: 'manager',
+          toRunId: 'card-thread',
+          text: 'status?',
+          createdAt: at(240),
+        }),
+      );
+    });
+
+    it("names a card thread with its card's key and the card's current title, not the thread's", async () => {
+      const cardRows = (await allEvents()).filter(
+        (event) => event.threadRunId === 'card-thread',
+      );
+
+      expect(cardRows.map((event) => event.threadTitle)).toEqual([
+        'Build the export',
+        'Build the export',
+        'Build the export',
+      ]);
+      expect(cardRows.map((event) => event.task)).toEqual([CARD, CARD, CARD]);
+    });
+
+    it('gives a thread without a card no card, and its live project', async () => {
+      const looseRows = (await allEvents()).filter(
+        (event) => event.threadRunId === 'loose-thread',
+      );
+
+      expect(looseRows).toHaveLength(2);
+      expect(looseRows.map((event) => event.task)).toEqual([null, null]);
+      expect(looseRows.map((event) => event.project)).toEqual([
+        { id: 'project-1', name: 'Geniro' },
+        { id: 'project-1', name: 'Geniro' },
+      ]);
+    });
+
+    it('gives a thread whose project was deleted no project', async () => {
+      const orphanRows = (await allEvents()).filter(
+        (event) => event.threadRunId === 'orphan-thread',
+      );
+
+      expect(orphanRows).toHaveLength(2);
+      expect(orphanRows.map((event) => event.project)).toEqual([null, null]);
+    });
+
+    it('gives a row that names no thread neither a card nor a project', async () => {
+      const wrote = (await allEvents()).filter(
+        (event) => event.kind === 'user_message',
+      );
+
+      expect(wrote).toEqual([
+        expect.objectContaining({
+          threadRunId: null,
+          task: null,
+          project: null,
+        }),
+      ]);
+    });
   });
 
   it('answers an empty timeline when there is no manager', async () => {

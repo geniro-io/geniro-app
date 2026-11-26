@@ -16,6 +16,7 @@ function fakeProcess(): EventEmitter & { pid: number } {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('installCrashGuards', () => {
@@ -173,6 +174,72 @@ describe('installCrashGuards', () => {
     expect(() =>
       target.emit('unhandledRejection', new Error('floating')),
     ).not.toThrow();
+  });
+
+  it('records the error after the crash mark and before the self-SIGTERM', () => {
+    const target = fakeProcess();
+    const order: string[] = [];
+    const err = new Error('boom');
+    installCrashGuards(
+      {
+        log: () => {},
+        kill: () => order.push('kill'),
+        exit: () => {},
+        markCrash: () => order.push('mark'),
+        recordError: (recorded) =>
+          order.push(recorded === err ? 'record' : 'another error'),
+      },
+      target,
+    );
+
+    target.emit('uncaughtException', err);
+
+    expect(order).toEqual(['mark', 'record', 'kill']);
+  });
+
+  it('still shuts down when the error record cannot be written', () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const target = fakeProcess();
+    const kill = vi.fn();
+    installCrashGuards(
+      {
+        log: () => {},
+        kill,
+        exit: () => {},
+        recordError: () => {
+          throw new Error('ENOSPC');
+        },
+      },
+      target,
+    );
+
+    target.emit('uncaughtException', new Error('boom'));
+
+    expect(kill).toHaveBeenCalledWith(4242, 'SIGTERM');
+    expect(consoleError).toHaveBeenCalledWith(
+      'crash guard: error record itself failed',
+    );
+  });
+
+  it('records only the exception that began the shutdown, not those raised during it', () => {
+    vi.useFakeTimers();
+    const recordError = vi.fn();
+    const target = fakeProcess();
+    const first = new Error('boom');
+    const kill = vi.fn(() => {
+      target.emit('uncaughtException', new Error('a shutdown hook failed'));
+    });
+    installCrashGuards(
+      { log: () => {}, kill, exit: () => {}, recordError },
+      target,
+    );
+
+    target.emit('uncaughtException', first);
+
+    expect(recordError).toHaveBeenCalledTimes(1);
+    expect(recordError).toHaveBeenCalledWith(first);
   });
 
   it('the failsafe sits past the registry drain but inside the UI kill grace', () => {

@@ -5118,35 +5118,32 @@ describe('TeamExecutorService', () => {
     });
   });
 
-  it('boot reconcile settles the turns and calls the transcript left open', async () => {
-    // The renderer reads a member's liveness and a call block's status off the
-    // TRANSCRIPT before node_state, so failing the member rows alone left the
-    // card and the call block spinning under the failed run.
-    const { service, runDao, nodeDao, itemDao } = setup();
-    const orphan = await runDao.create({
+  const openCallRows = [
+    ['orch', 'status', { nodeId: 'orch', status: 'running' }],
+    [
+      'orch',
+      'call_started',
+      {
+        callId: 'c1',
+        callerNodeId: 'orch',
+        calleeNodeId: 'poet',
+        mode: 'sync',
+        message: 'write',
+      },
+    ],
+    ['poet', 'status', { nodeId: 'poet', status: 'running', callId: 'c1' }],
+  ] as const;
+
+  async function seedOpenCall(ctx: ReturnType<typeof setup>) {
+    const orphan = await ctx.runDao.create({
       teamId: 'ghost',
       status: 'running',
       cwd: dir,
     });
-    await nodeDao.createPending(orphan.id, 'orch');
-    await nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
-    const rows = [
-      ['orch', 'status', { nodeId: 'orch', status: 'running' }],
-      [
-        'orch',
-        'call_started',
-        {
-          callId: 'c1',
-          callerNodeId: 'orch',
-          calleeNodeId: 'poet',
-          mode: 'sync',
-          message: 'write',
-        },
-      ],
-      ['poet', 'status', { nodeId: 'poet', status: 'running', callId: 'c1' }],
-    ] as const;
-    for (const [index, [memberId, kind, payload]] of rows.entries()) {
-      await itemDao.create({
+    await ctx.nodeDao.createPending(orphan.id, 'orch');
+    await ctx.nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+    for (const [index, [memberId, kind, payload]] of openCallRows.entries()) {
+      await ctx.itemDao.create({
         runId: orphan.id,
         memberId,
         seq: index,
@@ -5154,11 +5151,59 @@ describe('TeamExecutorService', () => {
         payload: JSON.stringify(payload),
       });
     }
+    return orphan;
+  }
+
+  it('names HOW the previous daemon ended on the interrupted row and on the call it closed', async () => {
+    const ctx = setup();
+    const orphan = await seedOpenCall(ctx);
+
+    await ctx.service.reconcileOrphanedRuns(
+      'unknown',
+      'killed by SIGKILL, memory 1.2 GB',
+    );
+
+    const written = ctx.itemDao.items
+      .filter((i) => i.runId === orphan.id && i.seq >= openCallRows.length)
+      .map((i) => ({
+        memberId: i.memberId,
+        kind: i.kind,
+        payload: JSON.parse(i.payload) as Record<string, unknown>,
+      }));
+    expect(written.find((i) => i.kind === 'error')?.payload).toEqual({
+      message:
+        'team run interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) while it was running',
+      interrupted: true,
+      interruptCause: 'unknown',
+      interruptDetail: 'killed by SIGKILL, memory 1.2 GB',
+    });
+    expect(written).toContainEqual(
+      expect.objectContaining({
+        memberId: 'orch',
+        kind: 'call_result',
+        payload: expect.objectContaining({
+          callId: 'c1',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error:
+            'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) before the call finished',
+        }),
+      }),
+    );
+  });
+
+  it('boot reconcile settles the turns and calls the transcript left open', async () => {
+    // The renderer reads a member's liveness and a call block's status off the
+    // TRANSCRIPT before node_state, so failing the member rows alone left the
+    // card and the call block spinning under the failed run.
+    const ctx = setup();
+    const { service, itemDao } = ctx;
+    const orphan = await seedOpenCall(ctx);
 
     await service.reconcileOrphanedRuns('crash');
 
     const written = itemDao.items
-      .filter((i) => i.runId === orphan.id && i.seq >= rows.length)
+      .filter((i) => i.runId === orphan.id && i.seq >= openCallRows.length)
       .map((i) => ({
         memberId: i.memberId,
         kind: i.kind,

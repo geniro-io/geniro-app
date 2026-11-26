@@ -49,6 +49,25 @@ export const DAEMON_CRASH_MARK_NAME = 'daemon-crashed';
  */
 export const DAEMON_STOP_CAUSE_NAME = 'daemon-stop-cause';
 
+/**
+ * Written by the UI for every exit of a daemon that had come up and that the
+ * app did not end itself, and for every daemon the app had to finish with
+ * SIGKILL: `{"pid", "code", "signal", "at", "killedAfterMs"}`. Read and removed
+ * by the next daemon's boot, which names the exit on the rows of the turns it
+ * cut off.
+ *
+ * TWIN PARSER: the UI's `DAEMON_EXIT_NOTE_NAME` and `writeExitNote` in
+ * `apps/ui/src/main/daemon-pidfile.ts` write what `consumeExitNote` in
+ * `./previous-stop.ts` reads.
+ */
+export const DAEMON_EXIT_NOTE_NAME = 'daemon-exit.json';
+
+/** The daemon's own beat (pid, start, time, RSS), read by the next boot (`./previous-stop.ts`). */
+export const DAEMON_HEARTBEAT_NAME = 'daemon-heartbeat.json';
+
+/** The crash guards' one-line summary of an uncaught error, read by the next boot. */
+export const DAEMON_LAST_ERROR_NAME = 'daemon-last-error.json';
+
 /** Highest valid TCP port. */
 export const MAX_TCP_PORT = 65535;
 

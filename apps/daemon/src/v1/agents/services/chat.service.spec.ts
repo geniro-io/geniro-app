@@ -10101,6 +10101,41 @@ describe('ChatService', () => {
     },
   );
 
+  it('names HOW the previous daemon ended on the interrupted row, when the records said', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.reconcileOrphanedRuns(
+      'unknown',
+      'killed by SIGKILL, memory 1.2 GB',
+    );
+
+    const error = (await itemDao.getByRun(run.id)).find(
+      (i) => i.kind === 'error',
+    );
+    expect(JSON.parse(error!.payload)).toEqual({
+      message:
+        'run interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) while this turn was running',
+      interrupted: true,
+      interruptCause: 'unknown',
+      interruptDetail: 'killed by SIGKILL, memory 1.2 GB',
+    });
+  });
+
+  it('writes no interruptDetail when nobody recorded how the daemon ended', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.updateById(run.id, { status: 'running' });
+
+    await service.reconcileOrphanedRuns('unknown');
+
+    const error = (await itemDao.getByRun(run.id)).find(
+      (i) => i.kind === 'error',
+    );
+    expect(JSON.parse(error!.payload)).not.toHaveProperty('interruptDetail');
+  });
+
   it.each([
     [
       'self-update',

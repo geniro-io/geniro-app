@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   consumeCrashMark,
   DAEMON_CRASH_MARK_NAME,
+  DAEMON_EXIT_NOTE_NAME,
   DAEMON_LOOPBACK_HOST,
   DAEMON_MIGRATING_PREFIX,
   DAEMON_MIGRATION_ERROR_NAME,
@@ -27,6 +28,7 @@ import {
   readDaemonInfo,
   readMigrationError,
   stampEntry,
+  writeExitNote,
   writeStopCause,
 } from './daemon-pidfile';
 
@@ -292,6 +294,79 @@ describe('writeStopCause', () => {
     expect(readFileSync(decoy, 'utf8')).toBe('untouched');
     expect(readFileSync(path, 'utf8')).toBe('quit');
     expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('writeExitNote', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-exit-note-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const exit = {
+    pid: 4242,
+    code: null,
+    signal: 'SIGKILL' as const,
+    at: new Date('2026-11-26T10:00:00.000Z'),
+  };
+
+  it('writes how the daemon exited as JSON, owner-only', () => {
+    const path = join(dir, DAEMON_EXIT_NOTE_NAME);
+
+    writeExitNote(path, exit);
+
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
+      pid: 4242,
+      code: null,
+      signal: 'SIGKILL',
+      at: '2026-11-26T10:00:00.000Z',
+      killedAfterMs: null,
+    });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('writes how long the app waited before it killed the daemon itself', () => {
+    const path = join(dir, DAEMON_EXIT_NOTE_NAME);
+
+    writeExitNote(path, { ...exit, killedAfterMs: 7_000 });
+
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
+      signal: 'SIGKILL',
+      killedAfterMs: 7_000,
+    });
+  });
+
+  it('replaces an earlier note and a leftover at the staging name rather than writing through it', () => {
+    const path = join(dir, DAEMON_EXIT_NOTE_NAME);
+    writeFileSync(path, '{"pid":1}');
+    const decoy = join(dir, 'decoy');
+    writeFileSync(decoy, 'untouched', { mode: 0o644 });
+    symlinkSync(decoy, `${path}.${process.pid}.tmp`);
+
+    writeExitNote(path, { ...exit, code: 1, signal: null });
+
+    expect(readFileSync(decoy, 'utf8')).toBe('untouched');
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
+      pid: 4242,
+      code: 1,
+      signal: null,
+    });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('DAEMON_EXIT_NOTE_NAME', () => {
+  it('names the file the daemon reads', () => {
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/utils/handshake.ts'),
+      'utf8',
+    );
+    expect(daemon).toContain(
+      `export const DAEMON_EXIT_NOTE_NAME = '${DAEMON_EXIT_NOTE_NAME}';`,
+    );
   });
 });
 

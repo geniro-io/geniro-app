@@ -59,8 +59,12 @@ export function continuesUnattended(
   return cause === 'self-update' || cause === 'restart';
 }
 
-export function interruptCauseClause(cause: InterruptCause): string {
-  return INTERRUPT_CAUSE_CLAUSE[cause];
+export function interruptCauseClause(
+  cause: InterruptCause,
+  detail: string | null = null,
+): string {
+  const clause = INTERRUPT_CAUSE_CLAUSE[cause];
+  return detail === null ? clause : `${clause} (${detail})`;
 }
 
 /** Why the armed autopilot leaves a card alone after its run was cut off. */

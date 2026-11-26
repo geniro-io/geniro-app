@@ -18,9 +18,11 @@ import {
   consumeCrashMark,
   DAEMON_COMPACTION_MARK_NAME,
   DAEMON_CRASH_MARK_NAME,
+  DAEMON_EXIT_NOTE_NAME,
   DAEMON_MIGRATION_ERROR_NAME,
   DAEMON_MIGRATION_EXIT_CODE,
   DAEMON_STOP_CAUSE_NAME,
+  type DaemonExitNote,
   type DaemonInfo,
   type DaemonMigrationError,
   type DaemonMigrationProgress,
@@ -32,6 +34,7 @@ import {
   readDaemonInfo,
   readMigrationError,
   stampEntry,
+  writeExitNote,
   writeStopCause,
 } from './daemon-pidfile';
 import { adoptLoginShellPath } from './process-path';
@@ -367,6 +370,8 @@ export interface DaemonSupervisorOptions {
   consumeCrashMark?: (pid: number) => boolean;
   /** Leave the next daemon the note of why this one stopped (`DAEMON_STOP_CAUSE_NAME`). */
   writeStopCause?: (cause: DaemonStopCause) => void;
+  /** Leave the record of how an owned daemon exited (`DAEMON_EXIT_NOTE_NAME`). */
+  writeExitNote?: (exit: DaemonExitNote) => void;
   /** Whether the next start compacts the database first (`DAEMON_COMPACTION_MARK_NAME`). */
   compactionPending?: () => boolean;
   /** The daemon's report of the migration that failed (`DAEMON_MIGRATION_ERROR_NAME`). */
@@ -493,6 +498,7 @@ export class DaemonSupervisor {
   private readonly removePidfile: (path: string) => void;
   private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly writeStopCause: (cause: DaemonStopCause) => void;
+  private readonly writeExitNote: (exit: DaemonExitNote) => void;
   private readonly compactionPending: () => boolean;
   private readonly readMigrationError: () => DaemonMigrationError | null;
   private readonly onMigrating: (
@@ -538,6 +544,13 @@ export class DaemonSupervisor {
         writeStopCause(
           join(app.getPath('userData'), DAEMON_STOP_CAUSE_NAME),
           cause,
+        ));
+    this.writeExitNote =
+      options.writeExitNote ??
+      ((exit) =>
+        writeExitNote(
+          join(app.getPath('userData'), DAEMON_EXIT_NOTE_NAME),
+          exit,
         ));
     this.compactionPending =
       options.compactionPending ??
@@ -956,6 +969,7 @@ export class DaemonSupervisor {
       }
       return;
     }
+    this.noteKilledUnresponsive(pid);
     const killDeadline = Date.now() + KILL_CONFIRM_MS;
     while (Date.now() < killDeadline) {
       if (!this.isAlive(pid)) {
@@ -1070,6 +1084,9 @@ export class DaemonSupervisor {
       }
       if (!wasServing || this.stopping || this.endedOnPurpose.has(child)) {
         return;
+      }
+      if (child.pid !== undefined) {
+        this.noteExit({ pid: child.pid, code, signal, at: new Date() });
       }
       // A crash SIGTERMs itself so the shutdown hooks still run, and so
       // exits exactly as the idle exit does — its mark is what tells them apart.
@@ -1210,6 +1227,21 @@ export class DaemonSupervisor {
   }
 
   /**
+   * Record how the daemon exited. A note that cannot be written must not stop
+   * the exit from being handled, so a failure only logs.
+   */
+  private noteExit(exit: DaemonExitNote): void {
+    try {
+      this.writeExitNote(exit);
+    } catch (err) {
+      this.log(
+        'warn',
+        `could not record how the daemon exited (code ${exit.code ?? 'none'}, signal ${exit.signal ?? 'none'}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * Wait for an in-flight start or restart to settle — but only so long; see
    * {@link STOP_WAITS_FOR_START_MS}. Past the bound, `stop()` goes on to end
    * whatever child it can see, and the start still running finds `stopping`
@@ -1226,15 +1258,29 @@ export class DaemonSupervisor {
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {
+    const exit = new Promise<boolean>((resolve) => {
+      child.once('exit', () => resolve(true));
+    });
     child.kill('SIGTERM');
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => {
-        child.once('exit', () => resolve(true));
-      }),
+      exit,
       delay(this.shutdownGraceMs).then(() => false),
     ]);
     if (!exited) {
       child.kill('SIGKILL');
+      if (child.pid !== undefined) {
+        this.noteKilledUnresponsive(child.pid);
+      }
     }
+  }
+
+  private noteKilledUnresponsive(pid: number): void {
+    this.noteExit({
+      pid,
+      code: null,
+      signal: 'SIGKILL',
+      at: new Date(),
+      killedAfterMs: this.shutdownGraceMs,
+    });
   }
 }

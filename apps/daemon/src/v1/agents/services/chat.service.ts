@@ -1002,7 +1002,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * carries it so the task board can tell a stop it may continue from a crash it
    * must not (`TaskSettleService`).
    */
-  async reconcileOrphanedRuns(cause: InterruptCause): Promise<void> {
+  async reconcileOrphanedRuns(
+    cause: InterruptCause,
+    detail: string | null = null,
+  ): Promise<void> {
     try {
       const em = this.em.fork();
       const stale = await this.runDao.listRunningChats(em);
@@ -1026,13 +1029,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             'error',
             null,
             {
-              message: `run interrupted — ${interruptCauseClause(cause)} while this turn was running${continues ? ' — work continues' : ''}`,
+              message: `run interrupted — ${interruptCauseClause(cause, detail)} while this turn was running${continues ? ' — work continues' : ''}`,
               // Written at BOOT, which can be hours after the work stopped — so
               // a clock reading this row as the turn's end must not (the
               // renderer's wall-clock fallback ends such a turn at its last
               // real row).
               interrupted: true,
               interruptCause: cause,
+              ...(detail !== null ? { interruptDetail: detail } : {}),
               ...(continues ? { continues: true } : {}),
             },
           );

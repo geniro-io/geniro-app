@@ -1,12 +1,21 @@
+import type { PreviousStop } from './previous-stop';
 import { continuesUnattended, type InterruptCause } from './stop-cause';
 
 /** What the boot needs from each service that closes an interrupted run. */
 export interface InterruptedRunsDeps {
-  /** Read and remove the UI's note of why the previous daemon stopped. */
-  readCause: () => InterruptCause;
-  chats: { reconcileOrphanedRuns: (cause: InterruptCause) => Promise<void> };
+  /** Read and remove the notes of why and how the previous daemon stopped. */
+  readStop: () => PreviousStop;
+  chats: {
+    reconcileOrphanedRuns: (
+      cause: InterruptCause,
+      detail: string | null,
+    ) => Promise<void>;
+  };
   teams: {
-    reconcileOrphanedRuns: (cause: InterruptCause) => Promise<void>;
+    reconcileOrphanedRuns: (
+      cause: InterruptCause,
+      detail: string | null,
+    ) => Promise<void>;
   };
   tasks: { settleCutOffCards: (projectId: null) => Promise<void> };
   /**
@@ -29,8 +38,9 @@ export interface InterruptedRunsDeps {
  */
 export async function closeInterruptedRuns(
   deps: InterruptedRunsDeps,
-): Promise<InterruptCause> {
-  const cause = deps.readCause();
+): Promise<PreviousStop> {
+  const stop = deps.readStop();
+  const { cause, detail } = stop;
   // Before the reconciles: a record left over from an update the daemon then
   // crashed out of must not be continued, nor read as already announced.
   if (!continuesUnattended(cause)) {
@@ -40,8 +50,8 @@ export async function closeInterruptedRuns(
       );
     });
   }
-  await deps.chats.reconcileOrphanedRuns(cause);
-  await deps.teams.reconcileOrphanedRuns(cause);
+  await deps.chats.reconcileOrphanedRuns(cause, detail);
+  await deps.teams.reconcileOrphanedRuns(cause, detail);
   await deps.tasks.settleCutOffCards(null).catch((err: unknown) => {
     deps.logError(
       `boot settle of interrupted task cards failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -49,5 +59,5 @@ export async function closeInterruptedRuns(
   });
   // Handed back because the note was removed as it was read: whatever else
   // the boot reconciles from it takes this value, never a second read.
-  return cause;
+  return stop;
 }

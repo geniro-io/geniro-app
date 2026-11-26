@@ -412,7 +412,7 @@ describe('GraphView', () => {
     ).toBe('Working');
     expect(
       manager.querySelector(
-        '[data-slot="graph-manager-state"] svg.animate-spin.spinner-stepped',
+        '[data-slot="graph-manager-state"] [data-slot="spinner"].spinner-stepped',
       ),
     ).not.toBeNull();
     expect(manager.className).not.toContain('cc-breathe');
@@ -434,7 +434,7 @@ describe('GraphView', () => {
     expect(
       manager.querySelector('[data-slot="graph-manager-state"]')!.textContent,
     ).toBe('Idle');
-    expect(manager.querySelector('svg.animate-spin')).toBeNull();
+    expect(manager.querySelector('[data-slot="spinner"]')).toBeNull();
   });
 
   it('keeps the manager on top before its chat exists', async () => {

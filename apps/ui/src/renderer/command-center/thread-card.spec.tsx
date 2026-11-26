@@ -475,7 +475,7 @@ describe('ThreadCard — working', () => {
     const working = render({ attention: 'working' });
     expect(
       working.querySelector(
-        '[data-slot="thread-card-head"] svg.animate-spin.spinner-stepped',
+        '[data-slot="thread-card-head"] [data-slot="spinner"].spinner-stepped',
       ),
     ).not.toBeNull();
     expect(working.className).not.toMatch(/cc-running-border|cc-breathe/);
@@ -490,7 +490,9 @@ describe('ThreadCard — working', () => {
     'inactive',
     'done',
   ])('shows no loader on a %s card', (attention) => {
-    expect(render({ attention }).querySelector('svg.animate-spin')).toBeNull();
+    expect(
+      render({ attention }).querySelector('[data-slot="spinner"]'),
+    ).toBeNull();
   });
 });
 

@@ -1,17 +1,6 @@
-import { cva } from 'class-variance-authority';
 import { Loader, Loader2 } from 'lucide-react';
 
 import { cn } from './utils';
-
-const spinnerVariants = cva('size-3 shrink-0 animate-spin text-primary', {
-  variants: {
-    pace: {
-      smooth: '',
-      stepped: 'spinner-stepped',
-    },
-  },
-  defaultVariants: { pace: 'smooth' },
-});
 
 /**
  * The app's ONE "something is running" spinner.
@@ -22,9 +11,10 @@ const spinnerVariants = cva('size-3 shrink-0 animate-spin text-primary', {
  * `renderer-components.md` forbids — a change to the size or the tone would
  * have had to be made four times and could silently drift between them.
  *
- * `stepped` turns a spoked wheel eight steps a second instead of a smooth arc:
- * a smooth spin repaints on every display frame, which a canvas showing many
- * at once pays for in GPU and renderer time.
+ * `stepped` turns a spoked wheel eight steps a second instead of a smooth arc,
+ * for a surface showing many at once: a smooth spin repaints on every display
+ * frame. It turns a span around the glyph, because Chromium runs an animation
+ * on an SVG element on the main thread, restyling the page every frame.
  *
  * Always `aria-hidden`: it decorates a row that already says in words what is
  * happening, so announcing it again would only interrupt a screen reader.
@@ -36,11 +26,23 @@ export function Spinner({
   className?: string;
   pace?: 'smooth' | 'stepped';
 }): React.JSX.Element {
-  const Glyph = pace === 'stepped' ? Loader : Loader2;
+  if (pace === 'stepped') {
+    return (
+      <span
+        aria-hidden="true"
+        data-slot="spinner"
+        className={cn(
+          'inline-flex size-3 shrink-0 animate-spin spinner-stepped text-primary',
+          className,
+        )}>
+        <Loader className="size-full" />
+      </span>
+    );
+  }
   return (
-    <Glyph
+    <Loader2
       aria-hidden="true"
-      className={cn(spinnerVariants({ pace }), className)}
+      className={cn('size-3 shrink-0 animate-spin text-primary', className)}
     />
   );
 }

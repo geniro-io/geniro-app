@@ -23,9 +23,9 @@ afterEach(() => {
   container.remove();
 });
 
-function draw(node: React.ReactNode): SVGElement {
+function draw(node: React.ReactNode): Element {
   act(() => root.render(node));
-  return container.querySelector('svg')!;
+  return container.firstElementChild!;
 }
 
 describe('Spinner', () => {
@@ -36,12 +36,15 @@ describe('Spinner', () => {
     expect(svg.classList.contains('lucide-loader-circle')).toBe(true);
   });
 
-  it('turns a spoked wheel in steps when stepped', () => {
-    const svg = draw(<Spinner pace="stepped" className="size-4" />);
-    expect(svg.classList.contains('animate-spin')).toBe(true);
-    expect(svg.classList.contains('spinner-stepped')).toBe(true);
-    expect(svg.classList.contains('lucide-loader')).toBe(true);
-    expect(svg.classList.contains('size-4')).toBe(true);
-    expect(svg.getAttribute('aria-hidden')).toBe('true');
+  it('turns a span around a spoked wheel in steps when stepped, never the svg itself', () => {
+    const spinner = draw(<Spinner pace="stepped" className="size-4" />);
+    expect(spinner.tagName).toBe('SPAN');
+    expect(spinner.classList.contains('animate-spin')).toBe(true);
+    expect(spinner.classList.contains('spinner-stepped')).toBe(true);
+    expect(spinner.classList.contains('size-4')).toBe(true);
+    expect(spinner.getAttribute('aria-hidden')).toBe('true');
+    const glyph = spinner.querySelector('svg')!;
+    expect(glyph.classList.contains('lucide-loader')).toBe(true);
+    expect(glyph.classList.contains('animate-spin')).toBe(false);
   });
 });

@@ -76,8 +76,8 @@ function Row({
     <li
       data-slot={slot}
       className="flex min-w-0 flex-col gap-1 py-2 first:pt-0 last:pb-0">
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="min-w-0 text-sm break-words">{text}</span>
+      <div className="flex min-w-0 items-center gap-3 [&>button]:shrink-0">
+        <span className="min-w-0 flex-1 text-sm break-words">{text}</span>
         {action}
       </div>
       {children}
@@ -227,10 +227,10 @@ export function AppUpdateCard({
       icon={Download}
       label="Update available"
       heading="Geniro">
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <div className="flex min-w-0 items-center gap-3 [&>button]:shrink-0">
         <p
           data-slot="settings-attention-app-update"
-          className="m-0 min-w-0 text-sm break-words">
+          className="m-0 min-w-0 flex-1 text-sm break-words">
           {updateStatusText(state)}
         </p>
         {remote ? null : <AppUpdateActions update={update} />}

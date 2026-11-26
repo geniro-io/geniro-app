@@ -575,6 +575,7 @@ export function CommandCenter({
     runId: thread.id,
     identity:
       threadIdentities.get(thread.id) ?? bareThreadIdentity(thread.view.title),
+    attention: thread.view.attention,
     statusText: thread.view.statusText,
   }));
   const contacts = Object.fromEntries(

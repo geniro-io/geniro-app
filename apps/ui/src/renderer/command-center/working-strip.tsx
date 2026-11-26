@@ -1,20 +1,24 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 
 import { CONTROL_HOVER } from '../chats/working-card-parts';
+import { CARD_BUTTON_CLASS } from '../components/card-hover';
 import { ThreadFace } from '../components/thread-face';
 import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
+import type { ThreadAttention } from '../components/thread-labels';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
 import { useElementSize } from '../components/use-element-size';
+import { attentionFrameVariants } from './thread-card';
 
 export interface StripThread {
   runId: string;
   identity: ThreadIdentity;
+  attention: ThreadAttention;
   statusText: string;
 }
 
 const FACE_CLASS = cn(
-  'relative flex shrink-0 cursor-pointer items-center rounded-full p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  'relative flex shrink-0 cursor-pointer items-center rounded-full border p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring',
   CONTROL_HOVER,
 );
 const MORE_CLASS =
@@ -140,8 +144,12 @@ export function WorkingStrip({
           data-run={thread.runId}
           title={titleOf(thread)}
           aria-label={`Open ${thread.identity.title}`}
+          data-attention={thread.attention}
           onClick={() => onOpenThread(thread.runId)}
-          className={FACE_CLASS}>
+          className={cn(
+            FACE_CLASS,
+            attentionFrameVariants({ attention: thread.attention }),
+          )}>
           <span className="pointer-events-none flex">
             <ThreadFace
               look={thread.identity.face}
@@ -149,11 +157,6 @@ export function WorkingStrip({
               size="sm"
             />
           </span>
-          <span
-            aria-hidden="true"
-            data-slot="working-strip-dot"
-            className="absolute top-0 right-0 size-2 animate-pulse rounded-full bg-primary ring-2 ring-card motion-reduce:animate-none"
-          />
         </button>
       ))}
       {hidden.length === 0 ? null : (
@@ -179,17 +182,26 @@ export function WorkingStrip({
             label="Working threads not shown"
             className="w-72 p-1.5">
             {hidden.map((thread) => (
-              <div key={thread.runId} className="rounded-lg px-2 py-1.5">
+              <button
+                key={thread.runId}
+                type="button"
+                data-slot="working-strip-row"
+                data-run={thread.runId}
+                aria-label={`Open ${thread.identity.title}`}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onOpenThread(thread.runId);
+                }}
+                className={cn(
+                  'block w-full cursor-pointer rounded-lg px-2 py-1.5 text-left',
+                  CARD_BUTTON_CLASS,
+                )}>
                 <ThreadHead
                   identity={thread.identity}
                   slot="working-strip-row"
                   ringClassName="ring-popover"
-                  onOpen={() => {
-                    setMoreOpen(false);
-                    onOpenThread(thread.runId);
-                  }}
                 />
-              </div>
+              </button>
             ))}
           </Popover>
         </>

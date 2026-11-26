@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import { bareThreadIdentity } from '../components/thread-head';
+import type { ThreadAttention } from '../components/thread-labels';
+import { ThreadCard } from './thread-card';
 import { fitFaces, type StripThread, WorkingStrip } from './working-strip';
 
 (
@@ -15,6 +17,7 @@ function threadOf(
   runId: string,
   title: string,
   project: string | null = 'Billing',
+  attention: ThreadAttention = 'working',
 ): StripThread {
   return {
     runId,
@@ -22,10 +25,51 @@ function threadOf(
       ...bareThreadIdentity(title),
       face: { kind: 'unknown' },
       project,
-      status: { attention: 'working', text: 'Working' },
+      status: { attention, text: 'Working' },
     },
+    attention,
     statusText: 'Working',
   };
+}
+
+function frameClassesOfCard(attention: ThreadAttention): string[] {
+  const host = document.createElement('div');
+  const cardRoot = createRoot(host);
+  act(() => {
+    cardRoot.render(
+      <ThreadCard
+        title="Card"
+        status="working"
+        statusText="Working"
+        attention={attention}
+        project={null}
+        agentLabel={null}
+        isTeam={false}
+        face={{ kind: 'unknown' }}
+        pullRequest={null}
+        note={null}
+        lastMessage={null}
+        boardCard={null}
+        idleDays={null}
+        lastAt="2026-11-26T10:00:00.000Z"
+        now={Date.parse('2026-11-26T10:05:00.000Z')}
+        onOpenInChats={() => undefined}
+      />,
+    );
+  });
+  const classes = host
+    .querySelector('[data-slot="thread-card"]')!
+    .className.split(' ')
+    .filter(
+      (name) =>
+        name.startsWith('border-') ||
+        name.startsWith('bg-') ||
+        name.startsWith('cc-'),
+    );
+  act(() => {
+    cardRoot.unmount();
+  });
+  return classes;
 }
 
 let root: Root;
@@ -88,15 +132,35 @@ describe('WorkingStrip', () => {
     expect(container.querySelector('[data-slot="working-strip"]')).toBeNull();
   });
 
-  it('draws one face per thread in the order given, each with its working dot', () => {
+  it('draws one face per thread in the order given', () => {
     draw([threadOf('run-b', 'Second'), threadOf('run-a', 'First')]);
     expect(facesOf()).toEqual(['run-b', 'run-a']);
-    expect(
-      container.querySelectorAll('[data-slot="working-strip-dot"]'),
-    ).toHaveLength(2);
-    expect(
-      container.querySelector('[data-slot="working-strip-dot"]')!.className,
-    ).toContain('animate-pulse');
+  });
+
+  it("frames a working face in its card's working colours and running border", () => {
+    draw([threadOf('run-a', 'First')]);
+    const face = container.querySelector<HTMLElement>(
+      '[data-slot="working-strip-thread"]',
+    )!;
+    const cardFrame = frameClassesOfCard('working');
+    expect(cardFrame).toContain('cc-running-border');
+    expect(cardFrame).toContain('border-success/50');
+    expect(face.className.split(' ')).toEqual(
+      expect.arrayContaining(cardFrame),
+    );
+    expect(face.className).not.toContain('bg-primary');
+  });
+
+  it("follows the thread's own attention rather than always drawing working", () => {
+    draw([threadOf('run-a', 'Asking', 'Billing', 'question')]);
+    const face = container.querySelector<HTMLElement>(
+      '[data-slot="working-strip-thread"]',
+    )!;
+    expect(face.dataset.attention).toBe('question');
+    expect(face.className.split(' ')).toEqual(
+      expect.arrayContaining(frameClassesOfCard('question')),
+    );
+    expect(face.className).not.toContain('cc-running-border');
   });
 
   it('titles a face with its title, project and status, and leaves out a missing project', () => {
@@ -178,6 +242,37 @@ describe('WorkingStrip', () => {
     expect(
       document.querySelectorAll('[data-slot="working-strip-row-title"]'),
     ).toHaveLength(0);
+  });
+
+  it('opens a hidden thread from a press anywhere on its row and closes the popover', () => {
+    measureFacesAt(28, 30, 4);
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(80);
+    const onOpenThread = vi.fn();
+    draw(
+      [
+        threadOf('run-a', 'One'),
+        threadOf('run-b', 'Two'),
+        threadOf('run-c', 'Three'),
+      ],
+      onOpenThread,
+    );
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="working-strip-more"]')!
+        .click();
+    });
+    const row = document.querySelector<HTMLButtonElement>(
+      '[data-slot="working-strip-row"][data-run="run-b"]',
+    )!;
+    expect(row.tagName).toBe('BUTTON');
+    act(() => {
+      row.click();
+    });
+    expect(onOpenThread).toHaveBeenCalledWith('run-b');
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    expect(
+      document.querySelector('[data-slot="working-strip-row"]'),
+    ).toBeNull();
   });
 
   it('fits the faces by the widths they are drawn at, padding included', () => {

@@ -16,7 +16,7 @@ export function applyArgSynonyms(
   args: Record<string, unknown>,
   synonyms: ArgSynonyms,
 ): SynonymArgs {
-  const renamed: Record<string, unknown> = {};
+  const renamed: Record<string, unknown> = Object.create(null);
   const givenAs = new Map<string, string>();
   for (const [key, value] of Object.entries(args)) {
     const name =

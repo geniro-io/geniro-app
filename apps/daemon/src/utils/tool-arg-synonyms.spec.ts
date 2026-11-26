@@ -73,6 +73,12 @@ describe('applyArgSynonyms', () => {
       args: { toString: 'x' },
     });
   });
+
+  it('keeps an argument named __proto__ as its own key, so a strict reader refuses it', () => {
+    const read = applyArgSynonyms(JSON.parse('{"__proto__":"x"}'), synonyms);
+
+    expect(read.ok && Object.keys(read.args)).toEqual(['__proto__']);
+  });
 });
 
 describe('withSynonymProperties', () => {

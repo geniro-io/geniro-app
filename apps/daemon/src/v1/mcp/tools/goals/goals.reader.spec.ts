@@ -71,17 +71,31 @@ describe('readGoals', () => {
 });
 
 describe('goalsResultText', () => {
+  const goal = {
+    id: 'g1',
+    text: 'a',
+    source: 'agent' as const,
+    status: 'achieved' as const,
+    evidence: 'ran',
+    memberId: null,
+    createdAt: '2026-11-01T00:00:00.000Z',
+    closedAt: '2026-11-01T00:01:00.000Z',
+  };
+
+  it('answers a close of a closed goal as nothing changed, with the goals after it', () => {
+    expect(
+      goalsResultText('complete', {
+        status: 'unchanged',
+        goals: [goal],
+        reason: 'g1 is already closed (achieved) — nothing changed',
+      }),
+    ).toEqual({
+      text: 'g1 is already closed (achieved) — nothing changed.\n1 goal, 0 open:\n- g1 [achieved] a — evidence: ran',
+      isError: false,
+    });
+  });
+
   it('names what changed and lists the goals after it', () => {
-    const goal = {
-      id: 'g1',
-      text: 'a',
-      source: 'agent' as const,
-      status: 'achieved' as const,
-      evidence: 'ran',
-      memberId: null,
-      createdAt: '2026-11-01T00:00:00.000Z',
-      closedAt: '2026-11-01T00:01:00.000Z',
-    };
     expect(
       goalsResultText('complete', {
         status: 'ok',

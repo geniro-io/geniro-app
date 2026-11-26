@@ -100,6 +100,9 @@ function goalsOrThrow(outcome: GoalsWriteOutcome): RunGoalsWire {
   if (outcome.status === 'ok') {
     return { goals: outcome.goals };
   }
+  if (outcome.status === 'unchanged') {
+    throw new ConflictException('GOAL_CLOSED', outcome.reason);
+  }
   switch (outcome.code) {
     case 'RUN_NOT_FOUND':
     case 'GOAL_NOT_FOUND':

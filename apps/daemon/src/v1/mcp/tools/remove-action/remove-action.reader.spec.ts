@@ -32,4 +32,13 @@ describe('removeActionResultText', () => {
       removeActionResultText({ status: 'removed', text: 'Removed.' }),
     ).toBe('Removed.');
   });
+
+  it('passes an already-removed answer through as its receipt', () => {
+    expect(
+      removeActionResultText({
+        status: 'unchanged',
+        text: 'Already removed — no live action "x".',
+      }),
+    ).toBe('Already removed — no live action "x".');
+  });
 });

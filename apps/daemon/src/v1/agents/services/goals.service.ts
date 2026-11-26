@@ -166,10 +166,7 @@ export class GoalsService implements OnModuleInit {
         return notFound(id);
       }
       if (goal.status !== 'open') {
-        return refuse(
-          'GOAL_CLOSED',
-          `${id} is already closed (${goal.status}); reopen it to close it again`,
-        );
+        return closedAlready(goal, status);
       }
       goal.status = status;
       goal.evidence = evidence;
@@ -234,7 +231,7 @@ export class GoalsService implements OnModuleInit {
       goals: Goal[],
       em: EntityManager,
       run: { id: string; teamId: string | null },
-    ) => Promise<Goal[] | Refusal>,
+    ) => Promise<Goal[] | Refusal | Unchanged>,
   ): Promise<GoalsWriteOutcome> {
     return this.writes.run(runId, async () => {
       const em = this.em.fork();
@@ -251,6 +248,9 @@ export class GoalsService implements OnModuleInit {
         return { status: 'refused', ...changed };
       }
       const goals = (await this.goalDao.listByRun(runId, em)).map(toWire);
+      if ('unchanged' in changed) {
+        return { status: 'unchanged', goals, reason: changed.unchanged };
+      }
       await this.project(runId, goals, em);
       return { status: 'ok', goals, changed: changed.map(toWire) };
     });
@@ -293,6 +293,10 @@ interface Refusal {
   reason: string;
 }
 
+interface Unchanged {
+  unchanged: string;
+}
+
 export function goalIdOf(number: number): string {
   return `g${number}`;
 }
@@ -329,6 +333,16 @@ function refuse(
   status: 'refused';
 } {
   return { status: 'refused', code, reason };
+}
+
+function closedAlready(goal: Goal, requested: GoalClosingStatus): Unchanged {
+  const nothing = `${goalIdOf(goal.number)} is already closed (${goal.status}) — nothing changed`;
+  return {
+    unchanged:
+      goal.status === requested
+        ? nothing
+        : `${nothing}; reopen it first to close it as ${requested}`,
+  };
 }
 
 function notFound(id: string): Refusal {

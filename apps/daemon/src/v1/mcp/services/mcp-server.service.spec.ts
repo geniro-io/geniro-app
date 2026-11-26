@@ -2668,9 +2668,10 @@ describe('McpServerService', () => {
     expect(published).toHaveLength(1);
   });
 
-  it('tools/call answers a refused publish as an error, and remove_action with its receipt', async () => {
+  it('tools/call answers a refused publish as an error, and a second remove_action as done', async () => {
     const actions = new ActionBroker();
     const removed: string[] = [];
+    const live = new Set(['pr-merged']);
     actions.register('run-1', 'agent', {
       publish: async () => ({
         status: 'refused',
@@ -2678,7 +2679,12 @@ describe('McpServerService', () => {
       }),
       remove: async (actionId, caller) => {
         removed.push(`${actionId} by ${caller}`);
-        return { status: 'removed', text: `Removed action "${actionId}".` };
+        return live.delete(actionId)
+          ? { status: 'removed', text: `Removed action "${actionId}".` }
+          : {
+              status: 'unchanged',
+              text: `Already removed — no live action "${actionId}".`,
+            };
       },
     });
     const call = async (name: string, args: Record<string, unknown>) => {
@@ -2706,7 +2712,15 @@ describe('McpServerService', () => {
       content: [{ type: 'text', text: 'Removed action "pr-merged".' }],
       isError: false,
     });
-    expect(removed).toEqual(['pr-merged by agent']);
+    expect(
+      await call(HOST_REMOVE_ACTION_TOOL, { action_id: 'pr-merged' }),
+    ).toEqual({
+      content: [
+        { type: 'text', text: 'Already removed — no live action "pr-merged".' },
+      ],
+      isError: false,
+    });
+    expect(removed).toEqual(['pr-merged by agent', 'pr-merged by agent']);
   });
 
   it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
@@ -6747,7 +6761,7 @@ describe('goals through the MCP endpoint', () => {
     );
   });
 
-  it('reopens a closed goal as its refusal says, so a retry closes the same goal', async () => {
+  it('answers a second close as nothing changed, so a reopen closes the goal again', async () => {
     await callGoals(endpoint, 'dev', {
       action: 'add',
       goals: [{ text: 'a', source: 'agent' }],
@@ -6765,8 +6779,20 @@ describe('goals through the MCP endpoint', () => {
       status: 'achieved',
       evidence: 'the retry saved it',
     });
-    expect(closedAgain.isError).toBe(true);
-    expect(closedAgain.text).toContain('reopen it to close it again');
+    expect(closedAgain.isError).toBe(false);
+    expect(closedAgain.text).toContain(
+      'g1 is already closed (not_achieved) — nothing changed; reopen it first to close it as achieved',
+    );
+    const closedSame = await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'not_achieved',
+      evidence: 'again',
+    });
+    expect(closedSame.isError).toBe(false);
+    expect(closedSame.text).toContain(
+      'g1 is already closed (not_achieved) — nothing changed.',
+    );
 
     const reopened = await callGoals(endpoint, 'dev', {
       action: 'reopen',

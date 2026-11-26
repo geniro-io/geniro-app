@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 
 import { statSync } from 'node:fs';
+import { uptime } from 'node:os';
 import { join } from 'node:path';
 
 import { MikroORM } from '@mikro-orm/core';
@@ -28,7 +29,7 @@ import {
 } from './utils/instance-lock';
 import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
-import { consumeStopCause } from './utils/stop-cause';
+import { readPreviousStop, writeLastError } from './utils/previous-stop';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { RunDao } from './v1/agents/dao/run.dao';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
@@ -82,6 +83,8 @@ interface SqlitePragmas {
 
 installCrashGuards({
   markCrash: () => writeCrashMark(environment.userDataDir, process.pid),
+  recordError: (err) =>
+    writeLastError(environment.userDataDir, process.pid, err, Date.now()),
 });
 
 const startedAt = Date.now();
@@ -300,8 +303,12 @@ bootstrapper.addExtension(
       // (after the schema sync, before listen), in this explicit order. Nest's
       // OnApplicationBootstrap hooks fire later, inside `listen()`, with no
       // order among them that this sequence could rely on.
-      const stopCause = await closeInterruptedRuns({
-        readCause: () => consumeStopCause(environment.userDataDir),
+      const { cause: stopCause } = await closeInterruptedRuns({
+        readStop: () =>
+          readPreviousStop(
+            environment.userDataDir,
+            Date.now() - uptime() * 1000,
+          ),
         chats: app.get(ChatService),
         teams: app.get(TeamExecutorService),
         tasks: app.get(TaskSettleService),

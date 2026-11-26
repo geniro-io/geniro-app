@@ -35,6 +35,8 @@ export interface CrashGuardHooks {
    * like a requested stop (`DAEMON_CRASH_MARK_NAME`). Must be synchronous.
    */
   markCrash?: () => void;
+  /** Leave a one-line summary of the error for the next boot. Must be synchronous. */
+  recordError?: (err: unknown) => void;
 }
 
 /**
@@ -67,6 +69,7 @@ export function installCrashGuards(
     ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
   const exit = hooks.exit ?? ((code: number) => process.exit(code));
   const markCrash = hooks.markCrash ?? (() => undefined);
+  const recordError = hooks.recordError ?? (() => undefined);
 
   /**
    * A handler that cannot throw OUT of itself.
@@ -134,6 +137,7 @@ export function installCrashGuards(
       log('uncaught exception - shutting down', err),
     );
     safely('crash mark', markCrash);
+    safely('error record', () => recordError(err));
     safely('self-SIGTERM', () => kill(target.pid, 'SIGTERM'));
     setTimeout(() => exit(1), UNCAUGHT_FAILSAFE_EXIT_MS).unref();
   });

@@ -4455,7 +4455,10 @@ export class TeamExecutorService
    * never-started `pending` members go `skipped`, and the run rolls up `failed`.
    * `cause` is written onto the run's row as the chat twin's is.
    */
-  async reconcileOrphanedRuns(cause: InterruptCause): Promise<void> {
+  async reconcileOrphanedRuns(
+    cause: InterruptCause,
+    detail: string | null = null,
+  ): Promise<void> {
     try {
       const em = this.em.fork();
       const stale = await this.runDao.listRunningTeamRuns(em);
@@ -4512,7 +4515,7 @@ export class TeamExecutorService
             { cause, owed },
           );
           if (kept !== null) {
-            const message = `team run interrupted — ${interruptCauseClause(cause)} while it was running — work continues`;
+            const message = `team run interrupted — ${interruptCauseClause(cause, detail)} while it was running — work continues`;
             if (owed === null) {
               await this.persist(em, run.id, null, kept, 'error', null, {
                 message,
@@ -4535,12 +4538,13 @@ export class TeamExecutorService
         if (owed !== null) {
           await this.runDao.setRestartContinuation(run.id, null, em);
         }
-        const message = `team run interrupted — ${interruptCauseClause(cause)} while it was running`;
+        const message = `team run interrupted — ${interruptCauseClause(cause, detail)} while it was running`;
         const interruptedSeq = seq++;
         await this.persist(em, run.id, null, interruptedSeq, 'error', null, {
           message,
           interrupted: true,
           interruptCause: cause,
+          ...(detail !== null ? { interruptDetail: detail } : {}),
         });
         await this.flagInterrupted(
           run.id,
@@ -4551,7 +4555,7 @@ export class TeamExecutorService
         );
         await this.closeOpenMemberWork(em, run.id, history, seq, {
           member: 'interrupted',
-          call: `${CALLEE_INTERRUPTED_ERROR} — ${interruptCauseClause(cause)} before the call finished`,
+          call: `${CALLEE_INTERRUPTED_ERROR} — ${interruptCauseClause(cause, detail)} before the call finished`,
         });
         await this.setRunStatus(em, run.id, 'failed');
         reconciled += 1;

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { DiagnosticsController } from './controllers/diagnostics.controller';
+import { DaemonHeartbeatService } from './services/daemon-heartbeat.service';
 import { DebugLogService } from './services/debug-log.service';
 import { DiagnosticsReportService } from './services/diagnostics-report.service';
 import { EventLoopWatchdogService } from './services/event-loop-watchdog.service';
@@ -21,6 +22,7 @@ import { EventLoopWatchdogService } from './services/event-loop-watchdog.service
   imports: [AgentsModule],
   controllers: [DiagnosticsController],
   providers: [
+    DaemonHeartbeatService,
     DebugLogService,
     DiagnosticsReportService,
     EventLoopWatchdogService,

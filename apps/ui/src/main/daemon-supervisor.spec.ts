@@ -30,7 +30,11 @@ vi.mock('./login-shell-path', () => ({
 }));
 vi.mock('./settings', () => ({ readSettings: mocks.readSettings }));
 
-import type { DaemonInfo, DaemonStopCause } from './daemon-pidfile';
+import type {
+  DaemonExitNote,
+  DaemonInfo,
+  DaemonStopCause,
+} from './daemon-pidfile';
 import { DAEMON_MIGRATION_EXIT_CODE } from './daemon-pidfile';
 import {
   DaemonMigrationFailedError,
@@ -1413,6 +1417,7 @@ function respawner(
   supervisor: DaemonSupervisor;
   children: FakeChild[];
   causes: DaemonStopCause[];
+  exits: DaemonExitNote[];
   started: unknown[];
   logs: string[];
   die: (child: FakeChild) => void;
@@ -1426,6 +1431,7 @@ function respawner(
   const started: unknown[] = [];
   const logs: string[] = [];
   const causes: DaemonStopCause[] = [];
+  const exits: DaemonExitNote[] = [];
   let pidfile: DaemonInfo | null = null;
   // Tracked apart from `exitCode`, which a real child leaves null when a
   // SIGNAL ended it.
@@ -1481,6 +1487,7 @@ function respawner(
     },
     consumeCrashMark: (pid) => opts.crashMarks?.delete(pid) ?? false,
     writeStopCause: (cause) => causes.push(cause),
+    writeExitNote: (exit) => exits.push(exit),
     pollIntervalMs: 1,
     shutdownGraceMs: 15,
     respawnDelaysMs: opts.delays ?? [5, 5],
@@ -1491,7 +1498,7 @@ function respawner(
       ? { readMigrationError: opts.readMigrationError }
       : {}),
   });
-  return { supervisor, children, causes, started, logs, die, exit };
+  return { supervisor, children, causes, exits, started, logs, die, exit };
 }
 
 /** Lets every pending respawn timer run and its start settle. */
@@ -1529,6 +1536,14 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     expect(r.supervisor.getHandle()).toBeNull();
     expect(r.logs.join('\n')).toMatch(/stopped on request/);
     expect(r.causes).toEqual([]);
+    expect(r.exits).toEqual([
+      {
+        pid: r.children[0]!.pid,
+        code: null,
+        signal: 'SIGTERM',
+        at: expect.any(Date),
+      },
+    ]);
   });
 
   it('IS respawned after a CRASH, though a crash too exits by SIGTERM at its own pid', async () => {
@@ -1549,6 +1564,14 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     // The mark is consumed here, so the next daemon learns of the crash from
     // this note — or it would continue the turn the crash cut off.
     expect(r.causes).toEqual(['crash']);
+    expect(r.exits).toEqual([
+      {
+        pid: r.children[0]!.pid,
+        code: null,
+        signal: 'SIGTERM',
+        at: expect.any(Date),
+      },
+    ]);
   });
 
   it('notes no crash for a daemon that died in its own boot — it reconciled nothing', async () => {
@@ -1556,6 +1579,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     // daemon; overwriting it would relabel turns this daemon never reached.
     const child = new FakeChild();
     const causes: DaemonStopCause[] = [];
+    const exits: DaemonExitNote[] = [];
     const crashMarksRead: number[] = [];
     let spawned = false;
     const supervisor = new DaemonSupervisor({
@@ -1575,6 +1599,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
         return true;
       },
       writeStopCause: (cause) => causes.push(cause),
+      writeExitNote: (exit) => exits.push(exit),
       pollIntervalMs: 1,
       log: () => undefined,
     });
@@ -1590,6 +1615,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     // The exit was seen as a crash — and still noted nothing.
     expect(crashMarksRead).toEqual([child.pid]);
     expect(causes).toEqual([]);
+    expect(exits).toEqual([]);
   });
 
   it('is NOT respawned after a clean exit either', async () => {
@@ -1610,6 +1636,32 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     await settleRespawns();
 
     expect(r.children).toHaveLength(2);
+    expect(r.exits).toEqual([
+      {
+        pid: r.children[0]!.pid,
+        code: null,
+        signal: 'SIGKILL',
+        at: expect.any(Date),
+      },
+    ]);
+  });
+
+  it('records a non-zero exit with its code, and respawns it', async () => {
+    const r = respawner();
+    await r.supervisor.start();
+
+    r.die(r.children[0]!);
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.exits).toEqual([
+      {
+        pid: r.children[0]!.pid,
+        code: 1,
+        signal: null,
+        at: expect.any(Date),
+      },
+    ]);
   });
 
   it('is NOT respawned when stop() ended it', async () => {
@@ -1621,6 +1673,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
 
     expect(r.children).toHaveLength(1);
     expect(r.logs.join('\n')).not.toMatch(/exited on its own/);
+    expect(r.exits).toEqual([]);
   });
 
   it('is NOT respawned when a restart() replaced it', async () => {
@@ -1633,6 +1686,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     // The restart's own replacement, and nothing after it.
     expect(r.children).toHaveLength(2);
     expect(r.logs.join('\n')).not.toMatch(/exited on its own/);
+    expect(r.exits).toEqual([]);
   });
 
   it('gives up at the end of its table, and a start() then brings it back with a fresh budget', async () => {

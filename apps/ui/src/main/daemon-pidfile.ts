@@ -80,12 +80,48 @@ export type DaemonQuitCause = Extract<DaemonStopCause, 'quit' | 'self-update'>;
  * daemon never reads half a word.
  */
 export function writeStopCause(path: string, cause: DaemonStopCause): void {
+  writeNoteFile(path, cause);
+}
+
+/**
+ * Stage a note next to its target and rename it in, so a reader never sees
+ * half of it.
+ */
+function writeNoteFile(path: string, body: string): void {
   const staged = `${path}.${process.pid}.tmp`;
   // Exclusive, so a leftover at the staging name is replaced rather than
   // written through — and 0600 applies to the file actually renamed in.
   rmSync(staged, { force: true });
-  writeFileSync(staged, cause, { mode: 0o600, flag: 'wx' });
+  writeFileSync(staged, body, { mode: 0o600, flag: 'wx' });
   renameSync(staged, path);
+}
+
+/**
+ * Where an owned daemon's exit is noted when the app did not end it: the next
+ * daemon's boot names the turns that exit cut off.
+ *
+ * TWIN PARSER: the daemon's `DAEMON_EXIT_NOTE_NAME` in `apps/daemon/src/utils/handshake.ts`,
+ * read by `consumeExitNote` in `apps/daemon/src/utils/previous-stop.ts`.
+ */
+export const DAEMON_EXIT_NOTE_NAME = 'daemon-exit.json';
+
+export interface DaemonExitNote {
+  pid: number;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  at: Date;
+}
+
+export function writeExitNote(path: string, exit: DaemonExitNote): void {
+  writeNoteFile(
+    path,
+    JSON.stringify({
+      pid: exit.pid,
+      code: exit.code,
+      signal: exit.signal,
+      at: exit.at.toISOString(),
+    }),
+  );
 }
 
 const MAX_TCP_PORT = 65535;

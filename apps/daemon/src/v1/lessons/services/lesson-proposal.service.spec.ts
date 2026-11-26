@@ -11,6 +11,7 @@ import type { UsageEventDao } from '../../stats/dao/usage-event.dao';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
 import type { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonProposal } from '../entity/lesson-proposal.entity';
+import { LESSON_PROPOSAL_STATUSES } from '../lessons.types';
 import {
   LessonProposalService,
   moveUpOf,
@@ -80,6 +81,8 @@ function build(
   const proposals = {
     getById: vi.fn(() => Promise.resolve(row)),
     list: vi.fn(() => Promise.resolve([] as LessonProposal[])),
+    page: vi.fn(() => Promise.resolve([] as LessonProposal[])),
+    countIn: vi.fn((_statuses: readonly string[]) => Promise.resolve(0)),
   };
   const runDao = {
     getById: vi.fn(() => Promise.resolve(null)),
@@ -1091,6 +1094,74 @@ describe('LessonProposalService.moveUp', () => {
     expect(projects.update).not.toHaveBeenCalled();
     expect(memory.setStatus).not.toHaveBeenCalled();
     expect(rows.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('LessonProposalService.history', () => {
+  it('answers one page, the cursor of the next and the counts of every lesson, read over all rows', async () => {
+    const { service, proposals } = build(null);
+    proposals.page.mockResolvedValueOnce([
+      proposal({ id: 'lp-3', createdAt: new Date(3_000) }),
+      proposal({ id: 'lp-2', status: 'saved', createdAt: new Date(2_000) }),
+      proposal({ id: 'lp-1', status: 'rejected', createdAt: new Date(1_000) }),
+    ]);
+    proposals.countIn.mockImplementation((statuses: readonly string[]) =>
+      Promise.resolve(
+        statuses.length === LESSON_PROPOSAL_STATUSES.length
+          ? 50
+          : statuses.includes('saved')
+            ? 40
+            : statuses.includes('proposed')
+              ? 2
+              : 7,
+      ),
+    );
+
+    const page = await service.history({ limit: 2 });
+
+    expect(proposals.page).toHaveBeenCalledWith(null, 3, expect.anything());
+    expect(page.proposals.map((wire) => wire.id)).toEqual(['lp-3', 'lp-2']);
+    expect(page.nextBefore).toBe(`${new Date(2_000).toISOString()}~lp-2`);
+    expect(page.counts).toEqual({
+      total: 50,
+      saved: 40,
+      waiting: 2,
+      notSaved: 7,
+    });
+    expect(proposals.countIn).toHaveBeenCalledWith(
+      ['proposed', 'checking', 'check_failed'],
+      expect.anything(),
+    );
+    expect(proposals.countIn).toHaveBeenCalledWith(
+      ['skipped_duplicate', 'undone', 'dropped_by_check', 'rejected', 'failed'],
+      expect.anything(),
+    );
+  });
+
+  it('reads on from the cursor it handed out, and ends with no cursor on the last page', async () => {
+    const { service, proposals } = build(null);
+    proposals.page.mockResolvedValueOnce([proposal({ id: 'lp-1' })]);
+
+    const page = await service.history({
+      limit: 2,
+      before: `${new Date(2_000).toISOString()}~lp-2`,
+    });
+
+    expect(proposals.page).toHaveBeenCalledWith(
+      { createdAt: new Date(2_000), id: 'lp-2' },
+      3,
+      expect.anything(),
+    );
+    expect(page.nextBefore).toBeNull();
+  });
+
+  it('refuses a cursor it never handed out, with 400 LESSON_HISTORY_BAD_CURSOR', async () => {
+    const { service, proposals } = build(null);
+
+    await expect(
+      service.history({ limit: 2, before: 'not-a-cursor' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_HISTORY_BAD_CURSOR' });
+    expect(proposals.page).not.toHaveBeenCalled();
   });
 });
 

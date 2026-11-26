@@ -4,6 +4,8 @@ import { z } from 'zod';
 import {
   EditLessonSchema,
   LessonEstimateQuerySchema,
+  LessonHistoryPageSchema,
+  LessonHistoryQuerySchema,
   LessonProposalListQuerySchema,
   LessonProposalListSchema,
   LessonProposalWireSchema,
@@ -61,6 +63,14 @@ export class LessonProposalListQueryDto extends createZodDto(
 
 export class LessonProposalListDto extends createZodDto(
   LessonProposalListSchema,
+) {}
+
+export class LessonHistoryQueryDto extends createZodDto(
+  LessonHistoryQuerySchema,
+) {}
+
+export class LessonHistoryPageDto extends createZodDto(
+  LessonHistoryPageSchema,
 ) {}
 
 export class LessonProposalDto extends createZodDto(

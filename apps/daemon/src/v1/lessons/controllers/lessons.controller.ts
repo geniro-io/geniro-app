@@ -4,6 +4,8 @@ import { ZodResponse } from 'nestjs-zod';
 
 import {
   EditLessonDto,
+  LessonHistoryPageDto,
+  LessonHistoryQueryDto,
   LessonProposalDto,
   LessonProposalListDto,
   LessonProposalListQueryDto,
@@ -13,6 +15,7 @@ import {
   UpdateLessonRuleDto,
 } from '../dto/lessons.dto';
 import type {
+  LessonHistoryPage,
   LessonProposalWire,
   LessonReflectionFacts,
 } from '../lessons.types';
@@ -28,6 +31,14 @@ import { LessonProposalService } from '../services/lesson-proposal.service';
 @ApiBearerAuth()
 export class LessonsController {
   constructor(private readonly proposals: LessonProposalService) {}
+
+  /** Every lesson ever filed, of every status, a page at a time, newest first, with the counts of all of them. 400 `LESSON_HISTORY_BAD_CURSOR`. */
+  @Get('history')
+  @ApiOperation({ operationId: 'listLessonHistory' })
+  @ZodResponse({ status: 200, type: LessonHistoryPageDto })
+  history(@Query() query: LessonHistoryQueryDto): Promise<LessonHistoryPage> {
+    return this.proposals.history(query);
+  }
 
   @Get('proposals')
   @ApiOperation({ operationId: 'listLessonProposals' })

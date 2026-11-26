@@ -30,8 +30,11 @@ import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import type { LessonProposal } from '../entity/lesson-proposal.entity';
 import {
   type EditLesson,
+  LESSON_HISTORY_BUCKETS,
   LESSON_PROPOSAL_STATUSES,
   type LessonDedup,
+  type LessonHistoryPage,
+  type LessonHistoryQuery,
   type LessonMoveUpPlace,
   type LessonOutcomePayload,
   type LessonPlaces,
@@ -94,6 +97,43 @@ export class LessonProposalService {
       },
       em,
     );
+    return this.wiresOf(rows, em);
+  }
+
+  /** Every lesson ever filed, a page at a time, with the counts of all of them. */
+  async history(query: LessonHistoryQuery): Promise<LessonHistoryPage> {
+    const em = this.em.fork();
+    const before = historyCursorOf(query.before);
+    const rows = await this.proposals.page(before, query.limit + 1, em);
+    const page = rows.slice(0, query.limit);
+    const last = page[page.length - 1];
+    const saved = await this.proposals.countIn(
+      LESSON_HISTORY_BUCKETS.saved,
+      em,
+    );
+    const waiting = await this.proposals.countIn(
+      LESSON_HISTORY_BUCKETS.waiting,
+      em,
+    );
+    const notSaved = await this.proposals.countIn(
+      LESSON_HISTORY_BUCKETS.notSaved,
+      em,
+    );
+    const total = await this.proposals.countIn(LESSON_PROPOSAL_STATUSES, em);
+    return {
+      proposals: await this.wiresOf(page, em),
+      nextBefore:
+        rows.length > query.limit && last !== undefined
+          ? `${last.createdAt.toISOString()}${HISTORY_CURSOR_SEPARATOR}${last.id}`
+          : null,
+      counts: { total, saved, waiting, notSaved },
+    };
+  }
+
+  private async wiresOf(
+    rows: readonly LessonProposal[],
+    em: EntityManager,
+  ): Promise<LessonProposalWire[]> {
     const existing = await this.runDao.existingIds(
       rows.map((row) => row.sourceRunId),
       em,
@@ -763,6 +803,26 @@ function refuseHiddenText(title: string, rule: string): void {
 function clipped(text: string, max: number): string {
   const chars = [...text];
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
+}
+
+const HISTORY_CURSOR_SEPARATOR = '~';
+
+function historyCursorOf(
+  cursor: string | undefined,
+): { createdAt: Date; id: string } | null {
+  if (cursor === undefined || cursor === '') {
+    return null;
+  }
+  const at = cursor.indexOf(HISTORY_CURSOR_SEPARATOR);
+  const createdAt = new Date(at < 0 ? '' : cursor.slice(0, at));
+  const id = at < 0 ? '' : cursor.slice(at + 1);
+  if (id === '' || Number.isNaN(createdAt.getTime())) {
+    throw new BadRequestException(
+      'LESSON_HISTORY_BAD_CURSOR',
+      `not a lessons history cursor: ${cursor}`,
+    );
+  }
+  return { createdAt, id };
 }
 
 function statusesOf(

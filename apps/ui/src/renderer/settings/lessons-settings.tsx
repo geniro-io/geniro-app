@@ -28,6 +28,7 @@ import { Switch } from '../components/ui/switch';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { LessonsHistory } from './lessons-history';
 import {
   blankTriageChoice,
   blankTriageChoiceFor,
@@ -171,6 +172,7 @@ export function LessonsSettingsPanel({
   capabilitiesLoading = false,
   cliDetections,
   lessonsApi,
+  knowledgeApi = null,
   client,
   remote,
   agentWrites,
@@ -181,6 +183,7 @@ export function LessonsSettingsPanel({
   /** Per-CLI detection, or null while the probe has not answered. */
   cliDetections: readonly CliDetection[] | null;
   lessonsApi: DaemonApis['lessons'] | null;
+  knowledgeApi?: DaemonApis['knowledge'] | null;
   client: Pick<DaemonClient, 'onLessonsChanged'> | null;
   remote: boolean;
   agentWrites: MemoryAgentWrites | null;
@@ -404,6 +407,11 @@ export function LessonsSettingsPanel({
           description="What lessons have cost on your agents' accounts.">
           <SpendReadout spend={spend} />
         </SettingsPanelRow>
+        <LessonsHistory
+          lessonsApi={lessonsApi}
+          knowledgeApi={knowledgeApi}
+          client={client}
+        />
       </SettingsPanel>
     </SettingsGroup>
   );

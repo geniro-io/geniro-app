@@ -625,6 +625,71 @@ export type LessonProposalListQuery = z.infer<
   typeof LessonProposalListQuerySchema
 >;
 
+export const LESSON_HISTORY_PAGE_DEFAULT = 25;
+export const LESSON_HISTORY_PAGE_MAX = 100;
+
+export const LESSON_HISTORY_BUCKETS = {
+  saved: ['saved'],
+  waiting: ['proposed', 'checking', 'check_failed'],
+  notSaved: [
+    'skipped_duplicate',
+    'undone',
+    'dropped_by_check',
+    'rejected',
+    'failed',
+  ],
+} as const satisfies Record<string, readonly LessonProposalStatus[]>;
+export type LessonHistoryBucket = keyof typeof LESSON_HISTORY_BUCKETS;
+
+export const LessonHistoryQuerySchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(LESSON_HISTORY_PAGE_MAX)
+    .default(LESSON_HISTORY_PAGE_DEFAULT),
+  before: z
+    .string()
+    .max(400)
+    .optional()
+    .describe('The `nextBefore` of the previous page'),
+});
+export type LessonHistoryQuery = z.infer<typeof LessonHistoryQuerySchema>;
+
+export const LessonHistoryCountsSchema = z
+  .object({
+    total: z.number().int().min(0),
+    saved: z.number().int().min(0),
+    waiting: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Proposed, being checked, or left by a check that failed'),
+    notSaved: z
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        'Rejected, undone, dropped by the check, already remembered or failed',
+      ),
+  })
+  .meta({ id: 'LessonHistoryCounts' });
+export type LessonHistoryCounts = z.infer<typeof LessonHistoryCountsSchema>;
+
+export const LessonHistoryPageSchema = z.object({
+  proposals: z
+    .array(LessonProposalWireSchema)
+    .describe('One page of lessons of every status, newest first'),
+  nextBefore: z
+    .string()
+    .nullable()
+    .describe('The cursor of the next page; null at the end'),
+  counts: LessonHistoryCountsSchema.describe(
+    'Every lesson ever filed, counted over every row',
+  ),
+});
+export type LessonHistoryPage = z.infer<typeof LessonHistoryPageSchema>;
+
 /** "Update rule" on a `refines` lesson: the named entry takes the lesson's text, as the user's edit. */
 export const UpdateLessonRuleSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS).optional(),

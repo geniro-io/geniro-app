@@ -8083,6 +8083,62 @@ export interface LessonEvidence {
 /**
  * 
  * @export
+ * @interface LessonHistoryCounts
+ */
+export interface LessonHistoryCounts {
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonHistoryCounts
+     */
+    total: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonHistoryCounts
+     */
+    saved: number;
+    /**
+     * Proposed, being checked, or left by a check that failed
+     * @type {number}
+     * @memberof LessonHistoryCounts
+     */
+    waiting: number;
+    /**
+     * Rejected, undone, dropped by the check, already remembered or failed
+     * @type {number}
+     * @memberof LessonHistoryCounts
+     */
+    notSaved: number;
+}
+/**
+ * 
+ * @export
+ * @interface LessonHistoryPageDto
+ */
+export interface LessonHistoryPageDto {
+    /**
+     * One page of lessons of every status, newest first
+     * @type {Array<LessonProposal>}
+     * @memberof LessonHistoryPageDto
+     */
+    proposals: Array<LessonProposal>;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonHistoryPageDto
+     */
+    nextBefore: string | null;
+    /**
+     * Every lesson ever filed, counted over every row
+     * @type {LessonHistoryCounts}
+     * @memberof LessonHistoryPageDto
+     */
+    counts: LessonHistoryCounts;
+}
+/**
+ * 
+ * @export
  * @interface LessonKnowledgeTarget
  */
 export interface LessonKnowledgeTarget {

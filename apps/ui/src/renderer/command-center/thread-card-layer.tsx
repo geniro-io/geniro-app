@@ -38,6 +38,8 @@ export const ZOOM_SETTLE_MS = 160;
 
 /** The room a card leaves the graph pane's edges when it is as big as it may get. */
 const PANE_INSET = 16;
+const CARD_UNDER_WINDOW_Z = 20;
+const CARD_OVER_WINDOW_Z = 35;
 
 /** A thread open as a card on the canvas. */
 export interface CanvasCard {
@@ -45,6 +47,7 @@ export interface CanvasCard {
   identity: ThreadIdentity;
   attention: ThreadAttention;
   size: CardSize;
+  aboveWindow: boolean;
 }
 
 type ResizeEdge = 's' | 'e' | 'se';
@@ -402,9 +405,9 @@ export interface ThreadCardLayerProps {
   onMove: (runId: string, to: { x: number; y: number }, done: boolean) => void;
   onOpenInChats: (runId: string) => void;
   renderChat: (runId: string) => React.ReactNode;
-  /** Draw the cards over the manager's window rather than under it. */
+  /** Draw the cards not opened from the manager's window over it rather than under it. */
   inFront?: boolean;
-  /** A press landed in a card. */
+  /** A press landed in a card not opened from the manager's window. */
   onActivate?: () => void;
 }
 
@@ -538,12 +541,7 @@ export function ThreadCardLayer({
   return (
     <div
       data-slot="command-center-cards"
-      data-front={inFront || undefined}
-      className={cn(
-        'pointer-events-none absolute inset-0 overflow-hidden',
-        inFront ? 'z-35' : 'z-20',
-      )}
-      onPointerDownCapture={onActivate}>
+      className="pointer-events-none absolute inset-0 overflow-hidden">
       {shown.map((card) => (
         <div
           key={card.runId}
@@ -555,9 +553,20 @@ export function ThreadCardLayer({
             }
           }}
           data-slot="thread-canvas-card-place"
+          data-over-window={card.aboveWindow || inFront || undefined}
           className="absolute"
-          style={{ zIndex: front === card.runId ? 2 : 1 }}
-          onPointerDownCapture={() => setFront(card.runId)}>
+          style={{
+            zIndex:
+              (card.aboveWindow || inFront
+                ? CARD_OVER_WINDOW_Z
+                : CARD_UNDER_WINDOW_Z) + (front === card.runId ? 1 : 0),
+          }}
+          onPointerDownCapture={() => {
+            setFront(card.runId);
+            if (!card.aboveWindow) {
+              onActivate?.();
+            }
+          }}>
           <div
             data-slot="thread-canvas-card-zoom"
             className="origin-top-left"

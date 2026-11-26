@@ -151,9 +151,7 @@ export function CommandCenter({
   const narrow = useNarrowViewport();
   const [chatOpen, setChatOpen] = useState(false);
   const [front, setFront] = useState<'manager' | 'cards'>('manager');
-  const cardReturns = useRef(
-    new Map<string, { focus: Element | null; front: 'manager' | 'cards' }>(),
-  );
+  const cardOpeners = useRef(new Map<string, Element | null>());
   const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
@@ -399,26 +397,20 @@ export function CommandCenter({
   const toggleCard = (runId: string): void => {
     const card = board.cards?.find((entry) => entry.run.id === runId);
     if (card !== undefined) {
-      cardReturns.current.delete(runId);
+      cardOpeners.current.delete(runId);
       cards.toggle(runId, bandOf(card));
       setFront('cards');
     }
   };
   const closeCard = useLatestCallback((runId: string): void => {
     cards.close(runId);
-    const back = cardReturns.current.get(runId);
-    if (back === undefined) {
-      return;
-    }
-    cardReturns.current.delete(runId);
-    if (cards.cards.every((open) => open.runId === runId)) {
-      setFront(back.front);
-    }
-    if (back.focus instanceof HTMLElement && back.focus.isConnected) {
-      back.focus.focus({ preventScroll: true });
+    const opener = cardOpeners.current.get(runId);
+    cardOpeners.current.delete(runId);
+    if (opener instanceof HTMLElement && opener.isConnected) {
+      opener.focus({ preventScroll: true });
     }
   }, []);
-  const showThread = useLatestCallback((runId: string): void => {
+  const openThread = (runId: string, fromWindow: boolean): void => {
     if (board.cards === null) {
       return;
     }
@@ -444,15 +436,22 @@ export function CommandCenter({
       setProjectFilter(card.run.project?.id ?? ALL_PROJECTS);
     }
     if (!cards.cards.some((open) => open.runId === runId)) {
-      cardReturns.current.set(runId, {
-        focus: document.activeElement,
-        front,
-      });
+      cardOpeners.current.set(runId, document.activeElement);
     }
-    cards.open(runId, bandOf(card));
-    setFront('cards');
+    cards.open(runId, bandOf(card), fromWindow);
+    if (!fromWindow) {
+      setFront('cards');
+    }
     setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
-  }, []);
+  };
+  const showThread = useLatestCallback(
+    (runId: string): void => openThread(runId, false),
+    [],
+  );
+  const showThreadFromWindow = useLatestCallback(
+    (runId: string): void => openThread(runId, true),
+    [],
+  );
   const replyFrom = (
     runId: string,
     anchor: HTMLElement,
@@ -807,7 +806,7 @@ export function CommandCenter({
                     hidden={!chatOpen}
                     active={active}
                     threadIdentities={threadIdentities}
-                    onOpenThread={showThread}
+                    onOpenThread={showThreadFromWindow}
                     onTurnSettled={board.reload}
                     onDiscarded={board.reload}
                   />

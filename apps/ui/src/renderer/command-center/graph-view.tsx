@@ -110,6 +110,7 @@ export interface GraphOpenCard {
   runId: string;
   band: CardBand;
   size: CardSize;
+  aboveWindow: boolean;
 }
 
 /** The thread to bring into view, once per `seq`. */
@@ -165,9 +166,9 @@ export interface GraphViewProps {
   onResetLayout: () => void;
   /** The chat a card holds under its head. */
   renderCardChat: (threadId: string) => React.ReactNode;
-  /** Draw the open cards over the manager's window rather than under it. */
+  /** Draw the open cards not opened from the manager's window over it rather than under it. */
   cardsInFront?: boolean;
-  /** A press landed in an open card. */
+  /** A press landed in an open card not opened from the manager's window. */
   onActivateCards?: () => void;
   /** The thread to pan to and flash; null for none. */
   focus: GraphFocus | null;
@@ -1470,6 +1471,7 @@ function GraphCanvas({
         identity: threadCardIdentity(thread.view),
         attention: thread.view.attention,
         size: card.size,
+        aboveWindow: card.aboveWindow,
       });
     }
     const wire = drawn.routes.get(id);
@@ -1578,6 +1580,7 @@ function GraphCanvas({
                 identity: threadCardIdentity(phoneThread.view),
                 attention: phoneThread.view.attention,
                 size: phoneCard.size,
+                aboveWindow: phoneCard.aboveWindow,
               }}
               active={active}
               onClose={() => onCloseCard(phoneThread.id)}

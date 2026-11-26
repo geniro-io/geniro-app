@@ -420,14 +420,50 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
     );
   }
 
-  it('draws the opened card over the manager’s window, and a press back in the window puts the window on top again', async () => {
+  const aboveWindowOf = (runId: string): boolean | undefined =>
+    probes.graph!.openCards.find((card) => card.runId === runId)?.aboveWindow;
+
+  it('keeps the opened card over the manager’s window while the user presses, minimises, restores, maximises and reopens the window', async () => {
     await openManager();
-    expect(probes.graph!.cardsInFront).toBe(false);
 
     clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
     expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
       'run-b',
     ]);
+    expect(aboveWindowOf('run-b')).toBe(true);
+
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+    expect(aboveWindowOf('run-b')).toBe(true);
+
+    for (const control of [
+      'command-center-chat-minimise',
+      'command-center-chat-minimise',
+      'command-center-chat-maximise',
+      'command-center-chat-maximise',
+    ]) {
+      clickOn(container.querySelector(`[data-slot="${control}"]`));
+    }
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+    expect(managerWindow().hidden).toBe(false);
+    expect(aboveWindowOf('run-b')).toBe(true);
+  });
+
+  it('leaves a card opened on the graph under the window once the window is pressed, until the window opens it', async () => {
+    await openManager();
+    act(() => {
+      probes.graph!.onToggleCard('run-b');
+    });
+    expect(aboveWindowOf('run-b')).toBe(false);
     expect(probes.graph!.cardsInFront).toBe(true);
 
     act(() => {
@@ -437,9 +473,28 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
     });
     expect(probes.graph!.cardsInFront).toBe(false);
 
+    clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
+    expect(aboveWindowOf('run-b')).toBe(true);
+  });
+
+  it('puts a card shown from a link in another card in front without keeping it over the window', async () => {
+    await openManager();
     act(() => {
-      probes.graph!.onActivateCards!();
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
     });
+    expect(probes.graph!.cardsInFront).toBe(false);
+
+    act(() => {
+      (
+        probes.graph!.renderCardChat(
+          'run-a',
+        ) as React.ReactElement<ThreadCardChatProps>
+      ).props.onOpenThread('run-b');
+    });
+
+    expect(aboveWindowOf('run-b')).toBe(false);
     expect(probes.graph!.cardsInFront).toBe(true);
   });
 
@@ -452,7 +507,7 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
 
     clickOn(container.querySelector('[data-slot="stub-open-chat"]'));
 
-    expect(probes.graph!.cardsInFront).toBe(true);
+    expect(aboveWindowOf('run-b')).toBe(true);
     expect(managerWindow().dataset.state).toBe('maximised');
     expect(
       container.querySelector<HTMLElement>(
@@ -461,7 +516,7 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
     ).toBe(false);
   });
 
-  it('gives the keyboard and the top back to the window’s Open chat once the card it opened is closed', async () => {
+  it('gives the keyboard back to the window’s Open chat once the card it opened is closed', async () => {
     await openManager();
     const opener = container.querySelector<HTMLButtonElement>(
       '[data-slot="stub-open-chat"]',
@@ -481,10 +536,9 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
 
     expect(probes.graph!.openCards).toEqual([]);
     expect(document.activeElement).toBe(opener);
-    expect(probes.graph!.cardsInFront).toBe(false);
   });
 
-  it('keeps the first opener when an open card is shown again, and leaves the cards on top while another card stays open', async () => {
+  it('keeps the first opener when an open card is shown again, and leaves another open card where it stood', async () => {
     await openManager();
     const opener = container.querySelector<HTMLButtonElement>(
       '[data-slot="stub-open-chat"]',
@@ -507,6 +561,7 @@ describe('CommandCenter — a thread opened from the manager’s window', () => 
     expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
       'run-a',
     ]);
+    expect(aboveWindowOf('run-a')).toBe(false);
     expect(probes.graph!.cardsInFront).toBe(true);
   });
 

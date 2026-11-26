@@ -123,6 +123,7 @@ function card(runId: string, width: number, height: number): CanvasCard {
     identity: bareThreadIdentity(`Thread ${runId}`),
     attention: 'working',
     size: { width, height },
+    aboveWindow: false,
   };
 }
 
@@ -211,29 +212,77 @@ function headOf(runId: string): HTMLElement {
 }
 
 describe('ThreadCardLayer — the cards over the canvas', () => {
-  it('stands under the manager’s window until it is put in front, then over it', () => {
-    const layer = (): HTMLElement =>
-      container.querySelector<HTMLElement>(
-        '[data-slot="command-center-cards"]',
-      )!;
+  it('stands a card under the manager’s window until the cards are put in front, then over it', () => {
     drawLayer();
-    expect(layer().classList).toContain('z-20');
-    expect(layer().classList).not.toContain('z-35');
+    expect(placedOf('a').style.zIndex).toBe('20');
+    expect(placedOf('a').dataset.overWindow).toBeUndefined();
 
     drawLayer({ inFront: true });
-    expect(layer().classList).toContain('z-35');
-    expect(layer().classList).not.toContain('z-20');
+    expect(placedOf('a').style.zIndex).toBe('35');
+    expect(placedOf('a').dataset.overWindow).toBe('true');
   });
 
-  it('reports a press inside a card', () => {
+  it('stands a card opened from the manager’s window over it whether the other cards are in front or not', () => {
+    const cards = [
+      { ...card('a', 400, 300), aboveWindow: true },
+      card('b', 400, 300),
+    ];
+    const slots = new Map([
+      ['a', box(0, 0)],
+      ['b', box(600, 0)],
+    ]);
+    drawLayer({ cards, slots });
+    expect(placedOf('a').style.zIndex).toBe('35');
+    expect(placedOf('b').style.zIndex).toBe('20');
+
+    drawLayer({ cards, slots, inFront: true });
+    expect(placedOf('a').style.zIndex).toBe('35');
+    expect(placedOf('b').style.zIndex).toBe('35');
+  });
+
+  it('reports a press inside a card, but not inside one opened from the manager’s window', () => {
     const onActivate = vi.fn();
-    drawLayer({ onActivate });
+    drawLayer({
+      cards: [
+        { ...card('a', 400, 300), aboveWindow: true },
+        card('b', 400, 300),
+      ],
+      slots: new Map([
+        ['a', box(0, 0)],
+        ['b', box(600, 0)],
+      ]),
+      onActivate,
+    });
+    const chatOf = (runId: string): Element =>
+      placedOf(runId).querySelector('[data-slot="card-chat"]')!;
     act(() => {
-      container
-        .querySelector('[data-slot="card-chat"]')!
-        .dispatchEvent(pointer('pointerdown', 10, 10));
+      chatOf('a').dispatchEvent(pointer('pointerdown', 10, 10));
+    });
+    expect(onActivate).not.toHaveBeenCalled();
+    act(() => {
+      chatOf('b').dispatchEvent(pointer('pointerdown', 610, 10));
     });
     expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it('raises the card pressed last above the others on its side of the window', () => {
+    drawLayer({
+      cards: [
+        { ...card('a', 400, 300), aboveWindow: true },
+        card('b', 400, 300),
+      ],
+      slots: new Map([
+        ['a', box(0, 0)],
+        ['b', box(600, 0)],
+      ]),
+      inFront: true,
+    });
+    act(() => {
+      headOf('b').dispatchEvent(pointer('pointerdown', 610, 10));
+      headOf('b').dispatchEvent(pointer('pointerup', 610, 10));
+    });
+    expect(placedOf('b').style.zIndex).toBe('36');
+    expect(placedOf('a').style.zIndex).toBe('35');
   });
 
   it('draws one card per open thread that has a slot, each with its chat, and none for one without', () => {

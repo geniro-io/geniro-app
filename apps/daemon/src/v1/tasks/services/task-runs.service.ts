@@ -7,11 +7,17 @@ import {
 } from '@packages/common';
 
 import { interruptedReason } from '../../../utils/stop-cause';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { TurnFolderService } from '../../agents/services/turn-folder.service';
+import {
+  callsClosedBy,
+  interruptionOf,
+} from '../../agents/utils/run-interruption';
 import { assertTeamRun } from '../../agents/utils/run-kind';
+import { restartContinuationPrompt } from '../../agents/utils/run-restart-continuation';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
@@ -118,6 +124,7 @@ export class TaskRunsService {
     private readonly overlays: TeamOverlayService,
     private readonly runTeams: RunTeamService,
     private readonly turnFolders: TurnFolderService,
+    private readonly itemDao: ItemDao,
     /** Test seam only — nothing in the app passes it. */
     @Optional() worktreesRoot?: string,
   ) {
@@ -485,6 +492,9 @@ export class TaskRunsService {
       return null;
     }
     try {
+      // Read before the move back into the worktree, whose transcript row
+      // would otherwise stand after the interruption as the run's last word.
+      const message = await this.continuation(task, input, run, em);
       // The card is re-pointed at its own run BEFORE the turn starts, on the
       // create path's own reasoning: `recordRun` also writes the worktree and
       // branch this press prepared, and the settle path reads them.
@@ -534,7 +544,7 @@ export class TaskRunsService {
       };
       // Before the send, which reads the run row for the turn.
       await this.chats.updateSettings(run.id, resolved);
-      await this.chats.sendMessage(run.id, this.continuation(task, input));
+      await this.chats.sendMessage(run.id, message);
       return wire;
     } catch (error) {
       await this.tasks.moveStatus(task.id, {
@@ -592,9 +602,10 @@ export class TaskRunsService {
       // Before the send, on `resume`'s reasoning: the worktree and branch this
       // press prepared are written onto the card, and the settle path reads
       // them.
+      const message = await this.continuation(task, input, run, em);
       const wire = await this.recordRun(task.id, run.id, input);
       await this.returnToWorktree(run, input);
-      await this.executor.sendMessage(run.id, this.continuation(task, input));
+      await this.executor.sendMessage(run.id, message);
       return wire;
     } catch (error) {
       await this.tasks.moveStatus(task.id, {
@@ -688,15 +699,36 @@ export class TaskRunsService {
    * conversation, and repeating it would bury the one new sentence under a
    * paragraph the agent has read before.
    *
-   * The brief again when they wrote none, and that is the useful default
-   * rather than a filler: pressing Run a second time with nothing to add means
-   * "work this card again", and the card may have CHANGED since the first
-   * press — an edited description, a file attached — so the brief is both the
-   * honest restatement and the only way those edits reach the agent.
+   * A run the daemon's stop cut off is told so instead, with the calls the
+   * stop closed: its brief is already in the conversation and nothing new is
+   * asked, so the brief again only reads as a request to do nothing.
+   *
+   * Otherwise the brief again, and that is the useful default rather than a
+   * filler: pressing Run a second time with nothing to add means "work this
+   * card again", and the card may have CHANGED since the first press — an
+   * edited description, a file attached — so the brief is both the honest
+   * restatement and the only way those edits reach the agent.
    */
-  private continuation(task: Task, input: StartTaskRun): string {
+  private async continuation(
+    task: Task,
+    input: StartTaskRun,
+    run: Run,
+    em: EntityManager,
+  ): Promise<string> {
     const added = input.prompt?.trim() ?? '';
-    return added === '' ? this.brief(task, input) : added;
+    if (added !== '') {
+      return added;
+    }
+    const interruption = await interruptionOf(this.itemDao, run.id, em);
+    if (interruption === null) {
+      return this.brief(task, input);
+    }
+    return restartContinuationPrompt(interruption.cause, {
+      working: 'turn',
+      calls: [],
+      failedCalls: await callsClosedBy(this.itemDao, run.id, interruption, em),
+      monitors: [],
+    });
   }
 
   /**

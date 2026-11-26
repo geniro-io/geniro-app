@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { readFlagIssue } from './flag-issue.reader';
+import {
+  AgentFlagCategorySchema,
+  AgentFlagCostSchema,
+} from '../../../agents/chat.types';
+import { GENIRO_UI_PREAMBLE } from '../../../agents/utils/agent-instructions';
+import { FlagIssueArgsSchema, readFlagIssue } from './flag-issue.reader';
 
 describe('readFlagIssue', () => {
   const base = {
@@ -63,5 +68,40 @@ describe('readFlagIssue', () => {
     expect('error' in readFlagIssue({ ...base, category: 'ui' })).toBe(true);
     expect('error' in readFlagIssue({ ...base, minutesLost: 601 })).toBe(true);
     expect('error' in readFlagIssue({ ...base, runId: 'other' })).toBe(true);
+  });
+});
+
+describe('the flag_issue line of the host preamble', () => {
+  const requiredKeys = Object.entries(FlagIssueArgsSchema.shape)
+    .filter(([, schema]) => !schema.isOptional())
+    .map(([key]) => key);
+
+  function flagIssueLine(): string {
+    const line = GENIRO_UI_PREAMBLE.split('\n').find((candidate) =>
+      candidate.startsWith('- `flag_issue`'),
+    );
+    if (line === undefined) {
+      throw new Error('the preamble has no flag_issue line');
+    }
+    return line;
+  }
+
+  it('names every argument the call requires, and minutesLost', () => {
+    const line = flagIssueLine();
+
+    for (const key of [...requiredKeys, 'minutesLost']) {
+      expect(line).toContain(key + ':');
+    }
+  });
+
+  it('names every cost and category the schemas accept', () => {
+    const line = flagIssueLine();
+
+    for (const option of [
+      ...AgentFlagCostSchema.options,
+      ...AgentFlagCategorySchema.options,
+    ]) {
+      expect(line).toContain('"' + option + '"');
+    }
   });
 });

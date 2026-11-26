@@ -96,7 +96,7 @@ describe('composeStopDetail', () => {
         },
         BOOTED_AT,
       ),
-    ).toBe('killed by Geniro after it did not stop within 7 s (memory 1.2 GB)');
+    ).toBe('killed by Geniro after it did not stop within 7 s, memory 1.2 GB');
   });
 
   it('names an uncaught error over every other record', () => {
@@ -110,6 +110,22 @@ describe('composeStopDetail', () => {
         BOOTED_AT,
       ),
     ).toBe('uncaught TypeError in team-executor.service: boom');
+  });
+
+  it('makes the error message’s own parentheses square, so the detail nests no parentheses', () => {
+    expect(
+      composeStopDetail(
+        {
+          ...NONE,
+          lastError: lastError({
+            message: "Cannot read properties of undefined (reading 'id')",
+          }),
+        },
+        BOOTED_AT,
+      ),
+    ).toBe(
+      "uncaught TypeError in team-executor.service: Cannot read properties of undefined [reading 'id']",
+    );
   });
 
   it.each([
@@ -134,7 +150,7 @@ describe('composeStopDetail', () => {
         { ...NONE, heartbeat: heartbeat(), exit: exitNote(null, 'SIGKILL') },
         BOOTED_AT,
       ),
-    ).toBe('killed by SIGKILL (memory 1.2 GB)');
+    ).toBe('killed by SIGKILL, memory 1.2 GB');
   });
 
   it('names a signal alone when no heartbeat was left', () => {
@@ -152,7 +168,7 @@ describe('composeStopDetail', () => {
         { ...NONE, heartbeat: heartbeat(), exit: exitNote(1) },
         BOOTED_AT,
       ),
-    ).toBe('exited with code 1 (memory 1.2 GB)');
+    ).toBe('exited with code 1, memory 1.2 GB');
   });
 
   it('names a zero exit code as a daemon that ended on its own', () => {
@@ -161,7 +177,7 @@ describe('composeStopDetail', () => {
         { ...NONE, heartbeat: heartbeat(), exit: exitNote(0) },
         BOOTED_AT,
       ),
-    ).toBe('exited on its own (memory 1.2 GB)');
+    ).toBe('exited on its own, memory 1.2 GB');
   });
 
   it('reads a heartbeat older than the Mac’s boot as a shutdown or restart', () => {
@@ -462,7 +478,7 @@ describe('readPreviousStop', () => {
       expect(readPreviousStop(dir, BOOTED_AT)).toEqual({
         cause,
         detail:
-          'killed by Geniro after it did not stop within 7 s (memory 1.2 GB)',
+          'killed by Geniro after it did not stop within 7 s, memory 1.2 GB',
       });
       expect(readdirSync(dir)).toEqual([]);
     },

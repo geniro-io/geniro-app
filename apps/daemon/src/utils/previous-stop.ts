@@ -163,20 +163,21 @@ export function composeStopDetail(
     heartbeat !== null ? `memory ${formatMemory(heartbeat.rssBytes)}` : null;
   if (lastError !== null) {
     const where = lastError.where !== null ? ` in ${lastError.where}` : '';
-    const message = lastError.message !== '' ? `: ${lastError.message}` : '';
+    const message =
+      lastError.message !== '' ? `: ${squareBrackets(lastError.message)}` : '';
     return `uncaught ${lastError.name}${where}${message}`;
   }
   if (exit !== null && exit.killedAfterMs !== null) {
-    return withNote(
+    return withMemory(
       `killed by Geniro after it did not stop within ${Math.round(exit.killedAfterMs / 1000)} s`,
       memory,
     );
   }
   if (exit !== null && exit.signal !== null) {
-    return withNote(`killed by ${exit.signal}`, memory);
+    return withMemory(`killed by ${exit.signal}`, memory);
   }
   if (exit !== null && exit.code !== null) {
-    return withNote(
+    return withMemory(
       exit.code === 0 ? 'exited on its own' : `exited with code ${exit.code}`,
       memory,
     );
@@ -197,8 +198,13 @@ export function formatMemory(bytes: number): string {
     : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
-function withNote(text: string, note: string | null): string {
-  return note === null ? text : `${text} (${note})`;
+function withMemory(text: string, memory: string | null): string {
+  return memory === null ? text : `${text}, ${memory}`;
+}
+
+/** The detail is shown inside parentheses, so the error's own are made square. */
+function squareBrackets(text: string): string {
+  return text.replaceAll('(', '[').replaceAll(')', ']');
 }
 
 function isoSecond(ms: number): string {

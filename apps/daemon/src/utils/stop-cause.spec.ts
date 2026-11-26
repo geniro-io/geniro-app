@@ -132,9 +132,9 @@ describe('interruptCauseClause', () => {
 
   it('appends how the previous daemon ended in brackets', () => {
     expect(
-      interruptCauseClause('unknown', 'killed by SIGKILL (memory 1.2 GB)'),
+      interruptCauseClause('unknown', 'killed by SIGKILL, memory 1.2 GB'),
     ).toBe(
-      'the daemon stopped unexpectedly (killed by SIGKILL (memory 1.2 GB))',
+      'the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB)',
     );
     expect(
       interruptCauseClause(

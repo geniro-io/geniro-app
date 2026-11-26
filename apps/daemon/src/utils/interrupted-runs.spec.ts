@@ -9,7 +9,7 @@ import type { InterruptCause } from './stop-cause';
 
 const KILLED: PreviousStop = {
   cause: 'unknown',
-  detail: 'killed by SIGKILL (memory 1.2 GB)',
+  detail: 'killed by SIGKILL, memory 1.2 GB',
 };
 
 function harness(

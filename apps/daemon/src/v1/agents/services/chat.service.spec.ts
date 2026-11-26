@@ -10108,7 +10108,7 @@ describe('ChatService', () => {
 
     await service.reconcileOrphanedRuns(
       'unknown',
-      'killed by SIGKILL (memory 1.2 GB)',
+      'killed by SIGKILL, memory 1.2 GB',
     );
 
     const error = (await itemDao.getByRun(run.id)).find(
@@ -10116,10 +10116,10 @@ describe('ChatService', () => {
     );
     expect(JSON.parse(error!.payload)).toEqual({
       message:
-        'run interrupted — the daemon stopped unexpectedly (killed by SIGKILL (memory 1.2 GB)) while this turn was running',
+        'run interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) while this turn was running',
       interrupted: true,
       interruptCause: 'unknown',
-      interruptDetail: 'killed by SIGKILL (memory 1.2 GB)',
+      interruptDetail: 'killed by SIGKILL, memory 1.2 GB',
     });
   });
 

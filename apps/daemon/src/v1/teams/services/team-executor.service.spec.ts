@@ -5160,7 +5160,7 @@ describe('TeamExecutorService', () => {
 
     await ctx.service.reconcileOrphanedRuns(
       'unknown',
-      'killed by SIGKILL (memory 1.2 GB)',
+      'killed by SIGKILL, memory 1.2 GB',
     );
 
     const written = ctx.itemDao.items
@@ -5172,10 +5172,10 @@ describe('TeamExecutorService', () => {
       }));
     expect(written.find((i) => i.kind === 'error')?.payload).toEqual({
       message:
-        'team run interrupted — the daemon stopped unexpectedly (killed by SIGKILL (memory 1.2 GB)) while it was running',
+        'team run interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) while it was running',
       interrupted: true,
       interruptCause: 'unknown',
-      interruptDetail: 'killed by SIGKILL (memory 1.2 GB)',
+      interruptDetail: 'killed by SIGKILL, memory 1.2 GB',
     });
     expect(written).toContainEqual(
       expect.objectContaining({
@@ -5186,7 +5186,7 @@ describe('TeamExecutorService', () => {
           calleeNodeId: 'poet',
           status: 'error',
           error:
-            'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly (killed by SIGKILL (memory 1.2 GB)) before the call finished',
+            'CALLEE_FAILED: interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) before the call finished',
         }),
       }),
     );

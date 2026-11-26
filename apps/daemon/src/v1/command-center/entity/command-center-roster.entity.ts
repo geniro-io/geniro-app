@@ -56,6 +56,14 @@ export class CommandCenterRosterEntry extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   announcedFinish: string | null = null;
 
+  /**
+   * Since when a finish of this thread is news: its joining, then each
+   * `tell_threads` send. Null only on a row written before finishes were
+   * recorded, whose finishes the app of that time had already told.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  finishNewsSince: Date | null = null;
+
   @Property({ type: DateTimeType })
   joinedAt!: Date;
 

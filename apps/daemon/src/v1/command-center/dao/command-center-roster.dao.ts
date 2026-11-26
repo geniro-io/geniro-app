@@ -8,7 +8,10 @@ import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity
 
 const HANDLE_PATTERN = /^t(\d+)$/;
 
-type RosterMarks = Pick<CommandCenterRosterEntry, 'announcedFinish' | 'watch'>;
+type RosterMarks = Pick<
+  CommandCenterRosterEntry,
+  'announcedFinish' | 'watch' | 'finishNewsSince'
+>;
 
 /** `command_center_roster` — the threads each manager holds. */
 @Injectable()
@@ -79,6 +82,7 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
               note: null,
               joinedAt: at,
               leftAt: null,
+              finishNewsSince: at,
             },
             { partial: true },
           );
@@ -181,14 +185,17 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
         threadRunId,
         announcedFinish: read.announcedFinish,
         watch: read.watch,
+        finishNewsSince: read.finishNewsSince,
       },
       next,
     );
   }
 
+  /** Make each thread's next finish news, from `at` on. */
   async clearAnnounced(
     managerRunId: string,
     threadRunIds: readonly string[],
+    at: Date = new Date(),
     txEm?: EntityManager,
   ): Promise<void> {
     if (threadRunIds.length === 0) {
@@ -197,7 +204,7 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
     await (txEm ?? this.em.fork()).nativeUpdate(
       CommandCenterRosterEntry,
       { managerRunId, threadRunId: { $in: [...threadRunIds] } },
-      { announcedFinish: null },
+      { announcedFinish: null, finishNewsSince: at },
     );
   }
 

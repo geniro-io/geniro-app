@@ -98,6 +98,37 @@ function finishKeyOf(run: RunWire): string {
   ]);
 }
 
+/**
+ * What a thread found done at its first reading, mostly after a boot, calls
+ * for: a watched thread that finished after its finish became news is told
+ * once; one still owing the work a `tell_threads` asked for keeps waiting for
+ * it; anything else is recorded quietly, as is a row written before finishes
+ * were recorded.
+ */
+function firstReadingOf(
+  entry: CommandCenterRosterEntry,
+  run: RunWire,
+): 'announce' | 'record' | 'wait' {
+  const since = entry.finishNewsSince;
+  if (since === null) {
+    return 'record';
+  }
+  const ranSince =
+    typeof run.lastActivityAt === 'string' &&
+    Date.parse(run.lastActivityAt) > since.getTime();
+  if (entry.watch && (ranSince || entry.announcedFinish !== null)) {
+    return 'announce';
+  }
+  if (
+    !ranSince &&
+    entry.announcedFinish === null &&
+    since.getTime() > entry.joinedAt.getTime()
+  ) {
+    return 'wait';
+  }
+  return 'record';
+}
+
 function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
   const summary = clean(run.outcome?.summary ?? '');
   return {
@@ -118,8 +149,9 @@ function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
  * is never told. Driven by the board's own change stream, so it reads a thread
  * only when its card moved.
  *
- * A thread's first reading only records its column and finish: a boot never
- * wakes the manager about threads that were done before it.
+ * A thread's first reading records its column and, quietly, its finish
+ * (`firstReadingOf`), except a watched thread's finish that came after it
+ * became news, which a restart missed and which wakes the manager once.
  */
 @Injectable()
 export class CommandCenterNotifyService
@@ -295,8 +327,15 @@ export class CommandCenterNotifyService
       return;
     }
     const finish = finishKeyOf(run);
-    if (previous === undefined || entry.announcedFinish === finish) {
-      if (entry.announcedFinish !== finish) {
+    if (entry.announcedFinish === finish) {
+      return;
+    }
+    if (previous === undefined) {
+      const reading = firstReadingOf(entry, run);
+      if (reading === 'wait') {
+        return;
+      }
+      if (reading === 'record') {
         await this.roster.markAnnounced(
           managerRunId,
           runId,
@@ -305,8 +344,8 @@ export class CommandCenterNotifyService
           false,
           em,
         );
+        return;
       }
-      return;
     }
     const message = `${entry.handle} is done`;
     const fields = { threadDone: [doneRowOf(runId, entry.handle, run)] };

@@ -235,7 +235,11 @@ describe('CommandCenterOpsService', () => {
 
       it('makes the next finish of each named thread news again, leaving the others as they were', async () => {
         const roster = new CommandCenterRosterDao(db.em);
-        const unread = { announcedFinish: null, watch: false };
+        const unread = {
+          announcedFinish: null,
+          watch: false,
+          finishNewsSince: null,
+        };
         await roster.markAnnounced(
           MANAGER,
           'thread-1',
@@ -284,7 +288,11 @@ describe('CommandCenterOpsService', () => {
 
         beforeEach(async () => {
           const roster = new CommandCenterRosterDao(db.em);
-          const unread = { announcedFinish: null, watch: false };
+          const unread = {
+            announcedFinish: null,
+            watch: false,
+            finishNewsSince: null,
+          };
           await roster.markAnnounced(
             MANAGER,
             'thread-1',
@@ -344,10 +352,13 @@ describe('CommandCenterOpsService', () => {
         it('keeps a finish announced while the refused send was out', async () => {
           const roster = new CommandCenterRosterDao(db.em);
           delivery.send.mockImplementationOnce(async () => {
+            const row = (await roster.listOf(MANAGER)).find(
+              (entry) => entry.threadRunId === 'thread-1',
+            )!;
             await roster.markAnnounced(
               MANAGER,
               'thread-1',
-              { announcedFinish: null, watch: true },
+              row,
               'finish-3',
               true,
             );
@@ -368,7 +379,7 @@ describe('CommandCenterOpsService', () => {
         await roster.markAnnounced(
           MANAGER,
           'thread-1',
-          { announcedFinish: null, watch: false },
+          { announcedFinish: null, watch: false, finishNewsSince: null },
           'finish-1',
           false,
         );

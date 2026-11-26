@@ -81,6 +81,7 @@ interface RunFields {
   pullRequests?: { number: number; opened: boolean }[];
   monitorsOpen?: number;
   goals?: { id: string; status: string }[];
+  lastActivityAt?: string | null;
 }
 
 function runOf(fields: RunFields): RunWire {
@@ -605,13 +606,8 @@ describe('CommandCenterNotifyService', () => {
 
   it('keeps a tell_threads clear and watch that landed after a review read the row', async () => {
     await roster.join(MANAGER, [THREAD], 'auto', new Date());
-    await roster.markAnnounced(
-      MANAGER,
-      THREAD,
-      { announcedFinish: null, watch: false },
-      'old-finish',
-      false,
-    );
+    const [joined] = await roster.listOf(MANAGER);
+    await roster.markAnnounced(MANAGER, THREAD, joined!, 'old-finish', false);
     const [stale] = await roster.listOf(MANAGER);
 
     await roster.clearAnnounced(MANAGER, [THREAD]);
@@ -625,13 +621,8 @@ describe('CommandCenterNotifyService', () => {
 
   it('leaves a tell_threads clear and watch that land while a review announces a finish', async () => {
     await roster.join(MANAGER, [THREAD], 'auto', new Date());
-    await roster.markAnnounced(
-      MANAGER,
-      THREAD,
-      { announcedFinish: null, watch: false },
-      'older-finish',
-      false,
-    );
+    const [joined] = await roster.listOf(MANAGER);
+    await roster.markAnnounced(MANAGER, THREAD, joined!, 'older-finish', false);
     setThread({ id: THREAD, status: 'running' });
     await service.review(THREAD);
 
@@ -652,6 +643,102 @@ describe('CommandCenterNotifyService', () => {
     const [row] = await listOf(MANAGER);
     expect(row?.announcedFinish).toBeNull();
     expect(row?.watch).toBe(true);
+  });
+
+  describe('at a boot', () => {
+    const later = () => new Date(Date.now() + 60_000).toISOString();
+    const earlier = () => new Date(Date.now() - 60_000).toISOString();
+    const finished = (lastActivityAt: string) => ({
+      id: THREAD,
+      outcome: {
+        summary: 'Cache cleared',
+        seq: 7,
+        source: 'recorded' as const,
+      },
+      lastActivityAt,
+    });
+
+    async function restart(): Promise<void> {
+      service.onModuleDestroy();
+      service = makeService();
+      await service.review(THREAD);
+    }
+
+    it('wakes the manager once for a watched thread that finished while the daemon was down, and not after the next restart', async () => {
+      await watched(THREAD);
+      setThread(finished(later()));
+
+      await restart();
+      await restart();
+
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(firstWake().key).toBe(`command-center:done:${THREAD}`);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.watch).toBe(false);
+      expect(row?.announcedFinish).not.toBeNull();
+    });
+
+    it('stays silent for an unwatched thread that finished while the daemon was down, and records its finish', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date());
+      setThread(finished(later()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(await managerRows()).toEqual([]);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).not.toBeNull();
+    });
+
+    it('stays silent for a watched row written before finishes were recorded, and records its finish', async () => {
+      await db.seedRoster(MANAGER, THREAD, 't1', { watch: true });
+      setThread(finished(later()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(await managerRows()).toEqual([]);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).not.toBeNull();
+      expect(row?.watch).toBe(true);
+    });
+
+    it('keeps waiting when the thread has not run since tell_threads asked for new work, and announces the finish of that work', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date(Date.now() - 1000));
+      await roster.setWatch(MANAGER, [THREAD], true);
+      const [joined] = await roster.listOf(MANAGER);
+      await roster.markAnnounced(MANAGER, THREAD, joined!, 'older', false);
+      await roster.clearAnnounced(MANAGER, [THREAD]);
+      setThread(finished(earlier()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      const [waiting] = await roster.listOf(MANAGER);
+      expect(waiting?.announcedFinish).toBeNull();
+      expect(waiting?.watch).toBe(true);
+
+      setThread({ id: THREAD, status: 'running' });
+      await service.review(THREAD);
+      setThread(finished(later()));
+      await service.review(THREAD);
+
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a tell_threads re-arm that landed after a review read a watched row with no finish recorded', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date(Date.now() - 1000));
+      await roster.setWatch(MANAGER, [THREAD], true);
+      const [stale] = await roster.listOf(MANAGER);
+
+      await roster.clearAnnounced(MANAGER, [THREAD]);
+      await roster.setWatch(MANAGER, [THREAD], true);
+      await roster.markAnnounced(MANAGER, THREAD, stale!, 'finish', true);
+
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).toBeNull();
+      expect(row?.watch).toBe(true);
+    });
   });
 
   it('tells the manager nothing about status changes that never reach done', async () => {

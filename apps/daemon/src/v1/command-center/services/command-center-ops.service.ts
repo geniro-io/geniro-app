@@ -140,7 +140,11 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     const marksBefore = new Map(
       (await this.roster.listOf(managerRunId)).map((row) => [
         row.threadRunId,
-        { announcedFinish: row.announcedFinish, watch: row.watch },
+        {
+          announcedFinish: row.announcedFinish,
+          watch: row.watch,
+          finishNewsSince: row.finishNewsSince,
+        },
       ]),
     );
     const sent: TellThreadsAnswer['sent'] = [];
@@ -150,7 +154,8 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       seen.add(thread.runId);
-      await this.roster.clearAnnounced(managerRunId, [thread.runId]);
+      const newsSince = new Date();
+      await this.roster.clearAnnounced(managerRunId, [thread.runId], newsSince);
       if (input.watch !== undefined) {
         await this.roster.setWatch(managerRunId, [thread.runId], input.watch);
       }
@@ -167,7 +172,11 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
         await this.roster.replaceMarks(
           managerRunId,
           thread.runId,
-          { announcedFinish: null, watch: input.watch ?? before.watch },
+          {
+            announcedFinish: null,
+            watch: input.watch ?? before.watch,
+            finishNewsSince: newsSince,
+          },
           before,
         );
       }

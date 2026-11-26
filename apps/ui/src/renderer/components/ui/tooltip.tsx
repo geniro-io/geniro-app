@@ -212,6 +212,9 @@ export function TooltipLayer(): React.JSX.Element | null {
       );
     };
     const onMove = (event: PointerEvent): void => {
+      if (event.buttons !== 0) {
+        return;
+      }
       lastMove = event;
       if (moveFrame !== 0) {
         return;

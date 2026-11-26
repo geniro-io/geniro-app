@@ -124,6 +124,37 @@ describe('FloatingWindow', () => {
     expect(windowOf(el).style.top).toBe('300px');
   });
 
+  it('draws on a layer of its own while its head is held, and in the page again once let go', () => {
+    const el = draw();
+    const head = el.querySelector('[data-slot="floating-window-head"]')!;
+    expect(windowOf(el).className).not.toContain('will-change-transform');
+
+    press(head, 'pointerdown', 100, 100);
+    expect(windowOf(el).className).toContain('will-change-transform');
+    press(head, 'pointermove', 40, 160);
+    expect(windowOf(el).className).toContain('will-change-transform');
+
+    press(head, 'pointerup', 40, 160);
+    expect(windowOf(el).className).not.toContain('will-change-transform');
+
+    press(head, 'pointerdown', 100, 100);
+    press(head, 'pointercancel', 100, 100);
+    expect(windowOf(el).className).not.toContain('will-change-transform');
+  });
+
+  it('stays in the page while an edge resizes it', () => {
+    const el = draw();
+    const left = el.querySelector(
+      '[data-slot="floating-window-resize"][data-edge="w"]',
+    )!;
+
+    press(left, 'pointerdown', 500, 300);
+    press(left, 'pointermove', 400, 300);
+
+    expect(windowOf(el).className).not.toContain('will-change-transform');
+    press(left, 'pointerup', 400, 300);
+  });
+
   it('resizes from an edge', () => {
     const el = draw();
     const left = el.querySelector(

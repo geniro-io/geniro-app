@@ -233,6 +233,7 @@ export function FloatingWindow({
   const [draft, setDraft] = useState<WindowRect | null>(null);
   const [minimised, setMinimised] = useState(false);
   const [maximised, setMaximised] = useState(false);
+  const [moving, setMoving] = useState(false);
   const gesture = useRef<Gesture | null>(null);
   const measured = bounds.width > 0 && bounds.height > 0;
   const start =
@@ -274,6 +275,7 @@ export function FloatingWindow({
     }
     event.currentTarget.setPointerCapture(event.pointerId);
     gesture.current = make(rect);
+    setMoving(gesture.current.kind === 'move');
   };
   const follow = (event: ReactPointerEvent<HTMLElement>): void => {
     const active = gesture.current;
@@ -299,6 +301,7 @@ export function FloatingWindow({
       return;
     }
     gesture.current = null;
+    setMoving(false);
     if (draft !== null) {
       setPlaced(clampWindow(draft, bounds));
       setDraft(null);
@@ -327,6 +330,8 @@ export function FloatingWindow({
             ? 'absolute inset-0 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]'
             : 'absolute rounded-card border border-border shadow-panel-lg',
           !phone && shown === null && 'invisible',
+          // Only while moving: a layer of its own makes the window the containing block of the fixed menus and dialogs inside it.
+          moving && 'will-change-transform',
         )}
         style={
           shown === null

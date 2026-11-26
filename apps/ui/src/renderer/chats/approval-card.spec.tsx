@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApprovalCard } from './approval-card';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -398,6 +399,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe(
       '✓ answered — answers are not saved when a question is secret',
     );
@@ -419,6 +421,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe(
       '✓ answered — answers are not saved when a question is secret',
     );
@@ -435,6 +438,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe('✓ answered');
     expect(el.textContent).not.toContain('not saved');
   });
@@ -646,6 +650,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(settled));
     expect(
       settled.querySelector('[data-slot="option-preview"] strong')?.textContent,
     ).toBe('root cause');
@@ -1546,6 +1551,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     // Tabs would hide half the record: a settled card is a transcript row.
     expect(tabsOf(el)).toHaveLength(0);
     expect(answerControlsOf(el)).toHaveLength(0);
@@ -2378,6 +2384,13 @@ describe('ApprovalCard — hazardous-character warning', () => {
   });
 
   describe('question card fold', () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+    afterEach(() => {
+      localStorage.clear();
+    });
+
     const QUESTION_INPUT = {
       questions: [
         {
@@ -2482,10 +2495,169 @@ describe('ApprovalCard — hazardous-character warning', () => {
           onRespond={vi.fn()}
         />,
       );
-      click(toggleOf(el));
       expect(
         el.querySelector('[data-slot="question-card-summary"]')?.textContent,
       ).toBe('✓ answered · Blue · the lighter one');
+    });
+
+    it('an answered card folds by default to its question and answer', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={true}
+          answer="Blue"
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      expect(answerControlsOf(el)).toHaveLength(0);
+      expect(el.textContent).not.toContain('Red');
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Blue');
+
+      click(toggleOf(el));
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+      expect(el.textContent).toContain('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]'),
+      ).toBeNull();
+    });
+
+    it('a declined card folds by default to its question and "declined"', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={false}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✗ declined');
+    });
+
+    it('a folded settled multi-question card names its first question and how many follow', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [
+              { question: 'Which color?', options: [{ label: 'Red' }] },
+              { question: 'Which **size**?', options: [{ label: 'S' }] },
+            ],
+          })}
+          verdict={true}
+          answer={'Red\nS'}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color? (+1 more)');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Red · S');
+    });
+
+    it('an expired card with no answer stays open by default', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          expired
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('a pending card answered while it is open folds by itself', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+
+      act(() => {
+        root!.render(
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            onRespond={vi.fn()}
+          />,
+        );
+      });
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('a pending card the user folded and reopened stays open once answered', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          requestId="req-open-press"
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      click(toggleOf(el));
+
+      act(() => {
+        root!.render(
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            requestId="req-open-press"
+            onRespond={vi.fn()}
+          />,
+        );
+      });
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('a press on an answered card is remembered in its thread across a remount', () => {
+      const card = (
+        <ThreadUiMemoryContext.Provider value="thread-question-fold">
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            requestId="req-remembered"
+            onRespond={vi.fn()}
+          />
+        </ThreadUiMemoryContext.Provider>
+      );
+      const el = render(card);
+      click(toggleOf(el));
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+
+      act(() => {
+        root!.unmount();
+      });
+      container!.remove();
+      const remounted = render(card);
+      expect(toggleOf(remounted).getAttribute('aria-expanded')).toBe('true');
     });
   });
 });

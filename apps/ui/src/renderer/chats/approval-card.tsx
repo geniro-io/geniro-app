@@ -41,7 +41,7 @@ import {
   readThreadQuestionRelay,
   ThreadQuestionCard,
 } from './thread-question-card';
-import { useThreadFlag } from './thread-ui-memory';
+import { useThreadOverride } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { recordOf } from './tool-result-text';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -451,9 +451,10 @@ function QuestionCard({
     body — this component stays mounted, so the picks, the typed text and the
     staged screenshots of a pending card are all still there when it opens
     again. Remembered per thread under the request's id, like every other
-    transcript fold, so a card folded in one visit stays folded in the next.
+    transcript fold, so a card folded in one visit stays folded in the next. A
+    settled card starts folded; the reader's own press overrides that.
   */
-  const [collapsed, setCollapsed] = useThreadFlag(memoryKey, false);
+  const [foldPress, setFoldPress] = useThreadOverride(memoryKey);
   const cardId = useId();
   const secretHintId = `${cardId}-secret-hint`;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -485,6 +486,8 @@ function QuestionCard({
     onRespond,
   );
   const pending = verdict === null && !expired;
+  const settled = verdict !== null;
+  const collapsed = foldPress ?? settled;
   // One tab per question, and only while the card can still be answered —
   // a settled card is a transcript row, so it lists every question instead.
   const showTabs = pending && questions.length > 1;
@@ -688,6 +691,11 @@ function QuestionCard({
           : verdict
             ? `✓ answered${answerLine === '' ? '' : ` · ${answerLine}`}`
             : '✗ declined';
+  const firstQuestionLine = oneLine(plainMarkdownText(questions[0]!.question));
+  const settledQuestion =
+    questions.length > 1
+      ? `${firstQuestionLine} (+${questions.length - 1} more)`
+      : firstQuestionLine;
   return (
     <Card
       data-slot="question-card"
@@ -701,7 +709,7 @@ function QuestionCard({
         data-slot="question-card-toggle"
         aria-expanded={!collapsed}
         title={collapsed ? 'Show the question' : 'Collapse the question'}
-        onClick={() => setCollapsed((value) => !value)}
+        onClick={() => setFoldPress(!collapsed)}
         className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <MessageCircleQuestion
           aria-hidden="true"
@@ -726,19 +734,29 @@ function QuestionCard({
         />
       </button>
       {collapsed ? (
-        <p
-          data-slot="question-card-summary"
-          title={summary}
-          className={cn(
-            'm-0 truncate text-xs',
-            verdict === true
-              ? 'text-success'
-              : verdict === false
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-          )}>
-          {summary}
-        </p>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {settled ? (
+            <p
+              data-slot="question-card-question"
+              title={settledQuestion}
+              className="m-0 truncate text-xs text-muted-foreground">
+              {settledQuestion}
+            </p>
+          ) : null}
+          <p
+            data-slot="question-card-summary"
+            title={summary}
+            className={cn(
+              'm-0 truncate text-xs',
+              verdict === true
+                ? 'text-success'
+                : verdict === false
+                  ? 'text-destructive'
+                  : 'text-muted-foreground',
+            )}>
+            {summary}
+          </p>
+        </div>
       ) : (
         <>
           {showTabs ? (

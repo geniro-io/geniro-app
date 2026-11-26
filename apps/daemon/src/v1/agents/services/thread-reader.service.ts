@@ -47,8 +47,10 @@ import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { eventLoopSlicer } from '../utils/event-loop-slices';
+import { failedCallErrors } from '../utils/failed-call-errors';
 import { type FailedCall, groupFailures } from '../utils/failure-groups';
 import { asRecord, parseJsonColumn } from '../utils/json-util';
+import { payloadFieldText } from '../utils/payload-field-text';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import {
   lifecycleEvents,
@@ -120,12 +122,6 @@ const FAILED_SPAN_TEXT_CHARS = 300;
 /** How many spans a page reads the failed calls' texts for at once. */
 const SPAN_TEXT_WINDOW = 40;
 
-/** How many failed calls' result rows view=failures reads in one statement. */
-const FAILURE_ROWS_READ = 200;
-
-/** How much of a failed call's error view=failures keeps to sign it; a signature reads its first line. */
-const FAILURE_TEXT_READ_CHARS = 4_000;
-
 /** A message on a view=userMessages page is clipped to this. */
 const USER_MESSAGE_CHARS = 400;
 
@@ -180,27 +176,6 @@ function payloadText(payload: string): string {
       ? record.text
       : JSON.stringify(collapsed);
   return redactSecrets(text);
-}
-
-/**
- * One field of a row's payload as text, images collapsed and secrets masked
- * before any cut; the whole payload's text when the field is absent.
- */
-function payloadFieldText(payload: string, field: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return redactSecrets(payload);
-  }
-  const record = asRecord(parsed);
-  if (record === null || record[field] === undefined) {
-    return '';
-  }
-  const value = collapseImageBlocks(record[field]);
-  return redactSecrets(
-    typeof value === 'string' ? value : JSON.stringify(value),
-  );
 }
 
 /** A JSON answer with every registered secret masked in its values. */
@@ -477,7 +452,9 @@ export class ThreadReaderService {
       case 'spans':
         return this.spans(source, args);
       case 'items':
-        return this.items(source, args, em);
+        return args.failed === true
+          ? this.spans(source, args)
+          : this.items(source, args, em);
       case 'item':
         return this.item(source, args, em);
       case 'pr':
@@ -1671,33 +1648,23 @@ export class ThreadReaderService {
           ? [{ span, label, resultSeq: span.resultSeq }]
           : [];
       });
-      for (let at = 0; at < failed.length; at += FAILURE_ROWS_READ) {
-        const chunk = failed.slice(at, at + FAILURE_ROWS_READ);
-        const rows = await this.itemDao.rowsAtSeqs(
-          analysed.runId,
-          chunk.map((entry) => entry.resultSeq),
-          analysed.snapshotSeq,
-          em,
-        );
-        const payloads = new Map(rows.map((row) => [row.seq, row.payload]));
-        for (const { span, label, resultSeq } of chunk) {
-          const payload = payloads.get(resultSeq);
-          calls.push({
-            runId: analysed.runId,
-            seq: span.seq,
-            resultSeq,
-            at: iso(span.startMs),
-            tool: label,
-            error:
-              payload === undefined
-                ? ''
-                : payloadFieldText(payload, 'result').slice(
-                    0,
-                    FAILURE_TEXT_READ_CHARS,
-                  ),
-          });
-        }
-        await yieldTurn();
+      const errors = await failedCallErrors(
+        this.itemDao,
+        analysed.runId,
+        failed.map((entry) => entry.resultSeq),
+        analysed.snapshotSeq,
+        em,
+        yieldTurn,
+      );
+      for (const { span, label, resultSeq } of failed) {
+        calls.push({
+          runId: analysed.runId,
+          seq: span.seq,
+          resultSeq,
+          at: iso(span.startMs),
+          tool: label,
+          error: errors.get(resultSeq) ?? '',
+        });
       }
     }
     const groups = groupFailures(calls, FAILED_SPAN_TEXT_CHARS);

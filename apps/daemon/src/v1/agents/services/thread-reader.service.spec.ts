@@ -1200,6 +1200,30 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(curl.error).toContain('denied for');
       expect(curl.error).not.toContain('sk-live-supersecret-token');
     });
+
+    it('answers items failed=true with each failed call, its input and its error text, as spans failed=true does', async () => {
+      const items = await reader.read(source, {
+        view: 'items',
+        failed: true,
+        tool: 'geniro',
+      });
+
+      expect(items).toEqual(
+        await reader.read(source, {
+          view: 'spans',
+          failed: true,
+          tool: 'geniro',
+        }),
+      );
+      expect(items.spans).toEqual([
+        expect.objectContaining({
+          seq: 3,
+          resultSeq: 4,
+          input: JSON.stringify({ handle: 'm12' }),
+          error: 'INVALID_ARGS: ids is required',
+        }),
+      ]);
+    });
   });
 
   it("answers only the user's messages when items asks for role=user", async () => {

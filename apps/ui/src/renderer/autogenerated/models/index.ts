@@ -5558,6 +5558,12 @@ export interface DigestSignals {
      * @memberof DigestSignals
      */
     failedToolCalls: number;
+    /**
+     * 
+     * @type {FailedToolCallsByKind}
+     * @memberof DigestSignals
+     */
+    failedToolCallsByKind?: FailedToolCallsByKind;
 }
 
 
@@ -5638,6 +5644,12 @@ export interface DigestThread {
     failedTools: Array<DigestThreadFailedToolsInner>;
     /**
      * 
+     * @type {Array<DigestToolError>}
+     * @memberof DigestThread
+     */
+    geniroToolErrors?: Array<DigestToolError>;
+    /**
+     * 
      * @type {number}
      * @memberof DigestThread
      */
@@ -5669,6 +5681,56 @@ export interface DigestThreadFailedToolsInner {
      * @memberof DigestThreadFailedToolsInner
      */
     failures: number;
+}
+/**
+ * 
+ * @export
+ * @interface DigestToolError
+ */
+export interface DigestToolError {
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestToolError
+     */
+    tool: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestToolError
+     */
+    signature: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestToolError
+     */
+    count: number;
+    /**
+     * 
+     * @type {DigestToolErrorExample}
+     * @memberof DigestToolError
+     */
+    example: DigestToolErrorExample;
+}
+/**
+ * 
+ * @export
+ * @interface DigestToolErrorExample
+ */
+export interface DigestToolErrorExample {
+    /**
+     * 
+     * @type {string}
+     * @memberof DigestToolErrorExample
+     */
+    runId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof DigestToolErrorExample
+     */
+    seq: number;
 }
 /**
  * 
@@ -6085,6 +6147,31 @@ export interface ExportedDto {
      * @memberof ExportedDto
      */
     exported: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface FailedToolCallsByKind
+ */
+export interface FailedToolCallsByKind {
+    /**
+     * 
+     * @type {number}
+     * @memberof FailedToolCallsByKind
+     */
+    geniro: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FailedToolCallsByKind
+     */
+    otherMcp: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FailedToolCallsByKind
+     */
+    shell: number;
 }
 /**
  * 
@@ -19147,6 +19234,18 @@ export interface SystemDigestTotals {
      * @memberof SystemDigestTotals
      */
     failedToolCalls: number;
+    /**
+     * 
+     * @type {FailedToolCallsByKind}
+     * @memberof SystemDigestTotals
+     */
+    failedToolCallsByKind?: FailedToolCallsByKind;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotals
+     */
+    geniroToolErrorGroups?: number;
     /**
      * 
      * @type {number}

@@ -38,7 +38,43 @@ describe('errorSignature', () => {
       errorSignature(
         JSON.stringify({ error: 'INVALID_ARGS', message: 'ids is required' }),
       ),
-    ).toBe('INVALID_ARGS');
+    ).toBe('INVALID_ARGS: ids is required');
+    expect(
+      errorSignature(
+        JSON.stringify({ error: 'the tab closed', code: 'NO_SUCH_TAB' }),
+      ),
+    ).toBe('the tab closed');
+  });
+
+  it('signs a list of validation issues by where each failed and what it says, not by the bracket that opens it', () => {
+    const issues = (limit: number) =>
+      `INVALID_ARGS: ${JSON.stringify(
+        [
+          {
+            origin: 'number',
+            code: 'too_big',
+            maximum: limit,
+            path: ['limit'],
+            message: `Too big: expected number to be <=${limit}`,
+          },
+          {
+            code: 'unrecognized_keys',
+            keys: ['name'],
+            path: [],
+            message: 'Unrecognized key: "name"',
+          },
+        ],
+        null,
+        2,
+      )}\n\nThis tool's input schema was not in your prompt when you called it.`;
+
+    expect(errorSignature(issues(10))).toBe(
+      'INVALID_ARGS: limit: Too big: expected number to be <=#; Unrecognized key: <q>',
+    );
+    expect(errorSignature(issues(3))).toBe(errorSignature(issues(10)));
+    expect(errorSignature('INVALID_ARGS: [\n  {"broken": ')).toBe(
+      'INVALID_ARGS: [',
+    );
     expect(
       errorSignature(
         '<tool_use_error>\n\nString to replace not found in file.',

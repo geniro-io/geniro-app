@@ -12,8 +12,11 @@ import {
   agentFlagRunKindOf,
   agentFlagWire,
 } from '../../agents/utils/agent-flags';
+import { eventLoopSlicer } from '../../agents/utils/event-loop-slices';
+import { failedCallErrors } from '../../agents/utils/failed-call-errors';
 import { librarySlugOf } from '../../agents/utils/run-kind';
 import { runSnapshotOf } from '../../agents/utils/run-snapshots';
+import { GENIRO_MCP_SERVER } from '../../agents/utils/tool-metric';
 import { LessonProposalDao } from '../../lessons/dao/lesson-proposal.dao';
 import { readLessonSignals } from '../../lessons/utils/read-lesson-signals';
 import { MetricLedgerDao } from '../../stats/dao/metric-ledger.dao';
@@ -23,7 +26,9 @@ import {
 } from '../system-analysis.types';
 import {
   type DigestCandidate,
+  type DigestFailedCall,
   digestScore,
+  failedToolCallsByKind,
   foldSystemDigest,
 } from '../utils/system-digest.fold';
 
@@ -103,15 +108,18 @@ export class SystemDigestService {
         unmet.set(goal.runId, (unmet.get(goal.runId) ?? 0) + 1);
       }
     }
-    const failedByRun = new Map<
-      string,
-      DigestCandidate['failedTools'][number][]
-    >();
+    const failedByRun = new Map<string, DigestFailedCall[]>();
     for (const call of failedCalls) {
       const list = failedByRun.get(call.runId) ?? [];
-      list.push({ tool: call.tool, mcpServer: call.mcpServer });
+      list.push({
+        seq: call.seq,
+        tool: call.tool,
+        mcpServer: call.mcpServer,
+        error: null,
+      });
       failedByRun.set(call.runId, list);
     }
+    await this.readGeniroErrors(runIds, failedByRun);
     const counted = new Set([...runIds, ...goneRunIds]);
     const wires = flags
       .filter((flag) => counted.has(flag.runId))
@@ -176,6 +184,36 @@ export class SystemDigestService {
   }
 
   /**
+   * The error text of every failed call of geniro's own tools among `runIds`,
+   * read off its result row; the other failures are only counted.
+   */
+  private async readGeniroErrors(
+    runIds: readonly string[],
+    failedByRun: ReadonlyMap<string, DigestFailedCall[]>,
+  ): Promise<void> {
+    const yieldTurn = eventLoopSlicer();
+    for (const runId of runIds) {
+      const geniro = (failedByRun.get(runId) ?? []).filter(
+        (call) => call.mcpServer === GENIRO_MCP_SERVER,
+      );
+      if (geniro.length === 0) {
+        continue;
+      }
+      const errors = await failedCallErrors(
+        this.itemDao,
+        runId,
+        geniro.map((call) => call.seq),
+        Number.MAX_SAFE_INTEGER,
+        this.em.fork(),
+        yieldTurn,
+      );
+      for (const call of geniro) {
+        call.error = errors.get(call.seq) ?? null;
+      }
+    }
+  }
+
+  /**
    * Corrections and refused approvals, read off the transcripts of the
    * candidates the ledgers rank highest — at most
    * {@link SYSTEM_DIGEST_PAYLOAD_CANDIDATES}, one run per turn of the loop.
@@ -203,6 +241,7 @@ export class SystemDigestService {
         corrections: 0,
         analysisRefusals: candidate.analysisRefusals,
         failedToolCalls: candidate.failedTools.length,
+        failedToolCallsByKind: failedToolCallsByKind(candidate.failedTools),
       });
     const ranked = candidates
       .map((candidate) => ({ candidate, score: ledgerScore(candidate) }))

@@ -20,6 +20,12 @@ export const SYSTEM_DIGEST_PAYLOAD_CANDIDATES = 200;
 export const SYSTEM_DIGEST_GONE_FLAGS = 20;
 /** Failed tools listed per thread, the most frequent first. */
 export const SYSTEM_DIGEST_TOOLS_PER_THREAD = 5;
+/** geniro tool error signatures listed per thread, the most frequent first. */
+export const SYSTEM_DIGEST_TOOL_ERRORS_PER_THREAD = 3;
+/** geniro tool error signatures listed for the whole period, the most frequent first. */
+export const SYSTEM_DIGEST_TOOL_ERRORS = 15;
+/** How much of a period error signature's first error text the digest quotes. */
+export const SYSTEM_DIGEST_TOOL_ERROR_CHARS = 200;
 export const SYSTEM_ANALYSIS_DAYS_MAX = 90;
 /** How long a start reuses the digest the scope read built for the same period length. */
 export const SYSTEM_DIGEST_REUSE_MS = 5 * 60_000;
@@ -34,6 +40,41 @@ export const SYSTEM_DIGEST_WEIGHTS = {
   failedToolCallsCap: 10,
 } as const;
 
+/**
+ * Failed tool calls by where the tool came from: geniro's own MCP server,
+ * any other MCP server, or the CLI's own tools (shell, file reads and edits),
+ * whose failures are mostly ordinary command exits.
+ */
+export const FailedToolCallsByKindSchema = z
+  .object({
+    geniro: z.number().int(),
+    otherMcp: z.number().int(),
+    shell: z.number().int(),
+  })
+  .meta({ id: 'FailedToolCallsByKind' });
+export type FailedToolCallsByKind = z.infer<typeof FailedToolCallsByKindSchema>;
+
+/** Every failed call of one geniro tool failing for one reason, with one of them to open. */
+export const DigestToolErrorSchema = z
+  .object({
+    tool: z.string(),
+    signature: z.string(),
+    count: z.number().int(),
+    /** A failed call's result row: view=item runId=… seq=… reads its error whole. */
+    example: z.object({ runId: z.string(), seq: z.number().int() }),
+  })
+  .meta({ id: 'DigestToolError' });
+export type DigestToolError = z.infer<typeof DigestToolErrorSchema>;
+
+export const PeriodToolErrorSchema = DigestToolErrorSchema.extend({
+  threads: z.number().int(),
+  /** False when every call of it is in a thread outside the digest, which cannot be opened. */
+  readable: z.boolean(),
+  /** The first call's error text, clipped. */
+  error: z.string(),
+}).meta({ id: 'PeriodToolError' });
+export type PeriodToolError = z.infer<typeof PeriodToolErrorSchema>;
+
 export const DigestSignalsSchema = z
   .object({
     workFlags: z.number().int(),
@@ -44,6 +85,8 @@ export const DigestSignalsSchema = z
     corrections: z.number().int(),
     analysisRefusals: z.number().int(),
     failedToolCalls: z.number().int(),
+    /** Absent from a digest built before failures were split. */
+    failedToolCallsByKind: FailedToolCallsByKindSchema.optional(),
   })
   .meta({ id: 'DigestSignals' });
 export type DigestSignals = z.infer<typeof DigestSignalsSchema>;
@@ -66,6 +109,8 @@ export const DigestThreadSchema = z
         failures: z.number().int(),
       }),
     ),
+    /** Its geniro tool failures by tool and error signature, the most frequent first. */
+    geniroToolErrors: z.array(DigestToolErrorSchema).optional(),
     /** The run's newest row when the digest was built: every read of it stops there. */
     snapshotSeq: z.number().int(),
   })
@@ -87,6 +132,9 @@ export const SystemDigestTotalsSchema = z
     threadsWithSignals: z.number().int(),
     flags: z.number().int(),
     failedToolCalls: z.number().int(),
+    failedToolCallsByKind: FailedToolCallsByKindSchema.optional(),
+    /** How many tool and error signature groups the period's geniro tool failures form. */
+    geniroToolErrorGroups: z.number().int().optional(),
     /** Of the threads with signals, geniro's own: analyses and lessons chats. */
     systemThreads: z.number().int(),
   })
@@ -102,6 +150,8 @@ export const SystemDigestSchema = z
     flags: z.array(AgentFlagWireSchema),
     /** Flags of threads deleted since, which can be read only here. */
     goneFlags: z.array(AgentFlagWireSchema),
+    /** The period's geniro tool failures by tool and error signature, the most frequent first. */
+    geniroToolErrors: z.array(PeriodToolErrorSchema).optional(),
     threads: z.array(DigestThreadSchema),
   })
   .meta({ id: 'SystemDigest' });

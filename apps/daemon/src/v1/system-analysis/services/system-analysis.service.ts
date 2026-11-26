@@ -93,7 +93,8 @@ export class SystemAnalysisService {
       throw error;
     }
     this.events.publishChanged(run.id);
-    return run;
+    // As it reads after the brief: the copy taken above is `pending`, and a pending run shows no Stop.
+    return (await this.chats.findSystemAnalysis(run.id)) ?? run;
   }
 
   private buildFresh(days: number): Promise<DigestBuild> {

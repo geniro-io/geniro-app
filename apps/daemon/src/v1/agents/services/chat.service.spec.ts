@@ -6264,6 +6264,29 @@ describe('ChatService', () => {
     });
   });
 
+  describe('findSystemAnalysis', () => {
+    it('answers the system analysis it is asked for, and no other run', async () => {
+      const { service } = setup();
+      const system = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSystem: {
+          runs: [{ runId: 'r1', snapshotSeq: 3, working: false }],
+          digest: '{}',
+        },
+      });
+      const thread = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSource: { runId: 'r1', seq: 3, working: false },
+      });
+
+      expect((await service.findSystemAnalysis(system.id))?.id).toBe(system.id);
+      expect(await service.findSystemAnalysis(thread.id)).toBeNull();
+      expect(await service.findSystemAnalysis('gone')).toBeNull();
+    });
+  });
+
   describe('listChats', () => {
     it('lists only the page it is asked for', async () => {
       const { service } = setup();

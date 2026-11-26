@@ -38,6 +38,9 @@ describe('SystemAnalysisService — the digest a start reads', () => {
     typeof vi.fn<(period: { days: number }) => Promise<DigestBuild>>
   >;
   let createChat: ReturnType<typeof vi.fn>;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let deleteChat: ReturnType<typeof vi.fn>;
+  let findSystemAnalysis: ReturnType<typeof vi.fn>;
   let service: SystemAnalysisService;
   let builds: number;
 
@@ -52,10 +55,14 @@ describe('SystemAnalysisService — the digest a start reads', () => {
       );
     });
     createChat = vi.fn(() => Promise.resolve({ id: 'analysis-1' } as RunWire));
+    sendMessage = vi.fn(() => Promise.resolve());
+    deleteChat = vi.fn(() => Promise.resolve());
+    findSystemAnalysis = vi.fn(() => Promise.resolve(null));
     const chats = {
       createChat,
-      sendMessage: vi.fn(() => Promise.resolve()),
-      delete: vi.fn(() => Promise.resolve()),
+      sendMessage,
+      delete: deleteChat,
+      findSystemAnalysis,
     } as unknown as ChatService;
     service = new SystemAnalysisService(
       {} as EntityManager,
@@ -164,5 +171,45 @@ describe('SystemAnalysisService — the digest a start reads', () => {
     ).rejects.toMatchObject({ code: 'SYSTEM_ANALYSIS_NOTHING' });
     expect(build).toHaveBeenCalledTimes(1);
     expect(createChat).not.toHaveBeenCalled();
+  });
+
+  it('answers the run as it reads after the brief was sent, not the copy taken before it', async () => {
+    createChat.mockResolvedValueOnce({
+      id: 'analysis-1',
+      status: 'pending',
+    });
+    findSystemAnalysis.mockResolvedValueOnce({
+      id: 'analysis-1',
+      status: 'running',
+    });
+
+    const answer = await service.start({ agentKind: 'claude', days: 7 });
+
+    expect(answer).toMatchObject({ id: 'analysis-1', status: 'running' });
+    expect(findSystemAnalysis).toHaveBeenCalledWith('analysis-1');
+    expect(findSystemAnalysis.mock.invocationCallOrder[0] ?? 0).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('answers the created run when its re-read finds none', async () => {
+    createChat.mockResolvedValueOnce({
+      id: 'analysis-1',
+      status: 'pending',
+    });
+
+    await expect(
+      service.start({ agentKind: 'claude', days: 7 }),
+    ).resolves.toMatchObject({ id: 'analysis-1', status: 'pending' });
+  });
+
+  it('deletes the run and throws when its brief does not send', async () => {
+    sendMessage.mockRejectedValueOnce(new Error('the brief was refused'));
+
+    await expect(
+      service.start({ agentKind: 'claude', days: 7 }),
+    ).rejects.toThrow('the brief was refused');
+    expect(deleteChat).toHaveBeenCalledWith('analysis-1');
+    expect(findSystemAnalysis).not.toHaveBeenCalled();
   });
 });

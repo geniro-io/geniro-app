@@ -181,8 +181,8 @@ function RowActions({
   );
 }
 
-function namesThread(event: TimelineEvent, sentence: Sentence): boolean {
-  return sentence.named && event.threadRunId !== null;
+function namesSubject(event: TimelineEvent, sentence: Sentence): boolean {
+  return sentence.named && (event.threadRunId !== null || event.task !== null);
 }
 
 function sentenceNodes(
@@ -191,7 +191,7 @@ function sentenceNodes(
 ): React.JSX.Element {
   const name = event.task?.title ?? event.threadTitle ?? 'Untitled thread';
   const identifier = event.task?.identifier ?? null;
-  const labelOnMeta = namesThread(event, sentence);
+  const labelOnMeta = namesSubject(event, sentence);
   return (
     <>
       {sentence.before === '' ? null : (
@@ -226,7 +226,7 @@ function metaNodes(
   event: TimelineEvent,
   sentence: Sentence,
 ): React.JSX.Element | null {
-  if (!namesThread(event, sentence)) {
+  if (!namesSubject(event, sentence)) {
     return null;
   }
   const project = event.project?.name ?? null;

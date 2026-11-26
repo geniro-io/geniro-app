@@ -20,6 +20,7 @@ import { oneLine, type TimedRow } from './timeline-page';
 export interface TimelineCandidate extends TimedRow {
   kind: CommandCenterTimelineKind;
   threadRunId: string | null;
+  taskId: string | null;
   fallbackTitle: string | null;
   text: string | null;
   detail: string | null;
@@ -44,6 +45,7 @@ function candidate(
     at,
     kind,
     threadRunId: null,
+    taskId: null,
     fallbackTitle: null,
     text: null,
     detail: null,
@@ -106,11 +108,11 @@ export function threadStartedEvent(
 }
 
 export function startRequestEvent(
-  task: Pick<Task, 'id' | 'title' | 'startApprovedAt'>,
+  task: Pick<Task, 'id' | 'startApprovedAt'>,
   at: Date,
 ): TimelineCandidate {
   return candidate('start_requested', task.id, at, {
-    text: oneLine(task.title),
+    taskId: task.id,
     detail: task.startApprovedAt === null ? 'waiting for Start' : 'approved',
   });
 }

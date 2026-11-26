@@ -50,14 +50,14 @@ describe('CommandCenterTimelineService', () => {
   let db: Db;
   let managerRunId: string | null;
   let activeRunIds: string[];
-  let liveProjects: Map<string, string>;
+  let liveProjects: Map<string, { name: string; taskKey: string | null }>;
   let service: CommandCenterTimelineService;
 
   beforeEach(async () => {
     db = await commandCenterDb();
     managerRunId = 'manager';
     activeRunIds = [];
-    liveProjects = new Map([['project-1', 'Geniro']]);
+    liveProjects = new Map([['project-1', { name: 'Geniro', taskKey: 'GEN' }]]);
     const board = {
       managerRunId: vi.fn(async () => managerRunId),
       activeThreads: vi.fn(async () => ({
@@ -65,11 +65,18 @@ describe('CommandCenterTimelineService', () => {
         runs: activeRunIds.map((id) => ({ id }) as unknown as RunWire),
       })),
     };
+    const liveOf = (ids: Iterable<string | null>) => {
+      const wanted = new Set(ids);
+      return [...liveProjects].filter(([id]) => wanted.has(id));
+    };
     const projects = {
-      liveNamesOf: vi.fn(async (ids: Iterable<string | null>) => {
-        const wanted = new Set(ids);
-        return new Map([...liveProjects].filter(([id]) => wanted.has(id)));
-      }),
+      liveNamesOf: vi.fn(
+        async (ids: Iterable<string | null>) =>
+          new Map(liveOf(ids).map(([id, ref]) => [id, ref.name])),
+      ),
+      liveRefsOf: vi.fn(
+        async (ids: Iterable<string | null>) => new Map(liveOf(ids)),
+      ),
     };
     service = new CommandCenterTimelineService(
       board as unknown as CommandCenterService,
@@ -230,6 +237,7 @@ describe('CommandCenterTimelineService', () => {
       }),
       Object.assign(new Task(), {
         projectId: 'project-1',
+        number: 2,
         title: 'Card Y',
         status: 'backlog',
         startRequestedByRunId: 'manager',
@@ -314,13 +322,15 @@ describe('CommandCenterTimelineService', () => {
       expect.objectContaining({
         threadRunId: null,
         threadTitle: null,
-        text: 'Card Y',
+        text: null,
         detail: 'approved',
+        task: expect.objectContaining({ identifier: 'GEN-2', title: 'Card Y' }),
       }),
       expect.objectContaining({
         threadRunId: null,
-        text: 'Card X',
+        text: null,
         detail: 'waiting for Start',
+        task: expect.objectContaining({ identifier: null, title: 'Card X' }),
       }),
     ]);
     expect(ofKind('pull_request')).toEqual([
@@ -597,6 +607,66 @@ describe('CommandCenterTimelineService', () => {
 
       expect(orphanRows).toHaveLength(2);
       expect(orphanRows.map((event) => event.project)).toEqual([null, null]);
+    });
+
+    it("names a start request by its card's key, current title and project", async () => {
+      await persist(
+        Object.assign(new Task(), {
+          id: 'card-30',
+          projectId: 'project-1',
+          number: 30,
+          title: 'Wire the conductor',
+          status: 'backlog',
+          startRequestedByRunId: 'manager',
+          startRequestedAt: at(250),
+          startApprovedAt: null,
+        }),
+      );
+
+      const starts = (await allEvents()).filter(
+        (event) => event.kind === 'start_requested',
+      );
+
+      expect(starts).toEqual([
+        expect.objectContaining({
+          threadRunId: null,
+          threadTitle: null,
+          task: {
+            id: 'card-30',
+            identifier: 'GEN-30',
+            title: 'Wire the conductor',
+            status: 'backlog',
+          },
+          project: { id: 'project-1', name: 'Geniro' },
+        }),
+      ]);
+    });
+
+    it('gives a start request whose project has no card key a card with no identifier', async () => {
+      liveProjects = new Map([
+        ['project-1', { name: 'Geniro', taskKey: null }],
+      ]);
+      await persist(
+        Object.assign(new Task(), {
+          id: 'card-31',
+          projectId: 'project-1',
+          number: 31,
+          title: 'Keyless',
+          status: 'backlog',
+          startRequestedByRunId: 'manager',
+          startRequestedAt: at(250),
+          startApprovedAt: null,
+        }),
+      );
+
+      const [start] = (await allEvents()).filter(
+        (event) => event.kind === 'start_requested',
+      );
+
+      expect(start?.task).toEqual(
+        expect.objectContaining({ id: 'card-31', identifier: null }),
+      );
+      expect(start?.project).toEqual({ id: 'project-1', name: 'Geniro' });
     });
 
     it('gives a row that names no thread neither a card nor a project', async () => {

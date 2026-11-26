@@ -188,7 +188,15 @@ export class CommandCenterTimelineDao extends BaseDao<Item> {
         startRequestedAt: { $lt: before },
       },
       {
-        fields: ['id', 'title', 'startRequestedAt', 'startApprovedAt'],
+        fields: [
+          'id',
+          'projectId',
+          'number',
+          'title',
+          'status',
+          'startRequestedAt',
+          'startApprovedAt',
+        ],
         orderBy: [{ startRequestedAt: 'desc' }, { id: 'asc' }],
         limit,
         disableIdentityMap: true,

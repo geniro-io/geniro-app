@@ -252,7 +252,7 @@ describe('TimelinePanel — threads and messages', () => {
     expect(row.textContent).toContain('You wrote');
   });
 
-  it('shows a thread row without a thread as plain text, with no button', () => {
+  it("names a start request by its card's key, title and project, with no button", () => {
     const el = render({
       events: [
         {
@@ -260,11 +260,16 @@ describe('TimelinePanel — threads and messages', () => {
           at: new Date('2026-11-17T08:15:00').toISOString(),
           kind: 'start_requested',
           threadRunId: null,
-          threadTitle: 'Wire the thread-start conductor',
-          task: null,
-          project: null,
+          threadTitle: null,
+          task: {
+            id: 'card-417',
+            identifier: 'GEN-417',
+            title: 'Wire the thread-start conductor',
+            status: 'backlog',
+          },
+          project: { id: 'project-app', name: 'Geniro' },
           text: null,
-          detail: null,
+          detail: 'waiting for Start',
           awaitingReply: false,
         },
       ],
@@ -272,8 +277,16 @@ describe('TimelinePanel — threads and messages', () => {
 
     const row = rowOf(el, 'start_requested');
     expect(row.querySelector('button')).toBeNull();
-    expect(row.textContent).toContain('Wire the thread-start conductor');
-    expect(row.textContent).toContain('Start requested');
+    expect(
+      row.querySelector('[data-slot="timeline-task-identifier"]')!.textContent,
+    ).toBe('GEN-417');
+    expect(
+      row.querySelector('[data-slot="timeline-thread-title"]')!.textContent,
+    ).toBe('Wire the thread-start conductor');
+    expect(
+      row.querySelector('[data-slot="timeline-event-meta"]')!.textContent,
+    ).toBe('Geniro · Start requested');
+    expect(row.textContent).not.toContain('Untitled thread');
   });
 
   it('marks a manager message awaiting a reply, and only that one', () => {

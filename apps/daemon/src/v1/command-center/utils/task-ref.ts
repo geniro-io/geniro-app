@@ -11,7 +11,7 @@ export function cardsByRun(tasks: readonly Task[]): Map<string, Task> {
 
 export function taskRefOf(
   run: { taskIdentifier: string | null },
-  task: Task | null,
+  task: Pick<Task, 'id' | 'title' | 'status'> | null,
 ): CommandCenterTaskRef | null {
   return task === null
     ? null

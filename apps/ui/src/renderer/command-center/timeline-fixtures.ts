@@ -80,8 +80,14 @@ export function timelineFixtures(): TimelineEvent[] {
       text: 'Allow running the export check against the staging database?',
     }),
     event('evt-08', 'start_requested', '2026-11-17T08:15:00', {
-      threadTitle: 'Wire the thread-start conductor',
-      text: 'GEN-417 · Conductor',
+      task: {
+        id: 'card-conductor',
+        identifier: 'GEN-417',
+        title: 'Wire the thread-start conductor',
+        status: 'backlog',
+      },
+      project: APP,
+      detail: 'waiting for Start',
     }),
     event('evt-09', 'thread_started', '2026-11-16T18:20:00', {
       ...BILLING,

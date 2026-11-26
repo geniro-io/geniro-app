@@ -4,7 +4,9 @@ import type { RunProjectRef } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { runProjectRefOf } from '../../agents/utils/run-project-ref';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { taskIdentifier } from '../../projects/utils/project-key';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import type { Task } from '../../tasks/entity/task.entity';
 import type {
   CommandCenterTaskRef,
   CommandCenterTimeline,
@@ -33,11 +35,19 @@ import { CommandCenterService } from './command-center.service';
 const FAR_FUTURE = new Date(8.64e15);
 const UNTITLED_THREAD = 'Untitled thread';
 
-interface TimelineThread {
-  title: string | null;
+interface TimelineSubject {
   task: CommandCenterTaskRef | null;
   project: RunProjectRef | null;
 }
+
+interface TimelineThread extends TimelineSubject {
+  title: string | null;
+}
+
+type StartRequestCard = Pick<
+  Task,
+  'id' | 'projectId' | 'number' | 'title' | 'status'
+>;
 
 /**
  * The command center's timeline: what the manager said and was told, and what
@@ -118,17 +128,26 @@ export class CommandCenterTimelineService {
     ];
 
     const page = pageOf(candidates, limit);
-    const threads = await this.threadsOf(
-      page.rows.flatMap((row) =>
-        row.threadRunId === null ? [] : [row.threadRunId],
-      ),
+    const pageTaskIds = new Set(
+      page.rows.flatMap((row) => (row.taskId === null ? [] : [row.taskId])),
     );
+    const [threads, cards] = await Promise.all([
+      this.threadsOf(
+        page.rows.flatMap((row) =>
+          row.threadRunId === null ? [] : [row.threadRunId],
+        ),
+      ),
+      this.startRequestCardsOf(
+        startRequests.filter((task) => pageTaskIds.has(task.id)),
+      ),
+    ]);
 
     return {
       events: page.rows.map((row): CommandCenterTimelineEvent => {
         const threadRunId = row.threadRunId;
         const thread =
           threadRunId === null ? undefined : threads.get(threadRunId);
+        const card = row.taskId === null ? undefined : cards.get(row.taskId);
         return {
           id: row.id,
           at: row.at.toISOString(),
@@ -138,8 +157,8 @@ export class CommandCenterTimelineService {
             threadRunId === null
               ? null
               : (thread?.title ?? row.fallbackTitle ?? UNTITLED_THREAD),
-          task: thread?.task ?? null,
-          project: thread?.project ?? null,
+          task: thread?.task ?? card?.task ?? null,
+          project: thread?.project ?? card?.project ?? null,
           text: row.text,
           detail: row.detail,
           awaitingReply: row.awaitingReply,
@@ -171,6 +190,34 @@ export class CommandCenterTimelineService {
         ? [failedEvent(run, at, newestError.get(run.id) ?? null)]
         : [];
     });
+  }
+
+  private async startRequestCardsOf(
+    tasks: readonly StartRequestCard[],
+  ): Promise<Map<string, TimelineSubject>> {
+    const projects = await this.projects.liveRefsOf(
+      tasks.map((task) => task.projectId),
+    );
+    return new Map(
+      tasks.map((task): [string, TimelineSubject] => {
+        const project = projects.get(task.projectId) ?? null;
+        return [
+          task.id,
+          {
+            task: taskRefOf(
+              {
+                taskIdentifier: taskIdentifier(
+                  project?.taskKey ?? null,
+                  task.number,
+                ),
+              },
+              task,
+            ),
+            project: runProjectRefOf(task.projectId, project?.name ?? null),
+          },
+        ];
+      }),
+    );
   }
 
   private async threadsOf(

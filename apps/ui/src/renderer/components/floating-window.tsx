@@ -1,5 +1,5 @@
 import { cva } from 'class-variance-authority';
-import { Maximize2, Minimize2, Minus, X } from 'lucide-react';
+import { ChevronUp, Maximize2, Minimize2, Minus, X } from 'lucide-react';
 import {
   type PointerEvent as ReactPointerEvent,
   useRef,
@@ -202,6 +202,7 @@ export function FloatingWindow({
   initialRect,
   actions,
   onClose,
+  onActivate,
   children,
   slot = 'floating-window',
 }: {
@@ -214,6 +215,8 @@ export function FloatingWindow({
   /** Controls drawn in the head before minimise, maximise and close. */
   actions?: React.ReactNode;
   onClose: () => void;
+  /** A press landed anywhere in the window, so it is the one the user is working in. */
+  onActivate?: () => void;
   children: React.ReactNode;
   slot?: string;
 }): React.JSX.Element {
@@ -317,6 +320,7 @@ export function FloatingWindow({
         data-slot={slot}
         data-state={maximised ? 'maximised' : minimised ? 'minimised' : 'open'}
         data-phone={phone || undefined}
+        onPointerDownCapture={onActivate}
         className={cn(
           'pointer-events-auto flex flex-col overflow-hidden bg-card',
           phone
@@ -379,7 +383,7 @@ export function FloatingWindow({
                   setMaximised(false);
                 }}>
                 {minimised ? (
-                  <Maximize2 aria-hidden="true" />
+                  <ChevronUp aria-hidden="true" />
                 ) : (
                   <Minus aria-hidden="true" />
                 )}

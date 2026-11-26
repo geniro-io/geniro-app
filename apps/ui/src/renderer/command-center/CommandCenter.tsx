@@ -11,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -149,6 +150,10 @@ export function CommandCenter({
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();
   const [chatOpen, setChatOpen] = useState(false);
+  const [front, setFront] = useState<'manager' | 'cards'>('manager');
+  const cardReturns = useRef(
+    new Map<string, { focus: Element | null; front: 'manager' | 'cards' }>(),
+  );
   const [teamFaces, setTeamFaces] = useState<ReadonlyMap<string, TeamFace>>(
     () => new Map(),
   );
@@ -394,15 +399,32 @@ export function CommandCenter({
   const toggleCard = (runId: string): void => {
     const card = board.cards?.find((entry) => entry.run.id === runId);
     if (card !== undefined) {
+      cardReturns.current.delete(runId);
       cards.toggle(runId, bandOf(card));
+      setFront('cards');
     }
   };
+  const closeCard = useLatestCallback((runId: string): void => {
+    cards.close(runId);
+    const back = cardReturns.current.get(runId);
+    if (back === undefined) {
+      return;
+    }
+    cardReturns.current.delete(runId);
+    if (cards.cards.every((open) => open.runId === runId)) {
+      setFront(back.front);
+    }
+    if (back.focus instanceof HTMLElement && back.focus.isConnected) {
+      back.focus.focus({ preventScroll: true });
+    }
+  }, []);
   const showThread = useLatestCallback((runId: string): void => {
     if (board.cards === null) {
       return;
     }
     if (runId === managerRunId) {
       setChatOpen(true);
+      setFront('manager');
       return;
     }
     const card = board.cards.find((entry) => entry.run.id === runId);
@@ -421,7 +443,14 @@ export function CommandCenter({
     ) {
       setProjectFilter(card.run.project?.id ?? ALL_PROJECTS);
     }
+    if (!cards.cards.some((open) => open.runId === runId)) {
+      cardReturns.current.set(runId, {
+        focus: document.activeElement,
+        front,
+      });
+    }
     cards.open(runId, bandOf(card));
+    setFront('cards');
     setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
   }, []);
   const replyFrom = (
@@ -604,7 +633,7 @@ export function CommandCenter({
               ...card,
               size: cards.sizeOf(card.runId),
             }))}
-            onCloseCard={cards.close}
+            onCloseCard={closeCard}
             onResizeCard={cards.resize}
             positions={nodePositions.offsets}
             onPlaceNode={nodePositions.place}
@@ -615,6 +644,8 @@ export function CommandCenter({
             onOrderBlock={blockOrders.order}
             onResetLayout={resetLayout}
             renderCardChat={renderCardChat}
+            cardsInFront={front === 'cards'}
+            onActivateCards={() => setFront('cards')}
             focus={focus}
             onFocused={(seq) =>
               setFocus((last) => (last?.seq === seq ? null : last))
@@ -720,7 +751,10 @@ export function CommandCenter({
                   aria-pressed={chatOpen}
                   title={chatOpen ? 'Close the chat' : 'Chat with the manager'}
                   className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
-                  onClick={() => setChatOpen((open) => !open)}>
+                  onClick={() => {
+                    setChatOpen((open) => !open);
+                    setFront('manager');
+                  }}>
                   <MessageSquare aria-hidden="true" className="size-5" />
                   {manager?.working === true ? (
                     <span
@@ -747,6 +781,7 @@ export function CommandCenter({
                 open={chatOpen}
                 phone={narrow}
                 initialRect={managerWindowRect}
+                onActivate={() => setFront('manager')}
                 onClose={() => setChatOpen(false)}>
                 {managerRunId === null ? (
                   managerChoice.choice === null ? null : (

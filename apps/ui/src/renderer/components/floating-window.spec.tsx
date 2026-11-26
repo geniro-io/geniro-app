@@ -187,6 +187,76 @@ describe('FloatingWindow', () => {
     expect(windowOf(el).style.width).toBe('400px');
   });
 
+  it('gives each head control its own icon, name and title in every state', () => {
+    const el = draw();
+    const head = (): { icon: string; label: string; title: string }[] =>
+      ['minimise', 'maximise', 'close'].map((control) => {
+        const button = el.querySelector<HTMLButtonElement>(
+          `[data-slot="floating-window-${control}"]`,
+        )!;
+        return {
+          icon: button.querySelector('svg')!.getAttribute('class')!,
+          label: button.getAttribute('aria-label')!,
+          title: button.title,
+        };
+      });
+    const distinct = (
+      controls: { icon: string; label: string; title: string }[],
+    ): void => {
+      for (const key of ['icon', 'label', 'title'] as const) {
+        expect(new Set(controls.map((control) => control[key])).size).toBe(3);
+      }
+    };
+    const pressHead = (control: string): void =>
+      act(() =>
+        el
+          .querySelector<HTMLButtonElement>(
+            `[data-slot="floating-window-${control}"]`,
+          )!
+          .click(),
+      );
+
+    distinct(head());
+
+    pressHead('minimise');
+    expect(windowOf(el).dataset.state).toBe('minimised');
+    const minimised = head();
+    distinct(minimised);
+    expect(minimised[0]).toMatchObject({
+      label: 'Restore Manager chat',
+      title: 'Restore',
+      icon: expect.stringContaining('lucide-chevron-up'),
+    });
+    expect(minimised[1]).toMatchObject({
+      label: 'Maximise Manager chat',
+      title: 'Maximise',
+      icon: expect.stringContaining('lucide-maximize'),
+    });
+
+    pressHead('maximise');
+    expect(windowOf(el).dataset.state).toBe('maximised');
+    distinct(head());
+  });
+
+  it('reports a press anywhere in it, its head and its body alike', () => {
+    const onActivate = vi.fn();
+    const el = draw({ onActivate });
+    press(
+      el.querySelector('[data-slot="window-content"]')!,
+      'pointerdown',
+      600,
+      400,
+    );
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    press(
+      el.querySelector('[data-slot="floating-window-maximise"]')!,
+      'pointerdown',
+      860,
+      220,
+    );
+    expect(onActivate).toHaveBeenCalledTimes(2);
+  });
+
   it('closes from its head', () => {
     const onClose = vi.fn();
     const el = draw({ onClose });

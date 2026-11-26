@@ -211,6 +211,31 @@ function headOf(runId: string): HTMLElement {
 }
 
 describe('ThreadCardLayer — the cards over the canvas', () => {
+  it('stands under the manager’s window until it is put in front, then over it', () => {
+    const layer = (): HTMLElement =>
+      container.querySelector<HTMLElement>(
+        '[data-slot="command-center-cards"]',
+      )!;
+    drawLayer();
+    expect(layer().classList).toContain('z-20');
+    expect(layer().classList).not.toContain('z-35');
+
+    drawLayer({ inFront: true });
+    expect(layer().classList).toContain('z-35');
+    expect(layer().classList).not.toContain('z-20');
+  });
+
+  it('reports a press inside a card', () => {
+    const onActivate = vi.fn();
+    drawLayer({ onActivate });
+    act(() => {
+      container
+        .querySelector('[data-slot="card-chat"]')!
+        .dispatchEvent(pointer('pointerdown', 10, 10));
+    });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
   it('draws one card per open thread that has a slot, each with its chat, and none for one without', () => {
     drawLayer({
       cards: [card('a', 400, 300), card('b', 400, 300)],

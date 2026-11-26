@@ -402,6 +402,10 @@ export interface ThreadCardLayerProps {
   onMove: (runId: string, to: { x: number; y: number }, done: boolean) => void;
   onOpenInChats: (runId: string) => void;
   renderChat: (runId: string) => React.ReactNode;
+  /** Draw the cards over the manager's window rather than under it. */
+  inFront?: boolean;
+  /** A press landed in a card. */
+  onActivate?: () => void;
 }
 
 /**
@@ -423,6 +427,8 @@ export function ThreadCardLayer({
   onMove,
   onOpenInChats,
   renderChat,
+  inFront = false,
+  onActivate,
 }: ThreadCardLayerProps): React.JSX.Element | null {
   const store = useStoreApi();
   const moving = useRef(new Map<string, { x: number; y: number }>());
@@ -532,7 +538,12 @@ export function ThreadCardLayer({
   return (
     <div
       data-slot="command-center-cards"
-      className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
+      data-front={inFront || undefined}
+      className={cn(
+        'pointer-events-none absolute inset-0 overflow-hidden',
+        inFront ? 'z-35' : 'z-20',
+      )}
+      onPointerDownCapture={onActivate}>
       {shown.map((card) => (
         <div
           key={card.runId}

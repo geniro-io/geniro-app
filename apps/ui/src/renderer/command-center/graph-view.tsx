@@ -165,6 +165,10 @@ export interface GraphViewProps {
   onResetLayout: () => void;
   /** The chat a card holds under its head. */
   renderCardChat: (threadId: string) => React.ReactNode;
+  /** Draw the open cards over the manager's window rather than under it. */
+  cardsInFront?: boolean;
+  /** A press landed in an open card. */
+  onActivateCards?: () => void;
   /** The thread to pan to and flash; null for none. */
   focus: GraphFocus | null;
   /** The focus of this `seq` was handled, so it is never replayed on a later mount. */
@@ -946,6 +950,8 @@ function GraphCanvas({
   onOrderBlock,
   onResetLayout,
   renderCardChat,
+  cardsInFront,
+  onActivateCards,
   focus,
   onFocused,
   projects,
@@ -1638,6 +1644,8 @@ function GraphCanvas({
                   onMove={cardMoved}
                   onOpenInChats={openInChats}
                   renderChat={renderCardChat}
+                  inFront={cardsInFront}
+                  onActivate={onActivateCards}
                 />
               </>
             )}

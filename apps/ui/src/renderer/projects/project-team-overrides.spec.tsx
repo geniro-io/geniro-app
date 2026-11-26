@@ -172,6 +172,7 @@ async function mountWith(
         <ProjectTeamOverrides
           projectId="p1"
           projectName="Billing API"
+          projectFolder="/work/billing"
           slug="crew"
           apis={apis}
           chatWorking={false}
@@ -217,6 +218,32 @@ describe('ProjectTeamOverrides — the MCP allow list', () => {
     await mountWith({}, {});
     await press('Only servers I pick');
     expect(savedLead()).toEqual({ mcpAllowed: ['codegraph', 'linear'] });
+  });
+
+  it('lists the project folder’s own servers, so one can be kept on the list', async () => {
+    agentsApi.listAgentMcpServers.mockImplementation(
+      async ({ cwd }: { cwd?: string }) => ({
+        servers:
+          cwd === '/work/billing'
+            ? [
+                server('codegraph'),
+                { ...(server('billing-db') as object), scope: 'project' },
+              ]
+            : [server('codegraph')],
+        plugins: [],
+        unavailableReason: null,
+        interactiveOnlyNote: null,
+        pending: false,
+      }),
+    );
+    await mountWith({ mcpAllowed: ['codegraph'] }, {});
+
+    expect(agentsApi.listAgentMcpServers).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'claude', cwd: '/work/billing' }),
+      expect.anything(),
+    );
+    await press('billing-db in the list');
+    expect(savedLead()).toEqual({ mcpAllowed: ['codegraph', 'billing-db'] });
   });
 
   it('overrides the team’s list with null for every server in this project', async () => {

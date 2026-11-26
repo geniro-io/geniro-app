@@ -533,6 +533,7 @@ export function ProjectDetail({
               key={teamSlug}
               projectId={project.id}
               projectName={project.name}
+              projectFolder={project.folder}
               slug={teamSlug}
               apis={apis}
               chatWorking={chatWorking}

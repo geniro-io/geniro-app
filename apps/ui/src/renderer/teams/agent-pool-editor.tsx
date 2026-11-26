@@ -37,6 +37,7 @@ import {
   allowListCapabilityOf,
   nextMcpDisabled,
   nodeMcpHint,
+  projectMemberMcpHint,
   withNodeSwitches,
 } from './node-mcp-switches';
 import { useNodeMcp } from './use-node-mcp';
@@ -86,6 +87,7 @@ export function AgentPoolEditor({
   configDirAvailable,
   approvals,
   mcpAllowLists,
+  mcpFolder = null,
   nodeApproval,
   nodeAutoCompactPercent,
   recentConfigDirs,
@@ -106,6 +108,8 @@ export function AgentPoolEditor({
   approvals: readonly AgentApprovalCapability[];
   /** Every CLI's MCP allow-list support (`mcpAllowLists[]`); absent, no member offers one. */
   mcpAllowLists?: readonly AgentMcpAllowListCapability[];
+  /** A project's folder, where each member's MCP servers are listed; absent, the folderless listing. */
+  mcpFolder?: string | null;
   /** The team member's own mode — what a pool member that names none runs. */
   nodeApproval: TeamApproval;
   /** The team member's own threshold, which a NEW pool member starts from. */
@@ -178,6 +182,7 @@ export function AgentPoolEditor({
             mcpAllowLists,
             member.agent,
           )}
+          mcpFolder={mcpFolder}
           nodeApproval={nodeApproval}
           recentConfigDirs={recentConfigDirs[member.agent] ?? []}
           configProfiles={configProfiles.filter(
@@ -220,6 +225,7 @@ function PoolMemberRow({
   configDirAvailable,
   approval,
   allowListCapability,
+  mcpFolder,
   nodeApproval,
   recentConfigDirs,
   configProfiles,
@@ -238,6 +244,7 @@ function PoolMemberRow({
   configDirAvailable: boolean;
   approval: AgentApprovalCapability | undefined;
   allowListCapability: AgentMcpAllowListCapability | undefined;
+  mcpFolder: string | null;
   nodeApproval: TeamApproval;
   recentConfigDirs: string[];
   configProfiles: readonly ConfigProfile[];
@@ -276,7 +283,7 @@ function PoolMemberRow({
   );
   // Read on mount like the card above's, not on the press: the daemon's
   // refusal is the only thing that says this member's profile path is wrong.
-  const mcp = useNodeMcp(agentsApi, member.agent, configDir);
+  const mcp = useNodeMcp(agentsApi, member.agent, configDir, mcpFolder);
   const [mcpOpen, setMcpOpen] = useState(false);
   // Whether the sign-in in flight is THIS member's: the panel and the busy row
   // belong to the dialog it was pressed in, and two members on one CLI share
@@ -459,7 +466,11 @@ function PoolMemberRow({
             // never member 1's, which name another profile's servers.
             listing={withNodeSwitches(mcp.listing, member.mcpDisabled)}
             loading={mcp.loading}
-            hint={nodeMcpHint('member', configDir !== null)}
+            hint={
+              mcpFolder === null
+                ? nodeMcpHint('member', configDir !== null)
+                : projectMemberMcpHint(configDir !== null)
+            }
             onSetEnabled={(server, enabled) =>
               onChange({
                 ...member,

@@ -114,6 +114,7 @@ function Part({
 export function ProjectTeamOverrides({
   projectId,
   projectName,
+  projectFolder,
   slug,
   apis,
   chatWorking,
@@ -123,6 +124,8 @@ export function ProjectTeamOverrides({
 }: {
   projectId: string;
   projectName: string;
+  /** The project's folder: a member's MCP servers are listed there, its own included. */
+  projectFolder: string;
   slug: string;
   apis: DaemonApis;
   /** The page's chat is working: the overlay is not autosaved meanwhile. */
@@ -217,6 +220,7 @@ export function ProjectTeamOverrides({
     apis.agents,
     overlay === null ? null : (shown?.agent ?? null),
     overlay === null ? null : (shown?.configDir ?? null),
+    projectFolder,
   );
   const login = useCliLogin(apis, (settled) => {
     if (settled.server !== null) {
@@ -423,6 +427,7 @@ export function ProjectTeamOverrides({
                 void login.startMcp({
                   kind: shown.agent,
                   server,
+                  cwd: projectFolder,
                   configDir: shown.configDir ?? null,
                 })
               }
@@ -459,6 +464,7 @@ export function ProjectTeamOverrides({
                 }
                 approvals={capabilities?.approvals ?? []}
                 mcpAllowLists={capabilities?.mcpAllowLists}
+                mcpFolder={projectFolder}
                 nodeApproval={shown.approval}
                 nodeAutoCompactPercent={shown.autoCompactPercent}
                 recentConfigDirs={profileSources.recentConfigDirs}

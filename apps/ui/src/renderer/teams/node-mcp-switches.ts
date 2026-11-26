@@ -147,7 +147,7 @@ export function nodeMcpHint(subject: 'member', hasProfile: boolean): string {
 
 /** The same dialog's words on a project's page, where a switch overrides the team's for that project. */
 export function projectMemberMcpHint(hasProfile: boolean): string {
-  return `${whoseServers('member', hasProfile)} A switch here applies only to this member's turns in this project — the team's own switches and the CLI's own config stay as they are. ${RUN_FOLDER_SERVERS}`;
+  return `${whoseServers('member', hasProfile)} A switch here applies only to this member's turns in this project — the team's own switches and the CLI's own config stay as they are. The project folder's own servers are listed too.`;
 }
 
 /** A member's switches in a few words, for the team value an overridden row names. */

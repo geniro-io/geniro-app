@@ -2,7 +2,7 @@
 
 - **Teams:** load only the MCP servers a member needs
 
-  On Claude, a team member or one of its pool members can load only the servers you pick, and a project can set its own list. Everything else stays out of its sessions, account connectors added later included, so Gmail, Calendar or Spotify stop filling every request. Leave out account connectors drops them in one click while keeping the ones the member uses.
+  On Claude, a team member or one of its pool members can load only the servers you pick, and a project can set its own list, where its own folder's servers can be picked too. Everything else stays out of its sessions, account connectors added later included, so Gmail, Calendar or Spotify stop filling every request. Leave out account connectors drops them in one click while keeping the ones the member uses.
 
 ### Improved
 

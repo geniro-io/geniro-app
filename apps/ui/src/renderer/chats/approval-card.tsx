@@ -243,6 +243,63 @@ function combinedAnswer(
     .join('\n');
 }
 
+/** The tail `imagesAttachedNote` appends to an answer that carries pictures. */
+const IMAGES_NOTE_PATTERN =
+  /\n\(\d+ images? attached — sent as the next message\)$/;
+
+/**
+ * The labels one question's answer picked, read back off the answer the card
+ * sent: the whole answer for one question, that question's line for several.
+ * A label is picked only when its own words are whole `, `-separated parts of
+ * that text, so a label holding `, ` is never cut into its pieces, and typed
+ * words that are no label's whole text mark nothing. A secret question has no
+ * answer to read, and a null answer picked nothing.
+ */
+export function pickedLabelsOf(
+  questions: ParsedQuestion[],
+  answer: string | null,
+  index: number,
+): string[] {
+  const question = questions[index];
+  if (question === undefined || answer === null || question.secret) {
+    return [];
+  }
+  const text =
+    questions.length > 1
+      ? answerLineOf(question, answer)
+      : answer.replace(IMAGES_NOTE_PATTERN, '');
+  return text === null ? [] : labelsSpelledIn(question.options, text);
+}
+
+function answerLineOf(question: ParsedQuestion, answer: string): string | null {
+  const prefix = `${answerLabel(question)}: `;
+  const line = answer
+    .split('\n')
+    .find((candidate) => candidate.startsWith(prefix));
+  return line === undefined ? null : line.slice(prefix.length);
+}
+
+function labelsSpelledIn(options: readonly string[], text: string): string[] {
+  const partCount = (label: string): number => label.split(', ').length;
+  const parts = text.split(', ');
+  const taken = parts.map(() => false);
+  const spelled = new Set<string>();
+  for (const option of [...options].sort(
+    (a, b) => partCount(b) - partCount(a),
+  )) {
+    const size = partCount(option);
+    for (let start = 0; start + size <= parts.length; start++) {
+      const free = taken.slice(start, start + size).every((used) => !used);
+      if (free && parts.slice(start, start + size).join(', ') === option) {
+        taken.fill(true, start, start + size);
+        spelled.add(option);
+        break;
+      }
+    }
+  }
+  return options.filter((option) => spelled.has(option));
+}
+
 /**
  * Read the question CARD the daemon put on an `approval_request` row
  * (`questions`) into renderable entries — the one shape every CLI's own
@@ -710,7 +767,7 @@ function QuestionCard({
         aria-expanded={!collapsed}
         title={collapsed ? 'Show the question' : 'Collapse the question'}
         onClick={() => setFoldPress(!collapsed)}
-        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <MessageCircleQuestion
           aria-hidden="true"
           className="size-4 shrink-0 text-primary"
@@ -983,14 +1040,30 @@ function QuestionCard({
               ) : null}
             </div>
           ) : (
-            // A settled card keeps the previews: they are what the user decided
-            // on, and the rest of the conversation refers back to them.
+            // A settled card keeps the previews and the options: they are what the
+            // user decided on, and the rest of the conversation refers back to
+            // them. The options are inert; the pick they resolved to is marked.
             questions.map((q, qi) => (
               <div
                 key={`${qi}-${q.question}`}
                 className="flex flex-col gap-1.5">
                 <MarkdownContent content={q.question} />
                 <OptionPreviews previews={q.previews} />
+                {settled && q.options.length > 0 ? (
+                  <OptionList
+                    options={q.options}
+                    details={q.details}
+                    selected={pickedLabelsOf(questions, answer, qi)}
+                    arity={q.multiSelect ? 'many' : 'one'}
+                    inert
+                    label={
+                      questions.length > 1
+                        ? `Options: ${tabLabel(q, qi)}`
+                        : 'Options'
+                    }
+                    onPick={() => undefined}
+                  />
+                ) : null}
               </div>
             ))
           )}

@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ApprovalCard } from './approval-card';
+import {
+  ApprovalCard,
+  imagesAttachedNote,
+  pickedLabelsOf,
+} from './approval-card';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -71,6 +76,12 @@ const answerControlsOf = (el: HTMLElement): HTMLButtonElement[] => [
     'button:not([data-slot="question-card-toggle"])',
   ),
 ];
+
+/** The labels of the option buttons drawn pressed, in drawing order. */
+const pressedLabelsOf = (el: HTMLElement): string[] =>
+  [
+    ...el.querySelectorAll<HTMLButtonElement>('button[aria-pressed="true"]'),
+  ].map((button) => button.textContent ?? '');
 
 const toggleOf = (el: HTMLElement): HTMLButtonElement =>
   el.querySelector<HTMLButtonElement>('[data-slot="question-card-toggle"]')!;
@@ -398,6 +409,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe(
       '✓ answered — answers are not saved when a question is secret',
     );
@@ -419,6 +431,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe(
       '✓ answered — answers are not saved when a question is secret',
     );
@@ -435,6 +448,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     expect(settledNote(el)).toBe('✓ answered');
     expect(el.textContent).not.toContain('not saved');
   });
@@ -646,6 +660,7 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(settled));
     expect(
       settled.querySelector('[data-slot="option-preview"] strong')?.textContent,
     ).toBe('root cause');
@@ -1546,9 +1561,12 @@ describe('ApprovalCard', () => {
         onRespond={vi.fn()}
       />,
     );
+    click(toggleOf(el));
     // Tabs would hide half the record: a settled card is a transcript row.
     expect(tabsOf(el)).toHaveLength(0);
-    expect(answerControlsOf(el)).toHaveLength(0);
+    expect(
+      answerControlsOf(el).filter((button) => !button.disabled),
+    ).toHaveLength(0);
     expect(el.querySelector('input')).toBeNull();
     expect(el.textContent).toContain('Which color should the header be?');
     expect(el.textContent).toContain('Which font size?');
@@ -2378,6 +2396,13 @@ describe('ApprovalCard — hazardous-character warning', () => {
   });
 
   describe('question card fold', () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+    afterEach(() => {
+      localStorage.clear();
+    });
+
     const QUESTION_INPUT = {
       questions: [
         {
@@ -2482,11 +2507,382 @@ describe('ApprovalCard — hazardous-character warning', () => {
           onRespond={vi.fn()}
         />,
       );
-      click(toggleOf(el));
       expect(
         el.querySelector('[data-slot="question-card-summary"]')?.textContent,
       ).toBe('✓ answered · Blue · the lighter one');
     });
+
+    it('an answered card folds by default to its question and answer', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={true}
+          answer="Blue"
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      expect(answerControlsOf(el)).toHaveLength(0);
+      expect(el.textContent).not.toContain('Red');
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Blue');
+
+      click(toggleOf(el));
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+      expect(el.textContent).toContain('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]'),
+      ).toBeNull();
+    });
+
+    it('a declined card folds by default to its question and "declined"', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={false}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color should the header be?');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✗ declined');
+    });
+
+    it('a folded settled multi-question card names its first question and how many follow', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [
+              { question: 'Which color?', options: [{ label: 'Red' }] },
+              { question: 'Which **size**?', options: [{ label: 'S' }] },
+            ],
+          })}
+          verdict={true}
+          answer={'Red\nS'}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(
+        el.querySelector('[data-slot="question-card-question"]')?.textContent,
+      ).toBe('Which color? (+1 more)');
+      expect(
+        el.querySelector('[data-slot="question-card-summary"]')?.textContent,
+      ).toBe('✓ answered · Red · S');
+    });
+
+    it('an expired card with no answer stays open by default', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          expired
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('a pending card answered while it is open folds by itself', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+
+      act(() => {
+        root!.render(
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            onRespond={vi.fn()}
+          />,
+        );
+      });
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('a pending card the user folded and reopened stays open once answered', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={null}
+          requestId="req-open-press"
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      click(toggleOf(el));
+
+      act(() => {
+        root!.render(
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            requestId="req-open-press"
+            onRespond={vi.fn()}
+          />,
+        );
+      });
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('a press on an answered card is remembered in its thread across a remount', () => {
+      const card = (
+        <ThreadUiMemoryContext.Provider value="thread-question-fold">
+          <ApprovalCard
+            toolName="AskUserQuestion"
+            {...cardRow(QUESTION_INPUT)}
+            verdict={true}
+            answer="Blue"
+            requestId="req-remembered"
+            onRespond={vi.fn()}
+          />
+        </ThreadUiMemoryContext.Provider>
+      );
+      const el = render(card);
+      click(toggleOf(el));
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+
+      act(() => {
+        root!.unmount();
+      });
+      container!.remove();
+      const remounted = render(card);
+      expect(toggleOf(remounted).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('an expanded answered card shows the options it offered, the one picked marked and inert', () => {
+      const onRespond = vi.fn();
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={true}
+          answer="Blue"
+          onRespond={onRespond}
+        />,
+      );
+      click(toggleOf(el));
+      expect(buttonNamed(el, 'Blue').getAttribute('aria-pressed')).toBe('true');
+      expect(buttonNamed(el, 'Red').getAttribute('aria-pressed')).toBe('false');
+      expect(buttonNamed(el, 'Red').disabled).toBe(true);
+      click(buttonNamed(el, 'Red'));
+      expect(onRespond).not.toHaveBeenCalled();
+    });
+
+    it('an answered multi-select card marks exactly the labels picked, not the typed qualifier', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [
+              {
+                question: 'Which parts?',
+                options: [
+                  { label: 'Red' },
+                  { label: 'Blue' },
+                  { label: 'Green' },
+                ],
+                multiSelect: true,
+              },
+            ],
+          })}
+          verdict={true}
+          answer="Red, Green, the lighter one"
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(pressedLabelsOf(el)).toEqual(['Red', 'Green']);
+    });
+
+    it("an answered multi-question card marks each question's own picks", () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [
+              {
+                question: 'Which color?',
+                header: 'Color',
+                options: [{ label: 'Red' }, { label: 'Blue' }],
+                multiSelect: false,
+              },
+              {
+                question: 'Which sizes?',
+                header: 'Size',
+                options: [{ label: 'S' }, { label: 'M' }],
+                multiSelect: true,
+              },
+            ],
+          })}
+          verdict={true}
+          answer={'Which color?: Blue\nWhich sizes?: S, M'}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(pressedLabelsOf(el)).toEqual(['Blue', 'S', 'M']);
+    });
+
+    it('a declined card shows its options with nothing marked', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow(QUESTION_INPUT)}
+          verdict={false}
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(buttonNamed(el, 'Red')).toBeDefined();
+      expect(buttonNamed(el, 'Blue')).toBeDefined();
+      expect(pressedLabelsOf(el)).toEqual([]);
+    });
+
+    it('a secret question marks none of its options', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [
+              {
+                question: 'Paste the token',
+                options: [{ label: 'Red' }, { label: 'Blue' }],
+                secret: true,
+              },
+            ],
+          })}
+          verdict={true}
+          answer="Blue"
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(buttonNamed(el, 'Blue')).toBeDefined();
+      expect(pressedLabelsOf(el)).toEqual([]);
+    });
+
+    it('a question with no options draws no option list', () => {
+      const el = render(
+        <ApprovalCard
+          toolName="AskUserQuestion"
+          {...cardRow({
+            questions: [{ question: 'Anything else?', options: [] }],
+          })}
+          verdict={true}
+          answer="Nothing"
+          onRespond={vi.fn()}
+        />,
+      );
+      click(toggleOf(el));
+      expect(el.querySelector('[role="group"]')).toBeNull();
+    });
+  });
+});
+
+describe('pickedLabelsOf', () => {
+  const asked = (question: string, options: string[], secret = false) => ({
+    question,
+    header: null,
+    options,
+    details: options.map(() => null),
+    previews: [],
+    multiSelect: true,
+    secret,
+  });
+
+  it('marks the one label an answer spells out whole', () => {
+    expect(pickedLabelsOf([asked('Q', ['Red', 'Blue'])], 'Blue', 0)).toEqual([
+      'Blue',
+    ]);
+  });
+
+  it('marks each label of a multi-pick answer, and not the typed qualifier', () => {
+    expect(
+      pickedLabelsOf(
+        [asked('Q', ['Red', 'Blue', 'Green'])],
+        'Red, Green, the lighter one',
+        0,
+      ),
+    ).toEqual(['Red', 'Green']);
+  });
+
+  it('does not cut a label holding ", " into its parts, so a shorter label beside it is not marked', () => {
+    expect(
+      pickedLabelsOf([asked('Q', ['Red', 'Red, dark'])], 'Red, dark', 0),
+    ).toEqual(['Red, dark']);
+  });
+
+  it('marks a label holding ", " when it is the pick', () => {
+    expect(
+      pickedLabelsOf([asked('Q', ['Red, dark', 'Blue'])], 'Red, dark', 0),
+    ).toEqual(['Red, dark']);
+  });
+
+  it('marks nothing from part of a label', () => {
+    expect(pickedLabelsOf([asked('Q', ['Red, dark'])], 'Red', 0)).toEqual([]);
+  });
+
+  it('ignores the image note an answer carries, of any count', () => {
+    for (const count of [1, 3]) {
+      expect(
+        pickedLabelsOf(
+          [asked('Q', ['Red', 'Blue'])],
+          `Blue${imagesAttachedNote(count)}`,
+          0,
+        ),
+      ).toEqual(['Blue']);
+    }
+  });
+
+  it("reads one question's own line of a multi-question answer", () => {
+    const questions = [
+      asked('Which color?', ['Red', 'Blue']),
+      asked('Which size?', ['S', 'M']),
+    ];
+    const answer = 'Which color?: Blue\nWhich size?: S';
+    expect(pickedLabelsOf(questions, answer, 0)).toEqual(['Blue']);
+    expect(pickedLabelsOf(questions, answer, 1)).toEqual(['S']);
+  });
+
+  it('keeps an image note on its own line out of a multi-question answer', () => {
+    const questions = [
+      asked('Which color?', ['Red', 'Blue']),
+      asked('Which size?', ['S', 'M']),
+    ];
+    const answer = `Which color?: Red${imagesAttachedNote(2)}\nWhich size?: M`;
+    expect(pickedLabelsOf(questions, answer, 0)).toEqual(['Red']);
+    expect(pickedLabelsOf(questions, answer, 1)).toEqual(['M']);
+  });
+
+  it('marks nothing for a secret question, a null answer or a missing line', () => {
+    expect(pickedLabelsOf([asked('Q', ['Red'], true)], 'Red', 0)).toEqual([]);
+    expect(pickedLabelsOf([asked('Q', ['Red'])], null, 0)).toEqual([]);
+    expect(
+      pickedLabelsOf([asked('Q1', ['Red']), asked('Q2', ['S'])], 'Q1: Red', 1),
+    ).toEqual([]);
   });
 });
 

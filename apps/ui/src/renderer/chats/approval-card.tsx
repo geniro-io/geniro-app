@@ -40,8 +40,10 @@ import { HazardWarning, useHazardGate } from './text-hazard-gate';
 import {
   readThreadQuestionRelay,
   ThreadQuestionCard,
+  type ThreadQuestionRelay,
 } from './thread-question-card';
-import { useThreadFlag } from './thread-ui-memory';
+import { useThreadIdentity } from './thread-title';
+import { useThreadOverride } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { recordOf } from './tool-result-text';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -243,6 +245,63 @@ function combinedAnswer(
     .join('\n');
 }
 
+/** The tail `imagesAttachedNote` appends to an answer that carries pictures. */
+const IMAGES_NOTE_PATTERN =
+  /\n\(\d+ images? attached — sent as the next message\)$/;
+
+/**
+ * The labels one question's answer picked, read back off the answer the card
+ * sent: the whole answer for one question, that question's line for several.
+ * A label is picked only when its own words are whole `, `-separated parts of
+ * that text, so a label holding `, ` is never cut into its pieces, and typed
+ * words that are no label's whole text mark nothing. A secret question has no
+ * answer to read, and a null answer picked nothing.
+ */
+export function pickedLabelsOf(
+  questions: ParsedQuestion[],
+  answer: string | null,
+  index: number,
+): string[] {
+  const question = questions[index];
+  if (question === undefined || answer === null || question.secret) {
+    return [];
+  }
+  const text =
+    questions.length > 1
+      ? answerLineOf(question, answer)
+      : answer.replace(IMAGES_NOTE_PATTERN, '');
+  return text === null ? [] : labelsSpelledIn(question.options, text);
+}
+
+function answerLineOf(question: ParsedQuestion, answer: string): string | null {
+  const prefix = `${answerLabel(question)}: `;
+  const line = answer
+    .split('\n')
+    .find((candidate) => candidate.startsWith(prefix));
+  return line === undefined ? null : line.slice(prefix.length);
+}
+
+function labelsSpelledIn(options: readonly string[], text: string): string[] {
+  const partCount = (label: string): number => label.split(', ').length;
+  const parts = text.split(', ');
+  const taken = parts.map(() => false);
+  const spelled = new Set<string>();
+  for (const option of [...options].sort(
+    (a, b) => partCount(b) - partCount(a),
+  )) {
+    const size = partCount(option);
+    for (let start = 0; start + size <= parts.length; start++) {
+      const free = taken.slice(start, start + size).every((used) => !used);
+      if (free && parts.slice(start, start + size).join(', ') === option) {
+        taken.fill(true, start, start + size);
+        spelled.add(option);
+        break;
+      }
+    }
+  }
+  return options.filter((option) => spelled.has(option));
+}
+
 /**
  * Read the question CARD the daemon put on an `approval_request` row
  * (`questions`) into renderable entries — the one shape every CLI's own
@@ -409,12 +468,28 @@ export function imagesAttachedNote(count: number): string {
     : `\n(${count === 1 ? '1 image' : `${count} images`} attached — sent as the next message)`;
 }
 
+/**
+ * The one fold of a question drawn inside another card — a relayed question
+ * and its thread's card open and close together.
+ */
+export interface QuestionFold {
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
+  /** Named in the folded header in place of the agent. */
+  askedBy: string;
+}
+
+function startsCollapsed(press: boolean | null, verdict: boolean | null) {
+  return press ?? verdict !== null;
+}
+
 function QuestionCard({
   questions,
   verdict,
   answer,
   expired,
   memoryKey,
+  fold,
   onRespond,
 }: {
   /** Already parsed and non-empty. */
@@ -425,6 +500,8 @@ function QuestionCard({
   expired: boolean;
   /** Where the card's fold is remembered within the thread. */
   memoryKey: string | undefined;
+  /** Given, the card around it owns the fold and `memoryKey` is not read. */
+  fold: QuestionFold | undefined;
   /**
    * `images` are NOT part of the answer string — they cannot be. The answer
    * reaches the model as a plain string inside the CLI's own tool input
@@ -451,9 +528,12 @@ function QuestionCard({
     body — this component stays mounted, so the picks, the typed text and the
     staged screenshots of a pending card are all still there when it opens
     again. Remembered per thread under the request's id, like every other
-    transcript fold, so a card folded in one visit stays folded in the next.
+    transcript fold, so a card folded in one visit stays folded in the next. A
+    settled card starts folded; the reader's own press overrides that.
   */
-  const [collapsed, setCollapsed] = useThreadFlag(memoryKey, false);
+  const [foldPress, setFoldPress] = useThreadOverride(
+    fold === undefined ? memoryKey : undefined,
+  );
   const cardId = useId();
   const secretHintId = `${cardId}-secret-hint`;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -485,6 +565,9 @@ function QuestionCard({
     onRespond,
   );
   const pending = verdict === null && !expired;
+  const settled = verdict !== null;
+  const collapsed = fold?.collapsed ?? startsCollapsed(foldPress, verdict);
+  const setCollapsed = fold?.setCollapsed ?? setFoldPress;
   // One tab per question, and only while the card can still be answered —
   // a settled card is a transcript row, so it lists every question instead.
   const showTabs = pending && questions.length > 1;
@@ -688,6 +771,11 @@ function QuestionCard({
           : verdict
             ? `✓ answered${answerLine === '' ? '' : ` · ${answerLine}`}`
             : '✗ declined';
+  const firstQuestionLine = oneLine(plainMarkdownText(questions[0]!.question));
+  const settledQuestion =
+    questions.length > 1
+      ? `${firstQuestionLine} (+${questions.length - 1} more)`
+      : firstQuestionLine;
   return (
     <Card
       data-slot="question-card"
@@ -701,13 +789,19 @@ function QuestionCard({
         data-slot="question-card-toggle"
         aria-expanded={!collapsed}
         title={collapsed ? 'Show the question' : 'Collapse the question'}
-        onClick={() => setCollapsed((value) => !value)}
-        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        onClick={() => setCollapsed(!collapsed)}
+        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <MessageCircleQuestion
           aria-hidden="true"
           className="size-4 shrink-0 text-primary"
         />
-        <span className="text-sm font-medium">Agent asks a question</span>
+        <span
+          data-slot="question-card-title"
+          className="min-w-0 truncate text-sm font-medium">
+          {collapsed && fold !== undefined
+            ? `Question from ${fold.askedBy}`
+            : 'Agent asks a question'}
+        </span>
         {questions.length === 1 && active.header ? (
           <Badge variant="secondary">{active.header}</Badge>
         ) : null}
@@ -726,19 +820,29 @@ function QuestionCard({
         />
       </button>
       {collapsed ? (
-        <p
-          data-slot="question-card-summary"
-          title={summary}
-          className={cn(
-            'm-0 truncate text-xs',
-            verdict === true
-              ? 'text-success'
-              : verdict === false
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-          )}>
-          {summary}
-        </p>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {settled ? (
+            <p
+              data-slot="question-card-question"
+              title={settledQuestion}
+              className="m-0 truncate text-xs text-muted-foreground">
+              {settledQuestion}
+            </p>
+          ) : null}
+          <p
+            data-slot="question-card-summary"
+            title={summary}
+            className={cn(
+              'm-0 truncate text-xs',
+              verdict === true
+                ? 'text-success'
+                : verdict === false
+                  ? 'text-destructive'
+                  : 'text-muted-foreground',
+            )}>
+            {summary}
+          </p>
+        </div>
       ) : (
         <>
           {showTabs ? (
@@ -965,14 +1069,30 @@ function QuestionCard({
               ) : null}
             </div>
           ) : (
-            // A settled card keeps the previews: they are what the user decided
-            // on, and the rest of the conversation refers back to them.
+            // A settled card keeps the previews and the options: they are what the
+            // user decided on, and the rest of the conversation refers back to
+            // them. The options are inert; the pick they resolved to is marked.
             questions.map((q, qi) => (
               <div
                 key={`${qi}-${q.question}`}
                 className="flex flex-col gap-1.5">
                 <MarkdownContent content={q.question} />
                 <OptionPreviews previews={q.previews} />
+                {settled && q.options.length > 0 ? (
+                  <OptionList
+                    options={q.options}
+                    details={q.details}
+                    selected={pickedLabelsOf(questions, answer, qi)}
+                    arity={q.multiSelect ? 'many' : 'one'}
+                    inert
+                    label={
+                      questions.length > 1
+                        ? `Options: ${tabLabel(q, qi)}`
+                        : 'Options'
+                    }
+                    onPick={() => undefined}
+                  />
+                ) : null}
               </div>
             ))
           )}
@@ -1372,6 +1492,7 @@ export function ApprovalCard({
   onRespond,
   onOpenTeam,
   onOpenProject,
+  fold,
 }: {
   toolName: string;
   input: unknown;
@@ -1422,6 +1543,8 @@ export function ApprovalCard({
   expired?: boolean;
   /** Open a saved library team on its canvas; absent, nothing offers to. */
   onOpenTeam?: (slug: string) => void;
+  /** A question body's fold, when the card around it owns it. */
+  fold?: QuestionFold;
   /** Open the project a team card saved without touching the team; absent, nothing offers to. */
   onOpenProject?: (projectId: string) => void;
   /**
@@ -1451,23 +1574,16 @@ export function ApprovalCard({
   // chat: the thread's own card under the thread's name.
   if (relay !== null) {
     return (
-      <ThreadQuestionCard
+      <RelayedRequestCard
         relay={relay}
+        requestId={requestId ?? null}
         verdict={verdict}
+        verdictOption={verdictOption}
+        answer={answer}
         outcome={outcome}
-        expired={expired}>
-        <ApprovalCard
-          toolName={relay.toolName}
-          input={relay.input}
-          questions={relay.questions ?? recordOf(relay.input)?.questions}
-          options={relay.options}
-          requestId={requestId}
-          verdict={verdict}
-          verdictOption={verdictOption}
-          answer={answer}
-          onRespond={onRespond}
-        />
-      </ThreadQuestionCard>
+        expired={expired}
+        onRespond={onRespond}
+      />
     );
   }
   if (teamProposal !== null) {
@@ -1549,7 +1665,8 @@ export function ApprovalCard({
       verdict={verdict}
       answer={answer}
       expired={expired}
-      memoryKey={requestId ? `question:${requestId}` : undefined}
+      memoryKey={questionMemoryKey(requestId)}
+      fold={fold}
       onRespond={onRespond}
     />
   ) : (
@@ -1564,5 +1681,69 @@ export function ApprovalCard({
       expired={expired}
       onRespond={onRespond}
     />
+  );
+}
+
+function questionMemoryKey(requestId: string | null | undefined) {
+  return requestId ? `question:${requestId}` : undefined;
+}
+
+/**
+ * A managed thread's request, relayed into the command center manager's chat:
+ * the thread's own card under the thread's name. A relayed question folds as
+ * one card, by the rule and under the key of the question card it holds.
+ */
+function RelayedRequestCard({
+  relay,
+  requestId,
+  verdict,
+  verdictOption,
+  answer,
+  outcome,
+  expired,
+  onRespond,
+}: {
+  relay: ThreadQuestionRelay;
+  requestId: string | null;
+  verdict: boolean | null;
+  verdictOption: string | null;
+  answer: string | null;
+  outcome: unknown;
+  expired: boolean;
+  onRespond: React.ComponentProps<typeof ApprovalCard>['onRespond'];
+}): React.JSX.Element {
+  const card = relay.questions ?? recordOf(relay.input)?.questions;
+  const asksQuestion = readQuestions(card).length > 0;
+  const [press, setPress] = useThreadOverride(
+    asksQuestion ? questionMemoryKey(requestId) : undefined,
+  );
+  const known = useThreadIdentity(relay.threadRunId);
+  const fold: QuestionFold | undefined = asksQuestion
+    ? {
+        collapsed: startsCollapsed(press, verdict),
+        setCollapsed: setPress,
+        askedBy: known?.title ?? relay.threadTitle,
+      }
+    : undefined;
+  return (
+    <ThreadQuestionCard
+      relay={relay}
+      verdict={verdict}
+      outcome={outcome}
+      expired={expired}
+      folded={fold?.collapsed ?? false}>
+      <ApprovalCard
+        toolName={relay.toolName}
+        input={relay.input}
+        questions={card}
+        options={relay.options}
+        requestId={requestId}
+        verdict={verdict}
+        verdictOption={verdictOption}
+        answer={answer}
+        fold={fold}
+        onRespond={onRespond}
+      />
+    </ThreadQuestionCard>
   );
 }

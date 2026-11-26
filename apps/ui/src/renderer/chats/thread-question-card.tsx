@@ -188,13 +188,15 @@ function stateOf(verdict: boolean | null, expired: boolean): QuestionState {
  * A managed thread's question or approval, drawn in the command center
  * manager's chat: headed by the thread as its node on the graph shows it,
  * with the thread's own card under it — answering that answers the thread.
- * Closed with no answer, it says so in place of the card.
+ * Closed with no answer, it says so in place of the card. Folded, it is the
+ * thread's card alone, which names the thread itself.
  */
 export function ThreadQuestionCard({
   relay,
   verdict,
   outcome = null,
   expired = false,
+  folded = false,
   children,
 }: {
   relay: ThreadQuestionRelay;
@@ -204,6 +206,7 @@ export function ThreadQuestionCard({
   outcome?: unknown;
   /** Closed with no answer — answered in the thread, or its turn ended. */
   expired?: boolean;
+  folded?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const known = useThreadIdentity(relay.threadRunId);
@@ -212,6 +215,21 @@ export function ThreadQuestionCard({
   const state = stateOf(verdict, expired);
   const meta = STATE_META[state];
   const note = verdict === null ? null : deliveryNote(outcome);
+  const noteLine =
+    note === null ? null : <p className="text-xs text-destructive">{note}</p>;
+  if (folded && state !== 'closed') {
+    return (
+      <article
+        data-slot="thread-question-card"
+        data-state={state}
+        data-run={relay.threadRunId}
+        data-folded={true}
+        className="flex w-full min-w-0 flex-col gap-1.5">
+        {children}
+        {noteLine}
+      </article>
+    );
+  }
   return (
     <article
       data-slot="thread-question-card"
@@ -256,9 +274,7 @@ export function ThreadQuestionCard({
       ) : (
         children
       )}
-      {note === null ? null : (
-        <p className="text-xs text-destructive">{note}</p>
-      )}
+      {noteLine}
     </article>
   );
 }

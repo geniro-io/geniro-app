@@ -64,6 +64,7 @@ paths:
 - A question card is drawn from the row's `questions`, never from a CLI's tool name. `secret` masks the field.
 - `useOneShotVerdict` is the one verdict-timing contract.
 - Only the latest task-list card shows its rows. Fold state derived from data takes a press override (`useThreadOverride`). Never seed derived open state into `useState`.
+- A settled question card starts folded to its header, its first question and the answer. A relayed question folds with its `ThreadQuestionCard` as one card (`QuestionFold`, owned by `RelayedRequestCard` under the question card's own key): folded, only the question card shows, its header naming the thread; a relayed permission never folds, and one closed with no answer starts open, as an expired question card does.
 - Approval cards scan for text hazards (`chats/text-hazards.ts`):
   - Bidi or invisible characters gate Approve until acknowledged.
   - The tick resets when the content changes. Deny is never gated.

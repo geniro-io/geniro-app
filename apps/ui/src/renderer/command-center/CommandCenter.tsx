@@ -65,8 +65,8 @@ import {
   teamFacesOf,
   threadCardViewOf,
   threadIdentitiesOf,
-  workingThreadsInOrder,
 } from './card-view';
+import { workingThreadsInGraphOrder } from './graph-order';
 import type { GraphFocus } from './graph-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
@@ -564,9 +564,11 @@ export function CommandCenter({
       view: ask === undefined ? view : { ...view, lastMessage: askLineOf(ask) },
     };
   });
-  const workingStrip = workingThreadsInOrder(
+  const workingStrip = workingThreadsInGraphOrder(
     graphThreads,
-    shownProjects.map((project) => project.id),
+    shownProjects,
+    narrow ? new Map() : new Map(cards.cards.map((card) => [card.runId, card])),
+    blockOrders.orders,
   ).map((thread) => ({
     runId: thread.id,
     identity:

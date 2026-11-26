@@ -134,12 +134,13 @@ function cardOf(
   runId: string,
   projectId: string,
   column: 'idle' | 'done' | 'working' | 'waiting' = 'idle',
+  createdAt = NOW_ISO,
 ): unknown {
   return {
     run: {
       id: runId,
       title: `Thread ${runId}`,
-      createdAt: NOW_ISO,
+      createdAt,
       lastActivityAt: NOW_ISO,
       status: 'completed',
       awaiting: null,
@@ -1415,5 +1416,21 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
       'run-w',
     ]);
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it('follows the block order the user set, older thread first', async () => {
+    localStorage.setItem(
+      'commandCenter.blockOrders',
+      JSON.stringify({ 'block:p1': ['run-old', 'run-new'] }),
+    );
+    fakes.board = boardOf([
+      cardOf('run-new', 'p1', 'working', '2026-11-17T11:00:00.000Z'),
+      cardOf('run-old', 'p1', 'working', '2026-11-17T10:00:00.000Z'),
+    ]);
+    await renderPage();
+    openChat();
+    maximiseChat();
+
+    expect(facesOf()).toEqual(['run-old', 'run-new']);
   });
 });

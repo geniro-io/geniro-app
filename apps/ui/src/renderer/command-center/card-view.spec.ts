@@ -18,7 +18,6 @@ import {
   statusTextOf,
   threadCardViewOf,
   threadIdentitiesOf,
-  workingThreadsInOrder,
 } from './card-view';
 import { projectColorsOf } from './project-colors';
 
@@ -579,65 +578,5 @@ describe('isWorkingThread', () => {
     for (const status of ['waiting', 'idle', 'done', 'failed'] as const) {
       expect(isWorkingThread({ status })).toBe(false);
     }
-  });
-});
-
-describe('workingThreadsInOrder', () => {
-  const thread = (
-    id: string,
-    projectId: string | null,
-    createdAt: string,
-    status: 'working' | 'waiting' = 'working',
-  ) => ({ id, projectId, createdAt, view: { status } });
-
-  it('keeps only the working threads', () => {
-    const ordered = workingThreadsInOrder(
-      [
-        thread('a', 'p1', '2026-01-01'),
-        thread('b', 'p1', '2026-01-02', 'waiting'),
-      ],
-      ['p1'],
-    );
-    expect(ordered.map((entry) => entry.id)).toEqual(['a']);
-  });
-
-  it('stands the projects in the order given, a project missing from it after them and the threads of no project last', () => {
-    const ordered = workingThreadsInOrder(
-      [
-        thread('none', null, '2026-01-05'),
-        thread('unknown', 'p9', '2026-01-04'),
-        thread('second', 'p2', '2026-01-03'),
-        thread('first', 'p1', '2026-01-01'),
-      ],
-      ['p1', 'p2'],
-    );
-    expect(ordered.map((entry) => entry.id)).toEqual([
-      'first',
-      'second',
-      'unknown',
-      'none',
-    ]);
-  });
-
-  it('stands the newest started first inside a project, the id breaking a tie', () => {
-    const ordered = workingThreadsInOrder(
-      [
-        thread('old', 'p1', '2026-01-01'),
-        thread('new', 'p1', '2026-01-03'),
-        thread('b', 'p1', '2026-01-02'),
-        thread('a', 'p1', '2026-01-02'),
-      ],
-      ['p1'],
-    );
-    expect(ordered.map((entry) => entry.id)).toEqual(['new', 'a', 'b', 'old']);
-  });
-
-  it('does not reorder the list it is given', () => {
-    const input = [
-      thread('x', 'p1', '2026-01-01'),
-      thread('y', 'p1', '2026-01-02'),
-    ];
-    workingThreadsInOrder(input, ['p1']);
-    expect(input.map((entry) => entry.id)).toEqual(['x', 'y']);
   });
 });

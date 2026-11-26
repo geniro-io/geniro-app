@@ -16,30 +16,30 @@ export function applyArgSynonyms(
   args: Record<string, unknown>,
   synonyms: ArgSynonyms,
 ): SynonymArgs {
-  const renamed: Record<string, unknown> = Object.create(null);
+  const renamed = new Map<string, unknown>();
   const givenAs = new Map<string, string>();
   for (const [key, value] of Object.entries(args)) {
     const name =
       value !== null && Object.hasOwn(synonyms, key) ? synonyms[key]! : key;
-    if (value === null && renamed[name] !== undefined) {
+    if (value === null && renamed.get(name) !== undefined) {
       continue;
     }
     const earlier = givenAs.get(name);
     if (
       earlier !== undefined &&
-      JSON.stringify(renamed[name]) !== JSON.stringify(value)
+      JSON.stringify(renamed.get(name)) !== JSON.stringify(value)
     ) {
       return {
         ok: false,
         error: `send ${name} once — ${earlier} and ${key} name the same argument and disagree`,
       };
     }
-    renamed[name] = value;
+    renamed.set(name, value);
     if (value !== null) {
       givenAs.set(name, key);
     }
   }
-  return { ok: true, args: renamed };
+  return { ok: true, args: Object.fromEntries(renamed) };
 }
 
 /**

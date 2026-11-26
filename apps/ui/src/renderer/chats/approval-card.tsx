@@ -412,7 +412,8 @@ function readQuestions(questions: unknown): ParsedQuestion[] {
  * see cost them a decision, and a preview that appears only while one option
  * is focused is content the user has to know to go looking for. Each is
  * bounded and scrolls inside itself, so a long plan cannot push the answer
- * controls off screen.
+ * controls off screen; a preview holding a picture is not bounded, because a
+ * cropped picture is the very thing the choice rests on.
  */
 function OptionPreviews({
   previews,
@@ -442,6 +443,7 @@ function OptionPreviews({
             className={cn(
               'overflow-y-auto text-sm',
               stacked ? 'max-h-40' : 'max-h-80',
+              'has-[[data-slot=markdown-image]]:max-h-none',
             )}>
             <MarkdownContent content={preview} />
           </div>

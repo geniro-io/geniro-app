@@ -92,6 +92,13 @@ const click = (node: HTMLElement): void => {
   });
 };
 
+const scrollBoxOf = (preview: Element): HTMLElement =>
+  preview.querySelector<HTMLElement>('.overflow-y-auto')!;
+
+const PICTURE_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
+const PICTURE_LIFTS_BOUND = 'has-[[data-slot=markdown-image]]:max-h-none';
+const PICTURE_SELECTOR = ':has([data-slot="markdown-image"])';
+
 describe('ApprovalCard', () => {
   it('renders the tool + input and fires the verdict callback while pending', () => {
     const onRespond = vi.fn();
@@ -700,8 +707,6 @@ describe('ApprovalCard', () => {
   // three or four of them outgrew the pinned region by themselves and left no
   // room for the options they explain.
   it('question card: several previews each take the shorter cap, a lone one keeps the taller', () => {
-    const scrollBoxOf = (preview: Element): string =>
-      preview.querySelector('.overflow-y-auto')?.className ?? '';
     const lone = render(
       <ApprovalCard
         toolName="AskUserQuestion"
@@ -711,7 +716,7 @@ describe('ApprovalCard', () => {
       />,
     );
     const onlyOne = lone.querySelector('[data-slot="option-preview"]')!;
-    expect(scrollBoxOf(onlyOne)).toContain('max-h-80');
+    expect(scrollBoxOf(onlyOne).className).toContain('max-h-80');
 
     const question = PLAN_QUESTION_INPUT.questions[0]!;
     const stacked = render(
@@ -737,9 +742,68 @@ describe('ApprovalCard', () => {
     ];
     expect(previews).toHaveLength(2);
     for (const preview of previews) {
-      expect(scrollBoxOf(preview)).toContain('max-h-40');
-      expect(scrollBoxOf(preview)).not.toContain('max-h-80');
+      expect(scrollBoxOf(preview).className).toContain('max-h-40');
+      expect(scrollBoxOf(preview).className).not.toContain('max-h-80');
     }
+  });
+
+  it('question card: a preview holding a picture drops its bound, a text-only one keeps it', () => {
+    const question = PLAN_QUESTION_INPUT.questions[0]!;
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        {...cardRow({
+          questions: [
+            {
+              ...question,
+              options: [
+                { label: 'Shot', preview: `![after](${PICTURE_DATA_URL})` },
+                { label: 'Plan', preview: 'Rewrite **step 2**' },
+              ],
+            },
+          ],
+        })}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    const [picture, text] = [
+      ...el.querySelectorAll('[data-slot="option-preview"]'),
+    ];
+    expect(
+      picture!.querySelector('img[data-slot="markdown-image"]'),
+    ).not.toBeNull();
+    expect(scrollBoxOf(picture!).className).toContain(PICTURE_LIFTS_BOUND);
+    expect(scrollBoxOf(picture!).matches(PICTURE_SELECTOR)).toBe(true);
+    expect(scrollBoxOf(text!).className).toContain('max-h-40');
+    expect(scrollBoxOf(text!).className).toContain(PICTURE_LIFTS_BOUND);
+    expect(scrollBoxOf(text!).matches(PICTURE_SELECTOR)).toBe(false);
+  });
+
+  it('question card: a settled card keeps a picture preview whole too', () => {
+    const question = PLAN_QUESTION_INPUT.questions[0]!;
+    const settled = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        {...cardRow({
+          questions: [
+            {
+              ...question,
+              options: [
+                { label: 'Shot', preview: `![after](${PICTURE_DATA_URL})` },
+              ],
+            },
+          ],
+        })}
+        verdict={true}
+        answer="Shot"
+        onRespond={vi.fn()}
+      />,
+    );
+    click(toggleOf(settled));
+    const picture = settled.querySelector('[data-slot="option-preview"]')!;
+    expect(scrollBoxOf(picture).className).toContain(PICTURE_LIFTS_BOUND);
+    expect(scrollBoxOf(picture).matches(PICTURE_SELECTOR)).toBe(true);
   });
 
   it('question card: an option with no preview draws no preview box', () => {

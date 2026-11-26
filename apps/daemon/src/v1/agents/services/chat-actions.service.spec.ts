@@ -534,8 +534,67 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       'keep',
     ]);
     expect(await publisher.remove(ctx, 'drop')).toEqual({
+      status: 'unchanged',
+      text: 'Already removed — no live action "drop".',
+    });
+  });
+
+  it('answers a second removal as done and writes no outcome row', async () => {
+    await publisher.publish(ctx, { label: 'Drop', message: 'd' });
+    await publisher.remove(ctx, 'drop');
+    const outcomes = await items.rowsOfKinds(
+      'run-a',
+      ['action_outcome'],
+      undefined,
+      orm.em.fork(),
+    );
+
+    expect(await publisher.remove(ctx, 'drop')).toEqual({
+      status: 'unchanged',
+      text: 'Already removed — no live action "drop".',
+    });
+    expect(
+      await items.rowsOfKinds(
+        'run-a',
+        ['action_outcome'],
+        undefined,
+        orm.em.fork(),
+      ),
+    ).toHaveLength(outcomes.length);
+  });
+
+  it('answers an action a press already used up as done', async () => {
+    await publisher.publish(ctx, { label: 'Go', message: 'g' });
+    const [action] = await actions.live('run-a');
+    await actions.appendOutcome('run-a', null, {
+      actionSeq: action!.seq,
+      actionId: 'go',
+      nodeId: SINGLE_AGENT_NODE,
+      conversationId: '',
+      state: 'succeeded',
+    });
+
+    expect(await publisher.remove(ctx, 'go')).toEqual({
+      status: 'unchanged',
+      text: 'Already removed — no live action "go".',
+    });
+  });
+
+  it('refuses an id this conversation never published, even one another conversation published', async () => {
+    const theirs: ActionPublishContext = {
+      ...ctx,
+      publisher: { nodeId: 'member-b', conversationId: 'conv-2' },
+    };
+    await publisher.publish(ctx, { label: 'Keep', message: 'k' });
+    await publisher.publish(theirs, { label: 'Theirs', message: 't' });
+
+    expect(await publisher.remove(ctx, 'theirs')).toEqual({
       status: 'refused',
-      reason: 'No live action "drop". Yours: keep.',
+      reason: 'No live action "theirs". Yours: keep.',
+    });
+    expect(await publisher.remove(ctx, 'never')).toEqual({
+      status: 'refused',
+      reason: 'No live action "never". Yours: keep.',
     });
   });
 });

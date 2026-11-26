@@ -166,7 +166,7 @@ export class ActionPublishService {
     actionId: string,
   ): Promise<ActionToolOutcome> {
     return this.actions.serialize(ctx.runId, async () => {
-      const { live } = await this.actions.fold(ctx.runId);
+      const { live, keyOfSeq } = await this.actions.fold(ctx.runId);
       const own = live.filter(
         (action) =>
           action.memberId === ctx.publisher.nodeId &&
@@ -174,6 +174,17 @@ export class ActionPublishService {
       );
       const target = own.find((action) => action.actionId === actionId);
       if (target === undefined) {
+        const key = actionKey(
+          ctx.publisher.nodeId,
+          ctx.publisher.conversationId,
+          actionId,
+        );
+        if ([...keyOfSeq.values()].includes(key)) {
+          return {
+            status: 'unchanged',
+            text: `Already removed — no live action "${actionId}".`,
+          };
+        }
         return {
           status: 'refused',
           reason: `No live action "${actionId}". ${own.length === 0 ? 'You have none live.' : `Yours: ${own.map((action) => action.actionId).join(', ')}.`}`,

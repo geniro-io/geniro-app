@@ -5,6 +5,6 @@ export function removeActionInstructions(): string {
     'Use it when the button no longer applies — the thing it waited for happened another way, or the ' +
     'plan changed. ' +
     'To change a button instead, publish it again with the same `action_id`. ' +
-    'The result is a short receipt; an unknown id is answered with the ids you have live.'
+    'The result is a short receipt. An id you never published is refused with the ids you have live; one already removed or used up is answered "Already removed" and nothing changes.'
   );
 }

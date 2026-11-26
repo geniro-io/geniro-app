@@ -10,7 +10,7 @@ type Db = Awaited<ReturnType<typeof goalsDb>>;
 
 function ok(outcome: GoalsWriteOutcome) {
   if (outcome.status !== 'ok') {
-    throw new Error(`refused: ${outcome.code} ${outcome.reason}`);
+    throw new Error(`${outcome.status}: ${outcome.reason}`);
   }
   return outcome;
 }
@@ -92,9 +92,22 @@ describe('GoalsService', () => {
     });
     expect(closed.changed[0]!.closedAt).not.toBeNull();
 
+    const recorded = (await db.service.list('run-1'))!;
     expect(
       await db.service.close('run-1', agent, 'g1', 'achieved', 'again'),
-    ).toMatchObject({ status: 'refused', code: 'GOAL_CLOSED' });
+    ).toEqual({
+      status: 'unchanged',
+      goals: recorded,
+      reason:
+        'g1 is already closed (not_achieved) — nothing changed; reopen it first to close it as achieved',
+    });
+    expect(
+      await db.service.close('run-1', agent, 'g1', 'not_achieved', 'again'),
+    ).toMatchObject({
+      status: 'unchanged',
+      reason: 'g1 is already closed (not_achieved) — nothing changed',
+    });
+    expect(await db.service.list('run-1')).toEqual(recorded);
     expect(await db.service.remove('run-1', agent, 'g1')).toMatchObject({
       status: 'refused',
       code: 'GOAL_CLOSED',

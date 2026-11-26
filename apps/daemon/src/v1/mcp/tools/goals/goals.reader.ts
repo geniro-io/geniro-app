@@ -150,6 +150,12 @@ export function goalsResultText(
       isError: true,
     };
   }
+  if (outcome.status === 'unchanged') {
+    return {
+      text: `${outcome.reason}.\n${goalsListText(outcome.goals)}`,
+      isError: false,
+    };
+  }
   const head =
     action === 'remove'
       ? 'Removed.'

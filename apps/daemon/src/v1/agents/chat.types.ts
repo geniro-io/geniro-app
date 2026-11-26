@@ -5486,6 +5486,7 @@ export type GoalActor =
 /** A goals write as its service answers it. */
 export type GoalsWriteOutcome =
   | { status: 'ok'; goals: RunGoal[]; changed: RunGoal[] }
+  | { status: 'unchanged'; goals: RunGoal[]; reason: string }
   | { status: 'refused'; code: GoalRefusalCode; reason: string };
 
 export type GoalRefusalCode =
@@ -6363,6 +6364,8 @@ export interface ActionStopInput {
 /** What either action tool answers; `text` is the receipt the agent reads. */
 export type ActionToolOutcome =
   | { status: 'published' | 'removed'; text: string }
+  /** The button is already gone for this conversation; nothing is written. */
+  | { status: 'unchanged'; text: string }
   | { status: 'refused'; reason: string };
 
 /**

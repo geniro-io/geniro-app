@@ -649,6 +649,7 @@ export function DecidedRow({
   places,
   source = null,
   detailed = false,
+  undoable,
   onUndo,
   onEdit,
   onApprove,
@@ -660,6 +661,8 @@ export function DecidedRow({
   source?: React.ReactNode;
   /** Also draws the rule and the Why fold, for a list read apart from its thread. */
   detailed?: boolean;
+  /** The daemon's own word on whether Undo applies; absent reads it off `outcome`. */
+  undoable?: boolean;
   onUndo?: LessonsCardProps['onUndo'];
   onEdit?: LessonsCardProps['onEdit'];
   onApprove?: LessonsCardProps['onApprove'];
@@ -687,6 +690,8 @@ export function DecidedRow({
   const ownEntry =
     outcome.target.kind === 'memory' &&
     outcome.memoryHandle !== lesson.dedup.handle;
+  const changedNote = changedNoteBy(outcome, lesson);
+  const canUndo = undoable ?? (ownEntry || changedNote);
 
   const run = (
     kind: 'undo' | 'edit' | 'approve',
@@ -836,24 +841,32 @@ export function DecidedRow({
           <p className="m-0 min-w-0 flex-1 text-xs text-muted-foreground">
             {statusText}
           </p>
-          {outcome.status === 'saved' && ownEntry ? (
+          {outcome.status === 'saved' && canUndo ? (
             <div className="flex shrink-0 items-center gap-1">
               <Button
                 size="sm"
                 variant="ghost"
-                title="Forget the memory entry this lesson made."
+                title={
+                  ownEntry
+                    ? 'Forget the memory entry this lesson made.'
+                    : lesson.dedup.verdict === 'broken_again'
+                      ? 'Take the note back out of the memory index.'
+                      : 'Put back the note’s text from before this lesson.'
+                }
                 disabled={undoDisabled}
                 onClick={undo}>
                 {request === 'undo' ? 'Undoing…' : 'Undo'}
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                title="Change the title and rule of the saved entry."
-                disabled={busy || onEdit === undefined}
-                onClick={() => setEditing(true)}>
-                Edit
-              </Button>
+              {ownEntry ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Change the title and rule of the saved entry."
+                  disabled={busy || onEdit === undefined}
+                  onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              ) : null}
             </div>
           ) : outcome.status === 'pending' ? (
             <div className="flex shrink-0 items-center gap-1">
@@ -887,6 +900,19 @@ export function DecidedRow({
   );
 }
 
+/** Whether filing changed the agent note the lesson names by itself, rather than the user's press. */
+function changedNoteBy(
+  outcome: LessonOutcomeView,
+  lesson: LessonView,
+): boolean {
+  return (
+    outcome.by === 'auto' &&
+    outcome.target.kind === 'memory' &&
+    outcome.memoryHandle !== null &&
+    outcome.memoryHandle === lesson.dedup.handle
+  );
+}
+
 function savedStatusText(
   outcome: LessonOutcomeView,
   edited: boolean,
@@ -900,9 +926,10 @@ function savedStatusText(
         outcome.memoryHandle !== null &&
         outcome.memoryHandle === lesson.dedup.handle
       ) {
+        const byItself = changedNoteBy(outcome, lesson) ? ' by itself' : '';
         return lesson.dedup.verdict === 'broken_again'
-          ? `${outcome.memoryHandle} moved into the memory index`
-          : `Updated ${outcome.memoryHandle}`;
+          ? `${outcome.memoryHandle} moved into the memory index${byItself}`
+          : `Updated ${outcome.memoryHandle}${byItself}`;
       }
       return outcome.by === 'auto' && !edited
         ? `Saved to memory · ${target.scope} · Searchable only`

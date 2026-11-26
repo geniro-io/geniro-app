@@ -67,6 +67,8 @@ import {
   type MemoryImportResult,
   type MemoryIndexPreview,
   type MemoryKeepResult,
+  type MemoryLessonApplied,
+  type MemoryLessonChange,
   type MemoryLessonSource,
   type MemoryList,
   type MemoryListQuery,
@@ -100,6 +102,7 @@ import {
   type MemoryMarkTally,
   promotesLesson,
 } from '../utils/memory-marks-fold';
+import { NEAR_DUPLICATE_PREFIX } from '../utils/memory-outcome';
 import { memoryTextHash } from '../utils/memory-pairs';
 import {
   referencedPathsOf,
@@ -1148,6 +1151,103 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * A refining lesson filed with no human press, applied to the agent note it
+   * names while the user has not approved that note: `refine` rewrites its
+   * text, `index` moves it into the memory index. The note stays the agent's.
+   * Not applied while the user reviews agent writes, to any other entry, or
+   * when the new text reads like another entry its thread (`viewer`) sees.
+   */
+  applyLesson(
+    actor: Extract<MemoryActor, { kind: 'lesson' }>,
+    handle: string,
+    change: MemoryLessonChange,
+    viewer: RunPlace,
+  ): Promise<MemoryLessonApplied> {
+    return this.serialize(async () => {
+      if (this.underReview(actor)) {
+        return notApplied('the user reviews agent writes');
+      }
+      const invalid =
+        change.kind === 'refine'
+          ? this.refuseInvalid(actor, change)
+          : this.config.enabled
+            ? null
+            : refused('MEMORY_DISABLED', 'the user has turned memory off');
+      if (invalid) {
+        return notApplied(invalid.reason);
+      }
+      const em = this.em.fork();
+      const row = await this.findVisible(handle, viewer, em);
+      if (!row || row.status !== 'active' || indexable(row)) {
+        return notApplied(
+          `${handle} is not an agent note waiting on the user's approval`,
+        );
+      }
+      if (change.kind === 'index') {
+        row.approvedAt = new Date();
+        row.rev += 1;
+        await em.flush();
+        this.publish(row, 'approved');
+        return { kind: 'applied', entry: toEntry(row), previous: null };
+      }
+      const duplicates = await this.nearDuplicates(
+        change,
+        [],
+        placeOfInput(row),
+        viewer,
+        row,
+        em,
+      );
+      if (duplicates.length > 0) {
+        return notApplied(
+          `${NEAR_DUPLICATE_PREFIX}${duplicates.map((dup) => memoryHandle(dup.handle)).join(', ')}`,
+        );
+      }
+      const previous = { title: row.title, body: row.body };
+      row.title = change.title.trim();
+      row.body = change.body.trim();
+      markText(row);
+      row.rev += 1;
+      await em.flush();
+      this.embeddings?.enqueue('memory', [row.id]);
+      this.publish(row, 'updated');
+      return { kind: 'applied', entry: toEntry(row), previous };
+    });
+  }
+
+  /**
+   * The user's Undo of a lesson's automatic rewrite: `previous` goes back on
+   * the entry at the `rev` the rewrite left it at, its writer unchanged.
+   */
+  restoreText(
+    id: string,
+    rev: number,
+    previous: NoteText,
+  ): Promise<MemorySaveOutcome> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const row = await this.memories.getById(id, em);
+      if (!row || row.status === 'forgotten') {
+        return refused(
+          'NOT_FOUND',
+          row ? 'restore the entry before changing it' : `no memory ${id}`,
+        );
+      }
+      if (row.rev !== rev) {
+        return { kind: 'stale', current: toEntry(row) };
+      }
+      row.title = previous.title;
+      row.body = previous.body;
+      markText(row);
+      row.rev += 1;
+      await em.flush();
+      this.embeddings?.enqueue('memory', [row.id]);
+      this.publish(row, 'updated');
+      return { kind: 'updated', entry: toEntry(row) };
+    });
+  }
+
+  /**
    * The user's edit of an entry's text, type or scope at the `rev` it was read
    * at. Editing a pending entry makes it the user's own, so it is no longer
    * waiting on review; a forgotten one must be restored before it is edited.
@@ -2105,6 +2205,10 @@ function usedAt(row: Memory): number {
 
 function refused(code: MemoryRefusalCode, reason: string): Refusal {
   return { kind: 'refused', code, reason };
+}
+
+function notApplied(reason: string): MemoryLessonApplied {
+  return { kind: 'not_applied', reason };
 }
 
 /**

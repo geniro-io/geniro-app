@@ -104,6 +104,10 @@ export class LessonProposal extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   places: string | null = null;
 
+  /** What filing applied to the agent note the lesson names by itself, JSON `LessonAutoApplied`, so Undo can take it back. */
+  @Property({ type: 'text', nullable: true })
+  autoApplied: string | null = null;
+
   @Property({ type: DateTimeType, nullable: true })
   decidedAt: Date | null = null;
 }

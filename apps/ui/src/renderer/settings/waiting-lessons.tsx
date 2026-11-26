@@ -172,7 +172,8 @@ function outcomeOf(
 /**
  * One lesson as Settings lists it, whatever became of it: one still waiting
  * gets the card's own row and actions, a decided one the card's decided row,
- * with Undo and Edit on an entry of its own and Approve on one still pending.
+ * with Undo and Edit on an entry of its own, Undo on a note a lesson changed by
+ * itself and Approve on an entry still pending.
  */
 export function LessonProposalRow({
   proposal,
@@ -237,21 +238,22 @@ export function LessonProposalRow({
       />
     );
   }
-  const ownEntry = proposal.undoable;
+  const { undoable } = proposal;
   return (
     <DecidedRow
       lesson={lessonOf(proposal)}
       places={proposal.places}
       outcome={outcomeOf(proposal, status)}
+      undoable={undoable}
       source={source}
       detailed={detailed}
       onUndo={
-        ownEntry
+        undoable
           ? act((api) => api.undoLesson({ proposalId: proposal.id }))
           : undefined
       }
       onEdit={
-        ownEntry && lessonsApi !== null
+        undoable && lessonsApi !== null
           ? (proposalId: string, edit: LessonEdit) =>
               described(
                 lessonsApi.editLesson({ proposalId, editLessonDto: edit }),
@@ -259,7 +261,7 @@ export function LessonProposalRow({
           : undefined
       }
       onApprove={
-        ownEntry && proposal.memoryPending
+        undoable && proposal.memoryPending
           ? act((api) => api.approveLesson({ proposalId: proposal.id }))
           : undefined
       }

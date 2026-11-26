@@ -157,7 +157,7 @@ const TAB_HINT: Record<EntryTab, string> = {
   search:
     'Entries agents are not told about up front. They find one only by searching memory.',
   pending:
-    'Notes agents saved, and lessons a reflection found, that no agent uses until you approve them.',
+    'Notes agents saved that no agent uses until you approve them, and lessons a reflection found that wait for your decision.',
   forgotten: 'Entries hidden from every agent. Restore brings one back.',
 };
 
@@ -175,6 +175,9 @@ const TAB_EXPLAINED: Record<EntryTab, string> = {
   pending: 'No agent sees these until you approve them.',
   forgotten: 'Hidden from agents. Restore brings one back.',
 };
+
+const LESSONS_EXPLAINED =
+  'Lessons waiting for your decision. The ones that saved themselves, or updated an agent note you had not approved, are under Saved to memory, where Undo takes them back.';
 
 const TAB_EMPTY_ICON: Record<EntryTab, React.ReactNode> = {
   index: <MessagesSquare aria-hidden="true" />,
@@ -1562,7 +1565,9 @@ export function Memory({
               </div>
               <p className="m-0 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                 <span data-slot="memory-tab-explained">
-                  {TAB_EXPLAINED[filters.status]}
+                  {lessonsShown
+                    ? LESSONS_EXPLAINED
+                    : TAB_EXPLAINED[filters.status]}
                 </span>
                 {filters.status === 'index' && indexPreview !== null ? (
                   <span
@@ -1621,7 +1626,9 @@ export function Memory({
                     What a reflection found in a chat. A number here counts only
                     the lessons still waiting for you; the ones already saved
                     are listed below, under Saved to memory, with their own
-                    count.
+                    count. A lesson that updates an agent note you have not
+                    approved applies by itself, and Undo there puts the old text
+                    back.
                   </HelpHintPart>
                 </HelpHint>
               </div>

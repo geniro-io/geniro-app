@@ -1054,6 +1054,19 @@ export interface MemoryReflectionEffect {
   evidenceSeq: number;
 }
 
+/** What a lesson filed with no human press does to the agent note it names. */
+export type MemoryLessonChange =
+  { kind: 'refine'; title: string; body: string } | { kind: 'index' };
+
+export type MemoryLessonApplied =
+  | {
+      kind: 'applied';
+      entry: MemoryEntry;
+      /** The note's text before a `refine`; null for `index`. */
+      previous: { title: string; body: string } | null;
+    }
+  | { kind: 'not_applied'; reason: string };
+
 export type MemorySaveOutcome =
   | { kind: 'created'; entry: MemoryEntry }
   | { kind: 'updated'; entry: MemoryEntry }

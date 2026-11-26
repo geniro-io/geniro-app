@@ -8522,7 +8522,7 @@ export interface LessonProposal {
      */
     moveUp: LessonProposalMoveUpEnum | null;
     /**
-     * Saved to memory as an entry of its own, so Undo and Edit apply
+     * Undo applies: saved to memory as an entry of its own (Edit applies too), or a change filing made by itself to an agent note the user had not approved
      * @type {boolean}
      * @memberof LessonProposal
      */

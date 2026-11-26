@@ -100,6 +100,12 @@ function build(
     edit: vi.fn(() =>
       Promise.resolve({ kind: 'updated', entry: { handle: 'm7' } }),
     ),
+    restoreText: vi.fn(() =>
+      Promise.resolve({ kind: 'updated', entry: { handle: 'm7' } }),
+    ),
+    setIndexed: vi.fn(() =>
+      Promise.resolve({ kind: 'changed', entry: { handle: 'm7' } }),
+    ),
   };
   const rows = {
     write: vi.fn(() => Promise.resolve()),
@@ -1382,6 +1388,85 @@ describe('LessonProposalService.list', () => {
       { statuses: undefined, sourceRunId: undefined },
       expect.anything(),
     );
+  });
+});
+
+describe('LessonProposalService.undo on a lesson that changed an agent note by itself', () => {
+  const REFINED = JSON.stringify({
+    kind: 'refined',
+    rev: 3,
+    previous: { title: 'Old title', body: 'Old body' },
+  });
+
+  function autoApplied(record: string): LessonProposal {
+    return proposal({
+      status: 'saved',
+      resultRef: 'm7',
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+      autoApplied: record,
+    });
+  }
+
+  it('puts the note’s old text back at the rev the lesson left, and marks the lesson undone', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, rows } = build(row);
+
+    const wire = await service.undo('lp-1');
+
+    expect(memory.restoreText).toHaveBeenCalledWith('mem-7', 3, {
+      title: 'Old title',
+      body: 'Old body',
+    });
+    expect(memory.setStatus).not.toHaveBeenCalled();
+    expect(wire.status).toBe('undone');
+    expect(rows.write).toHaveBeenCalledWith(
+      'src',
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: 'undone' }),
+      }),
+    );
+  });
+
+  it('takes a note it moved into the memory index back out', async () => {
+    const row = autoApplied(JSON.stringify({ kind: 'indexed', rev: 3 }));
+    const { service, memory } = build(row);
+
+    await service.undo('lp-1');
+
+    expect(memory.setIndexed).toHaveBeenCalledWith(
+      { kind: 'user' },
+      'mem-7',
+      false,
+    );
+    expect(memory.restoreText).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 LESSON_ENTRY_CHANGED once the note changed after the lesson, leaving both as they are', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, rows } = build(row, undefined, {
+      ...FILED_ENTRY,
+      rev: 4,
+    });
+
+    await expect(service.undo('lp-1')).rejects.toMatchObject({
+      errorCode: 'LESSON_ENTRY_CHANGED',
+    });
+    expect(memory.restoreText).not.toHaveBeenCalled();
+    expect(row.status).toBe('saved');
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+
+  it('reads as undoable on the wire, but refuses Edit', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, proposals } = build(row);
+    proposals.list.mockResolvedValueOnce([row]);
+
+    const [wire] = await service.list({});
+    expect(wire).toMatchObject({ undoable: true });
+    await expect(
+      service.edit('lp-1', { title: 't', rule: 'r' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_NOT_FILED' });
+    expect(memory.edit).not.toHaveBeenCalled();
   });
 });
 

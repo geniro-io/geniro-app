@@ -192,6 +192,28 @@ describe('LessonsCard — a lesson saved to memory', () => {
     expect(buttonNamed(el, 'Edit')).toBeTruthy();
   });
 
+  it('offers Undo, but no Edit, on an agent note a lesson updated by itself', async () => {
+    const onUndo = vi.fn(async () => undefined);
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      outcomes: {
+        [LESSON_REFINES.id]: outcome(LESSON_REFINES.id, {
+          by: 'auto',
+          memoryHandle: 'm12',
+          resultRef: 'm12',
+        }),
+      },
+      onUndo,
+      onEdit: vi.fn(async () => undefined),
+    });
+
+    expect(el.textContent).toContain('Updated m12 by itself');
+    expect(() => buttonNamed(el, 'Edit')).toThrow();
+    await press(buttonNamed(el, 'Undo'));
+
+    expect(onUndo).toHaveBeenCalledWith(LESSON_REFINES.id);
+  });
+
   it('names the entry an Update rule changed, and offers no Undo or Edit on it', async () => {
     const el = await render({
       lessons: [LESSON_REFINES],

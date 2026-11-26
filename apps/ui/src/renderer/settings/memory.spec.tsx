@@ -3017,6 +3017,18 @@ describe('Memory waiting-for-review block', () => {
     );
   });
 
+  it('explains the Lessons side as lessons waiting for a decision, not as entries no agent sees', async () => {
+    await render({ lessonsApi: lessonsApiOf(2, 0) });
+    await openEntries('Waiting for review');
+    await press(tab(entriesGroup(), 'Lessons', '2'));
+
+    const explained = container.querySelector(
+      '[data-slot="memory-tab-explained"]',
+    )?.textContent;
+    expect(explained).toContain('Lessons waiting for your decision.');
+    expect(explained).not.toContain('No agent sees these');
+  });
+
   it('switches back to the entries side on Review now when entries wait too', async () => {
     await render({ lessonsApi: lessonsApiOf(2, 0) });
     await openEntries('Waiting for review');

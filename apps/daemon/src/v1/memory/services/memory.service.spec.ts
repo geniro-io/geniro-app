@@ -3998,6 +3998,181 @@ describe('MemoryService', () => {
   });
 });
 
+describe('MemoryService.applyLesson', () => {
+  let db: Awaited<ReturnType<typeof memoryDb>>;
+
+  const LESSON: Extract<MemoryActor, { kind: 'lesson' }> = {
+    kind: 'lesson',
+    runId: 'refl-1',
+    agentKind: 'claude',
+    model: 'opus',
+  };
+  const REFINE = {
+    kind: 'refine',
+    title: 'Read a run from the list route',
+    body: 'GET /v1/chats?runId=<id> answers a run; GET /v1/chats/<id> is a 404.',
+  } as const;
+
+  function agentNote() {
+    return db.service.save(
+      AGENT,
+      {
+        title: 'Live-check a daemon change end to end',
+        body: 'Boot the built daemon on a throwaway profile and drive it over REST.',
+        type: 'reference',
+      },
+      NONE,
+    );
+  }
+
+  beforeEach(async () => {
+    db = await memoryDb();
+    db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+  });
+
+  afterEach(async () => {
+    await db.orm.close();
+  });
+
+  it('rewrites an unapproved agent note, keeping it the agent’s, and hands back its old text', async () => {
+    const note = created(await agentNote());
+
+    const applied = await db.service.applyLesson(
+      LESSON,
+      note.handle,
+      REFINE,
+      NONE,
+    );
+
+    expect(applied).toMatchObject({
+      kind: 'applied',
+      entry: {
+        handle: note.handle,
+        title: REFINE.title,
+        rev: note.rev + 1,
+        indexed: false,
+        source: { actor: 'agent' },
+      },
+      previous: {
+        title: 'Live-check a daemon change end to end',
+        body: 'Boot the built daemon on a throwaway profile and drive it over REST.',
+      },
+    });
+  });
+
+  it('moves an unapproved agent note into the memory index', async () => {
+    const note = created(await agentNote());
+
+    const applied = await db.service.applyLesson(
+      LESSON,
+      note.handle,
+      { kind: 'index' },
+      NONE,
+    );
+
+    expect(applied).toMatchObject({
+      kind: 'applied',
+      entry: { indexed: true, source: { actor: 'agent' } },
+      previous: null,
+    });
+  });
+
+  it('applies nothing while the user reviews agent writes', async () => {
+    const note = created(await agentNote());
+    db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, agentWrites: 'pending' });
+
+    const applied = await db.service.applyLesson(
+      LESSON,
+      note.handle,
+      REFINE,
+      NONE,
+    );
+
+    expect(applied.kind).toBe('not_applied');
+    const row = await db.em.fork().findOneOrFail(Memory, { id: note.id });
+    expect(row.title).toBe('Live-check a daemon change end to end');
+  });
+
+  it('applies nothing to the user’s own entry or an approved agent note', async () => {
+    const own = created(
+      await db.service.save(
+        USER,
+        {
+          title: 'Use pnpm',
+          body: 'Never npm in this repo.',
+          type: 'feedback',
+        },
+        NONE,
+      ),
+    );
+    const approved = created(await agentNote());
+    await db.service.setIndexed(USER, approved.id, true);
+
+    for (const handle of [own.handle, approved.handle]) {
+      expect(
+        (await db.service.applyLesson(LESSON, handle, REFINE, NONE)).kind,
+      ).toBe('not_applied');
+    }
+  });
+
+  it('applies nothing when the new text reads like another entry', async () => {
+    const note = created(await agentNote());
+    created(
+      await db.service.save(
+        AGENT,
+        { title: REFINE.title, body: REFINE.body, type: 'reference' },
+        NONE,
+      ),
+    );
+
+    const applied = await db.service.applyLesson(
+      LESSON,
+      note.handle,
+      REFINE,
+      NONE,
+    );
+
+    expect(applied).toMatchObject({
+      kind: 'not_applied',
+      reason: expect.stringContaining('similar entries exist: ') as string,
+    });
+  });
+
+  it('puts the old text back on Undo at the rev the rewrite left, and refuses once the note changed again', async () => {
+    const note = created(await agentNote());
+    const applied = await db.service.applyLesson(
+      LESSON,
+      note.handle,
+      REFINE,
+      NONE,
+    );
+    if (applied.kind !== 'applied' || applied.previous === null) {
+      throw new Error('expected a rewrite');
+    }
+
+    expect(
+      await db.service.restoreText(
+        note.id,
+        applied.entry.rev - 1,
+        applied.previous,
+      ),
+    ).toMatchObject({ kind: 'stale' });
+    expect(
+      await db.service.restoreText(
+        note.id,
+        applied.entry.rev,
+        applied.previous,
+      ),
+    ).toMatchObject({
+      kind: 'updated',
+      entry: {
+        title: 'Live-check a daemon change end to end',
+        source: { actor: 'agent' },
+      },
+    });
+  });
+});
+
 describe('MemoryService.fileLesson', () => {
   let db: Awaited<ReturnType<typeof memoryDb>>;
 

@@ -25,7 +25,7 @@ export function wrapSpacedPaths(markdown: string): string {
     .map((part, index) =>
       // `split` with ONE capturing group puts the code it matched at the odd
       // indices, so those pass through untouched.
-      index % 2 === 1 ? part : part.replace(IMAGE_OR_LINK, wrapDestination),
+      index % 2 === 1 ? part : wrapSpacedPathsIn(part),
     )
     .join('');
 }
@@ -70,13 +70,72 @@ export function namesPicture(path: string): boolean {
 const CODE = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/;
 
 /**
- * `![alt](destination)` or `[text](destination)` whose destination is not
- * already in `<…>`, with one level of balanced parentheses in it (`Foo (1)`).
- * Neither the text nor the destination may hold a square bracket: each attempt
- * then ends at the next `[`, which keeps a line of thousands of them linear.
+ * Every `![alt](destination)` and `[text](destination)` in text with no code
+ * in it, found from each `](` through brackets paired in ONE pass, so square
+ * brackets in the text or the path (`[id]`, `report [v2].md`) and balanced
+ * parentheses in the path (`Foo (1)`) all work and a line of thousands of
+ * unclosed brackets stays linear. A destination holding another `](` is left
+ * to the inner one, which keeps every destination read at most once.
  */
-const IMAGE_OR_LINK =
-  /(!?)\[([^[\]\n]*)\]\((?!<)((?:[^()[\]\n]|\([^()[\]\n]*\))+)\)/g;
+function wrapSpacedPathsIn(text: string): string {
+  const pairs = pairBrackets(text);
+  let out = '';
+  let copied = 0;
+  let close = text.indexOf('](');
+  while (close !== -1) {
+    const next = text.indexOf('](', close + 2);
+    const open = pairs.squareOpener[close]!;
+    const end = pairs.roundCloser[close + 1]!;
+    if (open !== -1 && end !== -1 && (next === -1 || next > end)) {
+      const image = text[open - 1] === '!' && !isEscaped(text, open - 1);
+      const wrapped = wrapDestination(text.slice(close + 2, end), image);
+      if (wrapped !== null) {
+        out += text.slice(copied, close + 2) + wrapped;
+        copied = end;
+      }
+    }
+    close = next;
+  }
+  return out + text.slice(copied);
+}
+
+/**
+ * For each `]` the index of its `[`, and for each `(` the index of its `)`,
+ * or -1: pairs never cross a line, and an escaped bracket is not one.
+ */
+function pairBrackets(text: string): {
+  squareOpener: Int32Array;
+  roundCloser: Int32Array;
+} {
+  const squareOpener = new Int32Array(text.length).fill(-1);
+  const roundCloser = new Int32Array(text.length).fill(-1);
+  const squares: number[] = [];
+  const rounds: number[] = [];
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '\n') {
+      squares.length = 0;
+      rounds.length = 0;
+    } else if (char === '[') {
+      squares.push(index);
+    } else if (char === ']') {
+      squareOpener[index] = squares.pop() ?? -1;
+    } else if (char === '(') {
+      rounds.push(index);
+    } else if (char === ')') {
+      const opener = rounds.pop();
+      if (opener !== undefined) {
+        roundCloser[opener] = index;
+      }
+    }
+  }
+  return { squareOpener, roundCloser };
+}
 
 /**
  * A trimmed destination split into its PATH and its optional quoted title —
@@ -120,7 +179,7 @@ function splitTitle(trimmed: string): { path: string; title: string } {
 }
 
 /**
- * What a regex `.` does not match — `\n` never reaches here (see IMAGE_OR_LINK).
+ * What a regex `.` does not match — `\n` never reaches here (see pairBrackets).
  * Spelled by code point: the build writes U+2028 out literally, and inside a
  * regex literal that is a line break the parser refuses.
  */
@@ -130,23 +189,16 @@ const LINE_TERMINATORS = [
   String.fromCharCode(0x2029),
 ];
 
-function wrapDestination(
-  whole: string,
-  bang: string,
-  label: string,
-  destination: string,
-  offset: number,
-  text: string,
-): string {
+function wrapDestination(destination: string, image: boolean): string | null {
+  if (destination === '' || destination.startsWith('<')) {
+    return null;
+  }
   const { path: raw, title } = splitTitle(destination.trim());
   const path = raw.trim();
-  if (!/\s/.test(path)) {
-    return whole;
+  if (!/\s/.test(path) || (!image && !isLocalPath(path))) {
+    return null;
   }
-  if (bang === '' && (!isLocalPath(path) || isEscaped(text, offset))) {
-    return whole;
-  }
-  return `${bang}[${label}](<${path}>${title})`;
+  return `<${path}>${title}`;
 }
 
 function isLocalPath(path: string): boolean {

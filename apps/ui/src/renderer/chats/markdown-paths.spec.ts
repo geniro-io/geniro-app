@@ -103,6 +103,10 @@ describe('wrapSpacedPaths', () => {
       '/a\rb "t"',
       `/a b ${String.fromCharCode(0x2028)}"t"`,
       `/a${String.fromCharCode(0x2029)}b.png "t"`,
+      '/My App/app/[id]/shot.png',
+      '/a [b] c.png "t"',
+      '/a b/[x.png',
+      '/a b/]x.png',
     ];
 
     for (const destination of destinations) {
@@ -152,6 +156,30 @@ describe('wrapSpacedPaths on a link', () => {
     );
   });
 
+  it('wraps a path whose folders or name hold square brackets', () => {
+    const route = '/Users/me/My App/app/[id]/page.tsx';
+    const report = '/Users/me/My App/report [v2].md';
+    const shot = '/Users/me/My App/app/[id]/shot.png';
+    expect(wrapSpacedPaths(`[p](${route})`)).toBe(`[p](<${route}>)`);
+    expect(wrapSpacedPaths(`[r](${report})`)).toBe(`[r](<${report}>)`);
+    expect(wrapSpacedPaths(`![s](${shot})`)).toBe(`![s](<${shot}>)`);
+  });
+
+  it('wraps a link or image whose text holds square brackets', () => {
+    expect(wrapSpacedPaths(`[[draft] notes](${NOTES})`)).toBe(
+      `[[draft] notes](<${NOTES}>)`,
+    );
+    expect(wrapSpacedPaths(`![[before] shot](${SPACED})`)).toBe(
+      `![[before] shot](<${SPACED}>)`,
+    );
+  });
+
+  it('wraps an image inside a link, and the link around it', () => {
+    expect(wrapSpacedPaths(`[![s](${SPACED})](${NOTES})`)).toBe(
+      `[![s](<${SPACED}>)](<${NOTES}>)`,
+    );
+  });
+
   it('wraps an image and a link on one line, each by its own rule', () => {
     expect(
       wrapSpacedPaths(`![s](${SPACED}) [n](${NOTES}) [w](https://a b)`),
@@ -163,6 +191,10 @@ describe('wrapSpacedPaths on a link', () => {
       `${'['.repeat(100_000)}](x`,
       '[x](a'.repeat(20_000),
       `${'!['.repeat(50_000)}](x`,
+      `${'[a]('.repeat(30_000)}${')'.repeat(30_000)}`,
+      `[a](${'('.repeat(100_000)}`,
+      `${'](('.repeat(50_000)}`,
+      `${'[x](/a b '.repeat(20_000)}`,
     ]) {
       const started = performance.now();
       wrapSpacedPaths(text);

@@ -295,6 +295,33 @@ describe('registerIpc daemon configuration refresh', () => {
     expect(restart).not.toHaveBeenCalled();
   });
 
+  it('keeps the search-by-meaning switch as main holds it when the page saves the sources or the window', async () => {
+    mocks.readSettings.mockReturnValueOnce({
+      ...mocks.settings,
+      semanticSearch: {
+        enabled: false,
+        sources: { memory: true, knowledge: true, chats: true },
+        chatWindowDays: null,
+      },
+    });
+
+    await handler(IPC.updateSettings)(event, {
+      semanticSearch: {
+        enabled: true,
+        sources: { memory: true, knowledge: false, chats: true },
+        chatWindowDays: 30,
+      },
+    });
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      semanticSearch: {
+        enabled: false,
+        sources: { memory: true, knowledge: false, chats: true },
+        chatWindowDays: 30,
+      },
+    });
+  });
+
   it('restarts after the daemon-inspector toggle, which only a new process can honour', async () => {
     await handler(IPC.updateSettings)(event, { daemonInspect: true });
 

@@ -278,6 +278,7 @@ export function SearchSettings({
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [customText, setCustomText] = useState<string | null>(null);
   const [windowError, setWindowError] = useState<string | null>(null);
+  const scopeSaves = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -302,6 +303,7 @@ export function SearchSettings({
     change: Partial<Pick<SemanticSearchSettings, 'sources' | 'chatWindowDays'>>,
   ): Promise<boolean> => {
     const before = semantic;
+    const mine = ++scopeSaves.current;
     setSemantic(before === null ? null : { ...before, ...change });
     setScopeError(null);
     return window.geniro
@@ -312,12 +314,16 @@ export function SearchSettings({
         }),
       )
       .then((saved) => {
-        setSemantic(saved.semanticSearch);
+        if (mine === scopeSaves.current) {
+          setSemantic(saved.semanticSearch);
+        }
         return true;
       })
       .catch((err: unknown) => {
-        setSemantic(before);
-        setScopeError(messageOf(err));
+        if (mine === scopeSaves.current) {
+          setSemantic(before);
+          setScopeError(messageOf(err));
+        }
         return false;
       });
   };
@@ -379,6 +385,11 @@ export function SearchSettings({
 
   const commitDays = (): void => {
     if (customText === null) {
+      return;
+    }
+    if (customText.trim() === '') {
+      setCustomText(null);
+      setWindowError(null);
       return;
     }
     const days = parseWindowDays(customText);

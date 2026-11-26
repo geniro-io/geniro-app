@@ -95,6 +95,15 @@ function widens(days: number | null, stored: string): boolean {
   return stored !== ALL_TIME && (days === null || days > Number(stored));
 }
 
+function scopeChanged(before: EmbeddingConfig, next: EmbeddingConfig): boolean {
+  return (
+    before.chatWindowDays !== next.chatWindowDays ||
+    EMBEDDING_SOURCES.some(
+      (source) => before.sources[source] !== next.sources[source],
+    )
+  );
+}
+
 function withinWindow<T extends { createdAt: number }>(
   rows: readonly T[],
   cutoff: number | null,
@@ -194,7 +203,9 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       active: this.carried(next.model),
       pending: next.pendingModel ? this.carried(next.pendingModel) : null,
     };
-    this.applySources();
+    if (!wasEnabled || scopeChanged(before, next)) {
+      this.applySources();
+    }
     await this.process
       .setModels(next.model, next.pendingModel)
       .catch((err: unknown) =>
@@ -669,16 +680,15 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       return false;
     }
     const kept = withinWindow(older, cutoff);
-    if (kept.length > 0) {
-      await this.indexChats(slot, kept);
-      progress.back = Math.min(...kept.map((row) => row.rowid));
-      await this.saveCursor(progress, 'back', progress.back);
-      await this.refreshCounts(slot, progress);
-    }
-    if (kept.length < older.length) {
+    if (kept.length === 0) {
       progress.chatsDone = true;
+      return false;
     }
-    return kept.length > 0;
+    await this.indexChats(slot, kept);
+    progress.back = Math.min(...older.map((row) => row.rowid));
+    await this.saveCursor(progress, 'back', progress.back);
+    await this.refreshCounts(slot, progress);
+    return true;
   }
 
   private async indexChats(

@@ -591,6 +591,65 @@ describe('SearchSettings', () => {
     expect(windowTrigger().disabled).toBe(true);
   });
 
+  it('a saved window that is no preset opens as Custom with its days in the field', async () => {
+    const h = harness(state({ phase: 'ready', modelBytes: TOTAL }), status(), {
+      ...ON,
+      chatWindowDays: 45,
+    });
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    expect(windowTrigger().textContent).toContain('Custom');
+    expect(daysInput().value).toBe('45');
+  });
+
+  it('leaving an empty Custom field puts the saved window back, with no error and nothing saved', async () => {
+    const h = harness(state({ phase: 'ready', modelBytes: TOTAL }), status(), {
+      ...ON,
+      chatWindowDays: 30,
+    });
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    await press(windowTrigger());
+    await press(optionNamed('Custom…'));
+    await pressEnter(daysInput());
+
+    expect(h.geniro.updateSettings).not.toHaveBeenCalled();
+    expect(textOf()).not.toContain('Enter a whole number of days');
+    expect(windowTrigger().textContent).toContain('Last 30 days');
+  });
+
+  it('a save that answers after a newer one does not put the older switches back', async () => {
+    const h = harness(state({ phase: 'ready', modelBytes: TOTAL }));
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+    let stored = await window.geniro.getSettings();
+    vi.mocked(window.geniro.getSettings).mockImplementation(() =>
+      Promise.resolve(stored),
+    );
+    let releaseFirst: () => void = () => undefined;
+    vi.mocked(window.geniro.updateSettings)
+      .mockImplementationOnce((patch: Partial<Settings>) => {
+        const answer = { ...stored, ...patch };
+        stored = answer;
+        return new Promise<Settings>((resolve) => {
+          releaseFirst = () => resolve(answer);
+        });
+      })
+      .mockImplementation((patch: Partial<Settings>) => {
+        stored = { ...stored, ...patch };
+        return Promise.resolve(stored);
+      });
+
+    await press(sourceSwitch('knowledge'));
+    await press(sourceSwitch('memory'));
+    releaseFirst();
+    await settle();
+
+    expect(sourceSwitch('memory').getAttribute('aria-checked')).toBe('false');
+    expect(sourceSwitch('knowledge').getAttribute('aria-checked')).toBe(
+      'false',
+    );
+  });
+
   it('the chat window is disabled while chats are switched off', async () => {
     const h = harness(state({ phase: 'ready', modelBytes: TOTAL }), status(), {
       ...ON,

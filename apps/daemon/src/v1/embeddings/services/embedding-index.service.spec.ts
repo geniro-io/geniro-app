@@ -1183,6 +1183,86 @@ describe('EmbeddingIndexService', () => {
       expect(process.meta.get('chat_window_days')).toBe('all');
     });
 
+    it('keeps walking past a message dated before the window when newer ones lie below it', async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'below', now - DAY_MS);
+      for (let rowid = 2; rowid <= CHAT_PAGE; rowid++) {
+        chats.add(rowid, 'r1', `imported-${rowid}`, now - 90 * DAY_MS);
+      }
+      chats.add(CHAT_PAGE + 1, 'r1', 'top', now - DAY_MS);
+      index.registerChats(chats);
+
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+
+      expect(indexedChatIds()).toEqual(['top', 'below']);
+    });
+
+    it('tries the purge again on the next push after it failed', async () => {
+      memory.set('m1', 'one');
+      process.stored.memory.set('m1', 'hash-one');
+      let failures = 1;
+      process.handlers.dropSource = (request) => {
+        if (failures > 0) {
+          failures -= 1;
+          return Promise.reject(new Error('the embedding process exited'));
+        }
+        return process.answer(request) as WorkerResults['dropSource'];
+      };
+      const off = {
+        ...ON,
+        sources: { memory: false, knowledge: true, chats: true },
+      };
+
+      await index.setConfig(off);
+      await vi.waitFor(() => expect(failures).toBe(0));
+      expect(process.stored.memory.size).toBe(1);
+      await index.setConfig(off);
+
+      await vi.waitFor(() => expect(process.stored.memory.size).toBe(0));
+    });
+
+    it('purges nothing on a push that changes neither the sources nor the window', async () => {
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+      const asked = process.requests.length;
+
+      await index.setConfig({ ...ON, chatWindowDays: 30, onBattery: true });
+      await waitReady();
+
+      expect(
+        process.requests
+          .slice(asked)
+          .some(
+            (request) =>
+              request.op === 'deleteChatsBefore' || request.op === 'dropSource',
+          ),
+      ).toBe(false);
+    });
+
+    it("walks the pending model's chats again too when the window widens", async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'old', now - 60 * DAY_MS);
+      chats.add(2, 'r1', 'new', now - DAY_MS);
+      index.registerChats(chats);
+      await index.setConfig({ ...ON, pendingModel: NEXT, chatWindowDays: 7 });
+      await waitReady();
+
+      await index.setConfig({
+        ...ON,
+        pendingModel: NEXT,
+        chatWindowDays: null,
+      });
+      await waitReady();
+
+      const pendingIds = process.requests.flatMap((request) =>
+        request.op === 'indexChats' && request.slot === 'pending'
+          ? request.items.map((item) => item.itemId)
+          : [],
+      );
+      expect(pendingIds).toContain('old');
+    });
+
     it('walks the chats again for a window wider than the stored one after a restart', async () => {
       const now = Date.now();
       chats.add(1, 'r1', 'old', now - 60 * DAY_MS);

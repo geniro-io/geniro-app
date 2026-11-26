@@ -904,6 +904,25 @@ describe('semantic search settings', () => {
     });
   });
 
+  it('a semanticSearch or sources that is no object reads as the defaults, keeping what else is valid', () => {
+    writeRaw({ semanticSearch: 'on', onboardingComplete: true });
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: false,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: null,
+    });
+
+    writeRaw({
+      semanticSearch: { enabled: true, sources: 'x', chatWindowDays: 7 },
+      onboardingComplete: true,
+    });
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: true,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: 7,
+    });
+  });
+
   it('keeps a whole-day window and reads any other value as all time', () => {
     writeRaw({
       semanticSearch: { enabled: true, chatWindowDays: 30 },

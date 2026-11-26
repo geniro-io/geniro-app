@@ -1,21 +1,22 @@
 /**
- * A markdown image whose PATH contains a space, made parseable.
+ * A markdown image, or a link to a local absolute path, whose PATH contains a
+ * space, made parseable.
  *
  * CommonMark allows no space in a bare link destination, so
  * `![shot](/Users/me/Library/Application Support/x.png)` is not an image at
- * all — the parser leaves the whole reference as literal text. Every task
- * worktree and every task attachment lives under `~/Library/Application
- * Support/`, so for a screenshot an agent points at this is the ORDINARY case:
- * REPORTED as "i should be able to see images, but i dont see" against a task
- * description, and again when an agent's before/after screenshots reached the
- * chat as raw text. The spec's own escape is the angle-bracket form,
+ * all — the parser leaves the whole reference as literal text, and
+ * `[notes](/Users/me/Library/Application Support/notes.md)` is no link to
+ * click. Every task worktree and every task attachment lives under
+ * `~/Library/Application Support/`, so this is the ORDINARY case for a file an
+ * agent points at. The spec's own escape is the angle-bracket form,
  * `![shot](</path with spaces.png>)`, so a spaced destination is rewritten
- * into it before the parser sees it.
+ * into it before the parser sees it. A link is rewritten only when it names a
+ * local absolute path: a web address with a space is broken either way.
  *
  * Code is left alone: a fence or an inline span SHOWING such markdown is the
  * one place where the literal text is what the writer meant.
  */
-export function wrapSpacedImagePaths(markdown: string): string {
+export function wrapSpacedPaths(markdown: string): string {
   if (!markdown.includes('](')) {
     return markdown;
   }
@@ -24,7 +25,7 @@ export function wrapSpacedImagePaths(markdown: string): string {
     .map((part, index) =>
       // `split` with ONE capturing group puts the code it matched at the odd
       // indices, so those pass through untouched.
-      index % 2 === 1 ? part : part.replace(IMAGE, wrapDestination),
+      index % 2 === 1 ? part : part.replace(IMAGE_OR_LINK, wrapDestination),
     )
     .join('');
 }
@@ -68,8 +69,14 @@ export function namesPicture(path: string): boolean {
 /** Fenced blocks and inline code spans — ONE capturing group, see above. */
 const CODE = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/;
 
-/** `![alt](destination)` whose destination is not already in `<…>`. */
-const IMAGE = /!\[([^\]\n]*)\]\(([^)<\n][^)\n]*)\)/g;
+/**
+ * `![alt](destination)` or `[text](destination)` whose destination is not
+ * already in `<…>`, with one level of balanced parentheses in it (`Foo (1)`).
+ * Neither the text nor the destination may hold a square bracket: each attempt
+ * then ends at the next `[`, which keeps a line of thousands of them linear.
+ */
+const IMAGE_OR_LINK =
+  /(!?)\[([^[\]\n]*)\]\((?!<)((?:[^()[\]\n]|\([^()[\]\n]*\))+)\)/g;
 
 /**
  * A trimmed destination split into its PATH and its optional quoted title —
@@ -113,7 +120,7 @@ function splitTitle(trimmed: string): { path: string; title: string } {
 }
 
 /**
- * What a regex `.` does not match — `\n` never reaches here (see IMAGE).
+ * What a regex `.` does not match — `\n` never reaches here (see IMAGE_OR_LINK).
  * Spelled by code point: the build writes U+2028 out literally, and inside a
  * regex literal that is a line break the parser refuses.
  */
@@ -125,13 +132,31 @@ const LINE_TERMINATORS = [
 
 function wrapDestination(
   whole: string,
-  alt: string,
+  bang: string,
+  label: string,
   destination: string,
+  offset: number,
+  text: string,
 ): string {
   const { path: raw, title } = splitTitle(destination.trim());
   const path = raw.trim();
   if (!/\s/.test(path)) {
     return whole;
   }
-  return `![${alt}](<${path}>${title})`;
+  if (bang === '' && (!isLocalPath(path) || isEscaped(text, offset))) {
+    return whole;
+  }
+  return `${bang}[${label}](<${path}>${title})`;
+}
+
+function isLocalPath(path: string): boolean {
+  return /^\/[^/\s]/.test(path);
+}
+
+function isEscaped(text: string, offset: number): boolean {
+  let backslashes = 0;
+  while (text[offset - 1 - backslashes] === '\\') {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
 }

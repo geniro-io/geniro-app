@@ -133,10 +133,10 @@ describe('readTellThreadsArgs', () => {
 describe('tellThreadsResultText', () => {
   it('says the threads are watched, or no longer watched, when the call set it', () => {
     expect(tellThreadsResultText({ ...SENT, watch: true })).toContain(
-      '\nWatching these threads: the next finish of each wakes you once, and that wake ends its watch.\n',
+      '\nWatching t1: the next finish of each wakes you once, and that wake ends its watch.\n',
     );
     expect(tellThreadsResultText({ ...SENT, watch: false })).toContain(
-      '\nNo longer watching these threads: a finish only puts a Done card in your chat.\n',
+      '\nNo longer watching t1: a finish only puts a Done card in your chat.\n',
     );
     expect(tellThreadsResultText(SENT)).not.toMatch(/watching/i);
   });
@@ -196,6 +196,72 @@ describe('tellThreadsResultText', () => {
     expect(text).toContain('Not delivered to t2 (INBOX_FULL)');
     expect(text).toContain('Waiting at t3 (running_turn)');
     expect(text).not.toContain('Each thread above got the message');
+  });
+
+  it('says a refused thread keeps its watch, and names only the delivered threads as watched', () => {
+    const mixed: TellThreadsAnswer = {
+      sent: [
+        {
+          to: 't1',
+          runId: 'thread-1',
+          title: 'A',
+          outcome: 'woken',
+          code: null,
+        },
+        {
+          to: 't2',
+          runId: 'thread-2',
+          title: 'B',
+          outcome: 'refused',
+          code: 'REPEATED_MESSAGE',
+        },
+        {
+          to: 't3',
+          runId: 'thread-3',
+          title: 'C',
+          outcome: 'waiting',
+          code: 'running_turn',
+        },
+      ],
+      unresolved: [],
+      watch: true,
+    };
+
+    const lines = tellThreadsResultText(mixed).split('\n');
+
+    expect(
+      lines.find((line) => line.startsWith('Not delivered to t2')),
+    ).toContain('their watch is unchanged');
+    expect(lines).toContain(
+      'Watching t1, t3: the next finish of each wakes you once, and that wake ends its watch.',
+    );
+    expect(
+      tellThreadsResultText({ ...mixed, watch: false }).split('\n'),
+    ).toContain(
+      'No longer watching t1, t3: a finish only puts a Done card in your chat.',
+    );
+  });
+
+  it('says a send refused everywhere left every watch unchanged, and claims no watch', () => {
+    const refused: TellThreadsAnswer = {
+      sent: [
+        {
+          to: 't2',
+          runId: 'thread-2',
+          title: 'B',
+          outcome: 'refused',
+          code: 'REPEATED_MESSAGE',
+        },
+      ],
+      unresolved: [],
+    };
+
+    const text = tellThreadsResultText(refused);
+
+    expect(text).toContain(
+      'Not delivered to t2 (REPEATED_MESSAGE): those threads did not get the message, and their watch is unchanged.',
+    );
+    expect(text).not.toMatch(/watching/i);
   });
 });
 

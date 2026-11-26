@@ -1488,6 +1488,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     runId: string,
     cause: string,
     calls: { callId: string; calleeNodeId: string; status: string }[] = [],
+    monitorsCutOff = 0,
   ): Promise<void> => {
     const cutOff = await runDao.getById(runId);
     (cutOff as Run).status = 'failed';
@@ -1514,6 +1515,28 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           ...call,
           callerNodeId: 'manager',
           mode: 'async',
+        }),
+      });
+    }
+    for (let index = 0; index < monitorsCutOff; index += 1) {
+      await itemDao.create({
+        runId,
+        seq: seq++,
+        kind: 'system',
+        role: null,
+        payload: JSON.stringify({
+          severity: 'info',
+          message: `monitor m${index} ended: interrupted — geniro restarted`,
+          monitors: [
+            {
+              id: `m${index}`,
+              description: 'a check',
+              event: 'end',
+              end: { kind: 'interrupted' },
+              lines: [],
+              omitted: 0,
+            },
+          ],
         }),
       });
     }
@@ -1714,6 +1737,31 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
       expect(sent).toContain('Failed and not continued: call-21 (engineer)');
       expect(sent).not.toContain('call-19');
+    });
+
+    it('continues a run whose interruption the monitor sweep wrote after, with the note naming the closed call', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      const task = await seed({
+        title: 'Fix the cap',
+        description: 'Off by one.',
+      });
+      await runTeamAndReturn(task.id);
+      await interrupt(
+        'wf-run-1',
+        'quit',
+        [{ callId: 'call-21', calleeNodeId: 'engineer', status: 'error' }],
+        1,
+      );
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
+      expect(sent).not.toContain('Off by one.');
+      expect(sent).toMatch(
+        /^\[geniro\] The app was quit while you were working\./,
+      );
+      expect(sent).toContain('Failed and not continued: call-21 (engineer)');
     });
 
     it('sends the user’s own words into an interrupted run, not the note', async () => {

@@ -7,6 +7,7 @@ import {
 import type { ItemKind } from '../../runs/runs.types';
 import type { ItemDao } from '../dao/item.dao';
 import { asRecord, parseJsonColumn, payloadString } from './json-util';
+import { monitorRowOf } from './monitor-text';
 
 /**
  * The rows the boot reconcile writes AFTER an interruption's closing `error`,
@@ -17,7 +18,8 @@ import { asRecord, parseJsonColumn, payloadString } from './json-util';
  * member turn and a `call_result` per open call, and the delegate and shell boot
  * sweeps that run after both close what the dead process left out. None of
  * them is the run carrying on; all of them are bookkeeping about how it
- * stopped.
+ * stopped. The monitor sweep's `system` row is one too, told apart by
+ * {@link isMonitorCutOffRow}, since `system` rows also open turns.
  */
 export const INTERRUPTION_TRAILERS: readonly ItemKind[] = [
   'unanswerable',
@@ -50,18 +52,56 @@ export async function interruptionOf(
   runId: string,
   em: EntityManager,
 ): Promise<RunInterruption | null> {
-  const last = await itemDao.getOne(
-    { runId, kind: { $nin: [...INTERRUPTION_TRAILERS] } },
-    { orderBy: { seq: 'desc' }, disableIdentityMap: true },
-    em,
-  );
-  if (last?.kind !== 'error') {
-    return null;
+  let before: number | null = null;
+  for (;;) {
+    const rows = await itemDao.getAll(
+      {
+        runId,
+        kind: { $nin: [...INTERRUPTION_TRAILERS] },
+        ...(before === null ? {} : { seq: { $lt: before } }),
+      },
+      {
+        orderBy: { seq: 'desc' },
+        limit: LAST_WORD_PAGE,
+        disableIdentityMap: true,
+      },
+      em,
+    );
+    const last = rows.find((row) => !isMonitorCutOffRow(row));
+    if (last !== undefined) {
+      if (last.kind !== 'error') {
+        return null;
+      }
+      const payload = asRecord(parseJsonColumn(last.payload));
+      return payload?.interrupted === true
+        ? { cause: parseInterruptCause(payload.interruptCause), seq: last.seq }
+        : null;
+    }
+    if (rows.length < LAST_WORD_PAGE) {
+      return null;
+    }
+    before = rows[rows.length - 1]!.seq;
   }
-  const payload = asRecord(parseJsonColumn(last.payload));
-  return payload?.interrupted === true
-    ? { cause: parseInterruptCause(payload.interruptCause), seq: last.seq }
-    : null;
+}
+
+const LAST_WORD_PAGE = 20;
+
+/**
+ * The boot monitor sweep's row: a `system` row whose every entry ends a
+ * monitor as `interrupted` — the restart's bookkeeping, never a turn.
+ */
+function isMonitorCutOffRow(row: { kind: string; payload: unknown }): boolean {
+  if (row.kind !== 'system') {
+    return false;
+  }
+  const monitors = monitorRowOf(row.payload)?.monitors ?? [];
+  return (
+    monitors.length > 0 &&
+    monitors.every(
+      (monitor) =>
+        monitor.event === 'end' && monitor.end?.kind === 'interrupted',
+    )
+  );
 }
 
 /** A call the boot reconcile closed as failed after an interruption. */

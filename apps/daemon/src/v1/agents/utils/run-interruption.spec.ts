@@ -80,6 +80,58 @@ describe('run-interruption (in-memory sqlite)', () => {
     },
   );
 
+  const monitorEnd = (end: string) =>
+    row('system', {
+      severity: 'info',
+      message: `Stage 11 FPS gate · monitor m20 ended: ${end}`,
+      monitors: [
+        {
+          id: 'm20',
+          description: 'Stage 11 FPS gate',
+          event: 'end',
+          end: { kind: end },
+          lines: [],
+          omitted: 0,
+        },
+      ],
+    });
+
+  it('reads an interruption that the monitor sweep’s rows follow, past a page of them', async () => {
+    await interrupted('quit');
+    await callResult({
+      callId: 'call-22',
+      calleeNodeId: 'engineer',
+      status: 'error',
+    });
+    for (let index = 0; index < 25; index += 1) {
+      await monitorEnd('interrupted');
+    }
+
+    expect(await interruptionOf(itemDao, 'run-1', em)).toEqual({
+      cause: 'quit',
+      seq: 1,
+    });
+  });
+
+  it('reads no interruption past a monitor that ended for another reason', async () => {
+    await interrupted('quit');
+    await monitorEnd('exit');
+
+    expect(await interruptionOf(itemDao, 'run-1', em)).toBeNull();
+  });
+
+  it('reads no interruption past a system row that opened a turn', async () => {
+    await interrupted('quit');
+    await row('system', {
+      severity: 'info',
+      message: 'Woke the lead to finish the open stage',
+      shares: [],
+      woke: true,
+    });
+
+    expect(await interruptionOf(itemDao, 'run-1', em)).toBeNull();
+  });
+
   it('reads no interruption once the run has moved on past it', async () => {
     await interrupted('quit');
     await row('message', { text: 'continue' });

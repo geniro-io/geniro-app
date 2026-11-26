@@ -292,7 +292,9 @@ const searchModel = new SearchModelService({
   systemVersion: process.getSystemVersion(),
   readSwitch: () => readSettings().semanticSearch.enabled,
   writeSwitch: (enabled) => {
-    updateSettings({ semanticSearch: { enabled } });
+    updateSettings({
+      semanticSearch: { ...readSettings().semanticSearch, enabled },
+    });
   },
   download: (manifest, input) =>
     new SearchModelDownloader({
@@ -826,11 +828,14 @@ function reapWorktrees(handle: DaemonHandle): void {
     });
 }
 
-/** What the daemon searches with right now: the switch, the models on disk and the power source. */
+/** What the daemon searches with right now: the switch, what it indexes, the models on disk and the power source. */
 function searchConfigNow(): SearchConfig {
   const { model, pendingModel } = searchModel.daemonModels();
+  const semantic = readSettings().semanticSearch;
   return searchConfigOf({
-    switchOn: readSettings().semanticSearch.enabled,
+    switchOn: semantic.enabled,
+    sources: semantic.sources,
+    chatWindowDays: semantic.chatWindowDays,
     model,
     pendingModel,
     onBattery: app.isReady() && powerMonitor.isOnBatteryPower(),

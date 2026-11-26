@@ -411,18 +411,34 @@ export const DEFAULT_MEMORY: MemorySettings = {
   nativeMemoryOff: false,
 };
 
+/** TWIN: the bounds of `chatWindowDays` in `EmbeddingConfigSchema`, apps/daemon/src/v1/embeddings/embeddings.types.ts. */
+export const SEMANTIC_SEARCH_WINDOW_MIN_DAYS = 1;
+export const SEMANTIC_SEARCH_WINDOW_MAX_DAYS = 3650;
+
+/** The sources search by meaning indexes. A switched-off one leaves that index; word search is not affected. */
+export interface SemanticSearchSources {
+  memory: boolean;
+  knowledge: boolean;
+  chats: boolean;
+}
+
 /**
  * Whether memory, knowledge and chat search also match by meaning, through the
  * built-in model main downloads on the user's press. Owned here (settings.json)
  * and pushed to every daemon this app starts; the daemon keeps it in memory only.
- * Desktop only: a paired device may not write it.
+ * Desktop only: a paired device may not write it. `chatWindowDays` limits the
+ * chats indexed by meaning to the last N days; null is all time.
  */
 export interface SemanticSearchSettings {
   enabled: boolean;
+  sources: SemanticSearchSources;
+  chatWindowDays: number | null;
 }
 
 export const DEFAULT_SEMANTIC_SEARCH: SemanticSearchSettings = {
   enabled: false,
+  sources: { memory: true, knowledge: true, chats: true },
+  chatWindowDays: null,
 };
 
 /** Whether a thread is reflected on when it is archived: never, or automatically. */

@@ -15,6 +15,7 @@ import {
   DEFAULT_LESSONS,
   DEFAULT_MEMORY,
   DEFAULT_RESOURCE_ALERTS,
+  DEFAULT_SEMANTIC_SEARCH,
   DEFAULT_SETTINGS,
   DEFAULT_SHARING,
   type KnowledgeSettings,
@@ -25,6 +26,8 @@ import {
   type MemorySettings,
   type MemoryTriageConfig,
   type ResourceAlertSettings,
+  type SemanticSearchSettings,
+  type SemanticSearchSources,
   type Settings,
   type ShareDestination,
   type SharingSettings,
@@ -38,6 +41,8 @@ import {
   MAX_SHARE_DESTINATIONS,
   memorySchema,
   resourceAlertsSchema,
+  semanticSearchSchema,
+  semanticSearchSourcesSchema,
   settingsPatchSchema,
   shareDestinationSchema,
   shareSignInSchema,
@@ -139,6 +144,10 @@ export function readSettings(): Settings {
       }
       if (key === 'memory') {
         salvaged[key] = salvageMemory(record[key]);
+        continue;
+      }
+      if (key === 'semanticSearch') {
+        salvaged[key] = salvageSemanticSearch(record[key]);
         continue;
       }
       if (key === 'lessons') {
@@ -307,6 +316,42 @@ function salvageMemory(value: unknown): MemorySettings {
     nativeMemoryOff: memorySchema.shape.nativeMemoryOff
       .catch(DEFAULT_MEMORY.nativeMemoryOff)
       .parse(record.nativeMemoryOff),
+  };
+}
+
+/** The search settings field by field: one bad value keeps the others. */
+function salvageSemanticSearch(value: unknown): SemanticSearchSettings {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_SEMANTIC_SEARCH;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    enabled: semanticSearchSchema.shape.enabled
+      .catch(DEFAULT_SEMANTIC_SEARCH.enabled)
+      .parse(record.enabled),
+    sources: salvageSemanticSources(record.sources),
+    chatWindowDays: semanticSearchSchema.shape.chatWindowDays
+      .catch(DEFAULT_SEMANTIC_SEARCH.chatWindowDays)
+      .parse(record.chatWindowDays),
+  };
+}
+
+/** The sources field by field: one bad source keeps the others. */
+function salvageSemanticSources(value: unknown): SemanticSearchSources {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_SEMANTIC_SEARCH.sources;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    memory: semanticSearchSourcesSchema.shape.memory
+      .catch(DEFAULT_SEMANTIC_SEARCH.sources.memory)
+      .parse(record.memory),
+    knowledge: semanticSearchSourcesSchema.shape.knowledge
+      .catch(DEFAULT_SEMANTIC_SEARCH.sources.knowledge)
+      .parse(record.knowledge),
+    chats: semanticSearchSourcesSchema.shape.chats
+      .catch(DEFAULT_SEMANTIC_SEARCH.sources.chats)
+      .parse(record.chats),
   };
 }
 

@@ -74,7 +74,11 @@ const mocks = vi.hoisted(() => {
       checker: null,
     },
     knowledge: { enabled: true, agentWrites: 'review' },
-    semanticSearch: { enabled: false },
+    semanticSearch: {
+      enabled: false,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: null,
+    },
     resourceAlerts: {
       enabled: true,
       threadMemoryBytes: 8 * 1024 ** 3,

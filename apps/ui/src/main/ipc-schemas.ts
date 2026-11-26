@@ -24,6 +24,8 @@ import {
   MIN_KEPT_SESSION_IDLE_MINUTES,
   MIN_KEPT_SESSION_LIMIT,
   PROFILE_COLORS,
+  SEMANTIC_SEARCH_WINDOW_MAX_DAYS,
+  SEMANTIC_SEARCH_WINDOW_MIN_DAYS,
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
 } from '../shared/contracts';
@@ -327,8 +329,21 @@ export const memorySchema = z.strictObject({
   nativeMemoryOff: z.boolean(),
 });
 
+export const semanticSearchSourcesSchema = z.strictObject({
+  memory: z.boolean(),
+  knowledge: z.boolean(),
+  chats: z.boolean(),
+});
+
 export const semanticSearchSchema = z.strictObject({
   enabled: z.boolean(),
+  sources: semanticSearchSourcesSchema,
+  chatWindowDays: z
+    .number()
+    .int()
+    .min(SEMANTIC_SEARCH_WINDOW_MIN_DAYS)
+    .max(SEMANTIC_SEARCH_WINDOW_MAX_DAYS)
+    .nullable(),
 });
 
 /** The one boolean `setSearchByMeaning` takes. */

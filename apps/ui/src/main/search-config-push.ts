@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { DaemonHandle } from '../shared/contracts';
+import type { DaemonHandle, SemanticSearchSources } from '../shared/contracts';
 import { DaemonConfigPush } from './daemon-config-push';
 import type { ReadyModel } from './search-model/search-model-downloader';
 
@@ -9,6 +9,8 @@ const STATUS_TIMEOUT_MS = 5_000;
 /** The body of `PUT /v1/embeddings/config`. */
 export interface SearchConfig {
   enabled: boolean;
+  sources: SemanticSearchSources;
+  chatWindowDays: number | null;
   model: EmbeddingModelRef | null;
   pendingModel: EmbeddingModelRef | null;
   onBattery: boolean;
@@ -24,6 +26,9 @@ export interface EmbeddingModelRef {
 export interface SearchConfigInput {
   /** The `semanticSearch.enabled` switch. */
   switchOn: boolean;
+  sources: SemanticSearchSources;
+  /** Days back the chats indexed by meaning reach; null is all time. */
+  chatWindowDays: number | null;
   model: ReadyModel | null;
   pendingModel: ReadyModel | null;
   onBattery: boolean;
@@ -48,6 +53,8 @@ function refOf(model: ReadyModel | null): EmbeddingModelRef | null {
 export function searchConfigOf(input: SearchConfigInput): SearchConfig {
   return {
     enabled: input.switchOn && input.model !== null,
+    sources: input.sources,
+    chatWindowDays: input.chatWindowDays,
     model: refOf(input.model),
     pendingModel: refOf(input.pendingModel),
     onBattery: input.onBattery,

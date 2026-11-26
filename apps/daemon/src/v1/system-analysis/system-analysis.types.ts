@@ -14,7 +14,7 @@ import {
 
 /** Most of the user's threads one system analysis reads; the rest of the period is counted, not read. */
 export const SYSTEM_ANALYSIS_MAX_THREADS = MAX_ANALYSED_TEAM_RUNS;
-/** Most of geniro's own threads (thread and team analyses, lessons reflections and checks) one system analysis reads, beside the user's. */
+/** Most of geniro's own threads (thread and team analyses, lessons reflections and checks, earlier system analyses) one system analysis reads, beside the user's. */
 export const SYSTEM_DIGEST_SYSTEM_THREADS = 10;
 /** Candidates whose transcripts a digest reads for corrections and refused approvals. */
 export const SYSTEM_DIGEST_PAYLOAD_CANDIDATES = 200;
@@ -89,7 +89,7 @@ export const SystemDigestTotalsSchema = z
     threadsWithSignals: z.number().int(),
     flags: z.number().int(),
     failedToolCalls: z.number().int(),
-    /** Of the threads with signals, geniro's own: analyses and lessons chats. */
+    /** Of the threads with signals, geniro's own: analyses, earlier system analyses included, and lessons chats. */
     systemThreads: z.number().int(),
   })
   .meta({ id: 'SystemDigestTotals' });

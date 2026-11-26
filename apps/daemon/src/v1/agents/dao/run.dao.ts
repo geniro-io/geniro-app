@@ -697,8 +697,8 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * What a system digest needs of these runs: their kind, place and title.
-   * A run that no longer exists is absent; earlier system analyses are left
-   * out, since an analysis of analyses of itself would only grow.
+   * A run that no longer exists is absent. Earlier system analyses are read
+   * among geniro's own threads, capped with them.
    */
   async digestFactsOf(
     runIds: readonly string[],
@@ -707,7 +707,7 @@ export class RunDao extends BaseDao<Run> {
     const rows: DigestRunFacts[] = [];
     for (const batch of idBatches([...new Set(runIds)])) {
       const found = await this.getRepo(txEm ?? this.em.fork()).find(
-        { id: { $in: batch }, ...NOT_SYSTEM_ANALYSIS },
+        { id: { $in: batch } },
         { fields: [...DIGEST_RUN_FIELDS], disableIdentityMap: true },
       );
       rows.push(...found);

@@ -88,7 +88,7 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
     await db.close();
   });
 
-  it('ranks the reflection with a dropped lesson and the chat with two work flags, and leaves out a clean thread, a system analysis (its flag not counted) and a deleted thread’s flag from the threads', async () => {
+  it('ranks the chat with two work flags, an earlier system analysis with one and the reflection with a dropped lesson, and leaves out a clean thread and a deleted thread’s flag from the threads', async () => {
     await db.seedRun('busy-chat', { updatedAt: AT });
     await db.seedItem('busy-chat', 0, AT);
     await db.seedFlag('busy-chat', 'work', AT, { handle: 'F-b1' });
@@ -117,18 +117,28 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
 
     expect(digest.threads.map((thread) => thread.runId)).toEqual([
       'busy-chat',
+      'system-run',
       'lesson-run',
     ]);
-    expect(digest.threads[1]?.signals.analysisRefusals).toBe(1);
+    expect(digest.threads[1]?.kind).toBe('system_analysis');
+    expect(digest.threads[2]?.signals.analysisRefusals).toBe(1);
     expect(digest.totals).toEqual({
-      threadsWithSignals: 2,
-      flags: 3,
+      threadsWithSignals: 3,
+      flags: 4,
       failedToolCalls: 0,
-      systemThreads: 1,
+      systemThreads: 2,
     });
-    expect(digest.flags.map((flag) => flag.handle)).toEqual(['F-b1', 'F-b2']);
+    expect(digest.flags.map((flag) => flag.handle)).toEqual([
+      'F-b1',
+      'F-b2',
+      'F-sys',
+    ]);
     expect(digest.goneFlags.map((flag) => flag.handle)).toEqual(['F-gone']);
-    expect(runs.map((run) => run.runId)).toEqual(['busy-chat', 'lesson-run']);
+    expect(runs.map((run) => run.runId)).toEqual([
+      'busy-chat',
+      'system-run',
+      'lesson-run',
+    ]);
     expect(runs.map((run) => run.snapshotSeq)).toEqual(
       digest.threads.map((thread) => thread.snapshotSeq),
     );

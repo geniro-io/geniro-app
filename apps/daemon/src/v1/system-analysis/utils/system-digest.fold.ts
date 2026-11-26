@@ -36,6 +36,7 @@ const SYSTEM_KINDS: ReadonlySet<AgentFlagRunKind> = new Set([
   'team_analysis',
   'lessons',
   'lessons_check',
+  'system_analysis',
 ]);
 
 export function digestScore(signals: DigestSignals): number {

@@ -243,6 +243,32 @@ describe('foldSystemDigest', () => {
     );
   });
 
+  it("pins an earlier system analysis among geniro's own threads, with its kind", () => {
+    const users = Array.from(
+      { length: SYSTEM_ANALYSIS_MAX_THREADS },
+      (_, index) =>
+        candidate(`user${String(index).padStart(2, '0')}`, {
+          analysisRefusals: index + 20,
+        }),
+    );
+
+    const digest = fold({
+      candidates: [
+        ...users,
+        candidate('past-system', {
+          kind: 'system_analysis',
+          analysisRefusals: 1,
+        }),
+      ],
+    });
+
+    expect(
+      digest.threads.find((thread) => thread.runId === 'past-system')?.kind,
+    ).toBe('system_analysis');
+    expect(digest.threads).toHaveLength(SYSTEM_ANALYSIS_MAX_THREADS + 1);
+    expect(digest.totals.systemThreads).toBe(1);
+  });
+
   it('keeps each group under its own cap: a system thread never takes a user slot, nor a user thread a system one', () => {
     const users = Array.from(
       { length: SYSTEM_ANALYSIS_MAX_THREADS + 1 },

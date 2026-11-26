@@ -932,8 +932,8 @@ export function Chats({
     handoff: handoffApi,
   } = apis;
   const threadContext = useMemo(
-    () => threadContextReaderOf(apis.chats),
-    [apis],
+    () => threadContextReaderOf(apis.chats, handle),
+    [apis, handle],
   );
   const taskReader = useMemo<TaskReader>(
     () => ({

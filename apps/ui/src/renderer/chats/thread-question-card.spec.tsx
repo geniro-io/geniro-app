@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubThreadContextReader } from '../__fixtures__/thread-context-reader';
 import {
   bareThreadIdentity,
   type ThreadIdentity,
@@ -147,7 +148,8 @@ describe('a thread question relayed into the manager chat', () => {
     act(() =>
       root.render(
         <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
-          <ThreadContextReaderContext.Provider value={reader}>
+          <ThreadContextReaderContext.Provider
+            value={stubThreadContextReader(reader)}>
             <ApprovalCard
               toolName={THREAD_QUESTION_CARD}
               input={RELAYED_QUESTION}
@@ -216,7 +218,8 @@ describe('a thread question relayed into the manager chat', () => {
       ]);
     act(() =>
       root.render(
-        <ThreadContextReaderContext.Provider value={reader}>
+        <ThreadContextReaderContext.Provider
+          value={stubThreadContextReader(reader)}>
           <ApprovalCard
             toolName={THREAD_QUESTION_CARD}
             input={RELAYED_QUESTION}
@@ -258,7 +261,9 @@ describe('a thread question relayed into the manager chat', () => {
     act(() =>
       root.render(
         <ThreadContextReaderContext.Provider
-          value={() => Promise.reject(new Error('daemon down'))}>
+          value={stubThreadContextReader(() =>
+            Promise.reject(new Error('daemon down')),
+          )}>
           <ApprovalCard
             toolName={THREAD_QUESTION_CARD}
             input={RELAYED_QUESTION}

@@ -153,8 +153,8 @@ export function CommandCenter({
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const contextReader = useMemo(
-    () => threadContextReaderOf(apis.chats),
-    [apis],
+    () => threadContextReaderOf(apis.chats, handle),
+    [apis, handle],
   );
   const identities = useContext(AgentIdentityContext);
   const narrow = useNarrowViewport();

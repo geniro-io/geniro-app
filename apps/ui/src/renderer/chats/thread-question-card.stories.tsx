@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
 
+import { stubThreadContextReader } from '../__fixtures__/thread-context-reader';
 import {
   bareThreadIdentity,
   type ThreadIdentity,
@@ -48,7 +49,7 @@ const RELAY = {
   ],
 };
 
-const READER: ThreadContextReader = () =>
+const READER: ThreadContextReader['read'] = () =>
   Promise.resolve([
     { seq: 3, role: 'user', text: 'Clear the billing cache before the deploy' },
     {
@@ -80,7 +81,8 @@ const meta = {
   decorators: [
     (story) => (
       <div className="w-[560px] bg-background p-4">
-        <ThreadContextReaderContext.Provider value={READER}>
+        <ThreadContextReaderContext.Provider
+          value={stubThreadContextReader(READER)}>
           <ThreadIdentityContext.Provider value={IDENTITIES}>
             {story()}
           </ThreadIdentityContext.Provider>

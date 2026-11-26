@@ -25,6 +25,7 @@ import {
   type DigestCandidate,
   digestScore,
   foldSystemDigest,
+  withSystemSlots,
 } from '../utils/system-digest.fold';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -178,7 +179,8 @@ export class SystemDigestService {
   /**
    * Corrections and refused approvals, read off the transcripts of the
    * candidates the ledgers rank highest — at most
-   * {@link SYSTEM_DIGEST_PAYLOAD_CANDIDATES}, one run per turn of the loop.
+   * {@link SYSTEM_DIGEST_PAYLOAD_CANDIDATES} of geniro's own threads and as many
+   * of the user's, one run per turn of the loop.
    */
   private async readTranscripts(
     candidates: DigestCandidate[],
@@ -212,9 +214,12 @@ export class SystemDigestService {
           b.candidate.lastActivityAt.getTime() -
             a.candidate.lastActivityAt.getTime() ||
           a.candidate.runId.localeCompare(b.candidate.runId),
-      )
-      .slice(0, SYSTEM_DIGEST_PAYLOAD_CANDIDATES);
-    for (const { candidate } of ranked) {
+      );
+    const read = withSystemSlots(ranked, (item) => item.candidate.kind, {
+      user: SYSTEM_DIGEST_PAYLOAD_CANDIDATES,
+      system: SYSTEM_DIGEST_PAYLOAD_CANDIDATES,
+    });
+    for (const { candidate } of read) {
       await nextTick();
       const em = this.em.fork();
       const maxSeq = await this.itemDao.maxSeq(candidate.runId, em);

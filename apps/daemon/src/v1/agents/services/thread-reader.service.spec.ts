@@ -2867,6 +2867,32 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(answer.error).toBeUndefined();
     });
 
+    it('reads a pinned earlier system analysis with view=overview', async () => {
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'past-system',
+          status: 'completed',
+          title: 'Earlier system analysis',
+          analysisPurpose: 'system',
+          analysisDigest: JSON.stringify(FROZEN_DIGEST),
+        } as Run),
+      );
+      await fork.flush();
+      await insertInto('past-system', 0, 'earlier system row');
+      const turn = systemAnalysisTurn('analysis-1', [
+        { runId: 'source', snapshotSeq: 0, working: false },
+        { runId: 'past-system', snapshotSeq: 0, working: false },
+      ])!;
+
+      const answer = await reader.read(turn, {
+        view: 'overview',
+        runId: 'past-system',
+      });
+
+      expect(answer.error).toBeUndefined();
+    });
+
     it('refuses a run the digest does not hold with NOT_IN_DIGEST', async () => {
       expect(
         (await reader.read(TURN(), { view: 'overview', runId: 'outside' }))

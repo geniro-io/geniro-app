@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentFlagWire } from '../../agents/chat.types';
+import type { AgentFlagRunKind, AgentFlagWire } from '../../agents/chat.types';
 import {
   SYSTEM_ANALYSIS_MAX_THREADS,
   SYSTEM_DIGEST_GONE_FLAGS,
+  SYSTEM_DIGEST_SYSTEM_THREADS,
   SYSTEM_DIGEST_TOOLS_PER_THREAD,
   type SystemPeriod,
 } from '../system-analysis.types';
@@ -11,6 +12,7 @@ import {
   type DigestCandidate,
   digestScore,
   foldSystemDigest,
+  withSystemSlots,
 } from './system-digest.fold';
 
 const PERIOD: SystemPeriod = {
@@ -112,6 +114,26 @@ describe('digestScore', () => {
   });
 });
 
+describe('withSystemSlots', () => {
+  it('keeps the ranked items in order, each group under its own cap', () => {
+    const ranked: { id: string; kind: AgentFlagRunKind }[] = [
+      { id: 'u1', kind: 'chat' },
+      { id: 's1', kind: 'lessons' },
+      { id: 's2', kind: 'lessons' },
+      { id: 's3', kind: 'lessons' },
+      { id: 'u2', kind: 'chat' },
+      { id: 'u3', kind: 'chat' },
+    ];
+
+    const kept = withSystemSlots(ranked, (item) => item.kind, {
+      user: 2,
+      system: 1,
+    });
+
+    expect(kept.map((item) => item.id)).toEqual(['u1', 's1', 'u2']);
+  });
+});
+
 describe('foldSystemDigest', () => {
   it('leaves out a thread with no signal, and counts only threads that have one', () => {
     const digest = fold({
@@ -176,6 +198,133 @@ describe('foldSystemDigest', () => {
     expect(digest.totals.threadsWithSignals).toBe(
       SYSTEM_ANALYSIS_MAX_THREADS + 1,
     );
+  });
+
+  it("pins up to SYSTEM_DIGEST_SYSTEM_THREADS of geniro's own threads, the most troubled first", () => {
+    expect(SYSTEM_DIGEST_SYSTEM_THREADS).toBe(10);
+    const lessons = Array.from(
+      { length: SYSTEM_DIGEST_SYSTEM_THREADS + 2 },
+      (_, index) =>
+        candidate(`lesson${String(index).padStart(2, '0')}`, {
+          kind: 'lessons',
+          analysisRefusals: index + 1,
+        }),
+    );
+
+    const digest = fold({ candidates: lessons });
+
+    expect(digest.threads.map((thread) => thread.runId)).toEqual(
+      lessons
+        .slice(-SYSTEM_DIGEST_SYSTEM_THREADS)
+        .map((item) => item.runId)
+        .reverse(),
+    );
+  });
+
+  it("pins geniro's own threads beside the user threads, even when every user thread outranks them", () => {
+    const users = Array.from(
+      { length: SYSTEM_ANALYSIS_MAX_THREADS },
+      (_, index) =>
+        candidate(`user${String(index).padStart(2, '0')}`, {
+          analysisRefusals: index + 20,
+        }),
+    );
+
+    const digest = fold({
+      candidates: [
+        candidate('reflection', { kind: 'lessons', analysisRefusals: 1 }),
+        ...users,
+      ],
+    });
+
+    expect(digest.threads).toHaveLength(SYSTEM_ANALYSIS_MAX_THREADS + 1);
+    expect(digest.threads.map((thread) => thread.runId)).toContain(
+      'reflection',
+    );
+  });
+
+  it("pins an earlier system analysis among geniro's own threads, with its kind", () => {
+    const users = Array.from(
+      { length: SYSTEM_ANALYSIS_MAX_THREADS },
+      (_, index) =>
+        candidate(`user${String(index).padStart(2, '0')}`, {
+          analysisRefusals: index + 20,
+        }),
+    );
+
+    const digest = fold({
+      candidates: [
+        ...users,
+        candidate('past-system', {
+          kind: 'system_analysis',
+          analysisRefusals: 1,
+        }),
+      ],
+    });
+
+    expect(
+      digest.threads.find((thread) => thread.runId === 'past-system')?.kind,
+    ).toBe('system_analysis');
+    expect(digest.threads).toHaveLength(SYSTEM_ANALYSIS_MAX_THREADS + 1);
+    expect(digest.totals.systemThreads).toBe(1);
+  });
+
+  it('keeps each group under its own cap: a system thread never takes a user slot, nor a user thread a system one', () => {
+    const users = Array.from(
+      { length: SYSTEM_ANALYSIS_MAX_THREADS + 1 },
+      (_, index) =>
+        candidate(`user${String(index).padStart(2, '0')}`, {
+          analysisRefusals: index + 1,
+        }),
+    );
+    const lessons = Array.from(
+      { length: SYSTEM_DIGEST_SYSTEM_THREADS + 5 },
+      (_, index) =>
+        candidate(`lesson${String(index).padStart(2, '0')}`, {
+          kind: 'lessons',
+          analysisRefusals: index + 1,
+        }),
+    );
+
+    const digest = fold({ candidates: [...users, ...lessons] });
+
+    const pinned = digest.threads.map((thread) => thread.runId);
+    expect(pinned.filter((runId) => runId.startsWith('user'))).toHaveLength(
+      SYSTEM_ANALYSIS_MAX_THREADS,
+    );
+    expect(pinned.filter((runId) => runId.startsWith('lesson'))).toHaveLength(
+      SYSTEM_DIGEST_SYSTEM_THREADS,
+    );
+    expect(pinned).not.toContain('user00');
+    expect(pinned).not.toContain('lesson00');
+    expect(digest.totals.threadsWithSignals).toBe(
+      users.length + lessons.length,
+    );
+  });
+
+  it('lists the flags of a pinned system thread, and not those of one beyond the cap', () => {
+    const lessons = Array.from(
+      { length: SYSTEM_DIGEST_SYSTEM_THREADS + 1 },
+      (_, index) =>
+        candidate(`lesson${index}`, {
+          kind: 'lessons',
+          analysisRefusals: index === 0 ? 0 : index + 2,
+        }),
+    );
+
+    const digest = fold({
+      candidates: lessons,
+      flags: [
+        flag('lesson10', 'work', 'F-top'),
+        flag('lesson0', 'work', 'F-low'),
+      ],
+    });
+
+    expect(digest.threads.map((thread) => thread.runId)).not.toContain(
+      'lesson0',
+    );
+    expect(digest.flags.map((item) => item.handle)).toEqual(['F-top']);
+    expect(digest.totals.flags).toBe(2);
   });
 
   it('lists the flags of a thread it reads, and not those of a run it does not read', () => {

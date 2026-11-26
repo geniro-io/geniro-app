@@ -12,8 +12,10 @@ import {
   MAX_ANALYSED_TEAM_RUNS,
 } from '../agents/dto/chat.dto';
 
-/** Most threads one system analysis reads; the rest of the period is counted, not read. */
+/** Most of the user's threads one system analysis reads; the rest of the period is counted, not read. */
 export const SYSTEM_ANALYSIS_MAX_THREADS = MAX_ANALYSED_TEAM_RUNS;
+/** Most of geniro's own threads (thread and team analyses, lessons reflections and checks) one system analysis reads, beside the user's. */
+export const SYSTEM_DIGEST_SYSTEM_THREADS = 10;
 /** Candidates whose transcripts a digest reads for corrections and refused approvals. */
 export const SYSTEM_DIGEST_PAYLOAD_CANDIDATES = 200;
 /** Flags of deleted threads a digest still lists. */

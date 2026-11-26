@@ -4,6 +4,7 @@ import {
   type DigestThread,
   SYSTEM_ANALYSIS_MAX_THREADS,
   SYSTEM_DIGEST_GONE_FLAGS,
+  SYSTEM_DIGEST_SYSTEM_THREADS,
   SYSTEM_DIGEST_TOOLS_PER_THREAD,
   SYSTEM_DIGEST_WEIGHTS,
   type SystemDigest,
@@ -52,6 +53,27 @@ export function digestScore(signals: DigestSignals): number {
   );
 }
 
+/**
+ * Keeps the items of a ranked list in order, each group only while it holds
+ * fewer than its cap: geniro's own threads and the user's are capped apart, so
+ * a full group never takes the other's place.
+ */
+export function withSystemSlots<T>(
+  ranked: readonly T[],
+  kindOf: (item: T) => AgentFlagRunKind,
+  caps: { user: number; system: number },
+): T[] {
+  const taken = { user: 0, system: 0 };
+  return ranked.filter((item) => {
+    const group = SYSTEM_KINDS.has(kindOf(item)) ? 'system' : 'user';
+    if (taken[group] >= caps[group]) {
+      return false;
+    }
+    taken[group] += 1;
+    return true;
+  });
+}
+
 function failedToolsOf(
   calls: DigestCandidate['failedTools'],
 ): DigestThread['failedTools'] {
@@ -79,7 +101,9 @@ function failedToolsOf(
  * The period's troubled threads, ranked: what a system analysis reads. Pure —
  * the service gathers the rows. A thread with no signal is left out; ties go
  * to the newest activity, then the run id, so the same rows always rank the
- * same way.
+ * same way. Up to SYSTEM_ANALYSIS_MAX_THREADS of the user's threads are pinned
+ * and up to SYSTEM_DIGEST_SYSTEM_THREADS of geniro's own, each group in that
+ * order.
  */
 export function foldSystemDigest(input: {
   period: SystemPeriod;
@@ -131,7 +155,10 @@ export function foldSystemDigest(input: {
         Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt) ||
         a.runId.localeCompare(b.runId),
     );
-  const threads = scored.slice(0, SYSTEM_ANALYSIS_MAX_THREADS);
+  const threads = withSystemSlots(scored, (thread) => thread.kind, {
+    user: SYSTEM_ANALYSIS_MAX_THREADS,
+    system: SYSTEM_DIGEST_SYSTEM_THREADS,
+  });
   const read = new Set(threads.map((thread) => thread.runId));
   return {
     period: input.period,

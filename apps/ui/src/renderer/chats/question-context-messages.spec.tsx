@@ -9,6 +9,7 @@ import {
   type ThreadContextReader,
   ThreadContextReaderContext,
 } from './thread-question-context';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -23,6 +24,7 @@ let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  localStorage.clear();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -45,6 +47,40 @@ function draw(reader: ThreadContextReader | null, requestId = 'req-1'): void {
     );
   });
 }
+
+const FIVE_LINES = (name: string): string =>
+  [1, 2, 3, 4, 5].map((line) => `${name}, line ${line}.`).join('\n');
+
+const LONG_MESSAGES: ThreadContextMessage[] = [
+  { seq: 1, role: 'user', text: FIVE_LINES('Clear the shared cache') },
+  { seq: 2, role: 'assistant', text: FIVE_LINES('Two caches could be meant') },
+  { seq: 3, role: 'user', text: FIVE_LINES('The shared one') },
+];
+
+function drawInThread(reader: ThreadContextReader, requestId: string): void {
+  act(() => {
+    root.render(
+      <ThreadUiMemoryContext.Provider value="manager-run">
+        <ThreadContextReaderContext.Provider value={reader}>
+          <QuestionContextMessages
+            threadRunId="thread-1"
+            threadRequestId={requestId}
+          />
+        </ThreadContextReaderContext.Provider>
+      </ThreadUiMemoryContext.Provider>,
+    );
+  });
+}
+
+const messagesBlock = (): HTMLElement | null =>
+  container.querySelector<HTMLElement>(
+    '[data-slot="thread-question-context-messages"]',
+  );
+
+const messagesToggle = (): HTMLButtonElement =>
+  container.querySelector<HTMLButtonElement>(
+    '[data-slot="thread-question-context-messages-toggle"]',
+  )!;
 
 const settle = (): Promise<void> =>
   act(async () => {
@@ -116,6 +152,64 @@ describe('QuestionContextMessages', () => {
     await settle();
 
     expect(context()?.dataset.state).toBe('failed');
+  });
+
+  it('draws one Show more for the whole list of messages, and none on a message inside it', async () => {
+    draw(vi.fn().mockResolvedValue(LONG_MESSAGES));
+    await settle();
+
+    expect(messagesBlock()?.dataset.clamped).toBe('true');
+    expect(messagesToggle().textContent).toContain('Show more');
+    expect(
+      messagesBlock()!.querySelectorAll('[data-slot$="-toggle"]'),
+    ).toHaveLength(1);
+  });
+
+  it('unfolds every message at once on Show more, and folds the list again on Show less', async () => {
+    draw(vi.fn().mockResolvedValue(LONG_MESSAGES));
+    await settle();
+
+    act(() => messagesToggle().click());
+    expect(messagesBlock()!.dataset.clamped).toBeUndefined();
+    expect(container.querySelector('[data-clamped]')).toBeNull();
+    expect(
+      (messagesBlock()!.firstElementChild as HTMLElement).style.maxHeight,
+    ).toBe('');
+    expect(messagesToggle().textContent).toContain('Show less');
+
+    act(() => messagesToggle().click());
+    expect(messagesBlock()!.dataset.clamped).toBe('true');
+    expect(
+      (messagesBlock()!.firstElementChild as HTMLElement).style.maxHeight,
+    ).toBe('14.4em');
+    expect(messagesToggle().textContent).toContain('Show more');
+  });
+
+  it('draws no toggle and no clamp when the messages together are short', async () => {
+    draw(vi.fn().mockResolvedValue(MESSAGES));
+    await settle();
+
+    expect(messagesBlock()).not.toBeNull();
+    expect(messagesBlock()!.dataset.clamped).toBeUndefined();
+    expect(messagesBlock()!.querySelector('[data-slot$="-toggle"]')).toBeNull();
+  });
+
+  it('remembers an expanded list within the thread across a remount, and per question', async () => {
+    const reader = vi.fn().mockResolvedValue(LONG_MESSAGES);
+    drawInThread(reader, 'req-1');
+    await settle();
+    act(() => messagesToggle().click());
+
+    act(() => root.render(null));
+    drawInThread(reader, 'req-1');
+    await settle();
+    expect(messagesBlock()!.dataset.clamped).toBeUndefined();
+    expect(messagesToggle().textContent).toContain('Show less');
+
+    act(() => root.render(null));
+    drawInThread(reader, 'req-2');
+    await settle();
+    expect(messagesBlock()!.dataset.clamped).toBe('true');
   });
 
   it('draws nothing where no reader is provided', () => {

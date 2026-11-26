@@ -10,29 +10,28 @@ export function isLongMarkdown(text: string, lines: number): boolean {
 }
 
 /**
- * A text drawn as markdown and clamped to a few lines with a bottom fade and
- * a Show more / Show less toggle, remembered within the thread.
+ * Any content clamped to a few lines with a bottom fade and a Show more / Show
+ * less toggle, remembered within the thread. `long` says whether the content
+ * runs past the clamp; the caller judges it from what it draws.
  */
-export function ClampedMarkdown({
-  text,
+export function ClampedBlock({
+  children,
+  long,
   lines,
   slot,
-  className,
   toggleClassName,
   memoryKey,
 }: {
-  text: string;
+  children: React.ReactNode;
+  long: boolean;
   lines: number;
   slot: string;
-  /** The markdown's own text size and colour. */
-  className?: string;
   toggleClassName?: string;
   /** Where Show more is remembered within the thread. */
   memoryKey?: string;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useThreadFlag(memoryKey, false);
-  const isLong = isLongMarkdown(text, lines);
-  const clamped = !expanded && isLong;
+  const clamped = !expanded && long;
   return (
     <div data-slot={slot} data-clamped={clamped ? 'true' : undefined}>
       {/*
@@ -52,9 +51,9 @@ export function ClampedMarkdown({
               }
             : undefined
         }>
-        <MarkdownContent content={text} className={className} />
+        {children}
       </div>
-      {isLong ? (
+      {long ? (
         <button
           type="button"
           data-slot={`${slot}-toggle`}
@@ -75,5 +74,38 @@ export function ClampedMarkdown({
         </button>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A text drawn as markdown and clamped to a few lines with a bottom fade and
+ * a Show more / Show less toggle, remembered within the thread.
+ */
+export function ClampedMarkdown({
+  text,
+  lines,
+  slot,
+  className,
+  toggleClassName,
+  memoryKey,
+}: {
+  text: string;
+  lines: number;
+  slot: string;
+  /** The markdown's own text size and colour. */
+  className?: string;
+  toggleClassName?: string;
+  /** Where Show more is remembered within the thread. */
+  memoryKey?: string;
+}): React.JSX.Element {
+  return (
+    <ClampedBlock
+      long={isLongMarkdown(text, lines)}
+      lines={lines}
+      slot={slot}
+      toggleClassName={toggleClassName}
+      memoryKey={memoryKey}>
+      <MarkdownContent content={text} className={className} />
+    </ClampedBlock>
   );
 }

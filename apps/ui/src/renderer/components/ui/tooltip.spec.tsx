@@ -36,6 +36,7 @@ function pointer(
     pointerType?: string;
     x?: number;
     y?: number;
+    buttons?: number;
   } = {},
 ): void {
   const event = new MouseEvent(type, {
@@ -43,6 +44,7 @@ function pointer(
     relatedTarget: init.relatedTarget ?? null,
     clientX: init.x ?? 0,
     clientY: init.y ?? 0,
+    buttons: init.buttons ?? 0,
   });
   if (init.pointerType !== undefined) {
     Object.defineProperty(event, 'pointerType', { value: init.pointerType });
@@ -246,6 +248,35 @@ describe('TooltipLayer', () => {
     pointer('pointermove', cover, { x: 20, y: 20 });
     wait(16);
 
+    expect(tooltip()).toBeNull();
+    expect(time.getAttribute('title')).toBe('Last activity: Oct 27');
+  });
+
+  it('measures nothing and opens nothing while a held button drags across titled elements', () => {
+    const el = mount(
+      <section>
+        <header data-testid="head">Manager</header>
+        <time title="Last activity: Oct 27">5m</time>
+      </section>,
+    );
+    const head = el.querySelector('header')!;
+    const time = el.querySelector('time')!;
+    placeAt(head, { left: 0, top: 0, width: 400, height: 40 });
+    let measured = 0;
+    time.getBoundingClientRect = () => {
+      measured += 1;
+      return new DOMRect(200, 10, 30, 16);
+    };
+
+    pointer('pointerdown', head, { x: 20, y: 20, buttons: 1 });
+    pointer('pointermove', head, { x: 210, y: 18, buttons: 1 });
+    wait(16);
+    pointer('pointermove', head, { x: 212, y: 18, buttons: 1 });
+    wait(16);
+    pointer('pointerover', time, { x: 212, y: 18, buttons: 1 });
+    wait(TOOLTIP_OPEN_DELAY_MS);
+
+    expect(measured).toBe(0);
     expect(tooltip()).toBeNull();
     expect(time.getAttribute('title')).toBe('Last activity: Oct 27');
   });

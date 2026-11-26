@@ -183,7 +183,7 @@ export function TooltipLayer(): React.JSX.Element | null {
     };
 
     const consider = (event: PointerEvent): void => {
-      if (event.pointerType === 'touch') {
+      if (event.pointerType === 'touch' || event.buttons !== 0) {
         return;
       }
       const own = titledElement(event.target);
@@ -213,6 +213,9 @@ export function TooltipLayer(): React.JSX.Element | null {
       );
     };
     const onMove = (event: PointerEvent): void => {
+      if (event.buttons !== 0) {
+        return;
+      }
       lastMove = event;
       if (moveFrame !== 0) {
         return;

@@ -43,6 +43,7 @@ import {
   readWaitingShares,
   type ShareWait,
   shareWaitsByPlace,
+  useCardDismissal,
   useConfigProfiles,
 } from './settings-attention';
 import { ON_MEMORY, useWaitingSet } from './use-waiting-items';
@@ -94,13 +95,21 @@ export function AgentUpdatesCard({
   updates: CliUpdatesController;
   nameOf: (kind: string) => string;
 }): React.JSX.Element {
+  const dismissal = useCardDismissal(
+    'agent-updates',
+    rows.map(
+      (detection) =>
+        `${detection.kind}@${detection.update.latestVersion ?? ''}`,
+    ),
+  );
   return (
     <NoticeCard
       slot={SLOT}
       kind="agent-updates"
       icon={CircleArrowUp}
       label="Update available"
-      heading={plural(rows.length, 'agent', 'agents')}>
+      heading={plural(rows.length, 'agent', 'agents')}
+      dismissal={dismissal}>
       <Rows>
         {rows.map((detection) => {
           const running = updates.updating.has(detection.kind);
@@ -149,9 +158,15 @@ export function AgentSignInCard({
   nameOf: (kind: string) => string;
   profiles: readonly ConfigProfile[];
 }): React.JSX.Element {
+  const dismissal = useCardDismissal(
+    'agent-sign-in',
+    rows.map((row) => `${row.kind}:${row.configDir ?? ''}`),
+  );
   const busy =
     login.starting !== null ||
     (login.login !== null && !isLoginOver(login.login.session));
+  const dismissable =
+    rows.length > 0 && login.starting === null && login.login === null;
   return (
     <NoticeCard
       slot={SLOT}
@@ -161,7 +176,8 @@ export function AgentSignInCard({
       heading={plural(rows.length, 'account', 'accounts')}
       settled={rows.length === 0}
       settledIcon={CircleCheck}
-      settledLabel="Signed in">
+      settledLabel="Signed in"
+      dismissal={dismissable ? dismissal : undefined}>
       {rows.length === 0 ? null : (
         <Rows>
           {rows.map((row) => {
@@ -217,6 +233,10 @@ export function AppUpdateCard({
   remote: boolean;
 }): React.JSX.Element | null {
   const state = update.state;
+  const dismissal = useCardDismissal(
+    'app-update',
+    state === null ? [] : [state.version ?? ''],
+  );
   if (state === null) {
     return null;
   }
@@ -226,7 +246,8 @@ export function AppUpdateCard({
       kind="app-update"
       icon={Download}
       label="Update available"
-      heading="Geniro">
+      heading="Geniro"
+      dismissal={dismissal}>
       <div className="flex min-w-0 items-center gap-3 [&>button]:shrink-0">
         <p
           data-slot="settings-attention-app-update"
@@ -251,13 +272,18 @@ export function ShareSignInCard({
   wait: ShareWait;
   api: DaemonApis['shares'];
 }): React.JSX.Element {
+  const dismissal = useCardDismissal(
+    `share-sign-in:${wait.destinationId}`,
+    wait.shareIds,
+  );
   return (
     <NoticeCard
       slot={SLOT}
       kind="share-sign-in"
       icon={Link2}
       label="Waiting for sign-in"
-      heading={wait.label}>
+      heading={wait.label}
+      dismissal={dismissal}>
       <p
         data-slot="settings-attention-share-count"
         className="m-0 text-sm break-words">
@@ -275,19 +301,22 @@ export function ShareSignInCard({
 }
 
 export function MemoryConflictsCard({
-  count,
+  findingIds,
   onOpen,
 }: {
-  count: number;
+  findingIds: readonly string[];
   onOpen: (() => void) | null;
 }): React.JSX.Element {
+  const count = findingIds.length;
+  const dismissal = useCardDismissal('memory-conflicts', findingIds);
   return (
     <NoticeCard
       slot={SLOT}
       kind="memory-conflicts"
       icon={GitCompareArrows}
       label="Waiting for your decision"
-      heading={plural(count, 'memory conflict', 'memory conflicts')}>
+      heading={plural(count, 'memory conflict', 'memory conflicts')}
+      dismissal={dismissal}>
       <p
         data-slot="settings-attention-conflicts"
         className="m-0 text-sm break-words">
@@ -365,7 +394,7 @@ export function SettingsAttentionCards({
   const signInRows = (cli.detections ?? []).flatMap(signedOutAccountRows);
   const shareWaits =
     shares.items === null ? [] : shareWaitsByPlace(shares.items.values());
-  const conflicts = findings.items?.size ?? 0;
+  const conflictIds = findings.items === null ? [] : [...findings.items.keys()];
   const showSignIn = signInRows.length > 0 || login.login !== null;
   const showAppUpdate = appUpdateWaits(update.state);
 
@@ -374,7 +403,7 @@ export function SettingsAttentionCards({
     !showSignIn &&
     !showAppUpdate &&
     shareWaits.length === 0 &&
-    conflicts === 0
+    conflictIds.length === 0
   ) {
     return null;
   }
@@ -403,8 +432,11 @@ export function SettingsAttentionCards({
           api={apis.shares}
         />
       ))}
-      {conflicts === 0 ? null : (
-        <MemoryConflictsCard count={conflicts} onOpen={onOpenMemoryConflicts} />
+      {conflictIds.length === 0 ? null : (
+        <MemoryConflictsCard
+          findingIds={conflictIds}
+          onOpen={onOpenMemoryConflicts}
+        />
       )}
     </div>
   );

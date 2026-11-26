@@ -478,6 +478,84 @@ describe('threadContextReaderOf and the pages and pictures', () => {
     });
   });
 
+  it('keeps a call’s brief and its member’s pages however many rows of the run’s own flow stand between them and the question', async () => {
+    const brief = row(4, 'call_started', null, {
+      callId: 'call-1',
+      message: 'Run your command',
+    });
+    const busy = Array.from({ length: 450 }, (_, index) =>
+      memberRow(
+        100 + index,
+        'approval_request',
+        { id: `other-${index}`, toolName: 'Bash', callId: 'call-2' },
+        'reviewer',
+      ),
+    );
+    const flow: ItemDto[] = [
+      memberRow(2, 'show_artifact', PAGE_PAYLOAD('earlier-page', 1), 'helper'),
+      brief,
+      memberRow(6, 'show_artifact', PAGE_PAYLOAD('call-page', 1), 'helper'),
+      ...busy,
+      {
+        ...row(900, 'approval_request', null, {
+          id: 'thread-1::call:call-1#approval',
+          toolName: 'Bash',
+          callId: 'call-1',
+        }),
+        memberId: 'helper',
+      },
+    ];
+    const listRunItems = vi.fn(
+      async (request: {
+        conversation?: string;
+        limit?: number;
+        beforeSeq?: number;
+      }) => {
+        if (request.conversation !== 'root') {
+          return { items: busy.slice(-(request.limit ?? 0)), anchors: [] };
+        }
+        const items = flow
+          .filter(
+            (item) =>
+              request.beforeSeq === undefined || item.seq < request.beforeSeq,
+          )
+          .slice(-(request.limit ?? flow.length));
+        const firstSeq = items[0]?.seq ?? Infinity;
+        return {
+          items,
+          anchors: brief.seq < firstSeq ? [brief] : [],
+        };
+      },
+    );
+    const reader = threadContextReaderOf(
+      {
+        listRunItems,
+        listCallMessages: vi.fn().mockResolvedValue(CALL_MESSAGES),
+        readLocalImage: vi.fn(),
+        ...NO_ANSWERS,
+      },
+      HANDLE,
+    );
+
+    const entries = await reader.read(
+      'thread-1',
+      'thread-1::call:call-1#approval',
+    );
+
+    expect(entries).toEqual([
+      { seq: 4, role: 'user', text: 'Run your command' },
+      { seq: 5, role: 'assistant', text: 'Helper context' },
+      expect.objectContaining({
+        seq: 6,
+        artifact: expect.objectContaining({ artifactId: 'call-page' }),
+      }),
+    ]);
+    expect(listRunItems).toHaveBeenCalledTimes(3);
+    expect(listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conversation: 'root', beforeSeq: 151 }),
+    );
+  });
+
   it('binds the picture loader, the page URL and the answers store to the thread’s run', async () => {
     const readLocalImage = vi
       .fn()

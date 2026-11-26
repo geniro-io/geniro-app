@@ -280,7 +280,6 @@ describe('QuestionContextMessages', () => {
     expect(messagesBlock()!.dataset.clamped).toBe('true');
   });
 
-
   it('draws the pages and pictures beside the folded messages, never under the fold', async () => {
     draw(
       vi.fn().mockResolvedValue([

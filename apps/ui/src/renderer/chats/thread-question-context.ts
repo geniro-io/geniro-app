@@ -24,8 +24,11 @@ export const QUESTION_CONTEXT_MESSAGES = 3;
 /** How many of the pages and pictures the asking turn showed a relayed question shows, newest first. */
 export const QUESTION_CONTEXT_VISUALS = 3;
 
-/** How many of the thread's newest rows are read to find what led up to its question. */
+/** How many of the thread's rows one read takes to find what led up to its question. */
 const CONTEXT_PAGE = 200;
+
+/** The most pages of the run's own flow read back from a call's question towards its brief. */
+const CALL_CONTEXT_PAGES = 10;
 
 /** The most of a call's words one read may ask for (the daemon's `CALL_MESSAGES_MAX`). */
 const CALL_MESSAGES_PAGE = 20;
@@ -244,7 +247,9 @@ export function messagesBefore(
  * member call is answered from that call's own messages, cut at the question,
  * and the pages and pictures its member published after the call's brief; any
  * other from the root conversation's page. A member's pages stand in the run's
- * own flow, so they are found on the root page by the member that asked.
+ * own flow, so they are found on the root page by the member that asked, read
+ * back towards the brief, which a root page carries as an anchor of the call
+ * still open across it.
  */
 export function threadContextReaderOf(
   chats: Pick<
@@ -259,11 +264,14 @@ export function threadContextReaderOf(
 ): ThreadContextReader {
   return {
     read: async (threadRunId, threadRequestId) => {
-      const { items: root } = await chats.listRunItems({
-        runId: threadRunId,
-        limit: CONTEXT_PAGE,
-        conversation: ListRunItemsConversationEnum.Root,
-      });
+      const rootPage = (beforeSeq?: number) =>
+        chats.listRunItems({
+          runId: threadRunId,
+          limit: CONTEXT_PAGE,
+          beforeSeq,
+          conversation: ListRunItemsConversationEnum.Root,
+        });
+      const { items: root, anchors } = await rootPage();
       if (threadRequestId === null) {
         return messagesBefore(root, null);
       }
@@ -288,21 +296,40 @@ export function threadContextReaderOf(
         callId,
         limit: CALL_MESSAGES_PAGE,
       });
+      const brief = briefRowOf(
+        [...root, ...elsewhere, ...anchors],
+        callId,
+        asked.seq,
+      );
+      const askedBy = (rows: readonly ItemDto[]): ItemDto[] =>
+        rows.filter((row) => row.memberId === asked.memberId);
+      const flow = [...root];
+      let page = root;
+      for (let read = 1; read < CALL_CONTEXT_PAGES; read += 1) {
+        const oldest = Math.min(...flow.map((row) => row.seq));
+        if (
+          brief === undefined ||
+          page.length < CONTEXT_PAGE ||
+          oldest <= brief.seq ||
+          visualsOf(askedBy(flow), asked.seq, brief.seq).length ===
+            QUESTION_CONTEXT_VISUALS
+        ) {
+          break;
+        }
+        page = (await rootPage(oldest)).items;
+        flow.push(...page);
+      }
       const rows = [
         ...new Map(
-          [...root, ...elsewhere].map((row) => [row.id, row]),
+          [...flow, ...elsewhere].map((row) => [row.id, row]),
         ).values(),
       ];
       return contextOf(
         [
-          ...briefOf(rows, callId, asked.seq),
+          ...briefOf(brief === undefined ? [] : [brief], callId, asked.seq),
           ...messagesUpTo(messages, asked.seq),
         ].slice(-QUESTION_CONTEXT_MESSAGES),
-        visualsOf(
-          rows.filter((row) => row.memberId === asked.memberId),
-          asked.seq,
-          briefRowOf(rows, callId, asked.seq)?.seq ?? -Infinity,
-        ),
+        visualsOf(askedBy(rows), asked.seq, brief?.seq ?? -Infinity),
       );
     },
     artifactUrl: (threadRunId) => artifactUrlBuilder(handle, threadRunId),

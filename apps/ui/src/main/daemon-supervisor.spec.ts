@@ -1412,6 +1412,7 @@ function respawner(
     readMigrationError?: DaemonSupervisorOptions['readMigrationError'];
     /** Pids whose daemon left a crash mark on its way out. */
     crashMarks?: Set<number>;
+    writeExitNote?: DaemonSupervisorOptions['writeExitNote'];
   } = {},
 ): {
   supervisor: DaemonSupervisor;
@@ -1487,7 +1488,7 @@ function respawner(
     },
     consumeCrashMark: (pid) => opts.crashMarks?.delete(pid) ?? false,
     writeStopCause: (cause) => causes.push(cause),
-    writeExitNote: (exit) => exits.push(exit),
+    writeExitNote: opts.writeExitNote ?? ((exit) => exits.push(exit)),
     pollIntervalMs: 1,
     shutdownGraceMs: 15,
     respawnDelaysMs: opts.delays ?? [5, 5],
@@ -1644,6 +1645,23 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
         at: expect.any(Date),
       },
     ]);
+  });
+
+  it('still respawns, and says so, when the exit cannot be recorded', async () => {
+    const r = respawner({
+      writeExitNote: () => {
+        throw new Error('ENOSPC');
+      },
+    });
+    await r.supervisor.start();
+
+    r.exit(r.children[0]!, null, 'SIGKILL');
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.logs.join('\n')).toMatch(
+      /could not record how the daemon exited \(code none, signal SIGKILL\): ENOSPC/,
+    );
   });
 
   it('records a non-zero exit with its code, and respawns it', async () => {

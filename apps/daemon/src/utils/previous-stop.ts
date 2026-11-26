@@ -2,11 +2,12 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { redactSecrets } from '../v1/diagnostics/utils/redact';
-import { DAEMON_EXIT_NOTE_NAME } from './handshake';
+import {
+  DAEMON_EXIT_NOTE_NAME,
+  DAEMON_HEARTBEAT_NAME,
+  DAEMON_LAST_ERROR_NAME,
+} from './handshake';
 import { consumeStopCause, type InterruptCause } from './stop-cause';
-
-export const DAEMON_HEARTBEAT_NAME = 'daemon-heartbeat.json';
-export const DAEMON_LAST_ERROR_NAME = 'daemon-last-error.json';
 
 export const HEARTBEAT_EVERY_MS = 30_000;
 
@@ -73,10 +74,11 @@ export function writeLastError(
 export function summarizeError(
   err: unknown,
 ): Pick<DaemonLastError, 'name' | 'message' | 'where'> {
-  const name =
+  const declared =
     err instanceof Error
       ? err.name || err.constructor.name || 'Error'
       : typeof err;
+  const name = errorName(declared);
   const raw = err instanceof Error ? err.message : String(err);
   const firstLine = redactSecrets(raw.split('\n')[0] ?? '').trim();
   const message =
@@ -88,6 +90,10 @@ export function summarizeError(
       ? topFrameSource(err.stack)
       : null;
   return { name, message, where };
+}
+
+function errorName(declared: string): string {
+  return /^[A-Za-z0-9_$.]{1,80}$/.test(declared) ? declared : 'Error';
 }
 
 function topFrameSource(stack: string): string | null {
@@ -265,7 +271,7 @@ function parseLastError(raw: unknown): DaemonLastError | null {
   }
   return {
     pid: raw.pid,
-    name: raw.name.slice(0, 80),
+    name: errorName(raw.name),
     message: raw.message.slice(0, ERROR_MESSAGE_MAX_LENGTH),
     where: typeof raw.where === 'string' ? raw.where.slice(0, 120) : null,
     at: raw.at,

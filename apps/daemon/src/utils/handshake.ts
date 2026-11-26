@@ -61,6 +61,12 @@ export const DAEMON_STOP_CAUSE_NAME = 'daemon-stop-cause';
  */
 export const DAEMON_EXIT_NOTE_NAME = 'daemon-exit.json';
 
+/** The daemon's own beat (pid, start, time, RSS), read by the next boot (`./previous-stop.ts`). */
+export const DAEMON_HEARTBEAT_NAME = 'daemon-heartbeat.json';
+
+/** The crash guards' one-line summary of an uncaught error, read by the next boot. */
+export const DAEMON_LAST_ERROR_NAME = 'daemon-last-error.json';
+
 /** Highest valid TCP port. */
 export const MAX_TCP_PORT = 65535;
 

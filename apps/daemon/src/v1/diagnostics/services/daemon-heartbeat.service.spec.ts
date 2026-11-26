@@ -12,8 +12,8 @@ import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as environments from '../../../environments';
+import { DAEMON_HEARTBEAT_NAME } from '../../../utils/handshake';
 import {
-  DAEMON_HEARTBEAT_NAME,
   type DaemonHeartbeat,
   HEARTBEAT_EVERY_MS,
 } from '../../../utils/previous-stop';

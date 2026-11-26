@@ -13,12 +13,15 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../v1/diagnostics/utils/redact';
-import { DAEMON_EXIT_NOTE_NAME, DAEMON_STOP_CAUSE_NAME } from './handshake';
+import {
+  DAEMON_EXIT_NOTE_NAME,
+  DAEMON_HEARTBEAT_NAME,
+  DAEMON_LAST_ERROR_NAME,
+  DAEMON_STOP_CAUSE_NAME,
+} from './handshake';
 import {
   composeStopDetail,
   consumePreviousStopRecords,
-  DAEMON_HEARTBEAT_NAME,
-  DAEMON_LAST_ERROR_NAME,
   type DaemonExitNote,
   type DaemonHeartbeat,
   type DaemonLastError,
@@ -192,6 +195,12 @@ describe('summarizeError', () => {
 
   it('names the error by its name', () => {
     expect(summarizeError(new TypeError('boom')).name).toBe('TypeError');
+  });
+
+  it('names an error whose name is not a plain identifier as Error', () => {
+    const err = new Error('boom');
+    err.name = 'token=sk-live-0123456789 rejected';
+    expect(summarizeError(err).name).toBe('Error');
   });
 
   it('names a value that is not an Error by its type', () => {

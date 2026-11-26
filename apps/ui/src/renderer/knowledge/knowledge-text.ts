@@ -70,8 +70,10 @@ export function byLine(source: KnowledgeHead['source']): string {
   if (source.actor === 'user') {
     return 'You';
   }
-  const agent = source.agentKind ?? 'agent';
-  return source.model ? `${agent} · ${source.model}` : `${agent} · agent`;
+  if (source.agentKind === null) {
+    return source.model ? `an agent · ${source.model}` : 'an agent';
+  }
+  return `${source.agentKind} · ${source.model ?? 'agent'}`;
 }
 
 /** What a row or a header says about a document. */

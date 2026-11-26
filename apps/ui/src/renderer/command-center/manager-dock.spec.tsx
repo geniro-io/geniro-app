@@ -125,6 +125,8 @@ const IDENTITIES = new Map<string, ThreadIdentity>([
   ],
 ]);
 
+const REPORTS: ReadonlyMap<string, string> = new Map([['r1', 'Shipped it']]);
+
 async function paint(): Promise<void> {
   await act(async () => {
     root.render(
@@ -135,6 +137,7 @@ async function paint(): Promise<void> {
         choice={CHOICE}
         hidden={false}
         threadIdentities={IDENTITIES}
+        threadReports={REPORTS}
         active
         onOpenThread={vi.fn()}
         onTurnSettled={vi.fn()}
@@ -175,6 +178,13 @@ describe('ManagerDock', () => {
     await paint();
 
     expect(drawn.hosted?.threadIdentities).toBe(IDENTITIES);
+  });
+
+  it('hands the board threads’ reports to the manager’s transcript and marks it the manager', async () => {
+    await paint();
+
+    expect(drawn.hosted?.threadReports).toBe(REPORTS);
+    expect(drawn.hosted?.commandCenterManager).toBe(true);
   });
 
   it('starts a new manager chat from its header, after the confirmation, without re-opening the old one', async () => {

@@ -73,7 +73,7 @@ function ThreadLabels(): React.JSX.Element {
           <PullRequestLabel
             key={state ?? 'unknown'}
             slot="thread-pull-request"
-            pullRequest={{ number: 140 + index, state }}
+            pullRequest={{ number: 140 + index, state, url: null }}
           />
         ))}
       </div>

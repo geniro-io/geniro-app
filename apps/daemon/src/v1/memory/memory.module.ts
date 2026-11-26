@@ -58,6 +58,7 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
     MemoryUsageBackfillService,
   ],
   exports: [
+    MemoryDao,
     MemoryService,
     MemoryEventBus,
     MemoryFindingsService,

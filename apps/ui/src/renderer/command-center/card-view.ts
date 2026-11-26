@@ -121,17 +121,20 @@ function pullRequestOf(
   card: CommandCenterCard,
   pullRequest: PullRequestInfo | null,
 ): ThreadCardView['pullRequest'] {
+  const opened = card.run.pullRequests.find((row) => row.opened);
   if (pullRequest !== null) {
     return {
       number: pullRequest.number,
+      url: pullRequest.url,
       state:
         pullRequest.state === 'open' && pullRequest.isDraft
           ? 'draft'
           : pullRequest.state,
     };
   }
-  const opened = card.run.pullRequests.find((row) => row.opened);
-  return opened === undefined ? null : { number: opened.number, state: 'open' };
+  return opened === undefined
+    ? null
+    : { number: opened.number, url: opened.url, state: 'open' };
 }
 
 /** What the command center knows of a library team: its name and the faces of its members. */
@@ -303,6 +306,27 @@ function sameIdentity(a: ThreadIdentity, b: ThreadIdentity): boolean {
   return (
     sameFace(faceA, faceB) && JSON.stringify(restA) === JSON.stringify(restB)
   );
+}
+
+/** What each finished board thread reported, as the daemon read it: its recorded outcome, else its agent's newest message. */
+export function threadReportsOf(
+  cards: readonly CommandCenterCard[],
+): ReadonlyMap<string, string> {
+  const reports = new Map<string, string>();
+  for (const card of cards) {
+    if (card.report !== null && card.report.trim() !== '') {
+      reports.set(card.run.id, card.report);
+    }
+  }
+  return reports;
+}
+
+/** Whether two sets of reports hold the same text for the same threads. */
+export function sameThreadReports(
+  a: ReadonlyMap<string, string>,
+  b: ReadonlyMap<string, string>,
+): boolean {
+  return a.size === b.size && [...a].every(([id, text]) => b.get(id) === text);
 }
 
 /** Whether two sets of thread identities name the same threads the same way. */

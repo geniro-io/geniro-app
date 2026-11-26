@@ -5901,6 +5901,14 @@ export interface HostRowWire {
    * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
    */
   threadDone?: ThreadDoneRow[];
+  /**
+   * Items waiting for the user's review, announced in the command center's
+   * manager chat: one item, or a summary of several of one kind.
+   *
+   * TWIN PARSER: read by `readThreadMessageRow` in
+   * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+   */
+  waitingItems?: WaitingItemsRow;
 }
 
 /** What a call event row says of the callee and the call it is about. */
@@ -5979,6 +5987,22 @@ export interface ThreadDoneRow {
   handle: string;
   summary: string | null;
   pullRequest: number | null;
+}
+
+export const WAITING_ITEM_KINDS = ['memory', 'lesson', 'knowledge'] as const;
+export type WaitingItemKind = (typeof WAITING_ITEM_KINDS)[number];
+
+/** More new items of one kind than this, found at once, are announced as one summary. */
+export const WAITING_ITEMS_SUMMARY_OVER = 5;
+
+/**
+ * Review items of one kind announced together: a memory entry's id, a lesson
+ * proposal's id or a knowledge revision's id, each with the title it had then.
+ * One id is one item's card; more are a summary.
+ */
+export interface WaitingItemsRow {
+  kind: WaitingItemKind;
+  items: { id: string; title: string }[];
 }
 
 export type ThreadMessageStatus = 'waiting' | 'delivered' | 'cancelled';

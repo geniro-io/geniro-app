@@ -152,6 +152,25 @@ export class MemoryDao extends BaseDao<Memory> {
     return new Map(rows.map((row) => [memoryHandle(row.handle), row.id]));
   }
 
+  /** Every entry that waits for the user's review, oldest first. */
+  async pendingEntries(
+    em: EntityManager = this.em,
+  ): Promise<{ id: string; handle: number; body: string }[]> {
+    const rows = await this.getRepo(em).find(
+      { status: 'pending' },
+      {
+        fields: ['id', 'handle', 'body'],
+        orderBy: { createdAt: 'asc', id: 'asc' },
+        disableIdentityMap: true,
+      },
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      body: row.body,
+    }));
+  }
+
   /** Which of these lesson proposals own an entry that still waits for the user's review. */
   async pendingLessonProposalIds(
     proposalIds: readonly string[],

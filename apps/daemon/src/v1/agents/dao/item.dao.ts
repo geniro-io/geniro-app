@@ -737,6 +737,39 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Each run's newest message its own agent wrote in the run's own flow — a
+   * team run's lead, never a callee, a delegate or the user — whole. A run
+   * whose agent has said nothing is absent from the map.
+   */
+  async latestAgentMessageTextPerRun(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, string>> {
+    const repo = this.getRepo(txEm);
+    const texts = new Map<string, string>();
+    for (const runId of runIds) {
+      const row = await repo.findOne(
+        {
+          runId,
+          kind: 'message',
+          role: 'assistant',
+          $and: [NOT_A_DELEGATE, NOT_IN_A_CALL],
+        },
+        {
+          orderBy: { seq: 'desc', createdAt: 'desc', id: 'desc' },
+          fields: ['payload'],
+          disableIdentityMap: true,
+        },
+      );
+      const text = row === null ? null : messageText(row.payload);
+      if (text !== null && text.trim() !== '') {
+        texts.set(runId, text);
+      }
+    }
+    return texts;
+  }
+
+  /**
    * When each run's newest transcript row was written — its last ACTIVITY,
    * which no write to the run row can move (`RunWire.lastActivityAt`). The one
    * reading every activity filter shares (`utils/run-activity.ts`). A run with

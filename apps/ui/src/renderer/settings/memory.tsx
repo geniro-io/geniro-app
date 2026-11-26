@@ -77,6 +77,7 @@ import { Switch } from '../components/ui/switch';
 import { useLatestCallback } from '../components/use-latest-callback';
 import {
   awaitsApproval,
+  editingOf,
   movableReach,
   useMemoryEditor,
 } from '../components/use-memory-editor';
@@ -1090,18 +1091,7 @@ export function Memory({
             ? undefined
             : () => {
                 setFormError(null);
-                setEditing({
-                  kind: 'edit',
-                  entry,
-                  vouched: [],
-                  value: {
-                    title: entry.title,
-                    body: entry.body,
-                    type: entry.type,
-                    projectId: entry.projectId,
-                    teamSlug: entry.teamSlug,
-                  },
-                });
+                setEditing(editingOf(entry));
               }
         }
         onForget={

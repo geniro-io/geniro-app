@@ -64,7 +64,7 @@ const meta = {
         identity: {
           project: 'Geniro',
           projectColor: 'teal',
-          pullRequest: { number: 146, state: 'draft' },
+          pullRequest: { number: 146, state: 'draft', url: null },
           boardCard: { identifier: 'GEN-12', title: 'Export', status: 'todo' },
         },
         background: { held: false, subagents: 2, commands: 0, monitors: 0 },

@@ -61,8 +61,9 @@ describe('RunNoticeWriter', () => {
     const announced: string[] = [];
     bus.all().subscribe(({ item }) => announced.push(item.kind));
 
-    await writer.info('run-1', 'Started "Billing cache"');
+    const written = await writer.info('run-1', 'Started "Billing cache"');
 
+    expect(written).toBe(true);
     const rows = await itemDao.rowsOfKinds('run-1', ['system']);
     expect(rows.map((row) => itemToWire(row).payload)).toEqual([
       { severity: 'info', message: 'Started "Billing cache"', woke: false },
@@ -84,8 +85,9 @@ describe('RunNoticeWriter', () => {
   });
 
   it('writes nothing for a run that is gone', async () => {
-    await writer.info('gone', 'Started "Billing cache"');
+    const written = await writer.info('gone', 'Started "Billing cache"');
 
+    expect(written).toBe(false);
     expect(await itemDao.rowsOfKinds('gone', ['system'])).toEqual([]);
   });
 });

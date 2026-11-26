@@ -33,6 +33,11 @@ import { KnowledgeTextIndexService } from './services/knowledge-text-index.servi
     KnowledgeProjectRemovalService,
     KnowledgeTextIndexService,
   ],
-  exports: [KnowledgeService, KnowledgeEventBus, KnowledgeTextIndexService],
+  exports: [
+    KnowledgeService,
+    KnowledgeEventBus,
+    KnowledgeRevisionDao,
+    KnowledgeTextIndexService,
+  ],
 })
 export class KnowledgeModule {}

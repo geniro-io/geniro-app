@@ -11,7 +11,7 @@ const meta = {
     identity: {
       title: 'NCDEX_IND: add agro commodities',
       face: { kind: 'agent', icon: 'terminal', name: 'claude' },
-      pullRequest: { number: 146, state: 'open' },
+      pullRequest: { number: 146, state: 'open', url: null },
       status: { attention: 'working', text: 'Working' },
       agentLabel: 'claude',
       isTeam: false,

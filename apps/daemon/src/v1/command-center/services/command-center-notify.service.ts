@@ -34,9 +34,11 @@ import { CommandCenterRosterDao } from '../dao/command-center-roster.dao';
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
 import { managerWake } from '../utils/manager-wake';
+import { threadReportOf } from '../utils/thread-report';
 import { CommandCenterService } from './command-center.service';
 import { CommandCenterChatService } from './command-center-chat.service';
 import { CommandCenterEventBus } from './command-center-events.bus';
+import { ManagerAnnouncementsService } from './manager-announcements.service';
 
 const OUTCOME_SUMMARY_MAX = 300;
 
@@ -129,13 +131,17 @@ function firstReadingOf(
   return 'record';
 }
 
-function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
-  const summary = clean(run.outcome?.summary ?? '');
+function doneRowOf(
+  runId: string,
+  handle: string,
+  run: RunWire,
+  agentMessage: string | null,
+): ThreadDoneRow {
   return {
     runId,
     title: clean(run.title ?? UNTITLED_THREAD),
     handle,
-    summary: summary === '' ? null : capped(summary, OUTCOME_SUMMARY_MAX),
+    summary: threadReportOf(run.outcome?.summary, agentMessage),
     pullRequest: run.pullRequests.find((pr) => pr.opened)?.number ?? null,
   };
 }
@@ -149,9 +155,13 @@ function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
  * is never told. Driven by the board's own change stream, so it reads a thread
  * only when its card moved.
  *
- * A thread's first reading records its column and, quietly, its finish
+ * A thread's first reading records its column and its finish
  * (`firstReadingOf`), except a watched thread's finish that came after it
- * became news, which a restart missed and which wakes the manager once.
+ * became news, which a restart missed and which wakes the manager once. A
+ * finish recorded at a first reading still gets its Done row when the
+ * manager chat holds none for the thread, so a thread that finished while
+ * the daemon was down is shown. The Done row is always a row of its own; a
+ * wake never carries it.
  */
 @Injectable()
 export class CommandCenterNotifyService
@@ -176,6 +186,7 @@ export class CommandCenterNotifyService
     private readonly board: CommandCenterService,
     private readonly events: CommandCenterEventBus,
     private readonly managerChat: CommandCenterChatService,
+    private readonly announcements: ManagerAnnouncementsService,
   ) {}
 
   onModuleInit(): void {
@@ -330,44 +341,56 @@ export class CommandCenterNotifyService
     if (entry.announcedFinish === finish) {
       return;
     }
+    let wake = entry.watch;
+    let quiet = false;
     if (previous === undefined) {
       const reading = firstReadingOf(entry, run);
       if (reading === 'wait') {
         return;
       }
       if (reading === 'record') {
-        await this.roster.markAnnounced(
-          managerRunId,
-          runId,
-          entry,
-          finish,
-          false,
-          em,
-        );
-        return;
+        wake = false;
+        quiet = true;
       }
     }
     const message = `${entry.handle} is done`;
-    const fields = { threadDone: [doneRowOf(runId, entry.handle, run)] };
-    if (entry.watch) {
+    const { runIds } = await this.announcements.of(managerRunId);
+    const shown = runIds.has(runId);
+    if (!quiet || !shown) {
+      runIds.add(runId);
+      const agentMessages = await this.itemDao.latestAgentMessageTextPerRun(
+        [runId],
+        em,
+      );
+      const written = await this.notices.info(managerRunId, message, {
+        threadDone: [
+          doneRowOf(runId, entry.handle, run, agentMessages.get(runId) ?? null),
+        ],
+      });
+      if (!written) {
+        if (!shown) {
+          runIds.delete(runId);
+        }
+        this.columns.delete(runId);
+        return;
+      }
+    }
+    if (wake) {
       this.wakes.publish(
         managerWake(
           managerRunId,
           `done:${runId}`,
           donePrompt(entry.handle, run),
           message,
-          fields,
         ),
       );
-    } else {
-      await this.notices.info(managerRunId, message, fields);
     }
     await this.roster.markAnnounced(
       managerRunId,
       runId,
       entry,
       finish,
-      entry.watch,
+      wake,
       em,
     );
   }

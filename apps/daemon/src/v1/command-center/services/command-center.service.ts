@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import type { RunWire, ThreadContact } from '../../agents/chat.types';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
@@ -18,6 +19,7 @@ import { CommandCenterThreadStartDao } from '../dao/command-center-thread-start.
 import type { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { boardColumnOf } from '../utils/board-column';
 import { cardsByRun, taskRefOf } from '../utils/task-ref';
+import { threadReportOf } from '../utils/thread-report';
 
 const ACTIVITY_MAX = 140;
 
@@ -48,6 +50,7 @@ export class CommandCenterService {
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
+    private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
     private readonly executor: TeamExecutorService,
     private readonly inbox: ThreadInboxService,
@@ -149,6 +152,18 @@ export class CommandCenterService {
         : this.inbox.awaitingRepliesFrom(managerRunId),
     ]);
     const taskOf = cardsByRun(tasks);
+    const columnOf = (run: RunWire): CommandCenterColumn =>
+      boardColumnOf(run, taskOf.get(run.id)?.status ?? null);
+    const agentMessages = await this.itemDao.latestAgentMessageTextPerRun(
+      runs
+        .filter(
+          (run) =>
+            columnOf(run) === 'done' &&
+            (run.outcome?.summary?.trim() ?? '') === '',
+        )
+        .map((run) => run.id),
+      em,
+    );
     const onRoster = new Map(
       rosterRows
         .filter((row) => row.leftAt === null)
@@ -165,13 +180,21 @@ export class CommandCenterService {
       const entry = onRoster.get(run.id);
       const lastMail = lastContact.get(run.id) ?? null;
       const task = taskOf.get(run.id) ?? null;
+      const column = columnOf(run);
       return {
         run,
         task: taskRefOf(run, task),
         handle: entry?.handle ?? null,
         note: entry?.note ?? null,
-        column: boardColumnOf(run, task?.status ?? null),
+        column,
         activity: activityOf(run),
+        report:
+          column === 'done'
+            ? threadReportOf(
+                run.outcome?.summary,
+                agentMessages.get(run.id) ?? null,
+              )
+            : null,
         contact: {
           lastAt: lastMail === null ? null : new Date(lastMail).toISOString(),
           awaitingReply: awaiting.has(run.id),

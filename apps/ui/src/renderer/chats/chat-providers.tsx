@@ -72,6 +72,14 @@ import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
 import { TeamNoteOpenContext } from './team-note-row';
 import {
+  type ThreadArchived,
+  ThreadArchivedContext,
+  type ThreadDoneNewest,
+  ThreadDoneNewestContext,
+  type ThreadReports,
+  ThreadReportsContext,
+} from './thread-done-context';
+import {
   type ThreadContextReader,
   ThreadContextReaderContext,
 } from './thread-question-context';
@@ -93,6 +101,10 @@ import {
 import { type TaskReader, TaskReaderContext } from './use-live-task';
 import { type SurfaceHost, SurfaceHostContext } from './use-surface';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
+import {
+  WaitingItemsContext,
+  type WaitingItemsStore,
+} from './waiting-items-context';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
 export interface TranscriptValues {
@@ -123,6 +135,14 @@ export interface TranscriptValues {
   openMemory?: ((handle: string) => void) | null;
   /** Open the Knowledge page on one document — see `KnowledgeOpenContext`. */
   openKnowledge?: ((target: KnowledgeOpenTarget) => void) | null;
+  /** The newest Done row of each thread — see `ThreadDoneNewestContext`. */
+  threadDoneNewest?: ThreadDoneNewest | null;
+  /** When each Done thread was archived — see `ThreadArchivedContext`. */
+  threadArchived?: ThreadArchived | null;
+  /** What each thread last reported — see `ThreadReportsContext`. */
+  threadReports?: ThreadReports | null;
+  /** The manager's waiting review items — see `WaitingItemsContext`. */
+  waitingItems?: WaitingItemsStore | null;
 }
 
 /**
@@ -403,6 +423,10 @@ export function TranscriptContexts({
   openMemory = null,
   openKnowledge = null,
   callAnswerPairs = NO_CALL_ANSWER_PAIRS,
+  threadDoneNewest = null,
+  threadArchived = null,
+  threadReports = null,
+  waitingItems = null,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -423,7 +447,19 @@ export function TranscriptContexts({
                               value={threadIdentities}>
                               <CallAnswerPairsContext.Provider
                                 value={callAnswerPairs}>
-                                {children}
+                                <ThreadDoneNewestContext.Provider
+                                  value={threadDoneNewest}>
+                                  <ThreadArchivedContext.Provider
+                                    value={threadArchived}>
+                                    <ThreadReportsContext.Provider
+                                      value={threadReports}>
+                                      <WaitingItemsContext.Provider
+                                        value={waitingItems}>
+                                        {children}
+                                      </WaitingItemsContext.Provider>
+                                    </ThreadReportsContext.Provider>
+                                  </ThreadArchivedContext.Provider>
+                                </ThreadDoneNewestContext.Provider>
                               </CallAnswerPairsContext.Provider>
                             </ThreadIdentityContext.Provider>
                           </ThreadOpenContext.Provider>

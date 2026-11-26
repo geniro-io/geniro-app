@@ -21,7 +21,7 @@ const IDENTITIES = new Map<string, ThreadIdentity>([
       face: { kind: 'agent', icon: 'terminal', name: 'claude' },
       status: { attention: 'question', text: 'Question for you' },
       agentLabel: 'claude',
-      pullRequest: { number: 212, state: 'draft' },
+      pullRequest: { number: 212, state: 'draft', url: null },
       project: 'Web',
       projectColor: 'teal',
     },

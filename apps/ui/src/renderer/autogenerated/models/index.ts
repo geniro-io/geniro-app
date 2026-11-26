@@ -3502,6 +3502,12 @@ export interface CommandCenterCard {
     activity: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof CommandCenterCard
+     */
+    report: string | null;
+    /**
+     * 
      * @type {CommandCenterCardContact}
      * @memberof CommandCenterCard
      */

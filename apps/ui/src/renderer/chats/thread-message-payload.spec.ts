@@ -281,6 +281,42 @@ describe('readThreadMessageRow', () => {
   });
 });
 
+describe('readThreadMessageRow waiting items', () => {
+  it('reads a kind with its items', () => {
+    expect(
+      readThreadMessageRow({
+        waitingItems: {
+          kind: 'lesson',
+          items: [
+            { id: 'l1', title: 'Run lint first' },
+            { id: 'l2', title: 'Pin the node version' },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: 'waiting',
+      waiting: {
+        kind: 'lesson',
+        items: [
+          { id: 'l1', title: 'Run lint first' },
+          { id: 'l2', title: 'Pin the node version' },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'note', items: [{ id: 'a', title: 'b' }] }],
+    ['no items', { kind: 'memory', items: [] }],
+    ['items that are not a list', { kind: 'memory', items: 'a' }],
+    ['an item without a title', { kind: 'memory', items: [{ id: 'a' }] }],
+    ['an item without an id', { kind: 'knowledge', items: [{ title: 'a' }] }],
+    ['a value that is not an object', 'memory'],
+  ])('reads %s as no row', (_name, waitingItems) => {
+    expect(readThreadMessageRow({ waitingItems })).toBeNull();
+  });
+});
+
 describe('sentOutcomeWords', () => {
   it.each([
     ['joined', null, 'Joined the running turn'],

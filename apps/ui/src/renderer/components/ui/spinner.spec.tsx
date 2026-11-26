@@ -41,6 +41,7 @@ describe('Spinner', () => {
     expect(spinner.tagName).toBe('SPAN');
     expect(spinner.classList.contains('animate-spin')).toBe(true);
     expect(spinner.classList.contains('spinner-stepped')).toBe(true);
+    expect(spinner.classList.contains('motion-reduce:animate-none')).toBe(true);
     expect(spinner.classList.contains('size-4')).toBe(true);
     expect(spinner.getAttribute('aria-hidden')).toBe('true');
     const glyph = spinner.querySelector('svg')!;

@@ -50,7 +50,7 @@ import { eventLoopSlicer } from '../utils/event-loop-slices';
 import { failedCallErrors } from '../utils/failed-call-errors';
 import { type FailedCall, groupFailures } from '../utils/failure-groups';
 import { asRecord, parseJsonColumn } from '../utils/json-util';
-import { payloadFieldText } from '../utils/payload-field-text';
+import { payloadFieldText, toolResultText } from '../utils/payload-field-text';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import {
   lifecycleEvents,
@@ -472,8 +472,9 @@ export class ThreadReaderService {
 
   /**
    * view=digest: what a system analysis was started on, frozen on its run —
-   * the period's flags first, then its totals and ranked threads. Masked
-   * whole, then paged.
+   * the period, its totals and geniro tool errors first, so they sit on the
+   * first page however many threads and flags follow, then the ranked threads
+   * and the flags. Masked whole, then paged.
    */
   private async digest(
     turn: AnalysisReadScope,
@@ -502,12 +503,13 @@ export class ThreadReaderService {
         message: 'This analysis’s digest cannot be read.',
       };
     }
-    const { flags, goneFlags, ...rest } = digest;
+    const { threads, flags, goneFlags, ...rest } = digest;
     return pagedAnswer(
       maskedAnswer({
+        ...rest,
+        threads,
         flags,
         goneFlags,
-        ...rest,
         next: 'Read view=history next for what earlier system analyses proposed. Then open the threads that explain a pattern with view=overview runId=… — only these threads can be read.',
       }),
       offset,
@@ -1522,22 +1524,25 @@ export class ThreadReaderService {
       this.em.fork(),
     );
     const payloads = new Map(rows.map((row) => [row.seq, row.payload]));
-    const textOf = (seq: unknown, field: string): Answer => {
+    const textOf = (
+      seq: unknown,
+      key: 'input' | 'error',
+      read: (payload: string) => string,
+    ): Answer => {
       const payload = typeof seq === 'number' ? payloads.get(seq) : undefined;
       return typeof seq !== 'number' || payload === undefined
         ? {}
-        : {
-            [field === 'input' ? 'input' : 'error']: clip(
-              payloadFieldText(payload, field),
-              FAILED_SPAN_TEXT_CHARS,
-              seq,
-            ),
-          };
+        : { [key]: clip(read(payload), FAILED_SPAN_TEXT_CHARS, seq) };
     };
     return new Map(
       failed.map((span) => [
         span,
-        { ...textOf(span.seq, 'input'), ...textOf(span.resultSeq, 'result') },
+        {
+          ...textOf(span.seq, 'input', (payload) =>
+            payloadFieldText(payload, 'input'),
+          ),
+          ...textOf(span.resultSeq, 'error', toolResultText),
+        },
       ]),
     );
   }

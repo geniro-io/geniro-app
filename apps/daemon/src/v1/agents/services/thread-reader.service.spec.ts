@@ -1201,6 +1201,43 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(curl.error).not.toContain('sk-live-supersecret-token');
     });
 
+    it('reads an error that came as content blocks as the text the blocks carry, in spans and items alike', async () => {
+      await insert(
+        8,
+        'tool_call',
+        { id: 't4', name: 'mcp__geniro__memory_read', input: { ids: [] } },
+        8,
+      );
+      await insert(
+        9,
+        'tool_result',
+        {
+          id: 't4',
+          result: [
+            { type: 'text', text: 'NOT_FOUND: no memory m99' },
+            { type: 'text', text: 'try memory_search' },
+          ],
+          isError: true,
+        },
+        9,
+      );
+      const after = {
+        sourceRunId: 'source',
+        snapshotSeq: 9,
+        sourceWorking: false,
+      };
+
+      for (const view of ['spans', 'items'] as const) {
+        const spans = (
+          await reader.read(after, { view, failed: true, tool: 'memory_read' })
+        ).spans as Record<string, unknown>[];
+
+        expect(spans.find((span) => span.seq === 8)!.error).toBe(
+          'NOT_FOUND: no memory m99\ntry memory_search',
+        );
+      }
+    });
+
     it('answers items failed=true with each failed call, its input and its error text, as spans failed=true does', async () => {
       const items = await reader.read(source, {
         view: 'items',
@@ -2858,16 +2895,71 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       }
     });
 
-    it('answers view=digest with the frozen digest, its flags first', async () => {
+    it('answers view=digest with the frozen digest, its totals first and its flags after the threads', async () => {
       const answer = await reader.read(TURN(), { view: 'digest' });
 
-      expect(Object.keys(answer)[0]).toBe('flags');
+      expect(Object.keys(answer)).toEqual([
+        'period',
+        'totals',
+        'threads',
+        'flags',
+        'goneFlags',
+        'next',
+      ]);
       expect(answer).toMatchObject({
         flags: [FROZEN_FLAG],
         totals: FROZEN_DIGEST.totals,
         threads: FROZEN_DIGEST.threads,
       });
       expect(answer.error).toBeUndefined();
+    });
+
+    it('puts the period totals and geniro tool errors on the first page however many flags follow', async () => {
+      const geniroToolErrors = Array.from({ length: 15 }, (_, index) => ({
+        tool: `mcp__geniro__tool_${index}`,
+        signature: `TIMEOUT: tool ${index} gave up`,
+        count: 40 - index,
+        example: { runId: 'source', seq: index },
+        threads: 3,
+        readable: true,
+        error: `TIMEOUT: tool ${index} gave up ` + 'e'.repeat(160),
+      }));
+      const totals = {
+        ...FROZEN_DIGEST.totals,
+        flags: 300,
+        failedToolCalls: 615,
+        failedToolCallsByKind: { geniro: 405, otherMcp: 10, cli: 200 },
+        geniroToolErrorGroups: 15,
+      };
+      const flags = Array.from({ length: 300 }, (_, index) => ({
+        ...FROZEN_FLAG,
+        handle: `F-${index}`,
+        seq: index,
+        summary: `flag ${index} ` + 's'.repeat(400),
+      }));
+      const fork = orm.em.fork();
+      const run = await fork.findOneOrFail(Run, { id: 'analysis-1' });
+      run.analysisDigest = JSON.stringify({
+        ...FROZEN_DIGEST,
+        totals,
+        flags,
+        geniroToolErrors,
+      });
+      await fork.flush();
+
+      const first = await reader.read(TURN(), { view: 'digest' });
+      const pages = Math.ceil(
+        (first.total as number) / (first.text as string).length,
+      );
+
+      expect(pages).toBeGreaterThan(3);
+      expect(first.text).toContain(`"totals":${JSON.stringify(totals)}`);
+      expect(first.text).toContain(
+        `"geniroToolErrors":${JSON.stringify(geniroToolErrors)}`,
+      );
+      expect((first.text as string).indexOf('"totals"')).toBeLessThan(
+        (first.text as string).indexOf('"flags":['),
+      );
     });
 
     it('reads a pinned hidden lessons run only up to the snapshot its digest pinned', async () => {

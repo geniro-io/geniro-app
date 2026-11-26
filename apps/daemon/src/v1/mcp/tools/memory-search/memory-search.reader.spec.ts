@@ -76,9 +76,9 @@ describe('memorySearchResultText', () => {
       'No memory matches "zzz". Try other words, or save what you learn with memory_save.',
       note,
     ]);
-    expect(memorySearchResultText('loopback', [HIT], note).split('\n').at(-1)).toBe(
-      note,
-    );
+    expect(
+      memorySearchResultText('loopback', [HIT], note).split('\n').at(-1),
+    ).toBe(note);
     expect(memorySearchResultText('zzz', [], null)).toBe(
       'No memory matches "zzz". Try other words, or save what you learn with memory_save.',
     );

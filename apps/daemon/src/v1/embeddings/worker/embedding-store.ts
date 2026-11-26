@@ -7,7 +7,6 @@ import { getLoadablePath } from 'sqlite-vec';
 import {
   type ChatScore,
   type DocumentSource,
-  type EmbeddingSource,
   EMBEDDING_CHAT_MIN_SIMILARITY,
   EMBEDDING_DIM,
   EMBEDDING_MIN_SIMILARITY,
@@ -15,6 +14,7 @@ import {
   type EmbeddingCounts,
   type EmbeddingModelRef,
   type EmbeddingsDatabase,
+  type EmbeddingSource,
   type SourceScore,
 } from '../embeddings.types';
 import { kyselyOverNodeSqlite } from './node-sqlite-dialect';

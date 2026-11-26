@@ -687,7 +687,7 @@ export function SearchSettings({
               className="w-44"
               groups={CHAT_WINDOW_OPTIONS}
               value={windowValue}
-              disabled={scopeOff}
+              disabled={scopeOff || !sources.chats}
               onValueChange={pickWindow}
             />
           </SettingsPanelRow>
@@ -705,7 +705,7 @@ export function SearchSettings({
                 max={SEMANTIC_SEARCH_WINDOW_MAX_DAYS}
                 className="w-24"
                 value={daysText}
-                disabled={scopeOff}
+                disabled={scopeOff || !sources.chats}
                 onChange={(event) => {
                   setCustomText(event.target.value);
                   setWindowError(null);

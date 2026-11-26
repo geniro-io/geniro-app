@@ -591,6 +591,17 @@ describe('SearchSettings', () => {
     expect(windowTrigger().disabled).toBe(true);
   });
 
+  it('the chat window is disabled while chats are switched off', async () => {
+    const h = harness(state({ phase: 'ready', modelBytes: TOTAL }), status(), {
+      ...ON,
+      sources: { ...ON.sources, chats: false },
+    });
+    await mount(<SearchSettings api={h.api} events={h.events} />);
+
+    expect(sourceSwitch('chats').disabled).toBe(false);
+    expect(windowTrigger().disabled).toBe(true);
+  });
+
   it('a source switched off reads Off in its status row instead of a count', async () => {
     const h = harness(state({ phase: 'ready', modelBytes: TOTAL }), status(), {
       ...ON,

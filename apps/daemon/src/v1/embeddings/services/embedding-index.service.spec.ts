@@ -1078,7 +1078,9 @@ describe('EmbeddingIndexService', () => {
       await waitReady();
 
       expect(indexedIds('memory')).toEqual(['m1']);
-      expect((await statusAfter(EMBEDDING_TOTALS_FRESH_MS)).counts.memory).toEqual({
+      expect(
+        (await statusAfter(EMBEDDING_TOTALS_FRESH_MS)).counts.memory,
+      ).toEqual({
         indexed: 1,
         total: 1,
       });

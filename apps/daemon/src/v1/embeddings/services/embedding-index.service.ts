@@ -19,15 +19,15 @@ import {
   EMBEDDING_CONTROL_TIMEOUT_MS,
   EMBEDDING_DAY_MS,
   EMBEDDING_QUERY_TIMEOUT_MS,
+  EMBEDDING_SOURCES,
   EMBEDDING_SWEEP_INTERVAL_MS,
   EMBEDDING_TOTALS_FRESH_MS,
   type EmbeddingConfig,
   type EmbeddingCounts,
   type EmbeddingModelRef,
   type EmbeddingsChangedEvent,
-  EMBEDDING_SOURCES,
-  type EmbeddingSource,
   type EmbeddingsDatabase,
+  type EmbeddingSource,
   type EmbeddingStatus,
   type ModelSlot,
   type SourceScore,
@@ -99,7 +99,9 @@ function withinWindow<T extends { createdAt: number }>(
   rows: readonly T[],
   cutoff: number | null,
 ): T[] {
-  return cutoff === null ? [...rows] : rows.filter((row) => row.createdAt >= cutoff);
+  return cutoff === null
+    ? [...rows]
+    : rows.filter((row) => row.createdAt >= cutoff);
 }
 
 /**
@@ -1080,7 +1082,11 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
         }
         for (const which of ['fwd', 'back'] as const) {
           await this.process.request(
-            { op: 'setMeta', key: `chats:${keyOf(model)}:${which}`, value: null },
+            {
+              op: 'setMeta',
+              key: `chats:${keyOf(model)}:${which}`,
+              value: null,
+            },
             EMBEDDING_CONTROL_TIMEOUT_MS,
           );
         }

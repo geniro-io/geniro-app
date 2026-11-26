@@ -64,7 +64,11 @@ export class GlobalChatSearchService {
           ...hitOf(row, terms),
           score: relevance,
         })),
-        partialReason: partialReasonOf(fused.length > options.limit, options.limit, note),
+        partialReason: partialReasonOf(
+          fused.length > options.limit,
+          options.limit,
+          note,
+        ),
       };
     }
     return {
@@ -73,7 +77,11 @@ export class GlobalChatSearchService {
         // bm25 is negative and smaller is better; the wire says higher is.
         score: -row.rank,
       })),
-      partialReason: partialReasonOf(rows.length > options.limit, options.limit, note),
+      partialReason: partialReasonOf(
+        rows.length > options.limit,
+        options.limit,
+        note,
+      ),
     };
   }
 
@@ -174,7 +182,9 @@ function partialReasonOf(
   meaningNote: string | null,
 ): string | null {
   const parts = [
-    more ? `Showing the best ${limit} matches — add a word to narrow it.` : null,
+    more
+      ? `Showing the best ${limit} matches — add a word to narrow it.`
+      : null,
     meaningNote,
   ].filter((part): part is string => part !== null);
   return parts.length === 0 ? null : parts.join(' ');

@@ -63,6 +63,16 @@ describe('applyArgSynonyms', () => {
       args: { id: 'm1' },
     });
   });
+
+  it('reads an argument named like an Object prototype member as itself, not as a synonym', () => {
+    expect(
+      applyArgSynonyms({ constructor: 'x', monitor: 'm1' }, synonyms),
+    ).toEqual({ ok: true, args: { constructor: 'x', id: 'm1' } });
+    expect(applyArgSynonyms({ toString: 'x' }, synonyms)).toEqual({
+      ok: true,
+      args: { toString: 'x' },
+    });
+  });
 });
 
 describe('withSynonymProperties', () => {

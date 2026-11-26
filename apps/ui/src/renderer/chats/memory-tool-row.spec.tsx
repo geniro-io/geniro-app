@@ -250,6 +250,21 @@ describe('memory_read', () => {
     expect(line()).toBe('Read memory · m3, m5');
   });
 
+  it('shows the first three of five handles a read names', () => {
+    draw(
+      pair(
+        'memory_read',
+        { ids: ['m1', 'm2', 'm3', 'm4', 'm5'] },
+        {
+          text:
+            PREFACE +
+            '\n\nm1 (rev 1, global, user) — A\n\nm2 (rev 1, global, user) — B\n\nm3 (rev 1, global, user) — C\n\nNot read — at most 3 per call: m4, m5. Read them with memory_read({ids: ["m4", "m5"]}).',
+        },
+      ),
+    );
+    expect(line()).toBe('Read memory · m1, m2, m3');
+  });
+
   it('marks a handle the result could not find', () => {
     draw(
       pair(

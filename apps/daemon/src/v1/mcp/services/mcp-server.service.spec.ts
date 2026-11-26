@@ -247,6 +247,12 @@ function broker(
   instance.registerRun('run-1', capability);
   return instance;
 }
+function serviceWith(index: number, value: unknown): McpServerService {
+  const args: unknown[] = [];
+  args[index] = value;
+  return service(...(args as Parameters<typeof service>));
+}
+
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
@@ -1081,6 +1087,57 @@ describe('McpServerService', () => {
 
         expect(result.isError).toBe(false);
         expect(result.content[0]!.text).toContain('Never npm here.');
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('reads the first three of four entries named by ids, and names the fourth as not read', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const handles: string[] = [];
+        const entries = [
+          { title: 'Use pnpm', body: 'Never npm here.' },
+          { title: 'Pin Node', body: 'Node 24 or newer.' },
+          { title: 'Daemon port', body: 'The daemon prefers 47615.' },
+          { title: 'Seed data', body: 'Seeds are synthetic only.' },
+        ];
+        for (const entry of entries) {
+          const saved = await db.service.save(
+            { kind: 'user' },
+            { ...entry, type: 'feedback' },
+            { projectId: null, teamSlug: null },
+          );
+          if (saved.kind !== 'created') {
+            throw new Error('expected a saved entry');
+          }
+          handles.push(saved.entry.handle);
+        }
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_READ_TOOL,
+            arguments: { ids: handles },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+        const text = result.content[0]!.text;
+
+        expect(result.isError).toBe(false);
+        expect(text).toContain('Never npm here.');
+        expect(text).toContain('Node 24 or newer.');
+        expect(text).toContain('The daemon prefers 47615.');
+        expect(text).not.toContain('Seeds are synthetic only.');
+        expect(text).toContain(
+          'Not read — at most 3 per call: ' + handles[3] + '.',
+        );
       } finally {
         await db.orm.close();
       }
@@ -6726,6 +6783,161 @@ describe('McpServerService — the team-note tools', () => {
     );
     return (json().result as { tools: ToolListing[] }).tools.map((t) => t.name);
   };
+
+  it('declares every synonym of seven tools after its target, and drops a target a synonym stands for from required', async () => {
+    const notes = teamNoteBroker();
+    notes.register('run-1', 'agent', sinkOf([]));
+    const cases: {
+      tool: string;
+      subject: McpServerService;
+      member: string;
+      adjacent: [string, string[]][];
+      after: [string, string[]][];
+      present: string[];
+      annotated: string[];
+      required: string[];
+    }[] = [
+      {
+        tool: HOST_STOP_MONITOR_TOOL,
+        subject: serviceWith(18, monitorBroker().broker),
+        member: 'agent',
+        adjacent: [['id', ['monitor_id', 'monitor']]],
+        after: [],
+        present: [],
+        annotated: ['id'],
+        required: [],
+      },
+      {
+        tool: HOST_MOVE_STAGE_TOOL,
+        subject: serviceWith(
+          22,
+          stageService({ runId: 'run-1', memberId: 'agent' }),
+        ),
+        member: 'agent',
+        adjacent: [['text', ['summary', 'reason']]],
+        after: [],
+        present: [],
+        annotated: ['text'],
+        required: ['action', 'stage'],
+      },
+      {
+        tool: HOST_TEAM_NOTE_TOOL,
+        subject: serviceWith(19, notes),
+        member: 'agent',
+        adjacent: [['text', ['message']]],
+        after: [],
+        present: ['title', 'action'],
+        annotated: ['text'],
+        required: ['kind'],
+      },
+      {
+        tool: HOST_TEAM_NOTES_TOOL,
+        subject: serviceWith(19, notes),
+        member: 'agent',
+        adjacent: [['since', ['after']]],
+        after: [],
+        present: [],
+        annotated: [],
+        required: [],
+      },
+      {
+        tool: HOST_MEMORY_SEARCH_TOOL,
+        subject: serviceWith(24, fakeMemory(true).service),
+        member: 'agent',
+        adjacent: [
+          ['query', ['keywords']],
+          ['limit', ['max_results']],
+        ],
+        after: [],
+        present: [],
+        annotated: ['query'],
+        required: [],
+      },
+      {
+        tool: HOST_MEMORY_READ_TOOL,
+        subject: serviceWith(24, fakeMemory(true).service),
+        member: 'agent',
+        adjacent: [
+          ['ids', ['handles']],
+          ['id', ['handle']],
+        ],
+        after: [],
+        present: [],
+        annotated: [],
+        required: [],
+      },
+      {
+        tool: 'call_agent',
+        subject: service(),
+        member: 'orch',
+        adjacent: [
+          ['agent', ['agent_id']],
+          ['mode', ['async']],
+        ],
+        after: [['mode', ['sync']]],
+        present: [],
+        annotated: ['agent'],
+        required: ['message', 'title'],
+      },
+    ];
+    for (const c of cases) {
+      const { json } = await post(
+        c.subject,
+        'run-1',
+        c.member,
+        rpc('tools/list', {}),
+      );
+      const listed = (
+        json().result as {
+          tools: {
+            name: string;
+            inputSchema: {
+              properties: Record<string, { description?: string }>;
+              required?: string[];
+            };
+          }[];
+        }
+      ).tools.find((t) => t.name === c.tool)!;
+      const { properties, required = [] } = listed.inputSchema;
+      const keys = Object.keys(properties);
+      for (const [target, synonyms] of c.adjacent) {
+        const at = keys.indexOf(target);
+        expect({
+          tool: c.tool,
+          placed: keys.slice(at, at + 1 + synonyms.length),
+        }).toEqual({
+          tool: c.tool,
+          placed: [target, ...synonyms],
+        });
+      }
+      for (const [target, synonyms] of c.after) {
+        const at = keys.indexOf(target);
+        expect({
+          tool: c.tool,
+          later: synonyms.map((synonym) => keys.indexOf(synonym) > at),
+        }).toEqual({ tool: c.tool, later: synonyms.map(() => true) });
+      }
+      expect({
+        tool: c.tool,
+        missing: c.present.filter((name) => !keys.includes(name)),
+      }).toEqual({ tool: c.tool, missing: [] });
+      for (const target of c.annotated) {
+        expect({
+          tool: c.tool,
+          target,
+          description: properties[target]?.description,
+        }).toEqual(
+          expect.objectContaining({
+            description: expect.stringContaining('Required (or one of'),
+          }),
+        );
+      }
+      expect({ tool: c.tool, required }).toEqual({
+        tool: c.tool,
+        required: c.required,
+      });
+    }
+  });
 
   it('lists both tools to an agent with a sink and neither to an endpoint without one', async () => {
     const teamNotes = teamNoteBroker();

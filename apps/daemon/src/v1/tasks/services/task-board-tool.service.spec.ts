@@ -800,6 +800,28 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(stored).toMatchObject({ title: 'x' });
   });
 
+  it('leads a get_task refusal that names one card two ways with the right call', async () => {
+    await call('create_task', { project: 'GEN', title: 'x' });
+
+    const answer = await call('get_task', { key: 'GEN-1', task_id: 'GEN-2' });
+
+    expect(answer.isError).toBe(true);
+    expect(answer.text.split('\n')[0]).toBe(
+      'INVALID_ARGS: call get_task({task: "GEN-53"}) — or get_task({}) for the card this conversation works.',
+    );
+    expect(answer.text.split('\n')[1]).toBe(
+      'send task once — key and task_id name the same argument and disagree',
+    );
+  });
+
+  it('answers a create_task refusal with its reason and no right-call line', async () => {
+    const answer = await call('create_task', { project: 'GEN' });
+
+    expect(answer.isError).toBe(true);
+    expect(answer.text.split('\n')[0]).toMatch(/^INVALID_ARGS: 'title'/);
+    expect(answer.text).not.toContain('call create_task(');
+  });
+
   it('reads the card its run works when no card is named', async () => {
     await working();
 

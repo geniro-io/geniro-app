@@ -20,6 +20,7 @@ import {
 } from './thread-question-card';
 import { ThreadContextReaderContext } from './thread-question-context';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -415,7 +416,7 @@ describe('a thread question relayed into the manager chat', () => {
   });
 
   it('stops saying the thread waits once the card is answered, declined or closed', () => {
-    renderCard(RELAYED_QUESTION, { verdict: true, outcome: 'delivered' });
+    renderCard(RELAYED_PERMISSION, { verdict: true, outcome: 'delivered' });
     expect(slotText('thread-question-label')).toBe('Answered');
     expect(
       container.querySelector('[data-slot="thread-question-waiting"]'),
@@ -429,6 +430,148 @@ describe('a thread question relayed into the manager chat', () => {
     expect(
       container.querySelector('[data-slot="thread-question-waiting"]'),
     ).toBeNull();
+  });
+});
+
+describe('a relayed question once settled', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  const card = (): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-slot="thread-question-card"]')!;
+  const toggle = (): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>(
+      '[data-slot="question-card-toggle"]',
+    )!;
+  const press = (): void => act(() => toggle().click());
+
+  function renderOpenable(
+    over: Partial<React.ComponentProps<typeof ApprovalCard>>,
+    input: unknown = RELAYED_QUESTION,
+  ): void {
+    act(() =>
+      root.render(
+        <ThreadOpenContext.Provider value={() => undefined}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={input}
+            requestId="relay-1"
+            verdict={null}
+            onRespond={vi.fn()}
+            {...over}
+          />
+        </ThreadOpenContext.Provider>,
+      ),
+    );
+  }
+
+  it('folds an answered one into its question card alone, naming the thread, the question and the answer', () => {
+    renderOpenable({ verdict: true, answer: 'Redis' });
+    expect(card().dataset.folded).toBe('true');
+    expect(card().dataset.state).toBe('answered');
+    expect(slotText('question-card-title')).toBe('Question from Billing cache');
+    expect(slotText('question-card-question')).toBe(
+      'Which cache should I clear?',
+    );
+    expect(slotText('question-card-summary')).toBe('✓ answered · Redis');
+    expect(
+      container.querySelector('[data-slot="thread-question-label"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="thread-question-head"]'),
+    ).toBeNull();
+    expect(button('Open chat')).toBeUndefined();
+    expect(
+      container.querySelectorAll('[data-slot="question-card-toggle"]'),
+    ).toHaveLength(1);
+  });
+
+  it('opens the whole card with one press and folds it back with the next', () => {
+    renderOpenable({ verdict: true, answer: 'Redis' });
+    press();
+    expect(card().dataset.folded).toBeUndefined();
+    expect(slotText('thread-question-label')).toBe('Answered');
+    expect(slotText('thread-question-title')).toBe('Billing cache');
+    expect(button('Open chat')).toBeDefined();
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(slotText('question-card-title')).toBe('Agent asks a question');
+
+    press();
+    expect(card().dataset.folded).toBe('true');
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(button('Open chat')).toBeUndefined();
+  });
+
+  it('folds a declined one the same way', () => {
+    renderOpenable({ verdict: false });
+    expect(card().dataset.folded).toBe('true');
+    expect(slotText('question-card-summary')).toBe('✗ declined');
+  });
+
+  it('still says when the answer did not reach the thread while folded', () => {
+    renderOpenable({
+      verdict: true,
+      answer: 'Redis',
+      outcome: 'not-delivered',
+    });
+    expect(card().dataset.folded).toBe('true');
+    expect(container.textContent).toContain(
+      'Not delivered — the thread no longer waited on this.',
+    );
+  });
+
+  it('leaves a pending one open with the thread around it, and folds all of it on a press', () => {
+    renderOpenable({});
+    expect(card().dataset.folded).toBeUndefined();
+    expect(slotText('thread-question-waiting')).toBe('Waiting on you');
+    expect(button('Open chat')).toBeDefined();
+    expect(slotText('question-card-title')).toBe('Agent asks a question');
+
+    press();
+    expect(card().dataset.folded).toBe('true');
+    expect(button('Open chat')).toBeUndefined();
+  });
+
+  it('leaves one closed with no answer open, as an expired question card is', () => {
+    renderOpenable({ expired: true });
+    expect(card().dataset.folded).toBeUndefined();
+    expect(slotText('thread-question-title')).toBe('Billing cache');
+    expect(container.textContent).toContain('No longer open');
+  });
+
+  it('never folds a relayed permission', () => {
+    renderOpenable({ verdict: true }, RELAYED_PERMISSION);
+    expect(card().dataset.folded).toBeUndefined();
+    expect(slotText('thread-question-label')).toBe('Answered');
+    expect(container.textContent).toContain('rm -rf build');
+  });
+
+  it('remembers the press in the manager chat across a remount, as a thread chat does', () => {
+    const view = (
+      <ThreadUiMemoryContext.Provider value="manager-run">
+        <ApprovalCard
+          toolName={THREAD_QUESTION_CARD}
+          input={RELAYED_QUESTION}
+          requestId="relay-remembered"
+          verdict={true}
+          answer="Redis"
+          onRespond={vi.fn()}
+        />
+      </ThreadUiMemoryContext.Provider>
+    );
+    act(() => root.render(view));
+    press();
+    expect(card().dataset.folded).toBeUndefined();
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    act(() => root.render(view));
+    expect(card().dataset.folded).toBeUndefined();
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
   });
 });
 

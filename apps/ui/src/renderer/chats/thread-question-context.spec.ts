@@ -556,6 +556,51 @@ describe('threadContextReaderOf and the pages and pictures', () => {
     );
   });
 
+  it('keeps a call’s brief beside the member’s last three messages, never in place of one', async () => {
+    const reader = threadContextReaderOf(
+      {
+        listRunItems: vi.fn().mockResolvedValue({
+          items: [
+            row(1, 'call_started', null, {
+              callId: 'call-1',
+              message: 'Run your command',
+            }),
+            {
+              ...row(6, 'approval_request', null, {
+                id: 'thread-1::call:call-1#approval',
+                toolName: 'Bash',
+                callId: 'call-1',
+              }),
+              memberId: 'helper',
+            },
+          ],
+          anchors: [],
+        }),
+        listCallMessages: vi.fn().mockResolvedValue({
+          messages: [
+            callRow(2, 'message', 'assistant', { text: 'First' }, 'call-1'),
+            callRow(3, 'message', 'assistant', { text: 'Second' }, 'call-1'),
+            callRow(4, 'message', 'assistant', { text: 'Third' }, 'call-1'),
+            callRow(5, 'message', 'assistant', { text: 'Fourth' }, 'call-1'),
+          ],
+          hasOlder: false,
+        }),
+        readLocalImage: vi.fn(),
+        ...NO_ANSWERS,
+      },
+      HANDLE,
+    );
+
+    const entries = await reader.read(
+      'thread-1',
+      'thread-1::call:call-1#approval',
+    );
+
+    expect(
+      entries.flatMap((entry) => ('text' in entry ? [entry.text] : [])),
+    ).toEqual(['Run your command', 'Second', 'Third', 'Fourth']);
+  });
+
   it('binds the picture loader, the page URL and the answers store to the thread’s run', async () => {
     const readLocalImage = vi
       .fn()

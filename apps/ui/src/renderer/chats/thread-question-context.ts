@@ -245,8 +245,8 @@ export function messagesBefore(
 /**
  * The reader over the daemon's pages of a run. A question raised inside a
  * member call is answered from the call's brief and its last messages, cut at
- * the question, and the pages and pictures its member published after the call's brief; any
- * other from the root conversation's page. A member's pages stand in the run's
+ * the question, and the pages and pictures its member published after the
+ * brief; any other from the root conversation's page. A member's pages stand in the run's
  * own flow, so they are found on the root page by the member that asked, read
  * back towards the brief, which a root page carries as an anchor of the call
  * still open across it.

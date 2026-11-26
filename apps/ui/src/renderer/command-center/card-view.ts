@@ -361,6 +361,42 @@ export function threadCardViewOf(
   };
 }
 
+/** Whether a thread counts as working: the graph's manager node and its blocks count exactly these. */
+export function isWorkingThread(view: Pick<ThreadCardView, 'status'>): boolean {
+  return view.status === 'working';
+}
+
+/**
+ * The working threads in the graph's order: block by block in the project
+ * order the header filter shows, a project missing from it after them, the
+ * threads of no project last; inside a project the newest started first.
+ */
+export function workingThreadsInOrder<
+  T extends {
+    id: string;
+    projectId: string | null;
+    createdAt: string;
+    view: Pick<ThreadCardView, 'status'>;
+  },
+>(threads: readonly T[], projectOrder: readonly string[]): T[] {
+  const rankOf = (projectId: string | null): number => {
+    if (projectId === null) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const index = projectOrder.indexOf(projectId);
+    return index === -1 ? projectOrder.length : index;
+  };
+  return threads
+    .filter((thread) => isWorkingThread(thread.view))
+    .sort(
+      (a, b) =>
+        rankOf(a.projectId) - rankOf(b.projectId) ||
+        (a.projectId ?? '').localeCompare(b.projectId ?? '') ||
+        b.createdAt.localeCompare(a.createdAt) ||
+        a.id.localeCompare(b.id),
+    );
+}
+
 /**
  * The cards in the order they stand: by {@link ATTENTION_ORDER}, newest
  * activity first within each band, except working threads, which stand newest

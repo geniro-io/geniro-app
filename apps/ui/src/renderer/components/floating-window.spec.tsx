@@ -314,3 +314,72 @@ describe('FloatingWindow', () => {
     ).toBeNull();
   });
 });
+
+describe('the full-screen head slot', () => {
+  const strip = <span data-slot="strip-probe">strip</span>;
+
+  function drawWith(
+    over: Partial<React.ComponentProps<typeof FloatingWindow>> = {},
+  ): HTMLElement {
+    return render(
+      <FloatingWindow
+        label="Manager chat"
+        title="Manager"
+        open
+        initialRect={() => ({ x: 500, y: 200, width: 400, height: 400 })}
+        onClose={() => undefined}
+        fullHead={strip}
+        {...over}>
+        <span data-slot="window-content">chat</span>
+      </FloatingWindow>,
+    );
+  }
+
+  const pressSlot = (el: HTMLElement, slot: string): void =>
+    act(() =>
+      el.querySelector<HTMLButtonElement>(`[data-slot="${slot}"]`)!.click(),
+    );
+
+  const stripOf = (el: HTMLElement): Element | null =>
+    el.querySelector('[data-slot="floating-window-full-head"]');
+
+  it('is not drawn while the window is open but not maximised', () => {
+    expect(stripOf(drawWith())).toBeNull();
+  });
+
+  it('is drawn once maximised, and gone on restore and once minimised', () => {
+    const el = drawWith();
+    pressSlot(el, 'floating-window-maximise');
+    expect(
+      stripOf(el)?.querySelector('[data-slot="strip-probe"]'),
+    ).not.toBeNull();
+
+    pressSlot(el, 'floating-window-maximise');
+    expect(stripOf(el)).toBeNull();
+
+    pressSlot(el, 'floating-window-maximise');
+    pressSlot(el, 'floating-window-minimise');
+    expect(stripOf(el)).toBeNull();
+  });
+
+  it('is drawn on a phone, where the window always fills the page', () => {
+    expect(stripOf(drawWith({ phone: true }))).not.toBeNull();
+  });
+
+  it('is not drawn while the window is closed', () => {
+    expect(stripOf(drawWith({ phone: true, open: false }))).toBeNull();
+  });
+
+  it('does not toggle maximise on a double-click', () => {
+    const el = drawWith();
+    pressSlot(el, 'floating-window-maximise');
+    act(() => {
+      stripOf(el)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    expect(
+      el
+        .querySelector('[data-slot="floating-window"]')!
+        .getAttribute('data-state'),
+    ).toBe('maximised');
+  });
+});

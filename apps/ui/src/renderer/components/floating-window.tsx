@@ -205,6 +205,7 @@ export function FloatingWindow({
   onActivate,
   children,
   slot = 'floating-window',
+  fullHead,
 }: {
   label: string;
   title: React.ReactNode;
@@ -214,6 +215,8 @@ export function FloatingWindow({
   initialRect?: (bounds: WindowBounds) => WindowRect;
   /** Controls drawn in the head before minimise, maximise and close. */
   actions?: React.ReactNode;
+  /** Drawn in the head after the title while the window fills the page: maximised, or on a phone. */
+  fullHead?: React.ReactNode;
   onClose: () => void;
   /** A press landed anywhere in the window, so it is the one the user is working in. */
   onActivate?: () => void;
@@ -365,6 +368,15 @@ export function FloatingWindow({
           }}>
           <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold">
             {title}
+            {open && (maximised || phone) && fullHead ? (
+              <div
+                data-slot={`${slot}-full-head`}
+                className="flex min-w-0 flex-1 items-center"
+                onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}>
+                {fullHead}
+              </div>
+            ) : null}
           </div>
           <div
             className="flex shrink-0 items-center gap-0.5"

@@ -44,6 +44,7 @@ import { blockIdOf, type BlockPlaces } from './block-places';
 import {
   ATTENTION_ORDER,
   BLOCK_ATTENTION_ORDER,
+  isWorkingThread,
   MANAGER_TITLE,
   orderByAttention,
   type ThreadCardView,
@@ -1364,8 +1365,8 @@ function GraphCanvas({
   const awaiting = [...states.values()].filter(
     (entry) => entry.state === 'awaiting',
   ).length;
-  const working = threads.filter(
-    (thread) => thread.view.status === 'working',
+  const working = threads.filter((thread) =>
+    isWorkingThread(thread.view),
   ).length;
 
   const base = (id: string) => {
@@ -1413,9 +1414,8 @@ function GraphCanvas({
         name: block.name,
         color: block.color,
         threads: block.total,
-        working: block.threads.filter(
-          (thread) => thread.view.status === 'working',
-        ).length,
+        working: block.threads.filter((thread) => isWorkingThread(thread.view))
+          .length,
         movable: !narrow,
       },
     });

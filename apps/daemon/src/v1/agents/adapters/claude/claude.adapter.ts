@@ -169,6 +169,7 @@ import {
   CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
   CLAUDE_TOOLS_FLAG,
+  CLAUDE_URL_MATCHED_MCP_TRANSPORTS,
   CLAUDE_USER_DATA_TMP_DIR_NAME,
 } from './claude.const';
 import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
@@ -2561,8 +2562,10 @@ export class ClaudeAdapter extends AgentAdapter {
 
   /**
    * An account connector can only be allowed by its URL, so one the listing
-   * gave no URL for is left out. Sorted: the settings string is part of
-   * `sessionKey`.
+   * gave no URL for is left out. Once one is in, every remote server — geniro's
+   * own among them — is listed by its URL as well as its name
+   * (`CLAUDE_URL_MATCHED_MCP_TRANSPORTS`). Sorted: the settings string is part
+   * of `sessionKey`.
    */
   private allowedServers(
     input: AgentTurnInput,
@@ -2574,13 +2577,31 @@ export class ClaudeAdapter extends AgentAdapter {
     const add = (entry: ClaudeAllowedMcpServer): void => {
       entries.set(JSON.stringify(entry), entry);
     };
+    const isConnector = (name: string): boolean =>
+      name.startsWith(CLAUDE_AI_CONNECTOR_NAME_PREFIX);
+    const byUrl = input.mcpAllowed.some(
+      (server) => isConnector(server.name) && server.target,
+    );
     if (input.mcpEndpoint) {
       add({ serverName: input.mcpEndpoint.serverName });
+      if (byUrl) {
+        add({ serverUrl: input.mcpEndpoint.url });
+      }
     }
     for (const server of input.mcpAllowed) {
-      if (!server.name.startsWith(CLAUDE_AI_CONNECTOR_NAME_PREFIX)) {
-        add({ serverName: server.name });
-      } else if (server.target) {
+      if (isConnector(server.name)) {
+        if (server.target) {
+          add({ serverUrl: server.target });
+        }
+        continue;
+      }
+      add({ serverName: server.name });
+      if (
+        byUrl &&
+        server.target &&
+        server.transport !== null &&
+        CLAUDE_URL_MATCHED_MCP_TRANSPORTS.has(server.transport)
+      ) {
         add({ serverUrl: server.target });
       }
     }

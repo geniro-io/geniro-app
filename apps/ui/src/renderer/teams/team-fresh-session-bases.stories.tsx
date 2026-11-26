@@ -35,26 +35,32 @@ const readingEntry: FreshSessionBase = {
   contextReading: {
     runId: 'r1',
     measuredAt: '2026-11-20T10:00:00.000Z',
+    inWindow: [
+      { name: 'System prompt', tokens: 6000 },
+      { name: 'MCP tools', tokens: 2000 },
+    ],
+    reserved: [{ name: 'Autocompact buffer', tokens: 33000 }],
+    onUse: [{ name: 'MCP tools (deferred)', tokens: 30000 }],
+    memoryFiles: [{ path: 'CLAUDE.md', kind: 'Project', tokens: 1500 }],
+    mcpServers: [
+      {
+        name: 'big',
+        toolCount: 40,
+        loadedToolCount: 12,
+        inWindowTokens: 1800,
+        onUseTokens: 400,
+      },
+      {
+        name: 'claude_ai_Gmail',
+        toolCount: 31,
+        loadedToolCount: 0,
+        inWindowTokens: 0,
+        onUseTokens: 29600,
+      },
+    ],
+    cliTotalTokens: 22200,
     firstRequestTokens: 21000,
-    unattributedTokens: -1200,
-    breakdown: {
-      categories: [
-        { name: 'System prompt', tokens: 6000, deferred: false },
-        { name: 'MCP tools', tokens: 2000, deferred: false },
-        { name: 'Skills', tokens: 900, deferred: true },
-      ],
-      totalTokens: 22200,
-      maxTokens: 200000,
-      model: 'opus',
-      autoCompactAtTokens: null,
-      autoCompactEnabled: null,
-      memoryFiles: [{ path: 'CLAUDE.md', kind: 'Project', tokens: 1500 }],
-      servers: [
-        { name: 'small', tokens: 100, toolCount: 3, loadedToolCount: 3 },
-        { name: 'big', tokens: 1800, toolCount: 40, loadedToolCount: 12 },
-        { name: 'lazy', tokens: 50, toolCount: 9, loadedToolCount: 0 },
-      ],
-    },
+    firstRequestLessCliTotalTokens: -1200,
   },
 };
 

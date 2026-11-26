@@ -43,8 +43,14 @@ import type { RunKindRowsCache } from './run-kind-rows.cache';
  */
 const BREAKDOWN: AgentContextUsage = {
   categories: [
-    { name: 'System prompt', tokens: 3386, deferred: false },
-    { name: 'MCP tools', tokens: 273_876, deferred: true },
+    { name: 'System prompt', tokens: 3386, deferred: false, reserve: false },
+    { name: 'MCP tools', tokens: 273_876, deferred: true, reserve: false },
+    {
+      name: 'Autocompact buffer',
+      tokens: 33_000,
+      deferred: false,
+      reserve: true,
+    },
   ],
   totalTokens: 3386,
   maxTokens: 1_000_000,
@@ -53,7 +59,13 @@ const BREAKDOWN: AgentContextUsage = {
   autoCompactEnabled: true,
   memoryFiles: [{ path: '/proj/CLAUDE.md', kind: 'Project', tokens: 45_947 }],
   servers: [
-    { name: 'amplitude', tokens: 109_284, toolCount: 33, loadedToolCount: 0 },
+    {
+      name: 'amplitude',
+      tokens: 109_284,
+      toolCount: 33,
+      loadedToolCount: 0,
+      loadedTokens: 0,
+    },
   ],
 };
 

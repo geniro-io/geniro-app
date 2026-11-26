@@ -233,10 +233,26 @@ describe('FreshSessionBaseService', () => {
 
   const BREAKDOWN = {
     categories: [
-      { name: 'System prompt', tokens: 70_000, deferred: false },
-      { name: 'System tools', tokens: 14_561, deferred: false },
-      { name: 'Skills', tokens: 7_929, deferred: false },
-      { name: 'MCP tools (deferred)', tokens: 171_350, deferred: true },
+      {
+        name: 'System prompt',
+        tokens: 70_000,
+        deferred: false,
+        reserve: false,
+      },
+      { name: 'System tools', tokens: 47_071, deferred: false, reserve: false },
+      { name: 'MCP tools', tokens: 7_929, deferred: false, reserve: false },
+      {
+        name: 'MCP tools (deferred)',
+        tokens: 171_350,
+        deferred: true,
+        reserve: false,
+      },
+      {
+        name: 'Autocompact buffer',
+        tokens: 33_000,
+        deferred: false,
+        reserve: true,
+      },
     ],
     totalTokens: 125_000,
     maxTokens: 1_000_000,
@@ -246,15 +262,23 @@ describe('FreshSessionBaseService', () => {
     memoryFiles: [{ path: '/repo/AGENTS.md', kind: 'Project', tokens: 30_919 }],
     servers: [
       {
+        name: 'geniro-r-geniro',
+        tokens: 45_360,
+        toolCount: 57,
+        loadedToolCount: 7,
+        loadedTokens: 7_929,
+      },
+      {
         name: 'claude_ai_Gmail',
         tokens: 29_566,
         toolCount: 31,
         loadedToolCount: 0,
+        loadedTokens: 0,
       },
     ],
   };
 
-  it('shows the CLI’s own breakdown of the newest stored session, with what it leaves unattributed, and reads the base off the first request', async () => {
+  it('shows the CLI’s own breakdown of the newest stored session, each part placed by whether it is in the window, and reads the base off the first request', async () => {
     const answer = await serviceOver(
       [
         start('r-geniro', { firstRequestContextTokens: 139_000 }),
@@ -300,17 +324,47 @@ describe('FreshSessionBaseService', () => {
         runId: 'r-geniro',
         measuredAt: new Date(Date.UTC(2026, 10, 22, 10)).toISOString(),
         firstRequestTokens: 139_000,
-        unattributedTokens: 139_000 - 125_000,
-        breakdown: {
-          totalTokens: 125_000,
-          servers: [expect.objectContaining({ name: 'claude_ai_Gmail' })],
-        },
+        cliTotalTokens: 125_000,
+        firstRequestLessCliTotalTokens: 139_000 - 125_000,
+        inWindow: [
+          { name: 'System prompt', tokens: 70_000 },
+          { name: 'System tools', tokens: 47_071 },
+          { name: 'MCP tools', tokens: 7_929 },
+        ],
+        reserved: [{ name: 'Autocompact buffer', tokens: 33_000 }],
+        onUse: [{ name: 'MCP tools (deferred)', tokens: 171_350 }],
+        mcpServers: [
+          {
+            name: 'geniro-r-geniro',
+            toolCount: 57,
+            loadedToolCount: 7,
+            inWindowTokens: 7_929,
+            onUseTokens: 45_360 - 7_929,
+          },
+          {
+            name: 'claude_ai_Gmail',
+            toolCount: 31,
+            loadedToolCount: 0,
+            inWindowTokens: 0,
+            onUseTokens: 29_566,
+          },
+        ],
       },
     });
+    const reading = manager!.contextReading!;
+    expect(reading.inWindow.reduce((sum, part) => sum + part.tokens, 0)).toBe(
+      reading.cliTotalTokens,
+    );
+    expect(
+      reading.mcpServers.reduce(
+        (sum, server) => sum + (server.inWindowTokens ?? 0),
+        0,
+      ),
+    ).toBe(reading.inWindow.find((part) => part.name === 'MCP tools')?.tokens);
     expect(manager!.notMeasured.map((part) => part.part)).toEqual(['plugins']);
   });
 
-  it('keeps an unattributed figure below zero as it is, never clamped', async () => {
+  it('keeps a first request below the CLI’s total as a negative difference, never clamped', async () => {
     const answer = await serviceOver(
       [start('r-geniro', { firstRequestContextTokens: 100_000 })],
       undefined,
@@ -320,7 +374,9 @@ describe('FreshSessionBaseService', () => {
     const manager = answer.members.find(
       (entry) => entry.memberId === 'manager',
     );
-    expect(manager?.contextReading?.unattributedTokens).toBe(100_000 - 125_000);
+    expect(manager?.contextReading?.firstRequestLessCliTotalTokens).toBe(
+      100_000 - 125_000,
+    );
   });
 
   it('keeps the old estimate and names the parts not measured when no session stored a breakdown', async () => {

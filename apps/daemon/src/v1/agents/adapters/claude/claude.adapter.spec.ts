@@ -40,6 +40,7 @@ import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
   AgentEvent,
+  AgentMcpAllowedServer,
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
@@ -3448,9 +3449,19 @@ describe('ClaudeAdapter — fast mode', () => {
         prompt: 'go',
         cwd: '/proj',
         mcpAllowed: [
-          { name: 'codegraph', target: 'x' },
-          { name: 'claude.ai Slack', target: 'https://slack/mcp' },
-          { name: 'claude.ai Gmail', target: null },
+          { name: 'codegraph', target: 'codegraph serve', transport: 'stdio' },
+          {
+            name: 'linear',
+            target: 'https://mcp.linear.app/mcp',
+            transport: 'http',
+          },
+          { name: 'ticktick', target: null, transport: null },
+          {
+            name: 'claude.ai Slack',
+            target: 'https://slack/mcp',
+            transport: 'http',
+          },
+          { name: 'claude.ai Gmail', target: null, transport: null },
         ],
         mcpEndpoint: {
           url: 'http://127.0.0.1:1/v1/mcp/r/n',
@@ -3467,6 +3478,10 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(settings.allowedMcpServers).toEqual([
       { serverName: 'codegraph' },
       { serverName: 'geniro-run-1' },
+      { serverName: 'linear' },
+      { serverName: 'ticktick' },
+      { serverUrl: 'http://127.0.0.1:1/v1/mcp/r/n' },
+      { serverUrl: 'https://mcp.linear.app/mcp' },
       { serverUrl: 'https://slack/mcp' },
     ]);
 
@@ -3487,9 +3502,7 @@ describe('ClaudeAdapter — fast mode', () => {
       token: 't',
       serverName: 'geniro-run-1',
     };
-    const settingsOf = (
-      mcpAllowed: { name: string; target: string | null }[],
-    ): string => {
+    const settingsOf = (mcpAllowed: AgentMcpAllowedServer[]): string => {
       const { spawn, captured } = fakeSpawn();
       new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
         { prompt: 'go', cwd: '/proj', mcpAllowed, mcpEndpoint: endpoint },
@@ -3503,19 +3516,56 @@ describe('ClaudeAdapter — fast mode', () => {
       (JSON.parse(settingsOf([])) as { allowedMcpServers: unknown })
         .allowedMcpServers,
     ).toEqual([{ serverName: 'geniro-run-1' }]);
-    expect(
-      settingsOf([
-        { name: 'linear', target: 'https://mcp.linear.app/sse' },
-        { name: 'claude.ai Slack', target: 'https://slack/mcp' },
-        { name: 'codegraph', target: 'x' },
-      ]),
-    ).toBe(
-      settingsOf([
-        { name: 'codegraph', target: 'x' },
-        { name: 'claude.ai Slack', target: 'https://slack/mcp' },
-        { name: 'linear', target: 'https://mcp.linear.app/sse' },
-      ]),
+    const linear = {
+      name: 'linear',
+      target: 'https://mcp.linear.app/sse',
+      transport: 'sse' as const,
+    };
+    const slack = {
+      name: 'claude.ai Slack',
+      target: 'https://slack/mcp',
+      transport: 'http' as const,
+    };
+    const codegraph = {
+      name: 'codegraph',
+      target: 'x',
+      transport: 'stdio' as const,
+    };
+    expect(settingsOf([linear, slack, codegraph])).toBe(
+      settingsOf([codegraph, slack, linear]),
     );
+  });
+
+  it('lists remote servers by name alone while no connector is allowed by URL', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        mcpAllowed: [
+          {
+            name: 'linear',
+            target: 'https://mcp.linear.app/mcp',
+            transport: 'http',
+          },
+          { name: 'claude.ai Gmail', target: null, transport: null },
+        ],
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          token: 't',
+          serverName: 'geniro-run-1',
+        },
+      },
+      () => {},
+    );
+    const args = captured.args!;
+    expect(
+      (
+        JSON.parse(args[args.indexOf('--settings') + 1]!) as {
+          allowedMcpServers: unknown;
+        }
+      ).allowedMcpServers,
+    ).toEqual([{ serverName: 'geniro-run-1' }, { serverName: 'linear' }]);
   });
 
   it('gives a read-only turn only Read, Grep and Glob, and no MCP server but geniro’s own', () => {

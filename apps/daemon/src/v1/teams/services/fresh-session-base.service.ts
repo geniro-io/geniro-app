@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentRepoInstructions } from '../../agents/adapters/adapter.types';
 import {
+  type ContextBreakdownWire,
   ContextBreakdownWireSchema,
   type MemberTurnReading,
 } from '../../agents/chat.types';
@@ -29,6 +30,7 @@ import {
 import {
   foldFreshStarts,
   FRESH_SESSION_RUNS_READ,
+  freshSessionContextReading,
   type FreshSessionGroup,
   type FreshSessionRun,
   type FreshStartFold,
@@ -272,16 +274,11 @@ function contextReadingOf(
       row.runId,
       row.sessionId,
     );
-    return {
-      runId: row.runId,
-      measuredAt: row.createdAt.toISOString(),
+    return freshSessionContextReading(
+      { runId: row.runId, measuredAt: row.createdAt.toISOString() },
       breakdown,
       firstRequestTokens,
-      unattributedTokens:
-        firstRequestTokens === null || breakdown.totalTokens === null
-          ? null
-          : firstRequestTokens - breakdown.totalTokens,
-    };
+    );
   }
   return null;
 }
@@ -290,9 +287,7 @@ function groupKeyOf(group: FreshSessionGroup): string {
   return group.projectId ?? `folder:${group.name}`;
 }
 
-function parseBreakdown(
-  text: string,
-): FreshSessionContextReading['breakdown'] | null {
+function parseBreakdown(text: string): ContextBreakdownWire | null {
   try {
     const parsed = ContextBreakdownWireSchema.safeParse(JSON.parse(text));
     return parsed.success ? parsed.data : null;

@@ -379,6 +379,12 @@ export interface AgentContextCategory {
    * than it is — measured, 273,876 deferred MCP tokens against a 98,598 total.
    */
   deferred: boolean;
+  /**
+   * Room the CLI holds back rather than content of the request — claude's
+   * "Autocompact buffer", which its reply marks `kind: "buffer"`. Outside
+   * {@link AgentContextUsage.totalTokens}, like a deferred row.
+   */
+  reserve: boolean;
 }
 
 /** Where a CLI keeps the user's own standing instructions — see `AdapterConfig.userInstructions`. */
@@ -439,6 +445,12 @@ export interface AgentContextServer {
   toolCount: number;
   /** How many of those tools are actually loaded into the window right now. */
   loadedToolCount: number;
+  /**
+   * What the loaded tools' schemas put in the window, or null when the CLI
+   * does not price its tools. A tool that is not loaded is in the window by
+   * name only, which no CLI prices.
+   */
+  loadedTokens: number | null;
 }
 
 /**
@@ -2448,10 +2460,15 @@ export type AgentMcpServerStatus =
   | 'needs_auth'
   | 'unknown';
 
-/** One server of a turn's allow list, with the target the CLI's listing reports for it. */
+/**
+ * One server of a turn's allow list, with where the CLI's listing says it is
+ * reached — read for every server when the list holds an account connector,
+ * else for none.
+ */
 export interface AgentMcpAllowedServer {
   name: string;
   target: string | null;
+  transport: AgentMcpServer['transport'];
 }
 
 /**

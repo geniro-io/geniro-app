@@ -4435,6 +4435,12 @@ export interface ContextCategory {
      * @memberof ContextCategory
      */
     deferred: boolean;
+    /**
+     * room the CLI holds back (claude’s autocompact buffer), not content of the request and NOT counted in totalTokens
+     * @type {boolean}
+     * @memberof ContextCategory
+     */
+    reserve: boolean;
 }
 /**
  * 
@@ -4528,6 +4534,12 @@ export interface ContextServer {
      * @memberof ContextServer
      */
     loadedToolCount: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextServer
+     */
+    loadedTokens: number | null;
 }
 /**
  * 
@@ -6517,6 +6529,25 @@ export interface FreshSessionBasesDto {
 /**
  * 
  * @export
+ * @interface FreshSessionContextPart
+ */
+export interface FreshSessionContextPart {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextPart
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextPart
+     */
+    tokens: number;
+}
+/**
+ * 
+ * @export
  * @interface FreshSessionContextReading
  */
 export interface FreshSessionContextReading {
@@ -6533,11 +6564,41 @@ export interface FreshSessionContextReading {
      */
     measuredAt: string;
     /**
-     * 
-     * @type {ContextBreakdown}
+     * The CLI's own parts of the window, in its order; they sum to cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
      * @memberof FreshSessionContextReading
      */
-    breakdown: ContextBreakdown;
+    inWindow: Array<FreshSessionContextPart>;
+    /**
+     * Room the CLI holds back (claude’s autocompact buffer): not content of the request and not in cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
+     * @memberof FreshSessionContextReading
+     */
+    reserved: Array<FreshSessionContextPart>;
+    /**
+     * What the CLI offers on use (deferred tool schemas): NOT in the window and not in cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
+     * @memberof FreshSessionContextReading
+     */
+    onUse: Array<FreshSessionContextPart>;
+    /**
+     * 
+     * @type {Array<ContextMemoryFile>}
+     * @memberof FreshSessionContextReading
+     */
+    memoryFiles: Array<ContextMemoryFile>;
+    /**
+     * 
+     * @type {Array<FreshSessionContextServer>}
+     * @memberof FreshSessionContextReading
+     */
+    mcpServers: Array<FreshSessionContextServer>;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextReading
+     */
+    cliTotalTokens: number | null;
     /**
      * 
      * @type {number}
@@ -6549,7 +6610,44 @@ export interface FreshSessionContextReading {
      * @type {number}
      * @memberof FreshSessionContextReading
      */
-    unattributedTokens: number | null;
+    firstRequestLessCliTotalTokens: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionContextServer
+ */
+export interface FreshSessionContextServer {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextServer
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    toolCount: number;
+    /**
+     * Tools whose schemas are in the window; the rest are there by name only
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    loadedToolCount: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    inWindowTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    onUseTokens: number | null;
 }
 /**
  * 
@@ -19994,7 +20092,7 @@ export interface TeamMember {
      */
     mcpDisabled?: Array<string>;
     /**
-     * The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server
+     * The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server. Applied only by a CLI that can (GET /v1/capabilities mcpAllowLists); on any other the member loads every server
      * @type {Array<string>}
      * @memberof TeamMember
      */

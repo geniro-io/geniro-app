@@ -11,7 +11,7 @@ import {
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
-  ContextBreakdownWireSchema,
+  ContextMemoryFileSchema,
   CustomInstructionsSchema,
   type HostQuestion,
   type HostQuestionOutcome,
@@ -2496,6 +2496,37 @@ export const FRESH_SESSION_BASE_SOURCES = [
   'lastRequest',
 ] as const;
 
+const FreshSessionContextPartSchema = z
+  .object({ name: z.string(), tokens: z.number() })
+  .meta({ id: 'FreshSessionContextPart' });
+
+/** One MCP server of a fresh session, split into what is in the window and what is not. */
+export const FreshSessionContextServerSchema = z
+  .object({
+    name: z.string(),
+    toolCount: z.number().int().nonnegative(),
+    loadedToolCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'Tools whose schemas are in the window; the rest are there by name only',
+      ),
+    inWindowTokens: z
+      .number()
+      .nullable()
+      .describe(
+        "What the server's loaded tool schemas put in the window, its share of the MCP tools part; the names of its other tools are in the window too, and the CLI prices no name. Null when the CLI does not price tools",
+      ),
+    onUseTokens: z
+      .number()
+      .nullable()
+      .describe(
+        'The schemas of the tools not loaded: NOT in the window, added only when a tool is searched for; null when the CLI does not price tools',
+      ),
+  })
+  .meta({ id: 'FreshSessionContextServer' });
+
 /**
  * What the member's CLI said its fresh session held, asked once when the
  * session opened — the newest such reading in the group.
@@ -2504,7 +2535,27 @@ export const FreshSessionContextReadingSchema = z
   .object({
     runId: z.string(),
     measuredAt: z.string(),
-    breakdown: ContextBreakdownWireSchema,
+    inWindow: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        "The CLI's own parts of the window, in its order; they sum to cliTotalTokens",
+      ),
+    reserved: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        'Room the CLI holds back (claude’s autocompact buffer): not content of the request and not in cliTotalTokens',
+      ),
+    onUse: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        'What the CLI offers on use (deferred tool schemas): NOT in the window and not in cliTotalTokens',
+      ),
+    memoryFiles: z.array(ContextMemoryFileSchema),
+    mcpServers: z.array(FreshSessionContextServerSchema),
+    cliTotalTokens: z
+      .number()
+      .nullable()
+      .describe("The CLI's own total of inWindow; null when it gave none"),
     firstRequestTokens: z
       .number()
       .int()
@@ -2512,12 +2563,11 @@ export const FreshSessionContextReadingSchema = z
       .describe(
         "That session's first request, the whole prompt the model saw; null when the CLI reported none",
       ),
-    unattributedTokens: z
+    firstRequestLessCliTotalTokens: z
       .number()
-      .int()
       .nullable()
       .describe(
-        'The first request less what the CLI attributed (totalTokens): deferred tool names and fixed overhead it does not itemise; null when either is unknown, never clamped',
+        "firstRequestTokens less cliTotalTokens, never clamped: positive is what the CLI leaves unitemised (tool names it does not price, fixed overhead); negative means the CLI's parts add up to more than the first request. Not cliRemainderTokens, which is the whole base less Geniro's block and the repository files. Null when either is unknown",
       ),
   })
   .meta({ id: 'FreshSessionContextReading' });

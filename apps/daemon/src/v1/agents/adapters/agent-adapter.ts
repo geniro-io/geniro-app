@@ -2703,7 +2703,10 @@ export abstract class AgentAdapter {
         ? null
         : [
             ...new Set(
-              input.mcpAllowed.map((s) => `${s.name}\u0000${s.target ?? ''}`),
+              input.mcpAllowed.map(
+                (s) =>
+                  `${s.name}\u0000${s.target ?? ''}\u0000${s.transport ?? ''}`,
+              ),
             ),
           ].sort(),
       input.mcpEndpoint?.url ?? null,

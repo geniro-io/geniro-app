@@ -12,7 +12,9 @@ import {
 } from './fresh-session-context.recorder';
 
 const BREAKDOWN: AgentContextUsage = {
-  categories: [{ name: 'System prompt', tokens: 21_495, deferred: false }],
+  categories: [
+    { name: 'System prompt', tokens: 21_495, deferred: false, reserve: false },
+  ],
   totalTokens: 84_262,
   maxTokens: 1_000_000,
   model: 'claude-sonnet-5-5',
@@ -20,7 +22,13 @@ const BREAKDOWN: AgentContextUsage = {
   autoCompactEnabled: null,
   memoryFiles: [{ path: '/repo/AGENTS.md', kind: 'Project', tokens: 30_919 }],
   servers: [
-    { name: 'codegraph', tokens: 2_482, toolCount: 4, loadedToolCount: 1 },
+    {
+      name: 'codegraph',
+      tokens: 2_482,
+      toolCount: 4,
+      loadedToolCount: 1,
+      loadedTokens: 620,
+    },
   ],
 };
 

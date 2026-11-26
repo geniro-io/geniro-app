@@ -33,8 +33,13 @@ function metrics(): ChatMetricsDto {
   return {
     context: {
       categories: [
-        { name: 'System prompt', tokens: 5_700, deferred: false },
-        { name: 'Skills', tokens: 6_500, deferred: true },
+        {
+          name: 'System prompt',
+          tokens: 5_700,
+          deferred: false,
+          reserve: false,
+        },
+        { name: 'Skills', tokens: 6_500, deferred: true, reserve: false },
       ],
       totalTokens: 196_700,
       maxTokens: 1_000_000,
@@ -48,6 +53,7 @@ function metrics(): ChatMetricsDto {
           tokens: 123_200,
           toolCount: 12,
           loadedToolCount: 12,
+          loadedTokens: 123_200,
         },
       ],
     },
@@ -415,6 +421,7 @@ describe('a CLI that counts per request (codex)', () => {
             tokens: null,
             toolCount: 101,
             loadedToolCount: 101,
+            loadedTokens: null,
           },
         ],
         lastRequest: {

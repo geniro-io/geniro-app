@@ -216,7 +216,7 @@ const savedLead = (): unknown =>
 describe('ProjectTeamOverrides — the MCP allow list', () => {
   it('overrides a team without a list with the servers that load now', async () => {
     await mountWith({}, {});
-    await press('Only servers I pick');
+    await press('Only picked');
     expect(savedLead()).toEqual({ mcpAllowed: ['codegraph', 'linear'] });
   });
 
@@ -248,8 +248,8 @@ describe('ProjectTeamOverrides — the MCP allow list', () => {
 
   it('overrides the team’s list with null for every server in this project', async () => {
     await mountWith({ mcpAllowed: ['codegraph'] }, {});
-    expect(document.body.textContent).toContain('Only servers I pick');
-    await press('All servers');
+    expect(document.body.textContent).toContain('Only picked');
+    await press('All');
     expect(savedLead()).toEqual({ mcpAllowed: null });
   });
 

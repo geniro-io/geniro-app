@@ -1721,7 +1721,7 @@ describe('Teams — a member’s MCP switches', () => {
     });
   });
 
-  it('writes the servers that load now as the allow list when "Only servers I pick" is chosen, and drops the key on "All servers"', async () => {
+  it('writes the servers that load now as the allow list when "Only picked" is chosen, and drops the key on "All"', async () => {
     getCapabilities.mockImplementation(async () => ({
       agents: [],
       approvals: [],
@@ -1742,13 +1742,13 @@ describe('Teams — a member’s MCP switches', () => {
     await selectMember('lead');
     await wait(700);
 
-    await press('Only servers I pick');
+    await press('Only picked');
     await wait(900);
     expect(lastSaved().members[0]).toMatchObject({
       mcpAllowed: ['codegraph', 'cua_repl'],
     });
 
-    await press('All servers');
+    await press('All');
     await wait(900);
     expect(lastSaved().members[0]?.mcpAllowed).toBeUndefined();
   });
@@ -1759,7 +1759,7 @@ describe('Teams — a member’s MCP switches', () => {
     await wait(700);
     expect(
       [...document.body.querySelectorAll('button')].some(
-        (button) => button.textContent?.trim() === 'Only servers I pick',
+        (button) => button.textContent?.trim() === 'Only picked',
       ),
     ).toBe(false);
   });

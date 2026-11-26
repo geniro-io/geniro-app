@@ -16,8 +16,8 @@ import { type RowScope, ScopedSettingRow } from './overridable-row';
 type Mode = 'all' | 'only';
 
 const MODES: readonly { id: Mode; label: string }[] = [
-  { id: 'all', label: 'All servers' },
-  { id: 'only', label: 'Only servers I pick' },
+  { id: 'all', label: 'All' },
+  { id: 'only', label: 'Only picked' },
 ];
 
 export const ALLOW_LIST_NOTE =
@@ -116,24 +116,33 @@ export function McpAllowListControl({
                     onChange(nextMcpAllowed(picked, name, on))
                   }
                   label={
-                    <>
-                      {name}
+                    <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+                      <span>{name}</span>
                       {isAccountConnector(name, prefix) ? (
-                        <span className="ml-1.5 text-xs text-muted-foreground">
-                          account connector
-                        </span>
+                        <>
+                          {' '}
+                          <span className="text-xs text-muted-foreground">
+                            account connector
+                          </span>
+                        </>
                       ) : null}
                       {missing ? (
-                        <span className="ml-1.5 text-xs text-warning">
-                          not found
-                        </span>
+                        <>
+                          {' '}
+                          <span className="text-xs text-warning">
+                            not found
+                          </span>
+                        </>
                       ) : null}
                       {offByMember.has(name) ? (
-                        <span className="ml-1.5 text-xs text-muted-foreground">
-                          switched off
-                        </span>
+                        <>
+                          {' '}
+                          <span className="text-xs text-muted-foreground">
+                            switched off
+                          </span>
+                        </>
                       ) : null}
-                    </>
+                    </span>
                   }
                 />
               );

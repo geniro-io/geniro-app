@@ -11,7 +11,10 @@ import type {
   AgentContextServer,
   AgentContextUsage,
 } from '../../adapter.types';
-import { CLAUDE_CONTEXT_USAGE_SUBTYPE } from '../claude.const';
+import {
+  CLAUDE_CONTEXT_RESERVE_KIND,
+  CLAUDE_CONTEXT_USAGE_SUBTYPE,
+} from '../claude.const';
 
 /**
  * Reading and writing the `get_context_usage` control dialogue — what the
@@ -114,7 +117,14 @@ function readCategories(value: unknown): AgentContextCategory[] {
     if (name === null || tokens === null || name === FREE_SPACE_CATEGORY) {
       return [];
     }
-    return [{ name, tokens, deferred: asBoolean(row?.isDeferred) }];
+    return [
+      {
+        name,
+        tokens,
+        deferred: asBoolean(row?.isDeferred),
+        reserve: row?.kind === CLAUDE_CONTEXT_RESERVE_KIND,
+      },
+    ];
   });
 }
 
@@ -147,7 +157,10 @@ function readMemoryFiles(value: unknown): AgentContextMemoryFile[] {
 function readServers(value: unknown): AgentContextServer[] {
   // Summed here as plain numbers: claude prices every tool, so the wire's
   // nullable figure (for a CLI that does not) is never null on this path.
-  const byServer = new Map<string, AgentContextServer & { tokens: number }>();
+  const byServer = new Map<
+    string,
+    AgentContextServer & { tokens: number; loadedTokens: number }
+  >();
   for (const entry of asArray(value)) {
     const row = asRecord(entry);
     const name = row ? asString(row.serverName) : null;
@@ -160,11 +173,13 @@ function readServers(value: unknown): AgentContextServer[] {
       tokens: 0,
       toolCount: 0,
       loadedToolCount: 0,
+      loadedTokens: 0,
     };
     server.tokens += tokens;
     server.toolCount += 1;
     if (asBoolean(row?.isLoaded)) {
       server.loadedToolCount += 1;
+      server.loadedTokens += tokens;
     }
     byServer.set(name, server);
   }

@@ -86,7 +86,10 @@ import {
 } from '../../agents/services/action-publish.service';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { AgentMcpService } from '../../agents/services/agent-mcp.service';
+import {
+  type AgentMcpListedTarget,
+  AgentMcpService,
+} from '../../agents/services/agent-mcp.service';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
@@ -1098,7 +1101,10 @@ export class TeamExecutorService
    * The member's allow list as its turn carries it, or undefined when the
    * member has none or its CLI cannot apply one. An account connector is
    * allowed by its address, so each one gets the target a listing of the
-   * CLI's gives it; `unreachable` names those no listing gave one.
+   * CLI's gives it; `unreachable` names those no listing gave one. Beside a
+   * connector every other server on the list gets its target too, since a
+   * CLI that matches remote servers by address there matches them by
+   * nothing else.
    */
   private async mcpAllowedFor(
     member: Pick<TeamMember, 'agent' | 'configDir' | 'mcpAllowed'>,
@@ -1115,21 +1121,19 @@ export class TeamExecutorService
     }
     const connectors =
       prefix === null ? [] : names.filter((name) => name.startsWith(prefix));
-    const targets =
+    const targets: ReadonlyMap<string, AgentMcpListedTarget> =
       connectors.length === 0 || this.agentMcp === undefined
-        ? new Map<string, string>()
+        ? new Map()
         : await this.agentMcp
-            .connectorTargetsOf(
-              member.agent,
-              cwd,
-              member.configDir ?? null,
-              connectors,
-            )
+            .listedTargetsOf(member.agent, cwd, member.configDir ?? null, {
+              accountConnectors: connectors,
+              inFolder: names.filter((name) => !connectors.includes(name)),
+            })
             .catch((err: unknown) => {
               this.logger.warn(
                 `MCP targets for ${member.agent} in ${cwd} not read: ${err instanceof Error ? err.message : String(err)}`,
               );
-              return new Map<string, string>();
+              return new Map();
             });
     const unreachable = connectors.filter((name) => !targets.has(name));
     if (unreachable.length > 0) {
@@ -1140,7 +1144,8 @@ export class TeamExecutorService
     return {
       servers: names.map((name) => ({
         name,
-        target: targets.get(name) ?? null,
+        target: targets.get(name)?.target ?? null,
+        transport: targets.get(name)?.transport ?? null,
       })),
       unreachable,
     };

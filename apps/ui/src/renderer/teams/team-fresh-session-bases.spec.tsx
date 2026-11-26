@@ -38,26 +38,39 @@ const readingEntry: FreshSessionBase = {
   contextReading: {
     runId: 'r1',
     measuredAt: '2026-11-20T10:00:00.000Z',
+    inWindow: [
+      { name: 'System prompt', tokens: 6000 },
+      { name: 'MCP tools', tokens: 2000 },
+    ],
+    reserved: [{ name: 'Autocompact buffer', tokens: 33000 }],
+    onUse: [{ name: 'MCP tools (deferred)', tokens: 30000 }],
+    memoryFiles: [{ path: 'CLAUDE.md', kind: 'Project', tokens: 1500 }],
+    mcpServers: [
+      {
+        name: 'small',
+        toolCount: 3,
+        loadedToolCount: 3,
+        inWindowTokens: 200,
+        onUseTokens: 0,
+      },
+      {
+        name: 'big',
+        toolCount: 40,
+        loadedToolCount: 12,
+        inWindowTokens: 1800,
+        onUseTokens: 400,
+      },
+      {
+        name: 'claude_ai_Gmail',
+        toolCount: 31,
+        loadedToolCount: 0,
+        inWindowTokens: 0,
+        onUseTokens: 29600,
+      },
+    ],
+    cliTotalTokens: 8000,
     firstRequestTokens: 21000,
-    unattributedTokens: -1200,
-    breakdown: {
-      categories: [
-        { name: 'System prompt', tokens: 6000, deferred: false },
-        { name: 'MCP tools', tokens: 2000, deferred: false },
-        { name: 'Skills', tokens: 900, deferred: true },
-      ],
-      totalTokens: 22200,
-      maxTokens: 200000,
-      model: 'opus',
-      autoCompactAtTokens: null,
-      autoCompactEnabled: null,
-      memoryFiles: [{ path: 'CLAUDE.md', kind: 'Project', tokens: 1500 }],
-      servers: [
-        { name: 'small', tokens: 100, toolCount: 3, loadedToolCount: 3 },
-        { name: 'big', tokens: 1800, toolCount: 40, loadedToolCount: 12 },
-        { name: 'lazy', tokens: 50, toolCount: 9, loadedToolCount: 0 },
-      ],
-    },
+    firstRequestLessCliTotalTokens: 13000,
   },
 };
 
@@ -99,7 +112,7 @@ const texts = (el: Element | null): string[] =>
   [...(el?.querySelectorAll('li') ?? [])].map((li) => li.textContent ?? '');
 
 describe('TeamFreshSessionBases', () => {
-  it('shows the CLI breakdown when a reading exists', () => {
+  it('lists only what is in the window under the window, and every MCP server by what it puts there', () => {
     const el = render(readingEntry);
     expect(
       el.querySelector('[data-slot="fresh-session-base-source"]')?.textContent,
@@ -108,37 +121,82 @@ describe('TeamFreshSessionBases', () => {
       texts(el.querySelector('[data-slot="fresh-session-categories"]')),
     ).toEqual(['System prompt6k tokens', 'MCP tools2k tokens']);
     expect(
-      texts(el.querySelector('[data-slot="fresh-session-deferred"]')),
-    ).toEqual(['Skills900 tokens']);
-    expect(
       texts(el.querySelector('[data-slot="fresh-session-memory-files"]')),
     ).toEqual(['CLAUDE.md · Project1.5k tokens']);
     expect(
-      texts(el.querySelector('[data-slot="fresh-session-servers"]')),
+      texts(el.querySelector('[data-slot="fresh-session-servers"]')).slice(
+        0,
+        3,
+      ),
     ).toEqual([
-      'big1.8k tokens · 12 of 40 tools loaded',
-      'small100 tokens · 3 of 3 tools loaded',
-      'lazy50 tokens · names only',
+      'big1.8k tokens · 12 of 40 tools loaded, the rest by name',
+      'small200 tokens · 3 of 3 tools loaded',
+      'claude_ai_Gmail31 tools by name only',
     ]);
     expect(
-      el.querySelector('[data-slot="fresh-session-first-request"]')
-        ?.textContent,
-    ).toContain('21k tokens');
+      el.querySelector('[data-slot="fresh-session-names-only"]')?.textContent,
+    ).toContain('which the CLI does not count');
     expect(
-      el.querySelector('[data-slot="fresh-session-unattributed"]')?.textContent,
-    ).toBe('Not itemised by the CLI: −1.2k tokens');
+      el.querySelector('[data-slot="fresh-session-servers"]')?.textContent,
+    ).not.toContain('29.6k');
   });
 
-  it('omits the unattributed figure only when it is null', () => {
+  it('puts the schemas a server offers on use and the CLI’s reserve outside the window', () => {
+    const el = render(readingEntry);
+    expect(
+      texts(el.querySelector('[data-slot="fresh-session-deferred"]')),
+    ).toEqual([
+      'MCP tools (deferred)30k tokens',
+      'claude_ai_Gmail tool schemas29.6k tokens',
+      'big tool schemas400 tokens',
+    ]);
+    expect(
+      texts(el.querySelector('[data-slot="fresh-session-reserved"]')),
+    ).toEqual(['Autocompact buffer33k tokens']);
+    expect(
+      el.querySelector('[data-slot="fresh-session-categories"]')?.textContent,
+    ).not.toContain('Autocompact buffer');
+  });
+
+  it('says what the CLI leaves unitemised when the first request is larger than its total', () => {
+    const el = render(readingEntry);
+    expect(
+      el.querySelector('[data-slot="fresh-session-request-vs-total"]')
+        ?.textContent,
+    ).toBe(
+      'Not itemised by the CLI: 13k tokens of the first request (tool names it does not count, fixed overhead).',
+    );
+  });
+
+  it('says the CLI total runs over the first request instead of showing a negative unitemised figure', () => {
     const el = render({
       ...readingEntry,
       contextReading: {
         ...readingEntry.contextReading!,
-        unattributedTokens: null,
+        firstRequestTokens: 59753,
+        cliTotalTokens: 61249,
+        firstRequestLessCliTotalTokens: -1496,
+      },
+    });
+    const line = el.querySelector(
+      '[data-slot="fresh-session-request-vs-total"]',
+    )?.textContent;
+    expect(line).toBe(
+      'The CLI total is 1.5k tokens above the first request: its parts add up to more than the model received, so none of the request is left unitemised.',
+    );
+    expect(el.textContent).not.toContain('−');
+  });
+
+  it('omits the comparison only when it is null', () => {
+    const el = render({
+      ...readingEntry,
+      contextReading: {
+        ...readingEntry.contextReading!,
+        firstRequestLessCliTotalTokens: null,
       },
     });
     expect(
-      el.querySelector('[data-slot="fresh-session-unattributed"]'),
+      el.querySelector('[data-slot="fresh-session-request-vs-total"]'),
     ).toBeNull();
   });
 

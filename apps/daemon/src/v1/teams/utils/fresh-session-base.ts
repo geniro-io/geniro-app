@@ -1,4 +1,8 @@
-import type { MemberTurnReading } from '../../agents/chat.types';
+import type {
+  ContextBreakdownWire,
+  MemberTurnReading,
+} from '../../agents/chat.types';
+import type { FreshSessionContextReading } from '../teams.types';
 
 /** How many of a member's newest fresh starts its base is the median of. */
 export const FRESH_STARTS_PER_MEMBER = 10;
@@ -158,4 +162,49 @@ export function median(values: readonly number[]): number | null {
   return sorted.length % 2 === 1
     ? sorted[middle]!
     : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2);
+}
+
+/**
+ * A stored breakdown as the fresh-session readout serves it: each part placed
+ * by whether it is in the window, and each MCP server's loaded schemas apart
+ * from the schemas it only offers on use.
+ */
+export function freshSessionContextReading(
+  source: { runId: string; measuredAt: string },
+  breakdown: ContextBreakdownWire,
+  firstRequestTokens: number | null,
+): FreshSessionContextReading {
+  const part = ({ name, tokens }: { name: string; tokens: number }) => ({
+    name,
+    tokens,
+  });
+  return {
+    ...source,
+    inWindow: breakdown.categories
+      .filter((category) => !category.deferred && !category.reserve)
+      .map(part),
+    reserved: breakdown.categories
+      .filter((category) => category.reserve)
+      .map(part),
+    onUse: breakdown.categories
+      .filter((category) => category.deferred && !category.reserve)
+      .map(part),
+    memoryFiles: breakdown.memoryFiles,
+    mcpServers: breakdown.servers.map((server) => ({
+      name: server.name,
+      toolCount: server.toolCount,
+      loadedToolCount: server.loadedToolCount,
+      inWindowTokens: server.loadedTokens,
+      onUseTokens:
+        server.tokens === null || server.loadedTokens === null
+          ? null
+          : server.tokens - server.loadedTokens,
+    })),
+    cliTotalTokens: breakdown.totalTokens,
+    firstRequestTokens,
+    firstRequestLessCliTotalTokens:
+      firstRequestTokens === null || breakdown.totalTokens === null
+        ? null
+        : firstRequestTokens - breakdown.totalTokens,
+  };
 }

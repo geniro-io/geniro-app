@@ -25,6 +25,7 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentEvent,
+  AgentMcpAllowedServer,
   AgentModel,
   AgentTurnInput,
   FollowUpMessage,
@@ -1298,14 +1299,23 @@ describe('AgentAdapter sessions separate on the MCP allow list', () => {
   const second = (
     mcpAllowed: AgentTurnInput['mcpAllowed'],
   ): AgentTurnInput => ({ prompt: 'second', cwd: '/proj', mcpAllowed });
-  const one = { name: 'codegraph', target: 'x' };
-  const two = { name: 'linear', target: null };
+  const one: AgentMcpAllowedServer = {
+    name: 'codegraph',
+    target: 'x',
+    transport: 'stdio',
+  };
+  const two: AgentMcpAllowedServer = {
+    name: 'linear',
+    target: null,
+    transport: null,
+  };
 
   it.each([
     ['absent to empty', undefined, []],
     ['empty to absent', [], undefined],
     ['one list to another', [one], [two]],
     ['a target to another', [one], [{ ...one, target: 'y' }]],
+    ['a transport to another', [one], [{ ...one, transport: 'http' as const }]],
   ])('refuses a turn whose allow list went from %s', async (_, first, next) => {
     const session = await sessionAllowing(first);
 

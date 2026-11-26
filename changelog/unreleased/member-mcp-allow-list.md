@@ -6,7 +6,7 @@
 
 ### Improved
 
-- **Fresh session:** see what Claude itself says a member's new session holds — system prompt, tools, skills, memory files and each MCP server — and a starting size read from the session's first request
+- **Fresh session:** see what Claude itself says a member's new session holds — system prompt, tools, skills, memory files and what each MCP server puts in the window, with the tool schemas that load only on use kept apart — and a starting size read from the session's first request
 
 ### Fixed
 

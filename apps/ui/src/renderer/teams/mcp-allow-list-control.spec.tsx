@@ -90,15 +90,15 @@ const click = (el: HTMLElement | null | undefined): void =>
   act(() => el!.click());
 
 describe('McpAllowListControl', () => {
-  it('seeds the list with the servers that load now when "Only servers I pick" is chosen', () => {
+  it('seeds the list with the servers that load now when "Only picked" is chosen', () => {
     const onChange = render({ disabled: ['linear'] });
-    click(byText('Only servers I pick'));
+    click(byText('Only picked'));
     expect(onChange).toHaveBeenCalledWith(['codegraph', 'claude.ai Gmail']);
   });
 
-  it('removes the list on "All servers"', () => {
+  it('removes the list on "All"', () => {
     const onChange = render({ allowed: ['codegraph'] });
-    click(byText('All servers'));
+    click(byText('All'));
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
 
@@ -123,7 +123,9 @@ describe('McpAllowListControl', () => {
     const onChange = render({
       allowed: ['codegraph', 'claude.ai Gmail', 'claude.ai Slack'],
     });
-    expect(box('claude.ai Gmail')?.textContent).toContain('account connector');
+    expect(box('claude.ai Gmail')?.textContent).toContain(
+      'claude.ai Gmail account connector',
+    );
     click(byText('Leave out account connectors'));
     expect(onChange).toHaveBeenCalledWith(['codegraph']);
   });
@@ -138,7 +140,7 @@ describe('McpAllowListControl', () => {
 
   it('keeps a listed-no-more name as a row marked not found, so it can be removed', () => {
     const onChange = render({ allowed: ['codegraph', 'gone'] });
-    expect(box('gone')?.textContent).toContain('not found');
+    expect(box('gone')?.textContent).toContain('gone not found');
     click(box('gone'));
     expect(onChange).toHaveBeenCalledWith(['codegraph']);
   });
@@ -161,15 +163,15 @@ describe('McpAllowListControl', () => {
     expect(document.body.textContent).toContain(
       'This CLI cannot limit its servers.',
     );
-    expect(byText('Only servers I pick')?.disabled).toBe(true);
-    click(byText('Only servers I pick'));
+    expect(byText('Only picked')?.disabled).toBe(true);
+    click(byText('Only picked'));
     expect(onChange).not.toHaveBeenCalled();
   });
 
   it('cannot start a list before the servers are read, which would write an empty one', () => {
     const onChange = render({ listing: undefined });
-    expect(byText('Only servers I pick')?.disabled).toBe(true);
-    click(byText('Only servers I pick'));
+    expect(byText('Only picked')?.disabled).toBe(true);
+    click(byText('Only picked'));
     expect(onChange).not.toHaveBeenCalled();
   });
 });

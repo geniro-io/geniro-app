@@ -113,7 +113,15 @@ describe('codexContextUsage', () => {
         { path: '/home/u/.codex/AGENTS.md', kind: null, tokens: null },
       ],
       // Only what is connected is in the window; codex prices no server.
-      servers: [{ name: 'fs', tokens: null, toolCount: 4, loadedToolCount: 4 }],
+      servers: [
+        {
+          name: 'fs',
+          tokens: null,
+          toolCount: 4,
+          loadedToolCount: 4,
+          loadedTokens: null,
+        },
+      ],
       lastRequest: codexLastRequest(LAST),
     });
   });

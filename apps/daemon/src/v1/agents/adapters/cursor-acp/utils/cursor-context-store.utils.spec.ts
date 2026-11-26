@@ -80,13 +80,28 @@ describe('parseCursorContextBlob', () => {
     const usage = parseCursorContextBlob(ROOT);
 
     expect(usage?.categories).toEqual([
-      { name: 'System prompt', tokens: 5214, deferred: false },
-      { name: 'Tool definitions', tokens: 57_717, deferred: false },
-      { name: 'Rules', tokens: 48_590, deferred: false },
-      { name: 'Skills', tokens: 1713, deferred: false },
-      { name: 'MCP & dynamic tools', tokens: 4214, deferred: false },
-      { name: 'Subagent definitions', tokens: 269, deferred: false },
-      { name: 'Conversation', tokens: 2084, deferred: false },
+      { name: 'System prompt', tokens: 5214, deferred: false, reserve: false },
+      {
+        name: 'Tool definitions',
+        tokens: 57_717,
+        deferred: false,
+        reserve: false,
+      },
+      { name: 'Rules', tokens: 48_590, deferred: false, reserve: false },
+      { name: 'Skills', tokens: 1713, deferred: false, reserve: false },
+      {
+        name: 'MCP & dynamic tools',
+        tokens: 4214,
+        deferred: false,
+        reserve: false,
+      },
+      {
+        name: 'Subagent definitions',
+        tokens: 269,
+        deferred: false,
+        reserve: false,
+      },
+      { name: 'Conversation', tokens: 2084, deferred: false, reserve: false },
     ]);
   });
 
@@ -151,6 +166,7 @@ describe('parseCursorContextBlob', () => {
       name: 'System prompt',
       tokens: 5215,
       deferred: false,
+      reserve: false,
     });
   });
 

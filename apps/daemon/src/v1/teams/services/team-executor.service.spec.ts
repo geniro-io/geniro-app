@@ -1299,7 +1299,7 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a member turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'> &
-      Partial<Pick<AgentMcpService, 'connectorTargetsOf'>>;
+      Partial<Pick<AgentMcpService, 'listedTargetsOf'>>;
     /** Where a fresh member session's context breakdown is recorded, when a test reads it. */
     contextRecorder?: Pick<FreshSessionContextRecorder, 'record'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
@@ -13782,12 +13782,25 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('hands a member’s allow list to its turn with each account connector’s listed target, only on a CLI that applies one', async () => {
-      const connectorTargetsOf = vi.fn(
-        async () => new Map([['claude.ai Slack', 'https://mcp.slack.com/mcp']]),
+    it('hands a member’s allow list to its turn with every listed target beside an account connector, only on a CLI that applies one', async () => {
+      const listedTargetsOf = vi.fn(
+        async () =>
+          new Map([
+            [
+              'claude.ai Slack',
+              {
+                target: 'https://mcp.slack.com/mcp',
+                transport: 'http' as const,
+              },
+            ],
+            [
+              'codegraph',
+              { target: 'codegraph serve', transport: 'stdio' as const },
+            ],
+          ]),
       );
       const harness = setup(4870, {
-        agentMcp: { turnMismatchNotice: async () => null, connectorTargetsOf },
+        agentMcp: { turnMismatchNotice: async () => null, listedTargetsOf },
       });
       const run = await harness.service.startRun({
         slug: 'pool-allow',
@@ -13816,15 +13829,22 @@ describe('TeamExecutorService — agent calls', () => {
       });
       await drain();
       expect(harness.claude.starts[0]!.input.mcpAllowed).toEqual([
-        { name: 'codegraph', target: null },
-        { name: 'claude.ai Slack', target: 'https://mcp.slack.com/mcp' },
-        { name: 'claude.ai Gmail', target: null },
+        { name: 'codegraph', target: 'codegraph serve', transport: 'stdio' },
+        {
+          name: 'claude.ai Slack',
+          target: 'https://mcp.slack.com/mcp',
+          transport: 'http',
+        },
+        { name: 'claude.ai Gmail', target: null, transport: null },
       ]);
-      expect(connectorTargetsOf).toHaveBeenCalledWith(
+      expect(listedTargetsOf).toHaveBeenCalledWith(
         'claude',
         realpathSync(dir),
         null,
-        ['claude.ai Slack', 'claude.ai Gmail'],
+        {
+          accountConnectors: ['claude.ai Slack', 'claude.ai Gmail'],
+          inFolder: ['codegraph'],
+        },
       );
 
       const first = harness.callBroker.callAgent(run.id, 'orch', {
@@ -13849,7 +13869,7 @@ describe('TeamExecutorService — agent calls', () => {
       completeTurn(harness.cursor.starts[0]!, 'ok');
       await second;
 
-      expect(connectorTargetsOf).toHaveBeenCalledTimes(1);
+      expect(listedTargetsOf).toHaveBeenCalledTimes(1);
       completeTurn(harness.claude.starts[0]!, 'done');
       await drain();
     });
@@ -13858,7 +13878,7 @@ describe('TeamExecutorService — agent calls', () => {
       const harness = setup(4870, {
         agentMcp: {
           turnMismatchNotice: async () => null,
-          connectorTargetsOf: async () => new Map<string, string>(),
+          listedTargetsOf: async () => new Map(),
         },
       });
       const team = teamOf(

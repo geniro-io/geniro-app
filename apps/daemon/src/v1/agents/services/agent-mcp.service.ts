@@ -255,6 +255,12 @@ function mergeKnown(
   return merged;
 }
 
+/** Where a listing says one server is reached. */
+export interface AgentMcpListedTarget {
+  target: string;
+  transport: AgentMcpServer['transport'];
+}
+
 /** Constructor options — test seams, not user config. */
 export interface AgentMcpServiceOptions {
   /** How long a cached listing stays fresh. */
@@ -407,31 +413,41 @@ export class AgentMcpService {
   }
 
   /**
-   * Where each named account connector is reached, by name, as a listing of
-   * the CLI's under this profile reports it — never a turn's harvest, whose
-   * `system/init` names no target. A connector belongs to the account, so any
-   * folder's listing answers for it, the newest first; only when none names
-   * one is this folder listed, blocking. A connector no listing gives a
-   * target is absent.
+   * Where each named server is reached, as a listing of the CLI's under this
+   * profile reports it — never a turn's harvest, whose `system/init` names no
+   * target. An account connector belongs to the account, so any folder's
+   * listing answers for it, the newest first; `inFolder` servers are read
+   * from this folder's listing alone, and that listing is asked, blocking,
+   * only when one of them is asked or a connector is still unnamed. A server
+   * no listing gives a target is absent.
    */
-  async connectorTargetsOf(
+  async listedTargetsOf(
     agent: AgentKind,
     cwd: string,
     configDir: string | null,
-    names: readonly string[],
-  ): Promise<ReadonlyMap<string, string>> {
+    names: {
+      accountConnectors: readonly string[];
+      inFolder: readonly string[];
+    },
+  ): Promise<ReadonlyMap<string, AgentMcpListedTarget>> {
     const profile =
       configDir === null ? null : resolveValidConfigDir(configDir);
-    const targets = new Map<string, string>();
-    const take = (servers: readonly AgentMcpServer[]): void => {
+    const targets = new Map<string, AgentMcpListedTarget>();
+    const take = (
+      servers: readonly AgentMcpServer[],
+      wanted: readonly string[],
+    ): void => {
       for (const server of servers) {
         if (
-          names.includes(server.name) &&
+          wanted.includes(server.name) &&
           !targets.has(server.name) &&
           server.target !== null &&
           server.target !== ''
         ) {
-          targets.set(server.name, server.target);
+          targets.set(server.name, {
+            target: server.target,
+            transport: server.transport,
+          });
         }
       }
     };
@@ -440,16 +456,19 @@ export class AgentMcpService {
       .map(([, entry]) => entry)
       .sort((a, b) => b.fetchedAt - a.fetchedAt);
     for (const entry of listings) {
-      take(entry.servers);
+      take(entry.servers, names.accountConnectors);
     }
-    if (targets.size < names.length) {
+    if (
+      names.inFolder.length > 0 ||
+      names.accountConnectors.some((name) => !targets.has(name))
+    ) {
       const { result } = await this.readServers(agent, cwd, {
         configDir: profile,
         blocking: true,
         listingOnly: true,
       });
       if (result.ok) {
-        take(result.servers);
+        take(result.servers, [...names.accountConnectors, ...names.inFolder]);
       }
     }
     return targets;

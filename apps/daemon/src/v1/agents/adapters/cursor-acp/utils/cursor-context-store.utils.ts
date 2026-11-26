@@ -245,6 +245,7 @@ function readCategory(bytes: Uint8Array): AgentContextCategory | null {
     // Cursor draws no distinction between loaded and available: every category
     // it reports is counted in the total it states.
     deferred: false,
+    reserve: false,
   };
 }
 

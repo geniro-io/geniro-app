@@ -109,7 +109,8 @@ function searchEntry(
   text: string | null,
   failed: boolean,
 ): MemoryToolEntry | null {
-  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  const asked = args.query ?? args.keywords;
+  const query = typeof asked === 'string' ? asked.trim() : '';
   if (query === '') {
     return null;
   }
@@ -129,7 +130,9 @@ function readEntry(
   args: Record<string, unknown>,
   text: string | null,
 ): MemoryToolEntry | null {
-  const ids = args.ids ?? (args.id === undefined ? undefined : [args.id]);
+  const one = args.id ?? args.handle;
+  const ids =
+    args.ids ?? args.handles ?? (one === undefined ? undefined : [one]);
   if (!Array.isArray(ids)) {
     return null;
   }
@@ -269,7 +272,8 @@ function entryOf(
  * `memoryReadResultText`, `memorySaveResultText`, `memoryForgetResultText`,
  * `memoryFeedbackResultText` (each in `apps/daemon/src/v1/mcp/tools/memory-<tool>/`)
  * and `memoryEntryLine` (`apps/daemon/src/v1/mcp/tools/memory-mcp-tool.ts`),
- * and the `memory_read` arguments `readMemoryReadArgs` accepts (`ids` or `id`).
+ * and the arguments `readMemoryReadArgs` (`ids`, `handles`, `id`, `handle`) and
+ * `readMemorySearchArgs` (`query`, `keywords`) accept.
  */
 export function memoryToolEntryOf(pair: ToolPair): MemoryToolEntry | null {
   const name = payloadString(pair.call.payload, 'name') ?? '';

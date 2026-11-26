@@ -8,6 +8,7 @@ import {
   type KnowledgeDocumentDto,
 } from '../../../knowledge/knowledge.types';
 import { levelOfKey } from '../../../knowledge/utils/knowledge-text';
+import { leadWithCall } from '../../../../utils/tool-arg-synonyms';
 import type { ToolArgs } from '../../mcp.types';
 import { knowledgeHitLine } from '../knowledge-mcp-tool';
 import { pagedText } from '../paged-text';
@@ -48,7 +49,10 @@ export function readKnowledgeReadArgs(
   const read = readToolArgs(KnowledgeReadArgsSchema, args);
   return read.ok
     ? read
-    : { ok: false, error: `call ${KNOWLEDGE_READ_CALL}.\n${read.error}` };
+    : {
+        ok: false,
+        error: leadWithCall(`call ${KNOWLEDGE_READ_CALL}.`, read.error),
+      };
 }
 
 export function knowledgeMissingText(

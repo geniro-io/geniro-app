@@ -26,6 +26,10 @@ import {
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
+import {
+  applyArgSynonyms,
+  leadWithCall,
+} from '../../../utils/tool-arg-synonyms';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import type { TaskBoardToolAnswer } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
@@ -44,7 +48,12 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { landsInArmedIntake, quietColumn } from '../utils/armed-intake';
-import { BOARD_TOOLS, boardToolArgs } from '../utils/board-tools';
+import {
+  BOARD_TOOLS,
+  BOARD_TOOL_CALLS,
+  BOARD_TOOL_SYNONYMS,
+  boardToolArgs,
+} from '../utils/board-tools';
 import { reportImagePaths, rewriteReportImages } from '../utils/report-images';
 import { resolveRunTarget } from '../utils/run-target';
 import { parseLabels } from '../utils/task-labels';
@@ -94,8 +103,10 @@ class BoardAnswer extends Error {
   }
 }
 
+const INVALID_PREFIX = 'INVALID_ARGS: ';
+
 const invalid = (reason: string): BoardAnswer =>
-  new BoardAnswer(`INVALID_ARGS: ${reason}`, true);
+  new BoardAnswer(`${INVALID_PREFIX}${reason}`, true);
 
 /**
  * The board's half of the board tools (`HOST_BOARD_TOOLS`) — how ANY agent
@@ -155,7 +166,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
       };
     } catch (err) {
       if (err instanceof BoardAnswer) {
-        return { text: err.text, isError: err.isError };
+        return { text: withRightCall(name, err.text), isError: err.isError };
       }
       if (err instanceof BaseException) {
         return { text: `${err.errorCode}: ${err.message}`, isError: true };
@@ -167,11 +178,20 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
   private async answer(
     runId: string,
     name: string,
-    args: Record<string, unknown>,
+    given: Record<string, unknown>,
   ): Promise<string> {
     if (!isHostBoardTool(name)) {
       throw invalid(`'${name}' is not a board tool`);
     }
+    const synonyms = BOARD_TOOL_SYNONYMS[name];
+    const renamed =
+      synonyms === undefined
+        ? { ok: true as const, args: given }
+        : applyArgSynonyms(given, synonyms);
+    if (!renamed.ok) {
+      throw invalid(renamed.error);
+    }
+    const args = renamed.args;
     rejectUnknownArgs(args, boardToolArgs(name));
     switch (name) {
       case 'list_projects':
@@ -861,6 +881,13 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     const task = await this.taskDao.getById(run.taskId, em);
     return task !== null && task.runId === runId ? task : null;
   }
+}
+
+function withRightCall(name: string, text: string): string {
+  const rightCall = isHostBoardTool(name) ? BOARD_TOOL_CALLS[name] : undefined;
+  return rightCall !== undefined && text.startsWith(INVALID_PREFIX)
+    ? `${INVALID_PREFIX}${leadWithCall(rightCall, text.slice(INVALID_PREFIX.length))}`
+    : text;
 }
 
 function rejectUnknownArgs(

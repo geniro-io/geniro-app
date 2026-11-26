@@ -1390,7 +1390,7 @@ describe('McpServerService', () => {
       ],
       [
         'call_agent',
-        { agent: 'helper', agent_id: 'helper', message: 'm', title: 'T' },
+        { agent: 'helper', message: 'm', title: 'T', timeout: 5 },
         "'agent'",
       ],
       [

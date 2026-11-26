@@ -6,9 +6,22 @@ import {
   MEMORY_SEARCH_MAX,
   type MemoryHit,
 } from '../../../memory/memory.types';
+import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  clampCount,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
 import type { ToolArgs } from '../../mcp.types';
 import { memoryEntryLine } from '../memory-mcp-tool';
 import { readToolArgs } from '../tool-args';
+
+export const MEMORY_SEARCH_SYNONYMS: ArgSynonyms = {
+  keywords: 'query',
+  max_results: 'limit',
+};
+
+const MEMORY_SEARCH_CALL = `call memory_search({query: "<words>", limit: ${MEMORY_SEARCH_DEFAULT}}) — at most ${MEMORY_SEARCH_MAX} entries.`;
 
 export const MemorySearchArgsSchema = z
   .object({
@@ -26,15 +39,30 @@ export const MemorySearchArgsSchema = z
       .min(1)
       .max(MEMORY_SEARCH_MAX)
       .default(MEMORY_SEARCH_DEFAULT)
-      .describe('How many entries to return, best first.'),
+      .describe(
+        `How many entries to return, best first; more than ${MEMORY_SEARCH_MAX} reads ${MEMORY_SEARCH_MAX}.`,
+      ),
   })
   .strict();
 export type MemorySearchArgs = z.infer<typeof MemorySearchArgsSchema>;
 
+/**
+ * TWIN PARSER: `searchEntry` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
+ * reads the query a stored call asked for; a field accepted here is read there too.
+ */
 export function readMemorySearchArgs(
   args: Record<string, unknown>,
 ): ToolArgs<MemorySearchArgs> {
-  return readToolArgs(MemorySearchArgsSchema, args);
+  const renamed = applyArgSynonyms(args, MEMORY_SEARCH_SYNONYMS);
+  const read = renamed.ok
+    ? readToolArgs(
+        MemorySearchArgsSchema,
+        clampCount(renamed.args, 'limit', MEMORY_SEARCH_MAX),
+      )
+    : renamed;
+  return read.ok
+    ? read
+    : { ok: false, error: leadWithCall(MEMORY_SEARCH_CALL, read.error) };
 }
 
 /**

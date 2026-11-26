@@ -3,11 +3,25 @@ import { useContext, useEffect, useRef, useState } from 'react';
 
 import { ThreadActionButton } from '../components/thread-head';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { ClampedMarkdown } from './clamped-markdown';
+import { ClampedBlock, isLongMarkdown } from './clamped-markdown';
+import { MarkdownContent } from './markdown-content';
 import {
   type ThreadContextMessage,
   ThreadContextReaderContext,
 } from './thread-question-context';
+
+/** The lines the messages before a question may fill before they fold. */
+const MESSAGES_LINES = 8;
+
+function messageLabel(role: ThreadContextMessage['role']): string {
+  return role === 'user' ? 'Sent to the thread' : 'The thread';
+}
+
+function messagesText(messages: ThreadContextMessage[]): string {
+  return messages
+    .map((message) => `${messageLabel(message.role)}\n${message.text}`)
+    .join('\n');
+}
 
 type ContextState =
   | { kind: 'hidden' }
@@ -17,8 +31,10 @@ type ContextState =
 
 function ContextMessages({
   state,
+  memoryKey,
 }: {
   state: Exclude<ContextState, { kind: 'hidden' }>;
+  memoryKey: string;
 }): React.JSX.Element {
   return (
     <div
@@ -38,23 +54,27 @@ function ContextMessages({
           The thread said nothing before this question.
         </p>
       ) : (
-        state.messages.map((message) => (
-          <div
-            key={message.seq}
-            data-slot="thread-question-context-message"
-            data-role={message.role}
-            className="flex min-w-0 flex-col gap-0.5">
-            <span className="text-[11px] font-medium text-muted-foreground">
-              {message.role === 'user' ? 'Sent to the thread' : 'The thread'}
-            </span>
-            <ClampedMarkdown
-              text={message.text}
-              lines={4}
-              slot="thread-question-context-text"
-              className="text-xs"
-            />
+        <ClampedBlock
+          long={isLongMarkdown(messagesText(state.messages), MESSAGES_LINES)}
+          lines={MESSAGES_LINES}
+          slot="thread-question-context-messages"
+          toggleClassName="text-xs"
+          memoryKey={memoryKey}>
+          <div className="flex min-w-0 flex-col gap-2">
+            {state.messages.map((message) => (
+              <div
+                key={message.seq}
+                data-slot="thread-question-context-message"
+                data-role={message.role}
+                className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {messageLabel(message.role)}
+                </span>
+                <MarkdownContent content={message.text} className="text-xs" />
+              </div>
+            ))}
           </div>
-        ))
+        </ClampedBlock>
       )}
     </div>
   );
@@ -138,7 +158,12 @@ export function QuestionContextMessages({
         onClick={toggle}>
         {hidden ? 'Show a few messages' : 'Hide messages'}
       </ThreadActionButton>
-      {hidden ? null : <ContextMessages state={context} />}
+      {hidden ? null : (
+        <ContextMessages
+          state={context}
+          memoryKey={`question-context:${threadRunId}:${threadRequestId ?? 'latest'}`}
+        />
+      )}
     </div>
   );
 }

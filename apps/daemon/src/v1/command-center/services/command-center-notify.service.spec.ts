@@ -72,8 +72,16 @@ interface RunFields {
   id: string;
   title?: string;
   status?: string;
-  outcome?: { summary: string } | null;
+  outcome?: {
+    summary: string | null;
+    seq?: number | null;
+    source?: 'recorded' | 'goals';
+    kind?: string;
+  } | null;
   pullRequests?: { number: number; opened: boolean }[];
+  monitorsOpen?: number;
+  goals?: { id: string; status: string }[];
+  lastActivityAt?: string | null;
 }
 
 function runOf(fields: RunFields): RunWire {
@@ -133,8 +141,17 @@ describe('CommandCenterNotifyService', () => {
       await roster.join(managerRunId, [...boardThreads], 'auto', new Date());
       return [];
     });
+    service = makeService();
+  });
+
+  afterEach(async () => {
+    service.onModuleDestroy();
+    await db.orm.close(true);
+  });
+
+  function makeService(): CommandCenterNotifyService {
     const itemDao = new ItemDao(db.em);
-    service = new CommandCenterNotifyService(
+    return new CommandCenterNotifyService(
       db.em,
       {
         listChats,
@@ -167,12 +184,7 @@ describe('CommandCenterNotifyService', () => {
       } as unknown as CommandCenterEventBus,
       { syncRoster } as unknown as CommandCenterChatService,
     );
-  });
-
-  afterEach(async () => {
-    service.onModuleDestroy();
-    await db.orm.close(true);
-  });
+  }
 
   function setThread(fields: RunFields): void {
     runs.set(fields.id, runOf(fields));
@@ -355,6 +367,378 @@ describe('CommandCenterNotifyService', () => {
       },
     ]);
     expect(wake.row.message).toBe('t1 is done');
+  });
+
+  it('wakes the manager once per finish, not again when a finished thread settles a later turn that changed nothing', async () => {
+    await watched(THREAD);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Report sent' },
+    });
+    await service.review(THREAD);
+
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Report sent' },
+    });
+    await service.review(THREAD);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(await managerRows()).toEqual([]);
+  });
+
+  it('does not announce a watched thread as done while a monitor it started still runs', async () => {
+    await watched(THREAD);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Draft PR open, prod check at 10:15' },
+      monitorsOpen: 2,
+    });
+    await service.review(THREAD);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(await managerRows()).toEqual([]);
+
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Draft PR open, prod check at 10:15' },
+      monitorsOpen: 0,
+    });
+    await service.review(THREAD);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends a watch with the wake it asked for, so a later finish only writes a Done row', async () => {
+    await watched(THREAD);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Report sent', seq: 5, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    const [row] = (await roster.listOf(MANAGER)).filter(
+      (entry) => entry.threadRunId === THREAD,
+    );
+    expect(row?.watch).toBe(false);
+
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Second report sent', seq: 9, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(await managerRows()).toEqual([
+      expect.objectContaining({
+        message: 't1 is done',
+        woke: false,
+        threadDone: [
+          expect.objectContaining({ summary: 'Second report sent' }),
+        ],
+      }),
+    ]);
+  });
+
+  it('does not announce a finish again after a restart, when the thread runs once more and settles with the same finish', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+    expect(await managerRows()).toHaveLength(1);
+
+    service.onModuleDestroy();
+    service = makeService();
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(await managerRows()).toHaveLength(1);
+  });
+
+  it('records a thread already done at its first reading as announced, so its next unchanged settle stays quiet', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    setThread({
+      id: THREAD,
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      status: 'completed',
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(await managerRows()).toEqual([]);
+  });
+
+  it('announces a goals-derived finish again only once the goals that derive it change', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    const goalsDone = {
+      summary: null,
+      seq: null,
+      source: 'goals' as const,
+      kind: 'success',
+    };
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: goalsDone,
+      goals: [{ id: 'g1', status: 'achieved' }],
+    });
+    await service.review(THREAD);
+
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: goalsDone,
+      goals: [{ id: 'g1', status: 'achieved' }],
+    });
+    await service.review(THREAD);
+    expect(await managerRows()).toHaveLength(1);
+
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: goalsDone,
+      goals: [
+        { id: 'g1', status: 'achieved' },
+        { id: 'g2', status: 'achieved' },
+      ],
+    });
+    await service.review(THREAD);
+    expect(await managerRows()).toHaveLength(2);
+  });
+
+  it('announces the next finish once tell_threads cleared the one already announced', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    await roster.clearAnnounced(MANAGER, [THREAD]);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(await managerRows()).toHaveLength(2);
+  });
+
+  it('announces a card-Done finish once, and again after tell_threads cleared it', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    await db.seedTask(THREAD, 'done');
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({ id: THREAD, status: 'completed' });
+    await service.review(THREAD);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({ id: THREAD, status: 'completed' });
+    await service.review(THREAD);
+    expect(await managerRows()).toHaveLength(1);
+
+    await roster.clearAnnounced(MANAGER, [THREAD]);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+    setThread({ id: THREAD, status: 'completed' });
+    await service.review(THREAD);
+
+    expect(await managerRows()).toHaveLength(2);
+  });
+
+  it('keeps the watch of a thread already done at its first reading', async () => {
+    await watched(THREAD);
+    setThread({
+      id: THREAD,
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+
+    await service.review(THREAD);
+
+    expect(publish).not.toHaveBeenCalled();
+    const [row] = await roster.listOf(MANAGER);
+    expect(row?.watch).toBe(true);
+    expect(row?.announcedFinish).not.toBeNull();
+  });
+
+  it('keeps a tell_threads clear and watch that landed after a review read the row', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    const [joined] = await roster.listOf(MANAGER);
+    await roster.markAnnounced(MANAGER, THREAD, joined!, 'old-finish', false);
+    const [stale] = await roster.listOf(MANAGER);
+
+    await roster.clearAnnounced(MANAGER, [THREAD]);
+    await roster.setWatch(MANAGER, [THREAD], true);
+    await roster.markAnnounced(MANAGER, THREAD, stale!, 'old-finish', true);
+
+    const [row] = await roster.listOf(MANAGER);
+    expect(row?.announcedFinish).toBeNull();
+    expect(row?.watch).toBe(true);
+  });
+
+  it('leaves a tell_threads clear and watch that land while a review announces a finish', async () => {
+    await roster.join(MANAGER, [THREAD], 'auto', new Date());
+    const [joined] = await roster.listOf(MANAGER);
+    await roster.markAnnounced(MANAGER, THREAD, joined!, 'older-finish', false);
+    setThread({ id: THREAD, status: 'running' });
+    await service.review(THREAD);
+
+    const listOf = roster.listOf.bind(roster);
+    vi.spyOn(roster, 'listOf').mockImplementationOnce(async (...args) => {
+      const rows = await listOf(...args);
+      await roster.clearAnnounced(MANAGER, [THREAD]);
+      await roster.setWatch(MANAGER, [THREAD], true);
+      return rows;
+    });
+    setThread({
+      id: THREAD,
+      outcome: { summary: 'Cache cleared', seq: 7, source: 'recorded' },
+    });
+    await service.review(THREAD);
+
+    expect(await managerRows()).toHaveLength(1);
+    const [row] = await listOf(MANAGER);
+    expect(row?.announcedFinish).toBeNull();
+    expect(row?.watch).toBe(true);
+  });
+
+  describe('at a boot', () => {
+    const later = () => new Date(Date.now() + 60_000).toISOString();
+    const earlier = () => new Date(Date.now() - 60_000).toISOString();
+    const finished = (lastActivityAt: string) => ({
+      id: THREAD,
+      outcome: {
+        summary: 'Cache cleared',
+        seq: 7,
+        source: 'recorded' as const,
+      },
+      lastActivityAt,
+    });
+
+    async function restart(): Promise<void> {
+      service.onModuleDestroy();
+      service = makeService();
+      await service.review(THREAD);
+    }
+
+    it('wakes the manager once for a watched thread that finished while the daemon was down, and not after the next restart', async () => {
+      await watched(THREAD);
+      setThread(finished(later()));
+
+      await restart();
+      await restart();
+
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(firstWake().key).toBe(`command-center:done:${THREAD}`);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.watch).toBe(false);
+      expect(row?.announcedFinish).not.toBeNull();
+    });
+
+    it('stays silent for an unwatched thread that finished while the daemon was down, and records its finish', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date());
+      setThread(finished(later()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(await managerRows()).toEqual([]);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).not.toBeNull();
+    });
+
+    it('stays silent for a watched row written before finishes were recorded, and records its finish', async () => {
+      await db.seedRoster(MANAGER, THREAD, 't1', { watch: true });
+      setThread(finished(later()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(await managerRows()).toEqual([]);
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).not.toBeNull();
+      expect(row?.watch).toBe(true);
+    });
+
+    it('keeps waiting when the thread has not run since tell_threads asked for new work, and announces the finish of that work', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date(Date.now() - 1000));
+      await roster.setWatch(MANAGER, [THREAD], true);
+      const [joined] = await roster.listOf(MANAGER);
+      await roster.markAnnounced(MANAGER, THREAD, joined!, 'older', false);
+      await roster.clearAnnounced(MANAGER, [THREAD]);
+      setThread(finished(earlier()));
+
+      await restart();
+
+      expect(publish).not.toHaveBeenCalled();
+      const [waiting] = await roster.listOf(MANAGER);
+      expect(waiting?.announcedFinish).toBeNull();
+      expect(waiting?.watch).toBe(true);
+
+      setThread({ id: THREAD, status: 'running' });
+      await service.review(THREAD);
+      setThread(finished(later()));
+      await service.review(THREAD);
+
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a tell_threads re-arm that landed after a review read a watched row with no finish recorded', async () => {
+      await roster.join(MANAGER, [THREAD], 'auto', new Date(Date.now() - 1000));
+      await roster.setWatch(MANAGER, [THREAD], true);
+      const [stale] = await roster.listOf(MANAGER);
+
+      await roster.clearAnnounced(MANAGER, [THREAD]);
+      await roster.setWatch(MANAGER, [THREAD], true);
+      await roster.markAnnounced(MANAGER, THREAD, stale!, 'finish', true);
+
+      const [row] = await roster.listOf(MANAGER);
+      expect(row?.announcedFinish).toBeNull();
+      expect(row?.watch).toBe(true);
+    });
   });
 
   it('tells the manager nothing about status changes that never reach done', async () => {

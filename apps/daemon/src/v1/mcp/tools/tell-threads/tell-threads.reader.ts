@@ -27,7 +27,7 @@ function nextStepOf(answer: TellThreadsAnswer): string {
   const lines: string[] = [];
   if (refused.length > 0) {
     lines.push(
-      `Not delivered to ${refused.map((row) => `${row.to} (${row.code ?? 'refused'})`).join(', ')}: those threads did not get the message. Tell the user, or try again once the cause is fixed.`,
+      `Not delivered to ${refused.map((row) => `${row.to} (${row.code ?? 'refused'})`).join(', ')}: those threads did not get the message, and their watch is unchanged. Tell the user, or try again once the cause is fixed.`,
     );
   }
   if (waiting.length > 0) {
@@ -35,13 +35,17 @@ function nextStepOf(answer: TellThreadsAnswer): string {
       `Waiting at ${waiting.map((row) => `${row.to} (${row.code ?? 'waiting'})`).join(', ')}: it is read with that thread's next turn, not now.`,
     );
   }
+  const delivered = answer.sent
+    .filter((row) => row.outcome !== 'refused')
+    .map((row) => row.to)
+    .join(', ');
   if (answer.watch === true) {
     lines.push(
-      'Watching these threads: each one reaching done wakes you, once per finish.',
+      `Watching ${delivered}: the next finish of each wakes you once, and that wake ends its watch.`,
     );
   } else if (answer.watch === false) {
     lines.push(
-      'No longer watching these threads: a finish only puts a Done card in your chat.',
+      `No longer watching ${delivered}: a finish only puts a Done card in your chat.`,
     );
   }
   lines.push(

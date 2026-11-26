@@ -8,6 +8,11 @@ import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity
 
 const HANDLE_PATTERN = /^t(\d+)$/;
 
+type RosterMarks = Pick<
+  CommandCenterRosterEntry,
+  'announcedFinish' | 'watch' | 'finishNewsSince'
+>;
+
 /** `command_center_roster` — the threads each manager holds. */
 @Injectable()
 export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
@@ -77,6 +82,7 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
               note: null,
               joinedAt: at,
               leftAt: null,
+              finishNewsSince: at,
             },
             { partial: true },
           );
@@ -139,6 +145,66 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
       CommandCenterRosterEntry,
       { managerRunId, threadRunId: { $in: [...threadRunIds] } },
       { watch },
+    );
+  }
+
+  /**
+   * Record the finish the manager was told about, ending the watch that asked
+   * for it — only while the row still holds what the caller read, so a
+   * `tell_threads` landing in between keeps its clear and its watch.
+   */
+  async markAnnounced(
+    managerRunId: string,
+    threadRunId: string,
+    read: RosterMarks,
+    announcedFinish: string,
+    unwatch: boolean,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.replaceMarks(
+      managerRunId,
+      threadRunId,
+      read,
+      unwatch ? { announcedFinish, watch: false } : { announcedFinish },
+      txEm,
+    );
+  }
+
+  /** Write a thread's watch and announced finish only while the row still holds `read`. */
+  async replaceMarks(
+    managerRunId: string,
+    threadRunId: string,
+    read: RosterMarks,
+    next: Partial<RosterMarks>,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      CommandCenterRosterEntry,
+      {
+        managerRunId,
+        threadRunId,
+        announcedFinish: read.announcedFinish,
+        watch: read.watch,
+        finishNewsSince: read.finishNewsSince,
+      },
+      next,
+    );
+  }
+
+  /** Make each thread's next finish news, from `at` on. */
+  async clearAnnounced(
+    managerRunId: string,
+    threadRunIds: readonly string[],
+    at: Date = new Date(),
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (threadRunIds.length === 0) {
+      return;
+    }
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      CommandCenterRosterEntry,
+      { managerRunId, threadRunId: { $in: [...threadRunIds] } },
+      { announcedFinish: null, finishNewsSince: at },
     );
   }
 

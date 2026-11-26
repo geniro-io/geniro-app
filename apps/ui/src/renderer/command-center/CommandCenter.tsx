@@ -546,6 +546,7 @@ export function CommandCenter({
           held: (card.run.holdingFor ?? 0) > 0,
           subagents: card.run.subagentsOut ?? 0,
           commands: card.run.shellsOpen ?? 0,
+          monitors: card.run.monitorsOpen ?? 0,
         },
       },
     ];

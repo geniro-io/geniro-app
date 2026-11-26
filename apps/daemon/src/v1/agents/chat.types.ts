@@ -9633,7 +9633,7 @@ export const TellThreadsSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'True only when the user asked you to watch these threads or tell them when they finish: each one reaching done then wakes you. False stops watching them. Omit it to leave watching as it is; an unwatched thread that finishes only gets a Done card in your chat, with no turn of yours.',
+      'True only when the user asked you to watch these threads or tell them when they finish: the next finish of each then wakes you once, and that wake ends its watch. False stops watching them. Omit it to leave watching as it is; an unwatched thread that finishes only gets a Done card in your chat, with no turn of yours.',
     ),
 });
 export type TellThreadsInput = z.infer<typeof TellThreadsSchema>;
@@ -9738,7 +9738,7 @@ export const StartThreadSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      'True only when the user asked you to watch the new thread or tell them when it finishes: its reaching done then wakes you. Otherwise leave it off; a finished thread then only gets a Done card in your chat, with no turn of yours.',
+      'True only when the user asked you to watch the new thread or tell them when it finishes: its first finish then wakes you once, and that wake ends the watch. Otherwise leave it off; a finished thread then only gets a Done card in your chat, with no turn of yours.',
     ),
   card: z
     .boolean()

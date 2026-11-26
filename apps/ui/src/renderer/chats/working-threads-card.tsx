@@ -9,18 +9,24 @@ import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { plainMarkdownText } from './brief-text';
 import { formatDateTime, formatRelativeTime } from './relative-time';
-import { CallGlyph, SubagentGlyph, TerminalGlyph } from './shelf-glyphs';
+import {
+  CallGlyph,
+  MonitorGlyph,
+  SubagentGlyph,
+  TerminalGlyph,
+} from './shelf-glyphs';
 import {
   AgentsTile,
   type AgentsTileFace,
   CONTROL_HOVER,
 } from './working-card-parts';
 
-/** Work a settled thread still has out: a held turn, background sub-agents, detached commands. */
+/** Work a settled thread still has out: a held turn, background sub-agents, detached commands, monitors. */
 export interface WorkingThreadBackground {
   held: boolean;
   subagents: number;
   commands: number;
+  monitors: number;
 }
 
 export interface WorkingThread {
@@ -92,7 +98,8 @@ function ThreadBackground({
   if (
     !background.held &&
     background.subagents === 0 &&
-    background.commands === 0
+    background.commands === 0 &&
+    background.monitors === 0
   ) {
     return null;
   }
@@ -117,6 +124,12 @@ function ThreadBackground({
         <span data-slot="working-thread-commands" className={item}>
           <TerminalGlyph live className="size-3.5" />
           {plural(background.commands, 'command', 'commands')}
+        </span>
+      )}
+      {background.monitors === 0 ? null : (
+        <span data-slot="working-thread-monitors" className={item}>
+          <MonitorGlyph live className="size-3.5" />
+          {plural(background.monitors, 'monitor', 'monitors')}
         </span>
       )}
     </div>

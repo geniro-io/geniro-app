@@ -11,10 +11,15 @@ type BoardRun = Pick<
   | 'holdingFor'
   | 'shellsOpen'
   | 'subagentsOut'
+  | 'monitorsOpen'
 >;
 
 function heldForWork(run: BoardRun): boolean {
-  return (run.holdingFor ?? 0) > 0 || (run.subagentsOut ?? 0) > 0;
+  return (
+    (run.holdingFor ?? 0) > 0 ||
+    (run.subagentsOut ?? 0) > 0 ||
+    (run.monitorsOpen ?? 0) > 0
+  );
 }
 
 function commandRunning(run: BoardRun): boolean {
@@ -23,13 +28,13 @@ function commandRunning(run: BoardRun): boolean {
 
 /**
  * The board column a thread sits in. In order: waiting on the user; working
- * (its run is running, or it settled while a turn it holds or a background
- * sub-agent it started is still out); done (its card is Done or the thread
- * recorded how it ended); working (it settled while a detached command it
- * started still runs, and it is not done); in review (its card is In review,
- * or it opened a pull request); idle. A thread with no card is placed by its
- * pull requests and outcome alone. A monitor does not make a thread working:
- * the chat list names that state `monitoring`, not `working`.
+ * (its run is running, or it settled while a turn it holds, a background
+ * sub-agent or a monitor it started is still out); done (its card is Done or
+ * the thread recorded how it ended); working (it settled while a detached
+ * command it started still runs, and it is not done); in review (its card is
+ * In review, or it opened a pull request); idle. A thread with no card is
+ * placed by its pull requests and outcome alone. A thread with a monitor out
+ * has not finished, so it is never done, and so never announced as done.
  */
 export function boardColumnOf(
   run: BoardRun,

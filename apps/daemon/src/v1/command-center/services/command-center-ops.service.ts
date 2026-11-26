@@ -137,13 +137,16 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     const replyCreditUntil = input.expect_reply
       ? new Date(Date.now() + REPLY_CREDIT_MS)
       : null;
-    if (input.watch !== undefined) {
-      await this.roster.setWatch(
-        managerRunId,
-        resolved.map(({ thread }) => thread.runId),
-        input.watch,
-      );
-    }
+    const marksBefore = new Map(
+      (await this.roster.listOf(managerRunId)).map((row) => [
+        row.threadRunId,
+        {
+          announcedFinish: row.announcedFinish,
+          watch: row.watch,
+          finishNewsSince: row.finishNewsSince,
+        },
+      ]),
+    );
     const sent: TellThreadsAnswer['sent'] = [];
     const seen = new Set<string>();
     for (const { to, thread } of resolved) {
@@ -151,45 +154,81 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       seen.add(thread.runId);
-      try {
-        const answer = await this.delivery.send({
-          from: {
-            target: 'chat',
-            runId: managerRunId,
-            memberId: SINGLE_AGENT_NODE,
-            conversationId: null,
-            caller: SINGLE_AGENT_NODE,
+      const newsSince = new Date();
+      await this.roster.clearAnnounced(managerRunId, [thread.runId], newsSince);
+      if (input.watch !== undefined) {
+        await this.roster.setWatch(managerRunId, [thread.runId], input.watch);
+      }
+      const row = await this.sendOne(
+        managerRunId,
+        to,
+        thread,
+        input.message,
+        replyCreditUntil,
+      );
+      sent.push(row);
+      const before = marksBefore.get(thread.runId);
+      if (row.outcome === 'refused' && before !== undefined) {
+        await this.roster.replaceMarks(
+          managerRunId,
+          thread.runId,
+          {
+            announcedFinish: null,
+            watch: input.watch ?? before.watch,
+            finishNewsSince: newsSince,
           },
-          toRunId: thread.runId,
-          text: input.message,
-          wake: true,
-          replyCreditUntil,
-        });
-        sent.push({
-          to,
-          runId: thread.runId,
-          title: answer.title,
-          outcome: answer.outcome,
-          code: answer.reason ?? null,
-        });
-      } catch (error) {
-        sent.push({
-          to,
-          runId: thread.runId,
-          title: thread.title,
-          outcome: 'refused',
-          code:
-            error instanceof BaseException
-              ? error.errorCode
-              : 'DELIVERY_FAILED',
-        });
+          before,
+        );
       }
     }
+    const reachedAny = sent.some((row) => row.outcome !== 'refused');
     return {
       sent,
       unresolved: [],
-      ...(input.watch === undefined ? {} : { watch: input.watch }),
+      ...(input.watch === undefined || !reachedAny
+        ? {}
+        : { watch: input.watch }),
     };
+  }
+
+  private async sendOne(
+    managerRunId: string,
+    to: string,
+    thread: NameableThread,
+    text: string,
+    replyCreditUntil: Date | null,
+  ): Promise<TellThreadsAnswer['sent'][number]> {
+    try {
+      const answer = await this.delivery.send({
+        from: {
+          target: 'chat',
+          runId: managerRunId,
+          memberId: SINGLE_AGENT_NODE,
+          conversationId: null,
+          caller: SINGLE_AGENT_NODE,
+        },
+        toRunId: thread.runId,
+        text,
+        wake: true,
+        replyCreditUntil,
+      });
+      return {
+        to,
+        runId: thread.runId,
+        title: answer.title,
+        outcome: answer.outcome,
+        code: answer.reason ?? null,
+      };
+    } catch (error) {
+      return {
+        to,
+        runId: thread.runId,
+        title: thread.title,
+        outcome: 'refused',
+        code:
+          error instanceof BaseException ? error.errorCode : 'DELIVERY_FAILED',
+      };
+    }
   }
 
   async note(

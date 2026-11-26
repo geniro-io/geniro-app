@@ -41,12 +41,28 @@ export class CommandCenterRosterEntry extends TimestampsEntity {
   note: string | null = null;
 
   /**
-   * The manager asked to hear when this thread finishes (`watch` on
-   * `start_thread` or `tell_threads`): its move into done wakes the manager.
-   * Unwatched, that move only writes a Done row in the manager chat.
+   * The manager asked to hear when this thread next finishes (`watch` on
+   * `start_thread` or `tell_threads`): that finish wakes the manager once and
+   * clears it. Unwatched, a finish only writes a Done row in the manager chat.
    */
   @Property({ type: 'boolean', default: false })
   watch: boolean = false;
+
+  /**
+   * The finish the manager was last told about (`finishKeyOf`), so one finish
+   * is announced once; `tell_threads` clears it, since new work makes the next
+   * finish news.
+   */
+  @Property({ type: 'text', nullable: true })
+  announcedFinish: string | null = null;
+
+  /**
+   * Since when a finish of this thread is news: its joining, then each
+   * `tell_threads` send. Null only on a row written before finishes were
+   * recorded, whose finishes the app of that time had already told.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  finishNewsSince: Date | null = null;
 
   @Property({ type: DateTimeType })
   joinedAt!: Date;

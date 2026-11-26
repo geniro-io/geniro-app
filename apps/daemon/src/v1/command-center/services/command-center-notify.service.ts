@@ -75,6 +75,60 @@ function donePrompt(handle: string, run: RunWire): string {
   ].join('');
 }
 
+/**
+ * What a thread's finish is, so the same finish read again is not news: its
+ * recorded outcome, else the goals that derived one, else its Done card.
+ */
+function finishKeyOf(run: RunWire): string {
+  const { outcome } = run;
+  if (outcome === null || outcome === undefined) {
+    return JSON.stringify(['card']);
+  }
+  if (outcome.source === 'goals') {
+    return JSON.stringify([
+      'goals',
+      run.goals.map((goal) => [goal.id, goal.status]),
+    ]);
+  }
+  return JSON.stringify([
+    'outcome',
+    outcome.seq ?? null,
+    outcome.kind,
+    outcome.summary,
+  ]);
+}
+
+/**
+ * What a thread found done at its first reading, mostly after a boot, calls
+ * for: a watched thread that finished after its finish became news is told
+ * once; one still owing the work a `tell_threads` asked for keeps waiting for
+ * it; anything else is recorded quietly, as is a row written before finishes
+ * were recorded.
+ */
+function firstReadingOf(
+  entry: CommandCenterRosterEntry,
+  run: RunWire,
+): 'announce' | 'record' | 'wait' {
+  const since = entry.finishNewsSince;
+  if (since === null) {
+    return 'record';
+  }
+  const ranSince =
+    typeof run.lastActivityAt === 'string' &&
+    Date.parse(run.lastActivityAt) > since.getTime();
+  if (entry.watch && (ranSince || entry.announcedFinish !== null)) {
+    return 'announce';
+  }
+  if (
+    !ranSince &&
+    entry.announcedFinish === null &&
+    since.getTime() > entry.joinedAt.getTime()
+  ) {
+    return 'wait';
+  }
+  return 'record';
+}
+
 function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
   const summary = clean(run.outcome?.summary ?? '');
   return {
@@ -88,14 +142,16 @@ function doneRowOf(runId: string, handle: string, run: RunWire): ThreadDoneRow {
 
 /**
  * What the manager hears about the threads on its roster, and nothing else:
- * a Done row when a thread reaches done — a wake only for a thread it watches
- * — and each open question or approval of a thread relayed into its chat as a
- * card whose answer goes to that thread, with no wake, since the user answers
- * it. A status change alone is never told. Driven by the board's own change
- * stream, so it reads a thread only when its card moved.
+ * one Done row per finish when a thread reaches done — a wake instead for a
+ * thread it watches, which ends that watch — and each open question or
+ * approval of a thread relayed into its chat as a card whose answer goes to
+ * that thread, with no wake, since the user answers it. A status change alone
+ * is never told. Driven by the board's own change stream, so it reads a thread
+ * only when its card moved.
  *
- * A thread's first reading only records its column: a boot never wakes the
- * manager about threads that were done before it.
+ * A thread's first reading records its column and, quietly, its finish
+ * (`firstReadingOf`), except a watched thread's finish that came after it
+ * became news, which a restart missed and which wakes the manager once.
  */
 @Injectable()
 export class CommandCenterNotifyService
@@ -267,23 +323,52 @@ export class CommandCenterNotifyService
     const column = boardColumnOf(run, task?.status ?? null);
     const previous = this.columns.get(runId);
     this.columns.set(runId, column);
-    if (previous === undefined || previous === 'done' || column !== 'done') {
+    if (column !== 'done' || previous === 'done') {
       return;
+    }
+    const finish = finishKeyOf(run);
+    if (entry.announcedFinish === finish) {
+      return;
+    }
+    if (previous === undefined) {
+      const reading = firstReadingOf(entry, run);
+      if (reading === 'wait') {
+        return;
+      }
+      if (reading === 'record') {
+        await this.roster.markAnnounced(
+          managerRunId,
+          runId,
+          entry,
+          finish,
+          false,
+          em,
+        );
+        return;
+      }
     }
     const message = `${entry.handle} is done`;
     const fields = { threadDone: [doneRowOf(runId, entry.handle, run)] };
-    if (!entry.watch) {
+    if (entry.watch) {
+      this.wakes.publish(
+        managerWake(
+          managerRunId,
+          `done:${runId}`,
+          donePrompt(entry.handle, run),
+          message,
+          fields,
+        ),
+      );
+    } else {
       await this.notices.info(managerRunId, message, fields);
-      return;
     }
-    this.wakes.publish(
-      managerWake(
-        managerRunId,
-        `done:${runId}`,
-        donePrompt(entry.handle, run),
-        message,
-        fields,
-      ),
+    await this.roster.markAnnounced(
+      managerRunId,
+      runId,
+      entry,
+      finish,
+      entry.watch,
+      em,
     );
   }
 

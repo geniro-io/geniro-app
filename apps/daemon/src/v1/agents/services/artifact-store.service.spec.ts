@@ -80,6 +80,19 @@ describe('ArtifactStoreService', () => {
   };
 
   describe('publish', () => {
+    it('marks a page it cannot store as a failure inside geniro, and a refusal of the page as none', async () => {
+      writeFileSync(join(root, RUN), '');
+
+      expect(await publish({ id: 'plan' })).toEqual({
+        ok: false,
+        reason: 'the page could not be stored (ENOTDIR) — publish it again',
+        failure: 'internal',
+      });
+      expect(
+        await publish({ html: 'x'.repeat(MAX_ARTIFACT_HTML_BYTES + 1) }),
+      ).not.toHaveProperty('failure');
+    });
+
     it('stores the page and hands back the row the transcript needs', async () => {
       const result = await publish({ id: 'plan' });
       expect(result.ok).toBe(true);

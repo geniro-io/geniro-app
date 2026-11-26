@@ -22,6 +22,7 @@ import { hasHiddenText } from '../utils/hidden-text';
 import { ActionCommandService } from './action-command.service';
 import { ActionStopService } from './action-stop.service';
 import { ChatActionsService } from './chat-actions.service';
+import { failedInside, type HostSinkUnavailable } from './host-sink.broker';
 
 /** What a call's envelope says about one button published inside it. */
 export interface PublishedActionNote {
@@ -76,7 +77,7 @@ export class ActionPublishService {
   async publish(
     ctx: ActionPublishContext,
     input: ActionPublishInput,
-  ): Promise<ActionToolOutcome> {
+  ): Promise<ActionToolOutcome | HostSinkUnavailable> {
     const checked = checkInput(input);
     if ('reason' in checked) {
       return { status: 'refused', reason: checked.reason };
@@ -149,10 +150,7 @@ export class ActionPublishService {
         this.logger.error(
           `run ${ctx.runId} could not persist an action: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'refused',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return {
         status: 'published',
@@ -164,7 +162,7 @@ export class ActionPublishService {
   async remove(
     ctx: ActionPublishContext,
     actionId: string,
-  ): Promise<ActionToolOutcome> {
+  ): Promise<ActionToolOutcome | HostSinkUnavailable> {
     return this.actions.serialize(ctx.runId, async () => {
       const { live, keyOfSeq } = await this.actions.fold(ctx.runId);
       const own = live.filter(
@@ -202,10 +200,7 @@ export class ActionPublishService {
         this.logger.error(
           `run ${ctx.runId} could not persist an action removal: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'refused',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       ctx.notes?.removed(keyOf(target));
       return { status: 'removed', text: `Removed action "${actionId}".` };

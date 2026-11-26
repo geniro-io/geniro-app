@@ -355,7 +355,9 @@ export class ThreadReaderService {
       handle: flag.handle,
       seq: flag.seq,
       at: flag.occurredAt.toISOString(),
-      node: laneOf(flag.memberId),
+      ...(flag.automatic && flag.memberId === null
+        ? {}
+        : { node: laneOf(flag.memberId) }),
       ...(flag.callId === null ? {} : { callId: flag.callId }),
       cost: flag.cost,
       category: flag.category,

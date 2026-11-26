@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
 
+import type { HostToolFailure } from '../chat.types';
+
 /**
  * The outcome every host tool answers with when its call could not be
  * delivered — the one member each of their outcome unions shares.
@@ -11,6 +13,13 @@ import { Logger } from '@nestjs/common';
 export interface HostSinkUnavailable {
   status: 'unavailable';
   reason: string;
+  /** Set when the call failed inside geniro rather than finding nobody to receive it. */
+  failure?: HostToolFailure;
+}
+
+/** {@link HostSinkUnavailable} for a call that failed inside geniro: what the daemon flags itself. */
+export function failedInside(reason: string): HostSinkUnavailable {
+  return { status: 'unavailable', reason, failure: 'internal' };
 }
 
 /** How a sink was installed, beside the sink itself. */
@@ -178,10 +187,9 @@ export abstract class HostSinkBroker<TSink> {
       this.logger.error(
         `run ${runId}/${memberId} could not ${failure}: ${message}`,
       );
-      return {
-        status: 'unavailable',
-        reason: `this app failed internally while trying to ${failure}`,
-      };
+      return failedInside(
+        `this app failed internally while trying to ${failure}`,
+      );
     }
   }
 }

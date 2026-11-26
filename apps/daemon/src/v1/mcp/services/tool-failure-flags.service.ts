@@ -17,6 +17,7 @@ export interface ServedToolCall {
   runId: string;
   memberId: string;
   conversationId: string | null;
+  caller: string;
   endpointPath: string;
   tool: string;
   startedAt: number;
@@ -46,10 +47,6 @@ export class ToolFailureFlagsService {
     const now = Date.now();
     this.dropStale(now);
     const key = `${call.endpointPath}\u0000${call.tool}`;
-    if (!result.isError) {
-      this.streaks.delete(key);
-      return;
-    }
     const text = result.content.map((part) => part.text).join('\n');
     if (result.failure !== undefined) {
       this.raise(
@@ -61,6 +58,10 @@ export class ToolFailureFlagsService {
         text,
         call.startedAt,
       );
+      return;
+    }
+    if (!result.isError) {
+      this.streaks.delete(key);
       return;
     }
     const streak = this.streaks.get(key) ?? {
@@ -115,6 +116,7 @@ export class ToolFailureFlagsService {
       seq: null,
       memberId: call.memberId,
       conversationId: call.conversationId,
+      caller: call.caller,
       summary,
       detail: detail.slice(0, AGENT_FLAG_DETAIL_MAX),
       minutesLost: minutesLostBetween(since, Date.now()),

@@ -69,7 +69,8 @@ export class SavePluginTool extends BaseMcpTool {
       const outcome = await context.whileCancellable((signal) =>
         this.cards.propose(runId, memberId, prepared.proposal, signal),
       );
-      return this.text(
+      return this.answerTo(
+        outcome,
         hostPluginResultText(outcome),
         outcome.status === 'stale' || outcome.status === 'unavailable',
       );
@@ -77,9 +78,8 @@ export class SavePluginTool extends BaseMcpTool {
       this.logger.error(
         `run ${runId} could not propose a plugin: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text(
+      return this.failedInGeniro(
         `${this.name} failed internally — nothing was saved.`,
-        true,
       );
     }
   }

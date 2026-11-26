@@ -119,6 +119,7 @@ describe('GalleryImageService.localize', () => {
       {
         url: 'https://cdn.example/a.png',
         reason: 'the downloaded image could not be stored',
+        failure: 'internal',
       },
     ]);
   });

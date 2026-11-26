@@ -86,6 +86,7 @@ describe('FlagBroker.raiseAutomatic', () => {
     seq: extra.seq ?? null,
     memberId: 'senior',
     conversationId: 'conv-1',
+    caller: 'senior',
     summary: `geniro failure: ${cause}`,
     detail: 'what the daemon saw',
     minutesLost: 4,
@@ -187,6 +188,47 @@ describe('FlagBroker.raiseAutomatic', () => {
     expect(
       await broker.raiseAutomatic('run-1', auto('interrupted:quit')),
     ).toBeNull();
+  });
+
+  it('names the member’s agent, model and answered call from its flag sink, and the run’s without one', async () => {
+    await seedRun('run-1', { agentKind: 'claude', model: 'run-model' });
+    disposers.push(
+      broker.register('run-1', 'senior', {
+        raiser: (caller) => ({
+          memberId: 'senior',
+          conversationId: caller === 'senior' ? null : 'conv-1',
+          callId: 'call-7',
+          agentKind: 'codex',
+          model: 'gpt-5.5',
+        }),
+      }),
+    );
+
+    await broker.raiseAutomatic('run-1', auto('tool_refused:show_ui'));
+    await broker.raiseAutomatic('run-1', {
+      ...auto('interrupted:crash'),
+      memberId: null,
+      conversationId: null,
+      caller: null,
+    });
+
+    const rows = await flags.forRun('run-1', 100);
+    expect(
+      rows.find((row) => row.autoCause === 'tool_refused:show_ui'),
+    ).toMatchObject({
+      memberId: 'senior',
+      callId: 'call-7',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+    expect(
+      rows.find((row) => row.autoCause === 'interrupted:crash'),
+    ).toMatchObject({
+      memberId: null,
+      callId: null,
+      agentKind: 'claude',
+      model: 'run-model',
+    });
   });
 
   it('writes nothing for a run that does not exist', async () => {

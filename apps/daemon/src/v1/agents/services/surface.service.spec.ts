@@ -346,6 +346,52 @@ describe('SurfaceService.draw', () => {
     expect(sink).toHaveBeenCalledTimes(MAX_UI_LIVE_SURFACES);
   });
 
+  it('answers a download it cannot store as a failure inside geniro, never as the agent’s bad argument', async () => {
+    const blocked = join(root, 'blocked');
+    writeFileSync(blocked, '');
+    const unstorable = new SurfaceService(
+      orm.em,
+      dao,
+      new SurfaceMediaService(
+        new AttachmentStoreService({ root: blocked }),
+        new RunDownloadBudget(),
+        { getById: () => Promise.resolve({ cwd: root }) } as unknown as RunDao,
+        {
+          download: (() =>
+            Promise.resolve({
+              mediaType: 'png',
+              bytes: PNG,
+            })) as unknown as typeof downloadRemoteFile,
+        },
+      ),
+    );
+
+    const outcome = await unstorable.draw(
+      runId,
+      ALICE,
+      {
+        title: null,
+        messages: [
+          createSurface('f', [
+            { id: 'root', component: 'Column', children: ['photo'] },
+            {
+              id: 'photo',
+              component: 'Image',
+              url: 'https://cdn.example/photo.png',
+            },
+          ]),
+        ],
+      },
+      countingSink(),
+    );
+
+    expect(outcome).toEqual({
+      status: 'unavailable',
+      reason: "the card's media could not be stored",
+      failure: 'internal',
+    });
+  });
+
   it('reports unavailable and takes the card back when the run cannot record it', async () => {
     const sink = vi.fn(async (): Promise<number> => {
       throw new Error('disk full');
@@ -359,6 +405,7 @@ describe('SurfaceService.draw', () => {
     expect(outcome).toEqual({
       status: 'unavailable',
       reason: 'the card could not be saved',
+      failure: 'internal',
     });
     await expect(service.read(runId, 'plan')).rejects.toMatchObject({
       errorCode: 'UI_SURFACE_NOT_FOUND',

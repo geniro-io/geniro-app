@@ -26,6 +26,7 @@ const call = (over: Partial<ServedToolCall> = {}): ServedToolCall => ({
   runId: 'run-1',
   memberId: 'senior',
   conversationId: 'conv-1',
+  caller: 'senior\u0000conv-1',
   endpointPath: '/v1/mcp/run-1/senior/conv-1',
   tool: 'browser_click',
   startedAt: Date.now(),
@@ -98,6 +99,7 @@ describe('ToolFailureFlagsService', () => {
           seq: null,
           memberId: 'senior',
           conversationId: 'conv-1',
+          caller: 'senior\u0000conv-1',
           summary: 'browser_click timed out',
           detail: 'The browser operation took longer than 18 s',
           minutesLost: 2,
@@ -124,6 +126,27 @@ describe('ToolFailureFlagsService', () => {
         'The browser operation failed: boom',
       ],
       ['tool_failure:show_ui', 'show_ui failed inside geniro', 'db is locked'],
+    ]);
+  });
+
+  it('flags an internal failure the tool words as an outcome rather than an error', () => {
+    const { raised, service } = setup();
+
+    service.answered(call({ tool: 'show_artifact' }), {
+      ...ok(
+        'The artifact was not published (the page could not be stored (ENOTDIR) — publish it again).',
+      ),
+      failure: 'internal',
+    });
+
+    expect(
+      raised.map(({ input }) => [input.cause, input.summary, input.detail]),
+    ).toEqual([
+      [
+        'tool_failure:show_artifact',
+        'show_artifact failed inside geniro',
+        'The artifact was not published (the page could not be stored (ENOTDIR) — publish it again).',
+      ],
     ]);
   });
 
@@ -155,6 +178,7 @@ describe('ToolFailureFlagsService', () => {
           seq: null,
           memberId: 'senior',
           conversationId: 'conv-1',
+          caller: 'senior\u0000conv-1',
           summary: 'browser_click refused 3 times running',
           detail: 'third',
           minutesLost: 4,

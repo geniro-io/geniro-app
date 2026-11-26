@@ -2153,6 +2153,8 @@ export interface HostGalleryImage {
 export interface GalleryDownloadFailure {
   url: string;
   reason: string;
+  /** Set when the picture was downloaded but geniro could not store it. */
+  failure?: HostToolFailure;
 }
 
 /** One `show_gallery` call, as the card will draw it. */
@@ -2359,7 +2361,7 @@ export type HostToolFailure = z.infer<typeof HostToolFailureSchema>;
 export type BrowserRunOutcome =
   | BrowserOutcome
   | { status: 'awaiting_approval'; host: string }
-  | { status: 'unavailable'; reason: string };
+  | { status: 'unavailable'; reason: string; failure?: HostToolFailure };
 
 /**
  * TWIN PARSER: apps/ui/src/renderer/chats/published-artifact.ts — the reader
@@ -2507,8 +2509,8 @@ export interface HostArtifactFields {
  */
 export type HostArtifactOutcome =
   | { status: 'published'; artifactId: string; version: number }
-  | { status: 'rejected'; reason: string }
-  | { status: 'unavailable'; reason: string };
+  | { status: 'rejected'; reason: string; failure?: HostToolFailure }
+  | { status: 'unavailable'; reason: string; failure?: HostToolFailure };
 
 /**
  * The row `show_artifact` writes, and the whole of what the renderer is told.
@@ -2626,7 +2628,7 @@ export interface ProjectChatSource {
 export type HostProjectInstructionsOutcome =
   | { status: 'saved'; instructionsRevision: number }
   | { status: 'declined' }
-  | { status: 'stale'; reason: string }
+  | { status: 'stale'; reason: string; failure?: HostToolFailure }
   | {
       status: 'posted';
       /** The card's two buttons as its host draws them; absent is a chat's Apply or Reject. */
@@ -2666,7 +2668,7 @@ export interface HostPluginProposal {
 export type HostPluginOutcome =
   | { status: 'saved'; slug: string; path: string }
   | { status: 'declined' }
-  | { status: 'stale'; reason: string }
+  | { status: 'stale'; reason: string; failure?: HostToolFailure }
   | { status: 'posted'; buttons?: string }
   | { status: 'unavailable'; reason: string };
 
@@ -5064,6 +5066,8 @@ export interface AutomaticFlagInput {
   seq: number | null;
   memberId: string | null;
   conversationId: string | null;
+  /** The caller key of the conversation it happened in, which names the member's agent and model; null for the run as a whole. */
+  caller: string | null;
   summary: string;
   detail: string | null;
   minutesLost: number;
@@ -9752,7 +9756,12 @@ export type StartThreadAnswer =
       identifier: string | null;
     }
   | { status: 'card_shown' | 'starting'; startId: string }
-  | { status: 'refused'; code: string; reason: string };
+  | {
+      status: 'refused';
+      code: string;
+      reason: string;
+      failure?: HostToolFailure;
+    };
 
 /** `read_command_center` takes no arguments. */
 export const ReadCommandCenterSchema = z.object({});

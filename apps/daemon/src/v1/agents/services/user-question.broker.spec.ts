@@ -53,6 +53,7 @@ describe('UserQuestionBroker', () => {
     expect(outcome).toEqual({
       status: 'unavailable',
       reason: 'this app failed internally while trying to ask the user',
+      failure: 'internal',
     });
   });
 

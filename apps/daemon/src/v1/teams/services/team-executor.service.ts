@@ -103,6 +103,7 @@ import {
 } from '../../agents/services/command-end-wake.service';
 import { FlagBroker } from '../../agents/services/flag.broker';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
+import { failedInside } from '../../agents/services/host-sink.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -1933,6 +1934,7 @@ export class TeamExecutorService
       seq,
       memberId: null,
       conversationId: null,
+      caller: null,
       summary: `Team run interrupted: ${interruptCauseClause(cause)}`,
       detail: message,
       minutesLost: minutesLostBetween(lastActivityAt?.getTime() ?? now, now),
@@ -3143,7 +3145,13 @@ export class TeamExecutorService
           ): Promise<HostArtifactOutcome> => {
             const stored = await store.publish(runId, artifact);
             if (!stored.ok) {
-              return { status: 'rejected', reason: stored.reason };
+              return {
+                status: 'rejected',
+                reason: stored.reason,
+                ...(stored.failure === undefined
+                  ? {}
+                  : { failure: stored.failure }),
+              };
             }
             const row: HostArtifactRow = {
               artifactId: stored.stored.artifactId,
@@ -3183,10 +3191,7 @@ export class TeamExecutorService
               this.logger.error(
                 `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
               );
-              return {
-                status: 'unavailable',
-                reason: 'the transcript row could not be written',
-              };
+              return failedInside('the transcript row could not be written');
             }
             return {
               status: 'published',

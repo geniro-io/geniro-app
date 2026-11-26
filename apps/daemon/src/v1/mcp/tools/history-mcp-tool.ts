@@ -1,3 +1,5 @@
+import { BaseException } from '@packages/common';
+
 import { HISTORY_RESULT_PREFACE } from '../../agents/chat.types';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { McpToolResult, ToolArgs } from '../mcp.types';
@@ -44,10 +46,10 @@ export abstract class HistoryMcpTool<TQuery> extends BaseMcpTool {
     try {
       return this.text(historyResultText(await this.answer(read.query)));
     } catch (error) {
-      return this.text(
-        `${this.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-        true,
-      );
+      const text = `${this.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+      return error instanceof BaseException
+        ? this.text(text, true)
+        : this.failedInGeniro(text);
     }
   }
 }

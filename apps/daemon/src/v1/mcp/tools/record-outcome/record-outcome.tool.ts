@@ -53,7 +53,7 @@ export class RecordOutcomeTool extends BaseMcpTool {
       );
       return recorded.status === 'refused'
         ? this.invalidArgs(recorded.reason)
-        : this.text(threadOutcomeResultText(recorded));
+        : this.answerTo(recorded, threadOutcomeResultText(recorded));
     }
     const input = readRecordOutcome(args);
     if ('error' in input) {
@@ -62,6 +62,6 @@ export class RecordOutcomeTool extends BaseMcpTool {
     const outcome = await this.outcomes.record(runId, memberId, caller, input);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(recordOutcomeResultText(outcome));
+      : this.answerTo(outcome, recordOutcomeResultText(outcome));
   }
 }

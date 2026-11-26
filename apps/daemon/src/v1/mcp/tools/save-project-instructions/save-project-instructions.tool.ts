@@ -132,14 +132,13 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
         ),
       );
       const result = projectInstructionsResultText(answer);
-      return this.text(result.text, result.isError);
+      return this.answerTo(answer, result.text, result.isError);
     } catch (error) {
       this.logger.error(
         `run ${runId} could not save project instructions: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text(
+      return this.failedInGeniro(
         `${this.name} failed internally — nothing was saved. Report this item as failed.`,
-        true,
       );
     }
   }
@@ -156,14 +155,13 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
         ),
       );
       const result = projectInstructionsResultText(answer);
-      return this.text(result.text, result.isError);
+      return this.answerTo(answer, result.text, result.isError);
     } catch (error) {
       this.logger.error(
         `chat ${runId} could not save project instructions: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text(
+      return this.failedInGeniro(
         `${this.name} failed internally — nothing was saved.`,
-        true,
       );
     }
   }

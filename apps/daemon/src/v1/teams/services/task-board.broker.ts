@@ -55,7 +55,11 @@ export class TaskBoardBroker {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.logger.warn(`board tool ${name} failed for run ${runId}: ${reason}`);
-      return { text: `The board could not answer: ${reason}`, isError: true };
+      return {
+        text: `The board could not answer: ${reason}`,
+        isError: true,
+        failure: 'internal',
+      };
     }
   }
 }

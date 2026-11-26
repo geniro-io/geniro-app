@@ -348,6 +348,7 @@ describe('CommandCenterStartsService', () => {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
         reason: expect.stringContaining('GEN-7'),
+        failure: 'internal',
       });
       const task = await taskOf(createdIds[0]!);
       expect(task.startRequestedAt).toBeNull();
@@ -806,6 +807,7 @@ describe('CommandCenterStartsService', () => {
           status: 'refused',
           code: 'CARD_NOT_SHOWN',
           reason: expect.any(String),
+          failure: 'internal',
         });
         expect(row).toMatchObject({
           runId: null,

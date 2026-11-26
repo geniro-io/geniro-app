@@ -51,6 +51,6 @@ export class StartThreadTool extends BaseMcpTool {
     const answer = await this.ops.start(runId, read.query);
     return 'error' in answer
       ? this.text(answer.error, true)
-      : this.text(startThreadResultText(answer));
+      : this.answerTo(answer, startThreadResultText(answer));
   }
 }

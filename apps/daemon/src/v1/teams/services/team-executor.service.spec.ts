@@ -5021,6 +5021,7 @@ describe('TeamExecutorService', () => {
             seq: errorItem.seq,
             memberId: null,
             conversationId: null,
+            caller: null,
             summary: 'Team run interrupted: the daemon stopped unexpectedly',
             detail:
               'team run interrupted — the daemon stopped unexpectedly while it was running',

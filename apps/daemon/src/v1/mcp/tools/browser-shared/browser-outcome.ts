@@ -33,6 +33,7 @@ export function browserStoppedText(
       return {
         text: `The in-app browser is unavailable: ${outcome.reason}`,
         isError: true,
+        ...(outcome.failure === undefined ? {} : { failure: outcome.failure }),
       };
   }
 }

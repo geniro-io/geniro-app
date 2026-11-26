@@ -51,6 +51,6 @@ export class ShowComparisonTool extends BaseMcpTool {
     const outcome = await this.comparisons.draw(runId, memberId, comparison);
     // Same reading as its drawing siblings: an unavailable channel is an
     // answer, not a failure — the agent still holds the comparison.
-    return this.text(hostComparisonResultText(outcome));
+    return this.answerTo(outcome, hostComparisonResultText(outcome));
   }
 }

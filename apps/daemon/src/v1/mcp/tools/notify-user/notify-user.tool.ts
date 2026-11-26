@@ -44,6 +44,6 @@ export class NotifyUserTool extends BaseMcpTool {
     const outcome = await this.notices.notify(runId, memberId, message);
     // An unavailable channel is an answer, not a failure — the agent can
     // still say it in its reply.
-    return this.text(hostNotifyResultText(outcome));
+    return this.answerTo(outcome, hostNotifyResultText(outcome));
   }
 }

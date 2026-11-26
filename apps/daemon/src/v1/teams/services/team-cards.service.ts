@@ -30,6 +30,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
+import { failedInside } from '../../agents/services/host-sink.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
@@ -330,13 +331,12 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       if (raised) {
         await this.undoRaise(runId, card);
       }
-      return {
-        status: 'unavailable',
-        reason:
-          error instanceof ConflictException
-            ? 'this thread is archived, so the user cannot be asked'
-            : 'the card could not be written',
-      };
+      return error instanceof ConflictException
+        ? {
+            status: 'unavailable',
+            reason: 'this thread is archived, so the user cannot be asked',
+          }
+        : failedInside('the card could not be written');
     }
     return LEAD_CARD_POSTED;
   }
@@ -409,6 +409,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
             card.kind === 'project'
               ? 'the instructions could not be written'
               : 'the plugin could not be written',
+          failure: 'internal',
         };
       }
     }
@@ -608,13 +609,12 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       if (raised) {
         await this.closeMemberQuestions(runId, [card.requestId], false);
       }
-      return {
-        status: 'unavailable',
-        reason:
-          error instanceof ConflictException
-            ? 'this thread is archived, so the user cannot be asked'
-            : 'the question card could not be written',
-      };
+      return error instanceof ConflictException
+        ? {
+            status: 'unavailable',
+            reason: 'this thread is archived, so the user cannot be asked',
+          }
+        : failedInside('the question card could not be written');
     }
     return { status: 'posted' };
   }

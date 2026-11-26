@@ -185,9 +185,8 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       this.logger.error(
         `run ${runId} could not read its analysed thread: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text(
+      return this.failedInGeniro(
         `${this.name} failed internally — try a narrower read, or report what you have.`,
-        true,
       );
     }
   }

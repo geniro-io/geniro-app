@@ -41,6 +41,7 @@ export class BoardTools implements McpTool {
     return {
       content: [{ type: 'text', text: answer.text }],
       isError: answer.isError,
+      ...(answer.failure === undefined ? {} : { failure: answer.failure }),
     };
   }
 }

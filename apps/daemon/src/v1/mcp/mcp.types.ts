@@ -34,7 +34,7 @@ export type McpToolResult = {
   content: { type: 'text'; text: string }[];
   isError: boolean;
   images?: McpToolImage[];
-  /** Set on an error answer when the call failed inside geniro rather than being refused; never sent to the agent. */
+  /** Set when the call failed inside geniro (storage, the database, a bridge) rather than being refused, whether or not the answer is worded as an error; never sent to the agent. */
   failure?: HostToolFailure;
 };
 

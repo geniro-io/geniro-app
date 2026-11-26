@@ -333,6 +333,7 @@ export class McpServerService {
         runId,
         memberId,
         conversationId,
+        caller,
         endpointPath,
         tool: name,
         startedAt: Date.now(),

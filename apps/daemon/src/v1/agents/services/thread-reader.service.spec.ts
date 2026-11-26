@@ -494,7 +494,6 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         handle: 'F-000000',
         seq: 0,
         at: new Date(T0).toISOString(),
-        node: 'agent',
         cost: 'work',
         category: 'geniro_tool',
         minutesLost: 10,

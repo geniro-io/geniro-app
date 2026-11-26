@@ -70,6 +70,7 @@ import {
   HOST_TEAM_CHANGE_TOOL,
   HOST_TEAM_NOTE_TOOL,
   HOST_TEAM_NOTES_TOOL,
+  HOST_UI_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
 } from '../../agents/chat.types';
 import type { ChatSearchIndexDao } from '../../agents/dao/chat-search-index.dao';
@@ -90,6 +91,7 @@ import { GalleryImageService } from '../../agents/services/gallery-image.service
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import type { GoalsService } from '../../agents/services/goals.service';
+import { failedInside } from '../../agents/services/host-sink.broker';
 import { HostToolResultLedger } from '../../agents/services/host-tool-result.ledger';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
@@ -186,6 +188,8 @@ import { GoalsTool } from '../tools/goals/goals.tool';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
+import { ShowArtifactTool } from '../tools/show-artifact/show-artifact.tool';
+import { ShowUiTool } from '../tools/show-ui/show-ui.tool';
 import { McpServerService } from './mcp-server.service';
 import type {
   ServedToolCall,
@@ -4178,7 +4182,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
           caller: 'lead',
         } as Parameters<typeof tool.call>[2],
       );
-      expect(failed).toMatchObject({ isError: true });
+      expect(failed).toMatchObject({ isError: true, failure: 'internal' });
       expect(failed.content[0]!.text).toBe(
         'Not moved: the move could not be saved. Try again.',
       );
@@ -7553,12 +7557,83 @@ describe('McpServerService — the daemon’s own flags for a tool’s failures'
           runId: 'run-1',
           memberId: 'qa',
           conversationId: 'conv-9',
+          caller: callerKey('qa', 'conv-9'),
           endpointPath: hostEndpointPath('run-1', 'qa', 'conv-9'),
           tool: 'browser_click',
           startedAt: expect.any(Number),
         }),
         detail: timedOut,
       },
+    ]);
+  });
+
+  it('carries an internal failure a tool words as an outcome to the flags, a storage failure of show_artifact and of show_ui among them', async () => {
+    const { seen, flags } = recorder();
+    const artifacts = {
+      canPublish: () => true,
+      inTeamRun: () => false,
+      publish: () =>
+        Promise.resolve({
+          status: 'rejected',
+          reason: 'the page could not be stored (ENOTDIR) — publish it again',
+          failure: 'internal',
+        }),
+    } as unknown as ArtifactBroker;
+    const shares = {
+      agentsMayShare: () => false,
+    } as unknown as ShareService;
+    const surfaces = {
+      canDraw: () => true,
+      draw: () =>
+        Promise.resolve(failedInside("the card's media could not be stored")),
+    } as unknown as SurfaceBroker;
+    const target = new McpServerService(
+      [new ShowArtifactTool(artifacts, shares), new ShowUiTool(surfaces)],
+      RUNTIME_INFO,
+      new HostToolResultLedger(),
+      flags,
+    );
+
+    const artifact = await post(
+      target,
+      'run-1',
+      'qa',
+      rpc('tools/call', {
+        name: HOST_ARTIFACT_TOOL,
+        arguments: { title: 'Plan', html: '<p>plan</p>' },
+      }),
+    );
+    const card = await post(
+      target,
+      'run-1',
+      'qa',
+      rpc('tools/call', {
+        name: HOST_UI_TOOL,
+        arguments: {
+          messages: [{ createSurface: { surfaceId: 's1' } }],
+        },
+      }),
+    );
+
+    expect(artifact.json().result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: 'The artifact was not published (the page could not be stored (ENOTDIR) — publish it again).',
+        },
+      ],
+      isError: false,
+    });
+    expect(JSON.stringify(card.json().result)).not.toContain('INVALID_ARGS');
+    expect(JSON.stringify(card.json().result)).not.toContain('failure');
+    expect(
+      seen.map(({ call, detail }) => [
+        call.tool,
+        (detail as McpToolResult).failure,
+      ]),
+    ).toEqual([
+      [HOST_ARTIFACT_TOOL, 'internal'],
+      [HOST_UI_TOOL, 'internal'],
     ]);
   });
 

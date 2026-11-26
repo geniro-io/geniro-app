@@ -53,9 +53,8 @@ export class BrowserScreenshotTool extends BrowserTool {
         Buffer.from(outcome.png, 'base64'),
       );
     } catch (error) {
-      return this.text(
+      return this.failedInGeniro(
         `The screenshot could not be saved: ${error instanceof Error ? error.message : String(error)}`,
-        true,
       );
     }
     const text = browserDoneText(

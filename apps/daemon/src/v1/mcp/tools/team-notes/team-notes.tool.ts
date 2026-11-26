@@ -38,10 +38,7 @@ export class TeamNotesTool extends BaseMcpTool {
     if ('error' in query) {
       return this.invalidArgs(query.error);
     }
-    return this.text(
-      teamNotesResultText(
-        await this.notes.read(runId, memberId, caller, query),
-      ),
-    );
+    const outcome = await this.notes.read(runId, memberId, caller, query);
+    return this.answerTo(outcome, teamNotesResultText(outcome));
   }
 }

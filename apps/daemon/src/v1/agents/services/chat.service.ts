@@ -300,6 +300,7 @@ import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FlagBroker } from './flag.broker';
 import { GalleryBroker } from './gallery.broker';
+import { failedInside, type HostSinkUnavailable } from './host-sink.broker';
 import { ItemCallIndexService } from './item-call-index.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
@@ -2425,7 +2426,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     key: string,
     snapshotOf: (requestId: string) => Promise<PendingCardSnapshot>,
-  ): Promise<{ status: 'posted' } | { status: 'unavailable'; reason: string }> {
+  ): Promise<{ status: 'posted' } | HostSinkUnavailable> {
     const standing = await this.standingCard(em, runId, key);
     if (standing !== null) {
       return standing;
@@ -2480,7 +2481,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.logger.error(
         `run ${runId} could not put a deferred card on screen: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return { status: 'unavailable', reason: failureReason };
+      return failedInside(failureReason);
     }
     this.trackDeferredCard(runId, snapshot);
     this.announceAwaiting(runId);
@@ -7423,7 +7424,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           this.logger.error(
             `run ${runId} could not persist ${card.what}: ${err instanceof Error ? err.message : String(err)}`,
           );
-          return card.unavailable('the card could not be written');
+          return {
+            ...card.unavailable('the card could not be written'),
+            failure: 'internal',
+          };
         }
         return await new Promise<TOutcome>((resolve) => {
           const settle = (outcome: TOutcome): boolean => {
@@ -7583,10 +7587,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           this.logger.error(
             `run ${runId} could not persist a plan proposal: ${err instanceof Error ? err.message : String(err)}`,
           );
-          return {
-            status: 'unavailable',
-            reason: 'the card could not be written',
-          };
+          return failedInside('the card could not be written');
         }
         return await new Promise<HostPlanOutcome>((resolve) => {
           const settle = (outcome: HostPlanOutcome): boolean => {
@@ -9378,10 +9379,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.logger.error(
           `run ${runId} could not persist a chart: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return {
         status: 'drawn',
@@ -9417,10 +9415,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.logger.error(
           `run ${runId} could not persist a scorecard: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return { status: 'drawn', count: metrics.metrics.length };
     };
@@ -9447,10 +9442,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.logger.error(
           `run ${runId} could not persist a comparison: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return {
         status: 'drawn',
@@ -9490,10 +9482,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.logger.error(
           `run ${runId} could not persist a gallery: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return { status: 'drawn', images: gallery.images.length };
     };
@@ -9518,7 +9507,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     ): Promise<HostArtifactOutcome> => {
       const stored = await this.artifactStore.publish(runId, artifact);
       if (!stored.ok) {
-        return { status: 'rejected', reason: stored.reason };
+        return {
+          status: 'rejected',
+          reason: stored.reason,
+          ...(stored.failure === undefined ? {} : { failure: stored.failure }),
+        };
       }
       const row: HostArtifactRow = {
         artifactId: stored.stored.artifactId,
@@ -9545,10 +9538,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.logger.error(
           `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
         );
-        return {
-          status: 'unavailable',
-          reason: 'the transcript row could not be written',
-        };
+        return failedInside('the transcript row could not be written');
       }
       return {
         status: 'published',

@@ -41,8 +41,7 @@ export class ListMonitorsTool extends BaseMcpTool {
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    return this.text(
-      listMonitorsResultText(await this.monitors.list(runId, memberId, caller)),
-    );
+    const outcome = await this.monitors.list(runId, memberId, caller);
+    return this.answerTo(outcome, listMonitorsResultText(outcome));
   }
 }

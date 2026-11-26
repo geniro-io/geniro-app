@@ -75,6 +75,6 @@ export class AskUserQuestionTool extends BaseMcpTool {
     // unavailable channel are both answers the agent carries on from,
     // and flagging them as errors is how a model comes to retry a
     // question the user has already declined.
-    return this.text(hostQuestionResultText(outcome));
+    return this.answerTo(outcome, hostQuestionResultText(outcome));
   }
 }

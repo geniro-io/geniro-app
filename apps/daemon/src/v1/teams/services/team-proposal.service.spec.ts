@@ -2066,6 +2066,7 @@ describe('TeamProposalService', () => {
           status: 'refused',
           code: 'CARD_NOT_SHOWN',
           message: 'the proposal card could not be written',
+          failure: 'internal',
         },
       );
       // The old card was retired before the raise failed, so its pointer goes

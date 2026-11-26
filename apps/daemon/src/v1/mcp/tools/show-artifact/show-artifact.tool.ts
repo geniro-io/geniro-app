@@ -85,6 +85,6 @@ export class ShowArtifactTool extends BaseMcpTool {
     // Same reading as its drawing siblings, and it covers `rejected` too:
     // an oversize page is an answer the agent acts on by writing a
     // smaller one, not a call it got wrong.
-    return this.text(hostArtifactResultText(outcome, share));
+    return this.answerTo(outcome, hostArtifactResultText(outcome, share));
   }
 }

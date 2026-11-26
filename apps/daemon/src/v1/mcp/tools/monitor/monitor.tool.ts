@@ -41,6 +41,6 @@ export class MonitorTool extends BaseMcpTool {
     const outcome = await this.monitors.start(runId, memberId, input, caller);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(monitorResultText(outcome));
+      : this.answerTo(outcome, monitorResultText(outcome));
   }
 }

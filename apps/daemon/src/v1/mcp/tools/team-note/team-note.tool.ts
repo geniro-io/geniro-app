@@ -41,6 +41,6 @@ export class TeamNoteTool extends BaseMcpTool {
     const outcome = await this.notes.write(runId, memberId, caller, input);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(teamNoteResultText(outcome));
+      : this.answerTo(outcome, teamNoteResultText(outcome));
   }
 }

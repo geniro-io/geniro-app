@@ -123,9 +123,16 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
     if (run === null) {
       return null;
     }
+    const raiser =
+      input.memberId === null || input.caller === null
+        ? undefined
+        : this.sinkOf(runId, input.memberId)?.raiser(input.caller);
     const flag = Object.assign(await this.stamped(runId, run, input.seq, em), {
       memberId: input.memberId,
       conversationId: input.conversationId,
+      callId: raiser?.callId ?? null,
+      agentKind: raiser?.agentKind ?? run.agentKind ?? null,
+      model: raiser?.model ?? run.model ?? null,
       cost: 'work',
       category: 'geniro_tool',
       minutesLost: input.minutesLost,

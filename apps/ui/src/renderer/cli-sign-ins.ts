@@ -1,4 +1,10 @@
-import type { CliDetection } from '../shared/contracts';
+import type { CliDetection, CliKind } from '../shared/contracts';
+
+export interface SignedOutAccount {
+  kind: CliKind;
+  /** Null for the CLI's own default account. */
+  configDir: string | null;
+}
 
 export function signedOutConfigurations(detection: CliDetection): number {
   return Object.values(detection.profileLogins ?? {}).filter(
@@ -6,11 +12,27 @@ export function signedOutConfigurations(detection: CliDetection): number {
   ).length;
 }
 
-export function signedOutAccounts(detection: CliDetection): number {
+/** Every account an installed CLI said is signed out: its default, then each named configuration. */
+export function signedOutAccountRows(
+  detection: CliDetection,
+): SignedOutAccount[] {
   if (!detection.found) {
-    return 0;
+    return [];
   }
-  return (
-    (detection.loggedIn === false ? 1 : 0) + signedOutConfigurations(detection)
-  );
+  const rows: SignedOutAccount[] =
+    detection.loggedIn === false
+      ? [{ kind: detection.kind, configDir: null }]
+      : [];
+  for (const [configDir, loggedIn] of Object.entries(
+    detection.profileLogins ?? {},
+  )) {
+    if (loggedIn === false) {
+      rows.push({ kind: detection.kind, configDir });
+    }
+  }
+  return rows;
+}
+
+export function signedOutAccounts(detection: CliDetection): number {
+  return signedOutAccountRows(detection).length;
 }

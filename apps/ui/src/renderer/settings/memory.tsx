@@ -430,6 +430,8 @@ export function Memory({
   projects,
   focus = null,
   onFocusDone,
+  openConflicts = false,
+  onConflictsOpened,
   remote = isRemoteRuntime(),
   agentsApi = null,
   capabilities = null,
@@ -454,6 +456,9 @@ export function Memory({
   /** An entry's handle (`m12`) to show alone, as a transcript row asks. */
   focus?: string | null;
   onFocusDone?: () => void;
+  /** Open Clean up on its Conflicts tab, once; `onConflictsOpened` says it was. */
+  openConflicts?: boolean;
+  onConflictsOpened?: () => void;
   remote?: boolean;
   /** What the AI sort's model settings are listed from, as a chat's are. */
   agentsApi?: DaemonApis['agents'] | null;
@@ -550,6 +555,20 @@ export function Memory({
     onNotice: cleanup.announce,
   });
   const cleanupSort = useMemoryTriage(api, checkChoice, 'cleanup');
+  const showConflicts = useLatestCallback((): void => {
+    cleanup.setTab('checks');
+    cleanup.openDialog();
+    onConflictsOpened?.();
+  }, [cleanup, onConflictsOpened]);
+  const conflictsShown = useRef(false);
+  useEffect(() => {
+    if (!openConflicts) {
+      conflictsShown.current = false;
+    } else if (!conflictsShown.current) {
+      conflictsShown.current = true;
+      showConflicts();
+    }
+  }, [openConflicts, showConflicts]);
   const listedCheckAgents = check.pairs?.checkAgents;
   useEffect(() => {
     if (listedCheckAgents !== undefined) {

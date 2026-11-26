@@ -25,6 +25,7 @@ export function ManagerDock({
   threadIdentities,
   threadReports,
   onOpenThread,
+  onOpenMemoryConflicts,
   onTurnSettled,
   onDiscarded,
 }: {
@@ -40,6 +41,8 @@ export function ManagerDock({
   /** What each board thread last reported, for the Done cards in the manager's transcript. */
   threadReports: ReadonlyMap<string, string>;
   onOpenThread: (runId: string) => void;
+  /** Open Settings → Memory → Clean up on its Conflicts tab. */
+  onOpenMemoryConflicts?: () => void;
   onTurnSettled: () => void;
   /** The manager is gone; the page offers to start a new one on the same settings. */
   onDiscarded: () => void;
@@ -92,6 +95,7 @@ export function ManagerDock({
         threadReports,
         commandCenterManager: true,
         onOpenThread,
+        onOpenMemoryConflicts,
       }}
     />
   );

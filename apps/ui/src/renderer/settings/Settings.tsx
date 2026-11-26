@@ -67,6 +67,7 @@ import { AnalysisDialog } from '../chats/analysis-dialog';
 import { Chats } from '../chats/Chats';
 import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { AgentConfigList } from '../components/agent-config-list';
+import { AppUpdateActions } from '../components/app-update-actions';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
 import { InstructionPreview } from '../components/instruction-preview';
@@ -377,6 +378,8 @@ export function Settings({
   client = null,
   memoryFocus = null,
   onMemoryFocusDone,
+  memoryConflicts = false,
+  onMemoryConflictsOpened,
   memoryWaiting = null,
   onClisDetected,
 }: {
@@ -386,6 +389,9 @@ export function Settings({
   /** An entry's handle Settings → Memory opens on, as a transcript row asks. */
   memoryFocus?: string | null;
   onMemoryFocusDone?: () => void;
+  /** Open Memory's Clean up on its Conflicts tab once, as the manager's conflicts card asks. */
+  memoryConflicts?: boolean;
+  onMemoryConflictsOpened?: () => void;
   memoryWaiting?: number | null;
   /**
    * The pane to show. Owned by the app shell rather than by this screen so
@@ -1561,6 +1567,8 @@ export function Settings({
               projects={projects}
               focus={memoryFocus}
               onFocusDone={onMemoryFocusDone}
+              openConflicts={memoryConflicts}
+              onConflictsOpened={onMemoryConflictsOpened}
               agentsApi={apis?.agents ?? null}
               capabilities={capabilities}
               capabilitiesLoading={capabilitiesLoading}
@@ -2267,33 +2275,7 @@ export function Settings({
                           ? 'Checking…'
                           : 'Check now'}
                       </Button>
-                      {/* The same action as the strip's, on the screen a user opens when
-                they went LOOKING for it — not a second mechanism: both call the
-                one service, and both are gated on the same `canInstall`. */}
-                      {update.state?.phase === 'available' &&
-                      update.state.canInstall ? (
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          title="Download and install the new version. Geniro keeps running until you press Restart now."
-                          onClick={() => void update.install()}>
-                          Update now
-                        </Button>
-                      ) : null}
-                      {/* Installed, waiting on the user. The restart quits the app and
-                takes the daemon and every running turn with it, so it is a press
-                rather than something that happens the moment the copy ends. */}
-                      {update.state?.phase === 'ready' ? (
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          title="Close Geniro and open the new version. Agents working right now are stopped."
-                          onClick={() => void update.relaunch()}>
-                          Restart now
-                        </Button>
-                      ) : null}
+                      <AppUpdateActions update={update} />
                     </SettingsPanelRow>
                     {/* Only while something is moving: a bar sitting at 0% next to an
               offer would suggest a download nobody started. */}

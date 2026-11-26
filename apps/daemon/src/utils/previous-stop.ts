@@ -25,6 +25,7 @@ export interface DaemonExitNote {
   code: number | null;
   signal: string | null;
   at: string;
+  killedAfterMs: number | null;
 }
 
 export interface DaemonLastError {
@@ -143,10 +144,12 @@ export function readPreviousStop(
 ): PreviousStop {
   const cause = consumeStopCause(userDataDir);
   const records = consumePreviousStopRecords(userDataDir);
+  const announced = cause !== 'crash' && cause !== 'unknown';
   return {
     cause,
     detail:
-      cause === 'crash' || cause === 'unknown'
+      !announced ||
+      (records.exit !== null && records.exit.killedAfterMs !== null)
         ? composeStopDetail(records, macBootedAt)
         : null,
   };
@@ -162,6 +165,12 @@ export function composeStopDetail(
     const where = lastError.where !== null ? ` in ${lastError.where}` : '';
     const message = lastError.message !== '' ? `: ${lastError.message}` : '';
     return `uncaught ${lastError.name}${where}${message}`;
+  }
+  if (exit !== null && exit.killedAfterMs !== null) {
+    return withNote(
+      `killed by Geniro after it did not stop within ${Math.round(exit.killedAfterMs / 1000)} s`,
+      memory,
+    );
   }
   if (exit !== null && exit.signal !== null) {
     return withNote(`killed by ${exit.signal}`, memory);
@@ -256,7 +265,13 @@ function parseExitNote(raw: unknown): DaemonExitNote | null {
     typeof raw.signal === 'string' && /^SIG[A-Z0-9]+$/.test(raw.signal)
       ? raw.signal
       : null;
-  return { pid: raw.pid, code, signal, at: raw.at };
+  const killedAfterMs =
+    typeof raw.killedAfterMs === 'number' &&
+    Number.isFinite(raw.killedAfterMs) &&
+    raw.killedAfterMs >= 0
+      ? raw.killedAfterMs
+      : null;
+  return { pid: raw.pid, code, signal, at: raw.at, killedAfterMs };
 }
 
 function parseLastError(raw: unknown): DaemonLastError | null {

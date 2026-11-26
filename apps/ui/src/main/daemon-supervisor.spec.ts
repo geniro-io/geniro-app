@@ -99,6 +99,7 @@ interface Harness {
   removed: string[];
   /** Each stop cause recorded, with how many signals the child had seen by then. */
   causes: { cause: DaemonStopCause; signalsBefore: number }[];
+  exits: DaemonExitNote[];
   setPidfile(next: DaemonInfo | null): void;
 }
 
@@ -130,6 +131,7 @@ function harness(opts: {
   const killedPids = new Set<number>();
   const removed: string[] = [];
   const causes: Harness['causes'] = [];
+  const exits: DaemonExitNote[] = [];
   const options: DaemonSupervisorOptions = {
     spawn: ((cmd: string, args: string[], o: { env?: NodeJS.ProcessEnv }) => {
       void cmd;
@@ -166,6 +168,7 @@ function harness(opts: {
         cause,
         signalsBefore: child.signals.length + kills.length,
       }),
+    writeExitNote: (exit) => exits.push(exit),
     pollIntervalMs: opts.pollMs ?? 1,
     shutdownGraceMs: opts.graceMs ?? 15,
     readStartTime: opts.startTime ?? (() => RECORDED_START),
@@ -180,6 +183,7 @@ function harness(opts: {
     kills,
     removed,
     causes,
+    exits,
     setPidfile: (next) => {
       pidfile = next;
     },
@@ -318,6 +322,15 @@ describe('DaemonSupervisor.start', () => {
       expect(h.kills).toEqual([
         { pid: 1111, signal: 'SIGTERM' },
         { pid: 1111, signal: 'SIGKILL' },
+      ]);
+      expect(h.exits).toEqual([
+        {
+          pid: 1111,
+          code: null,
+          signal: 'SIGKILL',
+          at: expect.any(Date),
+          killedAfterMs: 50,
+        },
       ]);
       expect(h.spawned).toHaveLength(1);
     } finally {
@@ -804,6 +817,16 @@ describe('DaemonSupervisor.stop', () => {
     }
 
     expect(h.child.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(h.causes.map((c) => c.cause)).toEqual(['quit']);
+    expect(h.exits).toEqual([
+      {
+        pid: h.child.pid,
+        code: null,
+        signal: 'SIGKILL',
+        at: expect.any(Date),
+        killedAfterMs: 50,
+      },
+    ]);
   });
 
   it('lets the grace win when the child exits in time', async () => {
@@ -823,6 +846,7 @@ describe('DaemonSupervisor.stop', () => {
     }
 
     expect(h.child.signals).toEqual(['SIGTERM']);
+    expect(h.exits).toEqual([]);
   });
 
   it('interrupting a pending start(): the start rejects, stop() resolves, and the half-started child is killed', async () => {

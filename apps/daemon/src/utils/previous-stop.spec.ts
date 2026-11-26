@@ -57,8 +57,15 @@ function heartbeat(at: number = BEAT_BEFORE_BOOT): DaemonHeartbeat {
 function exitNote(
   code: number | null,
   signal: string | null = null,
+  killedAfterMs: number | null = null,
 ): DaemonExitNote {
-  return { pid: 100, code, signal, at: '2026-11-24T10:21:01.000Z' };
+  return {
+    pid: 100,
+    code,
+    signal,
+    at: '2026-11-24T10:21:01.000Z',
+    killedAfterMs,
+  };
 }
 
 function lastError(overrides: Partial<DaemonLastError> = {}): DaemonLastError {
@@ -79,6 +86,19 @@ function errorWithStack(stack: string): Error {
 }
 
 describe('composeStopDetail', () => {
+  it('names a daemon Geniro killed because it did not stop in time', () => {
+    expect(
+      composeStopDetail(
+        {
+          ...NONE,
+          heartbeat: heartbeat(),
+          exit: exitNote(null, 'SIGKILL', 7_000),
+        },
+        BOOTED_AT,
+      ),
+    ).toBe('killed by Geniro after it did not stop within 7 s (memory 1.2 GB)');
+  });
+
   it('names an uncaught error over every other record', () => {
     expect(
       composeStopDetail(
@@ -431,6 +451,33 @@ describe('readPreviousStop', () => {
       expect(readdirSync(dir)).toEqual([]);
     },
   );
+
+  it.each(['quit', 'self-update', 'restart'] as const)(
+    'names a %s that Geniro had to finish with SIGKILL, keeping the cause',
+    (cause) => {
+      leave(DAEMON_STOP_CAUSE_NAME, `${cause}\n`);
+      leave(DAEMON_HEARTBEAT_NAME, heartbeat());
+      leave(DAEMON_EXIT_NOTE_NAME, exitNote(null, 'SIGKILL', 7_000));
+
+      expect(readPreviousStop(dir, BOOTED_AT)).toEqual({
+        cause,
+        detail:
+          'killed by Geniro after it did not stop within 7 s (memory 1.2 GB)',
+      });
+      expect(readdirSync(dir)).toEqual([]);
+    },
+  );
+
+  it('gives no detail after a quit whose exit note was not a kill by Geniro', () => {
+    leave(DAEMON_STOP_CAUSE_NAME, 'quit\n');
+    leave(DAEMON_HEARTBEAT_NAME, heartbeat());
+    leave(DAEMON_EXIT_NOTE_NAME, exitNote(null, 'SIGTERM'));
+
+    expect(readPreviousStop(dir, BOOTED_AT)).toEqual({
+      cause: 'quit',
+      detail: null,
+    });
+  });
 
   it('names a crash from the records it left', () => {
     leave(DAEMON_STOP_CAUSE_NAME, 'crash\n');

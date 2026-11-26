@@ -51,7 +51,8 @@ export const DAEMON_STOP_CAUSE_NAME = 'daemon-stop-cause';
 
 /**
  * Written by the UI for every exit of a daemon that had come up and that the
- * app did not end itself: `{"pid", "code", "signal", "at"}`. Read and removed
+ * app did not end itself, and for every daemon the app had to finish with
+ * SIGKILL: `{"pid", "code", "signal", "at", "killedAfterMs"}`. Read and removed
  * by the next daemon's boot, which names the exit on the rows of the turns it
  * cut off.
  *

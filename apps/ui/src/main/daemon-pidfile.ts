@@ -110,6 +110,7 @@ export interface DaemonExitNote {
   code: number | null;
   signal: NodeJS.Signals | null;
   at: Date;
+  killedAfterMs?: number;
 }
 
 export function writeExitNote(path: string, exit: DaemonExitNote): void {
@@ -120,6 +121,7 @@ export function writeExitNote(path: string, exit: DaemonExitNote): void {
       code: exit.code,
       signal: exit.signal,
       at: exit.at.toISOString(),
+      killedAfterMs: exit.killedAfterMs ?? null,
     }),
   );
 }

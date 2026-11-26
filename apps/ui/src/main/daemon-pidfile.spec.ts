@@ -323,8 +323,20 @@ describe('writeExitNote', () => {
       code: null,
       signal: 'SIGKILL',
       at: '2026-11-26T10:00:00.000Z',
+      killedAfterMs: null,
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('writes how long the app waited before it killed the daemon itself', () => {
+    const path = join(dir, DAEMON_EXIT_NOTE_NAME);
+
+    writeExitNote(path, { ...exit, killedAfterMs: 7_000 });
+
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
+      signal: 'SIGKILL',
+      killedAfterMs: 7_000,
+    });
   });
 
   it('replaces an earlier note and a leftover at the staging name rather than writing through it', () => {

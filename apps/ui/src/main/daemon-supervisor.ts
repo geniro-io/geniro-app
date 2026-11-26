@@ -969,6 +969,7 @@ export class DaemonSupervisor {
       }
       return;
     }
+    this.noteKilledUnresponsive(pid);
     const killDeadline = Date.now() + KILL_CONFIRM_MS;
     while (Date.now() < killDeadline) {
       if (!this.isAlive(pid)) {
@@ -1257,15 +1258,29 @@ export class DaemonSupervisor {
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {
+    const exit = new Promise<boolean>((resolve) => {
+      child.once('exit', () => resolve(true));
+    });
     child.kill('SIGTERM');
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => {
-        child.once('exit', () => resolve(true));
-      }),
+      exit,
       delay(this.shutdownGraceMs).then(() => false),
     ]);
     if (!exited) {
       child.kill('SIGKILL');
+      if (child.pid !== undefined) {
+        this.noteKilledUnresponsive(child.pid);
+      }
     }
+  }
+
+  private noteKilledUnresponsive(pid: number): void {
+    this.noteExit({
+      pid,
+      code: null,
+      signal: 'SIGKILL',
+      at: new Date(),
+      killedAfterMs: this.shutdownGraceMs,
+    });
   }
 }

@@ -3546,8 +3546,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run], em);
-    return this.toRunWire(run, previews.of(run.id));
+    return this.wireOf(run, em);
   }
 
   /**
@@ -3565,8 +3564,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run], em);
-    return this.toRunWire(run, previews.of(run.id));
+    return this.wireOf(run, em);
   }
 
   /** Write a row of an analysis chat's own — a mark of its card, or a notice. */
@@ -3639,8 +3637,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run], em);
-    return this.toRunWire(run, previews.of(run.id));
+    return this.wireOf(run, em);
+  }
+
+  /** A system analysis by id, as it reads now, or null when the id names none. */
+  async findSystemAnalysis(runId: string): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run || run.analysisPurpose !== 'system') {
+      return null;
+    }
+    return this.wireOf(run, em);
   }
 
   /**
@@ -3758,8 +3765,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run], em);
-    return this.toRunWire(run, previews.of(run.id));
+    return this.wireOf(run, em);
   }
 
   /**
@@ -3825,8 +3831,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run], em);
-    return this.toRunWire(run, previews.of(run.id));
+    return this.wireOf(run, em);
   }
 
   /** The projects that have an own chat — what the orphan sweep checks. */
@@ -9829,6 +9834,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       reads.projectName,
       reads.sessionStarted,
     );
+  }
+
+  private async wireOf(run: Run, em: EntityManager): Promise<RunWire> {
+    const previews = await this.wireReads([run], em);
+    return this.toRunWire(run, previews.of(run.id));
   }
 
   /**

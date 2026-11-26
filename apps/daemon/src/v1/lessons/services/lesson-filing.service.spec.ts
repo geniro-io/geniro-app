@@ -5,6 +5,10 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import type {
+  MemoryEntry,
+  MemoryLessonApplied,
+} from '../../memory/memory.types';
 import type { MemoryService } from '../../memory/services/memory.service';
 import { memoryBodyOf } from '../../memory/utils/lesson-body';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
@@ -116,6 +120,7 @@ function build(
     closedBy?: 'manual' | 'archive' | 'delete';
     checker?: LessonModelChoice | null;
     saved?: SavedOutcome;
+    applied?: MemoryLessonApplied;
   } = {},
 ) {
   const source =
@@ -193,6 +198,14 @@ function build(
         options.saved ?? {
           kind: 'created',
           entry: { handle: 'm-new', status: 'active' },
+        },
+      ),
+    ),
+    applyLesson: vi.fn(() =>
+      Promise.resolve(
+        options.applied ?? {
+          kind: 'not_applied',
+          reason: 'm3 is not an agent note waiting on the user’s approval',
         },
       ),
     ),
@@ -1040,7 +1053,7 @@ describe('LessonFilingService.file', () => {
   });
 
   it.each(['refines', 'broken_again'] as const)(
-    'keeps a memory lesson that %s an entry as proposed, filing no entry for it, while a new lesson beside it is filed',
+    'keeps a memory lesson that %s an entry the lesson cannot change by itself as proposed, filing no entry for it, while a new lesson beside it is filed',
     async (verdict) => {
       const fixture = build({
         visible: [
@@ -1077,6 +1090,95 @@ describe('LessonFilingService.file', () => {
       );
     },
   );
+
+  it('rewrites an unapproved agent note a refining lesson names by itself, keeping its old text for Undo', async () => {
+    const fixture = build({
+      visible: [
+        { id: 'id-m3', handle: 'm3', title: 'Run pnpm test before a commit' },
+      ],
+      applied: {
+        kind: 'applied',
+        entry: { handle: 'm3', rev: 4 } as MemoryEntry,
+        previous: { title: 'Old title', body: 'Old body' },
+      },
+    });
+
+    await fixture.service.file(fixture.turn, [
+      lesson({
+        target: { kind: 'memory', scope: 'global', type: 'feedback' },
+        dedup: { verdict: 'refines', handle: 'm3' },
+      }),
+    ]);
+
+    const [row] = persistedOf(fixture);
+    expect(fixture.memory.applyLesson).toHaveBeenCalledWith(
+      { kind: 'lesson', runId: 'refl', agentKind: 'claude', model: 'opus' },
+      'm3',
+      {
+        kind: 'refine',
+        title: lesson().title,
+        body: expect.stringContaining(lesson().rule) as string,
+      },
+      { projectId: null, teamSlug: null },
+    );
+    expect(fixture.memory.fileLesson).not.toHaveBeenCalled();
+    expect(fixture.proposals.updateById).toHaveBeenCalledWith(
+      row!.id,
+      expect.objectContaining({
+        status: 'saved',
+        resultRef: 'm3',
+        autoApplied: JSON.stringify({
+          kind: 'refined',
+          rev: 4,
+          previous: { title: 'Old title', body: 'Old body' },
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(fixture.rows.write).toHaveBeenCalledWith('src', {
+      kind: 'lesson_outcome',
+      payload: expect.objectContaining({
+        status: 'saved',
+        by: 'auto',
+        memoryHandle: 'm3',
+      }),
+    });
+  });
+
+  it('moves an unapproved agent note a rule was broken again for into the memory index by itself', async () => {
+    const fixture = build({
+      visible: [
+        { id: 'id-m3', handle: 'm3', title: 'Run pnpm test before a commit' },
+      ],
+      applied: {
+        kind: 'applied',
+        entry: { handle: 'm3', rev: 5 } as MemoryEntry,
+        previous: null,
+      },
+    });
+
+    await fixture.service.file(fixture.turn, [
+      lesson({
+        target: { kind: 'memory', scope: 'global', type: 'feedback' },
+        dedup: { verdict: 'broken_again', handle: 'm3' },
+      }),
+    ]);
+
+    expect(fixture.memory.applyLesson).toHaveBeenCalledWith(
+      expect.anything(),
+      'm3',
+      { kind: 'index' },
+      expect.anything(),
+    );
+    expect(fixture.proposals.updateById).toHaveBeenCalledWith(
+      persistedOf(fixture)[0]!.id,
+      expect.objectContaining({
+        status: 'saved',
+        autoApplied: JSON.stringify({ kind: 'indexed', rev: 5 }),
+      }),
+      expect.anything(),
+    );
+  });
 
   it('refuses a second filing of the same reflection, writing nothing more', async () => {
     const fixture = build();

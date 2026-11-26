@@ -32,6 +32,8 @@ import {
   type EditLesson,
   LESSON_HISTORY_BUCKETS,
   LESSON_PROPOSAL_STATUSES,
+  type LessonAutoApplied,
+  LessonAutoAppliedSchema,
   type LessonDedup,
   type LessonHistoryPage,
   type LessonHistoryQuery,
@@ -161,7 +163,13 @@ export class LessonProposalService {
       const target = input.target ?? targetOf(row);
       const title = input.title ?? row.title;
       const rule = input.rule ?? row.rule;
-      const landed = await this.writeTo(row, target, title, rule);
+      const landed = await this.writeTo(
+        row,
+        target,
+        title,
+        rule,
+        input.notDuplicateOf ?? [],
+      );
       return this.decided(row, em, { title, rule, target, landed });
     });
   }
@@ -209,6 +217,7 @@ export class LessonProposalService {
         type: entry.type,
         projectId: entry.projectId,
         teamSlug: entry.teamSlug,
+        notDuplicateOf: input.notDuplicateOf,
       }),
     );
     return this.decided(row, em, {
@@ -248,13 +257,22 @@ export class LessonProposalService {
     });
   }
 
-  /** "Undo" on a lesson filed on its own: its entry is forgotten, restorable from Settings → Memory. */
+  /**
+   * "Undo" on a lesson filed on its own: its entry is forgotten, restorable
+   * from Settings → Memory; on one that changed an agent note by itself, that
+   * change is taken back while the note is still as the lesson left it.
+   */
   async undo(id: string): Promise<LessonProposalWire> {
     const em = this.em.fork();
-    const row = await this.filed(id, em);
-    const entry = await this.entryOf(row);
-    if (entry !== null && entry.status !== 'forgotten') {
-      await this.memory.setStatus({ kind: 'user' }, entry.id, 'forgotten');
+    const row = await this.filed(id, em, { orAutoApplied: true });
+    const applied = autoAppliedOf(row);
+    if (applied !== null) {
+      await this.takeBack(row, applied);
+    } else {
+      const entry = await this.entryOf(row);
+      if (entry !== null && entry.status !== 'forgotten') {
+        await this.memory.setStatus({ kind: 'user' }, entry.id, 'forgotten');
+      }
     }
     Object.assign(row, {
       status: 'undone' as const,
@@ -285,6 +303,7 @@ export class LessonProposalService {
         type: entry.type,
         projectId: entry.projectId,
         teamSlug: entry.teamSlug,
+        notDuplicateOf: input.notDuplicateOf,
       }),
     );
     Object.assign(row, { title: input.title, rule: input.rule });
@@ -390,7 +409,29 @@ export class LessonProposalService {
     return row;
   }
 
-  private async filed(id: string, em: EntityManager): Promise<LessonProposal> {
+  private async takeBack(
+    row: LessonProposal,
+    applied: LessonAutoApplied,
+  ): Promise<void> {
+    const entry = await this.liveEntry(row.resultRef ?? '');
+    if (entry.rev !== applied.rev) {
+      throw new ConflictException(
+        'LESSON_ENTRY_CHANGED',
+        `${entry.handle} changed after the lesson ${applied.kind === 'refined' ? 'updated it' : 'moved it into the memory index'} — change it in Settings → Memory instead`,
+      );
+    }
+    savedEntryOrThrow(
+      applied.kind === 'refined'
+        ? await this.memory.restoreText(entry.id, entry.rev, applied.previous)
+        : await this.memory.setIndexed({ kind: 'user' }, entry.id, false),
+    );
+  }
+
+  private async filed(
+    id: string,
+    em: EntityManager,
+    { orAutoApplied = false }: { orAutoApplied?: boolean } = {},
+  ): Promise<LessonProposal> {
     const row = await this.proposals.getById(id, em);
     if (row === null) {
       throw new NotFoundException('LESSON_NOT_FOUND', `no lesson ${id}`);
@@ -401,7 +442,7 @@ export class LessonProposalService {
         `this lesson is ${row.status}, not saved to memory`,
       );
     }
-    if (!ownsEntry(row)) {
+    if (!ownsEntry(row) && !(orAutoApplied && autoAppliedOf(row) !== null)) {
       throw new ConflictException(
         'LESSON_NOT_FILED',
         `this lesson changed the existing entry ${row.resultRef} — change it in Settings → Memory`,
@@ -536,11 +577,12 @@ export class LessonProposalService {
     target: LessonTarget,
     title: string,
     rule: string,
+    notDuplicateOf: readonly string[],
   ): Promise<Landed> {
     refuseHiddenText(title, rule);
     switch (target.kind) {
       case 'memory':
-        return this.toMemory(row, target, title, rule);
+        return this.toMemory(row, target, title, rule, notDuplicateOf);
       case 'project_instructions':
         return this.toProject(row, rule);
       case 'member_instructions':
@@ -555,8 +597,17 @@ export class LessonProposalService {
     target: Extract<LessonTarget, { kind: 'memory' }>,
     title: string,
     rule: string,
+    notDuplicateOf: readonly string[],
   ): Promise<Landed> {
     const dedup = dedupOf(row);
+    const vouched = [
+      ...new Set([
+        ...(dedup.verdict !== 'new' && dedup.handle !== null
+          ? [dedup.handle]
+          : []),
+        ...notDuplicateOf,
+      ]),
+    ];
     const entry = savedEntryOrThrow(
       await this.memory.create(
         {
@@ -566,9 +617,7 @@ export class LessonProposalService {
           projectId:
             target.scope === 'project' ? this.placeOf(row, 'project') : null,
           teamSlug: target.scope === 'team' ? this.placeOf(row, 'team') : null,
-          ...(dedup.verdict !== 'new' && dedup.handle !== null
-            ? { notDuplicateOf: [dedup.handle] }
-            : {}),
+          ...(vouched.length > 0 ? { notDuplicateOf: vouched } : {}),
         },
         { sourceRunId: row.sourceRunId, proposalId: row.id },
       ),
@@ -862,6 +911,17 @@ function ownsEntry(row: LessonProposal): boolean {
   return savedToMemory(row) && row.resultRef !== dedupOf(row).handle;
 }
 
+/** What filing applied by itself to the note a saved lesson names, or null. */
+function autoAppliedOf(row: LessonProposal): LessonAutoApplied | null {
+  if (!savedToMemory(row) || row.autoApplied === null) {
+    return null;
+  }
+  const parsed = LessonAutoAppliedSchema.safeParse(
+    parseJsonColumn(row.autoApplied),
+  );
+  return parsed.success ? parsed.data : null;
+}
+
 function toWire(
   row: LessonProposal,
   sourceExists: boolean,
@@ -891,7 +951,7 @@ function toWire(
     resultRef: row.resultRef,
     places: placesOf(row),
     moveUp,
-    undoable: ownsEntry(row),
+    undoable: ownsEntry(row) || autoAppliedOf(row) !== null,
     memoryPending,
     sourceExists,
     createdAt: row.createdAt.toISOString(),

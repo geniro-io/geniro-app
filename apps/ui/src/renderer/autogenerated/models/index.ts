@@ -5737,6 +5737,12 @@ export interface EditLessonDto {
      * @memberof EditLessonDto
      */
     rule: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof EditLessonDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 
@@ -8516,7 +8522,7 @@ export interface LessonProposal {
      */
     moveUp: LessonProposalMoveUpEnum | null;
     /**
-     * Saved to memory as an entry of its own, so Undo and Edit apply
+     * Undo applies: saved to memory as an entry of its own (Edit applies too), or a change filing made by itself to an agent note the user had not approved
      * @type {boolean}
      * @memberof LessonProposal
      */
@@ -16610,6 +16616,12 @@ export interface SaveLessonDto {
      * @memberof SaveLessonDto
      */
     target?: LessonTarget;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SaveLessonDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 
@@ -21906,6 +21918,12 @@ export interface UpdateLessonRuleDto {
      * @memberof UpdateLessonRuleDto
      */
     rule?: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof UpdateLessonRuleDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 

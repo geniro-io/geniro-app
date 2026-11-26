@@ -460,6 +460,27 @@ describe('SavedLessons', () => {
     expect(el.textContent).not.toContain('WHEN refining → keep it');
   });
 
+  it('lists a lesson that updated an agent note by itself with Undo and no Edit', async () => {
+    const api = lessonsApiMock([
+      proposal({
+        id: 'refined',
+        title: 'WHEN scripting a stand → read status from the list route',
+        status: 'saved',
+        dedup: { verdict: 'refines', handle: 'm7' },
+        memoryHandle: 'm7',
+        resultRef: 'm7',
+        undoable: true,
+      }),
+    ]);
+    const el = await renderSaved(asLessonsApi(api));
+
+    expect(el.textContent).toContain('Updated m7');
+    expect(() => buttonNamed(el, 'Edit')).toThrow();
+    await press(buttonNamed(el, 'Undo'));
+
+    expect(api.undoLesson).toHaveBeenCalledWith({ proposalId: 'refined' });
+  });
+
   it('undoes a saved lesson with the card’s own Undo, and reads the list again', async () => {
     const api = lessonsApiMock([
       savedProposal('own', 'WHEN seeding → reset the fixtures first'),

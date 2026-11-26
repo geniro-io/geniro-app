@@ -1,6 +1,10 @@
 import { createContext } from 'react';
 
 import type { LessonDocumentsReader } from '../components/lessons-card';
+import {
+  NearDuplicateError,
+  nearDuplicateHandles,
+} from '../components/use-memory-editor';
 import type { DaemonApis } from '../daemon-api';
 import { describeDaemonError } from '../daemon-api';
 
@@ -25,12 +29,18 @@ export const LessonsKnowledgeApiContext = createContext<
   DaemonApis['knowledge'] | null
 >(null);
 
-/** The daemon's refusal as a lesson's error line; the rest passes through. */
+/**
+ * The daemon's refusal as a lesson's error line, a near-duplicate one keeping
+ * the handles it named so the row can vouch past them; the rest passes through.
+ */
 export function described(call: Promise<unknown>): Promise<void> {
   return call.then(
     () => undefined,
     (err: unknown) => {
-      throw new Error(describeDaemonError(err));
+      const similar = nearDuplicateHandles(err);
+      throw similar !== null && similar.length > 0
+        ? new NearDuplicateError(similar)
+        : new Error(describeDaemonError(err));
     },
   );
 }

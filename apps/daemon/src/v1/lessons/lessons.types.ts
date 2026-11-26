@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import type { ChatApprovalMode } from '../agents/chat.types';
-import { MEMORY_TITLE_MAX_CHARS, MEMORY_TYPES } from '../memory/memory.types';
+import {
+  MEMORY_TITLE_MAX_CHARS,
+  MEMORY_TYPES,
+  NotDuplicateOfSchema,
+} from '../memory/memory.types';
 import { AgentKindSchema, type ItemKind } from '../runs/runs.types';
 
 export const LESSON_TITLE_MAX_CHARS = MEMORY_TITLE_MAX_CHARS;
@@ -495,10 +499,25 @@ export const LessonsSpendSchema = z
   .meta({ id: 'LessonsSpend' });
 export type LessonsSpend = z.infer<typeof LessonsSpendSchema>;
 
+/**
+ * What filing applied by itself to the unapproved agent note a lesson names,
+ * and the note's rev right after, so Undo takes back only that change.
+ */
+export const LessonAutoAppliedSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('refined'),
+    rev: z.number().int(),
+    previous: z.object({ title: z.string(), body: z.string() }),
+  }),
+  z.object({ kind: z.literal('indexed'), rev: z.number().int() }),
+]);
+export type LessonAutoApplied = z.infer<typeof LessonAutoAppliedSchema>;
+
 /** The user's edit of a lesson already saved to memory; the entry becomes the user's own. */
 export const EditLessonSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type EditLesson = z.infer<typeof EditLessonSchema>;
 
@@ -592,7 +611,7 @@ export const LessonProposalWireSchema = z
     undoable: z
       .boolean()
       .describe(
-        'Saved to memory as an entry of its own, so Undo and Edit apply',
+        'Undo applies: saved to memory as an entry of its own (Edit applies too), or a change filing made by itself to an agent note the user had not approved',
       ),
     memoryPending: z
       .boolean()
@@ -702,6 +721,7 @@ export type LessonHistoryPage = z.infer<typeof LessonHistoryPageSchema>;
 export const UpdateLessonRuleSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS).optional(),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS).optional(),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type UpdateLessonRule = z.infer<typeof UpdateLessonRuleSchema>;
 
@@ -710,6 +730,7 @@ export const SaveLessonSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS).optional(),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS).optional(),
   target: LessonTargetSchema.optional(),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type SaveLesson = z.infer<typeof SaveLessonSchema>;
 

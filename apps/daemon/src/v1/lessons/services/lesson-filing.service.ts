@@ -11,6 +11,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { placeKeyOf } from '../../knowledge/utils/knowledge-text';
 import {
+  type MemoryActor,
   memoryHandle,
   type MemoryReflectionEffect,
   type MemorySaveOutcome,
@@ -31,6 +32,7 @@ import {
   LESSON_RULE_MAX_CHARS,
   LESSON_TITLE_MAX_CHARS,
   LESSON_WHY_MAX_CHARS,
+  type LessonAutoApplied,
   type LessonDedup,
   type LessonEffect,
   type LessonOutcomePayload,
@@ -47,6 +49,12 @@ import { placesOf } from './lesson-proposal.service';
 import { LessonRowWriter } from './lesson-row.writer';
 import { LessonsConfigService } from './lessons-config.service';
 import { LessonsEventBus } from './lessons-events.bus';
+
+interface ReflectionFacts {
+  id: string;
+  agentKind: AgentKind | null;
+  model: string | null;
+}
 
 /** One lesson as `propose_lessons` hands it over, already shape-checked. */
 export interface ProposedLesson {
@@ -458,6 +466,7 @@ export class LessonFilingService {
           title: row.title,
           rule: row.rule,
           decidedAt: row.decidedAt,
+          autoApplied: row.autoApplied,
         },
         em,
       );
@@ -513,14 +522,17 @@ export class LessonFilingService {
 
   private async fileOne(
     row: LessonProposal,
-    reflection: {
-      id: string;
-      agentKind: AgentKind | null;
-      model: string | null;
-    } | null,
+    reflection: ReflectionFacts | null,
   ): Promise<LessonOutcomePayload | null> {
     const target = JSON.parse(row.target) as LessonTarget;
     const dedup = JSON.parse(row.dedup) as LessonDedup;
+    if (
+      target.kind === 'memory' &&
+      dedup.handle !== null &&
+      (dedup.verdict === 'refines' || dedup.verdict === 'broken_again')
+    ) {
+      return this.applyToNote(row, dedup.handle, dedup.verdict, reflection);
+    }
     if (target.kind !== 'memory' || dedup.verdict !== 'new') {
       row.status = 'proposed';
       return null;
@@ -540,12 +552,7 @@ export class LessonFilingService {
       return null;
     }
     const saved: MemorySaveOutcome = await this.memory.fileLesson(
-      {
-        kind: 'lesson',
-        runId: row.reflectionRunId,
-        agentKind: reflection?.agentKind ?? null,
-        model: reflection?.model ?? null,
-      },
+      lessonActorOf(row, reflection),
       {
         title: row.title,
         body: memoryBodyOf(row, row.rule),
@@ -580,6 +587,48 @@ export class LessonFilingService {
     }
     row.status = 'proposed';
     return null;
+  }
+
+  /**
+   * A lesson that refines, or was broken again for, an agent note the user
+   * has not approved: the note takes its text, or moves into the memory
+   * index, with no press. Anything that stops it leaves the lesson waiting.
+   */
+  private async applyToNote(
+    row: LessonProposal,
+    handle: string,
+    verdict: 'refines' | 'broken_again',
+    reflection: ReflectionFacts | null,
+  ): Promise<LessonOutcomePayload | null> {
+    const applied = await this.memory.applyLesson(
+      lessonActorOf(row, reflection),
+      handle,
+      verdict === 'refines'
+        ? {
+            kind: 'refine',
+            title: row.title,
+            body: memoryBodyOf(row, row.rule),
+          }
+        : { kind: 'index' },
+      { projectId: row.projectId, teamSlug: row.teamSlug },
+    );
+    if (applied.kind !== 'applied') {
+      row.status = 'proposed';
+      return null;
+    }
+    const record: LessonAutoApplied =
+      applied.previous === null
+        ? { kind: 'indexed', rev: applied.entry.rev }
+        : {
+            kind: 'refined',
+            rev: applied.entry.rev,
+            previous: applied.previous,
+          };
+    row.status = 'saved';
+    row.resultRef = applied.entry.handle;
+    row.decidedAt = new Date();
+    row.autoApplied = JSON.stringify(record);
+    return outcomeOf(row, 'saved', applied.entry.handle, null);
   }
 
   private async writeCard(
@@ -738,6 +787,18 @@ function filedOf(
 
 function refusedWith(code: LessonRefusalCode, reason: string): LessonFiled {
   return { status: 'refused', problems: [{ code, reason }] };
+}
+
+function lessonActorOf(
+  row: LessonProposal,
+  reflection: ReflectionFacts | null,
+): Extract<MemoryActor, { kind: 'lesson' }> {
+  return {
+    kind: 'lesson',
+    runId: row.reflectionRunId,
+    agentKind: reflection?.agentKind ?? null,
+    model: reflection?.model ?? null,
+  };
 }
 
 function outcomeOf(

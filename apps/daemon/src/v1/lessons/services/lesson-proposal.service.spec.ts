@@ -100,6 +100,12 @@ function build(
     edit: vi.fn(() =>
       Promise.resolve({ kind: 'updated', entry: { handle: 'm7' } }),
     ),
+    restoreText: vi.fn(() =>
+      Promise.resolve({ kind: 'updated', entry: { handle: 'm7' } }),
+    ),
+    setIndexed: vi.fn(() =>
+      Promise.resolve({ kind: 'changed', entry: { handle: 'm7' } }),
+    ),
   };
   const rows = {
     write: vi.fn(() => Promise.resolve()),
@@ -293,6 +299,37 @@ describe('LessonProposalService.save', () => {
       );
     },
   );
+
+  it('adds the handles the user vouched for to the entry a refines lesson names', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm12' }),
+    });
+    const { service, memory } = build(row);
+
+    await service.save('lp-1', { notDuplicateOf: ['m30', 'm12'] });
+
+    expect(memory.create).toHaveBeenCalledWith(
+      expect.objectContaining({ notDuplicateOf: ['m12', 'm30'] }),
+      expect.anything(),
+    );
+  });
+
+  it('refuses a save that looks like another entry with 409 MEMORY_NEAR_DUPLICATE naming it, and leaves the lesson open', async () => {
+    const row = proposal();
+    const { service, rows } = build(row, {
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    });
+
+    await expect(service.save('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.status).toBe('proposed');
+    expect(rows.write).not.toHaveBeenCalled();
+  });
 
   it('names no entry as not a duplicate for a new lesson', async () => {
     const { service, memory } = build(proposal());
@@ -568,6 +605,42 @@ describe('LessonProposalService.edit', () => {
         memoryHandle: 'm7',
       }),
     });
+  });
+
+  it('passes the handles the user vouched for to the edit', async () => {
+    const row = proposal({ status: 'saved', resultRef: 'm7' });
+    const { service, memory } = build(row);
+
+    await service.edit('lp-1', {
+      title: 't',
+      rule: 'r',
+      notDuplicateOf: ['m30'],
+    });
+
+    expect(memory.edit).toHaveBeenCalledWith(
+      'mem-7',
+      expect.objectContaining({ notDuplicateOf: ['m30'] }),
+    );
+  });
+
+  it('refuses an edit that looks like another entry with 409 MEMORY_NEAR_DUPLICATE, recording nothing', async () => {
+    const row = proposal({ status: 'saved', resultRef: 'm7' });
+    const { service, memory, rows } = build(row);
+    memory.edit.mockResolvedValueOnce({
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    } as never);
+
+    await expect(
+      service.edit('lp-1', { title: 't', rule: 'r' }),
+    ).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.title).not.toBe('t');
+    expect(rows.write).not.toHaveBeenCalled();
   });
 
   it('refuses when the entry is forgotten, writing nothing', async () => {
@@ -996,6 +1069,40 @@ describe('LessonProposalService.updateRule', () => {
     );
   });
 
+  it('passes the handles the user vouched for to the edit of the refined entry', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory } = build(row);
+
+    await service.updateRule('lp-1', { notDuplicateOf: ['m30'] });
+
+    expect(memory.edit).toHaveBeenCalledWith(
+      'mem-7',
+      expect.objectContaining({ notDuplicateOf: ['m30'] }),
+    );
+  });
+
+  it('refuses Update rule whose text looks like another entry with 409 MEMORY_NEAR_DUPLICATE naming it, leaving the lesson open', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory, rows } = build(row);
+    memory.edit.mockResolvedValueOnce({
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    } as never);
+
+    await expect(service.updateRule('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.status).toBe('proposed');
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+
   it('refuses Update rule when the refined entry was forgotten, with 409 LESSON_ENTRY_GONE, leaving the lesson open', async () => {
     const row = proposal({
       dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
@@ -1281,6 +1388,107 @@ describe('LessonProposalService.list', () => {
       { statuses: undefined, sourceRunId: undefined },
       expect.anything(),
     );
+  });
+});
+
+describe('LessonProposalService.undo on a lesson that changed an agent note by itself', () => {
+  const REFINED = JSON.stringify({
+    kind: 'refined',
+    rev: 3,
+    previous: { title: 'Old title', body: 'Old body' },
+  });
+
+  function autoApplied(record: string): LessonProposal {
+    return proposal({
+      status: 'saved',
+      resultRef: 'm7',
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+      autoApplied: record,
+    });
+  }
+
+  it('puts the note’s old text back at the rev the lesson left, and marks the lesson undone', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, rows } = build(row);
+
+    const wire = await service.undo('lp-1');
+
+    expect(memory.restoreText).toHaveBeenCalledWith('mem-7', 3, {
+      title: 'Old title',
+      body: 'Old body',
+    });
+    expect(memory.setStatus).not.toHaveBeenCalled();
+    expect(wire.status).toBe('undone');
+    expect(rows.write).toHaveBeenCalledWith(
+      'src',
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: 'undone' }),
+      }),
+    );
+  });
+
+  it('takes a note it moved into the memory index back out', async () => {
+    const row = autoApplied(JSON.stringify({ kind: 'indexed', rev: 3 }));
+    const { service, memory } = build(row);
+
+    await service.undo('lp-1');
+
+    expect(memory.setIndexed).toHaveBeenCalledWith(
+      { kind: 'user' },
+      'mem-7',
+      false,
+    );
+    expect(memory.restoreText).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 LESSON_ENTRY_CHANGED once the note changed after the lesson, leaving both as they are', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, rows } = build(row, undefined, {
+      ...FILED_ENTRY,
+      rev: 4,
+    });
+
+    await expect(service.undo('lp-1')).rejects.toMatchObject({
+      errorCode: 'LESSON_ENTRY_CHANGED',
+      message: expect.stringContaining('after the lesson updated it'),
+    });
+    expect(memory.restoreText).not.toHaveBeenCalled();
+    expect(row.status).toBe('saved');
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+
+  it('says the lesson moved the note into the index, not that it updated it, when refusing to undo that', async () => {
+    const row = autoApplied(JSON.stringify({ kind: 'indexed', rev: 3 }));
+    const { service, memory } = build(row, undefined, {
+      ...FILED_ENTRY,
+      rev: 4,
+    });
+
+    const refusal = service.undo('lp-1');
+
+    await expect(refusal).rejects.toMatchObject({
+      errorCode: 'LESSON_ENTRY_CHANGED',
+      message: expect.stringContaining(
+        'after the lesson moved it into the memory index',
+      ),
+    });
+    await expect(refusal).rejects.not.toMatchObject({
+      message: expect.stringContaining('updated it'),
+    });
+    expect(memory.setIndexed).not.toHaveBeenCalled();
+  });
+
+  it('reads as undoable on the wire, but refuses Edit', async () => {
+    const row = autoApplied(REFINED);
+    const { service, memory, proposals } = build(row);
+    proposals.list.mockResolvedValueOnce([row]);
+
+    const [wire] = await service.list({});
+    expect(wire).toMatchObject({ undoable: true });
+    await expect(
+      service.edit('lp-1', { title: 't', rule: 'r' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_NOT_FILED' });
+    expect(memory.edit).not.toHaveBeenCalled();
   });
 });
 

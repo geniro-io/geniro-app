@@ -8099,11 +8099,17 @@ export interface LessonHistoryCounts {
      */
     saved: number;
     /**
-     * Proposed, being checked, or left by a check that failed
+     * Waiting for the user's review: proposed, or left by a check that failed
      * @type {number}
      * @memberof LessonHistoryCounts
      */
     waiting: number;
+    /**
+     * Being checked by a second model
+     * @type {number}
+     * @memberof LessonHistoryCounts
+     */
+    checking: number;
     /**
      * Rejected, undone, dropped by the check, already remembered or failed
      * @type {number}

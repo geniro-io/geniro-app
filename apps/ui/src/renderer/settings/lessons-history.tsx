@@ -160,6 +160,9 @@ export function historySummary(counts: LessonHistoryCounts): string {
     counts.waiting > 0
       ? `${counts.waiting.toLocaleString('en-US')} waiting for review`
       : null,
+    counts.checking > 0
+      ? `${counts.checking.toLocaleString('en-US')} being checked`
+      : null,
     counts.notSaved > 0
       ? `${counts.notSaved.toLocaleString('en-US')} not saved`
       : null,

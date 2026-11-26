@@ -20,9 +20,10 @@ let container: HTMLDivElement;
 let root: Root;
 
 const COUNTS: LessonHistoryCounts = {
-  total: 49,
+  total: 50,
   saved: 40,
   waiting: 2,
+  checking: 1,
   notSaved: 7,
 };
 
@@ -217,14 +218,20 @@ describe('Lessons history', () => {
 
     expect(listLessonHistory).toHaveBeenCalledWith({ limit: 1 });
     expect(container.textContent).toContain(
-      '49 lessons · 40 saved · 2 waiting for review · 7 not saved',
+      '50 lessons · 40 saved · 2 waiting for review · 1 being checked · 7 not saved',
     );
     expect(button('Open…')).toBeDefined();
   });
 
   it('says there are no lessons yet and offers nothing to open', async () => {
     const { api } = lessonsApi(() =>
-      page([], null, { total: 0, saved: 0, waiting: 0, notSaved: 0 }),
+      page([], null, {
+        total: 0,
+        saved: 0,
+        waiting: 0,
+        checking: 0,
+        notSaved: 0,
+      }),
     );
 
     await render(api);

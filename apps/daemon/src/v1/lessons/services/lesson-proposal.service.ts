@@ -115,6 +115,10 @@ export class LessonProposalService {
       LESSON_HISTORY_BUCKETS.waiting,
       em,
     );
+    const checking = await this.proposals.countIn(
+      LESSON_HISTORY_BUCKETS.checking,
+      em,
+    );
     const notSaved = await this.proposals.countIn(
       LESSON_HISTORY_BUCKETS.notSaved,
       em,
@@ -126,7 +130,7 @@ export class LessonProposalService {
         rows.length > query.limit && last !== undefined
           ? `${last.createdAt.toISOString()}${HISTORY_CURSOR_SEPARATOR}${last.id}`
           : null,
-      counts: { total, saved, waiting, notSaved },
+      counts: { total, saved, waiting, checking, notSaved },
     };
   }
 

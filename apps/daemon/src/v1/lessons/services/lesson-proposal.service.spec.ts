@@ -1113,7 +1113,9 @@ describe('LessonProposalService.history', () => {
             ? 40
             : statuses.includes('proposed')
               ? 2
-              : 7,
+              : statuses.includes('checking')
+                ? 1
+                : 7,
       ),
     );
 
@@ -1126,10 +1128,15 @@ describe('LessonProposalService.history', () => {
       total: 50,
       saved: 40,
       waiting: 2,
+      checking: 1,
       notSaved: 7,
     });
     expect(proposals.countIn).toHaveBeenCalledWith(
-      ['proposed', 'checking', 'check_failed'],
+      ['proposed', 'check_failed'],
+      expect.anything(),
+    );
+    expect(proposals.countIn).toHaveBeenCalledWith(
+      ['checking'],
       expect.anything(),
     );
     expect(proposals.countIn).toHaveBeenCalledWith(

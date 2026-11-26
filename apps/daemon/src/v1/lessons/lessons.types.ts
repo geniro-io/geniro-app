@@ -630,7 +630,8 @@ export const LESSON_HISTORY_PAGE_MAX = 100;
 
 export const LESSON_HISTORY_BUCKETS = {
   saved: ['saved'],
-  waiting: ['proposed', 'checking', 'check_failed'],
+  waiting: ['proposed', 'check_failed'],
+  checking: ['checking'],
   notSaved: [
     'skipped_duplicate',
     'undone',
@@ -664,7 +665,14 @@ export const LessonHistoryCountsSchema = z
       .number()
       .int()
       .min(0)
-      .describe('Proposed, being checked, or left by a check that failed'),
+      .describe(
+        "Waiting for the user's review: proposed, or left by a check that failed",
+      ),
+    checking: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Being checked by a second model'),
     notSaved: z
       .number()
       .int()

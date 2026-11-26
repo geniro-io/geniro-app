@@ -68,6 +68,8 @@ export interface BrowserAgentHost {
 
 class AgentError extends Error {}
 
+class AgentTimeoutError extends AgentError {}
+
 interface Done {
   text: string;
   png?: string;
@@ -191,7 +193,7 @@ async function guarded<T>(op: AgentOp, work: () => Promise<T>): Promise<T> {
     op.signal.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => {
       reject(
-        new AgentError(
+        new AgentTimeoutError(
           `The browser operation took longer than ${OP_TIMEOUT_MS / 1000} s`,
         ),
       );
@@ -1137,13 +1139,22 @@ export async function runBrowserAgentRequest(
     const done = await execute(host, request, request.op);
     return { id: request.id, ok: true, ...done };
   } catch (error) {
+    if (error instanceof AgentTimeoutError) {
+      return {
+        id: request.id,
+        ok: false,
+        error: error.message,
+        failure: 'timeout',
+      };
+    }
+    if (error instanceof AgentError) {
+      return { id: request.id, ok: false, error: error.message };
+    }
     return {
       id: request.id,
       ok: false,
-      error:
-        error instanceof AgentError
-          ? error.message
-          : `The browser operation failed: ${error instanceof Error ? error.message : String(error)}`,
+      error: `The browser operation failed: ${error instanceof Error ? error.message : String(error)}`,
+      failure: 'internal',
     };
   }
 }

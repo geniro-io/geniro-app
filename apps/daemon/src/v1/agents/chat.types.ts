@@ -2351,6 +2351,10 @@ export interface BrowserHostCardInput {
   memberName: string;
 }
 
+/** How a geniro tool's call failed inside geniro, as opposed to being refused: what the daemon flags itself. */
+export const HostToolFailureSchema = z.enum(['timeout', 'internal']);
+export type HostToolFailure = z.infer<typeof HostToolFailureSchema>;
+
 /** How one browser operation ended, as a browser tool words it. */
 export type BrowserRunOutcome =
   | BrowserOutcome
@@ -5027,6 +5031,7 @@ export const AgentFlagWireSchema = z
     minutesLost: z.number().int().nullable(),
     summary: z.string(),
     detail: z.string().nullable(),
+    automatic: z.boolean(),
   })
   .meta({ id: 'AgentFlag' });
 export type AgentFlagWire = z.infer<typeof AgentFlagWireSchema>;
@@ -5045,6 +5050,24 @@ export type FlagIssueRefusal = 'DUPLICATE_FLAG' | 'FLAG_LIMIT';
 export type FlagIssueOutcome =
   | { status: 'recorded'; handle: string; flagsLeft: number }
   | { status: 'refused'; code: FlagIssueRefusal; reason: string };
+
+/** Consecutive error answers of one geniro tool in one conversation that raise an automatic flag. */
+export const AUTO_FLAG_REFUSAL_STREAK = 3;
+/** How long after its last error answer a streak still counts; a later one starts afresh. */
+export const AUTO_FLAG_REFUSAL_WINDOW_MS = 30 * 60_000;
+
+/** A flag the daemon raises itself, from a failure it observed rather than an agent's call. */
+export interface AutomaticFlagInput {
+  /** One flag per cause per thread: `interrupted:<cause>`, `tool_failure:<tool>`, `tool_refused:<tool>`. */
+  cause: string;
+  /** The row the failure is read at; null reads the run's newest. */
+  seq: number | null;
+  memberId: string | null;
+  conversationId: string | null;
+  summary: string;
+  detail: string | null;
+  minutesLost: number;
+}
 
 /** geniro's own tool a team member records a pull request's outcome with. */
 export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';

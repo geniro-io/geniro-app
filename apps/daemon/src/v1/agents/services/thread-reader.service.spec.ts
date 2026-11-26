@@ -476,6 +476,10 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       category: 'user_instructions',
       minutesLost: null,
     });
+    await flag('source', 0, 'Team run interrupted: the daemon crashed', {
+      automatic: true,
+      autoCause: 'interrupted:crash',
+    });
     // Raised after the analysis began: outside its snapshot.
     await flag('source', 5, 'Later problem');
 
@@ -487,6 +491,17 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(Object.keys(answer)[0]).toBe('flags');
     expect(answer.flags).toEqual([
       {
+        handle: 'F-000000',
+        seq: 0,
+        at: new Date(T0).toISOString(),
+        node: 'agent',
+        cost: 'work',
+        category: 'geniro_tool',
+        minutesLost: 10,
+        summary: 'Team run interrupted: the daemon crashed',
+        automatic: true,
+      },
+      {
         handle: 'F-000001',
         seq: 1,
         at: new Date(T0 + 1000).toISOString(),
@@ -497,6 +512,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         minutesLost: 10,
         summary: 'The board tool lost my card',
         detail: 'Filed it twice.',
+        automatic: false,
       },
       {
         handle: 'F-000002',
@@ -506,9 +522,11 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         cost: 'disagreement',
         category: 'user_instructions',
         summary: 'User rejected the plan',
+        automatic: false,
       },
     ]);
     expect(answer.next).toMatch(/^Start from the flags above/);
+    expect(answer.next).toContain('marked automatic, one geniro recorded');
   });
 
   it('never cuts the flags to fit the overview’s budget', async () => {
@@ -2720,6 +2738,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       minutesLost: null,
       summary: 'the fetch retried',
       detail: null,
+      automatic: true,
     };
     const FROZEN_DIGEST = {
       period: {

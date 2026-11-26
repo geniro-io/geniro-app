@@ -62,6 +62,7 @@ import { ThreadDeliveryService } from '../teams/services/thread-delivery.service
 import { TeamsModule } from '../teams/teams.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
+import { ToolFailureFlagsService } from './services/tool-failure-flags.service';
 import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
 
 /**
@@ -255,6 +256,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
       ],
     },
     McpServerService,
+    ToolFailureFlagsService,
   ],
 })
 export class McpModule {}

@@ -161,7 +161,13 @@ export type BrowserReply =
       viewPng?: string;
       tab?: string;
     }
-  | { id: string; ok: false; error: string };
+  | {
+      id: string;
+      ok: false;
+      error: string;
+      /** The operation failed inside geniro rather than being refused. TWIN: `HostToolFailureSchema` in the daemon's `agents/chat.types.ts`. */
+      failure?: 'timeout' | 'internal';
+    };
 
 /**
  * The most base64 a screenshot reply may carry. TWIN: `BROWSER_REPLY_MAX_BYTES`

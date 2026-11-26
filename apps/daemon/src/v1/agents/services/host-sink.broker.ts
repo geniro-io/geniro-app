@@ -64,7 +64,7 @@ export abstract class HostSinkBroker<TSink> {
    * Named for the concrete subclass, so a log line still says which tool failed
    * without every subclass declaring its own logger.
    */
-  private readonly logger = new Logger(this.constructor.name);
+  protected readonly logger = new Logger(this.constructor.name);
   private readonly sinks = new Map<string, HostSinkEntry<TSink>>();
 
   private key(runId: string, memberId: string): string {

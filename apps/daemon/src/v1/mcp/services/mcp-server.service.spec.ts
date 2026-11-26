@@ -179,7 +179,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../teams/utils/callee-text';
 import { callerKey } from '../../teams/utils/caller-key';
-import type { McpCallContext, McpTool } from '../mcp.types';
+import type { McpCallContext, McpTool, McpToolResult } from '../mcp.types';
 import { PAGE_CONTENT_PREFACE } from '../tools/browser-shared/browser-outcome';
 import { createBrowserTools } from '../tools/browser-shared/browser-tools';
 import { GoalsTool } from '../tools/goals/goals.tool';
@@ -187,6 +187,15 @@ import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
+import type {
+  ServedToolCall,
+  ToolFailureFlagsService,
+} from './tool-failure-flags.service';
+
+const NO_TOOL_FLAGS = {
+  answered: () => undefined,
+  threw: () => undefined,
+} as unknown as ToolFailureFlagsService;
 
 /** One row of `tools/list`, as the description audit reads it. */
 type ToolListing = {
@@ -349,6 +358,7 @@ function service(
       port: 4870,
     },
     new HostToolResultLedger(),
+    NO_TOOL_FLAGS,
   );
 }
 
@@ -6713,6 +6723,7 @@ describe('goals through the MCP endpoint', () => {
         port: 4870,
       },
       new HostToolResultLedger(),
+      NO_TOOL_FLAGS,
     );
   });
 
@@ -6920,6 +6931,7 @@ describe('goals through the MCP endpoint', () => {
       [new GoalsTool(db.service, relayWriters)],
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       new HostToolResultLedger(),
+      NO_TOOL_FLAGS,
     );
     const add = (member: string, text: string) =>
       callGoals(
@@ -7031,6 +7043,7 @@ describe('McpServerService — the in-app browser tools', () => {
         createBrowserTools(broker, attachments),
         RUNTIME,
         new HostToolResultLedger(),
+        NO_TOOL_FLAGS,
       ),
       runs,
       saved,
@@ -7063,6 +7076,45 @@ describe('McpServerService — the in-app browser tools', () => {
     answer.content
       .flatMap((part) => (part.type === 'text' ? [part.text] : []))
       .join('\n');
+
+  it('marks an operation that timed out for the daemon’s own flag, and keeps the mark off the answer', async () => {
+    const { broker } = fakeBrowser({
+      status: 'failed',
+      reason: 'The browser operation took longer than 18 s',
+      failure: 'timeout',
+    });
+    const answered: McpToolResult[] = [];
+    const subject = new McpServerService(
+      createBrowserTools(broker, {} as AttachmentStoreService),
+      RUNTIME,
+      new HostToolResultLedger(),
+      {
+        answered: (_call: ServedToolCall, result: McpToolResult) =>
+          answered.push(result),
+        threw: () => undefined,
+      } as unknown as ToolFailureFlagsService,
+    );
+
+    const answer = await callTool(subject, HOST_BROWSER_SNAPSHOT_TOOL, {
+      tab: 't1',
+    });
+
+    expect(answer).toEqual({
+      content: [
+        { type: 'text', text: 'The browser operation took longer than 18 s' },
+      ],
+      isError: true,
+    });
+    expect(answered).toEqual([
+      {
+        content: [
+          { type: 'text', text: 'The browser operation took longer than 18 s' },
+        ],
+        isError: true,
+        failure: 'timeout',
+      },
+    ]);
+  });
 
   it('asks once per new host outside auto and answers at once', async () => {
     const { subject, runs } = browserService({
@@ -7390,6 +7442,7 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
       [notes],
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       ledger,
+      NO_TOOL_FLAGS,
     );
     const callee = endpointOf('conv-9');
     const own = endpointOf(null);
@@ -7419,6 +7472,7 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
       [],
       { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
       ledger,
+      NO_TOOL_FLAGS,
     );
     const own = endpointOf(null);
     ledger.watch(own);
@@ -7433,5 +7487,113 @@ describe('McpServerService — results kept for a CLI that reports none', () => 
     expect(ledger.resultOf(own, callOf('launch_missiles', {}))).toEqual(
       response.json().result,
     );
+  });
+});
+
+describe('McpServerService — the daemon’s own flags for a tool’s failures', () => {
+  const RUNTIME_INFO = {
+    token: 'launch',
+    version: '9.9.9',
+    startedAt: 0,
+    port: 4870,
+  };
+  const recorder = () => {
+    const seen: { kind: string; call: ServedToolCall; detail: unknown }[] = [];
+    return {
+      seen,
+      flags: {
+        answered: (call: ServedToolCall, result: McpToolResult) =>
+          seen.push({ kind: 'answered', call, detail: result }),
+        threw: (call: ServedToolCall, err: unknown) =>
+          seen.push({ kind: 'threw', call, detail: err }),
+      } as unknown as ToolFailureFlagsService,
+    };
+  };
+
+  it('hands every answer to the flags with its endpoint, and keeps the failure mark off the wire', async () => {
+    const { seen, flags } = recorder();
+    const timedOut: McpToolResult = {
+      content: [
+        { type: 'text', text: 'The browser did not answer within 20 s.' },
+      ],
+      isError: true,
+      failure: 'timeout',
+    };
+    const target = new McpServerService(
+      [
+        {
+          handles: (name) => name === 'browser_click',
+          list: () => [],
+          call: () => Promise.resolve(timedOut),
+        },
+      ],
+      RUNTIME_INFO,
+      new HostToolResultLedger(),
+      flags,
+    );
+
+    const response = await post(
+      target,
+      'run-1',
+      'qa',
+      rpc('tools/call', { name: 'browser_click', arguments: { ref: 'e1' } }),
+      'conv-9',
+    );
+
+    expect(response.json().result).toEqual({
+      content: [
+        { type: 'text', text: 'The browser did not answer within 20 s.' },
+      ],
+      isError: true,
+    });
+    expect(seen).toEqual([
+      {
+        kind: 'answered',
+        call: expect.objectContaining({
+          runId: 'run-1',
+          memberId: 'qa',
+          conversationId: 'conv-9',
+          endpointPath: hostEndpointPath('run-1', 'qa', 'conv-9'),
+          tool: 'browser_click',
+          startedAt: expect.any(Number),
+        }),
+        detail: timedOut,
+      },
+    ]);
+  });
+
+  it('reports a tool that threw and still answers the call as an error', async () => {
+    const { seen, flags } = recorder();
+    const target = new McpServerService(
+      [
+        {
+          handles: (name) => name === 'show_ui',
+          list: () => [],
+          call: () => Promise.reject(new Error('db is locked')),
+        },
+      ],
+      RUNTIME_INFO,
+      new HostToolResultLedger(),
+      flags,
+    );
+
+    const response = await post(
+      target,
+      'run-1',
+      'qa',
+      rpc('tools/call', { name: 'show_ui', arguments: {} }),
+    );
+
+    expect(JSON.stringify(response.json())).toContain('db is locked');
+    expect(seen).toEqual([
+      {
+        kind: 'threw',
+        call: expect.objectContaining({
+          tool: 'show_ui',
+          conversationId: null,
+        }),
+        detail: new Error('db is locked'),
+      },
+    ]);
   });
 });

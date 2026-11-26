@@ -129,6 +129,27 @@ describe('runBrowserAgentRequest', () => {
     const hint = { ok: false, error: 'ref e7 is gone — take a new snapshot' };
     expect(unknown).toMatchObject(hint);
     expect(removed).toMatchObject(hint);
+    expect(unknown).not.toHaveProperty('failure');
+    expect(removed).not.toHaveProperty('failure');
+  });
+
+  it('marks an unexpected error as a failure inside geniro', async () => {
+    const { host, debug } = rig();
+    debug.handlers['Runtime.evaluate'] = () => {
+      throw new Error('Target closed');
+    };
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'evaluate', tab: 't1', expression: 'document.title' }),
+    );
+
+    expect(reply).toEqual({
+      id: 'q1',
+      ok: false,
+      error: 'The browser operation failed: Target closed',
+      failure: 'internal',
+    });
   });
 
   it('never returns a cookie value from getCookies', async () => {
@@ -284,6 +305,7 @@ describe('runBrowserAgentRequest', () => {
       await expect(pending).resolves.toMatchObject({
         ok: false,
         error: expect.stringContaining('took longer than 18 s'),
+        failure: 'timeout',
       });
       expect(op.signal.aborted).toBe(true);
       expect(

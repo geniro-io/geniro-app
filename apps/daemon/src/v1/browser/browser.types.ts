@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import type { RunGroupColor } from '../agents/chat.types';
+import {
+  type HostToolFailure,
+  HostToolFailureSchema,
+  type RunGroupColor,
+} from '../agents/chat.types';
 
 /** How long the daemon waits on the desktop window for one browser operation. */
 export const BROWSER_REQUEST_TIMEOUT_MS = 20_000;
@@ -107,6 +111,7 @@ export const BrowserReplySchema = z.union([
     id: z.string().min(1),
     ok: z.literal(false),
     error: z.string(),
+    failure: HostToolFailureSchema.optional(),
   }),
 ]);
 
@@ -122,4 +127,4 @@ export type BrowserOutcome =
       viewPng?: string;
       tab?: string;
     }
-  | { status: 'failed'; reason: string };
+  | { status: 'failed'; reason: string; failure?: HostToolFailure };

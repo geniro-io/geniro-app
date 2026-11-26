@@ -340,7 +340,7 @@ export class ThreadReaderService {
   ) {}
 
   /**
-   * What the run's agents flagged at or before the snapshot, oldest first —
+   * What the run's agents, and geniro itself, flagged at or before the snapshot, oldest first —
    * what every analysis reads before anything else. Never cut by a budget.
    */
   private async flagsOf(source: AnalysisSource): Promise<Answer[]> {
@@ -362,6 +362,7 @@ export class ThreadReaderService {
       ...(flag.minutesLost === null ? {} : { minutesLost: flag.minutesLost }),
       summary: flag.summary,
       ...(flag.detail === null ? {} : { detail: flag.detail }),
+      automatic: flag.automatic,
     }));
   }
 
@@ -960,7 +961,7 @@ export class ThreadReaderService {
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Runs with flags first: each flag is a problem the run's own agents recorded, and view=overview runId=… leads with them. Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
+      next: "Runs with flags first: each flag is a problem the run's own agents recorded, or, marked automatic, one geniro recorded itself, and view=overview runId=… leads with them. Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
     });
     return this.keepAnswer(key, answer);
   }
@@ -1170,7 +1171,7 @@ export class ThreadReaderService {
       ...(teamNotes > 0 ? await this.pitfallsOf(source) : {}),
       ...(await this.measured(source, run, timeline.tools, fold.calls)),
       ...lists,
-      next: `${flags.length > 0 ? "Start from the flags above: each is a problem an agent of the thread recorded itself; view=items afterSeq around a flag's seq shows what led to it. " : ''}Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
+      next: `${flags.length > 0 ? "Start from the flags above: each is a problem an agent of the thread recorded itself, or, marked automatic, one geniro recorded; view=items afterSeq around a flag's seq shows what led to it. " : ''}Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       withClippedGoalEvidence(answer, OVERVIEW_BYTES),

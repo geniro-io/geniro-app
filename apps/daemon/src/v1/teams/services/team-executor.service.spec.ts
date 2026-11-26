@@ -103,6 +103,7 @@ import {
   COMMAND_END_WAKE_BATCH_MS,
   CommandEndWakeService,
 } from '../../agents/services/command-end-wake.service';
+import type { FlagBroker } from '../../agents/services/flag.broker';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -505,6 +506,19 @@ class FakeItemDao {
   async maxSeq(runId: string): Promise<number> {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
+  }
+  async latestItemAtPerRun(runIds: string[]): Promise<Map<string, Date>> {
+    const out = new Map<string, Date>();
+    for (const item of this.items) {
+      const seen = out.get(item.runId);
+      if (
+        runIds.includes(item.runId) &&
+        (seen === undefined || item.createdAt > seen)
+      ) {
+        out.set(item.runId, item.createdAt);
+      }
+    }
+    return out;
   }
   // The two reads the stranded-work repair folds — one run's rows of those
   // kinds, in seq order; the real queries are pinned in `item.dao.spec.ts`.
@@ -1300,6 +1314,8 @@ function setup(
     threadInbox?: ThreadInboxService;
     /** The in-app browser's tools, when a test drives them. */
     browser?: BrowserBroker;
+    /** `flag_issue` and the daemon's own flags, when a test reads them. */
+    flags?: Pick<FlagBroker, 'raiseAutomatic'>;
     /** The lead's `read_teams` / `propose_team` gate, when a test reads it. */
     teamProposals?: TeamProposalBroker;
     /** The lead's `save_project_instructions` gate, when a test reads it. */
@@ -1868,7 +1884,7 @@ function setup(
     opts.writeFailures,
     opts.turnFolders as TurnFolderService | undefined,
     opts.cacheKeepAlive as PromptCacheKeepAliveService | undefined,
-    undefined,
+    opts.flags as FlagBroker | undefined,
     milestones,
     surfaceSinks,
     surfaces,
@@ -4959,6 +4975,137 @@ describe('TeamExecutorService', () => {
       message: 'team run interrupted — the daemon crashed while it was running',
       interrupted: true,
       interruptCause: 'crash',
+    });
+  });
+
+  describe('the daemon’s own flag for an interrupted run', () => {
+    const recorder = () => {
+      const raised: { runId: string; input: unknown }[] = [];
+      return {
+        raised,
+        flags: {
+          raiseAutomatic: async (runId: string, input: unknown) => {
+            raised.push({ runId, input });
+            return 'F-000001';
+          },
+        },
+      };
+    };
+
+    it('flags a run a kill cut off at its interrupted row, with the minutes since its last row', async () => {
+      const { raised, flags } = recorder();
+      const { service, runDao, itemDao } = setup(4870, { flags });
+      const orphan = await runDao.create({
+        teamId: 'ghost',
+        status: 'running',
+        cwd: dir,
+      });
+      await itemDao.create({
+        runId: orphan.id,
+        seq: 0,
+        kind: 'message',
+        payload: JSON.stringify({ text: 'working' }),
+        createdAt: new Date(Date.now() - 450_000),
+      });
+
+      await service.reconcileOrphanedRuns('unknown');
+
+      const errorItem = itemDao.items.find(
+        (i) => i.runId === orphan.id && i.kind === 'error',
+      )!;
+      expect(raised).toEqual([
+        {
+          runId: orphan.id,
+          input: {
+            cause: 'interrupted:unknown',
+            seq: errorItem.seq,
+            memberId: null,
+            conversationId: null,
+            summary: 'Team run interrupted: the daemon stopped unexpectedly',
+            detail:
+              'team run interrupted — the daemon stopped unexpectedly while it was running',
+            minutesLost: 8,
+          },
+        },
+      ]);
+    });
+
+    it('flags a run an update keeps open at its work-continues row', async () => {
+      const { raised, flags } = recorder();
+      const ctx = setup(4870, { flags });
+      const orphan = await ctx.runDao.create({
+        teamId: 'ghost',
+        status: 'running',
+        cwd: dir,
+      });
+      await ctx.nodeDao.createPending(orphan.id, 'orch');
+      await ctx.nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+      await ctx.itemDao.create({
+        runId: orphan.id,
+        memberId: 'orch',
+        seq: 0,
+        kind: 'status',
+        payload: JSON.stringify({ nodeId: 'orch', status: 'running' }),
+        createdAt: new Date(Date.now() - 150_000),
+      });
+
+      await ctx.service.reconcileOrphanedRuns('self-update');
+
+      expect(ctx.runDao.runs.get(orphan.id)?.status).toBe('running');
+      const continued = ctx.itemDao.items.find(
+        (i) => i.runId === orphan.id && i.kind === 'error',
+      )!;
+      expect(raised).toEqual([
+        {
+          runId: orphan.id,
+          input: expect.objectContaining({
+            cause: 'interrupted:self-update',
+            seq: continued.seq,
+            summary: 'Team run interrupted: the app was updated',
+            detail:
+              'team run interrupted — the app was updated while it was running — work continues',
+            minutesLost: 3,
+          }),
+        },
+      ]);
+    });
+
+    it('flags a run whose continuation could not start', async () => {
+      const { raised, flags } = recorder();
+      const { service, runDao, itemDao } = setup(4870, { flags });
+      const run = await runDao.create({
+        teamId: 'ghost',
+        status: 'running',
+        cwd: dir,
+      });
+
+      await service.abandonRestartContinuation(run.id, 'restart');
+
+      const errorItem = itemDao.items.find(
+        (i) => i.runId === run.id && i.kind === 'error',
+      )!;
+      expect(raised).toEqual([
+        {
+          runId: run.id,
+          input: expect.objectContaining({
+            cause: 'interrupted:restart',
+            seq: errorItem.seq,
+            detail:
+              'team run interrupted — the daemon was restarted while it was running, and it could not be continued',
+            minutesLost: 1,
+          }),
+        },
+      ]);
+    });
+
+    it('raises nothing for a run that was not running', async () => {
+      const { raised, flags } = recorder();
+      const { service, runDao } = setup(4870, { flags });
+      await runDao.create({ teamId: 'ghost', status: 'completed', cwd: dir });
+
+      await service.reconcileOrphanedRuns('crash');
+
+      expect(raised).toEqual([]);
     });
   });
 

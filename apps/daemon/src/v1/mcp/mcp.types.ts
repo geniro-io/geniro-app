@@ -1,5 +1,6 @@
 import type { RequestId } from '@modelcontextprotocol/sdk/types.js';
 
+import type { HostToolFailure } from '../agents/chat.types';
 import type { MemoryActor } from '../memory/memory.types';
 import type { RunPlace } from '../projects/projects.types';
 
@@ -33,6 +34,8 @@ export type McpToolResult = {
   content: { type: 'text'; text: string }[];
   isError: boolean;
   images?: McpToolImage[];
+  /** Set on an error answer when the call failed inside geniro rather than being refused; never sent to the agent. */
+  failure?: HostToolFailure;
 };
 
 /** WHO a listing is for: one member of one run, in one of its conversations. */

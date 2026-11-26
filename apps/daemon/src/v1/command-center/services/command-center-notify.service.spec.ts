@@ -566,7 +566,7 @@ describe('CommandCenterNotifyService', () => {
     expect(await managerRows()).toHaveLength(2);
   });
 
-  it("announces a card-Done finish once, and again after tell_threads cleared it", async () => {
+  it('announces a card-Done finish once, and again after tell_threads cleared it', async () => {
     await roster.join(MANAGER, [THREAD], 'auto', new Date());
     await db.seedTask(THREAD, 'done');
     setThread({ id: THREAD, status: 'running' });

@@ -1072,7 +1072,9 @@ describe('CommandCenter — the working tile on the canvas', () => {
       '[data-slot="working-thread-row"][data-run="run-w"]',
     )!;
 
-    expect(row.querySelector('[data-slot="working-thread-held"]')).not.toBeNull();
+    expect(
+      row.querySelector('[data-slot="working-thread-held"]'),
+    ).not.toBeNull();
     expect(
       row.querySelector('[data-slot="working-thread-subagents"]')!.textContent,
     ).toBe('2 sub-agents');

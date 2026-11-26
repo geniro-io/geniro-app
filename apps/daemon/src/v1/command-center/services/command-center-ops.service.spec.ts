@@ -236,8 +236,20 @@ describe('CommandCenterOpsService', () => {
       it('makes the next finish of each named thread news again, leaving the others as they were', async () => {
         const roster = new CommandCenterRosterDao(db.em);
         const unread = { announcedFinish: null, watch: false };
-        await roster.markAnnounced(MANAGER, 'thread-1', unread, 'finish-1', false);
-        await roster.markAnnounced(MANAGER, 'thread-2', unread, 'finish-2', false);
+        await roster.markAnnounced(
+          MANAGER,
+          'thread-1',
+          unread,
+          'finish-1',
+          false,
+        );
+        await roster.markAnnounced(
+          MANAGER,
+          'thread-2',
+          unread,
+          'finish-2',
+          false,
+        );
 
         await service.tell(MANAGER, input({ to: ['t1'] }));
 

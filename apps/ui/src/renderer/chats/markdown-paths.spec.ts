@@ -7,42 +7,42 @@ import {
   localPathOf,
   namesPicture,
   PICTURE_EXTENSIONS,
-  wrapSpacedImagePaths,
+  wrapSpacedPaths,
 } from './markdown-paths';
 
 const SPACED = '/Users/me/Library/Application Support/Geniro/shot.png';
 
-describe('wrapSpacedImagePaths', () => {
+describe('wrapSpacedPaths', () => {
   it('puts a destination with a space in angle brackets, which is what makes it an image', () => {
-    expect(wrapSpacedImagePaths(`see ![shot](${SPACED}) here`)).toBe(
+    expect(wrapSpacedPaths(`see ![shot](${SPACED}) here`)).toBe(
       `see ![shot](<${SPACED}>) here`,
     );
   });
 
   it('leaves a destination without a space exactly as written', () => {
     const text = '![shot](/tmp/shot.png) and ![b](rel/b.png)';
-    expect(wrapSpacedImagePaths(text)).toBe(text);
+    expect(wrapSpacedPaths(text)).toBe(text);
   });
 
   it('keeps a quoted title OUTSIDE the brackets', () => {
-    expect(wrapSpacedImagePaths(`![shot](${SPACED} "Before")`)).toBe(
+    expect(wrapSpacedPaths(`![shot](${SPACED} "Before")`)).toBe(
       `![shot](<${SPACED}> "Before")`,
     );
     // …and a title alone is not a space in the PATH.
     const titled = '![shot](/tmp/shot.png "the before shot")';
-    expect(wrapSpacedImagePaths(titled)).toBe(titled);
+    expect(wrapSpacedPaths(titled)).toBe(titled);
   });
 
   it('leaves code that SHOWS such markdown untouched', () => {
     const fenced = `\`\`\`md\n![shot](${SPACED})\n\`\`\``;
     const inline = `write \`![shot](${SPACED})\` to embed it`;
-    expect(wrapSpacedImagePaths(fenced)).toBe(fenced);
-    expect(wrapSpacedImagePaths(inline)).toBe(inline);
+    expect(wrapSpacedPaths(fenced)).toBe(fenced);
+    expect(wrapSpacedPaths(inline)).toBe(inline);
   });
 
   it('leaves an already-bracketed destination alone', () => {
     const text = `![shot](<${SPACED}>)`;
-    expect(wrapSpacedImagePaths(text)).toBe(text);
+    expect(wrapSpacedPaths(text)).toBe(text);
   });
 
   it('takes linear time over a destination that is mostly spaces', () => {
@@ -54,7 +54,7 @@ describe('wrapSpacedImagePaths', () => {
     const text = `![x](a${' '.repeat(100_000)}b)`;
 
     const started = performance.now();
-    const out = wrapSpacedImagePaths(text);
+    const out = wrapSpacedPaths(text);
     const elapsed = performance.now() - started;
 
     expect(out).toBe(`![x](<a${' '.repeat(100_000)}b>)`);
@@ -103,12 +103,110 @@ describe('wrapSpacedImagePaths', () => {
       '/a\rb "t"',
       `/a b ${String.fromCharCode(0x2028)}"t"`,
       `/a${String.fromCharCode(0x2029)}b.png "t"`,
+      '/My App/app/[id]/shot.png',
+      '/a [b] c.png "t"',
+      '/a b/[x.png',
+      '/a b/]x.png',
     ];
 
     for (const destination of destinations) {
       const text = `![alt](${destination})`;
-      expect(wrapSpacedImagePaths(text), destination).toBe(legacy(text));
+      expect(wrapSpacedPaths(text), destination).toBe(legacy(text));
     }
+  });
+});
+
+describe('wrapSpacedPaths on a link', () => {
+  const NOTES = '/Users/me/Library/Application Support/Geniro/notes.md';
+
+  it('puts a local path with a space in angle brackets, which is what makes it a link', () => {
+    expect(wrapSpacedPaths(`see [notes](${NOTES}) here`)).toBe(
+      `see [notes](<${NOTES}>) here`,
+    );
+  });
+
+  it('keeps a quoted title outside the brackets', () => {
+    expect(wrapSpacedPaths(`[notes](${NOTES} "Notes")`)).toBe(
+      `[notes](<${NOTES}> "Notes")`,
+    );
+  });
+
+  it('leaves a link that names no local absolute path exactly as written', () => {
+    for (const text of [
+      '[site](https://example.com/a b)',
+      '[rel](docs/a b.md)',
+      '[host](//server/a b)',
+      '[plain](/tmp/notes.md)',
+      '[prose](/ the docs)',
+      `[done](<${NOTES}>)`,
+      `\\[not a link](${NOTES})`,
+      `\\\\\\[not a link](${NOTES})`,
+    ]) {
+      expect(wrapSpacedPaths(text), text).toBe(text);
+    }
+  });
+
+  it('wraps a path with non-ASCII names, balanced parentheses, or after an escaped backslash', () => {
+    const russian = '/Users/me/Мои файлы/видео демо.mp4';
+    const copied = '/Users/me/Foo (1)/a b.md';
+    expect(wrapSpacedPaths(`[v](${russian})`)).toBe(`[v](<${russian}>)`);
+    expect(wrapSpacedPaths(`[c](${copied})`)).toBe(`[c](<${copied}>)`);
+    expect(wrapSpacedPaths(`C:\\\\[n](${NOTES})`)).toBe(
+      `C:\\\\[n](<${NOTES}>)`,
+    );
+  });
+
+  it('wraps a path whose folders or name hold square brackets', () => {
+    const route = '/Users/me/My App/app/[id]/page.tsx';
+    const report = '/Users/me/My App/report [v2].md';
+    const shot = '/Users/me/My App/app/[id]/shot.png';
+    expect(wrapSpacedPaths(`[p](${route})`)).toBe(`[p](<${route}>)`);
+    expect(wrapSpacedPaths(`[r](${report})`)).toBe(`[r](<${report}>)`);
+    expect(wrapSpacedPaths(`![s](${shot})`)).toBe(`![s](<${shot}>)`);
+  });
+
+  it('wraps a link or image whose text holds square brackets', () => {
+    expect(wrapSpacedPaths(`[[draft] notes](${NOTES})`)).toBe(
+      `[[draft] notes](<${NOTES}>)`,
+    );
+    expect(wrapSpacedPaths(`![[before] shot](${SPACED})`)).toBe(
+      `![[before] shot](<${SPACED}>)`,
+    );
+  });
+
+  it('wraps an image inside a link, and the link around it', () => {
+    expect(wrapSpacedPaths(`[![s](${SPACED})](${NOTES})`)).toBe(
+      `[![s](<${SPACED}>)](<${NOTES}>)`,
+    );
+  });
+
+  it('wraps an image and a link on one line, each by its own rule', () => {
+    expect(
+      wrapSpacedPaths(`![s](${SPACED}) [n](${NOTES}) [w](https://a b)`),
+    ).toBe(`![s](<${SPACED}>) [n](<${NOTES}>) [w](https://a b)`);
+  });
+
+  it('takes linear time over a line of brackets that never close into a link', () => {
+    for (const text of [
+      `${'['.repeat(100_000)}](x`,
+      '[x](a'.repeat(20_000),
+      `${'!['.repeat(50_000)}](x`,
+      `${'[a]('.repeat(30_000)}${')'.repeat(30_000)}`,
+      `[a](${'('.repeat(100_000)}`,
+      `${'](('.repeat(50_000)}`,
+      `${'[x](/a b '.repeat(20_000)}`,
+    ]) {
+      const started = performance.now();
+      wrapSpacedPaths(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+
+  it('leaves code that shows such a link untouched', () => {
+    const fenced = `\`\`\`md\n[notes](${NOTES})\n\`\`\``;
+    const inline = `write \`[notes](${NOTES})\` to link it`;
+    expect(wrapSpacedPaths(fenced)).toBe(fenced);
+    expect(wrapSpacedPaths(inline)).toBe(inline);
   });
 });
 

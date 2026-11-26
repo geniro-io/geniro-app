@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { GeniroApi } from '../../shared/contracts';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { BrowserPaneContext } from './browser/browser-pane-context';
 import { alignClass, MarkdownContent } from './markdown-content';
 
@@ -518,5 +520,65 @@ describe('MarkdownContent — an image sits on a line of its own', () => {
     );
     expect(el.querySelector('[data-slot="zoomable-image"]')).toBeNull();
     expect(el.textContent).toContain('![a](x.png)');
+  });
+});
+
+describe('MarkdownContent — a link to a local path shows it in Finder', () => {
+  async function pressLinkIn(content: string): Promise<{
+    link: HTMLAnchorElement | null;
+    calls: string[][];
+  }> {
+    const preload = window.geniro;
+    Object.defineProperty(navigator, 'userActivation', {
+      configurable: true,
+      get: () => ({ isActive: true }),
+    });
+    const showInFinder = vi.fn<GeniroApi['showInFinder']>(() =>
+      Promise.resolve({ shown: 'revealed' }),
+    );
+    window.geniro = createPreloadStub({ showInFinder });
+    try {
+      const link = render(<MarkdownContent content={content} />).querySelector(
+        'a',
+      );
+      if (link !== null) {
+        await act(async () => {
+          link.dispatchEvent(
+            new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+            }),
+          );
+          await Promise.resolve();
+        });
+      }
+      return { link, calls: showInFinder.mock.calls };
+    } finally {
+      Reflect.deleteProperty(navigator, 'userActivation');
+      window.geniro = preload;
+    }
+  }
+
+  it.each([
+    '/Users/me/Library/Application Support/Geniro/notes.md',
+    '/Users/me/Мои файлы/видео демо.mp4',
+    '/Users/me/Library/Application Support/Geniro/plan pages',
+    '/Users/me/Документы/страница.html',
+  ])('makes a clickable link of %s and shows that exact path', async (path) => {
+    const { link, calls } = await pressLinkIn(`see [it](${path}) here`);
+
+    expect(link?.textContent).toBe('it');
+    expect(link?.title).toBe('Show in Finder');
+    expect(calls).toEqual([[path]]);
+  });
+
+  it('keeps a quoted title on a spaced path as the link title', async () => {
+    const { link, calls } = await pressLinkIn(
+      '[it](/Users/me/Library/Application Support/notes.md "The notes")',
+    );
+
+    expect(link?.title).toBe('The notes');
+    expect(calls).toEqual([['/Users/me/Library/Application Support/notes.md']]);
   });
 });

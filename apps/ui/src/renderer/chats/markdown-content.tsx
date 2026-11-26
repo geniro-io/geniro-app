@@ -10,7 +10,7 @@ import { languageForFence } from '../components/ui/code-language';
 import { cn } from '../components/ui/utils';
 import { MarkdownImage } from './markdown-image';
 import { type HastNode, markdownImageBlocks } from './markdown-image-blocks';
-import { wrapSpacedImagePaths } from './markdown-paths';
+import { wrapSpacedPaths } from './markdown-paths';
 import { TranscriptLink } from './transcript-link';
 
 /**
@@ -323,7 +323,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         rehypePlugins={[markdownImageBlocks]}
         components={COMPONENTS}
         urlTransform={urlTransform}>
-        {wrapSpacedImagePaths(content)}
+        {wrapSpacedPaths(content)}
       </ReactMarkdown>
     </div>
   );

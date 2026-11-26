@@ -204,11 +204,20 @@ describe('stillRunningLines — named background processes', () => {
     { kind: 'monitor', name: 'CI on #681', owner: null },
   ];
 
+  it('names whose a process is ahead of its name, so a folded long command still shows it', () => {
+    const command = `pnpm dev ${'--flag '.repeat(40)}`.trim();
+    expect(
+      stillRunningLines({ ...SETTLED, work: { ...IDLE, commands: 1 } }, null, [
+        { kind: 'command', name: command, owner: 'Groot' },
+      ]),
+    ).toEqual([`Command by Groot: ${command}`]);
+  });
+
   it('names each process the run state holds, with whose it is', () => {
     expect(
       stillRunningLines(SETTLED_TEAM_WITH_BACKGROUND, null, processes),
     ).toEqual([
-      'Command: pnpm dev --port 5176 · Groot',
+      'Command by Groot: pnpm dev --port 5176',
       'Monitor: CI on #681',
       '1 more monitor',
     ]);
@@ -819,8 +828,8 @@ describe('useArchiveThread — background processes', () => {
 
     expect(readRunState).toHaveBeenCalledWith({ runId: 'run-1' });
     expect(items()).toEqual([
-      'Command: sleep 600 · Groot',
-      'Monitor: Wait for the release file · Tony Stark',
+      'Command by Groot: sleep 600',
+      'Monitor by Tony Stark: Wait for the release file',
     ]);
   });
 
@@ -834,8 +843,8 @@ describe('useArchiveThread — background processes', () => {
     await openDialog();
 
     expect(items()).toEqual([
-      'Command: sleep 600 · handyman',
-      'Monitor: Wait for the release file · senior',
+      'Command by handyman: sleep 600',
+      'Monitor by senior: Wait for the release file',
     ]);
   });
 

@@ -179,7 +179,7 @@ function processLines(
   const named = (processes ?? []).filter((process) => process.kind === kind);
   const lines = named.map(
     ({ name, owner }) =>
-      `${words.title}: ${name}${owner === null ? '' : ` · ${owner}`}`,
+      `${words.title}${owner === null ? '' : ` by ${owner}`}: ${name}`,
   );
   const rest = count - named.length;
   if (rest > 0) {

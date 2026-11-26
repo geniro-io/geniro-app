@@ -407,27 +407,49 @@ export class AgentMcpService {
   }
 
   /**
-   * What the CLI's listing says each server in the folder is reached through,
-   * by name — read through the cache, and dialled when the folder has no
-   * reading yet. A server the listing gives no target is absent.
+   * Where each named account connector is reached, by name, as a listing of
+   * the CLI's under this profile reports it — never a turn's harvest, whose
+   * `system/init` names no target. A connector belongs to the account, so any
+   * folder's listing answers for it, the newest first; only when none names
+   * one is this folder listed, blocking. A connector no listing gives a
+   * target is absent.
    */
-  async targetsOf(
+  async connectorTargetsOf(
     agent: AgentKind,
     cwd: string,
     configDir: string | null,
+    names: readonly string[],
   ): Promise<ReadonlyMap<string, string>> {
     const profile =
       configDir === null ? null : resolveValidConfigDir(configDir);
-    const { result } = await this.readServers(agent, cwd, {
-      configDir: profile,
-      blocking: true,
-    });
     const targets = new Map<string, string>();
-    if (result.ok) {
-      for (const server of result.servers) {
-        if (server.target !== null && server.target !== '') {
+    const take = (servers: readonly AgentMcpServer[]): void => {
+      for (const server of servers) {
+        if (
+          names.includes(server.name) &&
+          !targets.has(server.name) &&
+          server.target !== null &&
+          server.target !== ''
+        ) {
           targets.set(server.name, server.target);
         }
+      }
+    };
+    const listings = [...this.cache.entries()]
+      .filter(([key]) => sameAgentAndProfile(key, agent, profile))
+      .map(([, entry]) => entry)
+      .sort((a, b) => b.fetchedAt - a.fetchedAt);
+    for (const entry of listings) {
+      take(entry.servers);
+    }
+    if (targets.size < names.length) {
+      const { result } = await this.readServers(agent, cwd, {
+        configDir: profile,
+        blocking: true,
+        listingOnly: true,
+      });
+      if (result.ok) {
+        take(result.servers);
       }
     }
     return targets;
@@ -497,6 +519,8 @@ export class AgentMcpService {
       configDir?: string | null;
       refresh?: boolean;
       blocking?: boolean;
+      /** Answer from a listing of the CLI's alone, never from a turn's harvest. */
+      listingOnly?: boolean;
     } = {},
   ): Promise<{
     projectDir: string;
@@ -505,7 +529,12 @@ export class AgentMcpService {
     /** A dial is running; `result` is not the answer yet. */
     pending: boolean;
   }> {
-    const { configDir = null, refresh = false, blocking = false } = options;
+    const {
+      configDir = null,
+      refresh = false,
+      blocking = false,
+      listingOnly = false,
+    } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
     // answers — never a 400 for one CLI and a 200 for another. Ordering, not
     // just validation: placed BELOW an adapter's refusal, a folder's validity
@@ -643,9 +672,10 @@ export class AgentMcpService {
     // while the dial settles it: a server init saw connecting may since have
     // connected, failed, or be one awaiting approval, which only the listing
     // tells apart.
-    const harvested = refresh
-      ? null
-      : this.harvest.get(agent, projectDir, profile);
+    const harvested =
+      refresh || listingOnly
+        ? null
+        : this.harvest.get(agent, projectDir, profile);
     if (
       harvested !== null &&
       !harvested.some((row) => row.status === 'loading')

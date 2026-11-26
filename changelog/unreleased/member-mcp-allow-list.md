@@ -7,3 +7,7 @@
 ### Improved
 
 - **Fresh session:** see what Claude itself says a member's new session holds — system prompt, tools, skills, memory files and each MCP server — and a starting size read from the session's first request
+
+### Fixed
+
+- **Fresh session:** count the new sessions of every team member, including the ones it answers calls in, not only those of a member with a pool

@@ -1464,29 +1464,93 @@ describe('AgentMcpService.list', () => {
   });
 });
 
-describe('AgentMcpService.targetsOf', () => {
-  it('names the target the listing gives each server, and leaves out one it gives none', async () => {
+describe('AgentMcpService.connectorTargetsOf', () => {
+  const connector = (name: string, target: string | null): AgentMcpServer => ({
+    ...server(name),
+    target,
+  });
+
+  it('names the target the listing gives each asked connector, and leaves out one it gives none', async () => {
     const { service } = harness(() =>
       Promise.resolve([
-        { ...server('codegraph'), target: 'codegraph serve' },
-        { ...server('claude.ai Slack'), target: 'https://mcp.slack.com/mcp' },
-        { ...server('blank'), target: '' },
-        { ...server('unnamed'), target: null },
+        connector('codegraph', 'codegraph serve'),
+        connector('claude.ai Slack', 'https://mcp.slack.com/mcp'),
+        connector('claude.ai Blank', ''),
+        connector('claude.ai Unnamed', null),
       ]),
     );
 
-    const targets = await service.targetsOf(AgentKind.Claude, realDir(), null);
+    const targets = await service.connectorTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      ['claude.ai Slack', 'claude.ai Blank', 'claude.ai Unnamed'],
+    );
 
     expect([...targets]).toEqual([
-      ['codegraph', 'codegraph serve'],
       ['claude.ai Slack', 'https://mcp.slack.com/mcp'],
     ]);
+  });
+
+  it('lists the folder rather than answering from a turn’s harvest, which names no target', async () => {
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record('claude', cwd, null, [server('claude.ai Booking.com')]);
+    const { service, listMcpServers } = harness(
+      () =>
+        Promise.resolve([
+          connector(
+            'claude.ai Booking.com',
+            'https://demandapi-mcp.booking.com/*',
+          ),
+        ]),
+      { harvest },
+    );
+
+    const targets = await service.connectorTargetsOf(
+      AgentKind.Claude,
+      cwd,
+      null,
+      ['claude.ai Booking.com'],
+    );
+
+    expect([...targets]).toEqual([
+      ['claude.ai Booking.com', 'https://demandapi-mcp.booking.com/*'],
+    ]);
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a connector’s target from another folder’s listing under the profile without listing again', async () => {
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([
+        connector('claude.ai Slack', 'https://mcp.slack.com/mcp'),
+      ]),
+    );
+    await service.list(AgentKind.Claude, realDir());
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+
+    const targets = await service.connectorTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      ['claude.ai Slack'],
+    );
+
+    expect([...targets]).toEqual([
+      ['claude.ai Slack', 'https://mcp.slack.com/mcp'],
+    ]);
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
   });
 
   it('answers no targets when the listing fails', async () => {
     const { service } = harness(() => Promise.reject(new Error('timed out')));
 
-    const targets = await service.targetsOf(AgentKind.Claude, realDir(), null);
+    const targets = await service.connectorTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      ['claude.ai Slack'],
+    );
 
     expect(targets.size).toBe(0);
   });

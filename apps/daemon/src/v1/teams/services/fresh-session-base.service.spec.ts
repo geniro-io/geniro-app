@@ -145,6 +145,31 @@ describe('FreshSessionBaseService', () => {
     };
   }
 
+  it('takes the CLI, model and profile of a start whose row names none from the member as the team defines it', async () => {
+    const answer = await serviceOver([
+      start('r-geniro', { agent: null, model: null }),
+    ]).measure({
+      slug: 'dev-team',
+      team: teamOf([
+        member('manager', {
+          model: 'opus',
+          configDir: '/profiles/price-field',
+        }),
+      ]),
+      settings: {},
+    });
+
+    expect(
+      answer.members.find((entry) => entry.memberId === 'manager'),
+    ).toMatchObject({
+      agent: 'claude',
+      model: 'opus',
+      repoFilesUnavailableReason: null,
+      mcpServersUnavailableReason: null,
+    });
+    expect(harvested).toEqual([['claude', repo, '/profiles/price-field']]);
+  });
+
   it('splits a member’s base into Geniro’s block, the repository files and the CLI’s remainder', async () => {
     const answer = await serviceOver([start('r-geniro', {})]).measure({
       slug: 'dev-team',

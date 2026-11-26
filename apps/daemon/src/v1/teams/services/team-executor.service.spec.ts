@@ -58,6 +58,7 @@ import type {
   HostRowWire,
   HostUiCall,
   HostWake,
+  MemberTurnReading,
   SurfacePublisher,
 } from '../../agents/chat.types';
 import {
@@ -191,6 +192,8 @@ import {
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { teamInstructionsHashOf } from '../utils/conversation-instructions';
+import { foldFreshStarts } from '../utils/fresh-session-base';
+import { unreachableConnectorsNotice } from '../utils/mcp-allow-list-notice';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
@@ -1296,7 +1299,7 @@ function setup(
     autoGroupId?: string | null;
     /** The MCP service a member turn's server report is checked against. */
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'> &
-      Partial<Pick<AgentMcpService, 'targetsOf'>>;
+      Partial<Pick<AgentMcpService, 'connectorTargetsOf'>>;
     /** Where a fresh member session's context breakdown is recorded, when a test reads it. */
     contextRecorder?: Pick<FreshSessionContextRecorder, 'record'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
@@ -5813,6 +5816,84 @@ describe('TeamExecutorService — follow-up messages', () => {
         agent: 'claude',
       }),
     );
+  });
+
+  it('stamps every member’s turn ending with its session, so the fresh-session base counts an unpooled lead and its callee', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'side work',
+      agent: 'b',
+      message: 'do it',
+      mode: 'async',
+    });
+    await drain();
+    const b = turnsOf(claude, 'role-b')[0]!;
+    b.emit({ type: 'session', sessionId: 'sess-b' });
+    for (const [turn, tokens] of [
+      [b, 30_000],
+      [a, 50_000],
+    ] as const) {
+      turn.emit({
+        type: 'turn_complete',
+        usage: {
+          ...NO_USAGE,
+          contextTokens: tokens + 5_000,
+          firstRequestContextTokens: tokens,
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      turn.finish();
+      await drain();
+    }
+
+    const readings: MemberTurnReading[] = itemDao.items
+      .filter(
+        (item) =>
+          item.runId === run.id &&
+          item.kind === 'turn_complete' &&
+          item.memberId !== null,
+      )
+      .map((item) => {
+        const payload = JSON.parse(item.payload) as {
+          sessionId?: string;
+          usage: { contextTokens: number; firstRequestContextTokens: number };
+        };
+        return {
+          runId: item.runId,
+          seq: item.seq,
+          kind: 'turn_complete',
+          memberId: item.memberId!,
+          createdAt: item.createdAt,
+          sessionId: payload.sessionId ?? null,
+          contextTokens: payload.usage.contextTokens,
+          firstRequestContextTokens: payload.usage.firstRequestContextTokens,
+          numTurns: null,
+          agent: null,
+          model: null,
+          poolMember: null,
+        };
+      });
+    const folds = foldFreshStarts(
+      [{ id: run.id, cwd: dir, group: { projectId: null, name: 'repo' } }],
+      readings,
+    );
+
+    expect(
+      folds.map((fold) => [fold.memberId, fold.starts, fold.baseTokens]),
+    ).toEqual([
+      ['a', 1, 50_000],
+      ['b', 1, 30_000],
+    ]);
   });
 
   it('walks a SETTLED run again from its trigger member, resuming its own session', async () => {
@@ -13701,16 +13782,12 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
     });
 
-    it('hands a member’s allow list to its turn with the target the CLI lists for each server, only on a CLI that applies one', async () => {
-      const targetsOf = vi.fn(
-        async () =>
-          new Map([
-            ['codegraph', 'codegraph serve'],
-            ['claude.ai Slack', 'https://mcp.slack.com/mcp'],
-          ]),
+    it('hands a member’s allow list to its turn with each account connector’s listed target, only on a CLI that applies one', async () => {
+      const connectorTargetsOf = vi.fn(
+        async () => new Map([['claude.ai Slack', 'https://mcp.slack.com/mcp']]),
       );
       const harness = setup(4870, {
-        agentMcp: { turnMismatchNotice: async () => null, targetsOf },
+        agentMcp: { turnMismatchNotice: async () => null, connectorTargetsOf },
       });
       const run = await harness.service.startRun({
         slug: 'pool-allow',
@@ -13739,10 +13816,16 @@ describe('TeamExecutorService — agent calls', () => {
       });
       await drain();
       expect(harness.claude.starts[0]!.input.mcpAllowed).toEqual([
-        { name: 'codegraph', target: 'codegraph serve' },
+        { name: 'codegraph', target: null },
         { name: 'claude.ai Slack', target: 'https://mcp.slack.com/mcp' },
         { name: 'claude.ai Gmail', target: null },
       ]);
+      expect(connectorTargetsOf).toHaveBeenCalledWith(
+        'claude',
+        realpathSync(dir),
+        null,
+        ['claude.ai Slack', 'claude.ai Gmail'],
+      );
 
       const first = harness.callBroker.callAgent(run.id, 'orch', {
         title: 'on member 1',
@@ -13766,9 +13849,62 @@ describe('TeamExecutorService — agent calls', () => {
       completeTurn(harness.cursor.starts[0]!, 'ok');
       await second;
 
-      expect(targetsOf).toHaveBeenCalledTimes(1);
+      expect(connectorTargetsOf).toHaveBeenCalledTimes(1);
       completeTurn(harness.claude.starts[0]!, 'done');
       await drain();
+    });
+
+    it('tells the transcript once which allowed account connectors a member goes without, and files no harvest from its narrowed turn', async () => {
+      const harness = setup(4870, {
+        agentMcp: {
+          turnMismatchNotice: async () => null,
+          connectorTargetsOf: async () => new Map<string, string>(),
+        },
+      });
+      const team = teamOf(
+        [member('a', { mcpAllowed: ['qa-echo', 'claude.ai Booking.com'] })],
+        { name: 'allow' },
+      );
+      harness.storeGet.mockResolvedValue({ slug: 'allow', team });
+      const run = await harness.service.startRun({
+        slug: 'allow',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      harness.claude.starts[0]!.emit({
+        type: 'mcp_servers',
+        servers: [
+          {
+            name: 'qa-echo',
+            target: null,
+            transport: null,
+            status: 'connected',
+            detail: null,
+          },
+        ],
+      });
+      completeTurn(harness.claude.starts[0]!, 'A1');
+      await drain();
+      await harness.service.sendMessage(run.id, 'again');
+      await drain();
+      completeTurn(harness.claude.starts[1]!, 'A2');
+      await drain();
+
+      const warnings = harness.itemDao.items
+        .filter((item) => item.runId === run.id && item.kind === 'system')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) =>
+          String(payload['message']).includes('claude.ai Booking.com'),
+        );
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          message: unreachableConnectorsNotice(['claude.ai Booking.com']),
+          severity: 'warning',
+        }),
+      ]);
+      expect(harness.mcpHarvest.record).not.toHaveBeenCalled();
     });
 
     it('refuses a member the pool does not have', async () => {

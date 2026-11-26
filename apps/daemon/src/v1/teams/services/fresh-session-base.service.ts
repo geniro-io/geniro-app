@@ -164,7 +164,8 @@ export class FreshSessionBaseService {
     repoReadings: Map<string, Promise<RepoInstructionFiles>>,
     contextReading: FreshSessionContextReading | null,
   ): Promise<FreshSessionBase> {
-    const agent = agentKindOf(fold.agent);
+    const runner = runnerOf(team, fold.memberId, fold.poolMember);
+    const agent = agentKindOf(fold.agent ?? runner?.agent ?? null);
     const adapter = agent === null ? undefined : this.adapters.all().get(agent);
     const teamBlockTokens = blockTokens.get(fold.memberId) ?? null;
     const repo =
@@ -186,7 +187,7 @@ export class FreshSessionBaseService {
         : this.harvest.getStaleReading(
             agent,
             fold.newestCwd,
-            configDirOf(team, fold.memberId, fold.poolMember),
+            runner?.configDir ?? null,
           );
     const base = fold.baseTokens;
     const repoTokens = repo.kind === 'measured' ? repo.approxTokens : null;
@@ -197,8 +198,8 @@ export class FreshSessionBaseService {
     return {
       memberId: fold.memberId,
       poolMember: fold.poolMember,
-      agent: fold.agent,
-      model: fold.model,
+      agent: fold.agent ?? runner?.agent ?? null,
+      model: fold.model ?? runner?.model ?? null,
       project: fold.group,
       starts: fold.starts,
       baseTokens: base,
@@ -390,20 +391,19 @@ function agentKindOf(agent: string | null): AgentKind | null {
   return parsed.success ? parsed.data : null;
 }
 
-function configDirOf(
+/** The member or pool member as the team defines it now, for what a start's row does not carry. */
+function runnerOf(
   team: Team,
   memberId: string,
   poolMember: number | null,
-): string | null {
+): { agent: string; model?: string; configDir?: string } | undefined {
   const member = team.members.find((candidate) => candidate.id === memberId);
   if (member === undefined) {
-    return null;
+    return undefined;
   }
-  const runner =
-    poolMember === null || poolMember <= 1
-      ? member
-      : member.pool?.[poolMember - 2];
-  return runner?.configDir ?? null;
+  return poolMember === null || poolMember <= 1
+    ? member
+    : member.pool?.[poolMember - 2];
 }
 
 function shareOf(part: number | null, whole: number): number | null {

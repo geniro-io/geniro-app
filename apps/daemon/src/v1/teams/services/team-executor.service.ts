@@ -371,6 +371,7 @@ import {
   readConversationInstructions,
   teamInstructionsHashOf,
 } from '../utils/conversation-instructions';
+import { unreachableConnectorsNotice } from '../utils/mcp-allow-list-notice';
 import {
   callToolsAdmitted,
   instructionBlocksByMember,
@@ -1002,6 +1003,8 @@ export class TeamExecutorService
    * turn of it ran, by run then member — applied when its next turn starts.
    */
   private readonly poolChoices = new Map<string, Map<string, number>>();
+  /** The unreachable account connectors already told of, by run then lane. */
+  private readonly connectorWarnings = new Map<string, Map<string, string>>();
   private readonly runSettledListeners = new Set<(runId: string) => void>();
 
   constructor(
@@ -1092,52 +1095,83 @@ export class TeamExecutorService
   }
 
   /**
-   * The member's allow list as its turn carries it — each name with the
-   * target the CLI's listing gives it — or undefined when the member has none
-   * or its CLI cannot apply one.
+   * The member's allow list as its turn carries it, or undefined when the
+   * member has none or its CLI cannot apply one. An account connector is
+   * allowed by its address, so each one gets the target a listing of the
+   * CLI's gives it; `unreachable` names those no listing gave one.
    */
   private async mcpAllowedFor(
     member: Pick<TeamMember, 'agent' | 'configDir' | 'mcpAllowed'>,
     adapter: AgentAdapter,
     cwd: string,
-  ): Promise<AgentMcpAllowedServer[] | undefined> {
+  ): Promise<
+    { servers: AgentMcpAllowedServer[]; unreachable: string[] } | undefined
+  > {
     const names = member.mcpAllowed;
-    if (
-      names === undefined ||
-      adapter.getConfig().mcp.allowListUnavailableReason !== null
-    ) {
+    const { allowListUnavailableReason, accountConnectorPrefix: prefix } =
+      adapter.getConfig().mcp;
+    if (names === undefined || allowListUnavailableReason !== null) {
       return undefined;
     }
+    const connectors =
+      prefix === null ? [] : names.filter((name) => name.startsWith(prefix));
     const targets =
-      names.length === 0 || this.agentMcp === undefined
+      connectors.length === 0 || this.agentMcp === undefined
         ? new Map<string, string>()
         : await this.agentMcp
-            .targetsOf(member.agent, cwd, member.configDir ?? null)
+            .connectorTargetsOf(
+              member.agent,
+              cwd,
+              member.configDir ?? null,
+              connectors,
+            )
             .catch((err: unknown) => {
               this.logger.warn(
                 `MCP targets for ${member.agent} in ${cwd} not read: ${err instanceof Error ? err.message : String(err)}`,
               );
               return new Map<string, string>();
             });
-    const allowed = names.map((name) => ({
-      name,
-      target: targets.get(name) ?? null,
-    }));
-    const prefix = adapter.getConfig().mcp.accountConnectorPrefix;
-    const unreachable = allowed
-      .filter(
-        (server) =>
-          server.target === null &&
-          prefix !== null &&
-          server.name.startsWith(prefix),
-      )
-      .map((server) => server.name);
+    const unreachable = connectors.filter((name) => !targets.has(name));
     if (unreachable.length > 0) {
       this.logger.warn(
-        `allowed account connectors stay off for ${member.agent} in ${cwd}, the CLI's listing gave no URL for them: ${unreachable.join(', ')}`,
+        `allowed account connectors stay off for ${member.agent} in ${cwd}, no listing of the CLI's gave a URL for them: ${unreachable.join(', ')}`,
       );
     }
-    return allowed;
+    return {
+      servers: names.map((name) => ({
+        name,
+        target: targets.get(name) ?? null,
+      })),
+      unreachable,
+    };
+  }
+
+  /**
+   * Say in the transcript which allowed account connectors a turn goes
+   * without — once per lane until the set changes, so a member is never left
+   * without a server it was told to keep and nobody knowing.
+   */
+  private async warnUnreachableConnectors(
+    runId: string,
+    memberId: string,
+    poolMember: number | null,
+    names: readonly string[],
+    write: (message: string) => Promise<unknown>,
+  ): Promise<void> {
+    const lane = `${memberId}\u0000${poolMember ?? 1}`;
+    const said = names.join(', ');
+    const warned =
+      this.connectorWarnings.get(runId) ?? new Map<string, string>();
+    if (warned.get(lane) === said) {
+      return;
+    }
+    warned.set(lane, said);
+    this.connectorWarnings.set(runId, warned);
+    await write(unreachableConnectorsNotice(names)).catch((err: unknown) => {
+      this.logger.warn(
+        `run ${runId}: could not note the account connectors member ${memberId} goes without: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   private recordPromptCacheWarmup(
@@ -3123,6 +3157,7 @@ export class TeamExecutorService
   private disposeHostPublishers(runId: string): void {
     this.commandEndWakes?.forgetRun(runId);
     this.poolChoices.delete(runId);
+    this.connectorWarnings.delete(runId);
     for (const disposers of [
       this.artifactDisposers,
       this.surfaceDisposers,
@@ -6613,6 +6648,7 @@ export class TeamExecutorService
       // A member a pass starts owns a separate conversation. Its call
       // turns must never overwrite that conversation's session or context.
       // A call-only member keeps pool member 1's readings on its member row.
+      const turnPoolMember = extras.poolMember ?? callContext?.poolMember;
       const otherPoolMember =
         callContext?.poolMember !== undefined && callContext.poolMember !== 1;
       const separateCallState =
@@ -6699,7 +6735,22 @@ export class TeamExecutorService
         (await this.runDao.getById(runId, this.em.fork()))
           ?.conversationInstructions ?? null,
       )[sessionKey];
-      const mcpAllowed = await this.mcpAllowedFor(node, adapter, turnCwd);
+      const allowList = await this.mcpAllowedFor(node, adapter, turnCwd);
+      const mcpAllowed = allowList?.servers;
+      if (allowList !== undefined && allowList.unreachable.length > 0) {
+        await this.warnUnreachableConnectors(
+          runId,
+          node.id,
+          turnPoolMember ?? null,
+          allowList.unreachable,
+          (message) =>
+            persistItem(node.id, 'system', null, {
+              message,
+              severity: 'warning',
+              ...(callContext ? { callId: callContext.callId } : {}),
+            }),
+        );
+      }
       let contextReadingAsked = false;
       const instructionsChanged =
         plainTurn &&
@@ -6993,7 +7044,7 @@ export class TeamExecutorService
                 live: turnSession ?? this.sessions.peek(sessionKey),
                 runId,
                 memberId: node.id,
-                poolMember: extras.poolMember ?? null,
+                poolMember: turnPoolMember ?? null,
                 sessionId: event.sessionId,
                 agent: node.agent,
                 model: node.model ?? null,
@@ -7067,12 +7118,15 @@ export class TeamExecutorService
             // servers: two members on one CLI pointed at different ones load
             // genuinely different sets, and filing both under the folder alone
             // would serve each the other's answer.
-            this.mcpHarvest.record(
-              node.agent,
-              turnCwd,
-              node.configDir ?? null,
-              event.servers,
-            );
+            // An allow-listed turn reports only its list, not the folder's servers.
+            if (mcpAllowed === undefined) {
+              this.mcpHarvest.record(
+                node.agent,
+                turnCwd,
+                node.configDir ?? null,
+                event.servers,
+              );
+            }
             this.noteMcpMismatch(
               runId,
               node.id,
@@ -7495,11 +7549,12 @@ export class TeamExecutorService
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
                 ...usageOwner(mapped.kind),
-                ...(mapped.kind === 'turn_complete' &&
-                extras.poolMember !== undefined
+                ...(mapped.kind === 'turn_complete'
                   ? {
-                      nodePoolMember: extras.poolMember,
                       sessionId: capturedSessionId,
+                      ...(turnPoolMember !== undefined
+                        ? { nodePoolMember: turnPoolMember }
+                        : {}),
                     }
                   : {}),
               });

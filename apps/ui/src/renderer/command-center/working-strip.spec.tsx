@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
+import { stubTopLayer } from '../__tests__/stub-top-layer';
 import { bareThreadIdentity } from '../components/thread-head';
 import type { ThreadAttention } from '../components/thread-labels';
 import { ThreadCard } from './thread-card';
@@ -273,6 +274,40 @@ describe('WorkingStrip', () => {
     expect(
       document.querySelector('[data-slot="working-strip-row"]'),
     ).toBeNull();
+  });
+
+  it('lists the hidden threads in the top layer, over cards standing above the manager window', () => {
+    const topLayer = stubTopLayer();
+    try {
+      measureFacesAt(28, 30, 4);
+      vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(80);
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(40, 10, 30, 24),
+      );
+      draw([
+        threadOf('run-a', 'One'),
+        threadOf('run-b', 'Two'),
+        threadOf('run-c', 'Three'),
+      ]);
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>('[data-slot="working-strip-more"]')!
+          .click();
+      });
+      const panel = document.querySelector<HTMLElement>(
+        '[data-slot="popover-panel"]',
+      )!;
+
+      expect(panel.getAttribute('popover')).toBe('manual');
+      expect(topLayer.shown).toEqual([panel]);
+      expect(
+        panel.querySelector(
+          '[data-slot="working-strip-row"][data-run="run-b"]',
+        ),
+      ).not.toBeNull();
+    } finally {
+      topLayer.restore();
+    }
   });
 
   it('fits the faces by the widths they are drawn at, padding included', () => {

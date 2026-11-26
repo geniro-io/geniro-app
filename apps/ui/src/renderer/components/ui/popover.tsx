@@ -5,6 +5,7 @@ import { counterZoomStyle } from './css-zoom';
 import { pushEscapeLayer } from './escape-layers';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
+import { showInTopLayer } from './top-layer';
 import { cn } from './utils';
 
 /**
@@ -122,6 +123,9 @@ export function Popover({
    * thread list's left edge (x=1121), so the first 233px — the whole first half
    * of the sentence, and of the copyable `--resume` command line — rendered
    * off-surface. `Dialog` escapes the same way, for the same reason.
+   *
+   * The panel is also shown in the top layer (`popover="manual"`), so no
+   * stacking context above the trigger can paint over it.
    */
   anchor?: 'ancestor' | 'viewport';
   /** Accessible name for the panel. */
@@ -272,8 +276,12 @@ export function Popover({
     <div
       ref={(node) => {
         panelRef.current = node;
+        if (node !== null && box !== null) {
+          showInTopLayer(node);
+        }
         setPanelEl(node);
       }}
+      popover={box === null ? undefined : 'manual'}
       data-slot="popover-panel"
       role="dialog"
       aria-label={label}
@@ -294,6 +302,7 @@ export function Popover({
         box === null &&
           (side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'),
         box === null && (align === 'start' ? 'left-0' : 'right-0'),
+        box !== null && 'inset-auto m-0 p-0 text-inherit',
         className,
       )}>
       {/* A FLOATING panel is a clipping container, so it declares itself one.

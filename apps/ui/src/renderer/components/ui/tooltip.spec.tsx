@@ -3,6 +3,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTopLayer } from '../../__tests__/stub-top-layer';
 import { placeTooltip, TOOLTIP_OPEN_DELAY_MS, TooltipLayer } from './tooltip';
 
 (
@@ -121,6 +122,34 @@ describe('TooltipLayer', () => {
     pointer('pointerover', glyph);
 
     expect(tooltip()?.textContent).toBe('Search');
+  });
+
+  it('lands in the top layer over a panel shown there before it', () => {
+    const topLayer = stubTopLayer();
+    try {
+      const el = mount(
+        <>
+          <button title="First">1</button>
+          <button title="Second">2</button>
+          <div data-slot="panel" />
+        </>,
+      );
+      const [first, second] = [...el.querySelectorAll('button')];
+      pointer('pointerover', first!);
+      wait(TOOLTIP_OPEN_DELAY_MS);
+      el.querySelector<HTMLElement>('[data-slot="panel"]')!.showPopover();
+      pointer('pointerout', first!, { relatedTarget: second });
+      pointer('pointerover', second!);
+      wait(0);
+
+      const tip = tooltip()!;
+      expect(tip.textContent).toBe('Second');
+      expect(tip.getAttribute('popover')).toBe('manual');
+      expect(tip.matches(':popover-open')).toBe(true);
+      expect(topLayer.shown.at(-1)).toBe(tip);
+    } finally {
+      topLayer.restore();
+    }
   });
 
   it('opens the next tooltip at once while the reader moves along a row', () => {

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stubCssZoom } from '../../__tests__/stub-css-zoom';
+import { stubTopLayer } from '../../__tests__/stub-top-layer';
 import { Dialog } from './dialog';
 import { Menu } from './menu';
 import { Popover } from './popover';
@@ -343,6 +344,39 @@ describe('Popover — anchor="viewport"', () => {
     );
 
     expect(panelOf(container)).toBeNull();
+  });
+});
+
+describe('Popover — the top layer', () => {
+  let topLayer: ReturnType<typeof stubTopLayer>;
+  beforeEach(() => {
+    topLayer = stubTopLayer();
+  });
+  afterEach(() => {
+    topLayer.restore();
+  });
+
+  it('shows a viewport panel in the top layer once, over any stacking context above its trigger', () => {
+    const container = render(
+      <div style={{ position: 'absolute', zIndex: 30 }}>
+        <Harness anchor="viewport" rect={{ bottom: 140, right: 900 }} />
+      </div>,
+    );
+    const panel = panelOf(container)!;
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    expect(panel.getAttribute('popover')).toBe('manual');
+    expect(panel.matches(':popover-open')).toBe(true);
+    expect(topLayer.shown).toEqual([panel]);
+  });
+
+  it('leaves an ancestor-anchored panel in its ancestor’s layer', () => {
+    const panel = panelOf(render(<Harness />))!;
+
+    expect(panel.hasAttribute('popover')).toBe(false);
+    expect(topLayer.shown).toEqual([]);
   });
 });
 

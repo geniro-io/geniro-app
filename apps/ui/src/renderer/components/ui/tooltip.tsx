@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 
+import { raiseInTopLayer } from './top-layer';
 import { cn } from './utils';
 
 export const TOOLTIP_OPEN_DELAY_MS = 300;
@@ -272,6 +273,9 @@ export function TooltipLayer(): React.JSX.Element | null {
       setPosition(null);
       return;
     }
+    if (tipRef.current !== null) {
+      raiseInTopLayer(tipRef.current);
+    }
     let frame = 0;
     const follow = (): void => {
       const element = tipRef.current;
@@ -309,13 +313,14 @@ export function TooltipLayer(): React.JSX.Element | null {
       ref={tipRef}
       id={tipId}
       role="tooltip"
+      popover="manual"
       data-slot="tooltip"
       style={
         position === null
           ? { left: 0, top: 0, visibility: 'hidden' }
           : { left: position.left, top: position.top }
       }
-      className="pointer-events-none fixed z-60 max-w-[min(24rem,calc(100vw-16px))] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug font-medium break-words whitespace-pre-line text-popover-foreground shadow-panel-lg">
+      className="pointer-events-none fixed inset-auto z-60 m-0 overflow-visible max-w-[min(24rem,calc(100vw-16px))] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs leading-snug font-medium break-words whitespace-pre-line text-popover-foreground shadow-panel-lg">
       {position === null || position.arrow === null ? null : (
         <span
           aria-hidden

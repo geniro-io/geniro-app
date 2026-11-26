@@ -22,6 +22,10 @@ export const Sizes: Story = {
   ),
 };
 
+export const Stepped: Story = {
+  args: { pace: 'stepped', className: 'size-4' },
+};
+
 export const InlineWithText: Story = {
   render: () => (
     <div className="flex items-center gap-1.5 text-sm text-muted-foreground">

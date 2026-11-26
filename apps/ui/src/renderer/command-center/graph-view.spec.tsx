@@ -412,7 +412,7 @@ describe('GraphView', () => {
     ).toBe('Working');
     expect(
       manager.querySelector(
-        '[data-slot="graph-manager-state"] svg.animate-spin',
+        '[data-slot="graph-manager-state"] svg.animate-spin.spinner-stepped',
       ),
     ).not.toBeNull();
     expect(manager.className).not.toContain('cc-breathe');

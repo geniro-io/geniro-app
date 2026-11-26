@@ -474,7 +474,9 @@ describe('ThreadCard — working', () => {
   it('shows the loader in the head of a working card, with no looping border or glow', () => {
     const working = render({ attention: 'working' });
     expect(
-      working.querySelector('[data-slot="thread-card-head"] svg.animate-spin'),
+      working.querySelector(
+        '[data-slot="thread-card-head"] svg.animate-spin.spinner-stepped',
+      ),
     ).not.toBeNull();
     expect(working.className).not.toMatch(/cc-running-border|cc-breathe/);
     const asking = render({ attention: 'question', onAnswer: vi.fn() });

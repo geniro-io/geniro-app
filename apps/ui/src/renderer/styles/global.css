@@ -794,6 +794,11 @@
   }
 }
 
+/* Unlayered, so it beats the `animate-spin` shorthand's linear timing. */
+.spinner-stepped {
+  animation-timing-function: steps(8);
+}
+
 /* The command center's graph: a node's entrance and a shown card's flash, each played once. */
 @keyframes cc-node-in {
   from {

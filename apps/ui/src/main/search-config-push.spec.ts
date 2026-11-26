@@ -19,6 +19,8 @@ const MODEL: ReadyModel = {
   dir: '/Users/someone/Library/Application Support/Geniro/models/embeddinggemma-2-daa72c5',
 };
 
+const ALL_SOURCES = { memory: true, knowledge: true, chats: true };
+
 function recordingFetch(response: () => Response) {
   const calls: { url: string; init: RequestInit }[] = [];
   const fetchImpl = ((url: string, init: RequestInit) => {
@@ -33,6 +35,8 @@ describe('searchConfigOf', () => {
     expect(
       searchConfigOf({
         switchOn: true,
+        sources: ALL_SOURCES,
+        chatWindowDays: null,
         model: null,
         pendingModel: null,
         onBattery: false,
@@ -44,6 +48,8 @@ describe('searchConfigOf', () => {
     expect(
       searchConfigOf({
         switchOn: false,
+        sources: ALL_SOURCES,
+        chatWindowDays: null,
         model: MODEL,
         pendingModel: null,
         onBattery: false,
@@ -61,12 +67,16 @@ describe('searchConfigOf', () => {
     expect(
       searchConfigOf({
         switchOn: true,
+        sources: ALL_SOURCES,
+        chatWindowDays: null,
         model: MODEL,
         pendingModel: pending,
         onBattery: true,
       }),
     ).toEqual({
       enabled: true,
+      sources: ALL_SOURCES,
+      chatWindowDays: null,
       model: {
         id: MODEL.id,
         revision: MODEL.revision,
@@ -83,9 +93,29 @@ describe('searchConfigOf', () => {
     });
   });
 
+  it('sends the chosen sources and window to the daemon unchanged', () => {
+    const config = searchConfigOf({
+      switchOn: true,
+      sources: { memory: false, knowledge: true, chats: true },
+      chatWindowDays: 30,
+      model: MODEL,
+      pendingModel: null,
+      onBattery: false,
+    });
+
+    expect(config.sources).toEqual({
+      memory: false,
+      knowledge: true,
+      chats: true,
+    });
+    expect(config.chatWindowDays).toBe(30);
+  });
+
   it('sends no field a model folder carries beyond the four the daemon reads', () => {
     const config = searchConfigOf({
       switchOn: true,
+      sources: ALL_SOURCES,
+      chatWindowDays: null,
       model: { ...MODEL, extra: 'not sent' } as ReadyModel,
       pendingModel: null,
       onBattery: false,
@@ -111,6 +141,8 @@ describe('SearchConfigPush', () => {
       HANDLE,
       searchConfigOf({
         switchOn: true,
+        sources: ALL_SOURCES,
+        chatWindowDays: 30,
         model: MODEL,
         pendingModel: null,
         onBattery: true,
@@ -130,7 +162,42 @@ describe('SearchConfigPush', () => {
       onBattery: true,
       pendingModel: null,
       model: { id: MODEL.id, dim: 768 },
+      sources: ALL_SOURCES,
+      chatWindowDays: 30,
     });
+  });
+
+  it('pushes again when only the sources or the window change', async () => {
+    const http = recordingFetch(() => new Response('{}', { status: 200 }));
+    const push = new SearchConfigPush(() => undefined, http.fetchImpl);
+    const config = (
+      sources: typeof ALL_SOURCES,
+      chatWindowDays: number | null,
+    ) =>
+      searchConfigOf({
+        switchOn: true,
+        sources,
+        chatWindowDays,
+        model: MODEL,
+        pendingModel: null,
+        onBattery: false,
+      });
+
+    await push.pushIfChanged(HANDLE, config(ALL_SOURCES, null));
+    await push.pushIfChanged(
+      HANDLE,
+      config({ ...ALL_SOURCES, knowledge: false }, null),
+    );
+    await push.pushIfChanged(
+      HANDLE,
+      config({ ...ALL_SOURCES, knowledge: false }, 30),
+    );
+    await push.pushIfChanged(
+      HANDLE,
+      config({ ...ALL_SOURCES, knowledge: false }, 30),
+    );
+
+    expect(http.calls).toHaveLength(3);
   });
 
   it('reports a refused push as not accepted', async () => {
@@ -144,6 +211,8 @@ describe('SearchConfigPush', () => {
       HANDLE,
       searchConfigOf({
         switchOn: false,
+        sources: ALL_SOURCES,
+        chatWindowDays: null,
         model: null,
         pendingModel: null,
         onBattery: false,

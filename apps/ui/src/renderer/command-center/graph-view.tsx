@@ -1072,7 +1072,7 @@ function GraphCanvas({
         blocks,
         perLine,
         pinned,
-        unopened?.width,
+        unopened ?? undefined,
         placedBlocks,
       );
   const freeItemsOf = (block: GraphBlock, except?: string): GraphBox[] =>

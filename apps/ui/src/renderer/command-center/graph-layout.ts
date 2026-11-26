@@ -142,7 +142,11 @@ const MIN_BLOCK_WIDTH = 220;
 /**
  * The root centred on top and the project blocks under it, left to right in
  * the order given, a line wrapping once it is `perLine` cards wide; each line
- * is centred under the root and as tall as its tallest block. Inside a block
+ * is centred under the root and as tall as its tallest block. Given `frame`
+ * (the same graph laid out with every card closed and nothing pinned or
+ * placed), every block keeps the line and the left edge it has there, and a
+ * block grown by an open card pushes only the blocks after it along its line,
+ * so resizing a card never moves it or anything before it. Inside a block
  * its items stand in reading order, at most `perLine` to a line, its footer
  * on a line of its own under them.
  *
@@ -154,9 +158,9 @@ const MIN_BLOCK_WIDTH = 220;
  * out of its block, which shrinks around the rest from its own top-left; every
  * block keeps the place it has with nothing pinned, and only a block a pinned
  * box would touch moves along its line to the next free place past it — so a
- * pin moves only what it overlaps. The root is centred on `frame` when given (the
- * width with every card closed and none pinned), so neither a pin nor a card
- * grown in place moves the root and with it every pinned box.
+ * pin moves only what it overlaps. The root is centred on `frame`'s width when
+ * given, so neither a pin nor a card grown in place moves the root and with it
+ * every pinned box.
  *
  * One wire runs from the root to each block's top and to each pinned box; a
  * wire to a lower line passes each line above it through the nearest gap.
@@ -166,7 +170,7 @@ export function layoutBlocks(
   blocks: readonly LayoutBlock[],
   perLine: number,
   pinned: ReadonlyMap<string, Point> = new Map(),
-  frame?: number,
+  frame?: GraphGeometry,
   placed: ReadonlyMap<string, Point> = new Map(),
 ): GraphGeometry {
   const filled = blocks.filter(
@@ -199,7 +203,14 @@ export function layoutBlocks(
         ? Infinity
         : line.reduce((sum, item) => sum + item.width + COLUMN_GAP, 0) +
           shape.width;
-    if (line === undefined || span > lineRoom) {
+    const framed = frame?.boxes.get(shape.id);
+    const before =
+      line === undefined ? undefined : frame?.boxes.get(line.at(-1)!.id);
+    const wraps =
+      framed === undefined || before === undefined
+        ? span > lineRoom
+        : framed.y !== before.y;
+    if (line === undefined || wraps) {
       lines.push([shape]);
     } else {
       line.push(shape);
@@ -209,7 +220,7 @@ export function layoutBlocks(
     line.reduce((sum, shape) => sum + shape.width, 0) +
     COLUMN_GAP * (line.length - 1);
   const widest = Math.max(0, ...lines.map(spanOf));
-  const width = frame ?? Math.max(widest, root.width) + MARGIN * 2;
+  const width = frame?.width ?? Math.max(widest, root.width) + MARGIN * 2;
   const centre = width / 2;
 
   const boxes = new Map<string, PlacedBox>();
@@ -262,8 +273,8 @@ export function layoutBlocks(
     let left = centre - spanOf(line) / 2;
     const slots = line.flatMap((slot) => {
       const shape = shapes.get(slot.id);
-      const x = left;
-      left += slot.width + COLUMN_GAP;
+      const x = Math.max(left, frame?.boxes.get(slot.id)?.x ?? left);
+      left = x + slot.width + COLUMN_GAP;
       return shape === undefined ||
         shape.items.length === 0 ||
         placed.has(shape.id)

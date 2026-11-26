@@ -886,6 +886,32 @@ describe('GraphView', () => {
     expect(seams.setViewport.length).toBeGreaterThan(0);
   });
 
+  it('keeps a resized open card, its block and the blocks before it in place, moves only the block after it, and does not refit', async () => {
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-1')],
+    });
+    const card = flowNode('thread:thread-1').position;
+    const billing = flowNode('block:project-billing').position;
+    const cache = flowNode('block:project-cache').position;
+    expect(cache.y).toBe(billing.y);
+    expect(cache.x).toBeGreaterThan(billing.x);
+    seams.setViewport.splice(0);
+
+    await draw({
+      threads: graphThreadsOf(3),
+      openCards: [openCard('thread-1', { width: 700, height: 560 })],
+    });
+
+    expect(flowNode('thread:thread-1').position).toEqual(card);
+    expect(flowNode('block:project-billing').position).toEqual(billing);
+    expect(flowNode('block:project-cache').position).toEqual({
+      x: cache.x + 240,
+      y: cache.y,
+    });
+    expect(seams.setViewport).toEqual([]);
+  });
+
   it('hands a focus over at once on the narrow column, with no pan to wait for', async () => {
     const onFocused = vi.fn();
 

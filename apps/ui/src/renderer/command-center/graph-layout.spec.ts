@@ -294,7 +294,7 @@ describe('layoutBlocks', () => {
       blocks,
       4,
       new Map([['A-2', { x: 900, y: 0 }]]),
-      free.width,
+      free,
     );
 
     expect(geometry.boxes.get('block:A')).toMatchObject({
@@ -311,7 +311,7 @@ describe('layoutBlocks', () => {
       blocks,
       4,
       new Map([['A-2', { x: 900, y: 0 }]]),
-      free.width,
+      free,
     );
 
     expect(geometry.boxes.get('block:B')).toMatchObject({
@@ -334,7 +334,7 @@ describe('layoutBlocks', () => {
       ['C-4', { x: spot.x - root.x + 12, y: spot.y - root.y + 60 }],
     ]);
 
-    const geometry = layoutBlocks(ROOT, blocks, 4, pinned, free.width);
+    const geometry = layoutBlocks(ROOT, blocks, 4, pinned, free);
     const at = (id: string) => geometry.boxes.get(id)!;
     const was = (id: string) => free.boxes.get(id)!;
 
@@ -373,7 +373,7 @@ describe('layoutBlocks', () => {
       blocks,
       4,
       new Map([['A-1', { x: 0, y: 2000 }]]),
-      free.width,
+      free,
     );
 
     expect(pinned.boxes.get('root')).toEqual(free.boxes.get('root'));
@@ -472,7 +472,8 @@ describe('layoutBlocks', () => {
 
   it('centres the root on the frame it is given, however wide a block has grown', () => {
     const blocks = [blockOf('A', 4), blockOf('B', 4)];
-    const frame = layoutBlocks(ROOT, blocks, 4).width;
+    const framed = layoutBlocks(ROOT, blocks, 4);
+    const frame = framed.width;
     const grown = [
       {
         id: 'block:A',
@@ -481,7 +482,7 @@ describe('layoutBlocks', () => {
       blockOf('B', 4),
     ];
 
-    const geometry = layoutBlocks(ROOT, grown, 4, new Map(), frame);
+    const geometry = layoutBlocks(ROOT, grown, 4, new Map(), framed);
 
     expect(geometry.boxes.get('root')!.x).toBe(frame / 2 - ROOT.width / 2);
     const rightmost = Math.max(
@@ -489,6 +490,71 @@ describe('layoutBlocks', () => {
     );
     expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
   });
+  it('keeps an open card and the blocks before it in place while the card is resized, moving only the blocks after it along the line', () => {
+    const closed = [blockOf('A', 2), blockOf('B', 1), blockOf('C', 1)];
+    const frame = layoutBlocks(ROOT, closed, 4);
+    const opened = (width: number, height: number): LayoutBlock[] => [
+      blockOf('A', 2),
+      { id: 'block:B', items: [{ id: 'B-1', width, height }] },
+      blockOf('C', 1),
+    ];
+    const before = layoutBlocks(ROOT, opened(460, 486), 4, new Map(), frame);
+    const after = layoutBlocks(ROOT, opened(560, 686), 4, new Map(), frame);
+
+    for (const id of ['B-1', 'block:A', 'block:B', 'A-1', 'A-2']) {
+      expect(after.boxes.get(id)).toMatchObject({
+        x: before.boxes.get(id)!.x,
+        y: before.boxes.get(id)!.y,
+      });
+    }
+    expect(after.boxes.get('block:C')!.x).toBe(
+      before.boxes.get('block:C')!.x + 100,
+    );
+    expect(overlapping(after, opened(560, 686))).toEqual([]);
+  });
+
+  it("keeps a line's blocks on that line however wide an open card in it grows", () => {
+    const closed = [blockOf('A', 4), blockOf('B', 4), blockOf('C', 1)];
+    const free = layoutBlocks(ROOT, closed, 4);
+    const opened = [
+      { id: 'block:A', items: [{ id: 'A-1', width: 1400, height: 486 }] },
+      blockOf('B', 4),
+      blockOf('C', 1),
+    ];
+    const geometry = layoutBlocks(ROOT, opened, 4, new Map(), free);
+
+    const sharedLines = (layout: GraphGeometry): boolean[] => {
+      const [a, b, c] = ['block:A', 'block:B', 'block:C'].map(
+        (id) => layout.boxes.get(id)!.y,
+      );
+      return [a === b, b === c, a === c];
+    };
+    expect(sharedLines(free)).not.toEqual([true, true, true]);
+    expect(sharedLines(geometry)).toEqual(sharedLines(free));
+    expect(overlapping(geometry, opened)).toEqual([]);
+  });
+
+  it('stands a block the frame does not hold after the framed blocks of its line, leaving those where the frame has them', () => {
+    const frame = layoutBlocks(ROOT, [blockOf('A', 1), blockOf('B', 1)], 4);
+    const blocks = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
+
+    const geometry = layoutBlocks(ROOT, blocks, 4, new Map(), frame);
+
+    for (const id of ['block:A', 'block:B']) {
+      expect(geometry.boxes.get(id)).toMatchObject({
+        x: frame.boxes.get(id)!.x,
+        y: frame.boxes.get(id)!.y,
+      });
+    }
+    expect(geometry.boxes.get('block:C')!.y).toBe(
+      frame.boxes.get('block:B')!.y,
+    );
+    expect(geometry.boxes.get('block:C')!.x).toBeGreaterThan(
+      frame.boxes.get('block:B')!.x,
+    );
+    expect(overlapping(geometry, blocks)).toEqual([]);
+  });
+
   it('stands a placed block at the root top-left plus its offset, moves its items with it, and wires it to the root by an elbow onto its top', () => {
     const blocks = [blockOf('A', 2), blockOf('B', 1)];
     const free = layoutBlocks(ROOT, blocks, 4);

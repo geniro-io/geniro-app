@@ -19,7 +19,8 @@ export function applyArgSynonyms(
   const renamed: Record<string, unknown> = {};
   const givenAs = new Map<string, string>();
   for (const [key, value] of Object.entries(args)) {
-    const name = value === null ? key : (synonyms[key] ?? key);
+    const name =
+      value !== null && Object.hasOwn(synonyms, key) ? synonyms[key]! : key;
     if (value === null && renamed[name] !== undefined) {
       continue;
     }

@@ -126,6 +126,9 @@ function searchEntry(
   return { tool: 'memory_search', query, count, hits };
 }
 
+/** Twin of the daemon's `MEMORY_READ_MAX`: a call reads at most this many handles. */
+const MEMORY_READ_MAX = 3;
+
 function readEntry(
   args: Record<string, unknown>,
   text: string | null,
@@ -137,6 +140,7 @@ function readEntry(
     return null;
   }
   const handles = ids
+    .slice(0, MEMORY_READ_MAX)
     .map(normalizedHandle)
     .filter((handle): handle is string => handle !== null);
   if (handles.length === 0) {

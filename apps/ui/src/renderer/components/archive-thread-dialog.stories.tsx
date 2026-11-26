@@ -24,6 +24,8 @@ const LESSONS: ThreadLessonEstimateDto = {
   toSeq: 120,
 };
 
+const IDLE = { running: false, subagents: 0, commands: 0, monitors: 0 };
+
 const meta = {
   title: 'Components/ArchiveThreadDialog',
   component: ArchiveThreadDialog,
@@ -32,9 +34,10 @@ const meta = {
     target: {
       id: 'run-1',
       label: 'Fix the login redirect',
-      running: false,
+      work: IDLE,
       isTeam: false,
     },
+    workers: null,
     busy: false,
     error: null,
     lessons: null,
@@ -56,7 +59,7 @@ export const RunningChat: Story = {
     target: {
       id: 'run-1',
       label: 'Fix the login redirect',
-      running: true,
+      work: { ...IDLE, running: true },
       isTeam: false,
     },
   },
@@ -67,7 +70,30 @@ export const RunningTeamRun: Story = {
     target: {
       id: 'run-2',
       label: 'Release team',
-      running: true,
+      work: { ...IDLE, running: true, subagents: 1 },
+      isTeam: true,
+    },
+    workers: ['Tony Stark · Senior Engineer', 'Groot · Handyman'],
+  },
+};
+
+export const FinishedTeamRun: Story = {
+  args: {
+    target: {
+      id: 'run-3',
+      label: 'Name the required arguments',
+      work: IDLE,
+      isTeam: true,
+    },
+  },
+};
+
+export const FinishedRunWithBackgroundWork: Story = {
+  args: {
+    target: {
+      id: 'run-4',
+      label: 'Release team',
+      work: { ...IDLE, commands: 1, monitors: 1 },
       isTeam: true,
     },
   },

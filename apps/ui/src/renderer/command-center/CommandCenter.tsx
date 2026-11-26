@@ -31,7 +31,10 @@ import {
   WorkingThreadsCard,
 } from '../chats/working-threads-card';
 import { ActionNotice } from '../components/action-notice';
-import { useArchiveThread } from '../components/archive-thread-dialog';
+import {
+  archiveWorkOf,
+  useArchiveThread,
+} from '../components/archive-thread-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import {
@@ -487,6 +490,7 @@ export function CommandCenter({
   const archiveFlow = useArchiveThread({
     lessonsApi: apis.lessons,
     agentsApi: apis.agents,
+    teamsApi: apis.teams,
     archive: async (target, lessons) => {
       await apis.chats.archiveChat({ runId: target.id, lessons });
       setOffBoard(null);
@@ -511,7 +515,7 @@ export function CommandCenter({
             threadIdentities.get(runId)?.title ??
             card.run.title ??
             'Untitled thread',
-          running: card.run.status === 'running',
+          work: archiveWorkOf(card.run),
           isTeam: card.run.teamId !== null && card.run.teamId !== undefined,
         });
     };

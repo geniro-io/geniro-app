@@ -23,6 +23,7 @@ import {
   LessonsCard,
   type LessonsCardProps,
 } from './lessons-card';
+import { NearDuplicateError } from './use-memory-editor';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -247,6 +248,35 @@ describe('LessonsCard — a lesson saved to memory', () => {
     });
     expect(el.textContent).toContain('Saved to memory · project');
     expect(el.textContent).not.toContain('Searchable only');
+  });
+
+  it('names the similar entries an Edit was refused for, and saves again past exactly those', async () => {
+    const onEdit = vi
+      .fn<NonNullable<LessonsCardProps['onEdit']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m1106']))
+      .mockResolvedValueOnce(undefined);
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      outcomes: {
+        [LESSON_CORRECTION.id]: outcome(LESSON_CORRECTION.id, { by: 'auto' }),
+      },
+      onEdit,
+    });
+
+    await press(buttonNamed(el, 'Edit'));
+    await press(buttonNamed(el, 'Save'));
+
+    expect(el.textContent).toContain(
+      'Similar entries exist: m1106. Save again to keep this one anyway.',
+    );
+    await press(buttonNamed(el, 'Save'));
+
+    expect(onEdit).toHaveBeenLastCalledWith(LESSON_CORRECTION.id, {
+      title: LESSON_CORRECTION.title,
+      rule: LESSON_CORRECTION.rule,
+      notDuplicateOf: ['m1106'],
+    });
+    expect(el.textContent).toContain('Saved to memory · project');
   });
 
   it('reads saved by the user as saved, with no searchable note', async () => {
@@ -696,7 +726,125 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
   });
 });
 
+describe('LessonsCard — a save refused as like other entries', () => {
+  it('names them, and the next Save vouches past exactly the handles the last refusal named', async () => {
+    const onSave = vi
+      .fn<NonNullable<LessonsCardProps['onSave']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m30', 'm31']))
+      .mockRejectedValueOnce(new NearDuplicateError(['m40']))
+      .mockResolvedValueOnce(undefined);
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      places: PROJECT_PLACES,
+      onSave,
+    });
+
+    await press(primaryButton(el));
+    expect(onSave.mock.calls[0]?.[1]).not.toHaveProperty('notDuplicateOf');
+    expect(el.textContent).toContain(
+      'Similar entries exist: m30, m31. Save again to keep this one anyway.',
+    );
+
+    await press(primaryButton(el));
+    expect(onSave.mock.calls[1]?.[1]).toMatchObject({
+      notDuplicateOf: ['m30', 'm31'],
+    });
+    expect(el.textContent).toContain(
+      'Similar entries exist: m40. Save again to keep this one anyway.',
+    );
+
+    await press(primaryButton(el));
+    expect(onSave.mock.calls[2]?.[1]).toMatchObject({
+      notDuplicateOf: ['m40'],
+    });
+  });
+
+  it('vouches for nothing after a refusal of another kind', async () => {
+    const onSave = vi
+      .fn<NonNullable<LessonsCardProps['onSave']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m30']))
+      .mockRejectedValueOnce(new Error('the entry changed since it was read'))
+      .mockResolvedValueOnce(undefined);
+    const el = await render({
+      lessons: [LESSON_CORRECTION],
+      places: PROJECT_PLACES,
+      onSave,
+    });
+
+    await press(primaryButton(el));
+    await press(primaryButton(el));
+    expect(el.textContent).toContain('the entry changed since it was read');
+    await press(primaryButton(el));
+
+    expect(onSave.mock.calls[2]?.[1]).not.toHaveProperty('notDuplicateOf');
+  });
+});
+
 describe('LessonsCard — a refines or broken-again lesson in memory', () => {
+  it('names the similar entries an Update was refused for, and updates again past exactly those', async () => {
+    const onUpdateRule = vi
+      .fn<NonNullable<LessonsCardProps['onUpdateRule']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m1106']))
+      .mockResolvedValueOnce(undefined);
+    const el = await render({ lessons: [LESSON_REFINES], onUpdateRule });
+
+    await press(buttonNamed(el, 'Update m12'));
+    expect(el.textContent).toContain(
+      'Similar entries exist: m1106. Update again to keep this one anyway.',
+    );
+    await press(buttonNamed(el, 'Update m12'));
+
+    expect(onUpdateRule).toHaveBeenLastCalledWith(LESSON_REFINES.id, {
+      notDuplicateOf: ['m1106'],
+    });
+  });
+
+  it('drops the vouch and its line when the target changes after a refusal', async () => {
+    const onSave = vi.fn(async () => undefined);
+    const onUpdateRule = vi
+      .fn<NonNullable<LessonsCardProps['onUpdateRule']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m1106']));
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      onSave,
+      onUpdateRule,
+    });
+
+    await press(buttonNamed(el, 'Update m12'));
+    await press(targetTrigger(el));
+    await press(optionNamed('Memory · project'));
+
+    expect(el.textContent).not.toContain('Similar entries exist');
+    await press(primaryButton(el));
+    expect(onSave).toHaveBeenCalledWith(LESSON_REFINES.id, {
+      target: { kind: 'memory', scope: 'project', type: 'feedback' },
+    });
+  });
+
+  it('drops the vouch when the rule is edited after a refusal', async () => {
+    const onUpdateRule = vi
+      .fn<NonNullable<LessonsCardProps['onUpdateRule']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m1106']))
+      .mockResolvedValueOnce(undefined);
+    const el = await render({
+      lessons: [LESSON_REFINES],
+      onSave: vi.fn(async () => undefined),
+      onUpdateRule,
+    });
+
+    await press(buttonNamed(el, 'Update m12'));
+    await press(buttonNamed(el, 'Edit'));
+    typeInto(
+      el.querySelector<HTMLInputElement>('input[aria-label="Lesson title"]')!,
+      'Regenerate the client first',
+    );
+    await press(buttonNamed(el, 'Update m12'));
+
+    expect(onUpdateRule.mock.calls[1]?.[1]).not.toHaveProperty(
+      'notDuplicateOf',
+    );
+  });
+
   it('offers Update rule naming the entry, and calls onUpdateRule', async () => {
     const onUpdateRule = vi.fn(async () => undefined);
     const el = await render({ lessons: [LESSON_REFINES], onUpdateRule });

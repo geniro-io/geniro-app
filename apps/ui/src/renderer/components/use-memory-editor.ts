@@ -62,6 +62,21 @@ export function nearDuplicateHandles(err: unknown): string[] | null {
     .filter((handle) => /^m\d+$/.test(handle));
 }
 
+/** A write refused because it reads like the entries it names; pressing again may vouch past exactly those. */
+export class NearDuplicateError extends Error {
+  constructor(readonly handles: string[]) {
+    super(`Similar entries exist: ${handles.join(', ')}.`);
+  }
+}
+
+/** The line a near-duplicate refusal shows, naming the press that keeps the write anyway. */
+export function similarEntriesMessage(
+  handles: readonly string[],
+  action: string,
+): string {
+  return `Similar entries exist: ${handles.join(', ')}. ${action} again to keep this one anyway.`;
+}
+
 export interface MemoryEditor {
   editing: MemoryEditing | null;
   setEditing: (editing: MemoryEditing | null) => void;
@@ -186,9 +201,7 @@ export function useMemoryEditor(
       const similar = nearDuplicateHandles(err);
       if (similar !== null && similar.length > 0) {
         setEditing({ ...editing, vouched: similar });
-        setFormError(
-          `Similar entries exist: ${similar.join(', ')}. Save again to keep this one anyway.`,
-        );
+        setFormError(similarEntriesMessage(similar, 'Save'));
       } else {
         setFormError(describeDaemonError(err));
       }

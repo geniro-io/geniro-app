@@ -333,6 +333,12 @@ export const MemoryListSchema = z.object({
 });
 export type MemoryList = z.infer<typeof MemoryListSchema>;
 
+/** Handles the user has seen and says an entry is not a copy of. */
+export const NotDuplicateOfSchema = z
+  .array(z.string().min(1).max(20))
+  .max(20)
+  .optional();
+
 const MemoryTextFieldsSchema = z.object({
   title: z
     .string()
@@ -344,8 +350,7 @@ const MemoryTextFieldsSchema = z.object({
   projectId: z.string().min(1).max(200).nullable(),
   /** Files the entry under a team; absent is null, and never with a project. */
   teamSlug: z.string().min(1).max(200).regex(SLUG_RE).nullable().optional(),
-  /** Handles the user has seen and says this entry is not a copy of. */
-  notDuplicateOf: z.array(z.string().min(1).max(20)).max(20).optional(),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 
 const notBothScopes = (entry: {

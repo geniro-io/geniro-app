@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import type { ChatApprovalMode } from '../agents/chat.types';
-import { MEMORY_TITLE_MAX_CHARS, MEMORY_TYPES } from '../memory/memory.types';
+import {
+  MEMORY_TITLE_MAX_CHARS,
+  MEMORY_TYPES,
+  NotDuplicateOfSchema,
+} from '../memory/memory.types';
 import { AgentKindSchema, type ItemKind } from '../runs/runs.types';
 
 export const LESSON_TITLE_MAX_CHARS = MEMORY_TITLE_MAX_CHARS;
@@ -499,6 +503,7 @@ export type LessonsSpend = z.infer<typeof LessonsSpendSchema>;
 export const EditLessonSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type EditLesson = z.infer<typeof EditLessonSchema>;
 
@@ -702,6 +707,7 @@ export type LessonHistoryPage = z.infer<typeof LessonHistoryPageSchema>;
 export const UpdateLessonRuleSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS).optional(),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS).optional(),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type UpdateLessonRule = z.infer<typeof UpdateLessonRuleSchema>;
 
@@ -710,6 +716,7 @@ export const SaveLessonSchema = z.object({
   title: z.string().trim().min(1).max(LESSON_TITLE_MAX_CHARS).optional(),
   rule: z.string().trim().min(1).max(LESSON_RULE_MAX_CHARS).optional(),
   target: LessonTargetSchema.optional(),
+  notDuplicateOf: NotDuplicateOfSchema,
 });
 export type SaveLesson = z.infer<typeof SaveLessonSchema>;
 

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  EditLessonSchema,
   LESSON_HISTORY_BUCKETS,
   LESSON_HISTORY_PAGE_DEFAULT,
   LESSON_HISTORY_PAGE_MAX,
   LESSON_PROPOSAL_STATUSES,
   LessonHistoryQuerySchema,
   LessonProposalListQuerySchema,
+  SaveLessonSchema,
+  UpdateLessonRuleSchema,
 } from './lessons.types';
 
 describe('LessonProposalListQuerySchema', () => {
@@ -56,4 +59,33 @@ describe('LessonHistoryQuerySchema', () => {
       LessonHistoryQuerySchema.safeParse({ before: 'x'.repeat(401) }).success,
     ).toBe(false);
   });
+});
+
+describe('the lesson write bodies', () => {
+  const schemas = [
+    ['save', SaveLessonSchema, {}],
+    ['update rule', UpdateLessonRuleSchema, {}],
+    ['edit', EditLessonSchema, { title: 't', rule: 'r' }],
+  ] as const;
+
+  it.each(schemas)(
+    'keeps the handles a %s vouches past',
+    (_name, schema, body) => {
+      expect(
+        schema.parse({ ...body, notDuplicateOf: ['m1106'] }),
+      ).toMatchObject({
+        notDuplicateOf: ['m1106'],
+      });
+    },
+  );
+
+  it.each(schemas)(
+    'refuses more than 20 handles on a %s',
+    (_name, schema, body) => {
+      const handles = Array.from({ length: 21 }, (_, i) => 'm' + String(i + 1));
+      expect(
+        schema.safeParse({ ...body, notDuplicateOf: handles }).success,
+      ).toBe(false);
+    },
+  );
 });

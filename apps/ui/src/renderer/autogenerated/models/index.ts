@@ -5737,6 +5737,12 @@ export interface EditLessonDto {
      * @memberof EditLessonDto
      */
     rule: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof EditLessonDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 
@@ -16610,6 +16616,12 @@ export interface SaveLessonDto {
      * @memberof SaveLessonDto
      */
     target?: LessonTarget;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SaveLessonDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 
@@ -21906,6 +21918,12 @@ export interface UpdateLessonRuleDto {
      * @memberof UpdateLessonRuleDto
      */
     rule?: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof UpdateLessonRuleDto
+     */
+    notDuplicateOf?: Array<string>;
 }
 /**
  * 

@@ -161,7 +161,13 @@ export class LessonProposalService {
       const target = input.target ?? targetOf(row);
       const title = input.title ?? row.title;
       const rule = input.rule ?? row.rule;
-      const landed = await this.writeTo(row, target, title, rule);
+      const landed = await this.writeTo(
+        row,
+        target,
+        title,
+        rule,
+        input.notDuplicateOf ?? [],
+      );
       return this.decided(row, em, { title, rule, target, landed });
     });
   }
@@ -209,6 +215,7 @@ export class LessonProposalService {
         type: entry.type,
         projectId: entry.projectId,
         teamSlug: entry.teamSlug,
+        notDuplicateOf: input.notDuplicateOf,
       }),
     );
     return this.decided(row, em, {
@@ -285,6 +292,7 @@ export class LessonProposalService {
         type: entry.type,
         projectId: entry.projectId,
         teamSlug: entry.teamSlug,
+        notDuplicateOf: input.notDuplicateOf,
       }),
     );
     Object.assign(row, { title: input.title, rule: input.rule });
@@ -536,11 +544,12 @@ export class LessonProposalService {
     target: LessonTarget,
     title: string,
     rule: string,
+    notDuplicateOf: readonly string[],
   ): Promise<Landed> {
     refuseHiddenText(title, rule);
     switch (target.kind) {
       case 'memory':
-        return this.toMemory(row, target, title, rule);
+        return this.toMemory(row, target, title, rule, notDuplicateOf);
       case 'project_instructions':
         return this.toProject(row, rule);
       case 'member_instructions':
@@ -555,8 +564,17 @@ export class LessonProposalService {
     target: Extract<LessonTarget, { kind: 'memory' }>,
     title: string,
     rule: string,
+    notDuplicateOf: readonly string[],
   ): Promise<Landed> {
     const dedup = dedupOf(row);
+    const vouched = [
+      ...new Set([
+        ...(dedup.verdict !== 'new' && dedup.handle !== null
+          ? [dedup.handle]
+          : []),
+        ...notDuplicateOf,
+      ]),
+    ];
     const entry = savedEntryOrThrow(
       await this.memory.create(
         {
@@ -566,9 +584,7 @@ export class LessonProposalService {
           projectId:
             target.scope === 'project' ? this.placeOf(row, 'project') : null,
           teamSlug: target.scope === 'team' ? this.placeOf(row, 'team') : null,
-          ...(dedup.verdict !== 'new' && dedup.handle !== null
-            ? { notDuplicateOf: [dedup.handle] }
-            : {}),
+          ...(vouched.length > 0 ? { notDuplicateOf: vouched } : {}),
         },
         { sourceRunId: row.sourceRunId, proposalId: row.id },
       ),

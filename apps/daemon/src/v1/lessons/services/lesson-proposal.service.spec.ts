@@ -294,6 +294,37 @@ describe('LessonProposalService.save', () => {
     },
   );
 
+  it('adds the handles the user vouched for to the entry a refines lesson names', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm12' }),
+    });
+    const { service, memory } = build(row);
+
+    await service.save('lp-1', { notDuplicateOf: ['m30', 'm12'] });
+
+    expect(memory.create).toHaveBeenCalledWith(
+      expect.objectContaining({ notDuplicateOf: ['m12', 'm30'] }),
+      expect.anything(),
+    );
+  });
+
+  it('refuses a save that looks like another entry with 409 MEMORY_NEAR_DUPLICATE naming it, and leaves the lesson open', async () => {
+    const row = proposal();
+    const { service, rows } = build(row, {
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    });
+
+    await expect(service.save('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.status).toBe('proposed');
+    expect(rows.write).not.toHaveBeenCalled();
+  });
+
   it('names no entry as not a duplicate for a new lesson', async () => {
     const { service, memory } = build(proposal());
 
@@ -568,6 +599,42 @@ describe('LessonProposalService.edit', () => {
         memoryHandle: 'm7',
       }),
     });
+  });
+
+  it('passes the handles the user vouched for to the edit', async () => {
+    const row = proposal({ status: 'saved', resultRef: 'm7' });
+    const { service, memory } = build(row);
+
+    await service.edit('lp-1', {
+      title: 't',
+      rule: 'r',
+      notDuplicateOf: ['m30'],
+    });
+
+    expect(memory.edit).toHaveBeenCalledWith(
+      'mem-7',
+      expect.objectContaining({ notDuplicateOf: ['m30'] }),
+    );
+  });
+
+  it('refuses an edit that looks like another entry with 409 MEMORY_NEAR_DUPLICATE, recording nothing', async () => {
+    const row = proposal({ status: 'saved', resultRef: 'm7' });
+    const { service, memory, rows } = build(row);
+    memory.edit.mockResolvedValueOnce({
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    } as never);
+
+    await expect(
+      service.edit('lp-1', { title: 't', rule: 'r' }),
+    ).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.title).not.toBe('t');
+    expect(rows.write).not.toHaveBeenCalled();
   });
 
   it('refuses when the entry is forgotten, writing nothing', async () => {
@@ -994,6 +1061,40 @@ describe('LessonProposalService.updateRule', () => {
         }),
       }),
     );
+  });
+
+  it('passes the handles the user vouched for to the edit of the refined entry', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory } = build(row);
+
+    await service.updateRule('lp-1', { notDuplicateOf: ['m30'] });
+
+    expect(memory.edit).toHaveBeenCalledWith(
+      'mem-7',
+      expect.objectContaining({ notDuplicateOf: ['m30'] }),
+    );
+  });
+
+  it('refuses Update rule whose text looks like another entry with 409 MEMORY_NEAR_DUPLICATE naming it, leaving the lesson open', async () => {
+    const row = proposal({
+      dedup: JSON.stringify({ verdict: 'refines', handle: 'm7' }),
+    });
+    const { service, memory, rows } = build(row);
+    memory.edit.mockResolvedValueOnce({
+      kind: 'near_duplicate',
+      candidates: [{ handle: 'm30' }],
+      pending: [],
+      updatable: true,
+    } as never);
+
+    await expect(service.updateRule('lp-1', {})).rejects.toMatchObject({
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m30' },
+    });
+    expect(row.status).toBe('proposed');
+    expect(rows.write).not.toHaveBeenCalled();
   });
 
   it('refuses Update rule when the refined entry was forgotten, with 409 LESSON_ENTRY_GONE, leaving the lesson open', async () => {

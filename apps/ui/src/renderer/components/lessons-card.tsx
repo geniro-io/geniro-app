@@ -14,6 +14,7 @@ import { SplitButton } from './split-button';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import type { MenuGroup } from './ui/menu';
+import { NearDuplicateError, similarEntriesMessage } from './use-memory-editor';
 
 export type { LessonPlaces };
 
@@ -66,18 +67,23 @@ export type LessonDocumentsReader = (
   projectId: string,
 ) => Promise<readonly LessonKnowledgeDocument[]>;
 
-export interface LessonSaveRequest {
+/** Handles a near-duplicate refusal named that the user pressed again past. */
+interface LessonVouch {
+  notDuplicateOf?: string[];
+}
+
+export interface LessonSaveRequest extends LessonVouch {
   target: LessonTarget;
   title?: string;
   rule?: string;
 }
 
-export interface LessonEdit {
+export interface LessonEdit extends LessonVouch {
   title: string;
   rule: string;
 }
 
-export interface LessonRuleEdit {
+export interface LessonRuleEdit extends LessonVouch {
   title?: string;
   rule?: string;
 }
@@ -448,6 +454,38 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * The handles a row's last near-duplicate refusal named, vouched past on its
+ * next press until the row's text or target changes.
+ */
+function useVouch(setError: (error: string | null) => void): {
+  body: LessonVouch;
+  drop: () => void;
+  settled: () => void;
+  refused: (err: unknown, action: string) => void;
+} {
+  const [vouched, setVouched] = useState<string[]>([]);
+  return {
+    body: vouched.length > 0 ? { notDuplicateOf: vouched } : {},
+    drop: () => {
+      if (vouched.length > 0) {
+        setVouched([]);
+        setError(null);
+      }
+    },
+    settled: () => setVouched([]),
+    refused: (err, action) => {
+      if (err instanceof NearDuplicateError) {
+        setVouched(err.handles);
+        setError(similarEntriesMessage(err.handles, action));
+      } else {
+        setVouched([]);
+        setError(messageOf(err));
+      }
+    },
+  };
+}
+
 export function LessonsCard({
   look,
   lessons,
@@ -634,6 +672,15 @@ export function DecidedRow({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const vouch = useVouch(setError);
+  const retitle = (next: string): void => {
+    vouch.drop();
+    setTitle(next);
+  };
+  const rerule = (next: string): void => {
+    vouch.drop();
+    setRule(next);
+  };
 
   const busy = request !== null;
   const draftValid = title.trim() !== '' && rule.trim() !== '';
@@ -651,11 +698,12 @@ export function DecidedRow({
     action().then(
       () => {
         setRequest(null);
+        vouch.settled();
         done();
       },
       (err: unknown) => {
         setRequest(null);
-        setError(messageOf(err));
+        vouch.refused(err, 'Save');
       },
     );
   };
@@ -666,7 +714,12 @@ export function DecidedRow({
     }
     run(
       'edit',
-      () => onEdit(lesson.id, { title: title.trim(), rule: rule.trim() }),
+      () =>
+        onEdit(lesson.id, {
+          title: title.trim(),
+          rule: rule.trim(),
+          ...vouch.body,
+        }),
       () => {
         setEditing(false);
         setEdited(true);
@@ -717,7 +770,7 @@ export function DecidedRow({
             value={title}
             maxLength={TITLE_MAX_CHARS}
             disabled={busy}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => retitle(event.target.value)}
           />
           <ExpandableTextarea
             title="Lesson rule"
@@ -725,7 +778,7 @@ export function DecidedRow({
             value={rule}
             maxLength={RULE_MAX_CHARS}
             rows={3}
-            onChange={setRule}
+            onChange={rerule}
           />
         </div>
       ) : (
@@ -1042,6 +1095,15 @@ export function LessonRow({
     'save' | 'update' | 'moveUp' | 'reject' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const vouch = useVouch(setError);
+  const retitle = (next: string): void => {
+    vouch.drop();
+    setTitle(next);
+  };
+  const rerule = (next: string): void => {
+    vouch.drop();
+    setRule(next);
+  };
 
   const choices = choicesFor(lesson, places, documents);
   const usable = choices.filter((option) => option.unavailable === null);
@@ -1072,12 +1134,15 @@ export function LessonRow({
   const draftValid = title.trim() !== '' && rule.trim() !== '';
   const edits = editing ? { title: title.trim(), rule: rule.trim() } : {};
 
-  const settle = (work: Promise<void>): void => {
+  const settle = (work: Promise<void>, action = 'Save'): void => {
     work.then(
-      () => setRequest(null),
+      () => {
+        setRequest(null);
+        vouch.settled();
+      },
       (err: unknown) => {
         setRequest(null);
-        setError(messageOf(err));
+        vouch.refused(err, action);
       },
     );
   };
@@ -1111,7 +1176,7 @@ export function LessonRow({
         return;
       }
       setRequest('update');
-      settle(onUpdateRule(lesson.id, edits));
+      settle(onUpdateRule(lesson.id, { ...edits, ...vouch.body }), 'Update');
       return;
     }
     if (action === 'moveUp') {
@@ -1126,7 +1191,13 @@ export function LessonRow({
       return;
     }
     setRequest('save');
-    settle(onSave(lesson.id, { target: selected.target, ...edits }));
+    settle(
+      onSave(lesson.id, {
+        target: selected.target,
+        ...edits,
+        ...vouch.body,
+      }),
+    );
   };
 
   const reject = (): void => {
@@ -1173,7 +1244,10 @@ export function LessonRow({
       disabled={primaryDisabled}
       menuDisabled={menuDisabled}
       onClick={runPrimary}
-      onSelect={setChoice}
+      onSelect={(next) => {
+        vouch.drop();
+        setChoice(next);
+      }}
       onMenuOpen={loadDocuments}>
       {primaryLabel}
     </SplitButton>
@@ -1205,7 +1279,7 @@ export function LessonRow({
             value={title}
             maxLength={TITLE_MAX_CHARS}
             disabled={busy}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => retitle(event.target.value)}
           />
           <ExpandableTextarea
             title="Lesson rule"
@@ -1213,7 +1287,7 @@ export function LessonRow({
             value={rule}
             maxLength={RULE_MAX_CHARS}
             rows={3}
-            onChange={setRule}
+            onChange={rerule}
           />
         </div>
       ) : (

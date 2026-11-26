@@ -68,6 +68,10 @@ describe('orderedWithin — the order of the threads in one block', () => {
     expect(orderedWithin(['a', 'b', 'c'], ['b', 'a'])).toEqual(['b', 'a', 'c']);
   });
 
+  it('stands a thread a stored order names twice only once', () => {
+    expect(orderedWithin(['a', 'b'], ['b', 'a', 'b'])).toEqual(['b', 'a']);
+  });
+
   it('drops the stored threads the automatic order no longer has', () => {
     expect(orderedWithin(['a', 'b'], ['x', 'b', 'a'])).toEqual(['b', 'a']);
   });

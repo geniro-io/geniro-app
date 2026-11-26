@@ -27,7 +27,7 @@ export function orderedWithin(
     return [...automatic];
   }
   const rank = new Map(automatic.map((id, index) => [id, index]));
-  const result = stored.filter((id) => rank.has(id));
+  const result = [...new Set(stored)].filter((id) => rank.has(id));
   const named = new Set(result);
   for (const id of automatic) {
     if (named.has(id)) {

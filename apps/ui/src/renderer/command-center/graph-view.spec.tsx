@@ -1374,6 +1374,25 @@ describe('GraphView', () => {
     });
   });
 
+  it('places no block released by its header without having been dragged', async () => {
+    const onPlaceBlock = vi.fn();
+    await draw({
+      threads: graphThreadsOf(4),
+      projects: FIXTURE_PROJECTS,
+      onPlaceBlock,
+    });
+
+    act(() => {
+      seams.flow!.onNodeDragStop!(
+        new MouseEvent('mouseup'),
+        flowNode('block:project-billing'),
+        [],
+      );
+    });
+
+    expect(onPlaceBlock).not.toHaveBeenCalled();
+  });
+
   it('stands a project block where it was left, offset from the manager node', async () => {
     await draw({
       threads: graphThreadsOf(4),

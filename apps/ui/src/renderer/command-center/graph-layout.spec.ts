@@ -665,6 +665,21 @@ describe('slotIndexFor', () => {
     ).toBe(items.length);
   });
 
+  it('drops a card between two places at the index of the place its centre lands on', () => {
+    for (const index of [1, 2]) {
+      expect(
+        slotIndexFor(block, items, slot, 4, origin, {
+          x:
+            origin.x +
+            BLOCK_PAD +
+            index * (CARD_WIDTH + BLOCK_GAP) +
+            CARD_WIDTH / 2,
+          y: origin.y + BLOCK_HEAD + CENTRE_DEPTH,
+        }),
+      ).toBe(index);
+    }
+  });
+
   it('drops a card on a wrapped line at the index of the place it lands on', () => {
     expect(
       slotIndexFor(block, items, slot, 2, origin, {

@@ -67,4 +67,20 @@ describe('memorySearchResultText', () => {
       /^No memory matches "zzz"/,
     );
   });
+
+  it('ends with the note saying search by meaning left memory to words, with or without hits', () => {
+    const note =
+      'Search by meaning is off for memory in Settings → Search, so only word matches are listed.';
+
+    expect(memorySearchResultText('zzz', [], note).split('\n')).toEqual([
+      'No memory matches "zzz". Try other words, or save what you learn with memory_save.',
+      note,
+    ]);
+    expect(memorySearchResultText('loopback', [HIT], note).split('\n').at(-1)).toBe(
+      note,
+    );
+    expect(memorySearchResultText('zzz', [], null)).toBe(
+      'No memory matches "zzz". Try other words, or save what you learn with memory_save.',
+    );
+  });
 });

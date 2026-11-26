@@ -688,6 +688,9 @@ export function Knowledge({
             {list.error}
           </KnowledgeNote>
         )}
+        {list.meaningNote === null || q.trim().length === 0 ? null : (
+          <p className="text-sm text-muted-foreground">{list.meaningNote}</p>
+        )}
         {list.documents === null ? (
           list.error === null ? (
             <p className="text-sm text-muted-foreground">Loading documents…</p>

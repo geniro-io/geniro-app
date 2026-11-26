@@ -141,6 +141,16 @@ class EmbeddingWorker {
         return {
           deleted: await this.openStore().keepRuns(request.runIds),
         } satisfies WorkerResults['keepRuns'];
+      case 'dropSource':
+        return {
+          deleted: await this.openStore().dropSource(request.source),
+        } satisfies WorkerResults['dropSource'];
+      case 'deleteChatsBefore':
+        return {
+          deleted: await this.openStore().deleteChatsBefore(
+            request.createdBefore,
+          ),
+        } satisfies WorkerResults['deleteChatsBefore'];
       case 'counts': {
         const store = this.openStore();
         return {

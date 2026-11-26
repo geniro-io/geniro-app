@@ -48,13 +48,17 @@ export function readMemorySearchArgs(
 export function memorySearchResultText(
   query: string,
   hits: readonly MemoryHit[],
+  meaningNote: string | null = null,
 ): string {
-  if (hits.length === 0) {
-    return `No memory matches "${query}". Try other words, or save what you learn with memory_save.`;
-  }
-  return [
-    MEMORY_RESULT_PREFACE,
-    ...hits.map((hit) => `- ${memoryEntryLine(hit)}: ${hit.excerpt}`),
-    'Read whole entries with memory_read.',
-  ].join('\n');
+  const lines =
+    hits.length === 0
+      ? [
+          `No memory matches "${query}". Try other words, or save what you learn with memory_save.`,
+        ]
+      : [
+          MEMORY_RESULT_PREFACE,
+          ...hits.map((hit) => `- ${memoryEntryLine(hit)}: ${hit.excerpt}`),
+          'Read whole entries with memory_read.',
+        ];
+  return [...lines, ...(meaningNote === null ? [] : [meaningNote])].join('\n');
 }

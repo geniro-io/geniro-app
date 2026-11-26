@@ -25,6 +25,7 @@ function fakeKnowledge(refusal: KnowledgeRefusal | null = null) {
     callScope: vi.fn(async () => AGENT_SCOPE),
     placeNamed: vi.fn(async (place: RunPlace) => refusal ?? place),
     search: vi.fn(async () => ({ hits: [], total: 0 })),
+    meaningNote: () => null,
     read: vi.fn(async () => ({ kind: 'found', document: documentOf() })),
     save: vi.fn(async () => ({
       kind: 'proposed',

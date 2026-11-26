@@ -42,6 +42,10 @@ export const EMBEDDING_CHAT_POLL_MS = 10 * 60_000;
 export const EMBEDDING_CHANGED_THROTTLE_MS = 1_000;
 /** Deleted rows, as a share of all chat chunks, past which the child compacts the file. */
 export const EMBEDDING_VACUUM_SHARE = 0.1;
+/** TWIN: `SEMANTIC_SEARCH_WINDOW_MIN_DAYS` / `_MAX_DAYS` in `apps/ui/src/shared/contracts.ts`. */
+export const EMBEDDING_CHAT_WINDOW_MIN_DAYS = 1;
+export const EMBEDDING_CHAT_WINDOW_MAX_DAYS = 3650;
+export const EMBEDDING_DAY_MS = 24 * 60 * 60_000;
 
 export const EMBEDDING_SOURCES = ['memory', 'knowledge', 'chats'] as const;
 export type EmbeddingSource = (typeof EMBEDDING_SOURCES)[number];
@@ -57,10 +61,20 @@ export const EmbeddingModelRefSchema = z
   .meta({ id: 'EmbeddingModelRef' });
 export type EmbeddingModelRef = z.infer<typeof EmbeddingModelRefSchema>;
 
+export const EmbeddingSourcesSchema = z
+  .object({
+    memory: z.boolean(),
+    knowledge: z.boolean(),
+    chats: z.boolean(),
+  })
+  .meta({ id: 'EmbeddingSources' });
+export type EmbeddingSources = z.infer<typeof EmbeddingSourcesSchema>;
+
 /**
  * What Electron main pushes: whether search by meaning is on, the model it
- * downloaded and verified, a newer one being indexed beside it, and whether the
- * Mac runs on battery (chat indexing waits for power).
+ * downloaded and verified, a newer one being indexed beside it, whether the
+ * Mac runs on battery (chat indexing waits for power), which sources are
+ * embedded, and how many days back chats are (null: all of them).
  *
  * TWIN PARSER: `searchConfigOf` in `apps/ui/src/main/search-config-push.ts`.
  */
@@ -70,6 +84,13 @@ export const EmbeddingConfigSchema = z
     model: EmbeddingModelRefSchema.nullable(),
     pendingModel: EmbeddingModelRefSchema.nullable(),
     onBattery: z.boolean(),
+    sources: EmbeddingSourcesSchema,
+    chatWindowDays: z
+      .number()
+      .int()
+      .min(EMBEDDING_CHAT_WINDOW_MIN_DAYS)
+      .max(EMBEDDING_CHAT_WINDOW_MAX_DAYS)
+      .nullable(),
   })
   .meta({ id: 'EmbeddingConfig' });
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
@@ -79,6 +100,8 @@ export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
   model: null,
   pendingModel: null,
   onBattery: false,
+  sources: { memory: true, knowledge: true, chats: true },
+  chatWindowDays: null,
 };
 
 export const EMBEDDING_STATES = [
@@ -167,7 +190,8 @@ export interface ChatSourceRow extends EmbedChatItem {
 
 /** Chat history, as the agents module reads it for the index. */
 export interface ChatSourceProvider {
-  total(): Promise<number>;
+  /** Embeddable messages created at or after `createdAfter` (epoch ms), every one when null. */
+  total(createdAfter: number | null): Promise<number>;
   newestRowid(): Promise<number>;
   /** Up to `limit` rows below `rowid`, newest first. */
   before(rowid: number, limit: number): Promise<ChatSourceRow[]>;
@@ -215,6 +239,8 @@ export type WorkerRequest =
   | { op: 'delete'; source: DocumentSource; sourceIds: string[] }
   | { op: 'deleteRuns'; runIds: string[] }
   | { op: 'keepRuns'; runIds: string[] }
+  | { op: 'dropSource'; source: EmbeddingSource }
+  | { op: 'deleteChatsBefore'; createdBefore: number }
   | { op: 'counts'; slot: ModelSlot }
   | { op: 'getMeta'; key: string }
   | { op: 'setMeta'; key: string; value: string | null }
@@ -233,6 +259,8 @@ export interface WorkerResults {
   delete: { deleted: number };
   deleteRuns: { deleted: number };
   keepRuns: { deleted: number };
+  dropSource: { deleted: number };
+  deleteChatsBefore: { deleted: number };
   counts: EmbeddingCounts & { indexBytes: number };
   getMeta: string | null;
   setMeta: null;

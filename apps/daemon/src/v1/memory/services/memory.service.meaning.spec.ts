@@ -137,6 +137,15 @@ describe('MemoryService.search by meaning', () => {
     );
   });
 
+  it("hands memory_search the index's note for memory, and none without an index", () => {
+    const note =
+      'Search by meaning is off for memory in Settings → Search, so only word matches are listed.';
+    fake.notes = { memory: note };
+
+    expect(meaning.meaningNote()).toBe(note);
+    expect(db.service.meaningNote()).toBeNull();
+  });
+
   it('finds an entry that shares no word with the query when its meaning matches', async () => {
     fake.answerScores = () => [{ sourceId: images, similarity: 0.8 }];
     expect(await db.service.search(RUSSIAN_IMAGES, NONE, 10)).toEqual([]);

@@ -26,7 +26,11 @@ const RELEASE_HIT = {
   reviewed: true,
 } as const;
 
-function fakeKnowledge(result: KnowledgeSearchResult, enabled = true) {
+function fakeKnowledge(
+  result: KnowledgeSearchResult,
+  enabled = true,
+  meaningNote: string | null = null,
+) {
   const scopes: { runId: string; memberId: string }[] = [];
   const searches: {
     place: RunPlace;
@@ -47,6 +51,7 @@ function fakeKnowledge(result: KnowledgeSearchResult, enabled = true) {
       searches.push({ place, query, limit });
       return result;
     },
+    meaningNote: () => meaningNote,
   } as unknown as KnowledgeService;
   return { service, scopes, searches };
 }
@@ -75,6 +80,27 @@ describe('KnowledgeSearchTool', () => {
       ],
       isError: false,
     });
+  });
+
+  it('ends a query with the note that search by meaning left knowledge to words, and a plain listing without it', async () => {
+    const note =
+      'Search by meaning is off for knowledge documents in Settings → Search, so only word matches are listed.';
+    const { service } = fakeKnowledge(
+      { hits: [RELEASE_HIT], total: 1 },
+      true,
+      note,
+    );
+    const tool = new KnowledgeSearchTool(service, ordinaryChat());
+
+    const searched = await tool.call(
+      'knowledge_search',
+      { query: 'release' },
+      CALL,
+    );
+    const listed = await tool.call('knowledge_search', {}, CALL);
+
+    expect(JSON.stringify(searched)).toContain(note);
+    expect(JSON.stringify(listed)).not.toContain(note);
   });
 
   it('says so when no document the run sees matches the query', async () => {

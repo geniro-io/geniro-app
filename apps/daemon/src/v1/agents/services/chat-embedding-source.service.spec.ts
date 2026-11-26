@@ -42,7 +42,11 @@ function setup() {
   const bus = new AgentEventBus();
   const dao = {
     embeddableCountBetween: vi.fn<
-      (after: number, upTo: number) => Promise<number>
+      (
+        after: number,
+        upTo: number,
+        createdAfter: number | null,
+      ) => Promise<number>
     >(async () => 0),
     newestItemRowid: vi.fn<() => Promise<number>>(async () => 0),
     embeddableRows: vi.fn<
@@ -182,12 +186,26 @@ describe('ChatEmbeddingSourceService', () => {
       .mockResolvedValueOnce(4)
       .mockResolvedValueOnce(5);
 
-    expect(await provider.total()).toBe(12);
+    expect(await provider.total(null)).toBe(12);
     expect(dao.embeddableCountBetween.mock.calls).toEqual([
-      [0, EMBEDDING_CHAT_COUNT_WINDOW],
-      [EMBEDDING_CHAT_COUNT_WINDOW, EMBEDDING_CHAT_COUNT_WINDOW * 2],
-      [EMBEDDING_CHAT_COUNT_WINDOW * 2, newest],
+      [0, EMBEDDING_CHAT_COUNT_WINDOW, null],
+      [EMBEDDING_CHAT_COUNT_WINDOW, EMBEDDING_CHAT_COUNT_WINDOW * 2, null],
+      [EMBEDDING_CHAT_COUNT_WINDOW * 2, newest, null],
     ]);
+  });
+
+  it('counts only the messages created since the chat window opened', async () => {
+    const { dao, embeddings } = setup();
+    const provider = registeredProvider(embeddings);
+    dao.newestItemRowid.mockResolvedValueOnce(10);
+    dao.embeddableCountBetween.mockResolvedValueOnce(4);
+
+    expect(await provider.total(1_700_000_000_000)).toBe(4);
+    expect(dao.embeddableCountBetween).toHaveBeenCalledWith(
+      0,
+      10,
+      1_700_000_000_000,
+    );
   });
 
   it('offers the event loop a turn before each window it counts', async () => {
@@ -196,7 +214,7 @@ describe('ChatEmbeddingSourceService', () => {
     dao.newestItemRowid.mockResolvedValueOnce(EMBEDDING_CHAT_COUNT_WINDOW * 2);
     yieldIfHeld.mockClear();
 
-    await provider.total();
+    await provider.total(null);
 
     const yields = yieldIfHeld.mock.invocationCallOrder;
     const counts = dao.embeddableCountBetween.mock.invocationCallOrder;
@@ -211,7 +229,7 @@ describe('ChatEmbeddingSourceService', () => {
     const { dao, embeddings } = setup();
     const provider = registeredProvider(embeddings);
 
-    expect(await provider.total()).toBe(0);
+    expect(await provider.total(null)).toBe(0);
     expect(dao.embeddableCountBetween).not.toHaveBeenCalled();
   });
 });

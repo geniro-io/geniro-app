@@ -33,6 +33,12 @@ export class MemorySearchTool extends MemoryMcpTool {
       place,
       read.query.limit,
     );
-    return this.masked(memorySearchResultText(read.query.query, hits));
+    return this.masked(
+      memorySearchResultText(
+        read.query.query,
+        hits,
+        this.memory.meaningNote(),
+      ),
+    );
   }
 }

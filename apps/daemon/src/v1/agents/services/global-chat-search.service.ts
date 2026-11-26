@@ -57,16 +57,14 @@ export class GlobalChatSearchService {
     const rows = await this.index.match(options, matchQuery, options.limit + 1);
     const terms = chatTextQueryTerms(options.query);
     const fused = await this.fusedWithMeaning(options, rows);
+    const note = this.embeddings?.meaningNote('chats') ?? null;
     if (fused !== null) {
       return {
         hits: fused.slice(0, options.limit).map(({ row, relevance }) => ({
           ...hitOf(row, terms),
           score: relevance,
         })),
-        partialReason:
-          fused.length > options.limit
-            ? `Showing the best ${options.limit} matches — add a word to narrow it.`
-            : null,
+        partialReason: partialReasonOf(fused.length > options.limit, options.limit, note),
       };
     }
     return {
@@ -75,10 +73,7 @@ export class GlobalChatSearchService {
         // bm25 is negative and smaller is better; the wire says higher is.
         score: -row.rank,
       })),
-      partialReason:
-        rows.length > options.limit
-          ? `Showing the best ${options.limit} matches — add a word to narrow it.`
-          : null,
+      partialReason: partialReasonOf(rows.length > options.limit, options.limit, note),
     };
   }
 
@@ -172,6 +167,18 @@ export class GlobalChatSearchService {
 
 /** How long a hit's quote is. */
 const SNIPPET_CHARS = 240;
+
+function partialReasonOf(
+  more: boolean,
+  limit: number,
+  meaningNote: string | null,
+): string | null {
+  const parts = [
+    more ? `Showing the best ${limit} matches — add a word to narrow it.` : null,
+    meaningNote,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? null : parts.join(' ');
+}
 
 /**
  * A hit's quote, windowed on the first word the text answers for. Redacted

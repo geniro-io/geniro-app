@@ -54,6 +54,20 @@ describe('knowledgeSearchResultText', () => {
     ).toContain('0.7 KB, unreviewed)');
   });
 
+  it('ends with the note saying search by meaning left knowledge to words, with or without hits', () => {
+    const note =
+      'Search by meaning is off for knowledge documents in Settings → Search, so only word matches are listed.';
+
+    expect(
+      knowledgeSearchResultText({ hits: [HIT], total: 1 }, 'commit', note)
+        .split('\n')
+        .at(-1),
+    ).toBe(note);
+    expect(
+      knowledgeSearchResultText({ hits: [], total: 0 }, 'x', note).split('\n'),
+    ).toEqual(['No knowledge document this run sees matches "x".', note]);
+  });
+
   it('words an empty answer by whether a query was given', () => {
     expect(knowledgeSearchResultText({ hits: [], total: 0 }, 'x')).toBe(
       'No knowledge document this run sees matches "x".',

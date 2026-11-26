@@ -482,6 +482,7 @@ export class KnowledgeService implements OnModuleInit {
       return {
         documents: await this.toHeads(ranked.slice(0, limit), em),
         next: null,
+        meaningNote: this.meaningNote(),
       };
     }
     const heads = await this.documents.page(
@@ -500,7 +501,13 @@ export class KnowledgeService implements OnModuleInit {
         heads.length === limit && last
           ? `${last.updatedAt.getTime()}_${last.id}`
           : null,
+      meaningNote: null,
     };
+  }
+
+  /** What a search leaves to words while search by meaning is on, or null. */
+  meaningNote(): string | null {
+    return this.embeddings?.meaningNote('knowledge') ?? null;
   }
 
   /** One document by id, whatever its status or place — the user's read. */

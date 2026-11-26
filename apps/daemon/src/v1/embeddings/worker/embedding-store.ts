@@ -7,6 +7,7 @@ import { getLoadablePath } from 'sqlite-vec';
 import {
   type ChatScore,
   type DocumentSource,
+  type EmbeddingSource,
   EMBEDDING_CHAT_MIN_SIMILARITY,
   EMBEDDING_DIM,
   EMBEDDING_MIN_SIMILARITY,
@@ -33,6 +34,7 @@ interface ChatRowFilter {
   model?: string;
   notModel?: string;
   runIds?: readonly string[];
+  createdBefore?: number;
 }
 
 export interface StoredChatItem {
@@ -420,6 +422,27 @@ export class EmbeddingStore {
     return gone.length === 0 ? 0 : this.deleteRuns(gone);
   }
 
+  /** Every vector of one source; for chats, their walk cursors too, so switching chats back on walks the history again. */
+  async dropSource(source: EmbeddingSource): Promise<number> {
+    if (source !== 'chats') {
+      const result = await this.db
+        .deleteFrom('vectors')
+        .where('source', '=', source)
+        .executeTakeFirst();
+      return Number(result.numDeletedRows);
+    }
+    const deleted = await this.deleteChatRows(this.db, {});
+    await this.db.deleteFrom('meta').where('key', 'like', 'chats:%').execute();
+    await this.noteChatDeletions(deleted);
+    return deleted;
+  }
+
+  async deleteChatsBefore(createdBefore: number): Promise<number> {
+    const deleted = await this.deleteChatRows(this.db, { createdBefore });
+    await this.noteChatDeletions(deleted);
+    return deleted;
+  }
+
   async counts(model: string): Promise<EmbeddingCounts> {
     const documents = await this.db
       .selectFrom('vectors')
@@ -509,6 +532,12 @@ export class EmbeddingStore {
       .columns(['run_id', 'model'])
       .execute();
     await this.db.schema
+      .createIndex('chat_chunks_created')
+      .ifNotExists()
+      .on('chat_chunks')
+      .column('created_at')
+      .execute();
+    await this.db.schema
       .createTable('deletions')
       .ifNotExists()
       .addColumn('source', 'text', (c) => c.notNull())
@@ -565,6 +594,9 @@ export class EmbeddingStore {
     }
     if (which.runIds !== undefined) {
       read = read.where('run_id', 'in', which.runIds);
+    }
+    if (which.createdBefore !== undefined) {
+      read = read.where('created_at', '<', which.createdBefore);
     }
     const ids = (await read.execute())
       .map((row) => row.id)

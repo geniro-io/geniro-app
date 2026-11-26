@@ -420,6 +420,72 @@ describe('EmbeddingStore', () => {
       ).toEqual(['b1']);
     });
 
+    it('drops the messages created before a cutoff and keeps the newer ones searchable', async () => {
+      await store.storeChatItems(MODEL, [
+        chatItem('old-1', 'r1', 100),
+        chatItem('old-2', 'r2', 199),
+        chatItem('new-1', 'r1', 200),
+        chatItem('new-2', 'r2', 300),
+      ]);
+
+      expect(await store.deleteChatsBefore(200)).toBe(2);
+
+      expect((await store.counts(MODEL)).chats).toBe(2);
+      expect(
+        (await store.searchChats(MODEL, unit(100), 10, null)).map(
+          (hit) => hit.itemId,
+        ),
+      ).not.toContain('old-1');
+      expect(
+        (await store.searchChats(MODEL, unit(200), 10, null)).map(
+          (hit) => hit.itemId,
+        ),
+      ).toContain('new-1');
+    });
+
+    it('drops every chat vector and the chat cursors when chats are switched off, leaving documents', async () => {
+      await store.storeChatItems(MODEL, [
+        chatItem('a1', 'r1', 51),
+        chatItem('b1', 'r2', 52),
+      ]);
+      await store.storeDocuments('memory', MODEL, [
+        { sourceId: 'm1', textHash: 'h1', vectors: [unit(53)] },
+      ]);
+      await store.setMeta(`chats:${MODEL}:fwd`, '9');
+      await store.setMeta(`chats:${MODEL}:back`, '0');
+
+      expect(await store.dropSource('chats')).toBe(2);
+
+      expect(await store.counts(MODEL)).toEqual({
+        memory: 1,
+        knowledge: 0,
+        chats: 0,
+      });
+      expect(await store.searchChats(MODEL, unit(51), 10, null)).toEqual([]);
+      expect(await store.getMeta(`chats:${MODEL}:fwd`)).toBeNull();
+      expect(await store.getMeta(`chats:${MODEL}:back`)).toBeNull();
+      expect(await store.getMeta('schema_version')).not.toBeNull();
+    });
+
+    it('drops one document source and leaves the other and the chats', async () => {
+      await store.storeDocuments('memory', MODEL, [
+        { sourceId: 'm1', textHash: 'h1', vectors: [unit(61)] },
+        { sourceId: 'm2', textHash: 'h2', vectors: [unit(62)] },
+      ]);
+      await store.storeDocuments('knowledge', MODEL, [
+        { sourceId: 'k1', textHash: 'h3', vectors: [unit(63)] },
+      ]);
+      await store.storeChatItems(MODEL, [chatItem('c1', 'r1', 64)]);
+
+      expect(await store.dropSource('memory')).toBe(2);
+
+      expect(await store.counts(MODEL)).toEqual({
+        memory: 0,
+        knowledge: 1,
+        chats: 1,
+      });
+    });
+
     it('re-indexes a message whose text changed, replacing its chunks', async () => {
       await store.storeChatItems(MODEL, [chatItem('i1', 'r1', 41)]);
       await store.storeChatItems(MODEL, [

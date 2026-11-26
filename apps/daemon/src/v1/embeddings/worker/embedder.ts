@@ -24,7 +24,8 @@ export type EmbedKind = 'query' | 'document';
 /**
  * One loaded model: its tokenizer and ONNX session. The session options keep
  * onnxruntime away from the large aligned allocations that crash it under
- * Electron's Node (arena growth, the memory-pattern plan buffer).
+ * Electron's Node (arena growth, the memory-pattern plan buffer), and its idle
+ * pool threads block between operators instead of spin-waiting for them.
  */
 export class Embedder {
   private constructor(
@@ -50,6 +51,7 @@ export class Embedder {
         interOpNumThreads: 1,
         enableCpuMemArena: false,
         enableMemPattern: false,
+        extra: { session: { intra_op: { allow_spinning: '0' } } },
       },
     );
     return new Embedder(model, tokenizer, session);

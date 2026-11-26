@@ -1,6 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { chunkText } from './embedder';
+import { describe, expect, it, vi } from 'vitest';
+
+import { chunkText, Embedder } from './embedder';
+
+const ort = vi.hoisted(() => ({
+  create: vi.fn<
+    (path: string, options: unknown) => Promise<{ inputNames: string[] }>
+  >(() => Promise.resolve({ inputNames: [] })),
+}));
+
+vi.mock('onnxruntime-node', () => ({
+  InferenceSession: { create: ort.create },
+  Tensor: class {},
+}));
+
+vi.mock('@huggingface/tokenizers', () => ({
+  Tokenizer: class {},
+}));
 
 const words = (text: string): number =>
   text.split(/\s+/).filter((word) => word !== '').length;
@@ -57,5 +76,24 @@ describe('chunkText', () => {
 
     expect(chunks).toEqual(['xxx', 'xxx', 'xxxx']);
     expect(chunks.join('')).toBe(text);
+  });
+});
+
+describe('Embedder.load', () => {
+  it('turns off spin-waiting of the idle intra-op threads, which burned CPU between operators without doing work', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'embedder-load-'));
+    writeFileSync(join(dir, 'tokenizer.json'), '{}');
+    writeFileSync(join(dir, 'tokenizer_config.json'), '{}');
+    try {
+      await Embedder.load({ id: 'm', revision: 'rev1234', dir, dim: 768 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(ort.create).toHaveBeenCalledTimes(1);
+    const options = ort.create.mock.calls[0]?.[1] as {
+      extra?: { session?: { intra_op?: { allow_spinning?: string } } };
+    };
+    expect(options.extra?.session?.intra_op?.allow_spinning).toBe('0');
   });
 });

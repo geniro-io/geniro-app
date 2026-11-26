@@ -12,6 +12,7 @@ interface ProjectRefTable {
     id: string;
     name: string;
     folder: string;
+    task_key: string | null;
     created_at: string;
     deleted_at: string | null;
   };
@@ -22,6 +23,7 @@ export interface ProjectRefRow {
   id: string;
   name: string;
   folder: string;
+  taskKey: string | null;
 }
 
 @Injectable()
@@ -109,12 +111,12 @@ export class ProjectDao extends BaseDao<Project> {
     return nearest === null ? null : this.getById(nearest.id, txEm);
   }
 
-  /** Every LIVE project's id, name and folder, newest first. */
+  /** Every LIVE project's id, name, folder and card key, newest first. */
   async listRefs(txEm?: EntityManager): Promise<ProjectRefRow[]> {
     return (txEm ?? this.em.fork())
       .getKysely<ProjectRefTable>({ convertValues: false })
       .selectFrom('projects')
-      .select(['id', 'name', 'folder'])
+      .select(['id', 'name', 'folder', 'task_key as taskKey'])
       .where('deleted_at', 'is', null)
       .orderBy('created_at', 'desc')
       .limit(MAX_PROJECTS)

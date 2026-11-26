@@ -78,6 +78,7 @@ describe('ProjectScopeService (in-memory sqlite)', () => {
         id: 'p-app',
         name: 'App',
         folder: '/repo/app',
+        taskKey: 'APP',
         instructions: 'Use pnpm.',
       }),
     );
@@ -207,6 +208,17 @@ describe('ProjectScopeService (in-memory sqlite)', () => {
         'p-app',
       ]);
       expect([...names]).toEqual([['p-app', 'App']]);
+    });
+  });
+
+  describe('liveRefsOf', () => {
+    it('gives each live project among the ids its name and card key, and leaves out a deleted one', async () => {
+      const row = await em.findOneOrFail(Project, 'p-cards');
+      em.remove(row);
+      await em.flush();
+
+      const refs = await service.liveRefsOf(['p-app', 'p-cards', null]);
+      expect([...refs]).toEqual([['p-app', { name: 'App', taskKey: 'APP' }]]);
     });
   });
 

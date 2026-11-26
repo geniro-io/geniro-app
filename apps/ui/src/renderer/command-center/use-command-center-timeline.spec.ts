@@ -10,6 +10,8 @@ function event(id: string, at: string): CommandCenterTimelineEvent {
     kind: 'thread_message',
     threadRunId: 'run-1',
     threadTitle: 'Billing',
+    task: null,
+    project: null,
     text: id,
     detail: null,
     awaitingReply: false,

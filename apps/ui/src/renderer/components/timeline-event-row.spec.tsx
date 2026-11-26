@@ -155,6 +155,25 @@ describe('TimelineEventRow — content', () => {
   });
 });
 
+describe('TimelineEventRow — meta', () => {
+  it('draws the meta line under the sentence when one is given', () => {
+    const el = draw({ meta: <span>Geniro · started</span> });
+
+    expect(
+      el.querySelector('[data-slot="timeline-event-meta"]')!.textContent,
+    ).toBe('Geniro · started');
+  });
+
+  it('draws no meta line when none is given, null or undefined', () => {
+    expect(
+      draw().querySelector('[data-slot="timeline-event-meta"]'),
+    ).toBeNull();
+    expect(
+      draw({ meta: null }).querySelector('[data-slot="timeline-event-meta"]'),
+    ).toBeNull();
+  });
+});
+
 describe('TimelineEventRow — live', () => {
   it('draws a pulsing dot when the row is live', () => {
     const el = draw({ live: true });

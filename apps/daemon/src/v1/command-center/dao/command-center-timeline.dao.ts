@@ -167,15 +167,16 @@ export class CommandCenterTimelineDao extends BaseDao<Item> {
     );
   }
 
-  async titlesOf(runIds: readonly string[]) {
+  async threadRefsOf(runIds: readonly string[]) {
     return this.scoped(runIds, () =>
-      this.em
-        .fork()
-        .find(
-          Run,
-          { id: { $in: [...runIds] } },
-          { fields: ['id', 'title'], disableIdentityMap: true },
-        ),
+      this.em.fork().find(
+        Run,
+        { id: { $in: [...runIds] } },
+        {
+          fields: ['id', 'title', 'taskIdentifier', 'projectId'],
+          disableIdentityMap: true,
+        },
+      ),
     );
   }
 
@@ -187,7 +188,15 @@ export class CommandCenterTimelineDao extends BaseDao<Item> {
         startRequestedAt: { $lt: before },
       },
       {
-        fields: ['id', 'title', 'startRequestedAt', 'startApprovedAt'],
+        fields: [
+          'id',
+          'projectId',
+          'number',
+          'title',
+          'status',
+          'startRequestedAt',
+          'startApprovedAt',
+        ],
         orderBy: [{ startRequestedAt: 'desc' }, { id: 'asc' }],
         limit,
         disableIdentityMap: true,

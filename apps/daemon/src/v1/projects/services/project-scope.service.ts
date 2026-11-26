@@ -24,6 +24,12 @@ export type RunProjectColumns = Pick<
   'projectId' | 'projectSource' | 'taskId' | 'cwd'
 >;
 
+/** What a listing shows of a live project: its name and its card key. */
+export interface LiveProjectRef {
+  name: string;
+  taskKey: string | null;
+}
+
 /** The columns a run's place is read from. */
 export type RunPlaceColumns = RunProjectColumns & Pick<Run, 'teamId'>;
 
@@ -151,6 +157,14 @@ export class ProjectScopeService {
   async liveNamesOf(
     ids: Iterable<string | null>,
   ): Promise<ReadonlyMap<string, string>> {
+    const refs = await this.liveRefsOf(ids);
+    return new Map([...refs].map(([id, ref]) => [id, ref.name]));
+  }
+
+  /** The projects among `ids` that still exist, with their names and card keys, by id — one read per listing. */
+  async liveRefsOf(
+    ids: Iterable<string | null>,
+  ): Promise<ReadonlyMap<string, LiveProjectRef>> {
     const wanted = [...new Set(ids)].filter((id): id is string => id !== null);
     if (wanted.length === 0) {
       return new Map();
@@ -159,7 +173,10 @@ export class ProjectScopeService {
     return new Map(
       live
         .filter((project) => wanted.includes(project.id))
-        .map((project) => [project.id, project.name]),
+        .map((project) => [
+          project.id,
+          { name: project.name, taskKey: project.taskKey },
+        ]),
     );
   }
 

@@ -31,6 +31,7 @@ export interface TimelineEventRowProps {
   at: string;
   badge?: React.ReactNode;
   detail?: React.ReactNode;
+  meta?: React.ReactNode;
   actions?: React.ReactNode;
   live?: boolean;
   onActivate?: () => void;
@@ -48,6 +49,7 @@ function RowBody({
   at,
   badge,
   detail,
+  meta,
   actions,
   live,
 }: Omit<
@@ -80,6 +82,13 @@ function RowBody({
             {formatClockTime(at)}
           </time>
         </div>
+        {meta === undefined || meta === null ? null : (
+          <p
+            data-slot="timeline-event-meta"
+            className="flex min-w-0 items-baseline gap-1.5 truncate text-xs leading-5 text-muted-foreground">
+            {meta}
+          </p>
+        )}
         {detail === undefined || detail === null ? null : (
           <p className="mt-0.5 line-clamp-2 text-sm leading-5 break-words text-muted-foreground">
             {detail}

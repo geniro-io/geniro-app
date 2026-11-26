@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { CustomInstructionsSchema, RunWireSchema } from '../agents/chat.types';
+import {
+  CustomInstructionsSchema,
+  RunProjectRefSchema,
+  RunWireSchema,
+} from '../agents/chat.types';
 import { TaskStatusSchema } from '../tasks/tasks.types';
 import { chatChipsSchema } from '../teams/teams.types';
 
@@ -206,6 +210,12 @@ export const CommandCenterTimelineEventSchema = z
       .string()
       .nullable()
       .describe("The thread's title, or null with no thread"),
+    task: CommandCenterTaskRefSchema.nullable().describe(
+      "The board card the row is about — the one its thread works, or the one a start request names — with the card's current title; null with no card",
+    ),
+    project: RunProjectRefSchema.nullable().describe(
+      "The project of the row's thread or card while it exists; null with neither or no project",
+    ),
     text: z.string().nullable().describe('One line, at most 200 characters'),
     detail: z
       .string()

@@ -142,6 +142,46 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
     );
   }
 
+  /**
+   * Record the finish the manager was told about, ending the watch that asked
+   * for it — only while the row still holds what the caller read, so a
+   * `tell_threads` landing in between keeps its clear and its watch.
+   */
+  async markAnnounced(
+    managerRunId: string,
+    threadRunId: string,
+    read: Pick<CommandCenterRosterEntry, 'announcedFinish' | 'watch'>,
+    announcedFinish: string,
+    unwatch: boolean,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      CommandCenterRosterEntry,
+      {
+        managerRunId,
+        threadRunId,
+        announcedFinish: read.announcedFinish,
+        watch: read.watch,
+      },
+      unwatch ? { announcedFinish, watch: false } : { announcedFinish },
+    );
+  }
+
+  async clearAnnounced(
+    managerRunId: string,
+    threadRunIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (threadRunIds.length === 0) {
+      return;
+    }
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      CommandCenterRosterEntry,
+      { managerRunId, threadRunId: { $in: [...threadRunIds] } },
+      { announcedFinish: null },
+    );
+  }
+
   /** Every row of a manager being deleted. */
   async deleteOf(managerRunId: string, txEm?: EntityManager): Promise<void> {
     await (txEm ?? this.em.fork()).nativeDelete(CommandCenterRosterEntry, {

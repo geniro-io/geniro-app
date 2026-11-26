@@ -12,6 +12,7 @@ type BoardRun = Pick<
   | 'holdingFor'
   | 'shellsOpen'
   | 'subagentsOut'
+  | 'monitorsOpen'
 >;
 
 const OPENED_PR = {
@@ -107,6 +108,17 @@ describe('boardColumnOf', () => {
     ).toBe('working');
   });
 
+  it('places a settled thread with a monitor running in working, even when its goals closed, it recorded an outcome or its card is Done', () => {
+    expect(boardColumnOf(run({ monitorsOpen: 1 }), null)).toBe('working');
+    expect(
+      boardColumnOf(run({ monitorsOpen: 2, outcome: OUTCOME }), null),
+    ).toBe('working');
+    expect(boardColumnOf(run({ monitorsOpen: 1 }), 'done')).toBe('working');
+    expect(
+      boardColumnOf(run({ monitorsOpen: 1, pullRequests: [OPENED_PR] }), null),
+    ).toBe('working');
+  });
+
   it('places a settled thread with a detached command out in working, unless it is already done', () => {
     expect(boardColumnOf(run({ shellsOpen: 1 }), null)).toBe('working');
     expect(
@@ -119,7 +131,12 @@ describe('boardColumnOf', () => {
   });
 
   it('moves a thread out of working into done or idle once its background work has ended', () => {
-    const ended = { holdingFor: 0, shellsOpen: 0, subagentsOut: 0 };
+    const ended = {
+      holdingFor: 0,
+      shellsOpen: 0,
+      subagentsOut: 0,
+      monitorsOpen: 0,
+    };
 
     expect(boardColumnOf(run(ended), 'done')).toBe('done');
     expect(boardColumnOf(run(ended), null)).toBe('idle');
@@ -135,5 +152,8 @@ describe('boardColumnOf', () => {
     expect(boardColumnOf(run({ status: 'failed', shellsOpen: 1 }), null)).toBe(
       'idle',
     );
+    expect(
+      boardColumnOf(run({ status: 'failed', monitorsOpen: 1 }), 'done'),
+    ).toBe('done');
   });
 });

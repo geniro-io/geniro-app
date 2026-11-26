@@ -94,8 +94,8 @@ export function ManagerStart({
       aria-label="Open the manager"
       className="m-auto flex max-w-md flex-col items-center gap-3 p-6 text-center text-sm">
       <p className="text-muted-foreground">
-        The manager watches and messages every thread for you, and starts new
-        ones when you ask. Run it on
+        The manager messages every thread for you, shows you when each one
+        finishes, and starts new ones when you ask. Run it on
       </p>
       <div className="flex min-w-0 flex-wrap items-center justify-center gap-1">
         <TargetSelect

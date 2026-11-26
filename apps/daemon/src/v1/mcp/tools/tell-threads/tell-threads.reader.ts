@@ -37,7 +37,7 @@ function nextStepOf(answer: TellThreadsAnswer): string {
   }
   if (answer.watch === true) {
     lines.push(
-      'Watching these threads: each one reaching done wakes you, once per finish.',
+      'Watching these threads: the next finish of each wakes you once, and that wake ends its watch.',
     );
   } else if (answer.watch === false) {
     lines.push(

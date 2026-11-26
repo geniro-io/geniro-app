@@ -137,12 +137,10 @@ export class CommandCenterOpsService implements OnModuleInit, OnModuleDestroy {
     const replyCreditUntil = input.expect_reply
       ? new Date(Date.now() + REPLY_CREDIT_MS)
       : null;
+    const reached = resolved.map(({ thread }) => thread.runId);
+    await this.roster.clearAnnounced(managerRunId, reached);
     if (input.watch !== undefined) {
-      await this.roster.setWatch(
-        managerRunId,
-        resolved.map(({ thread }) => thread.runId),
-        input.watch,
-      );
+      await this.roster.setWatch(managerRunId, reached, input.watch);
     }
     const sent: TellThreadsAnswer['sent'] = [];
     const seen = new Set<string>();

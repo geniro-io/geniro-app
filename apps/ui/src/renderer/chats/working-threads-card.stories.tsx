@@ -32,7 +32,7 @@ function thread(
     status: 'working',
     lastMessage: null,
     lastAt: new Date(Date.now() - 4 * 60_000).toISOString(),
-    background: { held: false, subagents: 0, commands: 0 },
+    background: { held: false, subagents: 0, commands: 0, monitors: 0 },
     ...over,
     identity: { ...AGENT, ...over.identity },
   };
@@ -67,7 +67,7 @@ const meta = {
           pullRequest: { number: 146, state: 'draft' },
           boardCard: { identifier: 'GEN-12', title: 'Export', status: 'todo' },
         },
-        background: { held: false, subagents: 2, commands: 0 },
+        background: { held: false, subagents: 2, commands: 0, monitors: 0 },
         lastMessage: 'Export button wired; **two** specs left to write',
       }),
       thread({
@@ -91,7 +91,7 @@ const meta = {
           project: 'Docs',
           projectColor: 'purple',
         },
-        background: { held: true, subagents: 0, commands: 1 },
+        background: { held: true, subagents: 0, commands: 1, monitors: 1 },
         lastMessage: 'Waiting on the QA plan before the notes go out',
       }),
     ],

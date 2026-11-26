@@ -42,7 +42,7 @@ function thread(
     status: 'working',
     lastMessage: null,
     lastAt: '2026-11-19T08:00:00Z',
-    background: { held: false, subagents: 0, commands: 0 },
+    background: { held: false, subagents: 0, commands: 0, monitors: 0 },
     ...over,
     identity: { ...AGENT, ...over.identity },
   };
@@ -248,7 +248,7 @@ describe('WorkingThreadsCard', () => {
     const el = render([
       thread({
         runId: 'a',
-        background: { held: true, subagents: 2, commands: 1 },
+        background: { held: true, subagents: 2, commands: 1, monitors: 2 },
       }),
       thread({ runId: 'b' }),
     ]);
@@ -262,6 +262,9 @@ describe('WorkingThreadsCard', () => {
     );
     expect(slot(busy!, 'working-thread-commands')!.textContent).toBe(
       '1 command',
+    );
+    expect(slot(busy!, 'working-thread-monitors')!.textContent).toBe(
+      '2 monitors',
     );
     expect(slot(plain!, 'working-thread-background')).toBeNull();
   });

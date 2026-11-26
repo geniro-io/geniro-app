@@ -1051,4 +1051,36 @@ describe('CommandCenter — the working tile on the canvas', () => {
     ]);
     expect(onOpenThread).not.toHaveBeenCalled();
   });
+
+  it("names each working thread's held turn, sub-agents, commands and monitors from its run", async () => {
+    const card = cardOf('run-w', 'p1', 'working') as {
+      run: Record<string, unknown>;
+    };
+    Object.assign(card.run, {
+      holdingFor: 1,
+      subagentsOut: 2,
+      shellsOpen: 1,
+      monitorsOpen: 2,
+    });
+    fakes.board = boardOf([card, cardOf('run-a', 'p1')]);
+    await renderPage();
+
+    clickOn(
+      container.querySelector('[data-slot="working-threads-toggle"] button'),
+    );
+    const row = container.querySelector(
+      '[data-slot="working-thread-row"][data-run="run-w"]',
+    )!;
+
+    expect(row.querySelector('[data-slot="working-thread-held"]')).not.toBeNull();
+    expect(
+      row.querySelector('[data-slot="working-thread-subagents"]')!.textContent,
+    ).toBe('2 sub-agents');
+    expect(
+      row.querySelector('[data-slot="working-thread-commands"]')!.textContent,
+    ).toBe('1 command');
+    expect(
+      row.querySelector('[data-slot="working-thread-monitors"]')!.textContent,
+    ).toBe('2 monitors');
+  });
 });

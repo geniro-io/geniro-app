@@ -133,7 +133,7 @@ describe('readTellThreadsArgs', () => {
 describe('tellThreadsResultText', () => {
   it('says the threads are watched, or no longer watched, when the call set it', () => {
     expect(tellThreadsResultText({ ...SENT, watch: true })).toContain(
-      '\nWatching these threads: each one reaching done wakes you, once per finish.\n',
+      '\nWatching these threads: the next finish of each wakes you once, and that wake ends its watch.\n',
     );
     expect(tellThreadsResultText({ ...SENT, watch: false })).toContain(
       '\nNo longer watching these threads: a finish only puts a Done card in your chat.\n',

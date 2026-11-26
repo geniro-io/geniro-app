@@ -767,7 +767,7 @@ function QuestionCard({
         aria-expanded={!collapsed}
         title={collapsed ? 'Show the question' : 'Collapse the question'}
         onClick={() => setFoldPress(!collapsed)}
-        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50">
+        className="-m-1 flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <MessageCircleQuestion
           aria-hidden="true"
           className="size-4 shrink-0 text-primary"

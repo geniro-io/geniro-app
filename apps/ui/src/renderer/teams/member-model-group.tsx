@@ -158,6 +158,7 @@ export function MemberModelGroup({
               modelParameters: undefined,
               configDir: undefined,
               mcpDisabled: undefined,
+              mcpAllowed: undefined,
             });
           }}
         />

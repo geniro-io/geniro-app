@@ -741,6 +741,18 @@ export const CLAUDE_DENIED_MCP_SERVERS_KEY = 'deniedMcpServers';
 /** The field of each {@link CLAUDE_DENIED_MCP_SERVERS_KEY} entry that names the server. */
 export const CLAUDE_DENIED_MCP_SERVER_NAME_FIELD = 'serverName';
 
+/** The `--settings` key listing the only MCP servers a turn may load. */
+export const CLAUDE_ALLOWED_MCP_SERVERS_KEY = 'allowedMcpServers';
+
+/** The field of an {@link CLAUDE_ALLOWED_MCP_SERVERS_KEY} entry that names a server by its config name. */
+export const CLAUDE_ALLOWED_MCP_SERVER_NAME_FIELD = 'serverName';
+
+/** The field of an {@link CLAUDE_ALLOWED_MCP_SERVERS_KEY} entry that names a server by its URL. */
+export const CLAUDE_ALLOWED_MCP_SERVER_URL_FIELD = 'serverUrl';
+
+/** The prefix `claude mcp list` puts before an account connector's name. */
+export const CLAUDE_AI_CONNECTOR_NAME_PREFIX = 'claude.ai ';
+
 /**
  * The `.mcp.json` REJECTION list, in settings and in the home config.
  *

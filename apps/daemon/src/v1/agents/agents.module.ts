@@ -41,6 +41,7 @@ import { NodeStateDao } from './dao/node-state.dao';
 import { ReviewCommentDao } from './dao/review-comment.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
+import { SessionContextReadingDao } from './dao/session-context-reading.dao';
 import { ThreadMessageDao } from './dao/thread-message.dao';
 import { UiSurfaceDao } from './dao/ui-surface.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
@@ -100,6 +101,7 @@ import { ContextWindowsService } from './services/context-windows.service';
 import { DelegateSpendStore } from './services/delegate-spend.store';
 import { EffortsService } from './services/efforts.service';
 import { FlagBroker } from './services/flag.broker';
+import { FreshSessionContextRecorder } from './services/fresh-session-context.recorder';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
@@ -640,6 +642,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     NodeStateDao,
     WallTurnDao,
     UiSurfaceDao,
+    SessionContextReadingDao,
+    FreshSessionContextRecorder,
     SurfaceBroker,
     SurfaceService,
     {
@@ -863,6 +867,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     NodeStateDao,
     WallTurnDao,
     CallContextDao,
+    SessionContextReadingDao,
+    FreshSessionContextRecorder,
     ThreadInboxService,
     RunDao,
     RunNoticeWriter,

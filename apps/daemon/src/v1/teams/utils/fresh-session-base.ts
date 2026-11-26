@@ -27,6 +27,7 @@ export interface FreshStartFold {
   group: FreshSessionGroup;
   starts: number;
   baseTokens: number;
+  baseSource: 'firstRequest' | 'lastRequest';
   minTokens: number;
   maxTokens: number;
   medianRequests: number | null;
@@ -39,6 +40,7 @@ export interface FreshStartFold {
 interface FreshStart {
   reading: MemberTurnReading;
   contextTokens: number;
+  usedFirstRequest: boolean;
   run: FreshSessionRun;
 }
 
@@ -46,8 +48,7 @@ interface FreshStart {
  * Each member's fresh-session base per group: the median context of the newest
  * {@link FRESH_STARTS_PER_MEMBER} turns that opened a CLI session. A session is
  * opened by its first turn in a run, however that turn ended; a completed one's
- * reading is its last request's context, the closest stored figure to the first
- * request. A session whose first turn did not complete, or reported no context,
+ * figure is its first request's context, else its last request's. A session whose first turn did not complete, or reported no context,
  * is left out whole, since its later turns carry the conversation on top of
  * the base.
  */
@@ -82,6 +83,9 @@ export function foldFreshStarts(
     ) {
       continue;
     }
+    const first = reading.firstRequestContextTokens;
+    const usedFirstRequest =
+      first !== null && Number.isFinite(first) && first > 0;
     const key = [
       run.group.projectId ?? `folder:${run.group.name}`,
       reading.memberId,
@@ -89,7 +93,12 @@ export function foldFreshStarts(
     ].join('\u0000');
     groups.set(key, [
       ...(groups.get(key) ?? []),
-      { reading, contextTokens, run },
+      {
+        reading,
+        contextTokens: usedFirstRequest ? first : contextTokens,
+        usedFirstRequest,
+        run,
+      },
     ]);
   }
   return [...groups.values()]
@@ -126,6 +135,9 @@ function foldGroup(starts: FreshStart[], perMember: number): FreshStartFold {
     group: head.run.group,
     starts: newest.length,
     baseTokens: median(tokens)!,
+    baseSource: newest.every((start) => start.usedFirstRequest)
+      ? 'firstRequest'
+      : 'lastRequest',
     minTokens: Math.min(...tokens),
     maxTokens: Math.max(...tokens),
     medianRequests: median(requests),

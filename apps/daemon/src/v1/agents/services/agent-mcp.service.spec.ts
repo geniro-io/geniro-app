@@ -1464,6 +1464,34 @@ describe('AgentMcpService.list', () => {
   });
 });
 
+describe('AgentMcpService.targetsOf', () => {
+  it('names the target the listing gives each server, and leaves out one it gives none', async () => {
+    const { service } = harness(() =>
+      Promise.resolve([
+        { ...server('codegraph'), target: 'codegraph serve' },
+        { ...server('claude.ai Slack'), target: 'https://mcp.slack.com/mcp' },
+        { ...server('blank'), target: '' },
+        { ...server('unnamed'), target: null },
+      ]),
+    );
+
+    const targets = await service.targetsOf(AgentKind.Claude, realDir(), null);
+
+    expect([...targets]).toEqual([
+      ['codegraph', 'codegraph serve'],
+      ['claude.ai Slack', 'https://mcp.slack.com/mcp'],
+    ]);
+  });
+
+  it('answers no targets when the listing fails', async () => {
+    const { service } = harness(() => Promise.reject(new Error('timed out')));
+
+    const targets = await service.targetsOf(AgentKind.Claude, realDir(), null);
+
+    expect(targets.size).toBe(0);
+  });
+});
+
 describe('AgentMcpService scope + disabled overlay', () => {
   const nothingOff: Partial<AgentMcpFolderFacts> = {
     disabled: [],

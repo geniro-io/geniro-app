@@ -102,6 +102,7 @@ const MEMBER_FIELDS = [
   'approval',
   'configDir',
   'mcpDisabled',
+  'mcpAllowed',
   'pool',
 ] as const satisfies readonly Exclude<keyof TeamMember, 'id'>[];
 

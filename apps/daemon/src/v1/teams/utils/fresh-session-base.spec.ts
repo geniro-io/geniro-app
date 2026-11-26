@@ -31,6 +31,7 @@ function reading(
     createdAt: new Date(Date.UTC(2026, 10, 22, 0, 0, seq)),
     sessionId: `${runId}-s1`,
     contextTokens: 100_000,
+    firstRequestContextTokens: null,
     numTurns: 1,
     agent: 'claude',
     model: 'sonnet',
@@ -122,6 +123,52 @@ describe('foldFreshStarts', () => {
       baseTokens: 130_000,
       maxTokens: 140_000,
       newestRunId: 'r4',
+    });
+  });
+
+  it('prefers the first-request figure and reports the source', () => {
+    const readings = [
+      reading('r1', 1, {
+        sessionId: 'a',
+        contextTokens: 144_982,
+        firstRequestContextTokens: 30_000,
+      }),
+      reading('r1', 2, {
+        sessionId: 'b',
+        contextTokens: 190_000,
+        firstRequestContextTokens: 34_000,
+      }),
+    ];
+    const [all] = foldFreshStarts([run('r1')], readings);
+    expect(all).toMatchObject({
+      baseTokens: 32_000,
+      baseSource: 'firstRequest',
+    });
+
+    const [mixed] = foldFreshStarts(
+      [run('r1')],
+      [
+        readings[0]!,
+        reading('r1', 2, { sessionId: 'b', contextTokens: 190_000 }),
+      ],
+    );
+    expect(mixed).toMatchObject({
+      baseTokens: 110_000,
+      baseSource: 'lastRequest',
+    });
+
+    const [zero] = foldFreshStarts(
+      [run('r1')],
+      [
+        reading('r1', 1, {
+          firstRequestContextTokens: 0,
+          contextTokens: 50_000,
+        }),
+      ],
+    );
+    expect(zero).toMatchObject({
+      baseTokens: 50_000,
+      baseSource: 'lastRequest',
     });
   });
 

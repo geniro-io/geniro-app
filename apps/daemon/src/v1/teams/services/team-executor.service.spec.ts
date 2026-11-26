@@ -104,6 +104,7 @@ import {
   CommandEndWakeService,
 } from '../../agents/services/command-end-wake.service';
 import type { FlagBroker } from '../../agents/services/flag.broker';
+import type { FreshSessionContextRecorder } from '../../agents/services/fresh-session-context.recorder';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -1294,7 +1295,10 @@ function setup(
     /** The group a claiming rule would file this run's team under. */
     autoGroupId?: string | null;
     /** The MCP service a member turn's server report is checked against. */
-    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'> &
+      Partial<Pick<AgentMcpService, 'targetsOf'>>;
+    /** Where a fresh member session's context breakdown is recorded, when a test reads it. */
+    contextRecorder?: Pick<FreshSessionContextRecorder, 'record'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `FakeAdapter.resolutions`. */
@@ -1889,6 +1893,7 @@ function setup(
     surfaceSinks,
     surfaces,
     opts.pluginCards,
+    opts.contextRecorder as FreshSessionContextRecorder | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -5773,6 +5778,43 @@ describe('TeamExecutorService — a usage-limit continue a restart carried over'
 });
 
 describe('TeamExecutorService — follow-up messages', () => {
+  it('asks a member’s CLI for its context once when its session opens, and never on the turn that resumes it', async () => {
+    const record = vi.fn(async () => undefined);
+    const { service, claude, storeGet } = setup(undefined, {
+      contextRecorder: { record },
+    });
+    storeGet.mockResolvedValue({ slug: 'linear', team: LINEAR });
+    const run = await service.startRun({
+      slug: 'linear',
+      team: LINEAR,
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    expect(claude.starts[1]!.input.resumeSessionId).toBe('sess-a');
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[1]!, 'A2');
+    await drain();
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.id,
+        memberId: LINEAR.members[0]!.id,
+        poolMember: null,
+        sessionId: 'sess-a',
+        agent: 'claude',
+      }),
+    );
+  });
+
   it('walks a SETTLED run again from its trigger member, resuming its own session', async () => {
     const { service, claude, itemDao, runDao, storeGet } = setup();
     const team = LINEAR;
@@ -13655,6 +13697,76 @@ describe('TeamExecutorService — agent calls', () => {
       completeTurn(harness.claude.starts[1]!, 'ok');
       await first;
 
+      completeTurn(harness.claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands a member’s allow list to its turn with the target the CLI lists for each server, only on a CLI that applies one', async () => {
+      const targetsOf = vi.fn(
+        async () =>
+          new Map([
+            ['codegraph', 'codegraph serve'],
+            ['claude.ai Slack', 'https://mcp.slack.com/mcp'],
+          ]),
+      );
+      const harness = setup(4870, {
+        agentMcp: { turnMismatchNotice: async () => null, targetsOf },
+      });
+      const run = await harness.service.startRun({
+        slug: 'pool-allow',
+        team: {
+          ...CALL_WF,
+          members: CALL_WF.members.map((node) =>
+            node.id === 'orch'
+              ? {
+                  ...node,
+                  mcpAllowed: [
+                    'codegraph',
+                    'claude.ai Slack',
+                    'claude.ai Gmail',
+                  ],
+                }
+              : {
+                  ...node,
+                  pool: [
+                    { agent: 'cursor-agent' as const, mcpAllowed: ['linear'] },
+                  ],
+                },
+          ),
+        },
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(harness.claude.starts[0]!.input.mcpAllowed).toEqual([
+        { name: 'codegraph', target: 'codegraph serve' },
+        { name: 'claude.ai Slack', target: 'https://mcp.slack.com/mcp' },
+        { name: 'claude.ai Gmail', target: null },
+      ]);
+
+      const first = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 1',
+        agent: 'helper',
+        message: 'x',
+        member: 1,
+      });
+      await drain();
+      expect(harness.claude.starts[1]!.input.mcpAllowed).toBeUndefined();
+      completeTurn(harness.claude.starts[1]!, 'ok');
+      await first;
+
+      const second = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 2',
+        agent: 'helper',
+        message: 'y',
+        member: 2,
+      });
+      await drain();
+      expect(harness.cursor.starts[0]!.input.mcpAllowed).toBeUndefined();
+      completeTurn(harness.cursor.starts[0]!, 'ok');
+      await second;
+
+      expect(targetsOf).toHaveBeenCalledTimes(1);
       completeTurn(harness.claude.starts[0]!, 'done');
       await drain();
     });

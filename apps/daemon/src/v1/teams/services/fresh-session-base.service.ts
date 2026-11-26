@@ -3,8 +3,13 @@ import { basename } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { AgentRepoInstructions } from '../../agents/adapters/adapter.types';
+import {
+  ContextBreakdownWireSchema,
+  type MemberTurnReading,
+} from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { SessionContextReadingDao } from '../../agents/dao/session-context-reading.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import {
@@ -12,11 +17,13 @@ import {
   type RepoInstructionFiles,
 } from '../../agents/utils/repo-instruction-files';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import type { SessionContextReading } from '../../runs/entity/session-context-reading.entity';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import {
   FRESH_SESSION_UNMEASURED_PARTS,
   type FreshSessionBase,
   type FreshSessionBasesWire,
+  type FreshSessionContextReading,
   type Team,
 } from '../teams.types';
 import {
@@ -31,17 +38,11 @@ import {
   InstructionSizesService,
 } from './instruction-sizes.service';
 
-const NOT_MEASURED_REASON: Record<
-  (typeof FRESH_SESSION_UNMEASURED_PARTS)[number],
-  string
-> = {
-  plugins:
-    'not measured: a CLI names its plugins only in the event that starts a session, which geniro does not keep',
-  skills:
-    'not measured: a CLI names its skills only in the event that starts a session, which geniro does not keep',
-  builtInTools:
-    'not measured: a CLI lists its built-in tools only in the event that starts a session, which geniro does not keep',
-};
+const NO_READING_REASON =
+  'not measured: no fresh session in the group stored its CLI’s own breakdown — it is asked when a session opens, on a CLI that can answer';
+
+const PLUGINS_SPREAD_REASON =
+  'not totalled: the CLI counts a plugin’s parts under skills, agents and MCP servers, never per plugin';
 
 const NO_START_REASON = 'no fresh session of this member in the runs read';
 
@@ -55,8 +56,8 @@ const NO_BLOCK_REASON =
  * What a member's fresh CLI session starts with: the context its sessions
  * opened at in the team's newest runs, beside the parts of it that can be
  * measured — Geniro's instruction block, the repository's instruction files on
- * disk and the MCP servers the CLI last reported in that folder. Reads only
- * what is already recorded; nothing is stored.
+ * disk, the MCP servers the CLI last reported in that folder, and the CLI's
+ * own breakdown stored when the newest session opened.
  */
 @Injectable()
 export class FreshSessionBaseService {
@@ -69,6 +70,7 @@ export class FreshSessionBaseService {
     private readonly harvest: McpHarvestStore,
     private readonly projects: ProjectScopeService,
     private readonly sizes: InstructionSizesService,
+    private readonly contextReadings: SessionContextReadingDao,
   ) {}
 
   async measure(input: {
@@ -93,10 +95,13 @@ export class FreshSessionBaseService {
       input.projectId === undefined || input.projectId === null
         ? placed
         : placed.filter((run) => run.group.projectId === input.projectId);
-    const folds = foldFreshStarts(
-      runs,
-      await this.items.memberTurnReadings(runs.map((run) => run.id)),
-    );
+    const runIds = runs.map((run) => run.id);
+    const [turnReadings, stored] = await Promise.all([
+      this.items.memberTurnReadings(runIds),
+      this.contextReadings.listOfRuns(runIds),
+    ]);
+    const folds = foldFreshStarts(runs, turnReadings);
+    const groupOfRun = new Map(runs.map((run) => [run.id, run.group]));
     const blockTokens = new Map(
       this.sizes
         .measure({ ...input.settings, team: input.team })
@@ -113,6 +118,7 @@ export class FreshSessionBaseService {
           blockTokens,
           measuredAt,
           repoReadings,
+          contextReadingOf(fold, stored, groupOfRun, turnReadings),
         ),
       );
     }
@@ -156,6 +162,7 @@ export class FreshSessionBaseService {
     blockTokens: ReadonlyMap<string, number>,
     measuredAt: string,
     repoReadings: Map<string, Promise<RepoInstructionFiles>>,
+    contextReading: FreshSessionContextReading | null,
   ): Promise<FreshSessionBase> {
     const agent = agentKindOf(fold.agent);
     const adapter = agent === null ? undefined : this.adapters.all().get(agent);
@@ -195,6 +202,7 @@ export class FreshSessionBaseService {
       project: fold.group,
       starts: fold.starts,
       baseTokens: base,
+      baseSource: fold.baseSource,
       minTokens: fold.minTokens,
       maxTokens: fold.maxTokens,
       medianRequests: fold.medianRequests,
@@ -231,9 +239,86 @@ export class FreshSessionBaseService {
         mcp === null
           ? 'no turn of this CLI in that folder has reported its MCP servers'
           : null,
-      notMeasured: notMeasured(),
+      contextReading,
+      notMeasured: notMeasured(contextReading !== null),
     };
   }
+}
+
+function contextReadingOf(
+  fold: FreshStartFold,
+  stored: readonly SessionContextReading[],
+  groupOfRun: ReadonlyMap<string, FreshSessionGroup>,
+  turnReadings: readonly MemberTurnReading[],
+): FreshSessionContextReading | null {
+  const groupKey = groupKeyOf(fold.group);
+  for (const row of stored) {
+    const group = groupOfRun.get(row.runId);
+    if (
+      row.memberId !== fold.memberId ||
+      (row.poolMember ?? 1) !== (fold.poolMember ?? 1) ||
+      group === undefined ||
+      groupKeyOf(group) !== groupKey
+    ) {
+      continue;
+    }
+    const breakdown = parseBreakdown(row.breakdown);
+    if (breakdown === null) {
+      continue;
+    }
+    const firstRequestTokens = openingFirstRequest(
+      turnReadings,
+      row.runId,
+      row.sessionId,
+    );
+    return {
+      runId: row.runId,
+      measuredAt: row.createdAt.toISOString(),
+      breakdown,
+      firstRequestTokens,
+      unattributedTokens:
+        firstRequestTokens === null || breakdown.totalTokens === null
+          ? null
+          : firstRequestTokens - breakdown.totalTokens,
+    };
+  }
+  return null;
+}
+
+function groupKeyOf(group: FreshSessionGroup): string {
+  return group.projectId ?? `folder:${group.name}`;
+}
+
+function parseBreakdown(
+  text: string,
+): FreshSessionContextReading['breakdown'] | null {
+  try {
+    const parsed = ContextBreakdownWireSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function openingFirstRequest(
+  turnReadings: readonly MemberTurnReading[],
+  runId: string,
+  sessionId: string,
+): number | null {
+  let opening: MemberTurnReading | null = null;
+  for (const reading of turnReadings) {
+    if (
+      reading.runId === runId &&
+      reading.sessionId === sessionId &&
+      (opening === null || reading.seq < opening.seq)
+    ) {
+      opening = reading;
+    }
+  }
+  const tokens = opening?.firstRequestContextTokens ?? null;
+  return tokens !== null && Number.isFinite(tokens) && tokens > 0
+    ? tokens
+    : null;
 }
 
 function repoFilesOf(
@@ -264,6 +349,7 @@ function unstartedEntry(
     project: null,
     starts: 0,
     baseTokens: null,
+    baseSource: null,
     minTokens: null,
     maxTokens: null,
     medianRequests: null,
@@ -280,14 +366,18 @@ function unstartedEntry(
     cliRemainderUnavailableReason: NO_START_REASON,
     mcpServers: null,
     mcpServersUnavailableReason: NO_START_REASON,
-    notMeasured: notMeasured(),
+    contextReading: null,
+    notMeasured: notMeasured(false),
   };
 }
 
-function notMeasured(): FreshSessionBase['notMeasured'] {
+function notMeasured(hasReading: boolean): FreshSessionBase['notMeasured'] {
+  if (hasReading) {
+    return [{ part: 'plugins', reason: PLUGINS_SPREAD_REASON }];
+  }
   return FRESH_SESSION_UNMEASURED_PARTS.map((part) => ({
     part,
-    reason: NOT_MEASURED_REASON[part],
+    reason: NO_READING_REASON,
   }));
 }
 

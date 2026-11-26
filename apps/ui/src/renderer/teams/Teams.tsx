@@ -75,7 +75,11 @@ import {
   validateInstructionBlock,
   validateMember,
 } from './member-validate';
-import { nextMcpDisabled, nodeMcpHint } from './node-mcp-switches';
+import {
+  allowListCapabilityOf,
+  nextMcpDisabled,
+  nodeMcpHint,
+} from './node-mcp-switches';
 import { EntryCard, StageJourney } from './stage-journey';
 import { stageTitle, validateStageFields } from './stage-validate';
 import { StagesDialog } from './stages-dialog';
@@ -1719,6 +1723,20 @@ export function Teams({
       />
     );
 
+  const memberAllowCapability =
+    selected === null
+      ? undefined
+      : allowListCapabilityOf(capabilities?.mcpAllowLists, selected.agent);
+  const memberAllowList =
+    selected === null || memberAllowCapability === undefined
+      ? undefined
+      : {
+          capability: memberAllowCapability,
+          allowed: selected.mcpAllowed,
+          onChange: (mcpAllowed: string[] | undefined) =>
+            patchSelected({ mcpAllowed }),
+        };
+
   const toolsGroup =
     selected === null ? null : (
       <MemberMcpRow
@@ -1726,6 +1744,7 @@ export function Teams({
         title={`MCP servers — ${labels.get(selected.id)}`}
         mcp={memberMcp}
         mcpDisabled={selected.mcpDisabled}
+        allowList={memberAllowList}
         hint={nodeMcpHint('member', Boolean(selected.configDir))}
         configDir={selected.configDir ?? null}
         configDirUnavailableReason={configDirCapability.unavailableReasonFor(
@@ -1776,6 +1795,7 @@ export function Teams({
           configDirCapability.unavailableReasonFor(agent) === null
         }
         approvals={capabilities?.approvals ?? []}
+        mcpAllowLists={capabilities?.mcpAllowLists}
         nodeApproval={selected.approval}
         nodeAutoCompactPercent={selected.autoCompactPercent}
         recentConfigDirs={recentConfigDirs}

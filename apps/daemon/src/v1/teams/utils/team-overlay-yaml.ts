@@ -60,6 +60,9 @@ export function compactTeamOverlay(overlay: TeamOverlay): TeamOverlay {
       if (member.mcpDisabled !== undefined) {
         kept.mcpDisabled = member.mcpDisabled;
       }
+      if (member.mcpAllowed !== undefined) {
+        kept.mcpAllowed = member.mcpAllowed;
+      }
       return Object.keys(kept).length > 0 ? [[id, kept]] : [];
     }),
   );

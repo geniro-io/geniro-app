@@ -2167,7 +2167,11 @@ describe('ItemDao (in-memory sqlite)', () => {
       agentKind: 'claude',
       agentModel: 'sonnet',
       nodePoolMember: 2,
-      usage: { contextTokens: 144982, numTurns: 3 },
+      usage: {
+        contextTokens: 144982,
+        firstRequestContextTokens: 31000,
+        numTurns: 3,
+      },
     });
     await turn('run-a', 2, 'manager', { sessionId: 's0', usage: {} });
     await turn('run-a', 12, null, {
@@ -2198,6 +2202,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         memberId: 'manager',
         sessionId: 's0',
         contextTokens: null,
+        firstRequestContextTokens: null,
         numTurns: null,
         agent: null,
         model: null,
@@ -2211,6 +2216,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         memberId: 'manager',
         sessionId: 's1',
         contextTokens: 144982,
+        firstRequestContextTokens: 31000,
         numTurns: 3,
         agent: 'claude',
         model: 'sonnet',

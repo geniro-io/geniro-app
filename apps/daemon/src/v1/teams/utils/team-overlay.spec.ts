@@ -170,6 +170,26 @@ describe('applyTeamOverlay', () => {
     expect(apply({}).team.members[0]!.mcpDisabled).toEqual(['linear']);
   });
 
+  it('a member allow-list override replaces the team’s, null clears it, omitted keeps it', () => {
+    const withAllowed = (overlay: TeamOverlay) =>
+      applyTeamOverlay(
+        {
+          ...TEAM,
+          members: [{ ...TEAM.members[0]!, mcpAllowed: ['notes'] }],
+        },
+        overlay,
+        'p1',
+      ).team.members[0]!.mcpAllowed;
+    expect(
+      withAllowed({ members: { lead: { mcpAllowed: ['figma'] } } }),
+    ).toEqual(['figma']);
+    expect(withAllowed({ members: { lead: { mcpAllowed: [] } } })).toEqual([]);
+    expect(
+      withAllowed({ members: { lead: { mcpAllowed: null } } }),
+    ).toBeUndefined();
+    expect(withAllowed({})).toEqual(['notes']);
+  });
+
   it('an agent override keeps the member’s MCP switches', () => {
     const { team } = apply({
       members: { lead: { settings: { agent: 'codex' } } },

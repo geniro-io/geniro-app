@@ -7,6 +7,7 @@ import {
   memberOverlayBadges,
   overrideFields,
   resetFields,
+  withMemberMcpAllowed,
   withMemberMcpDisabled,
   withMemberPool,
   withMemberSettings,
@@ -123,6 +124,23 @@ describe('editing an overlay', () => {
     });
   });
 
+  it('reads the allow list override as omitted = the team’s, null = every server, array = only those', () => {
+    const team: TeamMember = { ...LEAD, mcpAllowed: ['codegraph'] };
+    expect(effectiveMemberOf(team, {}).mcpAllowed).toEqual(['codegraph']);
+    const all = withMemberMcpAllowed({}, 'lead', null);
+    expect(all).toEqual({ members: { lead: { mcpAllowed: null } } });
+    expect(effectiveMemberOf(team, all).mcpAllowed).toBeUndefined();
+    const only = withMemberMcpAllowed({}, 'lead', ['figma']);
+    expect(effectiveMemberOf(team, only).mcpAllowed).toEqual(['figma']);
+    expect(
+      effectiveMemberOf(LEAD, withMemberMcpAllowed({}, 'lead', [])).mcpAllowed,
+    ).toEqual([]);
+    expect(memberOverlayBadges(all, 'lead').overrides).toBe(1);
+    expect(withMemberMcpAllowed(only, 'lead', undefined)).toEqual({
+      members: {},
+    });
+  });
+
   it('restores every setting, the pool and the MCP switches, keeping the extra instructions and other members', () => {
     const before: TeamOverlay = {
       members: {
@@ -130,6 +148,7 @@ describe('editing an overlay', () => {
           settings: { agent: 'codex', effort: 'low' },
           pool: [],
           mcpDisabled: [],
+          mcpAllowed: null,
           extraInstructions: 'Use the staging DB.',
         },
         reviewer: { settings: { effort: 'max' } },

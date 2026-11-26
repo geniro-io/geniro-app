@@ -26,6 +26,7 @@ import {
 } from '../../../utils/stop-cause';
 import {
   type AgentEvent,
+  type AgentMcpAllowedServer,
   type AgentMcpServer,
   type AgentSession,
   type AgentTurnHandle,
@@ -102,6 +103,7 @@ import {
   memberWakeOwner,
 } from '../../agents/services/command-end-wake.service';
 import { FlagBroker } from '../../agents/services/flag.broker';
+import { FreshSessionContextRecorder } from '../../agents/services/fresh-session-context.recorder';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { failedInside } from '../../agents/services/host-sink.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
@@ -1084,8 +1086,58 @@ export class TeamExecutorService
     @Optional() private readonly surfaces?: SurfaceService,
     /** The lead's `save_plugin`, optional on `artifacts`' terms. */
     @Optional() private readonly pluginCards?: PluginProposalBroker,
+    @Optional() private readonly contextRecorder?: FreshSessionContextRecorder,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
+  }
+
+  /**
+   * The member's allow list as its turn carries it — each name with the
+   * target the CLI's listing gives it — or undefined when the member has none
+   * or its CLI cannot apply one.
+   */
+  private async mcpAllowedFor(
+    member: Pick<TeamMember, 'agent' | 'configDir' | 'mcpAllowed'>,
+    adapter: AgentAdapter,
+    cwd: string,
+  ): Promise<AgentMcpAllowedServer[] | undefined> {
+    const names = member.mcpAllowed;
+    if (
+      names === undefined ||
+      adapter.getConfig().mcp.allowListUnavailableReason !== null
+    ) {
+      return undefined;
+    }
+    const targets =
+      names.length === 0 || this.agentMcp === undefined
+        ? new Map<string, string>()
+        : await this.agentMcp
+            .targetsOf(member.agent, cwd, member.configDir ?? null)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `MCP targets for ${member.agent} in ${cwd} not read: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              return new Map<string, string>();
+            });
+    const allowed = names.map((name) => ({
+      name,
+      target: targets.get(name) ?? null,
+    }));
+    const prefix = adapter.getConfig().mcp.accountConnectorPrefix;
+    const unreachable = allowed
+      .filter(
+        (server) =>
+          server.target === null &&
+          prefix !== null &&
+          server.name.startsWith(prefix),
+      )
+      .map((server) => server.name);
+    if (unreachable.length > 0) {
+      this.logger.warn(
+        `allowed account connectors stay off for ${member.agent} in ${cwd}, the CLI's listing gave no URL for them: ${unreachable.join(', ')}`,
+      );
+    }
+    return allowed;
   }
 
   private recordPromptCacheWarmup(
@@ -6647,6 +6699,8 @@ export class TeamExecutorService
         (await this.runDao.getById(runId, this.em.fork()))
           ?.conversationInstructions ?? null,
       )[sessionKey];
+      const mcpAllowed = await this.mcpAllowedFor(node, adapter, turnCwd);
+      let contextReadingAsked = false;
       const instructionsChanged =
         plainTurn &&
         resumeSessionId !== null &&
@@ -6741,6 +6795,7 @@ export class TeamExecutorService
         // continuation and the member's own compaction turn all come through
         // here. Each CLI applies them in its own adapter.
         ...(node.mcpDisabled?.length ? { mcpDisabled: node.mcpDisabled } : {}),
+        ...(mcpAllowed !== undefined ? { mcpAllowed } : {}),
       };
       // This turn's compaction, until the row recording it is written — the
       // chat path's `compactions`, for a member's or a callee's own window.
@@ -6931,6 +6986,20 @@ export class TeamExecutorService
               noteConversation,
               event.sessionId,
             );
+            if (resumeSessionId === null && !contextReadingAsked) {
+              contextReadingAsked = true;
+              void this.contextRecorder?.record({
+                adapter,
+                live: turnSession ?? this.sessions.peek(sessionKey),
+                runId,
+                memberId: node.id,
+                poolMember: extras.poolMember ?? null,
+                sessionId: event.sessionId,
+                agent: node.agent,
+                model: node.model ?? null,
+                configDir: node.configDir ?? null,
+              });
+            }
             await saveSessionId(event.sessionId);
             if (callContext) {
               enqueue(() =>

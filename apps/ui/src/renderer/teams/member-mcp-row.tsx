@@ -3,6 +3,10 @@ import { type ComponentProps, useState } from 'react';
 import { ErrorText } from '../components/error-text';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { NoteBox } from '../components/note-box';
+import {
+  McpAllowListControl,
+  type McpAllowListControlProps,
+} from './mcp-allow-list-control';
 import { withNodeSwitches } from './node-mcp-switches';
 import { type RowScope, ScopedSettingRow } from './overridable-row';
 import type { NodeMcpState } from './use-node-mcp';
@@ -30,6 +34,7 @@ export function MemberMcpRow({
   configDir,
   configDirUnavailableReason,
   scope = null,
+  allowList,
   ...actions
 }: {
   title: string;
@@ -39,6 +44,11 @@ export function MemberMcpRow({
   configDir: string | null;
   configDirUnavailableReason: string | null | undefined;
   scope?: RowScope | null;
+  /** Drawn only with the CLI's capability; omitted, the member has no allow list to edit. */
+  allowList?: Pick<
+    McpAllowListControlProps,
+    'allowed' | 'capability' | 'scope' | 'onChange'
+  >;
 } & DialogActions): React.JSX.Element {
   const [open, setOpen] = useState(false);
   return (
@@ -59,6 +69,14 @@ export function MemberMcpRow({
               {...actions}
             />
           </ScopedSettingRow>
+          {allowList ? (
+            <McpAllowListControl
+              ariaLabel="Servers this member loads"
+              listing={mcp.listing}
+              disabled={mcpDisabled}
+              {...allowList}
+            />
+          ) : null}
         </div>
       ) : (
         <ErrorText id="member-config-dir-error" className="text-xs break-words">

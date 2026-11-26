@@ -197,6 +197,10 @@ export class TeamHealthService {
       effort,
       effortOffered: effort === null ? null : effortListed(adapter, effort),
       mcpDisabled: settings.mcpDisabled ?? [],
+      mcpAllowed:
+        config.mcp.allowListUnavailableReason === null
+          ? (settings.mcpAllowed ?? null)
+          : null,
       mcp: runnable ? await this.mcpOf(agent, profile, gathering) : NO_MCP,
     };
   }

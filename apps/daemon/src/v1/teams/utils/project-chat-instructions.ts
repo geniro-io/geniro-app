@@ -72,6 +72,9 @@ function membersYaml(team: Team): string {
       ...(member.mcpDisabled === undefined
         ? {}
         : { mcpDisabled: member.mcpDisabled }),
+      ...(member.mcpAllowed === undefined
+        ? {}
+        : { mcpAllowed: member.mcpAllowed }),
       ...(member.pool === undefined
         ? {}
         : { pool: member.pool.map(modelGroupOf) }),
@@ -133,7 +136,7 @@ it fits one answer, else its outline; then read the members, blocks or stages
 a change touches, or \`search\` for the words it names.
 
 What it holds for each member's Model group, MCP switches
-(\`mcpDisabled\`: the servers it runs without) and pool:
+(\`mcpDisabled\`: the servers it runs without; \`mcpAllowed\`: the only servers it runs with) and pool:
 
 \`\`\`yaml
 ${membersYaml(target.team)}

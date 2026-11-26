@@ -155,6 +155,7 @@ describe('ClaudeAdapter', () => {
           cacheCreationTokens: null,
           thinkingTokens: null,
           contextTokens: 1,
+          firstRequestContextTokens: 1,
           contextWindowTokens: null,
           contextModel: null,
           costUsd: 0.01,
@@ -3438,6 +3439,83 @@ describe('ClaudeAdapter — fast mode', () => {
       { serverName: 'claude.ai Gmail' },
       { serverName: 'codegraph' },
     ]);
+  });
+
+  it('limits a turn to its allow list in the settings: geniro’s own, names, and a connector by URL only when it has one', () => {
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'go',
+        cwd: '/proj',
+        mcpAllowed: [
+          { name: 'codegraph', target: 'x' },
+          { name: 'claude.ai Slack', target: 'https://slack/mcp' },
+          { name: 'claude.ai Gmail', target: null },
+        ],
+        mcpEndpoint: {
+          url: 'http://127.0.0.1:1/v1/mcp/r/n',
+          token: 't',
+          serverName: 'geniro-run-1',
+        },
+      },
+      () => {},
+    );
+    const args = captured.args!;
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1]!) as {
+      allowedMcpServers: unknown;
+    };
+    expect(settings.allowedMcpServers).toEqual([
+      { serverName: 'codegraph' },
+      { serverName: 'geniro-run-1' },
+      { serverUrl: 'https://slack/mcp' },
+    ]);
+
+    const none = fakeSpawn();
+    new ClaudeAdapter({ spawn: none.spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      () => {},
+    );
+    const bare = none.captured.args!;
+    expect(
+      JSON.parse(bare[bare.indexOf('--settings') + 1]!),
+    ).not.toHaveProperty('allowedMcpServers');
+  });
+
+  it('lets an empty allow list load geniro’s own server alone, and writes one list for the same set in any order', () => {
+    const endpoint = {
+      url: 'http://127.0.0.1:1/v1/mcp/r/n',
+      token: 't',
+      serverName: 'geniro-run-1',
+    };
+    const settingsOf = (
+      mcpAllowed: { name: string; target: string | null }[],
+    ): string => {
+      const { spawn, captured } = fakeSpawn();
+      new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+        { prompt: 'go', cwd: '/proj', mcpAllowed, mcpEndpoint: endpoint },
+        () => {},
+      );
+      const args = captured.args!;
+      return args[args.indexOf('--settings') + 1]!;
+    };
+
+    expect(
+      (JSON.parse(settingsOf([])) as { allowedMcpServers: unknown })
+        .allowedMcpServers,
+    ).toEqual([{ serverName: 'geniro-run-1' }]);
+    expect(
+      settingsOf([
+        { name: 'linear', target: 'https://mcp.linear.app/sse' },
+        { name: 'claude.ai Slack', target: 'https://slack/mcp' },
+        { name: 'codegraph', target: 'x' },
+      ]),
+    ).toBe(
+      settingsOf([
+        { name: 'codegraph', target: 'x' },
+        { name: 'claude.ai Slack', target: 'https://slack/mcp' },
+        { name: 'linear', target: 'https://mcp.linear.app/sse' },
+      ]),
+    );
   });
 
   it('gives a read-only turn only Read, Grep and Glob, and no MCP server but geniro’s own', () => {

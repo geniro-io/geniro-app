@@ -170,6 +170,13 @@ export interface AgentUsage {
    */
   contextTokens: number | null;
   /**
+   * The prompt of the turn's FIRST request, counted like {@link contextTokens}:
+   * what a session that opened on this turn started with, before its own tool
+   * calls grew it. Absent or null when the CLI does not break a turn into
+   * requests.
+   */
+  firstRequestContextTokens?: number | null;
+  /**
    * The window that context is measured against, as the CLI reports it for the
    * model it actually ran (claude: 1M for `claude-opus-5[1m]`, 200k for the
    * rest). Null when the CLI says nothing — the consumer then shows the count
@@ -2441,6 +2448,12 @@ export type AgentMcpServerStatus =
   | 'needs_auth'
   | 'unknown';
 
+/** One server of a turn's allow list, with the target the CLI's listing reports for it. */
+export interface AgentMcpAllowedServer {
+  name: string;
+  target: string | null;
+}
+
 /**
  * One MCP server a CLI agent loads in a given working directory.
  *
@@ -3622,6 +3635,17 @@ export interface AgentTurnInput {
    * so a kept process is never reused with a different set.
    */
   mcpDisabled?: readonly string[];
+  /**
+   * The ONLY MCP servers of the user's this turn loads — a team member's allow
+   * list (`TeamMember.mcpAllowed`) — each with the target the CLI's own listing
+   * reports for it, or null when no listing named it. geniro's own server
+   * always loads beside them. Absent loads every server, as before; empty
+   * loads geniro's own alone. Applied at spawn by a CLI whose
+   * `AdapterConfig.mcp.allowListUnavailableReason` is null and ignored by the
+   * rest; it writes into no config of the CLI's. Part of
+   * `AgentAdapter.sessionKey`.
+   */
+  mcpAllowed?: readonly AgentMcpAllowedServer[];
   /**
    * The directory this turn's CLI keeps its OWN state in — credentials,
    * settings, installed plugins, session history. Absent: the CLI's default
@@ -4984,6 +5008,17 @@ export interface AdapterConfig {
      * user's own CLI reads. A CLI can have either without the other.
      */
     readonly turnToggleUnavailableReason: string | null;
+    /**
+     * Why this CLI cannot limit a turn to an allow list of servers
+     * (`AgentTurnInput.mcpAllowed`), or null when the adapter applies it.
+     */
+    readonly allowListUnavailableReason: string | null;
+    /**
+     * The prefix this CLI's listing puts before an account connector's name —
+     * a server the account brings rather than a config file — or null when
+     * it has none.
+     */
+    readonly accountConnectorPrefix: string | null;
     /**
      * What this CLI loads in its OWN interactive session that a headless turn
      * never gets — the sentence the panel shows under the rows — or null when

@@ -1558,6 +1558,8 @@ describe('Teams — a member’s CLI', () => {
             model: 'opus',
             effort: 'high',
             configDir: '/profiles/work',
+            mcpDisabled: ['linear'],
+            mcpAllowed: ['codegraph'],
           },
         ],
       }),
@@ -1573,7 +1575,7 @@ describe('Teams — a member’s CLI', () => {
     await wait(900);
 
     const saved = lastSaved().members;
-    // Model, effort and profile were claude's; codex starts from its own.
+    // Model, effort, profile and MCP lists were claude's; codex starts from its own.
     expect(saved.find((m) => m.id === 'lead')).toEqual({
       id: 'lead',
       name: 'Lead',
@@ -1717,6 +1719,49 @@ describe('Teams — a member’s MCP switches', () => {
     expect(lastSaved().members[0]).toMatchObject({
       mcpDisabled: ['linear', 'codegraph'],
     });
+  });
+
+  it('writes the servers that load now as the allow list when "Only servers I pick" is chosen, and drops the key on "All servers"', async () => {
+    getCapabilities.mockImplementation(async () => ({
+      agents: [],
+      approvals: [],
+      configDirs: [],
+      interactiveTerminals: [],
+      modelEfforts: [],
+      options: [],
+      followUps: [],
+      mcpAllowLists: [
+        {
+          agent: 'codex',
+          unavailableReason: null,
+          accountConnectorPrefix: null,
+        },
+      ],
+    }));
+    await openBuilder();
+    await selectMember('lead');
+    await wait(700);
+
+    await press('Only servers I pick');
+    await wait(900);
+    expect(lastSaved().members[0]).toMatchObject({
+      mcpAllowed: ['codegraph', 'cua_repl'],
+    });
+
+    await press('All servers');
+    await wait(900);
+    expect(lastSaved().members[0]?.mcpAllowed).toBeUndefined();
+  });
+
+  it('offers no allow list for a CLI whose capability is absent', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    await wait(700);
+    expect(
+      [...document.body.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Only servers I pick',
+      ),
+    ).toBe(false);
   });
 
   it('shows the daemon’s reason, not a switch, on a server the member cannot switch', async () => {
@@ -2083,6 +2128,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           project: { projectId: 'p1', name: 'Geniro' },
           starts: 4,
           baseTokens: 144_982,
+          baseSource: 'lastRequest',
           minTokens: 140_000,
           maxTokens: 150_000,
           medianRequests: 3,
@@ -2106,6 +2152,7 @@ describe('Teams — a member’s always-on instruction size', () => {
             names: ['codegraph', 'blender'],
           },
           mcpServersUnavailableReason: null,
+          contextReading: null,
           notMeasured: [
             { part: 'plugins', reason: 'not measured: PLUGINS-REASON' },
             { part: 'builtInTools', reason: 'not measured: TOOLS-REASON' },
@@ -2119,6 +2166,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           project: { projectId: 'p1', name: 'Geniro' },
           starts: 1,
           baseTokens: 40_000,
+          baseSource: 'lastRequest',
           minTokens: 40_000,
           maxTokens: 40_000,
           medianRequests: 1,
@@ -2132,6 +2180,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           cliRemainderShare: 0.1,
           mcpServers: null,
           mcpServersUnavailableReason: 'MCP-REASON',
+          contextReading: null,
           notMeasured: [],
         },
         {
@@ -2142,6 +2191,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           project: { projectId: 'p1', name: 'Geniro' },
           starts: 1,
           baseTokens: 150_000,
+          baseSource: 'lastRequest',
           minTokens: 150_000,
           maxTokens: 150_000,
           medianRequests: 1,
@@ -2164,6 +2214,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           cliRemainderUnavailableReason: 'REMAINDER-REASON',
           mcpServers: null,
           mcpServersUnavailableReason: 'MCP-REASON',
+          contextReading: null,
           notMeasured: [],
         },
         {
@@ -2174,6 +2225,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           project: null,
           starts: 0,
           baseTokens: null,
+          baseSource: null,
           minTokens: null,
           maxTokens: null,
           medianRequests: null,
@@ -2189,6 +2241,7 @@ describe('Teams — a member’s always-on instruction size', () => {
           mcpServers: null,
           mcpServersUnavailableReason:
             'no fresh session of this member in the runs read',
+          contextReading: null,
           notMeasured: [],
         },
       ],

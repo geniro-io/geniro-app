@@ -9,6 +9,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
+import { SessionContextReadingDao } from '../dao/session-context-reading.dao';
 import { UiSurfaceDao } from '../dao/ui-surface.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { ActionCommandRegistry } from './action-command.registry';
@@ -93,6 +94,7 @@ export class RunTeardownService {
     @Optional() private readonly browserApprovals?: BrowserHostApprovals,
     @Optional() private readonly surfaces?: UiSurfaceDao,
     @Optional() private readonly reviewComments?: ReviewCommentDao,
+    @Optional() private readonly contextReadings?: SessionContextReadingDao,
   ) {}
 
   /**
@@ -254,6 +256,7 @@ export class RunTeardownService {
       await this.wallTurns.hardDeleteIncludingSoftDeleted({ runId }, em);
       await this.surfaces?.hardDeleteIncludingSoftDeleted({ runId }, em);
       await this.reviewComments?.hardDeleteIncludingSoftDeleted({ runId }, em);
+      await this.contextReadings?.hardDeleteIncludingSoftDeleted({ runId }, em);
       await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
       this.attachments.removeRun(runId);
       this.artifacts.removeRun(runId);

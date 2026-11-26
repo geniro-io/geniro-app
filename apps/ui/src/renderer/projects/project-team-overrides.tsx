@@ -25,6 +25,8 @@ import { MemberModelGroup } from '../teams/member-model-group';
 import { memberProblemsOf, memberStatusOf } from '../teams/member-problems';
 import { MemberSheet } from '../teams/member-sheet';
 import {
+  allowListCapabilityOf,
+  mcpAllowedWords,
   mcpSwitchesWords,
   nextMcpDisabled,
   projectMemberMcpHint,
@@ -41,6 +43,7 @@ import {
   type OverlaySettingsField,
   resetFields,
   withExtraInstructions,
+  withMemberMcpAllowed,
   withMemberMcpDisabled,
   withMemberPool,
   withMemberSettings,
@@ -204,6 +207,10 @@ export function ProjectTeamOverrides({
     selected === null || overlay === null
       ? selected
       : effectiveMemberOf(selected, overlay);
+  const allowCapability =
+    shown === null
+      ? undefined
+      : allowListCapabilityOf(capabilities?.mcpAllowLists, shown.agent);
   const poolOverridden =
     selected !== null && overlay?.members?.[selected.id]?.pool !== undefined;
   const memberMcp = useNodeMcp(
@@ -357,6 +364,37 @@ export function ProjectTeamOverrides({
               title={`MCP servers — ${selected.name || selected.id}`}
               mcp={memberMcp}
               mcpDisabled={shown.mcpDisabled}
+              allowList={
+                allowCapability === undefined
+                  ? undefined
+                  : {
+                      capability: allowCapability,
+                      allowed: shown.mcpAllowed,
+                      scope: {
+                        projectName,
+                        overridden:
+                          overlay.members?.[selected.id]?.mcpAllowed !==
+                          undefined,
+                        teamValue: mcpAllowedWords(selected.mcpAllowed),
+                        onReset: () =>
+                          overlayState.edit((current) =>
+                            withMemberMcpAllowed(
+                              current,
+                              selected.id,
+                              undefined,
+                            ),
+                          ),
+                      },
+                      onChange: (next) =>
+                        overlayState.edit((current) =>
+                          withMemberMcpAllowed(
+                            current,
+                            selected.id,
+                            next ?? null,
+                          ),
+                        ),
+                    }
+              }
               hint={projectMemberMcpHint(Boolean(shown.configDir))}
               configDir={shown.configDir ?? null}
               configDirUnavailableReason={configDirCapability.unavailableReasonFor(
@@ -420,6 +458,7 @@ export function ProjectTeamOverrides({
                   configDirCapability.unavailableReasonFor(agent) === null
                 }
                 approvals={capabilities?.approvals ?? []}
+                mcpAllowLists={capabilities?.mcpAllowLists}
                 nodeApproval={shown.approval}
                 nodeAutoCompactPercent={shown.autoCompactPercent}
                 recentConfigDirs={profileSources.recentConfigDirs}

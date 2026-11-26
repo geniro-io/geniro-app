@@ -74,6 +74,7 @@ import {
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
+  CLAUDE_AI_CONNECTOR_NAME_PREFIX,
   CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
@@ -256,7 +257,10 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
-import { claudeSettingsArgs } from './utils/claude-settings.utils';
+import {
+  type ClaudeAllowedMcpServer,
+  claudeSettingsArgs,
+} from './utils/claude-settings.utils';
 import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,
@@ -677,6 +681,8 @@ export class ClaudeAdapter extends AgentAdapter {
          * bundle).
          */
         turnToggleUnavailableReason: null,
+        allowListUnavailableReason: null,
+        accountConnectorPrefix: CLAUDE_AI_CONNECTOR_NAME_PREFIX,
         /**
          * Probe-verified on 2.1.226, and the reason it is a NOTE rather than
          * extra rows: the CLI's own `/mcp` panel carries a
@@ -2548,8 +2554,39 @@ export class ClaudeAdapter extends AgentAdapter {
         this.switchedOffServers(input),
         input.mcpEndpoint?.serverName ?? null,
       ).sort(),
+      allowedMcpServers: this.allowedServers(input),
       blockEveryTool: input.promptCacheWarmup === true,
     });
+  }
+
+  /**
+   * An account connector can only be allowed by its URL, so one the listing
+   * gave no URL for is left out. Sorted: the settings string is part of
+   * `sessionKey`.
+   */
+  private allowedServers(
+    input: AgentTurnInput,
+  ): ClaudeAllowedMcpServer[] | undefined {
+    if (input.mcpAllowed === undefined) {
+      return undefined;
+    }
+    const entries = new Map<string, ClaudeAllowedMcpServer>();
+    const add = (entry: ClaudeAllowedMcpServer): void => {
+      entries.set(JSON.stringify(entry), entry);
+    };
+    if (input.mcpEndpoint) {
+      add({ serverName: input.mcpEndpoint.serverName });
+    }
+    for (const server of input.mcpAllowed) {
+      if (!server.name.startsWith(CLAUDE_AI_CONNECTOR_NAME_PREFIX)) {
+        add({ serverName: server.name });
+      } else if (server.target) {
+        add({ serverUrl: server.target });
+      }
+    }
+    return [...entries.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, entry]) => entry);
   }
 
   /**

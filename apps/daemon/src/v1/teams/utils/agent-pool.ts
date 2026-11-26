@@ -48,6 +48,7 @@ const MEMBER_FIELDS = [
   // The servers a member runs WITHOUT name servers of ITS profile, so member
   // 1's list is never a member 2's: omitted means none switched off.
   'mcpDisabled',
+  'mcpAllowed',
 ] as const satisfies readonly Exclude<keyof TeamAgentPoolMember, 'agent'>[];
 
 /**

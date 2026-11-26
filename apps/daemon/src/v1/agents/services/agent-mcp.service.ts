@@ -407,6 +407,33 @@ export class AgentMcpService {
   }
 
   /**
+   * What the CLI's listing says each server in the folder is reached through,
+   * by name — read through the cache, and dialled when the folder has no
+   * reading yet. A server the listing gives no target is absent.
+   */
+  async targetsOf(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+  ): Promise<ReadonlyMap<string, string>> {
+    const profile =
+      configDir === null ? null : resolveValidConfigDir(configDir);
+    const { result } = await this.readServers(agent, cwd, {
+      configDir: profile,
+      blocking: true,
+    });
+    const targets = new Map<string, string>();
+    if (result.ok) {
+      for (const server of result.servers) {
+        if (server.target !== null && server.target !== '') {
+          targets.set(server.name, server.target);
+        }
+      }
+    }
+    return targets;
+  }
+
+  /**
    * What is already known of the FOLDERLESS listing (the team editor's) for one
    * profile, without asking anything: the newest cached reading of any CLI
    * version, merged with the turn harvest. Never dials, never spawns, never

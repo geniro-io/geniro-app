@@ -25,6 +25,7 @@ function configuration(
     effort: null,
     effortOffered: null,
     mcpDisabled: [],
+    mcpAllowed: null,
     mcp: { servers: null, checking: false },
     ...overrides,
   };
@@ -213,6 +214,20 @@ describe('memberHealthOf — MCP', () => {
 
     expect(health.problems).toEqual([]);
     expect(health.status).toBe('ok');
+  });
+
+  it('warns only about the servers on the member’s allow list', () => {
+    const health = memberHealthOf(
+      'a',
+      facts(
+        configuration({
+          mcpAllowed: ['figma'],
+          mcp: { servers, checking: false },
+        }),
+      ),
+    );
+
+    expect(health.problems.map((entry) => entry.server)).toEqual(['figma']);
   });
 
   it('dates the member by its oldest MCP reading, and by none when no reading is known', () => {

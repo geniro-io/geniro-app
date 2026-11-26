@@ -67,6 +67,33 @@ describe('foldTurnComplete', () => {
     expect(folded.usage).not.toHaveProperty('estimatedCostUsd');
   });
 
+  it('keeps the first request of the turn, which only the earlier segment made', () => {
+    expect(
+      foldTurnComplete(
+        complete({
+          contextTokens: 140_000,
+          firstRequestContextTokens: 139_000,
+        }),
+        complete({
+          contextTokens: 160_000,
+          firstRequestContextTokens: 158_000,
+        }),
+      ).usage,
+    ).toMatchObject({
+      contextTokens: 160_000,
+      firstRequestContextTokens: 139_000,
+    });
+    expect(
+      foldTurnComplete(
+        complete({ contextTokens: 140_000 }),
+        complete({
+          contextTokens: 160_000,
+          firstRequestContextTokens: 158_000,
+        }),
+      ).usage,
+    ).not.toHaveProperty('firstRequestContextTokens');
+  });
+
   it('keeps a context estimate with the count it describes', () => {
     // The later count is the CLI's, so the earlier stand-in no longer applies.
     expect(

@@ -2699,6 +2699,13 @@ export abstract class AgentAdapter {
       // serve a turn that switched off another. Sorted and de-duplicated: the
       // ORDER a member lists them in is not a different set.
       [...new Set(input.mcpDisabled ?? [])].sort(),
+      input.mcpAllowed === undefined
+        ? null
+        : [
+            ...new Set(
+              input.mcpAllowed.map((s) => `${s.name}\u0000${s.target ?? ''}`),
+            ),
+          ].sort(),
       input.mcpEndpoint?.url ?? null,
       input.env ?? null,
       // Argv too (`autoCompactArgs`), and on a KEPT process it is the one field

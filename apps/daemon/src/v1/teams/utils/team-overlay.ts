@@ -125,6 +125,13 @@ function effectiveMember(member: TeamMember, overlay: TeamOverlay): TeamMember {
       delete out.mcpDisabled;
     }
   }
+  if (own?.mcpAllowed !== undefined) {
+    if (own.mcpAllowed === null) {
+      delete out.mcpAllowed;
+    } else {
+      out.mcpAllowed = [...own.mcpAllowed];
+    }
+  }
   const extra = own?.extraInstructions?.trim();
   if (extra) {
     out.instructions = appended(member.instructions, extra);
@@ -222,6 +229,9 @@ export function overlayCounts(overlay: TeamOverlay): {
       overrides += 1;
     }
     if (member.mcpDisabled !== undefined) {
+      overrides += 1;
+    }
+    if (member.mcpAllowed !== undefined) {
       overrides += 1;
     }
     if (member.extraInstructions?.trim()) {

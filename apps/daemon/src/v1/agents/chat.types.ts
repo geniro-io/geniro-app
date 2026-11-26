@@ -1263,6 +1263,8 @@ export interface MemberTurnReading {
   sessionId: string | null;
   /** The prompt side of the turn's last request. */
   contextTokens: number | null;
+  /** The prompt side of the turn's first request; null when the CLI reported none. */
+  firstRequestContextTokens: number | null;
   /** How many requests the turn made. */
   numTurns: number | null;
   agent: string | null;

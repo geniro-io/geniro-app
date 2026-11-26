@@ -268,6 +268,12 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
     expect(line).toContain('by name only');
   });
 
+  it('shows flag_issue its exact call, with the cost and category values it takes', () => {
+    expect(lineStartingWith(`- \`${HOST_FLAG_ISSUE_TOOL}\``)).toBe(
+      '- `flag_issue`: something went wrong that cost real work — a tool of this app that failed or misbehaved, an instruction that misled you, a wrong memory entry — or the user disagreed with what you did or proposed. Record it then: `flag_issue({cost: "work" | "disagreement", category: "geniro_tool" | "geniro_instructions" | "user_instructions" | "memory" | "other", summary: "<one sentence>", minutesLost: <number, required when cost is "work">})`; analyses read these flags instead of the whole dialogue. Never for an ordinary error you fixed in one step.',
+    );
+  });
+
   it('sends a wait on slow output to monitor rather than a sleep loop', () => {
     const line = lineStartingWith(`- \`${HOST_MONITOR_TOOL}\``);
 

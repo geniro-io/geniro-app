@@ -15,6 +15,10 @@
  */
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import { AgentFlagCategorySchema, AgentFlagCostSchema } from '../chat.types';
+
+const quotedOptions = (values: readonly string[]): string =>
+  values.map((value) => `"${value}"`).join(' | ');
 
 /**
  * What geniro tells every agent about the surface its words land on, and about
@@ -124,7 +128,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`publish_action\`: a BUTTON in this chat. A press sends the message you gave it — to you, or in a team to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Use it when your next step waits on something only the user will see happen, such as a pull request being merged; whenever you leave a server or watcher running for the user, so they can stop it once they are done with it; and for a step only they should decide to run.
 - \`goals\`: a task with a clear end. At its start, record the few outcomes it must achieve; before you finish, close each one — achieved, not achieved or dropped — with the evidence that shows it. In a team, only its lead writes them, in its own conversation; every other member may list them. \`record_outcome\`: once, at the very end, how the whole thread ended — success, partial, failed or abandoned — and, for a pull request you opened, where it stands.
 - \`answer_review_comment\`: a review the user sent from the changes screen — a message that opens "Review of your changes" and numbers each comment. Deal with each comment, then answer every one with its number, what you did, and fixed or not fixed; the answer shows under that comment beside the code.
-- \`flag_issue\`: something went wrong that cost real work — a tool of this app that failed or misbehaved, an instruction that misled you, a wrong memory entry — or the user disagreed with what you did or proposed. Record it then, in a sentence; analyses read these flags instead of the whole dialogue. Never for an ordinary error you fixed in one step.
+- \`flag_issue\`: something went wrong that cost real work — a tool of this app that failed or misbehaved, an instruction that misled you, a wrong memory entry — or the user disagreed with what you did or proposed. Record it then: \`flag_issue({cost: ${quotedOptions(AgentFlagCostSchema.options)}, category: ${quotedOptions(AgentFlagCategorySchema.options)}, summary: "<one sentence>", minutesLost: <number, required when cost is "work">})\`; analyses read these flags instead of the whole dialogue. Never for an ordinary error you fixed in one step.
 - \`milestone\`: an important step of your work, as it happens — you started on the cause, found it, found a problem, a check passed, a piece is done. One line the user sees on the thread's timeline when they open it later; never routine progress.
 - \`notify_user\`: once, at the very end, when you have finished but leave something running for the user, such as a dev server.
 - \`show_chart\` for several readings of one thing — figures over time, or a total split across categories (spend by month, a bill by service) — \`show_metrics\` for one current figure each of several things, \`show_comparison\` when asked to pick among options against the same criteria, with a verdict and your pick, \`show_gallery\` for several pictures that belong together: each draws a live card, so use it instead of a markdown table, an ASCII chart or a list of paths, loading it first if your CLI lists it by name only.

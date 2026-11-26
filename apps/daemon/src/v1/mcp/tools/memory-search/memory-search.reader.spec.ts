@@ -39,15 +39,35 @@ const HIT: MemoryHit = {
 };
 
 describe('readMemorySearchArgs', () => {
-  it('defaults the limit and refuses one past the cap', () => {
+  it('defaults the limit and clamps one past the cap to it', () => {
     expect(readMemorySearchArgs({ query: 'pnpm' })).toEqual({
       ok: true,
       query: { query: 'pnpm', limit: MEMORY_SEARCH_DEFAULT },
     });
-    expect(
-      readMemorySearchArgs({ query: 'pnpm', limit: MEMORY_SEARCH_MAX + 1 }).ok,
-    ).toBe(false);
+    expect(readMemorySearchArgs({ query: 'pnpm', limit: 22 })).toEqual({
+      ok: true,
+      query: { query: 'pnpm', limit: MEMORY_SEARCH_MAX },
+    });
     expect(readMemorySearchArgs({ query: 'x' }).ok).toBe(false);
+  });
+
+  it('reads keywords as the query and max_results as the limit', () => {
+    expect(readMemorySearchArgs({ keywords: 'pnpm' })).toEqual({
+      ok: true,
+      query: { query: 'pnpm', limit: MEMORY_SEARCH_DEFAULT },
+    });
+    expect(readMemorySearchArgs({ keywords: 'pnpm', max_results: 3 })).toEqual({
+      ok: true,
+      query: { query: 'pnpm', limit: 3 },
+    });
+  });
+
+  it('leads a refusal with the right call, and refuses query and keywords that disagree', () => {
+    const read = readMemorySearchArgs({ query: 'pnpm', keywords: 'npm' });
+    expect(!read.ok && read.error.split('\n')).toEqual([
+      'call memory_search({query: "<words>", limit: 5}) — at most 10 entries.',
+      'send query once — query and keywords name the same argument and disagree',
+    ]);
   });
 });
 

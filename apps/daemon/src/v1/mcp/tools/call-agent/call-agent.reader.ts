@@ -1,4 +1,9 @@
 import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
+import {
   CALL_MODES,
   type CallEnvelope,
   type CallMode,
@@ -41,12 +46,79 @@ const CALL_AGENT_ARGS = [
   'folder',
 ];
 
+export const CALL_AGENT_SYNONYMS: ArgSynonyms = { agent_id: 'agent' };
+
+const CALL_AGENT_CALL =
+  'call call_agent({agent: "<member id>", message: "<the task>", title: "<why you call it>", mode: "async"}).';
+
+/** `async` and `sync` as a first call writes them, each read as the `mode` it means. */
+const MODE_FLAGS: Readonly<Record<string, { yes: CallMode; no: CallMode }>> = {
+  async: { yes: 'async', no: 'sync' },
+  sync: { yes: 'sync', no: 'async' },
+};
+
+export interface CheckedCallAgentArgs {
+  /** The TRIMMED title the call goes out with, so the value checked is the value sent. */
+  title: string;
+  /** The arguments with every synonym read as the name the tool reads. */
+  args: Record<string, unknown>;
+}
+
 /**
  * Arg validation happens in-envelope — never throw across the transport.
- * Answers the refusal, or the TRIMMED title the call goes out with, so the
- * value checked is the value sent.
+ * Answers the refusal, opening with the right call, or the arguments the call
+ * goes out with.
  */
 export function validateCallAgentArgs(
+  args: Record<string, unknown>,
+): CallEnvelope | CheckedCallAgentArgs {
+  const read = readModeFlags(args);
+  const checked = read.ok ? checkCallAgentArgs(read.args) : read.error;
+  if (typeof checked === 'string' && read.ok) {
+    return { title: checked, args: read.args };
+  }
+  const reason =
+    typeof checked === 'string'
+      ? checked
+      : checked.status === 'error'
+        ? checked.error.replace(/^INVALID_ARGS: /, '')
+        : '';
+  return invalidArgsEnvelope(leadWithCall(CALL_AGENT_CALL, reason));
+}
+
+function readModeFlags(
+  args: Record<string, unknown>,
+): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+  const renamed = applyArgSynonyms(args, CALL_AGENT_SYNONYMS);
+  if (!renamed.ok) {
+    return renamed;
+  }
+  const { async: asAsync, sync: asSync, ...rest } = renamed.args;
+  const modes = new Set<unknown>(rest.mode === undefined ? [] : [rest.mode]);
+  for (const [flag, value] of Object.entries({
+    async: asAsync,
+    sync: asSync,
+  })) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    const yes = value === true || value === 'true';
+    if (!yes && value !== false && value !== 'false') {
+      return { ok: false, error: `'${flag}' must be true or false` };
+    }
+    modes.add(yes ? MODE_FLAGS[flag]!.yes : MODE_FLAGS[flag]!.no);
+  }
+  if (modes.size > 1) {
+    return {
+      ok: false,
+      error: "'mode', 'async' and 'sync' disagree — send 'mode' alone",
+    };
+  }
+  const [mode] = modes;
+  return { ok: true, args: mode === undefined ? rest : { ...rest, mode } };
+}
+
+function checkCallAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | string {
   const unknown = unknownArgsEnvelope(args, CALL_AGENT_ARGS);

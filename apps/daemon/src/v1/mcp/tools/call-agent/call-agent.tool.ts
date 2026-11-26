@@ -33,13 +33,14 @@ export class CallAgentTool extends CallMcpTool {
   }
 
   protected async envelope(
-    args: Record<string, unknown>,
+    rawArgs: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<CallEnvelope> {
-    const checked = validateCallAgentArgs(args);
-    if (typeof checked !== 'string') {
+    const checked = validateCallAgentArgs(rawArgs);
+    if ('status' in checked) {
       return checked;
     }
+    const { args } = checked;
     return this.waiting(context, (signal) =>
       this.calls.callAgent(
         context.runId,
@@ -47,7 +48,7 @@ export class CallAgentTool extends CallMcpTool {
         {
           agent: args.agent as string,
           message: args.message as string,
-          title: checked,
+          title: checked.title,
           mode: args.mode as CallMode | undefined,
           thread: args.thread as string | undefined,
           ...(args.resume_cold === true ? { resumeCold: true } : {}),

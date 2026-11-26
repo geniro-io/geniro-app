@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { leadWithCall } from '../../../../utils/tool-arg-synonyms';
 import { HOST_KNOWLEDGE_SEARCH_TOOL } from '../../../agents/chat.types';
 import { PAGE_BYTES } from '../../../agents/services/thread-reader.service';
 import {
@@ -48,7 +49,10 @@ export function readKnowledgeReadArgs(
   const read = readToolArgs(KnowledgeReadArgsSchema, args);
   return read.ok
     ? read
-    : { ok: false, error: `call ${KNOWLEDGE_READ_CALL}.\n${read.error}` };
+    : {
+        ok: false,
+        error: leadWithCall(`call ${KNOWLEDGE_READ_CALL}.`, read.error),
+      };
 }
 
 export function knowledgeMissingText(

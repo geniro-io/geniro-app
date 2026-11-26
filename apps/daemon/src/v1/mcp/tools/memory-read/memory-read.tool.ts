@@ -26,6 +26,8 @@ export class MemoryReadTool extends MemoryMcpTool {
       return this.invalidArgs(read.error);
     }
     const { entries, missing } = await this.memory.read(read.query.ids, place);
-    return this.masked(memoryReadResultText(entries, missing, memoryFence()));
+    return this.masked(
+      memoryReadResultText(entries, missing, memoryFence(), read.query.unread),
+    );
   }
 }

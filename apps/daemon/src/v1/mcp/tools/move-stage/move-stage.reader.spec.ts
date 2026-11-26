@@ -24,6 +24,38 @@ describe('readMoveStage', () => {
     ).toEqual({ action: 'skip', stage: 'fix', text: 'n/a' });
   });
 
+  it('reads summary and reason as the text of the stage', () => {
+    expect(
+      readMoveStage({ action: 'complete', stage: 'build', summary: 'built' }),
+    ).toEqual({ action: 'complete', stage: 'build', text: 'built' });
+    expect(
+      readMoveStage({ action: 'complete', stage: 'build', reason: 'built' }),
+    ).toEqual({ action: 'complete', stage: 'build', text: 'built' });
+  });
+
+  it('leads each refusal with the right call, and refuses text and summary that disagree', () => {
+    const lead =
+      'call move_stage({action: "complete", stage: "<stage id>", text: "<what was done>"}).';
+    const wrongAction = readMoveStage({
+      action: 'finish',
+      stage: 'build',
+      summary: 'built',
+    });
+    expect('error' in wrongAction && wrongAction.error.split('\n')[0]).toBe(
+      lead,
+    );
+    const clash = readMoveStage({
+      action: 'complete',
+      stage: 'build',
+      text: 'a',
+      summary: 'b',
+    });
+    expect('error' in clash && clash.error.split('\n')).toEqual([
+      lead,
+      'send text once — text and summary name the same argument and disagree',
+    ]);
+  });
+
   it('refuses an unknown action, a missing stage and unknown arguments', () => {
     expect(
       readMoveStage({ action: 'finish', stage: 'a', text: 'x' }),

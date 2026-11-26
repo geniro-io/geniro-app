@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
 import { StageMoveActionSchema } from '../../../agents/chat.types';
 import type {
   StageMoveRequest,
@@ -8,6 +13,14 @@ import type {
 } from '../../../teams/teams.types';
 import { moveReply } from '../../../teams/utils/stage-text';
 import { readToolArgs } from '../tool-args';
+
+export const MOVE_STAGE_SYNONYMS: ArgSynonyms = {
+  summary: 'text',
+  reason: 'text',
+};
+
+const MOVE_STAGE_CALL =
+  'call move_stage({action: "complete", stage: "<stage id>", text: "<what was done>"}).';
 
 const MoveStageArgsSchema = z
   .object({
@@ -21,9 +34,12 @@ const MoveStageArgsSchema = z
 export function readMoveStage(
   args: Record<string, unknown>,
 ): StageMoveRequest | { error: string } {
-  const read = readToolArgs(MoveStageArgsSchema, args);
+  const renamed = applyArgSynonyms(args, MOVE_STAGE_SYNONYMS);
+  const read = renamed.ok
+    ? readToolArgs(MoveStageArgsSchema, renamed.args)
+    : renamed;
   if (!read.ok) {
-    return { error: read.error };
+    return { error: leadWithCall(MOVE_STAGE_CALL, read.error) };
   }
   return {
     action: read.query.action,

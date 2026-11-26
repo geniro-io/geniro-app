@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
 import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  clampCount,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
+import {
   TEAM_NOTES_DEFAULT_LIMIT,
   TEAM_NOTES_MAX_LIMIT,
   type TeamNoteEntry,
@@ -11,6 +17,11 @@ import {
 import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import { randomFenceTag } from '../../../agents/utils/fence-tag';
 import { readToolArgs } from '../tool-args';
+
+export const TEAM_NOTES_SYNONYMS: ArgSynonyms = { after: 'since' };
+
+const TEAM_NOTES_CALL =
+  'call team_notes({}) for the notes you have not read, or team_notes({since: 0}) for every note.';
 
 const TeamNotesArgsSchema = z
   .object({
@@ -28,9 +39,9 @@ const TeamNotesArgsSchema = z
 export function readTeamNotes(
   args: Record<string, unknown>,
 ): TeamNotesQuery | { error: string } {
-  const read = readToolArgs(TeamNotesArgsSchema, args);
+  const read = readNotesArgs(args);
   if (!read.ok) {
-    return { error: read.error };
+    return { error: leadWithCall(TEAM_NOTES_CALL, read.error) };
   }
   const {
     kind,
@@ -54,6 +65,23 @@ export function readTeamNotes(
       before === undefined &&
       includeSuperseded === undefined,
   };
+}
+
+function readNotesArgs(args: Record<string, unknown>) {
+  if (args.query !== undefined && args.query !== null) {
+    return {
+      ok: false as const,
+      error:
+        'team_notes has no word search — narrow it by kind, author, since or before',
+    };
+  }
+  const renamed = applyArgSynonyms(args, TEAM_NOTES_SYNONYMS);
+  return renamed.ok
+    ? readToolArgs(
+        TeamNotesArgsSchema,
+        clampCount(renamed.args, 'limit', TEAM_NOTES_MAX_LIMIT),
+      )
+    : renamed;
 }
 
 function noteHeader(note: TeamNoteEntry): string {

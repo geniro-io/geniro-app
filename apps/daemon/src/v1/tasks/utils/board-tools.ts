@@ -1,4 +1,8 @@
 import {
+  type ArgSynonyms,
+  withSynonymProperties,
+} from '../../../utils/tool-arg-synonyms';
+import {
   CHAT_APPROVAL_MODES,
   type ChatApprovalMode,
   type HostBoardTool,
@@ -100,6 +104,30 @@ const TASK_REF_ARG = {
   type: 'string',
   description:
     'The card — its key (e.g. "GEN-53", case-insensitive) or its id. list_tasks finds keys.',
+};
+
+const TASK_REF_SYNONYMS: ArgSynonyms = {
+  key: 'task',
+  task_id: 'task',
+  id: 'task',
+};
+
+/** The board tools that read a synonym of one of their own arguments. */
+export const BOARD_TOOL_SYNONYMS: Readonly<
+  Partial<Record<HostBoardTool, ArgSynonyms>>
+> = {
+  get_task: TASK_REF_SYNONYMS,
+  update_task: TASK_REF_SYNONYMS,
+};
+
+/** The call a refusal of these tools opens with. */
+export const BOARD_TOOL_CALLS: Readonly<
+  Partial<Record<HostBoardTool, string>>
+> = {
+  get_task:
+    'call get_task({task: "GEN-53"}) — or get_task({}) for the card this conversation works.',
+  update_task:
+    'call update_task({task: "GEN-53", status: "in_review", report: "<what was done>"}) — task may be left out for the card this conversation works.',
 };
 
 const STATUS_ARG = {
@@ -313,16 +341,19 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
       'worktree and run, attached files and pull requests. Use it when you need a card’s current state — the user ' +
       'can move a card at any time — or its full brief. When this conversation is WORKING a card, omit `task` to ' +
       'read that card. Do not use it to re-read a brief you were given at the start of the conversation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: {
-          ...TASK_REF_ARG,
-          description: `${TASK_REF_ARG.description} Omit to read the card this conversation is working (if it works one).`,
+    inputSchema: withSynonymProperties(
+      {
+        type: 'object',
+        properties: {
+          task: {
+            ...TASK_REF_ARG,
+            description: `${TASK_REF_ARG.description} Omit to read the card this conversation is working (if it works one).`,
+          },
         },
+        additionalProperties: false,
       },
-      additionalProperties: false,
-    },
+      TASK_REF_SYNONYMS,
+    ),
   },
   create_task: {
     name: 'create_task',
@@ -373,37 +404,40 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
       NOT_A_CHECKLIST +
       ' Do NOT use it to narrate progress while you work — a report is the final account — and do not use it to ' +
       'create a card (create_task) or delete one (delete_task).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: {
-          ...TASK_REF_ARG,
-          description: `${TASK_REF_ARG.description} Omit ONLY to change the card this conversation is working.`,
+    inputSchema: withSynonymProperties(
+      {
+        type: 'object',
+        properties: {
+          task: {
+            ...TASK_REF_ARG,
+            description: `${TASK_REF_ARG.description} Omit ONLY to change the card this conversation is working.`,
+          },
+          ...cardFieldArgs(true),
+          status: {
+            ...STATUS_ARG,
+            description: `Move the card to this column. ${enumList(TASK_STATUS_MEANINGS)}. Omit to leave it where it is.`,
+          },
+          fromStatus: {
+            type: 'string',
+            enum: [...TASK_STATUSES],
+            description:
+              'With `status`: the column you believe the card is in now. When it has moved since you read it, nothing ' +
+              'is changed and the answer says where it is. Omit to move it from wherever it is.',
+          },
+          report: {
+            type: 'string',
+            description:
+              `The agent's report on the work, as markdown, at most ${TASK_REPORT_MAX} characters: what changed, what ` +
+              'was verified, what was deliberately left undone, and the pull request link when there is one. Each ' +
+              'report REPLACES the previous one, so send the whole account. Reference screenshots as markdown images ' +
+              'with ABSOLUTE paths — `![what it shows](/abs/path.png)` — and each is copied onto the card. Omit to ' +
+              'leave the report as it is.',
+          },
         },
-        ...cardFieldArgs(true),
-        status: {
-          ...STATUS_ARG,
-          description: `Move the card to this column. ${enumList(TASK_STATUS_MEANINGS)}. Omit to leave it where it is.`,
-        },
-        fromStatus: {
-          type: 'string',
-          enum: [...TASK_STATUSES],
-          description:
-            'With `status`: the column you believe the card is in now. When it has moved since you read it, nothing ' +
-            'is changed and the answer says where it is. Omit to move it from wherever it is.',
-        },
-        report: {
-          type: 'string',
-          description:
-            `The agent's report on the work, as markdown, at most ${TASK_REPORT_MAX} characters: what changed, what ` +
-            'was verified, what was deliberately left undone, and the pull request link when there is one. Each ' +
-            'report REPLACES the previous one, so send the whole account. Reference screenshots as markdown images ' +
-            'with ABSOLUTE paths — `![what it shows](/abs/path.png)` — and each is copied onto the card. Omit to ' +
-            'leave the report as it is.',
-        },
+        additionalProperties: false,
       },
-      additionalProperties: false,
-    },
+      TASK_REF_SYNONYMS,
+    ),
   },
   delete_task: {
     name: 'delete_task',

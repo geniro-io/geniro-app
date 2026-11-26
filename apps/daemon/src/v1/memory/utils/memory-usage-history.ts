@@ -230,7 +230,7 @@ function searchHandles(resultPayload: string): string[] {
 }
 
 /**
- * The handles a `memory_read` call asked for (`ids`, or the one `id`), bare or
+ * The handles a `memory_read` call asked for (`ids` or `handles`, or the one `id` or `handle`), bare or
  * in cursor's `{toolName, args}` wrap.
  *
  * TWIN PARSER: `readMemoryReadArgs` in
@@ -239,7 +239,9 @@ function searchHandles(resultPayload: string): string[] {
 function askedHandles(callPayload: string): string[] {
   const input = asRecord(parseJsonColumn(callPayload))?.input;
   const args = asRecord(hostToolArguments(input, HOST_MEMORY_READ_TOOL));
-  const ids = args?.ids ?? (args?.id === undefined ? undefined : [args.id]);
+  const one = args?.id ?? args?.handle;
+  const ids =
+    args?.ids ?? args?.handles ?? (one === undefined ? undefined : [one]);
   if (!Array.isArray(ids)) {
     return [];
   }

@@ -247,6 +247,12 @@ function broker(
   instance.registerRun('run-1', capability);
   return instance;
 }
+function serviceWith(index: number, value: unknown): McpServerService {
+  const args: unknown[] = [];
+  args[index] = value;
+  return service(...(args as Parameters<typeof service>));
+}
+
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
@@ -1039,9 +1045,130 @@ describe('McpServerService', () => {
             }[];
           }
         ).tools.find((t) => t.name === HOST_MEMORY_READ_TOOL)!.inputSchema;
-        expect(Object.keys(schema.properties)).toEqual(['ids', 'id']);
+        expect(Object.keys(schema.properties)).toEqual([
+          'ids',
+          'handles',
+          'id',
+          'handle',
+        ]);
         expect(schema.properties.id!.description).toContain('instead of `ids`');
         expect(schema.required ?? []).toEqual([]);
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('reads entries sent as handles through tools/call, as ids are read', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const saved = await db.service.save(
+          { kind: 'user' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          { projectId: null, teamSlug: null },
+        );
+        if (saved.kind !== 'created') {
+          throw new Error('expected a saved entry');
+        }
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_READ_TOOL,
+            arguments: { handles: [saved.entry.handle] },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+
+        expect(result.isError).toBe(false);
+        expect(result.content[0]!.text).toContain('Never npm here.');
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('reads the first three of four entries named by ids, and names the fourth as not read', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const handles: string[] = [];
+        const entries = [
+          { title: 'Use pnpm', body: 'Never npm here.' },
+          { title: 'Pin Node', body: 'Node 24 or newer.' },
+          { title: 'Daemon port', body: 'The daemon prefers 47615.' },
+          { title: 'Seed data', body: 'Seeds are synthetic only.' },
+        ];
+        for (const entry of entries) {
+          const saved = await db.service.save(
+            { kind: 'user' },
+            { ...entry, type: 'feedback' },
+            { projectId: null, teamSlug: null },
+          );
+          if (saved.kind !== 'created') {
+            throw new Error('expected a saved entry');
+          }
+          handles.push(saved.entry.handle);
+        }
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_READ_TOOL,
+            arguments: { ids: handles },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+        const text = result.content[0]!.text;
+
+        expect(result.isError).toBe(false);
+        expect(text).toContain('Never npm here.');
+        expect(text).toContain('Node 24 or newer.');
+        expect(text).toContain('The daemon prefers 47615.');
+        expect(text).not.toContain('Seeds are synthetic only.');
+        expect(text).toContain(
+          'Not read — at most 3 per call: ' + handles[3] + '.',
+        );
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('searches memory through tools/call with keywords and max_results', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        await db.service.save(
+          { kind: 'user' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          { projectId: null, teamSlug: null },
+        );
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_SEARCH_TOOL,
+            arguments: { keywords: 'pnpm', max_results: 3 },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+
+        expect(result.isError).toBe(false);
+        expect(result.content[0]!.text).toContain('Use pnpm');
       } finally {
         await db.orm.close();
       }
@@ -1390,7 +1517,7 @@ describe('McpServerService', () => {
       ],
       [
         'call_agent',
-        { agent: 'helper', agent_id: 'helper', message: 'm', title: 'T' },
+        { agent: 'helper', message: 'm', title: 'T', timeout: 5 },
         "'agent'",
       ],
       [
@@ -2040,6 +2167,33 @@ describe('McpServerService', () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual({
       status: 'ok',
       result: { call_id: 'call-1', agent: 'helper', text: 'research done' },
+    });
+  });
+
+  it('hands call_agent a callee sent as agent_id, and async as its mode', async () => {
+    const callBroker = broker();
+    const callSpy = vi
+      .spyOn(callBroker, 'callAgent')
+      .mockResolvedValue({ status: 'ok', result: {} });
+    const { json } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent_id: 'helper',
+          message: 'find X',
+          title: 'Find X',
+          async: true,
+        },
+      }),
+    );
+
+    expect((json().result as { isError: boolean }).isError).toBe(false);
+    expect(callSpy.mock.calls[0]![2]).toMatchObject({
+      agent: 'helper',
+      mode: 'async',
     });
   });
 
@@ -4063,6 +4217,46 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(move).toContain('TaskCreate');
     expect(find(tools, HOST_TEAM_NOTE_TOOL)).toContain('move_stage');
     expect(find(tools, HOST_RECORD_OUTCOME_TOOL)).toContain('move_stage');
+  });
+
+  it('hands move_stage a summary as the stage text, through tools/call', async () => {
+    const requests: unknown[] = [];
+    const stages = stageService(
+      { runId: 'run-1', memberId: 'agent' },
+      async (_runId, request) => {
+        requests.push(request);
+        return {
+          ok: false,
+          code: 'NEXT_REQUIRED',
+          message: 'name one of: fix',
+        };
+      },
+    );
+    const args: Parameters<typeof service> = [];
+    args[22] = stages;
+    const { json } = await post(
+      service(...args),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_MOVE_STAGE_TOOL,
+        arguments: { action: 'complete', stage: 'build', summary: 'built' },
+      }),
+    );
+    const result = json().result as {
+      isError: boolean;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('NEXT_REQUIRED: name one of: fix');
+    expect(requests).toEqual([
+      expect.objectContaining({
+        action: 'complete',
+        stage: 'build',
+        text: 'built',
+      }),
+    ]);
   });
 
   it('answers a move with the stage to work on next, and a refusal with its fix', async () => {
@@ -6350,6 +6544,29 @@ describe('McpServerService — the monitor tools', () => {
     }
   });
 
+  it('stops a monitor named by monitor, through tools/call', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap',
+        timeout_ms: 60_000,
+      });
+
+      const stopped = await call(subject, 'stop_monitor', { monitor: 'm1' });
+
+      expect(stopped.isError).toBe(false);
+      expect(stopped.content[0]?.text).toBe(
+        'Stopped monitor m1. Nothing more is sent from it.',
+      );
+      expect(registry.isRunning('run-1')).toBe(false);
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
   it('refuses a second monitor on the command the conversation already runs, and names the others on a new start', async () => {
     const { broker, registry } = monitorBroker();
     const subject = monitorService(broker);
@@ -6567,6 +6784,161 @@ describe('McpServerService — the team-note tools', () => {
     return (json().result as { tools: ToolListing[] }).tools.map((t) => t.name);
   };
 
+  it('declares every synonym of seven tools after its target, and drops a target a synonym stands for from required', async () => {
+    const notes = teamNoteBroker();
+    notes.register('run-1', 'agent', sinkOf([]));
+    const cases: {
+      tool: string;
+      subject: McpServerService;
+      member: string;
+      adjacent: [string, string[]][];
+      after: [string, string[]][];
+      present: string[];
+      annotated: string[];
+      required: string[];
+    }[] = [
+      {
+        tool: HOST_STOP_MONITOR_TOOL,
+        subject: serviceWith(18, monitorBroker().broker),
+        member: 'agent',
+        adjacent: [['id', ['monitor_id', 'monitor']]],
+        after: [],
+        present: [],
+        annotated: ['id'],
+        required: [],
+      },
+      {
+        tool: HOST_MOVE_STAGE_TOOL,
+        subject: serviceWith(
+          22,
+          stageService({ runId: 'run-1', memberId: 'agent' }),
+        ),
+        member: 'agent',
+        adjacent: [['text', ['summary', 'reason']]],
+        after: [],
+        present: [],
+        annotated: ['text'],
+        required: ['action', 'stage'],
+      },
+      {
+        tool: HOST_TEAM_NOTE_TOOL,
+        subject: serviceWith(19, notes),
+        member: 'agent',
+        adjacent: [['text', ['message']]],
+        after: [],
+        present: ['title', 'action'],
+        annotated: ['text'],
+        required: ['kind'],
+      },
+      {
+        tool: HOST_TEAM_NOTES_TOOL,
+        subject: serviceWith(19, notes),
+        member: 'agent',
+        adjacent: [['since', ['after']]],
+        after: [],
+        present: [],
+        annotated: [],
+        required: [],
+      },
+      {
+        tool: HOST_MEMORY_SEARCH_TOOL,
+        subject: serviceWith(24, fakeMemory(true).service),
+        member: 'agent',
+        adjacent: [
+          ['query', ['keywords']],
+          ['limit', ['max_results']],
+        ],
+        after: [],
+        present: [],
+        annotated: ['query'],
+        required: [],
+      },
+      {
+        tool: HOST_MEMORY_READ_TOOL,
+        subject: serviceWith(24, fakeMemory(true).service),
+        member: 'agent',
+        adjacent: [
+          ['ids', ['handles']],
+          ['id', ['handle']],
+        ],
+        after: [],
+        present: [],
+        annotated: [],
+        required: [],
+      },
+      {
+        tool: 'call_agent',
+        subject: service(),
+        member: 'orch',
+        adjacent: [
+          ['agent', ['agent_id']],
+          ['mode', ['async']],
+        ],
+        after: [['mode', ['sync']]],
+        present: [],
+        annotated: ['agent'],
+        required: ['message', 'title'],
+      },
+    ];
+    for (const c of cases) {
+      const { json } = await post(
+        c.subject,
+        'run-1',
+        c.member,
+        rpc('tools/list', {}),
+      );
+      const listed = (
+        json().result as {
+          tools: {
+            name: string;
+            inputSchema: {
+              properties: Record<string, { description?: string }>;
+              required?: string[];
+            };
+          }[];
+        }
+      ).tools.find((t) => t.name === c.tool)!;
+      const { properties, required = [] } = listed.inputSchema;
+      const keys = Object.keys(properties);
+      for (const [target, synonyms] of c.adjacent) {
+        const at = keys.indexOf(target);
+        expect({
+          tool: c.tool,
+          placed: keys.slice(at, at + 1 + synonyms.length),
+        }).toEqual({
+          tool: c.tool,
+          placed: [target, ...synonyms],
+        });
+      }
+      for (const [target, synonyms] of c.after) {
+        const at = keys.indexOf(target);
+        expect({
+          tool: c.tool,
+          later: synonyms.map((synonym) => keys.indexOf(synonym) > at),
+        }).toEqual({ tool: c.tool, later: synonyms.map(() => true) });
+      }
+      expect({
+        tool: c.tool,
+        missing: c.present.filter((name) => !keys.includes(name)),
+      }).toEqual({ tool: c.tool, missing: [] });
+      for (const target of c.annotated) {
+        expect({
+          tool: c.tool,
+          target,
+          description: properties[target]?.description,
+        }).toEqual(
+          expect.objectContaining({
+            description: expect.stringContaining('Required (or one of'),
+          }),
+        );
+      }
+      expect({ tool: c.tool, required }).toEqual({
+        tool: c.tool,
+        required: c.required,
+      });
+    }
+  });
+
   it('lists both tools to an agent with a sink and neither to an endpoint without one', async () => {
     const teamNotes = teamNoteBroker();
     teamNotes.register('run-1', 'agent', sinkOf([]));
@@ -6611,6 +6983,78 @@ describe('McpServerService — the team-note tools', () => {
       .text;
     expect(text).toContain('note 1 · pitfall · Writer');
     expect(text).toContain('npm ci fails here; use pnpm');
+  });
+
+  it('takes a note sent as message with a title, and reads it back joined', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    teamNotes.register('run-1', 'other', sinkOf(rows));
+    const subject = teamService(teamNotes);
+
+    const { json: wrote } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: {
+          kind: 'fact',
+          title: 'CI',
+          message: 'uses pnpm',
+          action: 'write',
+        },
+      }),
+    );
+    expect(
+      (wrote().result as { content: { text: string }[] }).content[0]!.text,
+    ).toBe('Saved as note 1.');
+
+    const { json: read } = await post(
+      subject,
+      'run-1',
+      'other',
+      rpc('tools/call', { name: HOST_TEAM_NOTES_TOOL, arguments: {} }),
+    );
+    expect(
+      (read().result as { content: { text: string }[] }).content[0]!.text,
+    ).toContain('CI\nuses pnpm');
+  });
+
+  it('reads the notes after a number sent as after, through tools/call', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    const subject = teamService(teamNotes);
+    for (const text of ['first fact', 'second fact']) {
+      await post(
+        subject,
+        'run-1',
+        'agent',
+        rpc('tools/call', {
+          name: HOST_TEAM_NOTE_TOOL,
+          arguments: { kind: 'fact', text },
+        }),
+      );
+    }
+
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTES_TOOL,
+        arguments: { after: 1 },
+      }),
+    );
+    const result = json().result as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('note 2 · fact · Writer');
+    expect(result.content[0]!.text).not.toContain('note 1 · fact');
   });
 
   it('answers a refused write as invalid arguments', async () => {

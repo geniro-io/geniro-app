@@ -48,9 +48,15 @@ describe('BOARD_TOOLS — the listing is the whole manual', () => {
 
   it('accepts exactly the arguments each schema lists', () => {
     expect(boardToolArgs('list_projects')).toEqual(['project']);
-    expect(boardToolArgs('get_task')).toEqual(['task']);
+    expect(boardToolArgs('get_task')).toEqual(['task', 'key', 'task_id', 'id']);
+    expect(boardToolArgs('update_task').slice(0, 4)).toEqual([
+      'task',
+      'key',
+      'task_id',
+      'id',
+    ]);
     expect(boardToolArgs('update_task')).toEqual(
-      expect.arrayContaining(['task', 'status', 'fromStatus', 'report']),
+      expect.arrayContaining(['status', 'fromStatus', 'report']),
     );
     expect(boardToolArgs('create_task')).not.toContain('runId');
     expect(boardToolArgs('delete_task')).toEqual(['task']);

@@ -78,7 +78,27 @@ describe('readTeamNotes', () => {
     });
   });
 
-  it('refuses a limit past the maximum, an unknown kind and unknown arguments', () => {
+  it('reads a limit past the maximum as the maximum', () => {
+    expect(readTeamNotes({ limit: TEAM_NOTES_MAX_LIMIT + 1 })).toMatchObject({
+      limit: TEAM_NOTES_MAX_LIMIT,
+    });
+  });
+
+  it('reads after as since, and leads a word search refusal with the right call', () => {
+    expect(readTeamNotes({ after: 5 })).toMatchObject({
+      since: 5,
+      unreadOnly: false,
+    });
+    const search = readTeamNotes({ query: 'pnpm' });
+    expect('error' in search && search.error.split('\n')[0]).toBe(
+      'call team_notes({}) for the notes you have not read, or team_notes({since: 0}) for every note.',
+    );
+    expect('error' in search && search.error).toContain(
+      'team_notes has no word search',
+    );
+  });
+
+  it('refuses an unknown kind and unknown arguments', () => {
     const error = (args: Record<string, unknown>): string => {
       const read = readTeamNotes(args);
       if (!('error' in read)) {
@@ -86,7 +106,6 @@ describe('readTeamNotes', () => {
       }
       return read.error;
     };
-    expect(error({ limit: TEAM_NOTES_MAX_LIMIT + 1 })).toContain('limit');
     expect(error({ kind: ['status'] })).toContain('kind');
     expect(error({ run_id: 'x' })).toContain('run_id');
   });

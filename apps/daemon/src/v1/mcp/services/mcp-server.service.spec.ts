@@ -1039,9 +1039,79 @@ describe('McpServerService', () => {
             }[];
           }
         ).tools.find((t) => t.name === HOST_MEMORY_READ_TOOL)!.inputSchema;
-        expect(Object.keys(schema.properties)).toEqual(['ids', 'id']);
+        expect(Object.keys(schema.properties)).toEqual([
+          'ids',
+          'handles',
+          'id',
+          'handle',
+        ]);
         expect(schema.properties.id!.description).toContain('instead of `ids`');
         expect(schema.required ?? []).toEqual([]);
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('reads entries sent as handles through tools/call, as ids are read', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const saved = await db.service.save(
+          { kind: 'user' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          { projectId: null, teamSlug: null },
+        );
+        if (saved.kind !== 'created') {
+          throw new Error('expected a saved entry');
+        }
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_READ_TOOL,
+            arguments: { handles: [saved.entry.handle] },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+
+        expect(result.isError).toBe(false);
+        expect(result.content[0]!.text).toContain('Never npm here.');
+      } finally {
+        await db.orm.close();
+      }
+    });
+
+    it('searches memory through tools/call with keywords and max_results', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        await db.service.save(
+          { kind: 'user' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          { projectId: null, teamSlug: null },
+        );
+        const { json } = await post(
+          target,
+          'run-1',
+          'agent',
+          rpc('tools/call', {
+            name: HOST_MEMORY_SEARCH_TOOL,
+            arguments: { keywords: 'pnpm', max_results: 3 },
+          }),
+        );
+        const result = json().result as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+
+        expect(result.isError).toBe(false);
+        expect(result.content[0]!.text).toContain('Use pnpm');
       } finally {
         await db.orm.close();
       }
@@ -2040,6 +2110,33 @@ describe('McpServerService', () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual({
       status: 'ok',
       result: { call_id: 'call-1', agent: 'helper', text: 'research done' },
+    });
+  });
+
+  it('hands call_agent a callee sent as agent_id, and async as its mode', async () => {
+    const callBroker = broker();
+    const callSpy = vi
+      .spyOn(callBroker, 'callAgent')
+      .mockResolvedValue({ status: 'ok', result: {} });
+    const { json } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent_id: 'helper',
+          message: 'find X',
+          title: 'Find X',
+          async: true,
+        },
+      }),
+    );
+
+    expect((json().result as { isError: boolean }).isError).toBe(false);
+    expect(callSpy.mock.calls[0]![2]).toMatchObject({
+      agent: 'helper',
+      mode: 'async',
     });
   });
 
@@ -4063,6 +4160,46 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(move).toContain('TaskCreate');
     expect(find(tools, HOST_TEAM_NOTE_TOOL)).toContain('move_stage');
     expect(find(tools, HOST_RECORD_OUTCOME_TOOL)).toContain('move_stage');
+  });
+
+  it('hands move_stage a summary as the stage text, through tools/call', async () => {
+    const requests: unknown[] = [];
+    const stages = stageService(
+      { runId: 'run-1', memberId: 'agent' },
+      async (_runId, request) => {
+        requests.push(request);
+        return {
+          ok: false,
+          code: 'NEXT_REQUIRED',
+          message: 'name one of: fix',
+        };
+      },
+    );
+    const args: Parameters<typeof service> = [];
+    args[22] = stages;
+    const { json } = await post(
+      service(...args),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_MOVE_STAGE_TOOL,
+        arguments: { action: 'complete', stage: 'build', summary: 'built' },
+      }),
+    );
+    const result = json().result as {
+      isError: boolean;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('NEXT_REQUIRED: name one of: fix');
+    expect(requests).toEqual([
+      expect.objectContaining({
+        action: 'complete',
+        stage: 'build',
+        text: 'built',
+      }),
+    ]);
   });
 
   it('answers a move with the stage to work on next, and a refusal with its fix', async () => {
@@ -6350,6 +6487,29 @@ describe('McpServerService — the monitor tools', () => {
     }
   });
 
+  it('stops a monitor named by monitor, through tools/call', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap',
+        timeout_ms: 60_000,
+      });
+
+      const stopped = await call(subject, 'stop_monitor', { monitor: 'm1' });
+
+      expect(stopped.isError).toBe(false);
+      expect(stopped.content[0]?.text).toBe(
+        'Stopped monitor m1. Nothing more is sent from it.',
+      );
+      expect(registry.isRunning('run-1')).toBe(false);
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
   it('refuses a second monitor on the command the conversation already runs, and names the others on a new start', async () => {
     const { broker, registry } = monitorBroker();
     const subject = monitorService(broker);
@@ -6611,6 +6771,78 @@ describe('McpServerService — the team-note tools', () => {
       .text;
     expect(text).toContain('note 1 · pitfall · Writer');
     expect(text).toContain('npm ci fails here; use pnpm');
+  });
+
+  it('takes a note sent as message with a title, and reads it back joined', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    teamNotes.register('run-1', 'other', sinkOf(rows));
+    const subject = teamService(teamNotes);
+
+    const { json: wrote } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTE_TOOL,
+        arguments: {
+          kind: 'fact',
+          title: 'CI',
+          message: 'uses pnpm',
+          action: 'write',
+        },
+      }),
+    );
+    expect(
+      (wrote().result as { content: { text: string }[] }).content[0]!.text,
+    ).toBe('Saved as note 1.');
+
+    const { json: read } = await post(
+      subject,
+      'run-1',
+      'other',
+      rpc('tools/call', { name: HOST_TEAM_NOTES_TOOL, arguments: {} }),
+    );
+    expect(
+      (read().result as { content: { text: string }[] }).content[0]!.text,
+    ).toContain('CI\nuses pnpm');
+  });
+
+  it('reads the notes after a number sent as after, through tools/call', async () => {
+    const rows: { seq: number; payload: string; createdAt: Date }[] = [];
+    const teamNotes = teamNoteBroker(rows);
+    teamNotes.register('run-1', 'agent', sinkOf(rows));
+    const subject = teamService(teamNotes);
+    for (const text of ['first fact', 'second fact']) {
+      await post(
+        subject,
+        'run-1',
+        'agent',
+        rpc('tools/call', {
+          name: HOST_TEAM_NOTE_TOOL,
+          arguments: { kind: 'fact', text },
+        }),
+      );
+    }
+
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_TEAM_NOTES_TOOL,
+        arguments: { after: 1 },
+      }),
+    );
+    const result = json().result as {
+      isError?: boolean;
+      content: { text: string }[];
+    };
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('note 2 · fact · Writer');
+    expect(result.content[0]!.text).not.toContain('note 1 · fact');
   });
 
   it('answers a refused write as invalid arguments', async () => {

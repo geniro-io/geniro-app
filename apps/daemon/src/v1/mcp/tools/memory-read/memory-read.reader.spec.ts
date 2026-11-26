@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  MEMORY_READ_MAX,
   MEMORY_RESULT_PREFACE,
   type MemoryEntry,
 } from '../../../memory/memory.types';
@@ -35,30 +34,42 @@ const ENTRY: MemoryEntry = {
 };
 
 describe('readMemoryReadArgs', () => {
-  it('reads up to the cap of handles and refuses anything else', () => {
+  it('reads up to the cap of handles, names the rest unread, and refuses what is not a handle', () => {
     expect(readMemoryReadArgs({ ids: ['m2', '7'] })).toEqual({
       ok: true,
-      query: { ids: ['m2', '7'] },
+      query: { ids: ['m2', '7'], unread: [] },
     });
-    expect(
-      readMemoryReadArgs({
-        ids: Array.from({ length: MEMORY_READ_MAX + 1 }, (_, i) => `m${i + 1}`),
-      }).ok,
-    ).toBe(false);
+    expect(readMemoryReadArgs({ ids: ['m1', 'm2', 'm3', 'm4'] })).toEqual({
+      ok: true,
+      query: { ids: ['m1', 'm2', 'm3'], unread: ['m4'] },
+    });
     expect(readMemoryReadArgs({ ids: ['note'] }).ok).toBe(false);
   });
 
   it('reads a single id as a one-handle ids', () => {
     expect(readMemoryReadArgs({ id: ' m12 ' })).toEqual({
       ok: true,
-      query: { ids: ['m12'] },
+      query: { ids: ['m12'], unread: [] },
     });
     expect(readMemoryReadArgs({ id: 'm12' })).toEqual(
       readMemoryReadArgs({ ids: ['m12'] }),
     );
     expect(readMemoryReadArgs({ id: 'm12', ids: null })).toEqual({
       ok: true,
-      query: { ids: ['m12'] },
+      query: { ids: ['m12'], unread: [] },
+    });
+  });
+
+  it('reads a handle sent as handle, and handles sent as handles, the first three of more', () => {
+    expect(readMemoryReadArgs({ handle: 'm974' })).toEqual({
+      ok: true,
+      query: { ids: ['m974'], unread: [] },
+    });
+    expect(
+      readMemoryReadArgs({ handles: ['m1', 'm2', 'm3', 'm4', 'm5'] }),
+    ).toEqual({
+      ok: true,
+      query: { ids: ['m1', 'm2', 'm3'], unread: ['m4', 'm5'] },
     });
   });
 
@@ -89,11 +100,9 @@ describe('readMemoryReadArgs', () => {
   it('leads each refused call with the right call and the cap, whatever was wrong with it', () => {
     const lead = 'call memory_read({ids: ["m12"]}) — at most 3 handles.';
     const cases: Record<string, unknown>[] = [
-      { handle: 'm758' },
+      { handle: 'note' },
       { items: ['m1'] },
-      {
-        ids: Array.from({ length: MEMORY_READ_MAX + 1 }, (_, i) => `m${i + 1}`),
-      },
+      { ids: ['m1'], handles: ['m2'] },
       {},
     ];
     for (const args of cases) {
@@ -106,6 +115,14 @@ describe('readMemoryReadArgs', () => {
 });
 
 describe('memoryReadResultText', () => {
+  it('names the handles it did not read, and the call that reads them', () => {
+    expect(
+      memoryReadResultText([], [], 'memory-entry-f00d', ['m4', 'm5']),
+    ).toBe(
+      'Not read — at most 3 per call: m4, m5. Read them with memory_read({ids: ["m4", "m5"]}).',
+    );
+  });
+
   it('quotes each entry whole, its body fenced, with its revision and author, then names what it could not read', () => {
     expect(memoryReadResultText([ENTRY], ['m9'], 'memory-entry-f00d')).toBe(
       [

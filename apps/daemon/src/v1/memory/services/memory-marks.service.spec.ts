@@ -695,6 +695,38 @@ describe('MemoryMarks through MemoryService', () => {
     });
   });
 
+  it.each<[string, (handle: string) => Record<string, unknown>]>([
+    ['handle', (handle) => ({ handle })],
+    ['handles', (handle) => ({ handles: [handle] })],
+  ])(
+    'lets a cursor run mark an entry it read by %s, though its result carries no text',
+    async (_name, argsOf) => {
+      const entry = await userEntry('Use pnpm');
+      const runId = 'cursor-run';
+      const server = `geniro-${runId.slice(0, 8)}`;
+      await thread(runId, { index: [] });
+      await row(runId, 'tool_call', {
+        id: 'call-1',
+        name: `${server}: memory_read`,
+        input: {
+          providerIdentifier: server,
+          toolName: 'memory_read',
+          args: argsOf(entry.handle),
+        },
+      });
+      await row(runId, 'tool_result', {
+        id: 'call-1',
+        name: `${server}: memory_read`,
+        result: { success: true },
+        isError: false,
+      });
+
+      expect(await mark(runId, entry, 'helped')).toMatchObject({
+        kind: 'marked',
+      });
+    },
+  );
+
   it('refuses a mark on a handle no visible entry holds', async () => {
     await thread('t1', { title: 'Any run' });
 

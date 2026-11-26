@@ -13,6 +13,36 @@ describe('readTeamNote', () => {
     );
   });
 
+  it('reads message as the note text, and a title ahead of the text', () => {
+    expect(readTeamNote({ kind: 'fact', message: 'CI uses pnpm' })).toEqual({
+      kind: 'fact',
+      text: 'CI uses pnpm',
+    });
+    expect(
+      readTeamNote({ kind: 'fact', title: 'CI', text: 'uses pnpm' }),
+    ).toEqual({ kind: 'fact', text: 'CI\nuses pnpm' });
+    expect(readTeamNote({ kind: 'fact', title: 'CI uses pnpm' })).toEqual({
+      kind: 'fact',
+      text: 'CI uses pnpm',
+    });
+  });
+
+  it('accepts write, add and set as the action, and refuses a read', () => {
+    for (const action of ['write', 'add', 'set']) {
+      expect(readTeamNote({ kind: 'fact', text: 'x', action })).toEqual({
+        kind: 'fact',
+        text: 'x',
+      });
+    }
+    const read = readTeamNote({ kind: 'fact', text: 'x', action: 'read' });
+    expect('error' in read && read.error.split('\n')[0]).toBe(
+      'call team_note({kind: "fact", text: "<the note>"}) — team_notes reads them.',
+    );
+    expect('error' in read && read.error).toContain(
+      'action "read" means nothing here',
+    );
+  });
+
   it('refuses an unknown kind, empty or overlong text, a bad supersedes and unknown arguments', () => {
     const error = (args: Record<string, unknown>): string => {
       const read = readTeamNote(args);

@@ -5305,6 +5305,40 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
 });
 
 describe('CallBroker — cancel_agent', () => {
+  const flush = () =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+  const cancelledByYou = (reason: string) => ({
+    status: 'ok',
+    result: {
+      call_id: 'call-1',
+      agent: 'helper',
+      state: 'cancelled',
+      by: 'you',
+      reason,
+    },
+  });
+  const startAsync = (broker: CallBroker) =>
+    broker.callAgent('run-1', 'orch', {
+      title: 'build it',
+      agent: 'helper',
+      message: 'build the thing',
+      mode: 'async',
+    });
+  const settleCancelled = (broker: CallBroker, reason: string) => {
+    broker.cancelAgent('run-1', 'orch', { call_id: 'call-1', reason });
+    broker.noteCalleeSettling(
+      'run-1',
+      'call-1',
+      settledWith({
+        status: 'cancelled',
+        finalText: null,
+        error: 'cancelled by the calling agent',
+      }),
+    );
+  };
+
   it('stops the callee turn and stamps WHO cancelled it and WHY onto the envelope', async () => {
     const { broker, cancelledTurns, items } = harness({ launch: 'defer' });
     const call = broker.callAgent('run-1', 'orch', {
@@ -5329,14 +5363,13 @@ describe('CallBroker — cancel_agent', () => {
 
     // And the reason travels: a cancelled call's record must say who ended it,
     // or a hundred-minute call ending early leaves nothing behind but its cost.
-    const collected = await broker.awaitAgent('run-1', 'orch', {
-      call_id: 'call-1',
-    });
-    expect(errorOf(collected)).toContain('CALLEE_CANCELLED');
-    expect(errorOf(collected)).toContain('stopped by orch');
-    expect(errorOf(collected)).toContain('its premise was refuted');
-    // The transcript's own row carries it too — `call_result` holds the envelope.
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual(cancelledByYou('its premise was refuted'));
     const result = items.find((item) => item.kind === 'call_result');
+    expect(result?.payload).toMatchObject({ status: 'error' });
+    expect(JSON.stringify(result?.payload)).toContain('CALLEE_CANCELLED');
+    expect(JSON.stringify(result?.payload)).toContain('stopped by orch');
     expect(JSON.stringify(result?.payload)).toContain(
       'its premise was refuted',
     );
@@ -5507,6 +5540,163 @@ describe('CallBroker — cancel_agent', () => {
       (item) => item.kind === 'call_answer' && item.payload.outcome,
     );
     expect(answer?.payload.outcome).toBe('cancelled');
+  });
+
+  it('answers an await of a call its caller cancelled as a cancelled result, not an error', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await startAsync(broker);
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'its premise was refuted',
+    });
+    await flush();
+
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual(cancelledByYou('its premise was refuted'));
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual(cancelledByYou('its premise was refuted'));
+  });
+
+  it('answers a wait already running when the caller cancelled the call the same way', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await startAsync(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+
+    expect(await waiting).toEqual(cancelledByYou('changed my mind'));
+  });
+
+  it('collects its own cancelled call as it settles, and does not tell a working caller about it', async () => {
+    const tells: string[] = [];
+    const { broker, items } = harness({
+      launch: 'defer',
+      tellLiveNode: (_caller, prompt) => {
+        tells.push(prompt);
+        return true;
+      },
+    });
+    await startAsync(broker);
+    settleCancelled(broker, 'changed my mind');
+    await flush();
+
+    expect(tells).toEqual([]);
+    expect(broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+    expect(
+      items.filter((item) => item.kind === 'await_collected'),
+    ).toHaveLength(1);
+    const result = items.find((item) => item.kind === 'call_result');
+    expect(result?.payload).toMatchObject({ status: 'error' });
+    expect(JSON.stringify(result?.payload)).toContain('CALLEE_CANCELLED');
+    expect(JSON.stringify(result?.payload)).toContain('stopped by orch');
+    expect(JSON.stringify(result?.payload)).toContain('changed my mind');
+
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual(cancelledByYou('changed my mind'));
+    expect(
+      items.filter((item) => item.kind === 'await_collected'),
+    ).toHaveLength(1);
+  });
+
+  it('collects its own cancelled call as it settles, and does not wake an idle caller for it', async () => {
+    const wakes: string[] = [];
+    const { broker, items } = harness({
+      launch: 'defer',
+      isNodeLive: () => false,
+      wakeNode: (_caller, prompt) => {
+        wakes.push(prompt);
+        return true;
+      },
+    });
+    await startAsync(broker);
+    settleCancelled(broker, 'changed my mind');
+    await flush();
+
+    expect(wakes).toEqual([]);
+    expect(broker.owedACallOrMonitor('run-1', 'orch')).toBe(false);
+    expect(
+      items.filter((item) => item.kind === 'await_collected'),
+    ).toHaveLength(1);
+  });
+
+  it('answers an await with no call_id that has only a self-cancelled call once, not NO_OPEN_CALLS', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await startAsync(broker);
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    await flush();
+
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toEqual(
+      cancelledByYou('changed my mind'),
+    );
+    expect(errorOf(await broker.awaitAgent('run-1', 'orch', {}))).toContain(
+      'NO_OPEN_CALLS',
+    );
+  });
+
+  it('answers the self-cancelled call at once, and waits on the other open call as before', async () => {
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await startAsync(broker);
+    await broker.callAgent('run-1', 'orch', {
+      title: 'review it',
+      agent: 'writer',
+      message: 'review the thing',
+      mode: 'async',
+    });
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    await flush();
+
+    expect(await broker.awaitAgent('run-1', 'orch', {})).toEqual(
+      cancelledByYou('changed my mind'),
+    );
+    const next = broker.awaitAgent('run-1', 'orch', {});
+    deferred[1]!.resolve(settledWith({ finalText: 'REVIEWED' }));
+    expect(await next).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2', text: 'REVIEWED' },
+    });
+  });
+
+  it('hands the caller the finished result, and wakes it for it, when the stop lost the race to a completed turn', async () => {
+    const tells: string[] = [];
+    const { broker, capability, deferred } = harness({
+      launch: 'defer',
+      tellLiveNode: (_caller, prompt) => {
+        tells.push(prompt);
+        return true;
+      },
+    });
+    capability.cancelCalleeTurn = () => true;
+    await startAsync(broker);
+    broker.cancelAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      reason: 'changed my mind',
+    });
+    const finished = settledWith({
+      finalText: 'THE FINISHED WORK',
+      sessionId: 'sess-1',
+    });
+    deferred[0]!.resolve(finished);
+    broker.noteCalleeSettling('run-1', 'call-1', finished);
+    await flush();
+
+    expect(tells).toHaveLength(1);
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-1', text: 'THE FINISHED WORK' },
+    });
   });
 });
 

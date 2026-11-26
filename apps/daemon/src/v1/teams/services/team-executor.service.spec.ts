@@ -10315,15 +10315,19 @@ describe('TeamExecutorService — agent calls', () => {
     expect(callee.cancelled).toBe(true);
     await drain();
 
-    // …and what the caller collects says who stopped it and why.
-    const collected = await callBroker.awaitAgent(run.id, 'orch', {
-      call_id: 'call-1',
+    // …and what the caller collects is its own cancellation, and why.
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+    ).toEqual({
+      status: 'ok',
+      result: {
+        call_id: 'call-1',
+        agent: 'helper',
+        state: 'cancelled',
+        by: 'you',
+        reason: 'the premise it was briefed on was refuted',
+      },
     });
-    expect(collected.status).toBe('error');
-    const error = collected.status === 'error' ? collected.error : '';
-    expect(error).toContain('CALLEE_CANCELLED');
-    expect(error).toContain('stopped by orch');
-    expect(error).toContain('the premise it was briefed on was refuted');
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -10901,13 +10905,12 @@ describe('TeamExecutorService — agent calls', () => {
       expect(endings).toContain('cancelled');
       expect(endings).not.toContain('completed');
 
-      const collected = await callBroker.awaitAgent(run.id, 'mgr', {
-        call_id: 'call-1',
+      expect(
+        await callBroker.awaitAgent(run.id, 'mgr', { call_id: 'call-1' }),
+      ).toMatchObject({
+        status: 'ok',
+        result: { call_id: 'call-1', state: 'cancelled', by: 'you' },
       });
-      expect(collected.status).toBe('error');
-      expect(collected.status === 'error' ? collected.error : '').toContain(
-        'CALLEE_CANCELLED',
-      );
     });
 
     it.each(['text_delta', 'reasoning_delta', 'reasoning'] as const)(
@@ -11540,14 +11543,15 @@ describe('TeamExecutorService — agent calls', () => {
 
     // Settled with every slot still taken: it left the queue, rather than
     // waiting for a slot only to read the mark there.
-    const collected = await callBroker.awaitAgent(run.id, 'orch', {
-      call_id: 'call-5',
-      timeout_ms: 50,
+    expect(
+      await callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-5',
+        timeout_ms: 50,
+      }),
+    ).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-5', state: 'cancelled', by: 'you' },
     });
-    expect(collected.status).toBe('error');
-    expect(collected.status === 'error' ? collected.error : '').toContain(
-      'CALLEE_CANCELLED',
-    );
 
     // Its slot never went to it: freeing one spawns nothing.
     completeTurn(claude.starts[1]!, 'ok-1');
@@ -13251,10 +13255,11 @@ describe('TeamExecutorService — agent calls', () => {
       await drain();
       // …and the caller collects the stop it asked for, not a hand-on.
       expect(
-        errorOf(
-          await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
-        ),
-      ).toContain('CALLEE_CANCELLED');
+        await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' }),
+      ).toMatchObject({
+        status: 'ok',
+        result: { call_id: 'call-1', state: 'cancelled', by: 'you' },
+      });
       expect(cursor.starts).toHaveLength(1);
 
       completeTurn(claude.starts[0]!, 'done');
@@ -19763,7 +19768,10 @@ describe('TeamExecutorService — work still out when a process ends', () => {
     ).toMatchObject({ outcome: 'undelivered', message: 'keep the old labels' });
     completeTurn(claude.starts[0]!, 'waiting');
     await drain();
-    const next = claude.starts[2]!;
+    expect(claude.starts).toHaveLength(2);
+    await service.sendMessage(run.id, 'next task');
+    await drain();
+    const next = claude.starts.at(-1)!;
     expect(next.input.prompt).toContain('Not delivered to callee (call-1)');
     expect(next.input.prompt).toContain('keep the old labels');
     expect(next.input.prompt).toContain('withdrawn');
@@ -20635,6 +20643,8 @@ describe('TeamExecutorService — automatic compaction of a member', () => {
     const compact = claude.starts.at(-1)!;
     expect(compact.input.prompt).toBe('/compact');
     fillAndComplete(compact, 20_000, 'compacted');
+    await drain();
+    await service.sendMessage(run.id, 'next task');
     await drain();
     expect(claude.starts.at(-1)!.input.prompt).toContain(
       'undelivered correction',

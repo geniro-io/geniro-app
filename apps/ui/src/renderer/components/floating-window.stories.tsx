@@ -5,7 +5,13 @@ import { useState } from 'react';
 import { cornerWindow, FloatingWindow } from './floating-window';
 import { Button } from './ui/button';
 
-function Page({ phone = false }: { phone?: boolean }): React.JSX.Element {
+function Page({
+  phone = false,
+  fullHead = false,
+}: {
+  phone?: boolean;
+  fullHead?: boolean;
+}): React.JSX.Element {
   const [open, setOpen] = useState(true);
   return (
     <div className="relative h-[560px] w-full overflow-hidden rounded-lg border border-dashed border-border bg-sidebar/40">
@@ -26,6 +32,15 @@ function Page({ phone = false }: { phone?: boolean }): React.JSX.Element {
         title="Manager"
         open={open}
         phone={phone}
+        fullHead={
+          fullHead ? (
+            <span className="flex items-center gap-1">
+              {[0, 1, 2].map((index) => (
+                <span key={index} className="size-6 rounded-full bg-accent" />
+              ))}
+            </span>
+          ) : undefined
+        }
         initialRect={(bounds) =>
           cornerWindow(
             bounds,
@@ -58,3 +73,5 @@ type Story = StoryObj<typeof meta>;
 export const Desktop: Story = {};
 
 export const Phone: Story = { args: { phone: true } };
+
+export const WithFullHead: Story = { args: { fullHead: true } };

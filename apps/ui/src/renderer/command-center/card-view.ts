@@ -361,6 +361,11 @@ export function threadCardViewOf(
   };
 }
 
+/** Whether a thread counts as working: the graph's manager node and its blocks count exactly these. */
+export function isWorkingThread(view: Pick<ThreadCardView, 'status'>): boolean {
+  return view.status === 'working';
+}
+
 /**
  * The cards in the order they stand: by {@link ATTENTION_ORDER}, newest
  * activity first within each band, except working threads, which stand newest

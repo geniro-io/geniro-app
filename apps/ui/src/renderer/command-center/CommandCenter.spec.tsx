@@ -134,12 +134,13 @@ function cardOf(
   runId: string,
   projectId: string,
   column: 'idle' | 'done' | 'working' | 'waiting' = 'idle',
+  createdAt = NOW_ISO,
 ): unknown {
   return {
     run: {
       id: runId,
       title: `Thread ${runId}`,
-      createdAt: NOW_ISO,
+      createdAt,
       lastActivityAt: NOW_ISO,
       status: 'completed',
       awaiting: null,
@@ -1324,5 +1325,126 @@ describe('CommandCenter — the working tile on the canvas', () => {
     expect(
       row.querySelector('[data-slot="working-thread-monitors"]')!.textContent,
     ).toBe('2 monitors');
+  });
+});
+
+describe('CommandCenter — the working strip in the maximised manager chat', () => {
+  const openChat = (): void =>
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-toggle"]'),
+    );
+  const maximiseChat = (): void =>
+    clickOn(
+      container.querySelector('[data-slot="command-center-chat-maximise"]'),
+    );
+  const stripOf = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-slot="working-strip"]');
+  const facesOf = (): string[] =>
+    [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="working-strip-thread"]',
+      ),
+    ].map((face) => face.dataset.run!);
+
+  it('draws no strip while the chat window is open but not maximised', async () => {
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'working'),
+      cardOf('run-a', 'p1'),
+    ]);
+    await renderPage();
+    openChat();
+
+    expect(stripOf()).toBeNull();
+  });
+
+  it('draws one face per working thread once the chat is maximised, and counts what the graph counts', async () => {
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'working'),
+      cardOf('run-x', 'p2', 'working'),
+      cardOf('run-q', 'p2', 'waiting'),
+      cardOf('run-a', 'p1'),
+    ]);
+    await renderPage();
+    openChat();
+    maximiseChat();
+
+    expect(facesOf()).toEqual(['run-w', 'run-x']);
+    expect(facesOf()).toHaveLength(
+      probes.graph!.threads.filter((thread) => thread.view.status === 'working')
+        .length,
+    );
+  });
+
+  it('follows the board: a thread that stops working leaves the strip, and none working removes it', async () => {
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'working'),
+      cardOf('run-x', 'p2', 'working'),
+    ]);
+    await renderPage();
+    openChat();
+    maximiseChat();
+    expect(facesOf()).toEqual(['run-w', 'run-x']);
+
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'idle'),
+      cardOf('run-x', 'p2', 'working'),
+    ]);
+    await renderPage();
+    expect(facesOf()).toEqual(['run-x']);
+
+    fakes.board = boardOf([cardOf('run-x', 'p2', 'done')]);
+    await renderPage();
+    expect(stripOf()).toBeNull();
+  });
+
+  it('opens a pressed face as its card over the maximised window, as the window’s own Open chat does, and keeps it there through a press in the window', async () => {
+    fakes.board = boardOf([
+      cardOf('run-w', 'p1', 'working'),
+      cardOf('run-a', 'p1'),
+    ]);
+    await renderPage();
+    openChat();
+    maximiseChat();
+
+    const face = container.querySelector<HTMLElement>(
+      '[data-slot="working-strip-thread"][data-run="run-w"]',
+    )!;
+    act(() => {
+      face.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    clickOn(face);
+
+    expect(probes.graph!.openCards).toEqual([
+      expect.objectContaining({ runId: 'run-w', aboveWindow: true }),
+    ]);
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="command-center-chat"]')!
+        .dataset.state,
+    ).toBe('maximised');
+    expect(onOpenThread).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+    expect(probes.graph!.openCards[0]!.aboveWindow).toBe(true);
+  });
+
+  it('follows the block order the user set, older thread first', async () => {
+    localStorage.setItem(
+      'commandCenter.blockOrders',
+      JSON.stringify({ 'block:p1': ['run-old', 'run-new'] }),
+    );
+    fakes.board = boardOf([
+      cardOf('run-new', 'p1', 'working', '2026-11-17T11:00:00.000Z'),
+      cardOf('run-old', 'p1', 'working', '2026-11-17T10:00:00.000Z'),
+    ]);
+    await renderPage();
+    openChat();
+    maximiseChat();
+
+    expect(facesOf()).toEqual(['run-old', 'run-new']);
   });
 });

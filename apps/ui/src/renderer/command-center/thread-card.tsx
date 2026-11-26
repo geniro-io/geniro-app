@@ -165,21 +165,22 @@ export const ATTENTION_TEXT: Record<ThreadAttention, string> = {
   done: 'Done',
 };
 
-const cardVariants = cva(
-  'relative flex flex-col overflow-hidden rounded-card border text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md motion-reduce:transition-none',
-  {
-    variants: {
-      attention: {
-        blocked: 'border-destructive/50 bg-destructive/5',
-        working: 'border-success/50 bg-success/5 cc-running-border',
-        question: 'border-warning/50 bg-warning/10',
-        quiet: 'border-border bg-card',
-        inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
-        done: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
-      } satisfies Record<ThreadAttention, string>,
-    },
+const CARD_CLASS =
+  'relative flex flex-col overflow-hidden rounded-card text-left shadow-sm transition-[border-color,box-shadow,opacity] duration-200 hover:shadow-md motion-reduce:transition-none';
+
+/** Where a thread stands, as the frame around its node on the graph and its face in the working strip. */
+export const attentionFrameVariants = cva('border', {
+  variants: {
+    attention: {
+      blocked: 'border-destructive/50 bg-destructive/5',
+      working: 'border-success/50 bg-success/5 cc-running-border',
+      question: 'border-warning/50 bg-warning/10',
+      quiet: 'border-border bg-card',
+      inactive: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
+      done: 'border-border bg-muted/40 opacity-70 hover:opacity-100',
+    } satisfies Record<ThreadAttention, string>,
   },
-);
+});
 
 export const attentionDotVariants = cva('size-2 shrink-0 rounded-full', {
   variants: {
@@ -312,7 +313,8 @@ export function ThreadCard({
       data-status={status}
       data-attention={attention}
       className={cn(
-        cardVariants({ attention }),
+        CARD_CLASS,
+        attentionFrameVariants({ attention }),
         onAnswer !== undefined && 'cc-breathe-warning',
       )}
       style={{

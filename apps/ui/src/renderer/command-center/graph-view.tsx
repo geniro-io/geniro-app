@@ -39,13 +39,11 @@ import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
 import type { BlockOrders } from './block-orders';
-import { orderedWithin } from './block-orders';
-import { blockIdOf, type BlockPlaces } from './block-places';
+import type { BlockPlaces } from './block-places';
 import {
   ATTENTION_ORDER,
-  BLOCK_ATTENTION_ORDER,
+  isWorkingThread,
   MANAGER_TITLE,
-  orderByAttention,
   type ThreadCardView,
 } from './card-view';
 import {
@@ -72,6 +70,11 @@ import {
   withBlockItems,
   withBoxAt,
 } from './graph-layout';
+import {
+  type GraphThread,
+  orderedBlocks,
+  threadsByAttention,
+} from './graph-order';
 import type { NodeOffset, NodeOffsets } from './node-positions';
 import type { CardBand, CardSize } from './open-cards';
 import { NO_PROJECT_NAME, ProjectBlock } from './project-block';
@@ -97,13 +100,7 @@ import { useWheelLatch, wheelStep } from './wheel-latch';
 
 export const MAX_THREAD_NODES = 24;
 
-export interface GraphThread {
-  id: string;
-  /** The thread's project, whose block it stands in; null for no project. */
-  projectId: string | null;
-  createdAt: string;
-  view: ThreadCardView;
-}
+export type { GraphThread } from './graph-order';
 
 /** A thread open as a card on the canvas: where it stood when it opened, and the size it is at. */
 export interface GraphOpenCard {
@@ -657,57 +654,32 @@ export function graphBlocks(
         : cardBox(card.size)),
     };
   };
-  const rank = (thread: GraphThread): number =>
-    BLOCK_ATTENTION_ORDER.indexOf(
-      open.get(thread.id)?.band.attention ?? thread.view.attention,
-    );
   const known = new Map(projects.map((project) => [project.id, project]));
-  const order = [
-    ...projects.map((project) => project.id),
-    ...new Set(
-      all.flatMap((thread) =>
-        thread.projectId === null || known.has(thread.projectId)
-          ? []
-          : [thread.projectId],
-      ),
-    ),
-  ];
-  const blockOf = (projectId: string | null): GraphBlock => {
-    const ofProject = (thread: GraphThread): boolean =>
-      thread.projectId === projectId;
-    const id = blockIdOf({ projectId });
-    const ranked = shown.filter(ofProject).sort((a, b) => rank(a) - rank(b));
-    const byId = new Map(ranked.map((thread) => [thread.id, thread]));
-    const threads = orderedWithin(
-      ranked.map((thread) => thread.id),
-      orders[id],
-    ).map((threadId) => byId.get(threadId)!);
-    const members = all.filter(ofProject);
-    const total = Math.max(members.length, threads.length);
-    const project = projectId === null ? undefined : known.get(projectId);
-    return {
-      id,
-      name:
-        projectId === null
-          ? NO_PROJECT_NAME
-          : (project?.name ?? members[0]?.view.project ?? projectId),
-      color: project?.color ?? null,
-      threads,
-      total,
-      items: threads.map(boxOf),
-      ...(total > threads.length
-        ? {
-            footer: {
-              id: moreIdOf(id),
-              width: MORE_WIDTH,
-              height: MORE_HEIGHT,
-            },
-          }
-        : {}),
-    };
-  };
-  return [...order.map(blockOf), blockOf(null)].filter(
-    (block) => block.total > 0,
+  return orderedBlocks(shown, projects, open, all, orders).map(
+    ({ id, projectId, threads, members }) => {
+      const total = Math.max(members.length, threads.length);
+      const project = projectId === null ? undefined : known.get(projectId);
+      return {
+        id,
+        name:
+          projectId === null
+            ? NO_PROJECT_NAME
+            : (project?.name ?? members[0]?.view.project ?? projectId),
+        color: project?.color ?? null,
+        threads,
+        total,
+        items: threads.map(boxOf),
+        ...(total > threads.length
+          ? {
+              footer: {
+                id: moreIdOf(id),
+                width: MORE_WIDTH,
+                height: MORE_HEIGHT,
+              },
+            }
+          : {}),
+      };
+    },
   );
 }
 
@@ -720,15 +692,9 @@ export function shownThreads(
   threads: readonly GraphThread[],
   open: ReadonlyMap<string, Pick<GraphOpenCard, 'band'>> = new Map(),
 ): GraphThread[] {
-  const keyed = threads.map((thread) => ({
-    id: thread.id,
-    createdAt: thread.createdAt,
-    view: open.get(thread.id)?.band ?? thread.view,
-    thread,
-  }));
-  return orderByAttention(keyed)
-    .filter((entry, index) => index < MAX_THREAD_NODES || open.has(entry.id))
-    .map((entry) => entry.thread);
+  return threadsByAttention(threads, open).filter(
+    (thread, index) => index < MAX_THREAD_NODES || open.has(thread.id),
+  );
 }
 
 /** How many threads stand in each attention band. */
@@ -1364,8 +1330,8 @@ function GraphCanvas({
   const awaiting = [...states.values()].filter(
     (entry) => entry.state === 'awaiting',
   ).length;
-  const working = threads.filter(
-    (thread) => thread.view.status === 'working',
+  const working = threads.filter((thread) =>
+    isWorkingThread(thread.view),
   ).length;
 
   const base = (id: string) => {
@@ -1413,9 +1379,8 @@ function GraphCanvas({
         name: block.name,
         color: block.color,
         threads: block.total,
-        working: block.threads.filter(
-          (thread) => thread.view.status === 'working',
-        ).length,
+        working: block.threads.filter((thread) => isWorkingThread(thread.view))
+          .length,
         movable: !narrow,
       },
     });

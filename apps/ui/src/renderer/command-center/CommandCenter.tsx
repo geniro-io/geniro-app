@@ -69,6 +69,7 @@ import {
   threadCardViewOf,
   threadIdentitiesOf,
 } from './card-view';
+import { workingThreadsInGraphOrder } from './graph-order';
 import type { GraphFocus } from './graph-view';
 import { ManagerDock } from './manager-dock';
 import { ManagerStart } from './manager-start';
@@ -88,6 +89,7 @@ import {
   type OpenRequest,
   useOpenRequests,
 } from './use-open-requests';
+import { WorkingStrip } from './working-strip';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
@@ -567,6 +569,20 @@ export function CommandCenter({
       view: ask === undefined ? view : { ...view, lastMessage: askLineOf(ask) },
     };
   });
+  const openBands = new Map(cards.cards.map((card) => [card.runId, card]));
+  const workingStrip = workingThreadsInGraphOrder(
+    graphThreads,
+    shownProjects,
+    openBands,
+    blockOrders.orders,
+    narrow ? new Map() : openBands,
+  ).map((thread) => ({
+    runId: thread.id,
+    identity:
+      threadIdentities.get(thread.id) ?? bareThreadIdentity(thread.view.title),
+    attention: thread.view.attention,
+    statusText: thread.view.statusText,
+  }));
   const contacts = Object.fromEntries(
     shown.map((card) => [
       card.run.id,
@@ -787,6 +803,12 @@ export function CommandCenter({
                 phone={narrow}
                 initialRect={managerWindowRect}
                 onActivate={() => setFront('manager')}
+                fullHead={
+                  <WorkingStrip
+                    threads={workingStrip}
+                    onOpenThread={showThreadFromWindow}
+                  />
+                }
                 onClose={() => setChatOpen(false)}>
                 {managerRunId === null ? (
                   managerChoice.choice === null ? null : (

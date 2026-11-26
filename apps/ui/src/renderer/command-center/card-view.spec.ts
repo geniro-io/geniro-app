@@ -11,6 +11,7 @@ import {
   attentionOf,
   IDLE_AFTER_DAYS,
   idleDaysOf,
+  isWorkingThread,
   MANAGER_TITLE,
   orderByAttention,
   sameThreadIdentities,
@@ -568,5 +569,14 @@ describe('sameThreadIdentities', () => {
         new Map([['a', identity('A', { kind: 'unknown' })]]),
       ),
     ).toBe(false);
+  });
+});
+
+describe('isWorkingThread', () => {
+  it('counts a thread only in the working status', () => {
+    expect(isWorkingThread({ status: 'working' })).toBe(true);
+    for (const status of ['waiting', 'idle', 'done', 'failed'] as const) {
+      expect(isWorkingThread({ status })).toBe(false);
+    }
   });
 });

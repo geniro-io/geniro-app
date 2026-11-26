@@ -2,6 +2,7 @@ import { cva } from 'class-variance-authority';
 import { ChevronUp, Maximize2, Minimize2, Minus, X } from 'lucide-react';
 import {
   type PointerEvent as ReactPointerEvent,
+  type SyntheticEvent,
   useRef,
   useState,
 } from 'react';
@@ -205,6 +206,7 @@ export function FloatingWindow({
   onActivate,
   children,
   slot = 'floating-window',
+  fullHead,
 }: {
   label: string;
   title: React.ReactNode;
@@ -214,6 +216,8 @@ export function FloatingWindow({
   initialRect?: (bounds: WindowBounds) => WindowRect;
   /** Controls drawn in the head before minimise, maximise and close. */
   actions?: React.ReactNode;
+  /** Drawn in the head after the title while the window fills the page: maximised, or on a phone. */
+  fullHead?: React.ReactNode;
   onClose: () => void;
   /** A press landed anywhere in the window, so it is the one the user is working in. */
   onActivate?: () => void;
@@ -259,6 +263,16 @@ export function FloatingWindow({
             }
           : rect;
 
+  const keepOffHeadUnlessFree = (event: SyntheticEvent<HTMLElement>): void => {
+    const slot = event.currentTarget;
+    const target = event.target;
+    if (
+      target !== slot &&
+      !(target instanceof Node && target.parentNode === slot)
+    ) {
+      event.stopPropagation();
+    }
+  };
   const begin = (
     event: ReactPointerEvent<HTMLElement>,
     make: (origin: WindowRect) => Gesture,
@@ -365,6 +379,15 @@ export function FloatingWindow({
           }}>
           <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold">
             {title}
+            {open && (maximised || phone) && fullHead ? (
+              <div
+                data-slot={`${slot}-full-head`}
+                className="flex min-w-0 flex-1 items-center"
+                onPointerDown={keepOffHeadUnlessFree}
+                onDoubleClick={keepOffHeadUnlessFree}>
+                {fullHead}
+              </div>
+            ) : null}
           </div>
           <div
             className="flex shrink-0 items-center gap-0.5"

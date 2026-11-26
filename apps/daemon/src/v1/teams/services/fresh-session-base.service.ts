@@ -41,8 +41,8 @@ import {
 const NO_READING_REASON =
   'not measured: no fresh session in the group stored its CLI’s own breakdown — it is asked when a session opens, on a CLI that can answer';
 
-const PLUGINS_SPREAD_REASON =
-  'not totalled: the CLI counts a plugin’s parts under skills, agents and MCP servers, never per plugin';
+const PLUGINS_UNATTRIBUTED_REASON =
+  'not measured: the CLI ties a plugin’s skills and agents to it, but not what its hooks add, and plugin skills share one listing budget with every other skill, so a sum per plugin is not what a plugin costs';
 
 const NO_START_REASON = 'no fresh session of this member in the runs read';
 
@@ -373,7 +373,7 @@ function unstartedEntry(
 
 function notMeasured(hasReading: boolean): FreshSessionBase['notMeasured'] {
   if (hasReading) {
-    return [{ part: 'plugins', reason: PLUGINS_SPREAD_REASON }];
+    return [{ part: 'plugins', reason: PLUGINS_UNATTRIBUTED_REASON }];
   }
   return FRESH_SESSION_UNMEASURED_PARTS.map((part) => ({
     part,

@@ -402,7 +402,7 @@ describe('WaitingItemsCard', () => {
   it('reads a resolved lesson as its decided status', async () => {
     const made = storeOf();
     made.listLessonProposals.mockResolvedValue({
-      proposals: [{ ...proposal('p1'), status: 'saved' }],
+      proposals: [{ ...proposal('p1'), title: 'a lesson', status: 'saved' }],
     });
     await act(async () => {
       draw(made.store, {
@@ -428,6 +428,21 @@ describe('WaitingItemsCard', () => {
     });
     expect(decidedCard()).not.toBeNull();
     expect(resolvedLines()).toEqual(['Old note — forgotten']);
+  });
+
+  it('names a decided entry by its own title, also on a row that stored another name', async () => {
+    const made = storeOf();
+    made.readMemory.mockResolvedValue({
+      status: 'active',
+      title: 'QA-MEM-1 synthetic note',
+    });
+    await act(async () => {
+      draw(made.store, {
+        kind: 'memory',
+        items: [{ id: 'm1', title: 'm1 Synthetic body for QA memory 1' }],
+      });
+    });
+    expect(resolvedLines()).toEqual(['QA-MEM-1 synthetic note — approved']);
   });
 
   it('falls back to no longer waiting when the outcome cannot be read', async () => {
@@ -498,8 +513,8 @@ describe('WaitingItemsCard', () => {
     const made = storeOf();
     made.listLessonProposals.mockResolvedValue({
       proposals: [
-        { ...proposal('p1'), status: 'saved' },
-        { ...proposal('p2'), status: 'rejected' },
+        { ...proposal('p1'), title: 'one', status: 'saved' },
+        { ...proposal('p2'), title: 'two', status: 'rejected' },
       ],
     });
     await act(async () => {

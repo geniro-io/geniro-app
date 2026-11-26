@@ -22,13 +22,10 @@ import { LessonProposalDao } from '../../lessons/dao/lesson-proposal.dao';
 import { LESSON_WAITING_STATUSES } from '../../lessons/lessons.types';
 import { LessonsEventBus } from '../../lessons/services/lessons-events.bus';
 import { MemoryDao } from '../../memory/dao/memory.dao';
-import { memoryHandle } from '../../memory/memory.types';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { CommandCenterService } from './command-center.service';
 import { CommandCenterEventBus } from './command-center-events.bus';
 import { ManagerAnnouncementsService } from './manager-announcements.service';
-
-const MEMORY_TITLE_MAX = 120;
 
 type WaitingItem = WaitingItemsRow['items'][number];
 
@@ -38,16 +35,6 @@ function clean(text: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function memoryTitleOf(handle: number, body: string): string {
-  const firstLine = clean(
-    body.split('\n').find((line) => line.trim() !== '') ?? '',
-  );
-  const title = clean(`${memoryHandle(handle)} ${firstLine}`);
-  return title.length > MEMORY_TITLE_MAX
-    ? `${title.slice(0, MEMORY_TITLE_MAX - 1)}…`
-    : title;
 }
 
 /**
@@ -165,7 +152,7 @@ export class CommandCenterWaitingService
     if (kind === 'memory') {
       return (await this.memories.pendingEntries(em)).map((entry) => ({
         id: entry.id,
-        title: memoryTitleOf(entry.handle, entry.body),
+        title: clean(entry.title),
       }));
     }
     if (kind === 'lesson') {

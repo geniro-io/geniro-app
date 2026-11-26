@@ -512,6 +512,25 @@ describe("ThreadEventCard — a finished thread drawn as the graph's card", () =
     ).toBe(false);
   });
 
+  it('says Done once, in its event line, with no status chip in its head', () => {
+    const finished: ThreadIdentity = {
+      ...PELICAN,
+      status: { attention: 'done', text: 'Done' },
+    };
+    const el = render(
+      <ThreadIdentityContext.Provider
+        value={new Map([['r-pelican', finished]])}>
+        <ThreadEventCard kind="done" runId="r-pelican" title="Pelican" />
+      </ThreadIdentityContext.Provider>,
+    );
+
+    expect(el.querySelector('[data-slot="thread-event-status"]')).toBeNull();
+    expect(el.textContent?.match(/Done/g)).toHaveLength(1);
+    expect(
+      el.querySelector('[data-slot="thread-event-project"]'),
+    ).not.toBeNull();
+  });
+
   it('keeps the one-line head on every other event', () => {
     const el = render(
       <ThreadIdentityContext.Provider value={IDENTITIES}>

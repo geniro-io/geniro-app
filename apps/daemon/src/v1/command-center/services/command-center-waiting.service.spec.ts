@@ -23,16 +23,15 @@ import { ManagerAnnouncementsService } from './manager-announcements.service';
 const MANAGER = 'manager-1';
 
 type Db = Awaited<ReturnType<typeof commandCenterDb>>;
-type Pending = { id: string; handle: number; body: string };
 type Titled = { id: string; title: string };
 
 describe('CommandCenterWaitingService', () => {
   let db: Db;
   let managerRunId: string | null;
-  let memories: Pending[];
+  let memories: Titled[];
   let lessons: Titled[];
   let revisions: Titled[];
-  let pendingEntries: ReturnType<typeof vi.fn<() => Promise<Pending[]>>>;
+  let pendingEntries: ReturnType<typeof vi.fn<() => Promise<Titled[]>>>;
   let lessonList: ReturnType<
     typeof vi.fn<(filter: { statuses: string[] }) => Promise<Titled[]>>
   >;
@@ -108,31 +107,20 @@ describe('CommandCenterWaitingService', () => {
     }));
   }
 
-  it('writes one row with one item for a new pending memory entry', async () => {
-    memories = [
-      { id: 'mem-1', handle: 12, body: '  Prefer   pnpm\nsecond line' },
-    ];
+  it("writes one row with one item for a new pending memory entry, named by the entry's own title", async () => {
+    memories = [{ id: 'mem-1', title: '  Prefer   pnpm ' }];
 
     await service.review('memory');
 
     expect(await managerRows()).toEqual([
       expect.objectContaining({
-        message: 'memory waits for your review: m12 Prefer pnpm',
+        message: 'memory waits for your review: Prefer pnpm',
         waitingItems: {
           kind: 'memory',
-          items: [{ id: 'mem-1', title: 'm12 Prefer pnpm' }],
+          items: [{ id: 'mem-1', title: 'Prefer pnpm' }],
         },
       }),
     ]);
-  });
-
-  it('caps a memory title at 120 characters', async () => {
-    memories = [{ id: 'mem-1', handle: 1, body: 'y'.repeat(500) }];
-
-    await service.review('memory');
-
-    const [row] = await managerRows();
-    expect(row?.waitingItems.items[0]?.title).toHaveLength(120);
   });
 
   it('announces six waiting lessons at once as one summary row', async () => {
@@ -178,7 +166,7 @@ describe('CommandCenterWaitingService', () => {
 
   it('writes nothing when there is no manager run', async () => {
     managerRunId = null;
-    memories = [{ id: 'mem-1', handle: 1, body: 'x' }];
+    memories = [{ id: 'mem-1', title: 'x' }];
 
     await service.review('memory');
 
@@ -202,7 +190,7 @@ describe('CommandCenterWaitingService', () => {
   });
 
   it('reviews only the kind whose change event arrived', async () => {
-    memories = [{ id: 'mem-1', handle: 1, body: 'x' }];
+    memories = [{ id: 'mem-1', title: 'x' }];
     lessons = lessonsOf(1);
     revisions = [{ id: 'rev-1', title: 'Doc' }];
     service.onModuleInit();

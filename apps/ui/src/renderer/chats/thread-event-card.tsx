@@ -115,7 +115,8 @@ export const ThreadEventCard = memo(function ThreadEventCard({
     kind === 'done' ? `thread-done-hidden:${runId}` : undefined,
     false,
   );
-  const identity = identityOf(known, title, pullRequest);
+  const heading = identityOf(known, title, pullRequest);
+  const identity = kind === 'done' ? { ...heading, status: null } : heading;
   const reply = inReplyTo === null ? '' : plainPreview(inReplyTo);
   if (kind === 'done' && hidden) {
     return (

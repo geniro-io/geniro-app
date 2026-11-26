@@ -50,8 +50,8 @@ describe('MemoryDao.pendingEntries', () => {
     const pending = await new MemoryDao(db.em).pendingEntries(db.em.fork());
 
     expect(pending).toEqual([
-      { id: oldest, handle: 2, body: 'body 2' },
-      { id: newest, handle: 1, body: 'body 1' },
+      { id: oldest, title: 'title 2' },
+      { id: newest, title: 'title 1' },
     ]);
   });
 });

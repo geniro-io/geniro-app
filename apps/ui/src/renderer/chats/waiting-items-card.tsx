@@ -33,6 +33,12 @@ import {
 type Kind = WaitingItemsRowView['kind'];
 type Item = WaitingItemsRowView['items'][number];
 
+interface Resolution {
+  outcome: string | null;
+  /** The item's live title, where it can be read: the one its waiting card showed. */
+  title: string | null;
+}
+
 const SUMMARY_SHOWN = 3;
 const DECIDED_LESSON_STATUSES = 'saved,rejected,undone';
 const DECIDED_WORDS: Record<string, string> = {
@@ -94,8 +100,8 @@ async function readOutcomes(
   { apis }: WaitingItemsStore,
   kind: Kind,
   ids: readonly string[],
-): Promise<ReadonlyMap<string, string>> {
-  const found = new Map<string, string>();
+): Promise<ReadonlyMap<string, Resolution>> {
+  const found = new Map<string, Resolution>();
   switch (kind) {
     case 'memory':
       await Promise.all(
@@ -103,11 +109,18 @@ async function readOutcomes(
           const entry = await apis.memories
             .readMemory({ memoryId: id })
             .catch(() => null);
-          if (entry?.status === 'active') {
-            found.set(id, 'approved');
-          } else if (entry?.status === 'forgotten') {
-            found.set(id, 'forgotten');
+          if (entry === null) {
+            return;
           }
+          found.set(id, {
+            outcome:
+              entry.status === 'active'
+                ? 'approved'
+                : entry.status === 'forgotten'
+                  ? 'forgotten'
+                  : null,
+            title: entry.title,
+          });
         }),
       );
       return found;
@@ -118,7 +131,10 @@ async function readOutcomes(
       const wanted = new Set(ids);
       for (const proposal of proposals) {
         if (wanted.has(proposal.id)) {
-          found.set(proposal.id, proposal.status);
+          found.set(proposal.id, {
+            outcome: proposal.status,
+            title: proposal.title,
+          });
         }
       }
       return found;
@@ -130,9 +146,9 @@ async function readOutcomes(
             .readKnowledgeRevision({ revisionId: id })
             .catch(() => null);
           if (revision?.status === 'applied') {
-            found.set(id, 'approved');
+            found.set(id, { outcome: 'approved', title: null });
           } else if (revision?.status === 'rejected') {
-            found.set(id, 'rejected');
+            found.set(id, { outcome: 'rejected', title: null });
           }
         }),
       );
@@ -144,8 +160,8 @@ function useResolvedOutcomes(
   store: WaitingItemsStore | null,
   kind: Kind,
   resolved: readonly Item[],
-): ReadonlyMap<string, string> {
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, string>>(
+): ReadonlyMap<string, Resolution> {
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, Resolution>>(
     new Map(),
   );
   const key = resolved.map((item) => item.id).join('\n');
@@ -171,12 +187,15 @@ function useResolvedOutcomes(
   return outcomes;
 }
 
-function outcomeWords(
-  outcomes: ReadonlyMap<string, string>,
-  id: string,
+function resolvedText(
+  outcomes: ReadonlyMap<string, Resolution>,
+  item: Item,
 ): string {
-  const read = outcomes.get(id);
-  return read === undefined ? NO_LONGER_WAITING : (DECIDED_WORDS[read] ?? read);
+  const read = outcomes.get(item.id);
+  const outcome = read?.outcome ?? null;
+  const words =
+    outcome === null ? NO_LONGER_WAITING : (DECIDED_WORDS[outcome] ?? outcome);
+  return `${read?.title ?? item.title} — ${words}`;
 }
 
 function ResolvedLine({ text }: { text: string }): React.JSX.Element {
@@ -196,7 +215,7 @@ function ResolvedList({
   nounOne,
 }: {
   items: readonly Item[];
-  outcomes: ReadonlyMap<string, string>;
+  outcomes: ReadonlyMap<string, Resolution>;
   noun: string;
   nounOne: string;
 }): React.JSX.Element {
@@ -210,9 +229,7 @@ function ResolvedList({
         <ul className="m-0 flex list-none flex-col gap-1 p-0">
           {shown.map((item) => (
             <li key={item.id} className="min-w-0">
-              <ResolvedLine
-                text={`${item.title} — ${outcomeWords(outcomes, item.id)}`}
-              />
+              <ResolvedLine text={resolvedText(outcomes, item)} />
             </li>
           ))}
         </ul>
@@ -548,7 +565,7 @@ function Summary({
   kind: Kind;
   waiting: readonly Item[];
   resolved: readonly Item[];
-  outcomes: ReadonlyMap<string, string>;
+  outcomes: ReadonlyMap<string, Resolution>;
 }): React.JSX.Element {
   const { shown, expanded, setExpanded } = useShowAll(waiting, SUMMARY_SHOWN);
   const words = KIND_WORDS[kind];
@@ -637,12 +654,11 @@ export function WaitingItemsCard({
     return <TitlesOnly row={row} items={row.items} />;
   }
   const { waiting, resolved } = split;
-  if (row.items.length === 1) {
+  const [only] = row.items;
+  if (row.items.length === 1 && only !== undefined) {
     return waiting.length === 0 ? (
       <Frame kind={row.kind} heading={words.one} decided>
-        <ResolvedLine
-          text={`${row.items[0]?.title ?? words.one} — ${outcomeWords(outcomes, row.items[0]?.id ?? '')}`}
-        />
+        <ResolvedLine text={resolvedText(outcomes, only)} />
       </Frame>
     ) : (
       <Frame kind={row.kind} heading={words.one}>

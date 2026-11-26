@@ -88,11 +88,12 @@ export function workingThreadsInGraphOrder(
   projects: readonly Pick<ProjectColor, 'id'>[],
   open: OpenBands,
   orders: BlockOrders,
+  onCanvas: OpenBands = open,
 ): GraphThread[] {
   return orderedBlocks(
     threadsByAttention(threads, open),
     projects,
-    open,
+    onCanvas,
     threads,
     orders,
   )

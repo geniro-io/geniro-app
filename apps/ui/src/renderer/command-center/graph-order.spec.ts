@@ -10,7 +10,12 @@ import {
   threadsByAttention,
   workingThreadsInGraphOrder,
 } from './graph-order';
-import { graphBlocks, MAX_THREAD_NODES } from './graph-view';
+import {
+  graphBlocks,
+  type GraphOpenCard,
+  MAX_THREAD_NODES,
+  shownThreads,
+} from './graph-view';
 import type { CardBand } from './open-cards';
 
 const A = FIXTURE_PROJECTS[0]!.id;
@@ -185,5 +190,51 @@ describe('graphBlocks and orderedBlocks', () => {
     ).flatMap((block) => idsOf(block.threads));
     expect(fromGraph).toEqual(fromOrder);
     expect(fromGraph).toEqual(['a', 'b', 'c', 'd']);
+  });
+});
+
+describe('workingThreadsInGraphOrder and the graph, with an open card', () => {
+  it('stands the working threads where the graph stands them, on the desktop and on a phone', () => {
+    const threads = [
+      thread('old', A, '2026-01-01T00:00:00Z', 'working'),
+      thread('new', A, '2026-01-02T00:00:00Z', 'working'),
+    ];
+    const open = new Map<string, GraphOpenCard>([
+      [
+        'old',
+        {
+          runId: 'old',
+          band: { attention: 'question', lastAt: view.lastAt },
+          size: { width: 480, height: 360 },
+        },
+      ],
+    ]);
+    const graphOrder = (
+      onCanvas: ReadonlyMap<string, GraphOpenCard>,
+    ): string[] =>
+      graphBlocks(
+        shownThreads(threads, open),
+        FIXTURE_PROJECTS,
+        onCanvas,
+        new Map(),
+        threads,
+        {},
+      ).flatMap((block) => idsOf(block.threads));
+    const desktop = idsOf(
+      workingThreadsInGraphOrder(threads, FIXTURE_PROJECTS, open, {}, open),
+    );
+    const phone = idsOf(
+      workingThreadsInGraphOrder(
+        threads,
+        FIXTURE_PROJECTS,
+        open,
+        {},
+        new Map(),
+      ),
+    );
+    expect(desktop).toEqual(graphOrder(open));
+    expect(phone).toEqual(graphOrder(new Map()));
+    expect(desktop).toEqual(['new', 'old']);
+    expect(phone).toEqual(['old', 'new']);
   });
 });

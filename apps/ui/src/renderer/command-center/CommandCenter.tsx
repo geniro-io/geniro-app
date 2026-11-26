@@ -564,11 +564,13 @@ export function CommandCenter({
       view: ask === undefined ? view : { ...view, lastMessage: askLineOf(ask) },
     };
   });
+  const openBands = new Map(cards.cards.map((card) => [card.runId, card]));
   const workingStrip = workingThreadsInGraphOrder(
     graphThreads,
     shownProjects,
-    narrow ? new Map() : new Map(cards.cards.map((card) => [card.runId, card])),
+    openBands,
     blockOrders.orders,
+    narrow ? new Map() : openBands,
   ).map((thread) => ({
     runId: thread.id,
     identity:

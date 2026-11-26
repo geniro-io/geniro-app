@@ -74,7 +74,20 @@ export class AgentFlagDao extends BaseDao<AgentFlag> {
     return counts;
   }
 
-  /** What one conversation has already raised in this run: its summaries, for the cap and the duplicate check. */
+  async hasAutoCause(
+    runId: string,
+    autoCause: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    return (
+      (await this.getRepo(txEm ?? this.em.fork()).count(
+        { runId, autoCause },
+        { filters: false },
+      )) > 0
+    );
+  }
+
+  /** What one conversation has already raised in this run: its summaries, for the cap and the duplicate check; the daemon's own flags left out. */
   async summariesOf(
     runId: string,
     memberId: string | null,
@@ -82,7 +95,7 @@ export class AgentFlagDao extends BaseDao<AgentFlag> {
     txEm?: EntityManager,
   ): Promise<{ conversation: string[]; run: string[] }> {
     const rows = await this.getRepo(txEm ?? this.em.fork()).find(
-      { runId },
+      { runId, automatic: false },
       {
         fields: ['summary', 'memberId', 'conversationId'],
         disableIdentityMap: true,

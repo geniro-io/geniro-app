@@ -72,8 +72,10 @@ export class ShowGalleryTool extends BaseMcpTool {
         return localized;
       },
     );
+    const unstored = failures.find((entry) => entry.failure !== undefined);
     if (gallery === null) {
-      return this.text(
+      return this.answerTo(
+        unstored ?? {},
         hostGalleryResultText(
           { status: 'unavailable', reason: 'no image could be downloaded' },
           failures,
@@ -95,6 +97,9 @@ export class ShowGalleryTool extends BaseMcpTool {
     }
     // Same reading as its drawing siblings: an unavailable channel is an
     // answer, not a failure — the agent still knows where the files are.
-    return this.text(hostGalleryResultText(outcome, failures));
+    return this.answerTo(
+      unstored ?? outcome,
+      hostGalleryResultText(outcome, failures),
+    );
   }
 }

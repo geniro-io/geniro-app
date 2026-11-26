@@ -103,6 +103,7 @@ import {
 } from '../../agents/services/command-end-wake.service';
 import { FlagBroker } from '../../agents/services/flag.broker';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
+import { failedInside } from '../../agents/services/host-sink.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -134,6 +135,10 @@ import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { WriteFailureNotices } from '../../agents/services/write-failure.notices';
 import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
+import {
+  autoFlagCause,
+  minutesLostBetween,
+} from '../../agents/utils/agent-flags';
 import { joinTurnInstructionParts } from '../../agents/utils/agent-instructions';
 import {
   type AgentOptionsSnapshot,
@@ -1884,19 +1889,17 @@ export class TeamExecutorService
     }
     const em = this.em.fork();
     const clause = interruptCauseClause(cause);
-    await this.persist(
-      em,
-      runId,
-      null,
-      await this.seqs.reserve(runId),
-      'error',
-      null,
-      {
-        message: `team run interrupted — ${clause} while it was running, and it could not be continued`,
-        interrupted: true,
-        interruptCause: cause,
-      },
-    );
+    const lastActivity = (
+      await this.itemDao.latestItemAtPerRun([runId], em)
+    ).get(runId);
+    const message = `team run interrupted — ${clause} while it was running, and it could not be continued`;
+    const seq = await this.seqs.reserve(runId);
+    await this.persist(em, runId, null, seq, 'error', null, {
+      message,
+      interrupted: true,
+      interruptCause: cause,
+    });
+    await this.flagInterrupted(runId, cause, seq, message, lastActivity);
     const history = await this.itemDao.rowsOfKinds(
       runId,
       [...OPEN_WORK_KINDS],
@@ -1915,6 +1918,27 @@ export class TeamExecutorService
       },
     );
     await this.setRunStatus(em, runId, 'failed');
+  }
+
+  /** The daemon's own flag for a run a stop cut off: once per cause, the minutes from its last row before the stop to now. */
+  private async flagInterrupted(
+    runId: string,
+    cause: InterruptCause,
+    seq: number | null,
+    message: string,
+    lastActivityAt: Date | undefined,
+  ): Promise<void> {
+    const now = Date.now();
+    await this.flags?.raiseAutomatic(runId, {
+      cause: autoFlagCause.interrupted(cause),
+      seq,
+      memberId: null,
+      conversationId: null,
+      caller: null,
+      summary: `Team run interrupted: ${interruptCauseClause(cause)}`,
+      detail: message,
+      minutesLost: minutesLostBetween(lastActivityAt?.getTime() ?? now, now),
+    });
   }
 
   /** A cut-off call the continuation could not re-open, closed as today. */
@@ -3121,7 +3145,13 @@ export class TeamExecutorService
           ): Promise<HostArtifactOutcome> => {
             const stored = await store.publish(runId, artifact);
             if (!stored.ok) {
-              return { status: 'rejected', reason: stored.reason };
+              return {
+                status: 'rejected',
+                reason: stored.reason,
+                ...(stored.failure === undefined
+                  ? {}
+                  : { failure: stored.failure }),
+              };
             }
             const row: HostArtifactRow = {
               artifactId: stored.stored.artifactId,
@@ -3161,10 +3191,7 @@ export class TeamExecutorService
               this.logger.error(
                 `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
               );
-              return {
-                status: 'unavailable',
-                reason: 'the transcript row could not be written',
-              };
+              return failedInside('the transcript row could not be written');
             }
             return {
               status: 'published',
@@ -4340,6 +4367,10 @@ export class TeamExecutorService
     try {
       const em = this.em.fork();
       const stale = await this.runDao.listRunningTeamRuns(em);
+      const lastActivity = await this.itemDao.latestItemAtPerRun(
+        stale.map((run) => run.id),
+        em,
+      );
       let reconciled = 0;
       for (const run of stale) {
         if (this.registry.has(run.id)) {
@@ -4389,26 +4420,43 @@ export class TeamExecutorService
             { cause, owed },
           );
           if (kept !== null) {
+            const message = `team run interrupted — ${interruptCauseClause(cause)} while it was running — work continues`;
             if (owed === null) {
               await this.persist(em, run.id, null, kept, 'error', null, {
-                message: `team run interrupted — ${interruptCauseClause(cause)} while it was running — work continues`,
+                message,
                 // Written at BOOT — see the chat twin in `ChatService`.
                 interrupted: true,
                 interruptCause: cause,
                 continues: true,
               });
             }
+            await this.flagInterrupted(
+              run.id,
+              cause,
+              owed === null ? kept : null,
+              message,
+              lastActivity.get(run.id),
+            );
             continue;
           }
         }
         if (owed !== null) {
           await this.runDao.setRestartContinuation(run.id, null, em);
         }
-        await this.persist(em, run.id, null, seq++, 'error', null, {
-          message: `team run interrupted — ${interruptCauseClause(cause)} while it was running`,
+        const message = `team run interrupted — ${interruptCauseClause(cause)} while it was running`;
+        const interruptedSeq = seq++;
+        await this.persist(em, run.id, null, interruptedSeq, 'error', null, {
+          message,
           interrupted: true,
           interruptCause: cause,
         });
+        await this.flagInterrupted(
+          run.id,
+          cause,
+          interruptedSeq,
+          message,
+          lastActivity.get(run.id),
+        );
         await this.closeOpenMemberWork(em, run.id, history, seq, {
           member: 'interrupted',
           call: `${CALLEE_INTERRUPTED_ERROR} — ${interruptCauseClause(cause)} before the call finished`,

@@ -49,6 +49,6 @@ export class RemoveActionTool extends BaseMcpTool {
     );
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(removeActionResultText(outcome));
+      : this.answerTo(outcome, removeActionResultText(outcome));
   }
 }

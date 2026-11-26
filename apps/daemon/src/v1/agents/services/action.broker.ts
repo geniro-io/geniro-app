@@ -13,8 +13,11 @@ export interface ActionSink {
   publish(
     input: ActionPublishInput,
     caller: string,
-  ): Promise<ActionToolOutcome>;
-  remove(actionId: string, caller: string): Promise<ActionToolOutcome>;
+  ): Promise<ActionToolOutcome | HostSinkUnavailable>;
+  remove(
+    actionId: string,
+    caller: string,
+  ): Promise<ActionToolOutcome | HostSinkUnavailable>;
 }
 
 /**

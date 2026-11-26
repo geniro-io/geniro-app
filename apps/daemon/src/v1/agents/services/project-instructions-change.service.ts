@@ -311,7 +311,11 @@ export class ProjectInstructionsChangeService {
       this.logger.error(
         `chat ${chatRunId} could not save project ${change.projectId}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return { status: 'stale', reason: 'the instructions could not be saved' };
+      return {
+        status: 'stale',
+        reason: 'the instructions could not be saved',
+        failure: 'internal',
+      };
     }
   }
 

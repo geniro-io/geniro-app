@@ -98,7 +98,12 @@ export class BrowserBridgeService {
       };
       this.pending.set(id, { socketId, runId: req.runId, settle });
       timer = awakeTimeout(
-        () => settle({ status: 'failed', reason: BROWSER_TIMEOUT_REASON }),
+        () =>
+          settle({
+            status: 'failed',
+            reason: BROWSER_TIMEOUT_REASON,
+            failure: 'timeout',
+          }),
         BROWSER_REQUEST_TIMEOUT_MS,
       );
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -140,7 +145,11 @@ export class BrowserBridgeService {
         ...(reply.tab === undefined ? {} : { tab: reply.tab }),
       });
     } else {
-      entry.settle({ status: 'failed', reason: reply.error });
+      entry.settle({
+        status: 'failed',
+        reason: reply.error,
+        ...(reply.failure === undefined ? {} : { failure: reply.failure }),
+      });
     }
   }
 

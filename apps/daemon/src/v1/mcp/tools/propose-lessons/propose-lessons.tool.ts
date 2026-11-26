@@ -48,15 +48,14 @@ export class ProposeLessonsTool extends BaseMcpTool {
     const turn = await this.analysis.turnOf(runId, memberId);
     if ('status' in turn) {
       const result = proposeLessonsResultText(turn);
-      return this.text(result.text, result.isError);
+      return this.answerTo(turn, result.text, result.isError);
     }
-    const result = proposeLessonsResultText(
-      await this.lessons.file(
-        turn,
-        read.query.lessons,
-        read.query.effects ?? [],
-      ),
+    const outcome = await this.lessons.file(
+      turn,
+      read.query.lessons,
+      read.query.effects ?? [],
     );
-    return this.text(result.text, result.isError);
+    const result = proposeLessonsResultText(outcome);
+    return this.answerTo(outcome, result.text, result.isError);
   }
 }

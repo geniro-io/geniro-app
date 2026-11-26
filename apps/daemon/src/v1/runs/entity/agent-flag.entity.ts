@@ -18,7 +18,7 @@ import type {
 
 /**
  * One problem an agent flagged with `flag_issue`: something that cost work, or
- * the user's disagreement.
+ * the user's disagreement — or one the daemon recorded itself (`automatic`).
  *
  * Exempt from `RunTeardownService`, like `run_goals`: every analysis reads the
  * flags of a period, deleted threads included. So `runId` is a plain string
@@ -27,6 +27,7 @@ import type {
  */
 @Entity({ tableName: 'agent_flags' })
 @Unique({ properties: ['handle'] })
+@Unique({ properties: ['runId', 'autoCause'] })
 @Index({ properties: ['occurredAt'] })
 @Index({ properties: ['runId', 'seq'] })
 export class AgentFlag extends TimestampsEntity {
@@ -89,4 +90,11 @@ export class AgentFlag extends TimestampsEntity {
 
   @Property({ type: 'text', nullable: true })
   detail: string | null = null;
+
+  @Property({ type: 'boolean', default: false })
+  automatic: boolean = false;
+
+  /** Why the daemon raised it; unique per run, so each cause flags a thread once. Null on an agent's flag. */
+  @Property({ type: 'string', nullable: true })
+  autoCause: string | null = null;
 }

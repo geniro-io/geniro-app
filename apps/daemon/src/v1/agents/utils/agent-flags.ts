@@ -1,8 +1,13 @@
 import { randomBytes } from 'node:crypto';
 
+import type { InterruptCause } from '../../../utils/stop-cause';
 import type { AgentFlag } from '../../runs/entity/agent-flag.entity';
 import type { Run } from '../../runs/entity/run.entity';
-import type { AgentFlagRunKind, AgentFlagWire } from '../chat.types';
+import {
+  AGENT_FLAG_MINUTES_MAX,
+  type AgentFlagRunKind,
+  type AgentFlagWire,
+} from '../chat.types';
 
 export function newAgentFlagHandle(): string {
   return `F-${randomBytes(3).toString('hex')}`;
@@ -68,7 +73,22 @@ export function agentFlagWire(flag: AgentFlag): AgentFlagWire {
     minutesLost: flag.minutesLost,
     summary: flag.summary,
     detail: flag.detail,
+    automatic: flag.automatic,
   };
+}
+
+export const autoFlagCause = {
+  interrupted: (cause: InterruptCause): string => `interrupted:${cause}`,
+  toolFailure: (tool: string): string => `tool_failure:${tool}`,
+  toolRefused: (tool: string): string => `tool_refused:${tool}`,
+};
+
+/** Whole minutes from `fromMs` to `toMs`, rounded up, at least one and at most what a flag records. */
+export function minutesLostBetween(fromMs: number, toMs: number): number {
+  return Math.min(
+    AGENT_FLAG_MINUTES_MAX,
+    Math.max(1, Math.ceil((toMs - fromMs) / 60_000)),
+  );
 }
 
 /** A summary's identity for the duplicate check: case and spacing do not make a new flag. */

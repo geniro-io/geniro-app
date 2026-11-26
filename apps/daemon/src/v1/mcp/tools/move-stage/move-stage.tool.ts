@@ -58,14 +58,13 @@ export class MoveStageTool extends BaseMcpTool {
         result,
         result.ok ? result.team.members : [],
       );
-      return this.text(reply.text, reply.isError);
+      return this.answerTo(result, reply.text, reply.isError);
     } catch (error) {
       this.logger.error(
         `run ${runId} could not move a stage: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text(
+      return this.failedInGeniro(
         'Not moved: the move could not be saved. Try again.',
-        true,
       );
     }
   }

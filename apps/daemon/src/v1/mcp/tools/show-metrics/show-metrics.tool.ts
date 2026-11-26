@@ -49,6 +49,6 @@ export class ShowMetricsTool extends BaseMcpTool {
     const outcome = await this.metrics.draw(runId, memberId, metrics);
     // Same reading as its drawing siblings: an unavailable channel is an
     // answer, not a failure — the agent still holds the figures.
-    return this.text(hostMetricsResultText(outcome));
+    return this.answerTo(outcome, hostMetricsResultText(outcome));
   }
 }

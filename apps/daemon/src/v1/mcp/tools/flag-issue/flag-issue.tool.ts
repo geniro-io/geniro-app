@@ -39,7 +39,8 @@ export class FlagIssueTool extends BaseMcpTool {
       return this.invalidArgs(input.error);
     }
     const outcome = await this.flags.raise(runId, memberId, caller, input);
-    return this.text(
+    return this.answerTo(
+      outcome,
       flagIssueResultText(outcome),
       outcome.status !== 'recorded',
     );

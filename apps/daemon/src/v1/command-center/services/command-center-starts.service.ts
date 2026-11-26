@@ -207,6 +207,7 @@ export class CommandCenterStartsService
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
         reason: `the card ${identifier ?? task.id} was filed in backlog, but its Start card could not be shown`,
+        failure: 'internal',
       };
     }
     return { status: 'card_shown', taskId: task.id, identifier };
@@ -435,6 +436,7 @@ export class CommandCenterStartsService
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
         reason: 'the Start card could not be shown; nothing was started',
+        failure: 'internal',
       };
     }
     return { status: 'card_shown', startId: row.id };

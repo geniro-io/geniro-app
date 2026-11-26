@@ -48,6 +48,6 @@ export class ShowChartTool extends BaseMcpTool {
     const outcome = await this.charts.draw(runId, memberId, chart);
     // Same reading as the findings tool: an unavailable channel is an
     // answer, not a failure — the agent still holds the numbers.
-    return this.text(hostChartResultText(outcome));
+    return this.answerTo(outcome, hostChartResultText(outcome));
   }
 }

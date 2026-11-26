@@ -69,7 +69,8 @@ export class RunTeamTool extends BaseMcpTool {
       const outcome = await this.proposals.proposeRunTeam(runId, () =>
         this.chatTeams.prepareStart(runId, read.query),
       );
-      return this.text(
+      return this.answerTo(
+        outcome,
         runTeamResultText(outcome),
         outcome.status === 'refused',
       );
@@ -88,7 +89,8 @@ export class RunTeamTool extends BaseMcpTool {
       this.chatTeams.prepareChange(runId, query),
     );
     const card = runTeamResultText(outcome);
-    return this.text(
+    return this.answerTo(
+      outcome,
       remark === null ? card : `${remark.text}\n${card}`,
       remark === null && outcome.status === 'refused',
     );

@@ -14,6 +14,7 @@ import {
   CustomInstructionsSchema,
   type HostQuestion,
   type HostQuestionOutcome,
+  type HostToolFailure,
   PendingOwnedCardSchema,
   type PersistedResetWake,
   type StageActor,
@@ -1214,7 +1215,12 @@ export interface TeamOverlayProposalRequest {
 /** What `propose_team` tells the agent. */
 export type ProposalOutcome =
   | { status: 'shown'; proposal: TeamProposal }
-  | { status: 'refused'; code: string; message: string };
+  | {
+      status: 'refused';
+      code: string;
+      message: string;
+      failure?: HostToolFailure;
+    };
 
 /** `Run.pendingTeamProposal`: the standing card and what it proposes. */
 export const PendingTeamProposalSchema = PendingOwnedCardSchema.extend({
@@ -2872,6 +2878,8 @@ export interface TaskBoardToolAnswer {
    * (the card moved under it) is not an error.
    */
   isError: boolean;
+  /** Set when the board failed inside geniro rather than refusing the call. */
+  failure?: HostToolFailure;
 }
 
 /**

@@ -731,6 +731,7 @@ describe('TeamCardsService — a member’s own question', () => {
     expect(await service.askMember(RUN, 'worker', QUESTIONS, null)).toEqual({
       status: 'unavailable',
       reason: 'the question card could not be written',
+      failure: 'internal',
     });
     expect(approvals.listByRun(RUN)).toEqual([]);
     expect(runs.get(RUN)!.pendingMemberQuestions).toBeNull();

@@ -227,10 +227,7 @@ export class SurfaceMediaService {
             : `${url}: ${error.message}`,
         );
       }
-      this.logger.error(
-        `run ${runId} could not store a card's download: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw new A2uiError(at, `${url}: the download could not be stored`);
+      throw error;
     }
   }
 

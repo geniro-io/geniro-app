@@ -48,11 +48,10 @@ export class CheckLessonsTool extends BaseMcpTool {
     const turn = await this.analysis.turnOf(runId, memberId);
     if ('status' in turn) {
       const result = checkLessonsResultText(turn);
-      return this.text(result.text, result.isError);
+      return this.answerTo(turn, result.text, result.isError);
     }
-    const result = checkLessonsResultText(
-      await this.checks.file(turn, read.query),
-    );
-    return this.text(result.text, result.isError);
+    const outcome = await this.checks.file(turn, read.query);
+    const result = checkLessonsResultText(outcome);
+    return this.answerTo(outcome, result.text, result.isError);
   }
 }

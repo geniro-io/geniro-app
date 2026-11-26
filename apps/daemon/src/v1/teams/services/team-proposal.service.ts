@@ -378,6 +378,7 @@ export class TeamProposalService {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
         message: 'the proposal card could not be written',
+        failure: 'internal',
       };
     }
     return { status: 'shown', proposal };

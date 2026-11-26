@@ -142,7 +142,8 @@ export class ProposeTeamTool extends BaseMcpTool {
   }
 
   private answer(outcome: ProposalOutcome): McpToolResult {
-    return this.text(
+    return this.answerTo(
+      outcome,
       proposeTeamResultText(outcome),
       outcome.status === 'refused',
     );

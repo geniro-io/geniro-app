@@ -54,6 +54,6 @@ export class ShowUiTool extends BaseMcpTool {
     if (outcome.status === 'invalid') {
       return this.invalidArgs(outcome.error);
     }
-    return this.text(hostUiResultText(outcome));
+    return this.answerTo(outcome, hostUiResultText(outcome));
   }
 }

@@ -19,9 +19,13 @@ import { callerKey } from '../../teams/utils/caller-key';
 import { closeQuietly } from '../../teams/utils/close-quietly';
 import type { McpCallContext, McpTool, McpToolResult } from '../mcp.types';
 import { MCP_TOOLS } from '../tools/mcp-tools';
+import {
+  type ServedToolCall,
+  ToolFailureFlagsService,
+} from './tool-failure-flags.service';
 
 /** A tool's answer as the MCP wire carries it: its pictures become `image` parts after the text. */
-function wireResult(result: McpToolResult): CallToolResult {
+function wireResult({ failure: _, ...result }: McpToolResult): CallToolResult {
   if (result.images === undefined) {
     return result;
   }
@@ -93,6 +97,7 @@ export class McpServerService {
     @Inject(MCP_TOOLS) private readonly tools: readonly McpTool[],
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly servedResults: HostToolResultLedger,
+    private readonly toolFailures: ToolFailureFlagsService,
   ) {}
 
   /** Serve one stateless MCP request for `(run, caller member)`. */
@@ -324,7 +329,24 @@ export class McpServerService {
         whileCancellable: (call) =>
           this.whileCancellable(runId, caller, extra.requestId, call),
       };
-      return answer(wireResult(await tool.call(name, args, context)));
+      const served: ServedToolCall = {
+        runId,
+        memberId,
+        conversationId,
+        caller,
+        endpointPath,
+        tool: name,
+        startedAt: Date.now(),
+      };
+      let result: McpToolResult;
+      try {
+        result = await tool.call(name, args, context);
+      } catch (err) {
+        this.toolFailures.threw(served, err);
+        throw err;
+      }
+      this.toolFailures.answered(served, result);
+      return answer(wireResult(result));
     });
 
     return server;

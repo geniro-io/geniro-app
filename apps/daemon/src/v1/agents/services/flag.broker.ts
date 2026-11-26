@@ -1,10 +1,13 @@
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { AgentFlag } from '../../runs/entity/agent-flag.entity';
+import type { Run } from '../../runs/entity/run.entity';
 import {
   AGENT_FLAGS_PER_CONVERSATION,
+  type AutomaticFlagInput,
   type FlagIssueInput,
   type FlagIssueOutcome,
 } from '../chat.types';
@@ -82,8 +85,73 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
     );
   }
 
+  /**
+   * A flag the daemon raises itself, from a failure it observed. Needs no sink
+   * and counts against no conversation's cap; a cause the run already has is
+   * skipped, the unique (runId, autoCause) index holding that across restarts.
+   * Never throws: the handle, or null when nothing was written.
+   */
+  async raiseAutomatic(
+    runId: string,
+    input: AutomaticFlagInput,
+  ): Promise<string | null> {
+    try {
+      return await this.writes.run(runId, () =>
+        this.raiseAutomaticNow(runId, input),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId}: could not record the automatic flag ${input.cause}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   forgetRun(runId: string): void {
     this.writes.forget(runId);
+  }
+
+  private async raiseAutomaticNow(
+    runId: string,
+    input: AutomaticFlagInput,
+  ): Promise<string | null> {
+    const em = this.em.fork();
+    if (await this.flagDao.hasAutoCause(runId, input.cause, em)) {
+      return null;
+    }
+    const run = await this.runDao.getById(runId, em);
+    if (run === null) {
+      return null;
+    }
+    const raiser =
+      input.memberId === null || input.caller === null
+        ? undefined
+        : this.sinkOf(runId, input.memberId)?.raiser(input.caller);
+    const flag = Object.assign(await this.stamped(runId, run, input.seq, em), {
+      memberId: input.memberId,
+      conversationId: input.conversationId,
+      callId: raiser?.callId ?? null,
+      agentKind: raiser?.agentKind ?? run.agentKind ?? null,
+      model: raiser?.model ?? run.model ?? null,
+      cost: 'work',
+      category: 'geniro_tool',
+      minutesLost: input.minutesLost,
+      summary: redactSecrets(input.summary),
+      detail: input.detail === null ? null : redactSecrets(input.detail),
+      automatic: true,
+      autoCause: input.cause,
+    } satisfies Partial<AgentFlag>);
+    try {
+      return await this.insertWithFreshHandle(flag, em);
+    } catch (err) {
+      if (
+        err instanceof UniqueConstraintViolationException &&
+        (await this.flagDao.hasAutoCause(runId, input.cause))
+      ) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   private async raiseNow(
@@ -116,23 +184,12 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
       };
     }
     const run = await this.runDao.getById(runId, em);
-    const seq = await this.itemDao.maxSeq(runId, em);
-    const flag = Object.assign(new AgentFlag(), {
-      runId,
-      seq: Math.max(seq, 0),
-      occurredAt: new Date(),
+    const flag = Object.assign(await this.stamped(runId, run, null, em), {
       memberId: raiser.memberId,
       conversationId: raiser.conversationId,
       callId: raiser.callId,
       agentKind: raiser.agentKind ?? run?.agentKind ?? null,
       model: raiser.model ?? run?.model ?? null,
-      teamSlug: librarySlugOf(run?.teamId ?? null),
-      projectId: run?.projectId ?? null,
-      runKind: run === null ? 'chat' : agentFlagRunKindOf(run),
-      runTitle:
-        run?.title === null || run?.title === undefined
-          ? null
-          : redactSecrets(run.title),
       cost: input.cost,
       category: input.category,
       minutesLost: input.minutesLost,
@@ -145,6 +202,29 @@ export class FlagBroker extends HostSinkBroker<FlagSink> {
       handle,
       flagsLeft: AGENT_FLAGS_PER_CONVERSATION - raised.conversation.length - 1,
     };
+  }
+
+  /** A new row with what the run stamps on every flag: its seq, kind, title, team and project. */
+  private async stamped(
+    runId: string,
+    run: Run | null,
+    seq: number | null,
+    em: EntityManager,
+  ): Promise<AgentFlag> {
+    return Object.assign(new AgentFlag(), {
+      runId,
+      seq: seq ?? Math.max(await this.itemDao.maxSeq(runId, em), 0),
+      occurredAt: new Date(),
+      agentKind: run?.agentKind ?? null,
+      model: run?.model ?? null,
+      teamSlug: librarySlugOf(run?.teamId ?? null),
+      projectId: run?.projectId ?? null,
+      runKind: run === null ? 'chat' : agentFlagRunKindOf(run),
+      runTitle:
+        run?.title === null || run?.title === undefined
+          ? null
+          : redactSecrets(run.title),
+    });
   }
 
   private async insertWithFreshHandle(

@@ -51,6 +51,6 @@ export class ProposePlanTool extends BaseMcpTool {
     // A rejection is not a tool failure: the user exercised the gate this
     // tool exists to offer them, and flagging it as an error is how a
     // model comes to re-propose a plan that was just turned down.
-    return this.text(hostPlanResultText(outcome));
+    return this.answerTo(outcome, hostPlanResultText(outcome));
   }
 }

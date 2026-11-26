@@ -127,9 +127,8 @@ export class ReadTeamsTool extends BaseMcpTool {
         `run ${runId} could not read the team library: ${error instanceof Error ? error.message : String(error)}`,
       );
       const code = (error as NodeJS.ErrnoException).code;
-      return this.text(
+      return this.failedInGeniro(
         `Not read: the team library could not be read${code ? ` (${code})` : ''}.`,
-        true,
       );
     }
   }

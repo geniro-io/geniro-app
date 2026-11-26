@@ -25,6 +25,7 @@ import {
   type ArtifactMediaFile,
   type ArtifactPatch,
   type HostArtifact,
+  type HostToolFailure,
   type KeptArtifactAnswers,
   MAX_ARTIFACT_ANSWERS_BYTES,
   MAX_ARTIFACT_HTML_BYTES,
@@ -84,8 +85,15 @@ export interface StoredArtifact {
 }
 
 /** A publish either landed, or was refused for a reason the agent can act on. */
+/** A refusal the agent acts on, or, with `failure`, a page geniro could not store or read back. */
+type ArtifactStoreRefusal = {
+  ok: false;
+  reason: string;
+  failure?: HostToolFailure;
+};
+
 export type ArtifactPublishResult =
-  { ok: true; stored: StoredArtifact } | { ok: false; reason: string };
+  { ok: true; stored: StoredArtifact } | ArtifactStoreRefusal;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -722,9 +730,7 @@ export class ArtifactStoreService {
     runId: string,
     requested: string | undefined,
     patch: ArtifactPatch,
-  ):
-    | { ok: true; base: PatchBase; source: string }
-    | { ok: false; reason: string } {
+  ): { ok: true; base: PatchBase; source: string } | ArtifactStoreRefusal {
     if (
       requested === undefined ||
       requested.length > MAX_ARTIFACT_ID_LENGTH ||
@@ -754,6 +760,7 @@ export class ArtifactStoreService {
       return {
         ok: false,
         reason: `version ${meta.version} of this page could not be read — publish the whole page with html`,
+        failure: 'internal',
       };
     }
     const edited = applyArtifactEdits(
@@ -819,9 +826,7 @@ export class ArtifactStoreService {
     runId: string,
     dir: string,
     media: PageMedia,
-  ): Promise<
-    { ok: true; names: Map<string, string> } | { ok: false; reason: string }
-  > {
+  ): Promise<{ ok: true; names: Map<string, string> } | ArtifactStoreRefusal> {
     try {
       mkdirSync(dir, { recursive: true });
       if (media.sources.size === 0) {
@@ -839,6 +844,7 @@ export class ArtifactStoreService {
       return {
         ok: false,
         reason: `the page could not be stored (${fsErrorCode(error)}) — publish it again`,
+        failure: 'internal',
       };
     } finally {
       media.close();

@@ -81,12 +81,14 @@ export class GoalsTool extends BaseMcpTool {
       }
       const outcome = await this.write(runId, actor, call);
       const reply = goalsResultText(call.action, outcome);
-      return this.text(reply.text, reply.isError);
+      return this.answerTo(outcome, reply.text, reply.isError);
     } catch (error) {
       this.logger.error(
         `run ${runId} could not ${call.action} its goals: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text('Not changed: the goals could not be written.', true);
+      return this.failedInGeniro(
+        'Not changed: the goals could not be written.',
+      );
     }
   }
 

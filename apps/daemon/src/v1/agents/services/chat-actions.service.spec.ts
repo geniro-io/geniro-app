@@ -325,13 +325,15 @@ describe('ChatActionsService (in-memory sqlite)', () => {
     );
 
     expect(await failing.publish(ctx, { label: 'x', message: 'go' })).toEqual({
-      status: 'refused',
+      status: 'unavailable',
       reason: 'the transcript row could not be written',
+      failure: 'internal',
     });
     await publisher.publish(ctx, { label: 'Keep', message: 'k' });
     expect(await failing.remove(ctx, 'keep')).toEqual({
-      status: 'refused',
+      status: 'unavailable',
       reason: 'the transcript row could not be written',
+      failure: 'internal',
     });
     expect((await actions.live('run-a')).map((a) => a.actionId)).toEqual([
       'keep',

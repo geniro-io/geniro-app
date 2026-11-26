@@ -105,6 +105,25 @@ describe('BrowserBridgeService', () => {
     });
   });
 
+  it('carries the window’s timeout mark onto the failed outcome', async () => {
+    const { bridge, lastId } = setup();
+    bridge.register('mac');
+    const outcome = bridge.request(draft);
+
+    bridge.reply('mac', {
+      id: lastId(),
+      ok: false,
+      error: 'The browser operation took longer than 18 s',
+      failure: 'timeout',
+    });
+
+    await expect(outcome).resolves.toEqual({
+      status: 'failed',
+      reason: 'The browser operation took longer than 18 s',
+      failure: 'timeout',
+    });
+  });
+
   it('times out a request at 20 s', async () => {
     const { bridge } = setup();
     bridge.register('mac');
@@ -120,6 +139,7 @@ describe('BrowserBridgeService', () => {
     await expect(outcome).resolves.toEqual({
       status: 'failed',
       reason: BROWSER_TIMEOUT_REASON,
+      failure: 'timeout',
     });
   });
 

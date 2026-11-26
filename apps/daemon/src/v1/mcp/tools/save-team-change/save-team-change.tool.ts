@@ -171,7 +171,7 @@ export class SaveTeamChangeTool extends BaseMcpTool {
           dryRun: query.dryRun ?? false,
         });
         const result = teamChangeResultText(answer);
-        return this.text(result.text, result.isError);
+        return this.answerTo(answer, result.text, result.isError);
       } catch (error) {
         return this.failed(runId, error);
       }
@@ -199,7 +199,7 @@ export class SaveTeamChangeTool extends BaseMcpTool {
       const answer = await this.teams.save(change);
       await onAnswer(answer);
       const result = teamChangeResultText(answer);
-      return this.text(result.text, result.isError);
+      return this.answerTo(answer, result.text, result.isError);
     } catch (error) {
       return this.failed(runId, error);
     }
@@ -209,9 +209,8 @@ export class SaveTeamChangeTool extends BaseMcpTool {
     this.logger.error(
       `run ${runId} could not save a team change: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return this.text(
+    return this.failedInGeniro(
       `${this.name} failed internally — nothing was saved. Report this item as failed.`,
-      true,
     );
   }
 }

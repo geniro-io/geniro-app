@@ -2153,6 +2153,8 @@ export interface HostGalleryImage {
 export interface GalleryDownloadFailure {
   url: string;
   reason: string;
+  /** Set when the picture was downloaded but geniro could not store it. */
+  failure?: HostToolFailure;
 }
 
 /** One `show_gallery` call, as the card will draw it. */
@@ -2351,11 +2353,15 @@ export interface BrowserHostCardInput {
   memberName: string;
 }
 
+/** How a geniro tool's call failed inside geniro, as opposed to being refused: what the daemon flags itself. */
+export const HostToolFailureSchema = z.enum(['timeout', 'internal']);
+export type HostToolFailure = z.infer<typeof HostToolFailureSchema>;
+
 /** How one browser operation ended, as a browser tool words it. */
 export type BrowserRunOutcome =
   | BrowserOutcome
   | { status: 'awaiting_approval'; host: string }
-  | { status: 'unavailable'; reason: string };
+  | { status: 'unavailable'; reason: string; failure?: HostToolFailure };
 
 /**
  * TWIN PARSER: apps/ui/src/renderer/chats/published-artifact.ts — the reader
@@ -2503,8 +2509,8 @@ export interface HostArtifactFields {
  */
 export type HostArtifactOutcome =
   | { status: 'published'; artifactId: string; version: number }
-  | { status: 'rejected'; reason: string }
-  | { status: 'unavailable'; reason: string };
+  | { status: 'rejected'; reason: string; failure?: HostToolFailure }
+  | { status: 'unavailable'; reason: string; failure?: HostToolFailure };
 
 /**
  * The row `show_artifact` writes, and the whole of what the renderer is told.
@@ -2622,7 +2628,7 @@ export interface ProjectChatSource {
 export type HostProjectInstructionsOutcome =
   | { status: 'saved'; instructionsRevision: number }
   | { status: 'declined' }
-  | { status: 'stale'; reason: string }
+  | { status: 'stale'; reason: string; failure?: HostToolFailure }
   | {
       status: 'posted';
       /** The card's two buttons as its host draws them; absent is a chat's Apply or Reject. */
@@ -2662,7 +2668,7 @@ export interface HostPluginProposal {
 export type HostPluginOutcome =
   | { status: 'saved'; slug: string; path: string }
   | { status: 'declined' }
-  | { status: 'stale'; reason: string }
+  | { status: 'stale'; reason: string; failure?: HostToolFailure }
   | { status: 'posted'; buttons?: string }
   | { status: 'unavailable'; reason: string };
 
@@ -5027,6 +5033,7 @@ export const AgentFlagWireSchema = z
     minutesLost: z.number().int().nullable(),
     summary: z.string(),
     detail: z.string().nullable(),
+    automatic: z.boolean(),
   })
   .meta({ id: 'AgentFlag' });
 export type AgentFlagWire = z.infer<typeof AgentFlagWireSchema>;
@@ -5045,6 +5052,26 @@ export type FlagIssueRefusal = 'DUPLICATE_FLAG' | 'FLAG_LIMIT';
 export type FlagIssueOutcome =
   | { status: 'recorded'; handle: string; flagsLeft: number }
   | { status: 'refused'; code: FlagIssueRefusal; reason: string };
+
+/** Consecutive error answers of one geniro tool in one conversation that raise an automatic flag. */
+export const AUTO_FLAG_REFUSAL_STREAK = 3;
+/** How long after its last error answer a streak still counts; a later one starts afresh. */
+export const AUTO_FLAG_REFUSAL_WINDOW_MS = 30 * 60_000;
+
+/** A flag the daemon raises itself, from a failure it observed rather than an agent's call. */
+export interface AutomaticFlagInput {
+  /** One flag per cause per thread: `interrupted:<cause>`, `tool_failure:<tool>`, `tool_refused:<tool>`. */
+  cause: string;
+  /** The row the failure is read at; null reads the run's newest. */
+  seq: number | null;
+  memberId: string | null;
+  conversationId: string | null;
+  /** The caller key of the conversation it happened in, which names the member's agent and model; null for the run as a whole. */
+  caller: string | null;
+  summary: string;
+  detail: string | null;
+  minutesLost: number;
+}
 
 /** geniro's own tool a team member records a pull request's outcome with. */
 export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';
@@ -9729,7 +9756,12 @@ export type StartThreadAnswer =
       identifier: string | null;
     }
   | { status: 'card_shown' | 'starting'; startId: string }
-  | { status: 'refused'; code: string; reason: string };
+  | {
+      status: 'refused';
+      code: string;
+      reason: string;
+      failure?: HostToolFailure;
+    };
 
 /** `read_command_center` takes no arguments. */
 export const ReadCommandCenterSchema = z.object({});

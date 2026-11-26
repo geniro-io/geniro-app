@@ -169,7 +169,11 @@ export class GalleryImageService {
       this.logger.error(
         `run ${runId} could not store a downloaded gallery image: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return { url, reason: 'the downloaded image could not be stored' };
+      return {
+        url,
+        reason: 'the downloaded image could not be stored',
+        failure: 'internal',
+      };
     }
   }
 }

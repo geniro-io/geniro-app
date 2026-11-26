@@ -40,6 +40,7 @@ import {
   readA2uiMessages,
 } from '../utils/a2ui/a2ui-validate';
 import { randomFenceTag } from '../utils/fence-tag';
+import { failedInside } from './host-sink.broker';
 import {
   type LocalizedComponents,
   type SurfaceMediaEntry,
@@ -260,7 +261,10 @@ export class SurfaceService {
           error: `${error.pointer}: ${error.message}`,
         };
       }
-      throw error;
+      this.logger.error(
+        `run ${runId} could not store card ${surfaceId}'s media: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return failedInside("the card's media could not be stored");
     }
     const files = Object.keys(localized.media);
     return this.serialize(runId, async () => {
@@ -286,7 +290,7 @@ export class SurfaceService {
         this.logger.error(
           `run ${runId} could not draw card ${surfaceId}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return { status: 'unavailable', reason: 'the card could not be saved' };
+        return failedInside('the card could not be saved');
       }
     });
   }

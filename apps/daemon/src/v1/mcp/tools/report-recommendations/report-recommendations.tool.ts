@@ -55,15 +55,14 @@ export class ReportRecommendationsTool extends BaseMcpTool {
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const result = recommendationsResultText(
-      await this.analysis.report(
-        runId,
-        memberId,
-        read.query,
-        (slug) => this.history.versionIndex(slug),
-        (slug) => this.history.population(slug),
-      ),
+    const outcome = await this.analysis.report(
+      runId,
+      memberId,
+      read.query,
+      (slug) => this.history.versionIndex(slug),
+      (slug) => this.history.population(slug),
     );
-    return this.text(result.text, result.isError);
+    const result = recommendationsResultText(outcome);
+    return this.answerTo(outcome, result.text, result.isError);
   }
 }

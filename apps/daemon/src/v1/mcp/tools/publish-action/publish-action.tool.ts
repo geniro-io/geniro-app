@@ -46,6 +46,6 @@ export class PublishActionTool extends BaseMcpTool {
     // so it reads as one; an unavailable channel is an answer to carry on from.
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(publishActionResultText(outcome));
+      : this.answerTo(outcome, publishActionResultText(outcome));
   }
 }

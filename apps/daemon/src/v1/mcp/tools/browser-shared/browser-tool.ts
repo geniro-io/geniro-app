@@ -58,7 +58,10 @@ export abstract class BrowserTool extends BaseMcpTool {
       return this.done(outcome, runId);
     }
     const stopped = browserStoppedText(outcome);
-    return this.text(stopped.text, stopped.isError);
+    return {
+      ...this.text(stopped.text, stopped.isError),
+      ...(stopped.failure === undefined ? {} : { failure: stopped.failure }),
+    };
   }
 
   protected done(outcome: DoneOutcome, _runId: string): McpToolResult {

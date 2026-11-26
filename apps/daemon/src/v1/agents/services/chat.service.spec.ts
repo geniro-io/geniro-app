@@ -2819,6 +2819,7 @@ describe('ChatService', () => {
       expect(outcome).toEqual({
         status: 'unavailable',
         reason: 'the transcript row could not be written',
+        failure: 'internal',
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
@@ -2874,6 +2875,7 @@ describe('ChatService', () => {
       expect(outcome).toEqual({
         status: 'unavailable',
         reason: 'the transcript row could not be written',
+        failure: 'internal',
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
@@ -3028,6 +3030,7 @@ describe('ChatService', () => {
       expect(outcome).toEqual({
         status: 'unavailable',
         reason: 'the transcript row could not be written',
+        failure: 'internal',
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
@@ -3889,6 +3892,7 @@ describe('ChatService', () => {
         expect(outcome).toEqual({
           status: 'unavailable',
           reason: 'the question card could not be written',
+          failure: 'internal',
         });
       });
 

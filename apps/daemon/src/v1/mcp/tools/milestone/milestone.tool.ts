@@ -46,6 +46,6 @@ export class MilestoneTool extends BaseMcpTool {
     );
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
-      : this.text(milestoneResultText(outcome));
+      : this.answerTo(outcome, milestoneResultText(outcome));
   }
 }

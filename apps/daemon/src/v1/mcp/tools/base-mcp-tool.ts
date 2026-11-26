@@ -1,3 +1,7 @@
+import {
+  type HostToolFailure,
+  HostToolFailureSchema,
+} from '../../agents/chat.types';
 import type {
   McpCallContext,
   McpListContext,
@@ -85,6 +89,28 @@ export abstract class BaseMcpTool implements McpTool {
     images: McpToolImage[],
   ): McpToolResult {
     return { ...result, images };
+  }
+
+  /** A text answer to `outcome`, carrying its mark when the outcome says the call failed inside geniro. */
+  protected answerTo(
+    outcome: object,
+    text: string,
+    isError = false,
+  ): McpToolResult {
+    const failure = HostToolFailureSchema.safeParse(
+      (outcome as { failure?: unknown }).failure,
+    );
+    return failure.success
+      ? { ...this.text(text, isError), failure: failure.data }
+      : this.text(text, isError);
+  }
+
+  /** A call that failed inside geniro: the error the agent reads, marked for the daemon's own flag. */
+  protected failedInGeniro(
+    text: string,
+    failure: HostToolFailure = 'internal',
+  ): McpToolResult {
+    return { ...this.text(text, true), failure };
   }
 
   /** A malformed call, answered in-protocol rather than thrown. */

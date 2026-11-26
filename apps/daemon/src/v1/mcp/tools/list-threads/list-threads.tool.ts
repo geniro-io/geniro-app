@@ -1,3 +1,5 @@
+import { BaseException } from '@packages/common';
+
 import { HOST_LIST_THREADS_TOOL } from '../../../agents/chat.types';
 import type { ThreadDeliveryService } from '../../../teams/services/thread-delivery.service';
 import type {
@@ -63,10 +65,10 @@ export class ListThreadsTool extends BaseMcpTool {
         ),
       );
     } catch (error) {
-      return this.text(
-        `${this.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-        true,
-      );
+      const text = `${this.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+      return error instanceof BaseException
+        ? this.text(text, true)
+        : this.failedInGeniro(text);
     }
   }
 }

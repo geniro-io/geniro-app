@@ -66,6 +66,7 @@ function flag(
     minutesLost: null,
     summary: 'a problem',
     detail: null,
+    automatic: false,
   };
 }
 

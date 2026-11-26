@@ -46,12 +46,14 @@ export class AnswerReviewCommentTool extends BaseMcpTool {
     try {
       const outcome = await this.reviews.answer(runId, { memberId }, call);
       const reply = answerReviewCommentResultText(outcome);
-      return this.text(reply.text, reply.isError);
+      return this.answerTo(outcome, reply.text, reply.isError);
     } catch (error) {
       this.logger.error(
         `run ${runId} could not answer review comment #${call.comment}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.text('Not answered: the answer could not be saved.', true);
+      return this.failedInGeniro(
+        'Not answered: the answer could not be saved.',
+      );
     }
   }
 }

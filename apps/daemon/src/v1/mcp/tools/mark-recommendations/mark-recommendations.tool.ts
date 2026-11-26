@@ -41,9 +41,8 @@ export class MarkRecommendationsTool extends BaseMcpTool {
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const result = marksResultText(
-      await this.analysis.mark(runId, memberId, read.query),
-    );
-    return this.text(result.text, result.isError);
+    const outcome = await this.analysis.mark(runId, memberId, read.query);
+    const result = marksResultText(outcome);
+    return this.answerTo(outcome, result.text, result.isError);
   }
 }

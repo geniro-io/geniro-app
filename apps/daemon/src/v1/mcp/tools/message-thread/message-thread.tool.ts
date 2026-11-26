@@ -71,9 +71,8 @@ export class MessageThreadTool extends BaseMcpTool {
       if (error instanceof BaseException) {
         return this.text(`${error.errorCode}: ${error.message}`, true);
       }
-      return this.text(
+      return this.failedInGeniro(
         `${this.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-        true,
       );
     }
   }

@@ -8,6 +8,8 @@ import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity
 
 const HANDLE_PATTERN = /^t(\d+)$/;
 
+type RosterMarks = Pick<CommandCenterRosterEntry, 'announcedFinish' | 'watch'>;
+
 /** `command_center_roster` — the threads each manager holds. */
 @Injectable()
 export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
@@ -150,9 +152,26 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
   async markAnnounced(
     managerRunId: string,
     threadRunId: string,
-    read: Pick<CommandCenterRosterEntry, 'announcedFinish' | 'watch'>,
+    read: RosterMarks,
     announcedFinish: string,
     unwatch: boolean,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.replaceMarks(
+      managerRunId,
+      threadRunId,
+      read,
+      unwatch ? { announcedFinish, watch: false } : { announcedFinish },
+      txEm,
+    );
+  }
+
+  /** Write a thread's watch and announced finish only while the row still holds `read`. */
+  async replaceMarks(
+    managerRunId: string,
+    threadRunId: string,
+    read: RosterMarks,
+    next: Partial<RosterMarks>,
     txEm?: EntityManager,
   ): Promise<void> {
     await (txEm ?? this.em.fork()).nativeUpdate(
@@ -163,7 +182,7 @@ export class CommandCenterRosterDao extends BaseDao<CommandCenterRosterEntry> {
         announcedFinish: read.announcedFinish,
         watch: read.watch,
       },
-      unwatch ? { announcedFinish, watch: false } : { announcedFinish },
+      next,
     );
   }
 

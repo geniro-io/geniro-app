@@ -261,6 +261,134 @@ describe('CommandCenterOpsService', () => {
         ).toEqual({ 'thread-1': null, 'thread-2': 'finish-2' });
       });
 
+      describe('when a send is refused', () => {
+        const refusal = () =>
+          Promise.reject(
+            new BadRequestException(
+              'REPEATED_MESSAGE',
+              'you sent that thread the same text a few minutes ago',
+            ),
+          );
+
+        async function marksOf(): Promise<
+          Record<string, { watch: boolean; announcedFinish: string | null }>
+        > {
+          const rows = await new CommandCenterRosterDao(db.em).listOf(MANAGER);
+          return Object.fromEntries(
+            rows.map((row) => [
+              row.threadRunId,
+              { watch: row.watch, announcedFinish: row.announcedFinish },
+            ]),
+          );
+        }
+
+        beforeEach(async () => {
+          const roster = new CommandCenterRosterDao(db.em);
+          const unread = { announcedFinish: null, watch: false };
+          await roster.markAnnounced(
+            MANAGER,
+            'thread-1',
+            unread,
+            'finish-1',
+            false,
+          );
+          await roster.markAnnounced(
+            MANAGER,
+            'thread-2',
+            unread,
+            'finish-2',
+            false,
+          );
+        });
+
+        it('leaves the refused thread watched and announced as before, and marks the others', async () => {
+          delivery.send.mockImplementationOnce(refusal);
+
+          const answer = await service.tell(MANAGER, input({ watch: true }));
+
+          expect(answer.sent.map((row) => row.outcome)).toEqual([
+            'refused',
+            'joined',
+          ]);
+          expect(await marksOf()).toEqual({
+            'thread-1': { watch: false, announcedFinish: 'finish-1' },
+            'thread-2': { watch: true, announcedFinish: null },
+          });
+          expect(answer.watch).toBe(true);
+        });
+
+        it('keeps a watch a refused stop asked to end', async () => {
+          await service.tell(MANAGER, input({ to: ['t1'], watch: true }));
+          delivery.send.mockImplementationOnce(refusal);
+
+          await service.tell(
+            MANAGER,
+            input({ to: ['t1'], message: 'stop', watch: false }),
+          );
+
+          expect((await marksOf())['thread-1']!.watch).toBe(true);
+        });
+
+        it('says no watch was set when every send is refused', async () => {
+          delivery.send.mockImplementation(refusal);
+
+          const answer = await service.tell(MANAGER, input({ watch: true }));
+
+          expect(answer).not.toHaveProperty('watch');
+          expect(await marksOf()).toEqual({
+            'thread-1': { watch: false, announcedFinish: 'finish-1' },
+            'thread-2': { watch: false, announcedFinish: 'finish-2' },
+          });
+        });
+
+        it('keeps a finish announced while the refused send was out', async () => {
+          const roster = new CommandCenterRosterDao(db.em);
+          delivery.send.mockImplementationOnce(async () => {
+            await roster.markAnnounced(
+              MANAGER,
+              'thread-1',
+              { announcedFinish: null, watch: true },
+              'finish-3',
+              true,
+            );
+            return refusal();
+          });
+
+          await service.tell(MANAGER, input({ to: ['t1'], watch: true }));
+
+          expect((await marksOf())['thread-1']).toEqual({
+            watch: false,
+            announcedFinish: 'finish-3',
+          });
+        });
+      });
+
+      it('arms the watch and clears the announced finish before the message goes out', async () => {
+        const roster = new CommandCenterRosterDao(db.em);
+        await roster.markAnnounced(
+          MANAGER,
+          'thread-1',
+          { announcedFinish: null, watch: false },
+          'finish-1',
+          false,
+        );
+        const atSend: { watch: boolean; announcedFinish: string | null }[] = [];
+        delivery.send.mockImplementationOnce(async () => {
+          const row = (await roster.listOf(MANAGER)).find(
+            (entry) => entry.threadRunId === 'thread-1',
+          )!;
+          atSend.push({
+            watch: row.watch,
+            announcedFinish: row.announcedFinish,
+          });
+          return sendOk('Billing cache');
+        });
+
+        await service.tell(MANAGER, input({ to: ['t1'], watch: true }));
+
+        expect(atSend).toEqual([{ watch: true, announcedFinish: null }]);
+      });
+
       it('watches nothing when one of the names is unresolved', async () => {
         const answer = await service.tell(
           MANAGER,

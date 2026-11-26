@@ -112,6 +112,12 @@ const PROJECT_VIEW_CHANGES = 20;
 /** One row on an `items` page is clipped to this; `item` reads it whole. */
 export const ITEM_TEXT_CHARS = 2_000;
 
+/** A failed tool span's input and error text are each clipped to this. */
+const FAILED_SPAN_TEXT_CHARS = 300;
+
+/** How many spans a page reads the failed calls' texts for at once. */
+const SPAN_TEXT_WINDOW = 40;
+
 /** At most this many rows are read for one `items` page. */
 const ITEMS_READ_LIMIT = 40;
 
@@ -158,6 +164,27 @@ function payloadText(payload: string): string {
       ? record.text
       : JSON.stringify(collapsed);
   return redactSecrets(text);
+}
+
+/**
+ * One field of a row's payload as text, images collapsed and secrets masked
+ * before any cut; the whole payload's text when the field is absent.
+ */
+function payloadFieldText(payload: string, field: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return redactSecrets(payload);
+  }
+  const record = asRecord(parsed);
+  if (record === null || record[field] === undefined) {
+    return '';
+  }
+  const value = collapseImageBlocks(record[field]);
+  return redactSecrets(
+    typeof value === 'string' ? value : JSON.stringify(value),
+  );
 }
 
 /** A JSON answer with every registered secret masked in its values. */
@@ -1312,8 +1339,9 @@ export class ThreadReaderService {
     if (reading === null) {
       return { spans: [], next: null };
     }
+    const toolsOnly = args.failed === true || args.tool !== undefined;
     const wanted = new Set(
-      (args.kinds ?? DEFAULT_SPAN_KINDS).filter(
+      (toolsOnly ? ['tool'] : (args.kinds ?? DEFAULT_SPAN_KINDS)).filter(
         (kind): kind is AnalysisSpanKind =>
           (ANALYSIS_SPAN_KINDS as readonly string[]).includes(kind),
       ),
@@ -1394,7 +1422,14 @@ export class ThreadReaderService {
       }
     }
     if (wanted.has('tool')) {
+      const named = args.tool?.toLowerCase();
       for (const tool of timeline.tools) {
+        if (args.failed === true && !tool.failed) {
+          continue;
+        }
+        if (named !== undefined && !tool.name.toLowerCase().includes(named)) {
+          continue;
+        }
         all.push({
           type: 'tool',
           node: laneOf(tool.memberId),
@@ -1431,9 +1466,20 @@ export class ThreadReaderService {
     const page: Answer[] = [];
     let used = ENVELOPE_BYTES;
     let index = start;
+    let texts = new Map<Answer, Answer>();
     for (; index < filtered.length; index += 1) {
+      if ((index - start) % SPAN_TEXT_WINDOW === 0) {
+        texts = await this.failedToolTexts(
+          source,
+          filtered.slice(index, index + SPAN_TEXT_WINDOW),
+        );
+      }
       const { startMs, ...span } = filtered[index]!;
-      const entry = { at: iso(startMs), ...span };
+      const entry = {
+        at: iso(startMs),
+        ...span,
+        ...texts.get(filtered[index]!),
+      };
       const size = bytes(entry) + 1;
       if (page.length > 0 && used + size > PAGE_BYTES) {
         break;
@@ -1447,6 +1493,49 @@ export class ThreadReaderService {
       spans: page,
       next: index < filtered.length ? { cursor: index } : null,
     };
+  }
+
+  /**
+   * Each failed tool span's input and error text, clipped, from one read of
+   * every call and result row among `spans`; a row past the snapshot gives none.
+   */
+  private async failedToolTexts(
+    source: AnalysisSource,
+    spans: readonly Answer[],
+  ): Promise<Map<Answer, Answer>> {
+    const failed = spans.filter(
+      (span) => span.type === 'tool' && span.failed === true,
+    );
+    const seqs = failed.flatMap((span) =>
+      [span.seq, span.resultSeq].filter(
+        (seq): seq is number => typeof seq === 'number',
+      ),
+    );
+    const rows = await this.itemDao.rowsAtSeqs(
+      source.sourceRunId,
+      seqs,
+      source.snapshotSeq,
+      this.em.fork(),
+    );
+    const payloads = new Map(rows.map((row) => [row.seq, row.payload]));
+    const textOf = (seq: unknown, field: string): Answer => {
+      const payload = typeof seq === 'number' ? payloads.get(seq) : undefined;
+      return typeof seq !== 'number' || payload === undefined
+        ? {}
+        : {
+            [field === 'input' ? 'input' : 'error']: clip(
+              payloadFieldText(payload, field),
+              FAILED_SPAN_TEXT_CHARS,
+              seq,
+            ),
+          };
+    };
+    return new Map(
+      failed.map((span) => [
+        span,
+        { ...textOf(span.seq, 'input'), ...textOf(span.resultSeq, 'result') },
+      ]),
+    );
   }
 
   private async items(
@@ -1473,6 +1562,7 @@ export class ThreadReaderService {
           ? {}
           : { memberId: args.memberId === CHAT_LANE ? null : args.memberId }),
         ...(kinds === undefined || kinds.length === 0 ? {} : { kinds }),
+        ...(args.role === undefined ? {} : { role: args.role }),
       },
       em,
     );

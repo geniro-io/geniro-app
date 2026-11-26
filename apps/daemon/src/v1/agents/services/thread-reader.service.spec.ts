@@ -1032,6 +1032,177 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(spans[0]).not.toHaveProperty('modelCosts');
   });
 
+  describe('failed tool calls and tool names', () => {
+    const source = {
+      sourceRunId: 'source',
+      snapshotSeq: 7,
+      sourceWorking: false,
+    };
+
+    beforeEach(async () => {
+      await insert(0, 'message', { text: 'go' }, 0);
+      await insert(
+        1,
+        'tool_call',
+        { id: 't1', name: 'Bash', input: { command: 'ls' } },
+        1,
+      );
+      await insert(2, 'tool_result', { id: 't1', result: 'listed' }, 2);
+      await insert(
+        3,
+        'tool_call',
+        {
+          id: 't2',
+          name: 'mcp__geniro-x__memory_read',
+          input: { handle: 'm12' },
+        },
+        3,
+      );
+      await insert(
+        4,
+        'tool_result',
+        { id: 't2', result: 'INVALID_ARGS: ids is required', isError: true },
+        4,
+      );
+      await insert(
+        5,
+        'tool_call',
+        { id: 't3', name: 'Bash', input: { command: 'false' } },
+        5,
+      );
+      await insert(
+        6,
+        'tool_result',
+        { id: 't3', result: 'exit 1 ' + 'y'.repeat(1_000), isError: true },
+        6,
+      );
+      await insert(7, 'turn_complete', { usage: { durationMs: 7_000 } }, 7);
+    });
+
+    it('answers only the failed tool calls, each with its input and its clipped error text', async () => {
+      const spans = (await reader.read(source, { view: 'spans', failed: true }))
+        .spans as Record<string, unknown>[];
+
+      expect(spans.map((span) => [span.type, span.seq])).toEqual([
+        ['tool', 3],
+        ['tool', 5],
+      ]);
+      expect(spans[0]).toMatchObject({
+        input: JSON.stringify({ handle: 'm12' }),
+        error: 'INVALID_ARGS: ids is required',
+      });
+      expect(spans[1]!.error).toMatch(
+        /^exit 1 y+… \[\+\d+ chars — view=item seq=6\]$/,
+      );
+    });
+
+    it('reads every failed call and result row of a page in one statement', async () => {
+      const rowsAtSeqs = vi.spyOn(itemDao, 'rowsAtSeqs');
+
+      await reader.read(source, { view: 'spans', failed: true });
+
+      expect(rowsAtSeqs).toHaveBeenCalledTimes(1);
+      expect([...rowsAtSeqs.mock.calls[0]![1]].sort((a, b) => a - b)).toEqual([
+        3, 4, 5, 6,
+      ]);
+    });
+
+    it('answers only the tool calls whose name contains the tool filter, in any case', async () => {
+      const geniro = (
+        await reader.read(source, {
+          view: 'spans',
+          failed: true,
+          tool: 'MCP__GENIRO',
+        })
+      ).spans as Record<string, unknown>[];
+      const bash = (await reader.read(source, { view: 'spans', tool: 'bash' }))
+        .spans as Record<string, unknown>[];
+
+      expect(geniro.map((span) => span.seq)).toEqual([3]);
+      expect(bash.map((span) => span.seq)).toEqual([1, 5]);
+      expect(bash[0]).not.toHaveProperty('error');
+    });
+
+    it('reads tool spans only when failed is set, whatever kinds asks for', async () => {
+      const spans = (
+        await reader.read(source, {
+          view: 'spans',
+          failed: true,
+          kinds: ['tool', 'turn'],
+        })
+      ).spans as Record<string, unknown>[];
+
+      expect(spans.map((span) => [span.type, span.seq])).toEqual([
+        ['tool', 3],
+        ['tool', 5],
+      ]);
+    });
+
+    it('masks a registered secret in the error text', async () => {
+      registerSecret('sk-live-supersecret-token', 'api key');
+      await insert(
+        8,
+        'tool_call',
+        { id: 't4', name: 'Bash', input: { command: 'curl' } },
+        8,
+      );
+      await insert(
+        9,
+        'tool_result',
+        {
+          id: 't4',
+          result: 'denied for sk-live-supersecret-token',
+          isError: true,
+        },
+        9,
+      );
+
+      const spans = (
+        await reader.read(
+          { sourceRunId: 'source', snapshotSeq: 9, sourceWorking: false },
+          { view: 'spans', failed: true },
+        )
+      ).spans as Record<string, unknown>[];
+      const curl = spans.find((span) => span.seq === 8)!;
+
+      expect(curl.error).toContain('denied for');
+      expect(curl.error).not.toContain('sk-live-supersecret-token');
+    });
+  });
+
+  it("answers only the user's messages when items asks for role=user", async () => {
+    const fork = orm.em.fork();
+    for (let seq = 0; seq < 6; seq += 1) {
+      const at = new Date(T0 + seq * 1000);
+      fork.create(Item, {
+        runId: 'source',
+        seq,
+        kind: 'message',
+        role: seq % 2 === 0 ? 'user' : 'assistant',
+        payload: JSON.stringify({ text: 'said ' + seq }),
+        createdAt: at,
+        updatedAt: at,
+      });
+    }
+    await fork.flush();
+
+    const page = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 5, sourceWorking: false },
+      { view: 'items', kinds: ['message'], role: 'user' },
+    );
+
+    expect(
+      (page.items as { seq: number; role: string }[]).map((row) => [
+        row.seq,
+        row.role,
+      ]),
+    ).toEqual([
+      [0, 'user'],
+      [2, 'user'],
+      [4, 'user'],
+    ]);
+  });
+
   it('never returns a row past the snapshot seq', async () => {
     await insert(0, 'message', { text: 'before' }, 0);
     await insert(1, 'message', { text: 'after the click' }, 1);

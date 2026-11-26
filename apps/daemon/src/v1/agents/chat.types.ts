@@ -488,6 +488,7 @@ export const ANALYSIS_SPAN_KINDS = [
   'critical',
 ] as const;
 export type AnalysisSpanKind = (typeof ANALYSIS_SPAN_KINDS)[number];
+export const ANALYSIS_ITEM_ROLES = ['user', 'assistant'] as const;
 
 /** The `read_analyzed_thread` arguments. */
 export const ReadAnalyzedThreadArgsSchema = z.object({
@@ -572,13 +573,32 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .max(12)
     .optional()
     .describe(
-      `spans: ${ANALYSIS_SPAN_KINDS.join(', ')} (default all but tool). items: item kinds such as message, tool_call, tool_result, turn_complete`,
+      `spans: ${ANALYSIS_SPAN_KINDS.join(', ')} (default all but tool; failed or tool reads tool spans only, whatever kinds says). items: item kinds such as message, tool_call, tool_result, turn_complete`,
     ),
   minMs: z
     .number()
     .min(0)
     .optional()
     .describe('spans: only spans at least this long'),
+  failed: z
+    .boolean()
+    .optional()
+    .describe(
+      "spans: only tool calls that failed, each with its input and its error text clipped — the way to collect a thread's failures without paging every tool span",
+    ),
+  tool: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'spans: only tool calls whose name contains this, any case (e.g. "mcp__geniro" for geniro\'s own tools)',
+    ),
+  role: z
+    .enum(ANALYSIS_ITEM_ROLES)
+    .optional()
+    .describe(
+      'items: only rows of this role — with kinds=["message"], role="user" reads what the user said without paging the agent\'s messages',
+    ),
 });
 export type ReadAnalyzedThreadArgs = z.infer<
   typeof ReadAnalyzedThreadArgsSchema

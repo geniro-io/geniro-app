@@ -1827,8 +1827,8 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * One page of a run's rows for an analysis, oldest first: after `afterSeq`
-   * (or from `fromTime`), never past `maxSeq`, optionally one member's and some
-   * kinds only. The caller budgets the page by bytes; `limit` bounds the read.
+   * (or from `fromTime`), never past `maxSeq`, optionally one member's, some
+   * kinds' and one role's only. The caller budgets the page by bytes; `limit` bounds the read.
    */
   async analysisPage(
     runId: string,
@@ -1839,6 +1839,7 @@ export class ItemDao extends BaseDao<Item> {
       fromTime?: Date;
       memberId?: string | null;
       kinds?: readonly ItemKind[];
+      role?: string;
     },
     txEm?: EntityManager,
   ): Promise<Item[]> {
@@ -1851,6 +1852,7 @@ export class ItemDao extends BaseDao<Item> {
           : { createdAt: { $gte: page.fromTime } }),
         ...(page.memberId === undefined ? {} : { memberId: page.memberId }),
         ...(page.kinds === undefined ? {} : { kind: { $in: [...page.kinds] } }),
+        ...(page.role === undefined ? {} : { role: page.role }),
       },
       { orderBy: { seq: 'asc' }, limit: page.limit, disableIdentityMap: true },
     );
@@ -1880,6 +1882,22 @@ export class ItemDao extends BaseDao<Item> {
     return this.getRepo(txEm).findOne(
       { runId, seq },
       { disableIdentityMap: true },
+    );
+  }
+
+  /** The rows of `seqs` at or below `maxSeq`, in one statement. */
+  async rowsAtSeqs(
+    runId: string,
+    seqs: readonly number[],
+    maxSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
+    if (seqs.length === 0) {
+      return [];
+    }
+    return this.getRepo(txEm).find(
+      { runId, seq: { $in: [...seqs], $lte: maxSeq } },
+      { fields: ['seq', 'payload'], disableIdentityMap: true },
     );
   }
 

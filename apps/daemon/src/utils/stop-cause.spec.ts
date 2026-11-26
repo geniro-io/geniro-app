@@ -14,6 +14,7 @@ import { DAEMON_STOP_CAUSE_NAME } from './handshake';
 import {
   consumeStopCause,
   continuesUnattended,
+  interruptCauseClause,
   parseInterruptCause,
   peekStopCause,
   resumesUnattended,
@@ -118,5 +119,30 @@ describe('continuesUnattended', () => {
   it('leaves a quit to the board, which resumes it without continuing it', () => {
     expect(resumesUnattended('quit')).toBe(true);
     expect(continuesUnattended('quit')).toBe(false);
+  });
+});
+
+describe('interruptCauseClause', () => {
+  it('reads a cause as the clause a person sees when no detail was recorded', () => {
+    expect(interruptCauseClause('unknown')).toBe(
+      'the daemon stopped unexpectedly',
+    );
+    expect(interruptCauseClause('crash', null)).toBe('the daemon crashed');
+  });
+
+  it('appends how the previous daemon ended in brackets', () => {
+    expect(
+      interruptCauseClause('unknown', 'killed by SIGKILL (memory 1.2 GB)'),
+    ).toBe(
+      'the daemon stopped unexpectedly (killed by SIGKILL (memory 1.2 GB))',
+    );
+    expect(
+      interruptCauseClause(
+        'crash',
+        'uncaught TypeError in team-executor.service: boom',
+      ),
+    ).toBe(
+      'the daemon crashed (uncaught TypeError in team-executor.service: boom)',
+    );
   });
 });

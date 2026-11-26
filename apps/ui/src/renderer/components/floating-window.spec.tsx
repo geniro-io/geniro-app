@@ -316,7 +316,13 @@ describe('FloatingWindow', () => {
 });
 
 describe('the full-screen head slot', () => {
-  const strip = <span data-slot="strip-probe">strip</span>;
+  const strip = (
+    <span data-slot="strip-probe">
+      <button type="button" data-slot="strip-face">
+        face
+      </button>
+    </span>
+  );
 
   function drawWith(
     over: Partial<React.ComponentProps<typeof FloatingWindow>> = {},
@@ -370,16 +376,31 @@ describe('the full-screen head slot', () => {
     expect(stripOf(drawWith({ phone: true, open: false }))).toBeNull();
   });
 
-  it('does not toggle maximise on a double-click', () => {
+  const doubleClick = (target: Element): void =>
+    act(() => {
+      target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+
+  const stateOf = (el: HTMLElement): string | null =>
+    el
+      .querySelector('[data-slot="floating-window"]')!
+      .getAttribute('data-state');
+
+  it('does not toggle maximise on a double-click on something drawn in it', () => {
     const el = drawWith();
     pressSlot(el, 'floating-window-maximise');
-    act(() => {
-      stripOf(el)!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    });
-    expect(
-      el
-        .querySelector('[data-slot="floating-window"]')!
-        .getAttribute('data-state'),
-    ).toBe('maximised');
+    doubleClick(el.querySelector('[data-slot="strip-face"]')!);
+    expect(stateOf(el)).toBe('maximised');
+  });
+
+  it('restores the window on a double-click on its free space, as the rest of the head does', () => {
+    const el = drawWith();
+    pressSlot(el, 'floating-window-maximise');
+    doubleClick(el.querySelector('[data-slot="strip-probe"]')!);
+    expect(stateOf(el)).toBe('open');
+
+    pressSlot(el, 'floating-window-maximise');
+    doubleClick(stripOf(el)!);
+    expect(stateOf(el)).toBe('open');
   });
 });

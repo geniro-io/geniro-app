@@ -5,12 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import { bareThreadIdentity } from '../components/thread-head';
-import {
-  faceWidthOf,
-  fitFaces,
-  type StripThread,
-  WorkingStrip,
-} from './working-strip';
+import { fitFaces, type StripThread, WorkingStrip } from './working-strip';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -57,6 +52,26 @@ function draw(
   act(() => {
     root.render(<WorkingStrip threads={threads} onOpenThread={onOpenThread} />);
   });
+}
+
+function measureFacesAt(face: number, more: number, gap: number): void {
+  stubResizeObserver();
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(
+    function (this: HTMLElement) {
+      if (this.parentElement?.dataset.slot !== 'working-strip-measure') {
+        return 0;
+      }
+      return this.nextElementSibling === null ? more : face;
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, 'offsetLeft', 'get').mockImplementation(
+    function (this: HTMLElement) {
+      const before = this.previousElementSibling;
+      return before instanceof HTMLElement
+        ? before.offsetLeft + before.offsetWidth + gap
+        : 0;
+    },
+  );
 }
 
 function facesOf(): string[] {
@@ -124,7 +139,7 @@ describe('WorkingStrip', () => {
   });
 
   it('shows as many faces as fit beside a "+N" and lists the rest in a popover', () => {
-    stubResizeObserver();
+    measureFacesAt(28, 30, 4);
     vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(80);
     const onOpenThread = vi.fn();
     draw(
@@ -164,45 +179,47 @@ describe('WorkingStrip', () => {
       document.querySelectorAll('[data-slot="working-strip-row-title"]'),
     ).toHaveLength(0);
   });
+
+  it('fits the faces by the widths they are drawn at, padding included', () => {
+    measureFacesAt(28, 30, 4);
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+    draw(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((key) =>
+        threadOf(`run-${key}`, key.toUpperCase()),
+      ),
+    );
+    expect(facesOf()).toEqual(['run-a', 'run-b', 'run-c', 'run-d', 'run-e']);
+    expect(
+      container.querySelector('[data-slot="working-strip-more"]')!.textContent,
+    ).toBe('+2');
+  });
+
+  it('draws every face once they all fit at their drawn widths', () => {
+    measureFacesAt(28, 30, 4);
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(220);
+    draw(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((key) =>
+        threadOf(`run-${key}`, key.toUpperCase()),
+      ),
+    );
+    expect(facesOf()).toHaveLength(7);
+    expect(
+      container.querySelector('[data-slot="working-strip-more"]'),
+    ).toBeNull();
+  });
 });
 
 describe('fitFaces', () => {
-  it('fits every face when they fit without a "+N"', () => {
-    expect(fitFaces([24, 24, 24], 80, 4, 32)).toBe(3);
+  it('fits every face when the last one ends inside the room', () => {
+    expect(fitFaces([24, 52, 80], 80, 36)).toBe(3);
   });
 
   it('fits as many faces as stand beside a "+N" when they do not all fit', () => {
-    expect(fitFaces([24, 24, 24, 24], 80, 4, 32)).toBe(1);
-    expect(fitFaces([24, 24, 24, 24], 96, 4, 32)).toBe(2);
+    expect(fitFaces([24, 52, 80, 108], 80, 36)).toBe(1);
+    expect(fitFaces([24, 52, 80, 108], 96, 36)).toBe(2);
   });
 
   it('never fits fewer than one face', () => {
-    expect(fitFaces([24, 24], 10, 4, 32)).toBe(1);
-  });
-
-  it('counts a team stack at its real width', () => {
-    expect(faceWidthOf({ kind: 'manager' })).toBe(24);
-    expect(
-      faceWidthOf({
-        kind: 'team',
-        people: [
-          { key: 'a', name: 'A' },
-          { key: 'b', name: 'B' },
-        ],
-        total: 2,
-      }),
-    ).toBe(34);
-    expect(
-      faceWidthOf({
-        kind: 'team',
-        people: [
-          { key: 'a', name: 'A' },
-          { key: 'b', name: 'B' },
-          { key: 'c', name: 'C' },
-          { key: 'd', name: 'D' },
-        ],
-        total: 5,
-      }),
-    ).toBe(62);
+    expect(fitFaces([24, 52], 10, 36)).toBe(1);
   });
 });

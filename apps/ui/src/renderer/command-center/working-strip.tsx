@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { CONTROL_HOVER } from '../chats/working-card-parts';
-import { ThreadFace, type ThreadFaceLook } from '../components/thread-face';
+import { ThreadFace } from '../components/thread-face';
 import { ThreadHead, type ThreadIdentity } from '../components/thread-head';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
@@ -13,48 +13,57 @@ export interface StripThread {
   statusText: string;
 }
 
-const FACE_PX = 24;
-const STACK_FACE_PX = 20;
-const STACK_OVERLAP_PX = 6;
-const STACK_MAX = 3;
-const GAP_PX = 4;
-const MORE_PX = 32;
+const FACE_CLASS = cn(
+  'relative flex shrink-0 cursor-pointer items-center rounded-full p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  CONTROL_HOVER,
+);
+const MORE_CLASS =
+  'flex h-6 shrink-0 cursor-pointer items-center rounded-pill bg-muted px-2 text-xs font-medium text-muted-foreground tabular-nums outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring';
 
-/** The width a face takes in the strip: a 24px face, or a team's stack of 20px faces as AvatarStack lays it out. */
-export function faceWidthOf(look: ThreadFaceLook): number {
-  if (look.kind !== 'team') {
-    return FACE_PX;
-  }
-  const shown = Math.min(look.people.length, STACK_MAX);
-  const count = Math.max(1, shown + (look.total > shown ? 1 : 0));
-  return STACK_FACE_PX + (count - 1) * (STACK_FACE_PX - STACK_OVERLAP_PX);
+interface StripMetrics {
+  /** Where each face ends, measured from the strip's left edge as the faces are drawn. */
+  ends: number[];
+  /** The room a "+N" takes after the last face shown, its gap included. */
+  moreRoom: number;
 }
 
-/** How many faces stand in `room` pixels: all of them when they fit, else as many as fit beside a "+N" of `overflowWidth`, and at least one. */
+/** How many faces stand in `room` pixels: all of them when they fit, else as many as fit beside a "+N", and at least one. */
 export function fitFaces(
-  widths: readonly number[],
+  ends: readonly number[],
   room: number,
-  gap: number,
-  overflowWidth: number,
+  moreRoom: number,
 ): number {
-  const total = widths.reduce(
-    (sum, width, index) => sum + width + (index > 0 ? gap : 0),
-    0,
-  );
-  if (total <= room) {
-    return widths.length;
+  const last = ends.at(-1);
+  if (last === undefined || last <= room) {
+    return ends.length;
   }
-  let used = 0;
   let count = 0;
-  for (const width of widths) {
-    const next = used + (count > 0 ? gap : 0) + width;
-    if (next + gap + overflowWidth > room) {
-      break;
-    }
-    used = next;
+  while (count < ends.length && ends[count]! + moreRoom <= room) {
     count += 1;
   }
   return Math.max(1, count);
+}
+
+function metricsOf(row: HTMLElement): StripMetrics {
+  const items = [...row.children].filter(
+    (child): child is HTMLElement => child instanceof HTMLElement,
+  );
+  const more = items.pop();
+  const ends = items.map((item) => item.offsetLeft + item.offsetWidth);
+  const last = ends.at(-1) ?? 0;
+  return {
+    ends,
+    moreRoom:
+      more === undefined ? 0 : more.offsetLeft + more.offsetWidth - last,
+  };
+}
+
+function sameMetrics(a: StripMetrics, b: StripMetrics): boolean {
+  return (
+    a.moreRoom === b.moreRoom &&
+    a.ends.length === b.ends.length &&
+    a.ends.every((end, index) => end === b.ends[index])
+  );
 }
 
 function titleOf(thread: StripThread): string {
@@ -73,18 +82,27 @@ export function WorkingStrip({
   const [measure, room] = useElementSize<HTMLDivElement>();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [metrics, setMetrics] = useState<StripMetrics | null>(null);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (row === null) {
+      return;
+    }
+    const next = metricsOf(row);
+    setMetrics((current) =>
+      current !== null && sameMetrics(current, next) ? current : next,
+    );
+  });
   if (threads.length === 0) {
     return null;
   }
   const fitting =
-    room.width === 0
+    room.width === 0 ||
+    metrics === null ||
+    metrics.ends.length !== threads.length
       ? threads.length
-      : fitFaces(
-          threads.map((thread) => faceWidthOf(thread.identity.face)),
-          room.width,
-          GAP_PX,
-          MORE_PX,
-        );
+      : fitFaces(metrics.ends, room.width, metrics.moreRoom);
   const shown = threads.slice(0, fitting);
   const hidden = threads.slice(fitting);
   const moreTitle = `${hidden.length} more working ${hidden.length === 1 ? 'thread' : 'threads'}`;
@@ -94,7 +112,26 @@ export function WorkingStrip({
       data-slot="working-strip"
       role="group"
       aria-label="Threads working"
-      className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+      className="relative flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+      <div
+        ref={rowRef}
+        aria-hidden="true"
+        inert
+        data-slot="working-strip-measure"
+        className="pointer-events-none invisible absolute top-0 left-0 flex w-max items-center gap-1">
+        {threads.map((thread) => (
+          <span key={thread.runId} className={FACE_CLASS}>
+            <span className="flex">
+              <ThreadFace
+                look={thread.identity.face}
+                slot="working-strip-measure-face"
+                size="sm"
+              />
+            </span>
+          </span>
+        ))}
+        <span className={MORE_CLASS}>+{threads.length}</span>
+      </div>
       {shown.map((thread) => (
         <button
           key={thread.runId}
@@ -104,10 +141,7 @@ export function WorkingStrip({
           title={titleOf(thread)}
           aria-label={`Open ${thread.identity.title}`}
           onClick={() => onOpenThread(thread.runId)}
-          className={cn(
-            'relative flex shrink-0 cursor-pointer items-center rounded-full p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            CONTROL_HOVER,
-          )}>
+          className={FACE_CLASS}>
           <span className="pointer-events-none flex">
             <ThreadFace
               look={thread.identity.face}
@@ -132,7 +166,7 @@ export function WorkingStrip({
             aria-label={moreTitle}
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen((open) => !open)}
-            className="flex h-6 shrink-0 cursor-pointer items-center rounded-pill bg-muted px-2 text-xs font-medium text-muted-foreground tabular-nums outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+            className={MORE_CLASS}>
             +{hidden.length}
           </button>
           <Popover

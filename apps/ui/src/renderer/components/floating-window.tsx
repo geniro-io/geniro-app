@@ -2,6 +2,7 @@ import { cva } from 'class-variance-authority';
 import { ChevronUp, Maximize2, Minimize2, Minus, X } from 'lucide-react';
 import {
   type PointerEvent as ReactPointerEvent,
+  type SyntheticEvent,
   useRef,
   useState,
 } from 'react';
@@ -262,6 +263,16 @@ export function FloatingWindow({
             }
           : rect;
 
+  const keepOffHeadUnlessFree = (event: SyntheticEvent<HTMLElement>): void => {
+    const slot = event.currentTarget;
+    const target = event.target;
+    if (
+      target !== slot &&
+      !(target instanceof Node && target.parentNode === slot)
+    ) {
+      event.stopPropagation();
+    }
+  };
   const begin = (
     event: ReactPointerEvent<HTMLElement>,
     make: (origin: WindowRect) => Gesture,
@@ -372,8 +383,8 @@ export function FloatingWindow({
               <div
                 data-slot={`${slot}-full-head`}
                 className="flex min-w-0 flex-1 items-center"
-                onPointerDown={(event) => event.stopPropagation()}
-                onDoubleClick={(event) => event.stopPropagation()}>
+                onPointerDown={keepOffHeadUnlessFree}
+                onDoubleClick={keepOffHeadUnlessFree}>
                 {fullHead}
               </div>
             ) : null}

@@ -206,6 +206,7 @@ describe('workingThreadsInGraphOrder and the graph, with an open card', () => {
           runId: 'old',
           band: { attention: 'question', lastAt: view.lastAt },
           size: { width: 480, height: 360 },
+          aboveWindow: false,
         },
       ],
     ]);

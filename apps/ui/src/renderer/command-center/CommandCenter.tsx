@@ -800,7 +800,7 @@ export function CommandCenter({
                 fullHead={
                   <WorkingStrip
                     threads={workingStrip}
-                    onOpenThread={showThread}
+                    onOpenThread={showThreadFromWindow}
                   />
                 }
                 onClose={() => setChatOpen(false)}>

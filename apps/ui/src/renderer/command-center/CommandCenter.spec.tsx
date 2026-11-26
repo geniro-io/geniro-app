@@ -1397,7 +1397,7 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
     expect(stripOf()).toBeNull();
   });
 
-  it('opens a pressed face as its card on the canvas, through showThread', async () => {
+  it('opens a pressed face as its card over the maximised window, as the window’s own Open chat does, and keeps it there through a press in the window', async () => {
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'working'),
       cardOf('run-a', 'p1'),
@@ -1406,16 +1406,30 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
     openChat();
     maximiseChat();
 
-    clickOn(
-      container.querySelector(
-        '[data-slot="working-strip-thread"][data-run="run-w"]',
-      ),
-    );
+    const face = container.querySelector<HTMLElement>(
+      '[data-slot="working-strip-thread"][data-run="run-w"]',
+    )!;
+    act(() => {
+      face.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    clickOn(face);
 
-    expect(probes.graph!.openCards.map((card) => card.runId)).toEqual([
-      'run-w',
+    expect(probes.graph!.openCards).toEqual([
+      expect.objectContaining({ runId: 'run-w', aboveWindow: true }),
     ]);
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="command-center-chat"]')!
+        .dataset.state,
+    ).toBe('maximised');
     expect(onOpenThread).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector('[data-slot="stub-manager-dock"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
+    expect(probes.graph!.cardsInFront).toBe(false);
+    expect(probes.graph!.openCards[0]!.aboveWindow).toBe(true);
   });
 
   it('follows the block order the user set, older thread first', async () => {

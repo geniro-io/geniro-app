@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   BLOCK_HEAD,
   BLOCK_PAD,
+  CENTRE_DEPTH,
   type GraphBox,
   type GraphGeometry,
   type LayoutBlock,
   layoutBlocks,
   layoutColumn,
   perLineFor,
+  slotIndexFor,
+  withBlockAt,
+  withBlockItems,
   withBoxAt,
 } from './graph-layout';
 
@@ -18,6 +22,8 @@ const CARD_HEIGHT = 150;
 const COLUMN_GAP = 40;
 const LINE_GAP = 72;
 const BLOCK_GAP = 24;
+const FRAME_PAD = 12;
+const MARGIN = 24;
 
 function itemsOf(count: number): GraphBox[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -483,6 +489,103 @@ describe('layoutBlocks', () => {
     );
     expect(geometry.width).toBeGreaterThanOrEqual(rightmost);
   });
+  it('stands a placed block at the root top-left plus its offset, moves its items with it, and wires it to the root by an elbow onto its top', () => {
+    const blocks = [blockOf('A', 2), blockOf('B', 1)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map(),
+      undefined,
+      new Map([['block:A', { x: 500, y: 600 }]]),
+    );
+    const root = geometry.boxes.get('root')!;
+    const block = geometry.boxes.get('block:A')!;
+    const route = geometry.routes.get('block:A')!;
+
+    expect([block.x, block.y]).toEqual([root.x + 500, root.y + 600]);
+    for (const id of ['A-1', 'A-2']) {
+      expect(geometry.boxes.get(id)!.x - block.x).toBe(
+        free.boxes.get(id)!.x - free.boxes.get('block:A')!.x,
+      );
+      expect(geometry.boxes.get(id)!.y - block.y).toBe(
+        free.boxes.get(id)!.y - free.boxes.get('block:A')!.y,
+      );
+    }
+    expect(route[0]).toEqual({
+      x: root.x + root.width / 2,
+      y: root.y + root.height,
+    });
+    expect(route.at(-1)).toEqual({ x: block.x + block.width / 2, y: block.y });
+    expect(overlapping(geometry, blocks)).toEqual([]);
+  });
+
+  it('keeps the lines under a line whose only block was placed out of it where they stand', () => {
+    const blocks = [blockOf('A', 1), blockOf('B', 1)];
+    const free = layoutBlocks(ROOT, blocks, 1);
+    expect(free.boxes.get('block:B')!.y).toBeGreaterThan(
+      free.boxes.get('block:A')!.y,
+    );
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      1,
+      new Map(),
+      undefined,
+      new Map([['block:A', { x: 2000, y: 0 }]]),
+    );
+
+    expect(geometry.boxes.get('block:B')).toMatchObject({
+      x: free.boxes.get('block:B')!.x,
+      y: free.boxes.get('block:B')!.y,
+    });
+  });
+
+  it('keeps the other blocks of a line where they stand while one is placed out of it', () => {
+    const blocks = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map(),
+      undefined,
+      new Map([['block:B', { x: 0, y: 600 }]]),
+    );
+
+    for (const id of ['block:A', 'block:C']) {
+      expect(geometry.boxes.get(id)).toMatchObject({
+        x: free.boxes.get(id)!.x,
+        y: free.boxes.get(id)!.y,
+      });
+    }
+    expect(geometry.boxes.get('block:B')!.y).not.toBe(
+      free.boxes.get('block:B')!.y,
+    );
+    expect(overlapping(geometry, blocks)).toEqual([]);
+  });
+
+  it('moves a block a placed one overlaps along its line, and leaves the placed block where it was put', () => {
+    const blocks = [blockOf('A', 1), blockOf('B', 1), blockOf('C', 1)];
+    const free = layoutBlocks(ROOT, blocks, 4);
+    const root = free.boxes.get('root')!;
+    const a = free.boxes.get('block:A')!;
+    const geometry = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map(),
+      undefined,
+      new Map([['block:C', { x: a.x - root.x, y: a.y - root.y }]]),
+    );
+
+    expect(geometry.boxes.get('block:C')).toMatchObject({ x: a.x, y: a.y });
+    expect(geometry.boxes.get('block:A')!.x).toBeGreaterThan(a.x);
+    expect(geometry.boxes.get('block:A')!.y).toBe(a.y);
+    expect(geometry.boxes.get('block:B')!.x).toBe(free.boxes.get('block:B')!.x);
+    expect(overlapping(geometry, blocks)).toEqual([]);
+  });
 });
 
 describe('withBoxAt', () => {
@@ -521,6 +624,130 @@ describe('withBoxAt', () => {
   });
 });
 
+describe('withBlockAt', () => {
+  it('moves a block and the members named with it by one delta, re-wires the block, and leaves every other box and wire where it was', () => {
+    const blocks = [blockOf('A', 2), blockOf('B', 2)];
+    const laidOut = layoutBlocks(
+      ROOT,
+      blocks,
+      4,
+      new Map([['B-1', { x: 500, y: 600 }]]),
+    );
+    const root = laidOut.boxes.get('root')!;
+
+    const moved = withBlockAt(laidOut, 'root', 'block:A', ['A-1', 'A-2'], {
+      x: 500,
+      y: 300,
+    });
+    const block = moved.boxes.get('block:A')!;
+    const dx = block.x - laidOut.boxes.get('block:A')!.x;
+    const dy = block.y - laidOut.boxes.get('block:A')!.y;
+
+    expect([block.x, block.y]).toEqual([root.x + 500, root.y + 300]);
+    for (const id of ['A-1', 'A-2']) {
+      expect(moved.boxes.get(id)).toMatchObject({
+        x: laidOut.boxes.get(id)!.x + dx,
+        y: laidOut.boxes.get(id)!.y + dy,
+      });
+    }
+    for (const id of ['root', 'block:B', 'B-1', 'B-2']) {
+      expect(moved.boxes.get(id)).toEqual(laidOut.boxes.get(id));
+    }
+    expect(moved.routes.get('block:A')![0]).toEqual({
+      x: root.x + root.width / 2,
+      y: root.y + root.height,
+    });
+    expect(moved.routes.get('block:A')!.at(-1)).toEqual({
+      x: block.x + block.width / 2,
+      y: block.y,
+    });
+    expect(moved.routes.get('block:B')).toEqual(laidOut.routes.get('block:B'));
+  });
+});
+
+describe('slotIndexFor', () => {
+  const slot: GraphBox = { id: 'slot', width: CARD_WIDTH, height: CARD_HEIGHT };
+  const origin = { x: 100, y: 50 };
+  const block = blockOf('A', 3);
+  const items = cardsOf('A', 3);
+
+  it('drops a card at the first index when its centre is at the first place, and past the last when it is past the last place', () => {
+    expect(
+      slotIndexFor(block, items, slot, 4, origin, {
+        x: origin.x + BLOCK_PAD + CARD_WIDTH / 2,
+        y: origin.y + BLOCK_HEAD + CENTRE_DEPTH,
+      }),
+    ).toBe(0);
+    expect(
+      slotIndexFor(block, items, slot, 4, origin, {
+        x: origin.x + BLOCK_PAD + 3 * (CARD_WIDTH + BLOCK_GAP) + CARD_WIDTH / 2,
+        y: origin.y + BLOCK_HEAD + CENTRE_DEPTH,
+      }),
+    ).toBe(items.length);
+  });
+
+  it('drops a card between two places at the index of the place its centre lands on', () => {
+    for (const index of [1, 2]) {
+      expect(
+        slotIndexFor(block, items, slot, 4, origin, {
+          x:
+            origin.x +
+            BLOCK_PAD +
+            index * (CARD_WIDTH + BLOCK_GAP) +
+            CARD_WIDTH / 2,
+          y: origin.y + BLOCK_HEAD + CENTRE_DEPTH,
+        }),
+      ).toBe(index);
+    }
+  });
+
+  it('drops a card on a wrapped line at the index of the place it lands on', () => {
+    expect(
+      slotIndexFor(block, items, slot, 2, origin, {
+        x: origin.x + BLOCK_PAD + CARD_WIDTH / 2,
+        y: origin.y + BLOCK_HEAD + CARD_HEIGHT + BLOCK_GAP + CENTRE_DEPTH,
+      }),
+    ).toBe(2);
+  });
+});
+
+describe('withBlockItems', () => {
+  it('keeps a block’s top-left, reflows its items round the slot inserted into them, and re-wires it to its new top centre', () => {
+    const laidOut = layoutBlocks(ROOT, [blockOf('A', 2), blockOf('B', 1)], 4);
+    const slot: GraphBox = {
+      id: 'slot',
+      width: CARD_WIDTH,
+      height: CARD_HEIGHT,
+    };
+    const [first, second] = cardsOf('A', 2);
+
+    const reshaped = withBlockItems(
+      laidOut,
+      blockOf('A', 2),
+      [first!, slot, second!],
+      4,
+    );
+    const before = laidOut.boxes.get('block:A')!;
+    const box = reshaped.boxes.get('block:A')!;
+
+    expect([box.x, box.y]).toEqual([before.x, before.y]);
+    expect(box.width).toBe(BLOCK_PAD * 2 + CARD_WIDTH * 3 + BLOCK_GAP * 2);
+    expect(box.height).toBe(BLOCK_HEAD + CARD_HEIGHT + BLOCK_PAD);
+    expect(reshaped.boxes.get('slot')).toMatchObject({
+      x: box.x + BLOCK_PAD + CARD_WIDTH + BLOCK_GAP,
+      y: box.y + BLOCK_HEAD,
+    });
+    expect(reshaped.boxes.get('A-2')).toMatchObject({
+      x: box.x + BLOCK_PAD + 2 * (CARD_WIDTH + BLOCK_GAP),
+      y: box.y + BLOCK_HEAD,
+    });
+    expect(reshaped.routes.get('block:A')!.at(-1)).toEqual({
+      x: box.x + box.width / 2,
+      y: box.y,
+    });
+  });
+});
+
 describe('layoutColumn', () => {
   it('stacks every box in one column, in order, indented under the root, none overlapping, phone-wide', () => {
     const geometry = layoutColumn(
@@ -550,6 +777,44 @@ describe('layoutColumn', () => {
     expect(geometry.routes.has('t0')).toBe(true);
     expect(geometry.boxes.get('heading:p')!.y).toBeLessThan(
       geometry.boxes.get('t0')!.y,
+    );
+  });
+  it('draws each frame round its members, 12px out on three sides and from the first member’s top, and no two frames touch', () => {
+    const geometry = layoutColumn(
+      { id: 'root', width: 300, height: 112 },
+      [
+        { id: 'heading:A', width: 400, height: 28 },
+        { id: 'A-1', width: 400, height: 150 },
+        { id: 'A-2', width: 400, height: 150 },
+        { id: 'heading:B', width: 400, height: 28 },
+        { id: 'B-1', width: 400, height: 150 },
+      ],
+      new Set(['heading:A', 'heading:B']),
+      [
+        { id: 'frame:A', members: ['heading:A', 'A-1', 'A-2'] },
+        { id: 'frame:B', members: ['heading:B', 'B-1'] },
+      ],
+    );
+    const enclosed = (frameId: string, members: readonly string[]): void => {
+      const frame = geometry.boxes.get(frameId)!;
+      const boxes = members.map((id) => geometry.boxes.get(id)!);
+      expect(frame.x).toBe(Math.min(...boxes.map((box) => box.x)) - FRAME_PAD);
+      expect(frame.x + frame.width).toBe(
+        Math.max(...boxes.map((box) => box.x + box.width)) + FRAME_PAD,
+      );
+      expect(frame.y).toBe(boxes[0]!.y);
+      expect(frame.y + frame.height).toBe(
+        Math.max(...boxes.map((box) => box.y + box.height)) + FRAME_PAD,
+      );
+    };
+    enclosed('frame:A', ['heading:A', 'A-1', 'A-2']);
+    enclosed('frame:B', ['heading:B', 'B-1']);
+
+    const frameA = geometry.boxes.get('frame:A')!;
+    const frameB = geometry.boxes.get('frame:B')!;
+    expect(frameA.y + frameA.height).toBeLessThan(frameB.y);
+    expect(geometry.width).toBe(
+      Math.max(frameA.x + frameA.width, frameB.x + frameB.width) + MARGIN,
     );
   });
 });

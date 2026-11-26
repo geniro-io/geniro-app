@@ -510,6 +510,67 @@ describe('CommandCenter — the places nodes were moved to', () => {
     ).toEqual({ 'run-a': { x: 40, y: 300 } });
   });
 
+  it('forgets the block places of projects with no thread on the board, and the threads that left the board from block orders', async () => {
+    localStorage.setItem(
+      'commandCenter.blockPositions',
+      JSON.stringify({
+        'block:p1': { x: 10, y: 20 },
+        'block:gone': { x: 0, y: 0 },
+      }),
+    );
+    localStorage.setItem(
+      'commandCenter.blockOrders',
+      JSON.stringify({
+        'block:p1': ['run-gone', 'run-a'],
+        'block:gone': ['run-gone'],
+      }),
+    );
+
+    await renderPage();
+
+    expect(probes.graph!.blockPlaces).toEqual({ 'block:p1': { x: 10, y: 20 } });
+    expect(probes.graph!.blockOrders).toEqual({ 'block:p1': ['run-a'] });
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.blockPositions')!),
+    ).toEqual({ 'block:p1': { x: 10, y: 20 } });
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.blockOrders')!),
+    ).toEqual({ 'block:p1': ['run-a'] });
+  });
+
+  it('gives every node, block place and block order back to the automatic layout on Reset layout', async () => {
+    localStorage.setItem(
+      'commandCenter.nodePositions',
+      JSON.stringify({ 'run-a': { x: 40, y: 300 } }),
+    );
+    localStorage.setItem(
+      'commandCenter.blockPositions',
+      JSON.stringify({ 'block:p1': { x: 10, y: 20 } }),
+    );
+    localStorage.setItem(
+      'commandCenter.blockOrders',
+      JSON.stringify({ 'block:p1': ['run-a'] }),
+    );
+    await renderPage();
+    expect(probes.graph!.blockPlaces).toEqual({ 'block:p1': { x: 10, y: 20 } });
+    expect(probes.graph!.blockOrders).toEqual({ 'block:p1': ['run-a'] });
+
+    act(() => probes.graph!.onResetLayout());
+
+    expect(probes.graph!.positions).toEqual({});
+    expect(probes.graph!.blockPlaces).toEqual({});
+    expect(probes.graph!.blockOrders).toEqual({});
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.nodePositions')!),
+    ).toEqual({});
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.blockPositions')!),
+    ).toEqual({});
+    expect(
+      JSON.parse(localStorage.getItem('commandCenter.blockOrders')!),
+    ).toEqual({});
+  });
+
   it('keeps a dropped node’s place and gives it up on Reset layout', async () => {
     await renderPage();
 

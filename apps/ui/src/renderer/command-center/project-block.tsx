@@ -54,7 +54,13 @@ export function ProjectBlockHeader({
 }
 
 /** One project's threads on the command center's canvas: a dashed frame in its colour, headed by its name. */
-export function ProjectBlock(props: ProjectBlockProps): React.JSX.Element {
+export function ProjectBlock({
+  headerClassName,
+  ...props
+}: ProjectBlockProps & {
+  /** Added to the header strip, which a movable block is dragged by. */
+  headerClassName?: string;
+}): React.JSX.Element {
   return (
     <section
       aria-label={`Project ${props.name}`}
@@ -66,7 +72,10 @@ export function ProjectBlock(props: ProjectBlockProps): React.JSX.Element {
           ? 'border-border-strong'
           : FRAME_CLASS[props.color],
       )}>
-      <ProjectBlockHeader {...props} className="h-10 px-4" />
+      <ProjectBlockHeader
+        {...props}
+        className={cn('h-10 px-4', headerClassName)}
+      />
     </section>
   );
 }

@@ -1,14 +1,9 @@
-import { useState } from 'react';
-
-import { useLatestCallback } from '../components/use-latest-callback';
 import {
   hasFiniteNumbers,
-  keptRunRecords,
   readRunRecords,
   type RunRecords,
-  withRunRecord,
-  writeRunRecords,
 } from './run-records';
+import { useStoredRecords } from './use-stored-records';
 
 /** Where a moved thread's node stands, from the manager node's top-left corner, in flow units. */
 export interface NodeOffset {
@@ -21,7 +16,7 @@ export type NodeOffsets = RunRecords<NodeOffset>;
 export const NODE_POSITIONS_KEY = 'commandCenter.nodePositions';
 export const MAX_REMEMBERED_NODE_POSITIONS = 200;
 
-function isNodeOffset(value: unknown): value is NodeOffset {
+export function isNodeOffset(value: unknown): value is NodeOffset {
   return hasFiniteNumbers(value, ['x', 'y']);
 }
 
@@ -43,48 +38,16 @@ export interface NodePositions {
 
 /** The nodes the user moved on the command center's canvas, kept on this device. */
 export function useNodePositions(): NodePositions {
-  const [offsets, setOffsets] = useState<NodeOffsets>(readNodePositions);
-  const place = useLatestCallback(
-    (runId: string, offset: NodeOffset): void =>
-      setOffsets((current) => {
-        const next = withRunRecord(
-          current,
-          runId,
-          offset,
-          MAX_REMEMBERED_NODE_POSITIONS,
-        );
-        writeRunRecords(NODE_POSITIONS_KEY, next);
-        return next;
-      }),
-    [],
+  const stored = useStoredRecords(
+    NODE_POSITIONS_KEY,
+    isNodeOffset,
+    MAX_REMEMBERED_NODE_POSITIONS,
   );
-  const forget = useLatestCallback(
-    (runId: string): void =>
-      setOffsets((current) => {
-        if (current[runId] === undefined) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[runId];
-        writeRunRecords(NODE_POSITIONS_KEY, next);
-        return next;
-      }),
-    [],
-  );
-  const keepOnly = useLatestCallback(
-    (runIds: ReadonlySet<string>): void =>
-      setOffsets((current) => {
-        const next = keptRunRecords(current, runIds);
-        if (next !== current) {
-          writeRunRecords(NODE_POSITIONS_KEY, next);
-        }
-        return next;
-      }),
-    [],
-  );
-  const reset = useLatestCallback((): void => {
-    writeRunRecords(NODE_POSITIONS_KEY, {});
-    setOffsets({});
-  }, []);
-  return { offsets, place, forget, keepOnly, reset };
+  return {
+    offsets: stored.records,
+    place: stored.set,
+    forget: stored.forget,
+    keepOnly: stored.keepOnly,
+    reset: stored.reset,
+  };
 }

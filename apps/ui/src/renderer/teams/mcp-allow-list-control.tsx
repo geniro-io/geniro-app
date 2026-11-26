@@ -116,7 +116,7 @@ export function McpAllowListControl({
                     onChange(nextMcpAllowed(picked, name, on))
                   }
                   label={
-                    <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+                    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 [overflow-wrap:anywhere]">
                       <span>{name}</span>
                       {isAccountConnector(name, prefix) ? (
                         <>

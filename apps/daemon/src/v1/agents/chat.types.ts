@@ -1263,6 +1263,8 @@ export interface MemberTurnReading {
   sessionId: string | null;
   /** The prompt side of the turn's last request. */
   contextTokens: number | null;
+  /** The prompt side of the turn's first request; null when the CLI reported none. */
+  firstRequestContextTokens: number | null;
   /** How many requests the turn made. */
   numTurns: number | null;
   agent: string | null;
@@ -3014,10 +3016,15 @@ const ContextCategorySchema = z
       .describe(
         'available but not loaded, and so NOT counted in totalTokens — rendering it in the same bar reports a window several times fuller than it is',
       ),
+    reserve: z
+      .boolean()
+      .describe(
+        'room the CLI holds back (claude’s autocompact buffer), not content of the request and NOT counted in totalTokens',
+      ),
   })
   .meta({ id: 'ContextCategory' });
 
-const ContextMemoryFileSchema = z
+export const ContextMemoryFileSchema = z
   .object({
     path: z.string(),
     kind: z
@@ -3048,6 +3055,12 @@ const ContextServerSchema = z
     loadedToolCount: z
       .number()
       .describe('how many of them are actually in the window right now'),
+    loadedTokens: z
+      .number()
+      .nullable()
+      .describe(
+        'what the loaded tools’ schemas put in the window — a tool not loaded is there by name only, which no CLI prices; null when the CLI does not price its tools (codex)',
+      ),
   })
   .meta({ id: 'ContextServer' });
 

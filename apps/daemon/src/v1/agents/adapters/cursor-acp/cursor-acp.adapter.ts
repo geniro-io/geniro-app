@@ -804,6 +804,8 @@ export class CursorAcpAdapter extends AgentAdapter {
          * measurement and what else that directory must link).
          */
         turnToggleUnavailableReason: null,
+        allowListUnavailableReason: 'this CLI has no per-turn allow list',
+        accountConnectorPrefix: null,
         /**
          * Null here because the gap is the machine's installed PLUGINS, which
          * only the folder read can name — `readMcpFolderFacts` answers it.

@@ -65,6 +65,17 @@ export const Editable: Story = {
   args: { onSetEnabled: () => {} },
 };
 
+export const WithAllowList: Story = {
+  args: {
+    onSetEnabled: () => {},
+    allowList: {
+      allowed: ['codegraph'],
+      capability: { unavailableReason: null, accountConnectorPrefix: null },
+      onChange: () => {},
+    },
+  },
+};
+
 export const OverriddenInAProject: Story = {
   args: {
     onSetEnabled: () => {},

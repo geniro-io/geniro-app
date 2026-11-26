@@ -61,7 +61,9 @@ export interface NodeMcpState {
 }
 
 /**
- * The MCP servers one team member would load, independent of any folder.
+ * The MCP servers one team member would load, independent of any folder —
+ * or, on a project's page, in that project's folder, so its own servers can
+ * be picked there.
  *
  * A team is edited long before it runs anywhere, so the builder has no
  * folder to ask about — and the honest answer is the set that does not depend
@@ -85,6 +87,7 @@ export function useNodeMcp(
   agentsApi: DaemonApis['agents'] | null,
   agent: CliKind | null,
   configDir: string | null,
+  cwd: string | null = null,
 ): NodeMcpState {
   // Stored WITH the question it answers. Without that pairing, clicking from
   // one member to another leaves the previous member's rows on screen until the
@@ -108,7 +111,7 @@ export function useNodeMcp(
   const consumedReread = useRef(0);
   // NUL-joined, the one byte neither an agent kind nor a path can contain —
   // the same key shape the daemon's own caches use.
-  const scope = `${agent ?? ''}\u0000${configDir ?? ''}`;
+  const scope = `${agent ?? ''}\u0000${configDir ?? ''}\u0000${cwd ?? ''}`;
 
   const current = answered.scope === scope;
   const listing = current ? answered.listing : undefined;
@@ -154,6 +157,7 @@ export function useNodeMcp(
           .listAgentMcpServers(
             {
               agent,
+              ...(cwd ? { cwd } : {}),
               ...(configDir ? { configDir } : {}),
               ...(bypassCache ? { refresh: 'true' } : {}),
             },
@@ -214,7 +218,7 @@ export function useNodeMcp(
       stale = true;
       clearTimeout(timer);
     };
-  }, [agentsApi, agent, configDir, scope, reloadToken, rereadToken]);
+  }, [agentsApi, agent, configDir, cwd, scope, reloadToken, rereadToken]);
 
   const refresh = useLatestCallback(() => {
     setReloadToken((token) => token + 1);

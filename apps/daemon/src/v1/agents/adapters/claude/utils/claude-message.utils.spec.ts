@@ -829,6 +829,7 @@ describe('mapClaudeMessage', () => {
           thinkingTokens: null,
           // The final request's prompt (4 + 12 + 996), not the 2_812 roll-up.
           contextTokens: 1012,
+          firstRequestContextTokens: 1012,
           contextWindowTokens: 1_000_000,
           contextModel: expect.any(String),
           costUsd: 0.004,

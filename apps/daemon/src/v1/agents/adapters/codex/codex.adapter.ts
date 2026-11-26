@@ -324,6 +324,9 @@ export class CodexAdapter extends AgentAdapter {
         // config overrides — see `codexTurnMcpOverrides` for the measurement
         // and for the rows it cannot reach (a plugin's server).
         turnToggleUnavailableReason: null,
+        allowListUnavailableReason:
+          'codex’s account apps cannot be limited per member yet',
+        accountConnectorPrefix: null,
         interactiveOnlyNote: null,
         userDisabledReason:
           'switched off in codex’s own config (`enabled = false` under its entry)',

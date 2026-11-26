@@ -102,6 +102,31 @@ describe('claudeSettingsArgs', () => {
     );
   });
 
+  it('writes allowedMcpServers only when given, each entry in its own shape', () => {
+    expect(
+      settingsOf(
+        claudeSettingsArgs({
+          allowedMcpServers: [
+            { serverName: 'codegraph' },
+            { serverUrl: 'https://slack/mcp' },
+          ],
+        }),
+      ),
+    ).toEqual({
+      ...REFUSE,
+      allowedMcpServers: [
+        { serverName: 'codegraph' },
+        { serverUrl: 'https://slack/mcp' },
+      ],
+    });
+    expect(settingsOf(claudeSettingsArgs({}))).not.toHaveProperty(
+      'allowedMcpServers',
+    );
+    expect(
+      settingsOf(claudeSettingsArgs({ allowedMcpServers: [] })),
+    ).toHaveProperty('allowedMcpServers', []);
+  });
+
   it('blocks every tool through a PreToolUse hook inside the same flag, only when asked', () => {
     expect(
       settingsOf(

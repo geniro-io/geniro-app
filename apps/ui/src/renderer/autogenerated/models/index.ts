@@ -871,6 +871,33 @@ export type AgentKind = typeof AgentKind[keyof typeof AgentKind];
 /**
  * 
  * @export
+ * @interface AgentMcpAllowListCapability
+ */
+export interface AgentMcpAllowListCapability {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentMcpAllowListCapability
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpAllowListCapability
+     */
+    unavailableReason: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpAllowListCapability
+     */
+    accountConnectorPrefix: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentMcpConfigDto
  */
 export interface AgentMcpConfigDto {
@@ -2538,6 +2565,12 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     options: Array<AgentOptionsCapability>;
+    /**
+     * Per-CLI support for limiting a member’s turn to an allow list of MCP servers, one entry per known agent
+     * @type {Array<AgentMcpAllowListCapability>}
+     * @memberof CapabilitiesDto
+     */
+    mcpAllowLists: Array<AgentMcpAllowListCapability>;
     /**
      * The instruction block geniro prepends to every user-facing turn, before the user’s own custom instructions
      * @type {string}
@@ -4420,6 +4453,12 @@ export interface ContextCategory {
      * @memberof ContextCategory
      */
     deferred: boolean;
+    /**
+     * room the CLI holds back (claude’s autocompact buffer), not content of the request and NOT counted in totalTokens
+     * @type {boolean}
+     * @memberof ContextCategory
+     */
+    reserve: boolean;
 }
 /**
  * 
@@ -4513,6 +4552,12 @@ export interface ContextServer {
      * @memberof ContextServer
      */
     loadedToolCount: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ContextServer
+     */
+    loadedTokens: number | null;
 }
 /**
  * 
@@ -6293,6 +6338,12 @@ export interface FreshSessionBase {
     baseTokens: number | null;
     /**
      * 
+     * @type {string}
+     * @memberof FreshSessionBase
+     */
+    baseSource: FreshSessionBaseBaseSourceEnum | null;
+    /**
+     * 
      * @type {number}
      * @memberof FreshSessionBase
      */
@@ -6383,11 +6434,28 @@ export interface FreshSessionBase {
     mcpServersUnavailableReason: string | null;
     /**
      * 
+     * @type {FreshSessionContextReading}
+     * @memberof FreshSessionBase
+     */
+    contextReading: FreshSessionContextReading | null;
+    /**
+     * 
      * @type {Array<FreshSessionBaseNotMeasuredInner>}
      * @memberof FreshSessionBase
      */
     notMeasured: Array<FreshSessionBaseNotMeasuredInner>;
 }
+
+
+/**
+ * @export
+ */
+export const FreshSessionBaseBaseSourceEnum = {
+    FirstRequest: 'firstRequest',
+    LastRequest: 'lastRequest'
+} as const;
+export type FreshSessionBaseBaseSourceEnum = typeof FreshSessionBaseBaseSourceEnum[keyof typeof FreshSessionBaseBaseSourceEnum];
+
 /**
  * 
  * @export
@@ -6524,6 +6592,129 @@ export interface FreshSessionBasesDto {
      * @memberof FreshSessionBasesDto
      */
     members: Array<FreshSessionBase>;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionContextPart
+ */
+export interface FreshSessionContextPart {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextPart
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextPart
+     */
+    tokens: number;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionContextReading
+ */
+export interface FreshSessionContextReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextReading
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextReading
+     */
+    measuredAt: string;
+    /**
+     * The CLI's own parts of the window, in its order; they sum to cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
+     * @memberof FreshSessionContextReading
+     */
+    inWindow: Array<FreshSessionContextPart>;
+    /**
+     * Room the CLI holds back (claude’s autocompact buffer): not content of the request and not in cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
+     * @memberof FreshSessionContextReading
+     */
+    reserved: Array<FreshSessionContextPart>;
+    /**
+     * What the CLI offers on use (deferred tool schemas): NOT in the window and not in cliTotalTokens
+     * @type {Array<FreshSessionContextPart>}
+     * @memberof FreshSessionContextReading
+     */
+    onUse: Array<FreshSessionContextPart>;
+    /**
+     * 
+     * @type {Array<ContextMemoryFile>}
+     * @memberof FreshSessionContextReading
+     */
+    memoryFiles: Array<ContextMemoryFile>;
+    /**
+     * 
+     * @type {Array<FreshSessionContextServer>}
+     * @memberof FreshSessionContextReading
+     */
+    mcpServers: Array<FreshSessionContextServer>;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextReading
+     */
+    cliTotalTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextReading
+     */
+    firstRequestTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextReading
+     */
+    firstRequestLessCliTotalTokens: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface FreshSessionContextServer
+ */
+export interface FreshSessionContextServer {
+    /**
+     * 
+     * @type {string}
+     * @memberof FreshSessionContextServer
+     */
+    name: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    toolCount: number;
+    /**
+     * Tools whose schemas are in the window; the rest are there by name only
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    loadedToolCount: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    inWindowTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof FreshSessionContextServer
+     */
+    onUseTokens: number | null;
 }
 /**
  * 
@@ -19754,6 +19945,12 @@ export interface TeamAgentPoolMember {
      * @memberof TeamAgentPoolMember
      */
     mcpDisabled?: Array<string>;
+    /**
+     * The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server
+     * @type {Array<string>}
+     * @memberof TeamAgentPoolMember
+     */
+    mcpAllowed?: Array<string>;
 }
 
 
@@ -19967,6 +20164,12 @@ export interface TeamMember {
      * @memberof TeamMember
      */
     mcpDisabled?: Array<string>;
+    /**
+     * The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server. Applied only by a CLI that can (GET /v1/capabilities mcpAllowLists); on any other the member loads every server
+     * @type {Array<string>}
+     * @memberof TeamMember
+     */
+    mcpAllowed?: Array<string>;
     /**
      * Further agent configurations a turn of this member can run under (members 2, 3, …); the member’s own settings are member 1
      * @type {Array<TeamAgentPoolMember>}
@@ -20207,6 +20410,12 @@ export interface TeamOverlayMember {
      * @memberof TeamOverlayMember
      */
     mcpDisabled?: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof TeamOverlayMember
+     */
+    mcpAllowed?: Array<string> | null;
 }
 /**
  * 

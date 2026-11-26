@@ -741,6 +741,31 @@ export const CLAUDE_DENIED_MCP_SERVERS_KEY = 'deniedMcpServers';
 /** The field of each {@link CLAUDE_DENIED_MCP_SERVERS_KEY} entry that names the server. */
 export const CLAUDE_DENIED_MCP_SERVER_NAME_FIELD = 'serverName';
 
+/** The `--settings` key listing the only MCP servers a turn may load. */
+export const CLAUDE_ALLOWED_MCP_SERVERS_KEY = 'allowedMcpServers';
+
+/** The field of an {@link CLAUDE_ALLOWED_MCP_SERVERS_KEY} entry that names a server by its config name. */
+export const CLAUDE_ALLOWED_MCP_SERVER_NAME_FIELD = 'serverName';
+
+/** The field of an {@link CLAUDE_ALLOWED_MCP_SERVERS_KEY} entry that names a server by its URL. */
+export const CLAUDE_ALLOWED_MCP_SERVER_URL_FIELD = 'serverUrl';
+
+/**
+ * The transports the CLI matches by URL alone once any entry of
+ * {@link CLAUDE_ALLOWED_MCP_SERVERS_KEY} is a {@link CLAUDE_ALLOWED_MCP_SERVER_URL_FIELD}:
+ * from then on a remote server listed only by name does not load (2.1.331, its
+ * allow-list check, confirmed live: an http server kept by name dropped once a
+ * connector's URL joined the list, and loaded again with its own URL beside it;
+ * a stdio server kept by name loaded throughout).
+ */
+export const CLAUDE_URL_MATCHED_MCP_TRANSPORTS: ReadonlySet<string> = new Set([
+  'http',
+  'sse',
+]);
+
+/** The prefix `claude mcp list` puts before an account connector's name. */
+export const CLAUDE_AI_CONNECTOR_NAME_PREFIX = 'claude.ai ';
+
 /**
  * The `.mcp.json` REJECTION list, in settings and in the home config.
  *
@@ -2208,6 +2233,12 @@ export const CLAUDE_RATE_LIMIT_EVENT_TYPE = 'rate_limit_event';
 
 /** The control subtype that reports the context window's category breakdown. */
 export const CLAUDE_CONTEXT_USAGE_SUBTYPE = 'get_context_usage';
+/**
+ * The `kind` a `get_context_usage` category carries when it is room held back
+ * rather than content: the "Autocompact buffer" row, outside `totalTokens`
+ * (2.1.331: `used`, `deferred`, `buffer` and `free`).
+ */
+export const CLAUDE_CONTEXT_RESERVE_KIND = 'buffer';
 
 /**
  * How long one breakdown question waits for its answer.

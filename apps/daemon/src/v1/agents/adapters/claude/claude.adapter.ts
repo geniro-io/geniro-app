@@ -74,6 +74,7 @@ import {
 import { readConfigForRewrite } from '../utils/strict-json.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
+  CLAUDE_AI_CONNECTOR_NAME_PREFIX,
   CLAUDE_APPEND_SYSTEM_PROMPT_FILE_FLAG,
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
@@ -168,6 +169,7 @@ import {
   CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
   CLAUDE_TOOLS_FLAG,
+  CLAUDE_URL_MATCHED_MCP_TRANSPORTS,
   CLAUDE_USER_DATA_TMP_DIR_NAME,
 } from './claude.const';
 import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
@@ -256,7 +258,10 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
-import { claudeSettingsArgs } from './utils/claude-settings.utils';
+import {
+  type ClaudeAllowedMcpServer,
+  claudeSettingsArgs,
+} from './utils/claude-settings.utils';
 import { recoverClaudeSubagent } from './utils/claude-subagent-recovery.utils';
 import {
   sweepStaleTurnSystemPrompts,
@@ -677,6 +682,8 @@ export class ClaudeAdapter extends AgentAdapter {
          * bundle).
          */
         turnToggleUnavailableReason: null,
+        allowListUnavailableReason: null,
+        accountConnectorPrefix: CLAUDE_AI_CONNECTOR_NAME_PREFIX,
         /**
          * Probe-verified on 2.1.226, and the reason it is a NOTE rather than
          * extra rows: the CLI's own `/mcp` panel carries a
@@ -2548,8 +2555,59 @@ export class ClaudeAdapter extends AgentAdapter {
         this.switchedOffServers(input),
         input.mcpEndpoint?.serverName ?? null,
       ).sort(),
+      allowedMcpServers: this.allowedServers(input),
       blockEveryTool: input.promptCacheWarmup === true,
     });
+  }
+
+  /**
+   * An account connector can only be allowed by its URL, so one the listing
+   * gave no URL for is left out. Once one is in, every remote server — geniro's
+   * own among them — is listed by its URL as well as its name
+   * (`CLAUDE_URL_MATCHED_MCP_TRANSPORTS`). Sorted: the settings string is part
+   * of `sessionKey`.
+   */
+  private allowedServers(
+    input: AgentTurnInput,
+  ): ClaudeAllowedMcpServer[] | undefined {
+    if (input.mcpAllowed === undefined) {
+      return undefined;
+    }
+    const entries = new Map<string, ClaudeAllowedMcpServer>();
+    const add = (entry: ClaudeAllowedMcpServer): void => {
+      entries.set(JSON.stringify(entry), entry);
+    };
+    const isConnector = (name: string): boolean =>
+      name.startsWith(CLAUDE_AI_CONNECTOR_NAME_PREFIX);
+    const byUrl = input.mcpAllowed.some(
+      (server) => isConnector(server.name) && server.target,
+    );
+    if (input.mcpEndpoint) {
+      add({ serverName: input.mcpEndpoint.serverName });
+      if (byUrl) {
+        add({ serverUrl: input.mcpEndpoint.url });
+      }
+    }
+    for (const server of input.mcpAllowed) {
+      if (isConnector(server.name)) {
+        if (server.target) {
+          add({ serverUrl: server.target });
+        }
+        continue;
+      }
+      add({ serverName: server.name });
+      if (
+        byUrl &&
+        server.target &&
+        server.transport !== null &&
+        CLAUDE_URL_MATCHED_MCP_TRANSPORTS.has(server.transport)
+      ) {
+        add({ serverUrl: server.target });
+      }
+    }
+    return [...entries.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, entry]) => entry);
   }
 
   /**

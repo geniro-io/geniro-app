@@ -81,6 +81,9 @@ export function foldUsage(
     // before the first request), which happened in the EARLIER segment —
     // never summed, and falling back to the later reading only when the
     // earlier one said nothing.
+    ...(earlier.firstRequestContextTokens === undefined
+      ? {}
+      : { firstRequestContextTokens: earlier.firstRequestContextTokens }),
     ttftMs: earlier.ttftMs ?? later.ttftMs,
     timeToRequestMs: earlier.timeToRequestMs ?? later.timeToRequestMs,
     // Describes the cache as the turn LEFT it, so the later segment's reading —

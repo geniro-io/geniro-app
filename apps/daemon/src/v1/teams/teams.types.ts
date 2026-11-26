@@ -11,6 +11,7 @@ import {
   AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ChatTotalsWireSchema,
+  ContextMemoryFileSchema,
   CustomInstructionsSchema,
   type HostQuestion,
   type HostQuestionOutcome,
@@ -149,15 +150,17 @@ function mcpServerNameIsClean(name: string): boolean {
 }
 
 /**
- * The MCP servers this member's (or this pool member's) turns run WITHOUT, by the
- * name the CLI lists them under.
+ * MCP servers of this member's (or this pool member's) turns, by the name the
+ * CLI lists them under: the ones it runs WITHOUT (`mcpDisabled`), or the only
+ * ones it loads (`mcpAllowed`).
  *
- * Applied per TURN by the member's own CLI (`AgentTurnInput.mcpDisabled`) and
- * written into no config file of the CLI's: it changes nothing outside this
- * member's turns. A name the CLI does not load at run time is simply ignored, so
- * a profile that later drops a server leaves the team runnable.
+ * Applied per TURN by the member's own CLI (`AgentTurnInput.mcpDisabled`,
+ * `AgentTurnInput.mcpAllowed`) and written into no config file of the CLI's:
+ * it changes nothing outside this member's turns. A name the CLI does not load
+ * at run time is simply ignored, so a profile that later drops a server leaves
+ * the team runnable.
  */
-const McpDisabledSchema = z
+const McpServerNamesSchema = z
   .array(
     z
       .string()
@@ -220,8 +223,11 @@ export const TeamAgentPoolMemberSchema = z
       .describe(
         'Absolute path to the agent config directory this member runs under',
       ),
-    mcpDisabled: McpDisabledSchema.optional().describe(
+    mcpDisabled: McpServerNamesSchema.optional().describe(
       'MCP servers this member’s turns run without, by name; omitted = none switched off',
+    ),
+    mcpAllowed: McpServerNamesSchema.optional().describe(
+      'The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server',
     ),
   })
   .meta({ id: 'TeamAgentPoolMember' });
@@ -368,12 +374,20 @@ const memberSettingsShape = {
     ),
   /**
    * The MCP servers this member's turns run WITHOUT — the member's own switches
-   * over the servers its profile loads (see {@link McpDisabledSchema}). A
+   * over the servers its profile loads (see {@link McpServerNamesSchema}). A
    * MEMBER field: each pool member carries its own list, since a member is a
    * different profile as often as a different CLI.
    */
-  mcpDisabled: McpDisabledSchema.optional().describe(
+  mcpDisabled: McpServerNamesSchema.optional().describe(
     'MCP servers this member’s turns run without, by name; omitted = none switched off',
+  ),
+  /**
+   * The ONLY MCP servers of the user's this member's turns load, beside
+   * geniro's own — account connectors included, so one added later stays off.
+   * A MEMBER field, like {@link mcpDisabled}.
+   */
+  mcpAllowed: McpServerNamesSchema.optional().describe(
+    'The only MCP servers this member’s turns load besides geniro’s own, by name; omitted = every server. Applied only by a CLI that can (GET /v1/capabilities mcpAllowLists); on any other the member loads every server',
   ),
   /**
    * The member's AGENT POOL: further configurations a turn of this member may run
@@ -627,7 +641,7 @@ export const TeamYamlSchema = TeamSchema.extend({
 
 /**
  * What a project may set for every member of one agent kind: the Model group
- * of {@link memberSettingsShape} without `agent`, `mcpDisabled` and `pool`.
+ * of {@link memberSettingsShape} without `agent`, `mcpDisabled`, `mcpAllowed` and `pool`.
  */
 export const TeamOverlayAgentDefaultsSchema = z
   .object({
@@ -679,9 +693,14 @@ export const TeamOverlayMemberSchema = z
       .describe(
         'Replaces the member’s whole pool (members 2, 3, …) in this project; [] = no pool; omitted = the team’s pool',
       ),
-    mcpDisabled: McpDisabledSchema.optional().describe(
+    mcpDisabled: McpServerNamesSchema.optional().describe(
       'Replaces the member’s own MCP switches in this project: the servers it runs without; [] = none off; omitted = the team’s',
     ),
+    mcpAllowed: McpServerNamesSchema.nullable()
+      .optional()
+      .describe(
+        'Replaces the member’s own MCP allow list in this project: the only servers it loads besides geniro’s own; null = every server; omitted = the team’s',
+      ),
   })
   .meta({ id: 'TeamOverlayMember' });
 export type TeamOverlayMember = z.infer<typeof TeamOverlayMemberSchema>;
@@ -2227,6 +2246,23 @@ export const AgentUsageCapabilitySchema = z
   .meta({ id: 'AgentUsageCapability' });
 export type AgentUsageCapability = z.infer<typeof AgentUsageCapabilitySchema>;
 
+/** Whether one CLI can limit a turn to an allow list of MCP servers. */
+export const AgentMcpAllowListCapabilitySchema = z
+  .object({
+    agent: AgentKindSchema,
+    unavailableReason: z.string().nullable(),
+    accountConnectorPrefix: z
+      .string()
+      .nullable()
+      .describe(
+        'The prefix this CLI’s MCP listing puts before an account connector’s name; null when it has none',
+      ),
+  })
+  .meta({ id: 'AgentMcpAllowListCapability' });
+export type AgentMcpAllowListCapability = z.infer<
+  typeof AgentMcpAllowListCapabilitySchema
+>;
+
 /** GET /v1/capabilities — machine-level feature availability the builder reads. */
 export const CapabilitiesWireSchema = z.object({
   agents: z
@@ -2266,6 +2302,11 @@ export const CapabilitiesWireSchema = z.object({
   options: z
     .array(AgentOptionsCapabilitySchema)
     .describe('Per-CLI user switches, one entry per known agent'),
+  mcpAllowLists: z
+    .array(AgentMcpAllowListCapabilitySchema)
+    .describe(
+      'Per-CLI support for limiting a member’s turn to an allow list of MCP servers, one entry per known agent',
+    ),
   /**
    * The instruction block geniro prepends to EVERY user-facing turn, verbatim.
    *
@@ -2450,6 +2491,90 @@ export const FreshSessionRepoFileSchema = z
   })
   .meta({ id: 'FreshSessionRepoFile' });
 
+export const FRESH_SESSION_BASE_SOURCES = [
+  'firstRequest',
+  'lastRequest',
+] as const;
+
+const FreshSessionContextPartSchema = z
+  .object({ name: z.string(), tokens: z.number() })
+  .meta({ id: 'FreshSessionContextPart' });
+
+/** One MCP server of a fresh session, split into what is in the window and what is not. */
+export const FreshSessionContextServerSchema = z
+  .object({
+    name: z.string(),
+    toolCount: z.number().int().nonnegative(),
+    loadedToolCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'Tools whose schemas are in the window; the rest are there by name only',
+      ),
+    inWindowTokens: z
+      .number()
+      .nullable()
+      .describe(
+        "What the server's loaded tool schemas put in the window, its share of the MCP tools part; the names of its other tools are in the window too, and the CLI prices no name. Null when the CLI does not price tools",
+      ),
+    onUseTokens: z
+      .number()
+      .nullable()
+      .describe(
+        'The schemas of the tools not loaded: NOT in the window, added only when a tool is searched for; null when the CLI does not price tools',
+      ),
+  })
+  .meta({ id: 'FreshSessionContextServer' });
+
+/**
+ * What the member's CLI said its fresh session held, asked once when the
+ * session opened — the newest such reading in the group.
+ */
+export const FreshSessionContextReadingSchema = z
+  .object({
+    runId: z.string(),
+    measuredAt: z.string(),
+    inWindow: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        "The CLI's own parts of the window, in its order; they sum to cliTotalTokens",
+      ),
+    reserved: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        'Room the CLI holds back (claude’s autocompact buffer): not content of the request and not in cliTotalTokens',
+      ),
+    onUse: z
+      .array(FreshSessionContextPartSchema)
+      .describe(
+        'What the CLI offers on use (deferred tool schemas): NOT in the window and not in cliTotalTokens',
+      ),
+    memoryFiles: z.array(ContextMemoryFileSchema),
+    mcpServers: z.array(FreshSessionContextServerSchema),
+    cliTotalTokens: z
+      .number()
+      .nullable()
+      .describe("The CLI's own total of inWindow; null when it gave none"),
+    firstRequestTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "That session's first request, the whole prompt the model saw; null when the CLI reported none",
+      ),
+    firstRequestLessCliTotalTokens: z
+      .number()
+      .nullable()
+      .describe(
+        "firstRequestTokens less cliTotalTokens, never clamped: positive is what the CLI leaves unitemised (tool names it does not price, fixed overhead); negative means the CLI's parts add up to more than the first request. Not cliRemainderTokens, which is the whole base less Geniro's block and the repository files. Null when either is unknown",
+      ),
+  })
+  .meta({ id: 'FreshSessionContextReading' });
+export type FreshSessionContextReading = z.infer<
+  typeof FreshSessionContextReadingSchema
+>;
+
 /** What one member's fresh CLI session starts with, and what of it is known. */
 export const FreshSessionBaseSchema = z
   .object({
@@ -2479,7 +2604,13 @@ export const FreshSessionBaseSchema = z
       .int()
       .nullable()
       .describe(
-        'Median context of those starts: the last request of the turn that opened each CLI session; null when not measured',
+        'Median context of those starts: the first request of the turn that opened each CLI session where the CLI reported it, else its last; null when not measured',
+      ),
+    baseSource: z
+      .enum(FRESH_SESSION_BASE_SOURCES)
+      .nullable()
+      .describe(
+        'Which request of each opening turn baseTokens reads: firstRequest when every start reported it, else lastRequest; null when not measured',
       ),
     minTokens: z.number().int().nullable(),
     maxTokens: z.number().int().nullable(),
@@ -2534,6 +2665,9 @@ export const FreshSessionBaseSchema = z
         'The MCP servers the CLI last reported in that folder, with when',
       ),
     mcpServersUnavailableReason: z.string().nullable(),
+    contextReading: FreshSessionContextReadingSchema.nullable().describe(
+      "The CLI's own account of the newest fresh session in the group; null when none was stored",
+    ),
     notMeasured: z.array(
       z.object({
         part: z.enum(FRESH_SESSION_UNMEASURED_PARTS),

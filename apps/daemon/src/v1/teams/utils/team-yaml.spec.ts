@@ -467,6 +467,7 @@ describe('serializeTeamYaml', () => {
       },
     ],
     ['mcpDisabled', { mcpDisabled: ['notes'] }],
+    ['mcpAllowed', { mcpAllowed: ['notes', 'figma'] }],
   ])('writes a member %s back into an existing file', (_field, change) => {
     const team = parseTeamYaml(VALID_SOURCE);
     Object.assign(team.members[0]!, change);

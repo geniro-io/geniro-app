@@ -25,6 +25,8 @@ import { MemberModelGroup } from '../teams/member-model-group';
 import { memberProblemsOf, memberStatusOf } from '../teams/member-problems';
 import { MemberSheet } from '../teams/member-sheet';
 import {
+  allowListCapabilityOf,
+  mcpAllowedWords,
   mcpSwitchesWords,
   nextMcpDisabled,
   projectMemberMcpHint,
@@ -41,6 +43,7 @@ import {
   type OverlaySettingsField,
   resetFields,
   withExtraInstructions,
+  withMemberMcpAllowed,
   withMemberMcpDisabled,
   withMemberPool,
   withMemberSettings,
@@ -111,6 +114,7 @@ function Part({
 export function ProjectTeamOverrides({
   projectId,
   projectName,
+  projectFolder,
   slug,
   apis,
   chatWorking,
@@ -120,6 +124,8 @@ export function ProjectTeamOverrides({
 }: {
   projectId: string;
   projectName: string;
+  /** The project's folder: a member's MCP servers are listed there, its own included. */
+  projectFolder: string;
   slug: string;
   apis: DaemonApis;
   /** The page's chat is working: the overlay is not autosaved meanwhile. */
@@ -204,12 +210,17 @@ export function ProjectTeamOverrides({
     selected === null || overlay === null
       ? selected
       : effectiveMemberOf(selected, overlay);
+  const allowCapability =
+    shown === null
+      ? undefined
+      : allowListCapabilityOf(capabilities?.mcpAllowLists, shown.agent);
   const poolOverridden =
     selected !== null && overlay?.members?.[selected.id]?.pool !== undefined;
   const memberMcp = useNodeMcp(
     apis.agents,
     overlay === null ? null : (shown?.agent ?? null),
     overlay === null ? null : (shown?.configDir ?? null),
+    projectFolder,
   );
   const login = useCliLogin(apis, (settled) => {
     if (settled.server !== null) {
@@ -357,6 +368,37 @@ export function ProjectTeamOverrides({
               title={`MCP servers — ${selected.name || selected.id}`}
               mcp={memberMcp}
               mcpDisabled={shown.mcpDisabled}
+              allowList={
+                allowCapability === undefined
+                  ? undefined
+                  : {
+                      capability: allowCapability,
+                      allowed: shown.mcpAllowed,
+                      scope: {
+                        projectName,
+                        overridden:
+                          overlay.members?.[selected.id]?.mcpAllowed !==
+                          undefined,
+                        teamValue: mcpAllowedWords(selected.mcpAllowed),
+                        onReset: () =>
+                          overlayState.edit((current) =>
+                            withMemberMcpAllowed(
+                              current,
+                              selected.id,
+                              undefined,
+                            ),
+                          ),
+                      },
+                      onChange: (next) =>
+                        overlayState.edit((current) =>
+                          withMemberMcpAllowed(
+                            current,
+                            selected.id,
+                            next ?? null,
+                          ),
+                        ),
+                    }
+              }
               hint={projectMemberMcpHint(Boolean(shown.configDir))}
               configDir={shown.configDir ?? null}
               configDirUnavailableReason={configDirCapability.unavailableReasonFor(
@@ -385,6 +427,7 @@ export function ProjectTeamOverrides({
                 void login.startMcp({
                   kind: shown.agent,
                   server,
+                  cwd: projectFolder,
                   configDir: shown.configDir ?? null,
                 })
               }
@@ -420,6 +463,8 @@ export function ProjectTeamOverrides({
                   configDirCapability.unavailableReasonFor(agent) === null
                 }
                 approvals={capabilities?.approvals ?? []}
+                mcpAllowLists={capabilities?.mcpAllowLists}
+                mcpFolder={projectFolder}
                 nodeApproval={shown.approval}
                 nodeAutoCompactPercent={shown.autoCompactPercent}
                 recentConfigDirs={profileSources.recentConfigDirs}

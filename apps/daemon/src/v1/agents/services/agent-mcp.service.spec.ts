@@ -1464,6 +1464,136 @@ describe('AgentMcpService.list', () => {
   });
 });
 
+describe('AgentMcpService.listedTargetsOf', () => {
+  const remote = (name: string, target: string | null): AgentMcpServer => ({
+    ...server(name),
+    target,
+    transport: 'http',
+  });
+  const connectorsOnly = (accountConnectors: string[]) => ({
+    accountConnectors,
+    inFolder: [],
+  });
+
+  it('names the target and transport the listing gives each asked server, and leaves out one it gives none', async () => {
+    const { service } = harness(() =>
+      Promise.resolve([
+        server('codegraph'),
+        remote('claude.ai Slack', 'https://mcp.slack.com/mcp'),
+        remote('claude.ai Blank', ''),
+        remote('claude.ai Unnamed', null),
+      ]),
+    );
+
+    const targets = await service.listedTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      connectorsOnly([
+        'claude.ai Slack',
+        'claude.ai Blank',
+        'claude.ai Unnamed',
+      ]),
+    );
+
+    expect([...targets]).toEqual([
+      [
+        'claude.ai Slack',
+        { target: 'https://mcp.slack.com/mcp', transport: 'http' },
+      ],
+    ]);
+  });
+
+  it('lists the folder rather than answering from a turn’s harvest, which names no target', async () => {
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record('claude', cwd, null, [server('claude.ai Booking.com')]);
+    const { service, listMcpServers } = harness(
+      () =>
+        Promise.resolve([
+          remote(
+            'claude.ai Booking.com',
+            'https://demandapi-mcp.booking.com/*',
+          ),
+        ]),
+      { harvest },
+    );
+
+    const targets = await service.listedTargetsOf(
+      AgentKind.Claude,
+      cwd,
+      null,
+      connectorsOnly(['claude.ai Booking.com']),
+    );
+
+    expect(targets.get('claude.ai Booking.com')?.target).toBe(
+      'https://demandapi-mcp.booking.com/*',
+    );
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a connector’s target from another folder’s listing under the profile without listing again', async () => {
+    const { service, listMcpServers } = harness(() =>
+      Promise.resolve([remote('claude.ai Slack', 'https://mcp.slack.com/mcp')]),
+    );
+    await service.list(AgentKind.Claude, realDir());
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+
+    const targets = await service.listedTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      connectorsOnly(['claude.ai Slack']),
+    );
+
+    expect(targets.get('claude.ai Slack')?.target).toBe(
+      'https://mcp.slack.com/mcp',
+    );
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a folder’s own server from that folder’s listing, never another folder’s', async () => {
+    const other = realDir();
+    const cwd = realDir();
+    const { service, listMcpServers } = harness((input) =>
+      Promise.resolve([
+        remote('claude.ai Slack', 'https://mcp.slack.com/mcp'),
+        remote(
+          'linear',
+          input.cwd === other
+            ? 'https://other/mcp'
+            : 'https://mcp.linear.app/mcp',
+        ),
+      ]),
+    );
+    await service.list(AgentKind.Claude, other);
+
+    const targets = await service.listedTargetsOf(AgentKind.Claude, cwd, null, {
+      accountConnectors: ['claude.ai Slack'],
+      inFolder: ['linear'],
+    });
+
+    expect(targets.get('linear')).toEqual({
+      target: 'https://mcp.linear.app/mcp',
+      transport: 'http',
+    });
+    expect(listMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers no targets when the listing fails', async () => {
+    const { service } = harness(() => Promise.reject(new Error('timed out')));
+
+    const targets = await service.listedTargetsOf(
+      AgentKind.Claude,
+      realDir(),
+      null,
+      { accountConnectors: ['claude.ai Slack'], inFolder: ['linear'] },
+    );
+
+    expect(targets.size).toBe(0);
+  });
+});
+
 describe('AgentMcpService scope + disabled overlay', () => {
   const nothingOff: Partial<AgentMcpFolderFacts> = {
     disabled: [],

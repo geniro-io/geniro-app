@@ -58,6 +58,7 @@ import type {
   HostRowWire,
   HostUiCall,
   HostWake,
+  MemberTurnReading,
   SurfacePublisher,
 } from '../../agents/chat.types';
 import {
@@ -104,6 +105,7 @@ import {
   CommandEndWakeService,
 } from '../../agents/services/command-end-wake.service';
 import type { FlagBroker } from '../../agents/services/flag.broker';
+import type { FreshSessionContextRecorder } from '../../agents/services/fresh-session-context.recorder';
 import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
@@ -190,6 +192,8 @@ import {
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { teamInstructionsHashOf } from '../utils/conversation-instructions';
+import { foldFreshStarts } from '../utils/fresh-session-base';
+import { unreachableConnectorsNotice } from '../utils/mcp-allow-list-notice';
 import { runTeamHashOf } from '../utils/team-snapshot';
 import { CallBroker } from './call-broker.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
@@ -1294,7 +1298,10 @@ function setup(
     /** The group a claiming rule would file this run's team under. */
     autoGroupId?: string | null;
     /** The MCP service a member turn's server report is checked against. */
-    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
+    agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'> &
+      Partial<Pick<AgentMcpService, 'listedTargetsOf'>>;
+    /** Where a fresh member session's context breakdown is recorded, when a test reads it. */
+    contextRecorder?: Pick<FreshSessionContextRecorder, 'record'>;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `FakeAdapter.resolutions`. */
@@ -1889,6 +1896,7 @@ function setup(
     surfaceSinks,
     surfaces,
     opts.pluginCards,
+    opts.contextRecorder as FreshSessionContextRecorder | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -5773,6 +5781,121 @@ describe('TeamExecutorService — a usage-limit continue a restart carried over'
 });
 
 describe('TeamExecutorService — follow-up messages', () => {
+  it('asks a member’s CLI for its context once when its session opens, and never on the turn that resumes it', async () => {
+    const record = vi.fn(async () => undefined);
+    const { service, claude, storeGet } = setup(undefined, {
+      contextRecorder: { record },
+    });
+    storeGet.mockResolvedValue({ slug: 'linear', team: LINEAR });
+    const run = await service.startRun({
+      slug: 'linear',
+      team: LINEAR,
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    expect(claude.starts[1]!.input.resumeSessionId).toBe('sess-a');
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[1]!, 'A2');
+    await drain();
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.id,
+        memberId: LINEAR.members[0]!.id,
+        poolMember: null,
+        sessionId: 'sess-a',
+        agent: 'claude',
+      }),
+    );
+  });
+
+  it('stamps every member’s turn ending with its session, so the fresh-session base counts an unpooled lead and its callee', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'side work',
+      agent: 'b',
+      message: 'do it',
+      mode: 'async',
+    });
+    await drain();
+    const b = turnsOf(claude, 'role-b')[0]!;
+    b.emit({ type: 'session', sessionId: 'sess-b' });
+    for (const [turn, tokens] of [
+      [b, 30_000],
+      [a, 50_000],
+    ] as const) {
+      turn.emit({
+        type: 'turn_complete',
+        usage: {
+          ...NO_USAGE,
+          contextTokens: tokens + 5_000,
+          firstRequestContextTokens: tokens,
+        },
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      turn.finish();
+      await drain();
+    }
+
+    const readings: MemberTurnReading[] = itemDao.items
+      .filter(
+        (item) =>
+          item.runId === run.id &&
+          item.kind === 'turn_complete' &&
+          item.memberId !== null,
+      )
+      .map((item) => {
+        const payload = JSON.parse(item.payload) as {
+          sessionId?: string;
+          usage: { contextTokens: number; firstRequestContextTokens: number };
+        };
+        return {
+          runId: item.runId,
+          seq: item.seq,
+          kind: 'turn_complete',
+          memberId: item.memberId!,
+          createdAt: item.createdAt,
+          sessionId: payload.sessionId ?? null,
+          contextTokens: payload.usage.contextTokens,
+          firstRequestContextTokens: payload.usage.firstRequestContextTokens,
+          numTurns: null,
+          agent: null,
+          model: null,
+          poolMember: null,
+        };
+      });
+    const folds = foldFreshStarts(
+      [{ id: run.id, cwd: dir, group: { projectId: null, name: 'repo' } }],
+      readings,
+    );
+
+    expect(
+      folds.map((fold) => [fold.memberId, fold.starts, fold.baseTokens]),
+    ).toEqual([
+      ['a', 1, 50_000],
+      ['b', 1, 30_000],
+    ]);
+  });
+
   it('walks a SETTLED run again from its trigger member, resuming its own session', async () => {
     const { service, claude, itemDao, runDao, storeGet } = setup();
     const team = LINEAR;
@@ -13657,6 +13780,151 @@ describe('TeamExecutorService — agent calls', () => {
 
       completeTurn(harness.claude.starts[0]!, 'done');
       await drain();
+    });
+
+    it('hands a member’s allow list to its turn with every listed target beside an account connector, only on a CLI that applies one', async () => {
+      const listedTargetsOf = vi.fn(
+        async () =>
+          new Map([
+            [
+              'claude.ai Slack',
+              {
+                target: 'https://mcp.slack.com/mcp',
+                transport: 'http' as const,
+              },
+            ],
+            [
+              'codegraph',
+              { target: 'codegraph serve', transport: 'stdio' as const },
+            ],
+          ]),
+      );
+      const harness = setup(4870, {
+        agentMcp: { turnMismatchNotice: async () => null, listedTargetsOf },
+      });
+      const run = await harness.service.startRun({
+        slug: 'pool-allow',
+        team: {
+          ...CALL_WF,
+          members: CALL_WF.members.map((node) =>
+            node.id === 'orch'
+              ? {
+                  ...node,
+                  mcpAllowed: [
+                    'codegraph',
+                    'claude.ai Slack',
+                    'claude.ai Gmail',
+                  ],
+                }
+              : {
+                  ...node,
+                  pool: [
+                    { agent: 'cursor-agent' as const, mcpAllowed: ['linear'] },
+                  ],
+                },
+          ),
+        },
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(harness.claude.starts[0]!.input.mcpAllowed).toEqual([
+        { name: 'codegraph', target: 'codegraph serve', transport: 'stdio' },
+        {
+          name: 'claude.ai Slack',
+          target: 'https://mcp.slack.com/mcp',
+          transport: 'http',
+        },
+        { name: 'claude.ai Gmail', target: null, transport: null },
+      ]);
+      expect(listedTargetsOf).toHaveBeenCalledWith(
+        'claude',
+        realpathSync(dir),
+        null,
+        {
+          accountConnectors: ['claude.ai Slack', 'claude.ai Gmail'],
+          inFolder: ['codegraph'],
+        },
+      );
+
+      const first = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 1',
+        agent: 'helper',
+        message: 'x',
+        member: 1,
+      });
+      await drain();
+      expect(harness.claude.starts[1]!.input.mcpAllowed).toBeUndefined();
+      completeTurn(harness.claude.starts[1]!, 'ok');
+      await first;
+
+      const second = harness.callBroker.callAgent(run.id, 'orch', {
+        title: 'on member 2',
+        agent: 'helper',
+        message: 'y',
+        member: 2,
+      });
+      await drain();
+      expect(harness.cursor.starts[0]!.input.mcpAllowed).toBeUndefined();
+      completeTurn(harness.cursor.starts[0]!, 'ok');
+      await second;
+
+      expect(listedTargetsOf).toHaveBeenCalledTimes(1);
+      completeTurn(harness.claude.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('tells the transcript once which allowed account connectors a member goes without, and files no harvest from its narrowed turn', async () => {
+      const harness = setup(4870, {
+        agentMcp: {
+          turnMismatchNotice: async () => null,
+          listedTargetsOf: async () => new Map(),
+        },
+      });
+      const team = teamOf(
+        [member('a', { mcpAllowed: ['qa-echo', 'claude.ai Booking.com'] })],
+        { name: 'allow' },
+      );
+      harness.storeGet.mockResolvedValue({ slug: 'allow', team });
+      const run = await harness.service.startRun({
+        slug: 'allow',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      harness.claude.starts[0]!.emit({
+        type: 'mcp_servers',
+        servers: [
+          {
+            name: 'qa-echo',
+            target: null,
+            transport: null,
+            status: 'connected',
+            detail: null,
+          },
+        ],
+      });
+      completeTurn(harness.claude.starts[0]!, 'A1');
+      await drain();
+      await harness.service.sendMessage(run.id, 'again');
+      await drain();
+      completeTurn(harness.claude.starts[1]!, 'A2');
+      await drain();
+
+      const warnings = harness.itemDao.items
+        .filter((item) => item.runId === run.id && item.kind === 'system')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) =>
+          String(payload['message']).includes('claude.ai Booking.com'),
+        );
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          message: unreachableConnectorsNotice(['claude.ai Booking.com']),
+          severity: 'warning',
+        }),
+      ]);
+      expect(harness.mcpHarvest.record).not.toHaveBeenCalled();
     });
 
     it('refuses a member the pool does not have', async () => {

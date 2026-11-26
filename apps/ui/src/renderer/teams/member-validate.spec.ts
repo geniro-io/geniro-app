@@ -127,6 +127,44 @@ describe('validateMember mirrors the daemon’s member schema', () => {
   });
 });
 
+describe('validateMember mcpAllowed', () => {
+  it('holds the allow list to the same limits as the switched-off list, for the member and each pool member', () => {
+    expect(
+      validateMember({
+        ...MEMBER,
+        mcpAllowed: Array.from({ length: 101 }, (_, i) => `s${i}`),
+      }),
+    ).toEqual([
+      { field: 'settings', message: expect.stringContaining('at most 100') },
+    ]);
+    expect(
+      validateMember({
+        ...MEMBER,
+        mcpAllowed: ['code\tgraph'],
+        pool: [{ agent: 'codex', mcpAllowed: [''] }],
+      }),
+    ).toEqual([
+      {
+        field: 'settings',
+        message: expect.stringContaining(
+          'This member: the allowed MCP server name',
+        ),
+      },
+      {
+        field: 'pool',
+        message: expect.stringContaining('Pool member 2: the allowed'),
+      },
+    ]);
+  });
+
+  it('accepts an empty list and an ordinary name', () => {
+    expect(validateMember({ ...MEMBER, mcpAllowed: [] })).toEqual([]);
+    expect(
+      validateMember({ ...MEMBER, mcpAllowed: ['claude.ai Gmail'] }),
+    ).toEqual([]);
+  });
+});
+
 describe('mcpServerNameProblem', () => {
   it('names each refusal, and accepts an ordinary name', () => {
     expect(mcpServerNameProblem('claude.ai Gmail')).toBeNull();

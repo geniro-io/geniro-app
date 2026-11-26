@@ -124,6 +124,7 @@ export function codexContextUsage(
         tokens: null,
         toolCount: server.toolCount,
         loadedToolCount: server.toolCount,
+        loadedTokens: null,
       })),
     lastRequest: usage === null ? null : codexLastRequest(usage.last),
   };

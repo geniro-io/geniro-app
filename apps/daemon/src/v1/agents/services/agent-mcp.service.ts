@@ -255,6 +255,12 @@ function mergeKnown(
   return merged;
 }
 
+/** Where a listing says one server is reached. */
+export interface AgentMcpListedTarget {
+  target: string;
+  transport: AgentMcpServer['transport'];
+}
+
 /** Constructor options — test seams, not user config. */
 export interface AgentMcpServiceOptions {
   /** How long a cached listing stays fresh. */
@@ -407,6 +413,68 @@ export class AgentMcpService {
   }
 
   /**
+   * Where each named server is reached, as a listing of the CLI's under this
+   * profile reports it — never a turn's harvest, whose `system/init` names no
+   * target. An account connector belongs to the account, so any folder's
+   * listing answers for it, the newest first; `inFolder` servers are read
+   * from this folder's listing alone, and that listing is asked, blocking,
+   * only when one of them is asked or a connector is still unnamed. A server
+   * no listing gives a target is absent.
+   */
+  async listedTargetsOf(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+    names: {
+      accountConnectors: readonly string[];
+      inFolder: readonly string[];
+    },
+  ): Promise<ReadonlyMap<string, AgentMcpListedTarget>> {
+    const profile =
+      configDir === null ? null : resolveValidConfigDir(configDir);
+    const targets = new Map<string, AgentMcpListedTarget>();
+    const take = (
+      servers: readonly AgentMcpServer[],
+      wanted: readonly string[],
+    ): void => {
+      for (const server of servers) {
+        if (
+          wanted.includes(server.name) &&
+          !targets.has(server.name) &&
+          server.target !== null &&
+          server.target !== ''
+        ) {
+          targets.set(server.name, {
+            target: server.target,
+            transport: server.transport,
+          });
+        }
+      }
+    };
+    const listings = [...this.cache.entries()]
+      .filter(([key]) => sameAgentAndProfile(key, agent, profile))
+      .map(([, entry]) => entry)
+      .sort((a, b) => b.fetchedAt - a.fetchedAt);
+    for (const entry of listings) {
+      take(entry.servers, names.accountConnectors);
+    }
+    if (
+      names.inFolder.length > 0 ||
+      names.accountConnectors.some((name) => !targets.has(name))
+    ) {
+      const { result } = await this.readServers(agent, cwd, {
+        configDir: profile,
+        blocking: true,
+        listingOnly: true,
+      });
+      if (result.ok) {
+        take(result.servers, [...names.accountConnectors, ...names.inFolder]);
+      }
+    }
+    return targets;
+  }
+
+  /**
    * What is already known of the FOLDERLESS listing (the team editor's) for one
    * profile, without asking anything: the newest cached reading of any CLI
    * version, merged with the turn harvest. Never dials, never spawns, never
@@ -470,6 +538,8 @@ export class AgentMcpService {
       configDir?: string | null;
       refresh?: boolean;
       blocking?: boolean;
+      /** Answer from a listing of the CLI's alone, never from a turn's harvest. */
+      listingOnly?: boolean;
     } = {},
   ): Promise<{
     projectDir: string;
@@ -478,7 +548,12 @@ export class AgentMcpService {
     /** A dial is running; `result` is not the answer yet. */
     pending: boolean;
   }> {
-    const { configDir = null, refresh = false, blocking = false } = options;
+    const {
+      configDir = null,
+      refresh = false,
+      blocking = false,
+      listingOnly = false,
+    } = options;
     // Validated FIRST, so a bad path is a bad request whichever adapter
     // answers — never a 400 for one CLI and a 200 for another. Ordering, not
     // just validation: placed BELOW an adapter's refusal, a folder's validity
@@ -616,9 +691,10 @@ export class AgentMcpService {
     // while the dial settles it: a server init saw connecting may since have
     // connected, failed, or be one awaiting approval, which only the listing
     // tells apart.
-    const harvested = refresh
-      ? null
-      : this.harvest.get(agent, projectDir, profile);
+    const harvested =
+      refresh || listingOnly
+        ? null
+        : this.harvest.get(agent, projectDir, profile);
     if (
       harvested !== null &&
       !harvested.some((row) => row.status === 'loading')

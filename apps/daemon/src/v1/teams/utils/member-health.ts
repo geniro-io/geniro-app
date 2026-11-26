@@ -38,6 +38,8 @@ export interface ConfigurationFacts {
   effort: string | null;
   effortOffered: boolean | null;
   mcpDisabled: readonly string[];
+  /** The only servers this configuration's turns load, where its CLI applies a list; null = every server. */
+  mcpAllowed: readonly string[] | null;
   mcp: McpFacts;
 }
 
@@ -180,8 +182,12 @@ function configurationProblemsOf(
     );
   }
   const off = new Set(facts.mcpDisabled);
+  const allowed = facts.mcpAllowed === null ? null : new Set(facts.mcpAllowed);
   for (const server of facts.mcp.servers ?? []) {
-    if (off.has(server.name)) {
+    if (
+      off.has(server.name) ||
+      (allowed !== null && !allowed.has(server.name))
+    ) {
       continue;
     }
     if (

@@ -105,6 +105,11 @@ export function effectiveMemberOf(
       delete out.mcpDisabled;
     }
   }
+  if (own?.mcpAllowed === null) {
+    delete out.mcpAllowed;
+  } else if (own?.mcpAllowed !== undefined) {
+    out.mcpAllowed = own.mcpAllowed;
+  }
   return out;
 }
 
@@ -226,6 +231,7 @@ export function withTeamSettings(
     delete next.settings;
     delete next.pool;
     delete next.mcpDisabled;
+    delete next.mcpAllowed;
     return next;
   });
 }
@@ -242,6 +248,23 @@ export function withMemberMcpDisabled(
       delete next.mcpDisabled;
     } else {
       next.mcpDisabled = disabled;
+    }
+    return next;
+  });
+}
+
+/** `allowed` undefined goes back to the team's list; `null` loads every server in this project; an array loads only those. */
+export function withMemberMcpAllowed(
+  overlay: TeamOverlay,
+  memberId: string,
+  allowed: string[] | null | undefined,
+): TeamOverlay {
+  return withOwn(overlay, memberId, (own) => {
+    const next = { ...own };
+    if (allowed === undefined) {
+      delete next.mcpAllowed;
+    } else {
+      next.mcpAllowed = allowed;
     }
     return next;
   });
@@ -292,7 +315,8 @@ export function memberOverlayBadges(
     overrides:
       Object.keys(own?.settings ?? {}).length +
       (own?.pool === undefined ? 0 : 1) +
-      (own?.mcpDisabled === undefined ? 0 : 1),
+      (own?.mcpDisabled === undefined ? 0 : 1) +
+      (own?.mcpAllowed === undefined ? 0 : 1),
     notes: (own?.extraInstructions ?? '').trim() !== '',
   };
 }

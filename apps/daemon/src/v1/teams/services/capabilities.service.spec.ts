@@ -282,6 +282,33 @@ describe('CapabilitiesService — token and cost usage', () => {
   });
 });
 
+describe('CapabilitiesService — the MCP allow list', () => {
+  it('offers it on claude and carries a reason on every CLI that cannot apply it', () => {
+    const rows = new Map(
+      service()
+        .service.capabilitiesWire()
+        .mcpAllowLists.map((r) => [r.agent, r.unavailableReason]),
+    );
+
+    expect([...rows.keys()]).toEqual([...registry().all().keys()]);
+    expect(rows.get('claude')).toBeNull();
+    expect(rows.get('cursor-agent')).toEqual(expect.any(String));
+    expect(rows.get('codex')).toEqual(expect.any(String));
+  });
+
+  it('names the account connectors only for a CLI whose listing marks them', () => {
+    const prefixes = new Map(
+      service()
+        .service.capabilitiesWire()
+        .mcpAllowLists.map((r) => [r.agent, r.accountConnectorPrefix]),
+    );
+
+    expect(prefixes.get('claude')).toBe('claude.ai ');
+    expect(prefixes.get('cursor-agent')).toBeNull();
+    expect(prefixes.get('codex')).toBeNull();
+  });
+});
+
 describe('CapabilitiesService — the reasoning-effort picker', () => {
   const efforts = (): Map<string, string | null> =>
     new Map(

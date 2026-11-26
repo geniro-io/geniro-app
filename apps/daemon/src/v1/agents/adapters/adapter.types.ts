@@ -170,6 +170,13 @@ export interface AgentUsage {
    */
   contextTokens: number | null;
   /**
+   * The prompt of the turn's FIRST request, counted like {@link contextTokens}:
+   * what a session that opened on this turn started with, before its own tool
+   * calls grew it. Absent or null when the CLI does not break a turn into
+   * requests.
+   */
+  firstRequestContextTokens?: number | null;
+  /**
    * The window that context is measured against, as the CLI reports it for the
    * model it actually ran (claude: 1M for `claude-opus-5[1m]`, 200k for the
    * rest). Null when the CLI says nothing — the consumer then shows the count
@@ -372,6 +379,12 @@ export interface AgentContextCategory {
    * than it is — measured, 273,876 deferred MCP tokens against a 98,598 total.
    */
   deferred: boolean;
+  /**
+   * Room the CLI holds back rather than content of the request — claude's
+   * "Autocompact buffer", which its reply marks `kind: "buffer"`. Outside
+   * {@link AgentContextUsage.totalTokens}, like a deferred row.
+   */
+  reserve: boolean;
 }
 
 /** Where a CLI keeps the user's own standing instructions — see `AdapterConfig.userInstructions`. */
@@ -432,6 +445,12 @@ export interface AgentContextServer {
   toolCount: number;
   /** How many of those tools are actually loaded into the window right now. */
   loadedToolCount: number;
+  /**
+   * What the loaded tools' schemas put in the window, or null when the CLI
+   * does not price its tools. A tool that is not loaded is in the window by
+   * name only, which no CLI prices.
+   */
+  loadedTokens: number | null;
 }
 
 /**
@@ -2442,6 +2461,17 @@ export type AgentMcpServerStatus =
   | 'unknown';
 
 /**
+ * One server of a turn's allow list, with where the CLI's listing says it is
+ * reached — read for every server when the list holds an account connector,
+ * else for none.
+ */
+export interface AgentMcpAllowedServer {
+  name: string;
+  target: string | null;
+  transport: AgentMcpServer['transport'];
+}
+
+/**
  * One MCP server a CLI agent loads in a given working directory.
  *
  * The set is per-CLI AND per-folder: a CLI resolves project-scoped servers
@@ -3622,6 +3652,17 @@ export interface AgentTurnInput {
    * so a kept process is never reused with a different set.
    */
   mcpDisabled?: readonly string[];
+  /**
+   * The ONLY MCP servers of the user's this turn loads — a team member's allow
+   * list (`TeamMember.mcpAllowed`) — each with the target the CLI's own listing
+   * reports for it, or null when no listing named it. geniro's own server
+   * always loads beside them. Absent loads every server, as before; empty
+   * loads geniro's own alone. Applied at spawn by a CLI whose
+   * `AdapterConfig.mcp.allowListUnavailableReason` is null and ignored by the
+   * rest; it writes into no config of the CLI's. Part of
+   * `AgentAdapter.sessionKey`.
+   */
+  mcpAllowed?: readonly AgentMcpAllowedServer[];
   /**
    * The directory this turn's CLI keeps its OWN state in — credentials,
    * settings, installed plugins, session history. Absent: the CLI's default
@@ -4984,6 +5025,17 @@ export interface AdapterConfig {
      * user's own CLI reads. A CLI can have either without the other.
      */
     readonly turnToggleUnavailableReason: string | null;
+    /**
+     * Why this CLI cannot limit a turn to an allow list of servers
+     * (`AgentTurnInput.mcpAllowed`), or null when the adapter applies it.
+     */
+    readonly allowListUnavailableReason: string | null;
+    /**
+     * The prefix this CLI's listing puts before an account connector's name —
+     * a server the account brings rather than a config file — or null when
+     * it has none.
+     */
+    readonly accountConnectorPrefix: string | null;
     /**
      * What this CLI loads in its OWN interactive session that a headless turn
      * never gets — the sentence the panel shows under the rows — or null when

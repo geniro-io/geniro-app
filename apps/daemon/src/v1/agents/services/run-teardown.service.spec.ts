@@ -33,6 +33,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { ReviewComment } from '../../runs/entity/review-comment.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { SessionContextReading } from '../../runs/entity/session-context-reading.entity';
 import { UiSurface } from '../../runs/entity/ui-surface.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { AgentKind } from '../../runs/runs.types';
@@ -52,6 +53,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { ReviewCommentDao } from '../dao/review-comment.dao';
 import { RunDao } from '../dao/run.dao';
+import { SessionContextReadingDao } from '../dao/session-context-reading.dao';
 import { UiSurfaceDao } from '../dao/ui-surface.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { ActionCommandRegistry } from './action-command.registry';
@@ -89,6 +91,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let wallTurnDao: WallTurnDao;
   let surfaceDao: UiSurfaceDao;
   let reviewDao: ReviewCommentDao;
+  let readingDao: SessionContextReadingDao;
   let referencedTexts: string[][] = [];
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
@@ -123,6 +126,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           ArtifactShare,
           Goal,
           ReviewComment,
+          SessionContextReading,
           AgentFlag,
           ToolCallEvent,
           UsageActivity,
@@ -171,6 +175,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     wallTurnDao = new WallTurnDao(em);
     surfaceDao = new UiSurfaceDao(em);
     reviewDao = new ReviewCommentDao(em);
+    readingDao = new SessionContextReadingDao(em);
     const threadInbox = {
       cancelFor: async (runId: string, why: string) => {
         inboxCancels.push({
@@ -237,6 +242,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       browserApprovals,
       surfaceDao,
       reviewDao,
+      readingDao,
     );
   });
 
@@ -774,6 +780,41 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect(await reviewDao.listByRun('run-a', orm.em.fork())).toHaveLength(0);
     expect(await reviewDao.listByRun('run-b', orm.em.fork())).toHaveLength(1);
+  });
+
+  it('destroys the run’s stored context readings, and only that run’s', async () => {
+    await seedRun('run-a');
+    await seedRun('run-b');
+    for (const runId of ['run-a', 'run-b']) {
+      await readingDao.save(
+        Object.assign(new SessionContextReading(), {
+          runId,
+          sessionId: `${runId}-session`,
+          memberId: 'manager',
+          agent: 'claude',
+          breakdown: '{}',
+        }),
+        orm.em.fork(),
+      );
+    }
+
+    await readingDao.save(
+      Object.assign(new SessionContextReading(), {
+        runId: 'run-b',
+        sessionId: 'run-b-session',
+        memberId: 'manager',
+        agent: 'claude',
+        breakdown: '{"again":true}',
+      }),
+      orm.em.fork(),
+    );
+    const before = await readingDao.listOfRuns(['run-b'], orm.em.fork());
+    expect(before.map((row) => row.breakdown)).toEqual(['{"again":true}']);
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    const left = await readingDao.listOfRuns(['run-a', 'run-b'], orm.em.fork());
+    expect(left.map((row) => row.runId)).toEqual(['run-b']);
   });
 
   it('keeps the run’s flags, which every later analysis of its period reads', async () => {

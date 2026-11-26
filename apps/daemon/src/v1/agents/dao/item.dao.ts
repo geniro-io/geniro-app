@@ -1533,6 +1533,9 @@ export class ItemDao extends BaseDao<Item> {
         payloadField<number | null>(eb, '$.usage.contextTokens').as(
           'context_tokens',
         ),
+        payloadField<number | null>(eb, '$.usage.firstRequestContextTokens').as(
+          'first_request_context_tokens',
+        ),
         payloadField<number | null>(eb, '$.usage.numTurns').as('num_turns'),
         payloadField(eb, '$.agentKind').as('agent_kind'),
         payloadField(eb, '$.agentModel').as('agent_model'),
@@ -1553,6 +1556,7 @@ export class ItemDao extends BaseDao<Item> {
       createdAt: new Date(row.created_at),
       sessionId: row.session_id,
       contextTokens: row.context_tokens,
+      firstRequestContextTokens: row.first_request_context_tokens,
       numTurns: row.num_turns,
       agent: row.agent_kind,
       model: row.agent_model,

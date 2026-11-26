@@ -10,9 +10,11 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import type { MemberTurnReading } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
+import type { SessionContextReadingDao } from '../../agents/dao/session-context-reading.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
+import type { SessionContextReading } from '../../runs/entity/session-context-reading.entity';
 import { member, teamOf } from '../__tests__/team-builders';
 import { FreshSessionBaseService } from './fresh-session-base.service';
 import type { InstructionSizesService } from './instruction-sizes.service';
@@ -39,6 +41,7 @@ describe('FreshSessionBaseService', () => {
   function serviceOver(
     readings: MemberTurnReading[],
     projectOfRun?: (run: { projectId: string | null }) => Promise<unknown>,
+    stored: SessionContextReading[] = [],
   ): FreshSessionBaseService {
     const runs = [
       {
@@ -104,6 +107,14 @@ describe('FreshSessionBaseService', () => {
           ],
         }),
       } as unknown as InstructionSizesService,
+      {
+        listOfRuns: (runIds: readonly string[]) =>
+          Promise.resolve(
+            stored
+              .filter((row) => runIds.includes(row.runId))
+              .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+          ),
+      } as unknown as SessionContextReadingDao,
     );
   }
 
@@ -125,6 +136,7 @@ describe('FreshSessionBaseService', () => {
       createdAt: new Date(Date.UTC(2026, 10, 22)),
       sessionId: `${runId}-${fields.memberId ?? 'manager'}`,
       contextTokens: 144_982,
+      firstRequestContextTokens: null,
       numTurns: 3,
       agent: 'claude',
       model: 'sonnet',
@@ -132,6 +144,31 @@ describe('FreshSessionBaseService', () => {
       ...fields,
     };
   }
+
+  it('takes the CLI, model and profile of a start whose row names none from the member as the team defines it', async () => {
+    const answer = await serviceOver([
+      start('r-geniro', { agent: null, model: null }),
+    ]).measure({
+      slug: 'dev-team',
+      team: teamOf([
+        member('manager', {
+          model: 'opus',
+          configDir: '/profiles/price-field',
+        }),
+      ]),
+      settings: {},
+    });
+
+    expect(
+      answer.members.find((entry) => entry.memberId === 'manager'),
+    ).toMatchObject({
+      agent: 'claude',
+      model: 'opus',
+      repoFilesUnavailableReason: null,
+      mcpServersUnavailableReason: null,
+    });
+    expect(harvested).toEqual([['claude', repo, '/profiles/price-field']]);
+  });
 
   it('splits a member’s base into Geniro’s block, the repository files and the CLI’s remainder', async () => {
     const answer = await serviceOver([start('r-geniro', {})]).measure({
@@ -175,6 +212,192 @@ describe('FreshSessionBaseService', () => {
     ]);
     expect(harvested).toEqual([['claude', repo, '/profiles/price-field']]);
     expect(answer.runsRead).toBe(2);
+  });
+
+  function storedReading(
+    fields: Partial<SessionContextReading>,
+  ): SessionContextReading {
+    return {
+      runId: 'r-geniro',
+      sessionId: 'r-geniro-manager',
+      memberId: 'manager',
+      poolMember: null,
+      agent: 'claude',
+      model: 'sonnet',
+      createdAt: new Date(Date.UTC(2026, 10, 22, 10)),
+      updatedAt: new Date(Date.UTC(2026, 10, 22, 10)),
+      breakdown: JSON.stringify(BREAKDOWN),
+      ...fields,
+    } as SessionContextReading;
+  }
+
+  const BREAKDOWN = {
+    categories: [
+      {
+        name: 'System prompt',
+        tokens: 70_000,
+        deferred: false,
+        reserve: false,
+      },
+      { name: 'System tools', tokens: 47_071, deferred: false, reserve: false },
+      { name: 'MCP tools', tokens: 7_929, deferred: false, reserve: false },
+      {
+        name: 'MCP tools (deferred)',
+        tokens: 171_350,
+        deferred: true,
+        reserve: false,
+      },
+      {
+        name: 'Autocompact buffer',
+        tokens: 33_000,
+        deferred: false,
+        reserve: true,
+      },
+    ],
+    totalTokens: 125_000,
+    maxTokens: 1_000_000,
+    model: 'claude-sonnet-5-5',
+    autoCompactAtTokens: null,
+    autoCompactEnabled: null,
+    memoryFiles: [{ path: '/repo/AGENTS.md', kind: 'Project', tokens: 30_919 }],
+    servers: [
+      {
+        name: 'geniro-r-geniro',
+        tokens: 45_360,
+        toolCount: 57,
+        loadedToolCount: 7,
+        loadedTokens: 7_929,
+      },
+      {
+        name: 'claude_ai_Gmail',
+        tokens: 29_566,
+        toolCount: 31,
+        loadedToolCount: 0,
+        loadedTokens: 0,
+      },
+    ],
+  };
+
+  it('shows the CLI’s own breakdown of the newest stored session, each part placed by whether it is in the window, and reads the base off the first request', async () => {
+    const answer = await serviceOver(
+      [
+        start('r-geniro', { firstRequestContextTokens: 139_000 }),
+        start('r-geniro', {
+          seq: 9,
+          sessionId: 'r-geniro-manager',
+          firstRequestContextTokens: 150_000,
+        }),
+      ],
+      undefined,
+      [
+        storedReading({
+          sessionId: 'r-geniro-manager-older',
+          createdAt: new Date(Date.UTC(2026, 10, 21)),
+          breakdown: JSON.stringify({ ...BREAKDOWN, totalTokens: 99_999 }),
+        }),
+        storedReading({
+          memberId: 'reviewer',
+          sessionId: 'r-geniro-reviewer',
+          createdAt: new Date(Date.UTC(2026, 10, 23)),
+        }),
+        storedReading({
+          poolMember: 2,
+          sessionId: 'r-geniro-manager-2',
+          createdAt: new Date(Date.UTC(2026, 10, 23)),
+        }),
+        storedReading({
+          breakdown: '{not json',
+          sessionId: 'r-geniro-broken',
+          createdAt: new Date(Date.UTC(2026, 10, 23)),
+        }),
+        storedReading({}),
+      ],
+    ).measure({ slug: 'dev-team', team: TEAM, settings: {} });
+
+    const manager = answer.members.find(
+      (entry) => entry.memberId === 'manager',
+    );
+    expect(manager).toMatchObject({
+      baseTokens: 139_000,
+      baseSource: 'firstRequest',
+      contextReading: {
+        runId: 'r-geniro',
+        measuredAt: new Date(Date.UTC(2026, 10, 22, 10)).toISOString(),
+        firstRequestTokens: 139_000,
+        cliTotalTokens: 125_000,
+        firstRequestLessCliTotalTokens: 139_000 - 125_000,
+        inWindow: [
+          { name: 'System prompt', tokens: 70_000 },
+          { name: 'System tools', tokens: 47_071 },
+          { name: 'MCP tools', tokens: 7_929 },
+        ],
+        reserved: [{ name: 'Autocompact buffer', tokens: 33_000 }],
+        onUse: [{ name: 'MCP tools (deferred)', tokens: 171_350 }],
+        mcpServers: [
+          {
+            name: 'geniro-r-geniro',
+            toolCount: 57,
+            loadedToolCount: 7,
+            inWindowTokens: 7_929,
+            onUseTokens: 45_360 - 7_929,
+          },
+          {
+            name: 'claude_ai_Gmail',
+            toolCount: 31,
+            loadedToolCount: 0,
+            inWindowTokens: 0,
+            onUseTokens: 29_566,
+          },
+        ],
+      },
+    });
+    const reading = manager!.contextReading!;
+    expect(reading.inWindow.reduce((sum, part) => sum + part.tokens, 0)).toBe(
+      reading.cliTotalTokens,
+    );
+    expect(
+      reading.mcpServers.reduce(
+        (sum, server) => sum + (server.inWindowTokens ?? 0),
+        0,
+      ),
+    ).toBe(reading.inWindow.find((part) => part.name === 'MCP tools')?.tokens);
+    expect(manager!.notMeasured.map((part) => part.part)).toEqual(['plugins']);
+  });
+
+  it('keeps a first request below the CLI’s total as a negative difference, never clamped', async () => {
+    const answer = await serviceOver(
+      [start('r-geniro', { firstRequestContextTokens: 100_000 })],
+      undefined,
+      [storedReading({})],
+    ).measure({ slug: 'dev-team', team: TEAM, settings: {} });
+
+    const manager = answer.members.find(
+      (entry) => entry.memberId === 'manager',
+    );
+    expect(manager?.contextReading?.firstRequestLessCliTotalTokens).toBe(
+      100_000 - 125_000,
+    );
+  });
+
+  it('keeps the old estimate and names the parts not measured when no session stored a breakdown', async () => {
+    const answer = await serviceOver([start('r-geniro', {})]).measure({
+      slug: 'dev-team',
+      team: TEAM,
+      settings: {},
+    });
+
+    const manager = answer.members.find(
+      (entry) => entry.memberId === 'manager',
+    );
+    expect(manager).toMatchObject({
+      baseTokens: 144_982,
+      baseSource: 'lastRequest',
+      contextReading: null,
+    });
+    const reviewer = answer.members.find(
+      (entry) => entry.memberId === 'reviewer',
+    );
+    expect(reviewer).toMatchObject({ baseSource: null, contextReading: null });
   });
 
   it('says why for a CLI whose files and servers are not known, and gives a member with no start no base', async () => {

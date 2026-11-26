@@ -25,7 +25,7 @@ alwaysApply: false
 - There is no model adopt and no effort adopt, because unset is a real answer.
 - The member sheet uses the composer's chips, never builder-only copies. Approval modes come from `approvals[]` with `plan` filtered out.
 - The builder's MCP read is not gated on a press: its 4xx is the only signal of a bad config path.
-- A member's MCP switches are its own `mcpDisabled` and write nothing the CLI keeps.
+- A member's MCP switches are its own `mcpDisabled` and write nothing the CLI keeps. Its allow list (`mcpAllowed`, offered only where `mcpAllowLists` gives the member's CLI no reason) is the same kind of member field; account connectors are the listing's names under that CLI's `accountConnectorPrefix`, never a name the renderer spells. The team page lists a member's servers without a folder (`useNodeMcp`); a project's page lists them in the project's folder (`ProjectTeamOverrides` `projectFolder`, pool members included), so the project's own servers can be picked only there (user decision).
   - A switched-off name the profile does not list shows as an `off` row.
   - Switching CLI clears the list.
   - Pool members fetch under their own CLI and profile.

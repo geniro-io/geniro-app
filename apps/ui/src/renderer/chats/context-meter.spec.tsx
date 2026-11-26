@@ -441,9 +441,24 @@ describe('the expanded readout the meter opens onto', () => {
   const METRICS = {
     context: {
       categories: [
-        { name: 'System prompt', tokens: 3386, deferred: false },
-        { name: 'Memory files', tokens: 59_058, deferred: false },
-        { name: 'MCP tools (deferred)', tokens: 273_876, deferred: true },
+        {
+          name: 'System prompt',
+          tokens: 3386,
+          deferred: false,
+          reserve: false,
+        },
+        {
+          name: 'Memory files',
+          tokens: 59_058,
+          deferred: false,
+          reserve: false,
+        },
+        {
+          name: 'MCP tools (deferred)',
+          tokens: 273_876,
+          deferred: true,
+          reserve: false,
+        },
       ],
       totalTokens: 62_444,
       maxTokens: 1_000_000,
@@ -459,6 +474,7 @@ describe('the expanded readout the meter opens onto', () => {
           tokens: 109_284,
           toolCount: 33,
           loadedToolCount: 0,
+          loadedTokens: 0,
         },
       ],
     },

@@ -1,4 +1,7 @@
 import {
+  CLAUDE_ALLOWED_MCP_SERVER_NAME_FIELD,
+  CLAUDE_ALLOWED_MCP_SERVER_URL_FIELD,
+  CLAUDE_ALLOWED_MCP_SERVERS_KEY,
   CLAUDE_BLOCK_EVERY_TOOL_HOOKS,
   CLAUDE_CROSS_SESSION_INBOUND_KEY,
   CLAUDE_CROSS_SESSION_INBOUND_REFUSE,
@@ -31,8 +34,17 @@ export interface ClaudeTurnSettings {
    * (`CLAUDE_DENIED_MCP_SERVERS_KEY`). Empty or absent, the key is left out.
    */
   deniedMcpServers?: readonly string[];
+  /**
+   * The only servers the turn may load (`CLAUDE_ALLOWED_MCP_SERVERS_KEY`),
+   * each by config name or by URL. Absent, the key is left out; empty is
+   * written, and allows nothing.
+   */
+  allowedMcpServers?: readonly ClaudeAllowedMcpServer[];
   blockEveryTool?: boolean;
 }
+
+export type ClaudeAllowedMcpServer =
+  { serverName: string } | { serverUrl: string };
 
 /**
  * The turn's own `--settings` flag, on every turn: other claude sessions are
@@ -65,6 +77,14 @@ export function claudeSettingsArgs(settings: ClaudeTurnSettings): string[] {
   if (settings.deniedMcpServers && settings.deniedMcpServers.length > 0) {
     value[CLAUDE_DENIED_MCP_SERVERS_KEY] = settings.deniedMcpServers.map(
       (name) => ({ [CLAUDE_DENIED_MCP_SERVER_NAME_FIELD]: name }),
+    );
+  }
+  if (settings.allowedMcpServers) {
+    value[CLAUDE_ALLOWED_MCP_SERVERS_KEY] = settings.allowedMcpServers.map(
+      (entry) =>
+        'serverName' in entry
+          ? { [CLAUDE_ALLOWED_MCP_SERVER_NAME_FIELD]: entry.serverName }
+          : { [CLAUDE_ALLOWED_MCP_SERVER_URL_FIELD]: entry.serverUrl },
     );
   }
   if (settings.blockEveryTool === true) {

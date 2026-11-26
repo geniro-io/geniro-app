@@ -119,12 +119,13 @@ describe('readClaudeUsage', () => {
     expect(usage.contextTokens).toBeGreaterThan(28_000);
   });
 
-  it('takes the last iteration when a turn reports several', () => {
+  it('takes the last iteration as context and the first as the first request', () => {
     const usage = readClaudeUsage(
       {
         usage: {
           iterations: [
             { input_tokens: 1, cache_read_input_tokens: 5_000 },
+            { input_tokens: 1, cache_read_input_tokens: 7_000 },
             { input_tokens: 1, cache_read_input_tokens: 9_000 },
           ],
         },
@@ -132,6 +133,7 @@ describe('readClaudeUsage', () => {
       new ClaudeSessionCostLedger(),
     );
     expect(usage.contextTokens).toBe(9_001);
+    expect(usage.firstRequestContextTokens).toBe(5_001);
   });
 
   it('answers null — never the roll-up — when a build reports no iterations', () => {
@@ -147,6 +149,7 @@ describe('readClaudeUsage', () => {
     );
     // Unknown reads as "no ctx shown"; the roll-up would read as a wrong one.
     expect(usage.contextTokens).toBeNull();
+    expect(usage.firstRequestContextTokens).toBeNull();
     expect(usage.inputTokens).toBe(14);
   });
 
@@ -214,6 +217,7 @@ describe('readClaudeUsage', () => {
       cacheCreationTokens: null,
       thinkingTokens: null,
       contextTokens: null,
+      firstRequestContextTokens: null,
       contextWindowTokens: null,
       contextModel: null,
       costUsd: null,

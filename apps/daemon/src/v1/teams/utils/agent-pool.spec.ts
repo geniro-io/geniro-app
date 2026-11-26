@@ -88,6 +88,17 @@ describe('poolMemberNode', () => {
     expect(poolMemberNode(node, 3)).not.toHaveProperty('autoCompactPercent');
   });
 
+  it('a pool member keeps its OWN allow-list, never member 1’s', () => {
+    const node: TeamMember = {
+      ...pooled(),
+      mcpAllowed: ['codegraph'],
+      pool: [{ agent: 'claude', mcpAllowed: ['notes'] }, { agent: 'codex' }],
+    };
+    expect(poolMemberNode(node, 1)?.mcpAllowed).toEqual(['codegraph']);
+    expect(poolMemberNode(node, 2)?.mcpAllowed).toEqual(['notes']);
+    expect(poolMemberNode(node, 3)).not.toHaveProperty('mcpAllowed');
+  });
+
   it('a member runs without its OWN switched-off MCP servers, never member 1’s', () => {
     const node: TeamMember = {
       ...pooled(),

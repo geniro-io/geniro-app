@@ -68,6 +68,9 @@ own ids:
   (members 2, 3, …; \`[]\` = none), each entry shaped like a team pool entry.
 - \`members.<memberId>.mcpDisabled\`: the MCP servers that member runs
   without in this project, replacing the team's list whole (\`[]\` = none off).
+- \`members.<memberId>.mcpAllowed\`: the only MCP servers that member loads in
+  this project besides Geniro's own, replacing the team's list whole (\`null\` =
+  every server, \`[]\` = Geniro's own alone).
 - \`members.<memberId>.extraInstructions\`: appended to that member's own
   instructions in this project.
 - \`instructionBlocks\`: blocks only this project's runs carry, shaped like

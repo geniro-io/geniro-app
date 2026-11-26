@@ -743,6 +743,7 @@ export function readClaudeUsage(
   const usage = asRecord(root.usage);
   const iterations = usage ? asArray(usage.iterations) : [];
   const lastRequest = asRecord(iterations[iterations.length - 1]);
+  const firstRequest = asRecord(iterations[0]);
   const context = readContextWindow(root);
   const cacheTtlMs = readPromptCacheTtl(lastRequest, usage);
   // The two SESSION-scoped fields, turned back into this turn's own. Required
@@ -789,6 +790,7 @@ export function readClaudeUsage(
       : null,
     thinkingTokens: readThinkingTokens(usage),
     contextTokens: promptSideTokens(lastRequest),
+    firstRequestContextTokens: promptSideTokens(firstRequest),
     contextWindowTokens: context.window,
     contextModel: context.model,
     // THIS TURN's spend, not the session's running total — see

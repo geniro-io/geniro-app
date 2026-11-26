@@ -1592,7 +1592,7 @@ describe('Projects page', () => {
         await afterDebounce();
 
         expect(agentsApi.listAgentMcpServers).toHaveBeenLastCalledWith(
-          { agent: 'claude', configDir: '/Users/me/.claude-work' },
+          { agent: 'claude', cwd: '/w', configDir: '/Users/me/.claude-work' },
           expect.anything(),
         );
         expect(
@@ -1689,7 +1689,7 @@ describe('Projects page', () => {
 
         expect(agentsApi.listAgentMcpServers).toHaveBeenCalledTimes(1);
         expect(agentsApi.listAgentMcpServers).toHaveBeenCalledWith(
-          { agent: 'codex' },
+          { agent: 'codex', cwd: '/w' },
           expect.anything(),
         );
       });

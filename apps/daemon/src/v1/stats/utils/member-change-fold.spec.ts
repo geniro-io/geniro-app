@@ -51,6 +51,19 @@ const V2: Team = {
 const at = (minute: number) => new Date(Date.UTC(2026, 10, 1, 10, minute));
 
 describe('memberDiff', () => {
+  it('reports a change of mcpAllowed in the tools group', () => {
+    const after: Team = {
+      ...V1,
+      members: [
+        { ...V1.members[0]!, mcpAllowed: ['notes'] },
+        ...V1.members.slice(1),
+      ],
+    };
+    expect(Object.fromEntries(memberDiff(V1, after))).toEqual({
+      lead: ['tools'],
+    });
+  });
+
   it('names what changed for each member, a member added or removed, and leaves the rest out', () => {
     const v3: Team = {
       ...V2,

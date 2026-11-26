@@ -8,6 +8,7 @@ import type {
   AgentConfigDirCapability,
   AgentFollowUpCapability,
   AgentIdentityCapability,
+  AgentMcpAllowListCapability,
   AgentModelEffortCapability,
   AgentOptionsCapability,
   AgentSubagentCapability,
@@ -37,6 +38,7 @@ export class CapabilitiesService {
       usage: this.usageCapabilities(),
       modelEfforts: this.modelEffortCapabilities(),
       options: this.optionCapabilities(),
+      mcpAllowLists: this.mcpAllowListCapabilities(),
       // Served verbatim from the one constant the adapters compose, so the
       // Settings preview cannot describe a preamble the CLIs stopped getting.
       hostPreamble: GENIRO_UI_PREAMBLE,
@@ -89,6 +91,14 @@ export class CapabilitiesService {
           config.hostQuestionToolReason === null,
       };
     });
+  }
+
+  private mcpAllowListCapabilities(): AgentMcpAllowListCapability[] {
+    return [...this.adapters.all()].map(([agent, adapter]) => ({
+      agent,
+      unavailableReason: adapter.getConfig().mcp.allowListUnavailableReason,
+      accountConnectorPrefix: adapter.getConfig().mcp.accountConnectorPrefix,
+    }));
   }
 
   /** Every registered CLI's own switches, in the order its config lists them. */

@@ -101,10 +101,12 @@ export function mcpServerNameProblem(name: string): string | null {
   return null;
 }
 
-function mcpDisabledIssues(
+function mcpNameListIssues(
   owner: string,
   field: MemberField,
   names: readonly string[] | undefined,
+  verb: string,
+  kind: string,
 ): MemberIssue[] {
   if (names === undefined) {
     return [];
@@ -113,7 +115,7 @@ function mcpDisabledIssues(
   if (names.length > MAX_MEMBER_MCP_DISABLED) {
     issues.push({
       field,
-      message: `${owner} switches off ${names.length} MCP servers — at most ${MAX_MEMBER_MCP_DISABLED} are allowed.`,
+      message: `${owner} ${verb} ${names.length} MCP servers — at most ${MAX_MEMBER_MCP_DISABLED} are allowed.`,
     });
   }
   for (const name of names) {
@@ -121,11 +123,27 @@ function mcpDisabledIssues(
     if (problem !== null) {
       issues.push({
         field,
-        message: `${owner}: the switched-off MCP server name “${name}” ${problem}.`,
+        message: `${owner}: the ${kind} MCP server name “${name}” ${problem}.`,
       });
     }
   }
   return issues;
+}
+
+function mcpDisabledIssues(
+  owner: string,
+  field: MemberField,
+  names: readonly string[] | undefined,
+): MemberIssue[] {
+  return mcpNameListIssues(owner, field, names, 'switches off', 'switched-off');
+}
+
+function mcpAllowedIssues(
+  owner: string,
+  field: MemberField,
+  names: readonly string[] | undefined,
+): MemberIssue[] {
+  return mcpNameListIssues(owner, field, names, 'allows', 'allowed');
 }
 
 /**
@@ -165,10 +183,12 @@ export function validateMember(member: TeamMember): MemberIssue[] {
   }
   issues.push(
     ...mcpDisabledIssues('This member', 'settings', member.mcpDisabled),
+    ...mcpAllowedIssues('This member', 'settings', member.mcpAllowed),
   );
   (member.pool ?? []).forEach((entry, index) => {
     const owner = `Pool member ${index + 2}`;
     issues.push(...mcpDisabledIssues(owner, 'pool', entry.mcpDisabled));
+    issues.push(...mcpAllowedIssues(owner, 'pool', entry.mcpAllowed));
     for (const [key, label] of POOL_MEMBER_TEXT_FIELDS) {
       const value = entry[key];
       if (typeof value === 'string' && value.includes(NUL)) {

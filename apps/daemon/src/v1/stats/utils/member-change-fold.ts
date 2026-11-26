@@ -54,7 +54,7 @@ const MEMBER_FIELDS: readonly [MemberChangeKind, (keyof TeamMember)[]][] = [
   ['effort', ['effort']],
   ['approval', ['approval']],
   ['pool', ['pool']],
-  ['tools', ['mcpDisabled']],
+  ['tools', ['mcpDisabled', 'mcpAllowed']],
 ];
 
 function same(a: unknown, b: unknown): boolean {

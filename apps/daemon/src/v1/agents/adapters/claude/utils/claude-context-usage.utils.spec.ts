@@ -36,6 +36,13 @@ const LIVE_BODY = {
     { name: 'Memory files', tokens: 59058, color: 'claude' },
     { name: 'Skills', tokens: 8687, color: 'warning' },
     { name: 'Messages', tokens: 15633, color: 'purple_FOR_SUBAGENTS_ONLY' },
+    {
+      id: 'autocompact_buffer',
+      name: 'Autocompact buffer',
+      tokens: 33000,
+      color: 'inactive',
+      kind: 'buffer',
+    },
     { name: 'Free space', tokens: 901402, color: 'promptBorder' },
   ],
   totalTokens: 98598,
@@ -91,9 +98,25 @@ describe('readContextUsageReply', () => {
     );
     expect(
       usage?.categories
-        .filter((row) => !row.deferred)
+        .filter((row) => !row.deferred && !row.reserve)
         .reduce((sum, row) => sum + row.tokens, 0),
     ).toBe(LIVE_BODY.totalTokens);
+  });
+
+  it('marks the row the CLI calls a buffer as a reserve, outside the total', () => {
+    const usage = readContextUsageReply(reply('req-1', LIVE_BODY), 'req-1');
+
+    expect(
+      usage?.categories.find((row) => row.name === 'Autocompact buffer'),
+    ).toEqual({
+      name: 'Autocompact buffer',
+      tokens: 33000,
+      deferred: false,
+      reserve: true,
+    });
+    expect(
+      usage?.categories.filter((row) => row.reserve).map((row) => row.name),
+    ).toEqual(['Autocompact buffer']);
   });
 
   it('marks a deferred category as deferred, keeping it out of the total', () => {
@@ -104,6 +127,7 @@ describe('readContextUsageReply', () => {
       name: 'MCP tools (deferred)',
       tokens: 273876,
       deferred: true,
+      reserve: false,
     });
     expect(
       usage?.categories.find((row) => row.name === 'System prompt')?.deferred,
@@ -114,8 +138,20 @@ describe('readContextUsageReply', () => {
     const usage = readContextUsageReply(reply('req-1', LIVE_BODY), 'req-1');
 
     expect(usage?.servers).toEqual([
-      { name: 'b', tokens: 5000, toolCount: 1, loadedToolCount: 0 },
-      { name: 'a', tokens: 1000, toolCount: 2, loadedToolCount: 1 },
+      {
+        name: 'b',
+        tokens: 5000,
+        toolCount: 1,
+        loadedToolCount: 0,
+        loadedTokens: 0,
+      },
+      {
+        name: 'a',
+        tokens: 1000,
+        toolCount: 2,
+        loadedToolCount: 1,
+        loadedTokens: 300,
+      },
     ]);
   });
 
@@ -188,7 +224,7 @@ describe('readContextUsageReply', () => {
     );
 
     expect(usage?.categories).toEqual([
-      { name: 'System prompt', tokens: 3386, deferred: false },
+      { name: 'System prompt', tokens: 3386, deferred: false, reserve: false },
     ]);
   });
 });

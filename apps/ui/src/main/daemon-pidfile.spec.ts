@@ -346,6 +346,18 @@ describe('writeExitNote', () => {
   });
 });
 
+describe('DAEMON_EXIT_NOTE_NAME', () => {
+  it('names the file the daemon reads', () => {
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/utils/handshake.ts'),
+      'utf8',
+    );
+    expect(daemon).toContain(
+      `export const DAEMON_EXIT_NOTE_NAME = '${DAEMON_EXIT_NOTE_NAME}';`,
+    );
+  });
+});
+
 describe('DAEMON_STOP_CAUSE_NAME', () => {
   it('names the file the daemon reads, and the daemon knows every cause written', () => {
     // A rename on one side, or a cause the daemon's list lacks, reads every

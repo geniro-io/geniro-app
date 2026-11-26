@@ -1,7 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
+import {
+  STUB_PICTURE_DATA_URL,
+  stubThreadContextReader,
+} from '../__fixtures__/thread-context-reader';
 import { QuestionContextMessages } from './question-context-messages';
 import {
+  type ThreadContextEntry,
   type ThreadContextMessage,
   type ThreadContextReader,
   ThreadContextReaderContext,
@@ -17,9 +22,45 @@ const MESSAGES: ThreadContextMessage[] = [
   { seq: 6, role: 'user', text: 'The shared one' },
 ];
 
-function withReader(reader: ThreadContextReader) {
+const WITH_PAGE_AND_PICTURES: ThreadContextEntry[] = [
+  { seq: 4, role: 'user', text: 'Take the acceptance screenshots' },
+  {
+    seq: 5,
+    artifact: {
+      artifactId: 'pr-673-acceptance',
+      version: 1,
+      title: 'PR #673 — acceptance',
+      summary: null,
+      key: 'k'.repeat(64),
+    },
+  },
+  {
+    seq: 6,
+    gallery: {
+      title: 'Strip screenshots',
+      images: [
+        {
+          path: 'shots/strip.png',
+          caption: 'The strip',
+          description: null,
+          source: null,
+        },
+      ],
+    },
+  },
+];
+
+const PAGE_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(
+  '<!doctype html><body style="margin:0;padding:8px;font:14px system-ui;color:#222">The acceptance page the thread published.</body>',
+)}`;
+
+function withRead(
+  read: ThreadContextReader['read'],
+  options?: Parameters<typeof stubThreadContextReader>[1],
+) {
   return (story: () => React.JSX.Element): React.JSX.Element => (
-    <ThreadContextReaderContext.Provider value={reader}>
+    <ThreadContextReaderContext.Provider
+      value={stubThreadContextReader(read, options)}>
       {story()}
     </ThreadContextReaderContext.Provider>
   );
@@ -56,17 +97,42 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Expanded: Story = {
-  decorators: [withReader(() => Promise.resolve(MESSAGES))],
+  decorators: [withRead(() => Promise.resolve(MESSAGES))],
+};
+
+export const WithPageAndPictures: Story = {
+  decorators: [
+    withRead(() => Promise.resolve(WITH_PAGE_AND_PICTURES), {
+      artifactUrl: () => () => PAGE_HTML,
+      loadImage: () => () => Promise.resolve(STUB_PICTURE_DATA_URL),
+    }),
+  ],
 };
 
 export const LongMessages: Story = {
-  decorators: [withReader(() => Promise.resolve(LONG_MESSAGES))],
+  decorators: [withRead(() => Promise.resolve(LONG_MESSAGES))],
+};
+
+export const LongMessagesWithPage: Story = {
+  decorators: [
+    withRead(
+      () =>
+        Promise.resolve([
+          ...LONG_MESSAGES,
+          ...WITH_PAGE_AND_PICTURES.filter((entry) => !('role' in entry)),
+        ]),
+      {
+        artifactUrl: () => () => PAGE_HTML,
+        loadImage: () => () => Promise.resolve(STUB_PICTURE_DATA_URL),
+      },
+    ),
+  ],
 };
 
 export const NothingBeforeQuestion: Story = {
-  decorators: [withReader(() => Promise.resolve([]))],
+  decorators: [withRead(() => Promise.resolve([]))],
 };
 
 export const Unreadable: Story = {
-  decorators: [withReader(() => Promise.reject(new Error('daemon down')))],
+  decorators: [withRead(() => Promise.reject(new Error('daemon down')))],
 };

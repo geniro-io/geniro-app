@@ -38,6 +38,9 @@ import { cn } from '../components/ui/utils';
 import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { formatUpdated } from '../teams/format-updated';
+import type { BlockOrders } from './block-orders';
+import { orderedWithin } from './block-orders';
+import { blockIdOf, type BlockPlaces } from './block-places';
 import {
   ATTENTION_ORDER,
   BLOCK_ATTENTION_ORDER,
@@ -55,6 +58,8 @@ import {
   usePrefersReducedMotion,
 } from './contact-edge';
 import {
+  BLOCK_HEAD,
+  CENTRE_DEPTH,
   type GraphBox,
   type GraphGeometry,
   type LayoutBlock,
@@ -62,15 +67,14 @@ import {
   layoutColumn,
   perLineFor,
   type PlacedBox,
+  slotIndexFor,
+  withBlockAt,
+  withBlockItems,
   withBoxAt,
 } from './graph-layout';
 import type { NodeOffset, NodeOffsets } from './node-positions';
 import type { CardBand, CardSize } from './open-cards';
-import {
-  NO_PROJECT_NAME,
-  ProjectBlock,
-  ProjectBlockHeader,
-} from './project-block';
+import { NO_PROJECT_NAME, ProjectBlock } from './project-block';
 import type { ProjectColor } from './project-colors';
 import {
   ATTENTION_TEXT,
@@ -149,7 +153,15 @@ export interface GraphViewProps {
   onPlaceNode: (threadId: string, offset: NodeOffset) => void;
   /** A thread's node or card was dropped back inside its own block, which takes it back. */
   onUnplaceNode: (threadId: string) => void;
-  /** Give every moved node back to the automatic layout. */
+  /** Where the project blocks the user moved stand, by block id, from the manager node's top-left. */
+  blockPlaces: BlockPlaces;
+  /** A project block was dropped by its header at `offset` from the manager node's top-left. */
+  onPlaceBlock: (blockId: string, offset: NodeOffset) => void;
+  /** The order the user set for each block's threads, by block id. */
+  blockOrders: BlockOrders;
+  /** A card was dropped inside its own block, whose threads now stand in `runIds` order. */
+  onOrderBlock: (blockId: string, runIds: readonly string[]) => void;
+  /** Give every moved node and block, and every order set, back to the automatic layout. */
   onResetLayout: () => void;
   /** The chat a card holds under its head. */
   renderCardChat: (threadId: string) => React.ReactNode;
@@ -175,10 +187,26 @@ const MANAGER_HEIGHT = 84;
 const MANAGER_HEIGHT_NARROW = 112;
 const MORE_WIDTH = 160;
 const MORE_HEIGHT = 32;
-const HEADING_HEIGHT = 28;
-
 function headingIdOf(blockId: string): string {
   return `heading:${blockId}`;
+}
+
+function dropSlotIdOf(runId: string): string {
+  return `drop:${runId}`;
+}
+
+const THREAD_PREFIX = 'thread:';
+
+/** What is being dragged: a thread's node or open card, or a project block by its header. */
+type GraphDrag =
+  | { kind: 'card'; id: string; runId: string; offset: NodeOffset }
+  | { kind: 'block'; id: string; offset: NodeOffset };
+
+/** What dropping a card where it is would do: `order` is its block's threads with it inside, null when it would be pinned. */
+interface CardDrop {
+  geometry: GraphGeometry;
+  blockId: string;
+  order: readonly string[] | null;
 }
 
 function moreIdOf(blockId: string): string {
@@ -230,6 +258,8 @@ interface BlockNodeData extends Record<string, unknown> {
   color: ProjectColor['color'] | null;
   threads: number;
   working: number;
+  /** Whether the block moves when its header is dragged. */
+  movable: boolean;
 }
 
 type ManagerFlowNode = Node<ManagerNodeData, 'manager'>;
@@ -237,14 +267,14 @@ type ThreadFlowNode = Node<ThreadNodeData, 'thread'>;
 type SlotFlowNode = Node<ThreadNodeData, 'slot'>;
 type MoreFlowNode = Node<MoreNodeData, 'more'>;
 type BlockFlowNode = Node<BlockNodeData, 'block'>;
-type HeadingFlowNode = Node<BlockNodeData, 'heading'>;
+type DropSlotFlowNode = Node<Record<string, never>, 'dropSlot'>;
 type GraphFlowNode =
   | ManagerFlowNode
   | ThreadFlowNode
   | SlotFlowNode
   | MoreFlowNode
   | BlockFlowNode
-  | HeadingFlowNode;
+  | DropSlotFlowNode;
 
 interface GraphActions {
   openInChats: (threadId: string) => void;
@@ -507,24 +537,35 @@ function MoreNode({ data }: NodeProps<MoreFlowNode>): React.JSX.Element {
   );
 }
 
-/** One project's frame behind its threads, wired from the manager at its top; the pointer passes through it to the canvas. */
+/** One project's frame behind its threads, wired from the manager at its top; the pointer passes through it to the canvas, except on a draggable block's header, which moves it. */
 const BlockNode = memo(function BlockNode({
-  data,
+  data: { movable, ...block },
 }: NodeProps<BlockFlowNode>): React.JSX.Element {
   return (
     <>
       <WireEnds />
-      <ProjectBlock {...data} />
+      <ProjectBlock
+        {...block}
+        headerClassName={movable ? BLOCK_HANDLE_CLASS : undefined}
+      />
     </>
   );
 }, sameData);
 
-/** A project's name over its threads in the phone column. */
-function HeadingNode({ data }: NodeProps<HeadingFlowNode>): React.JSX.Element {
+const BLOCK_HANDLE = 'cc-block-handle';
+const BLOCK_HANDLE_CLASS = cn(
+  BLOCK_HANDLE,
+  'pointer-events-auto cursor-grab active:cursor-grabbing',
+);
+
+/** Where a dragged card lands inside its block: free room the size of the card. */
+function DropSlotNode(): React.JSX.Element {
   return (
-    <div data-slot="project-heading" className="flex h-full items-end pb-1">
-      <ProjectBlockHeader {...data} />
-    </div>
+    <div
+      aria-hidden="true"
+      data-slot="graph-drop-slot"
+      className="size-full rounded-card border-2 border-dashed border-primary/60 bg-primary/5"
+    />
   );
 }
 
@@ -534,7 +575,7 @@ const NODE_TYPES = {
   slot: SlotNode,
   more: MoreNode,
   block: BlockNode,
-  heading: HeadingNode,
+  dropSlot: DropSlotNode,
 };
 const EDGE_TYPES = { contact: ContactEdge };
 
@@ -574,15 +615,6 @@ export function cardBox(size: CardSize): { width: number; height: number } {
   return { width: size.width, height: CARD_HEAD_HEIGHT + size.height };
 }
 
-export const NO_PROJECT_BLOCK = 'block:none';
-
-/** The block a thread stands in, by its project. */
-export function blockIdOf(thread: Pick<GraphThread, 'projectId'>): string {
-  return thread.projectId === null
-    ? NO_PROJECT_BLOCK
-    : `block:${thread.projectId}`;
-}
-
 /** The threads of one project's block, and what its header says. */
 export interface GraphBlock extends LayoutBlock {
   name: string;
@@ -606,6 +638,7 @@ export function graphBlocks(
   open: ReadonlyMap<string, GraphOpenCard> = new Map(),
   heights: ReadonlyMap<string, number> = new Map(),
   all: readonly GraphThread[] = shown,
+  orders: BlockOrders = {},
 ): GraphBlock[] {
   const boxOf = (thread: GraphThread): GraphBox => {
     const card = open.get(thread.id);
@@ -637,11 +670,16 @@ export function graphBlocks(
   const blockOf = (projectId: string | null): GraphBlock => {
     const ofProject = (thread: GraphThread): boolean =>
       thread.projectId === projectId;
-    const threads = shown.filter(ofProject).sort((a, b) => rank(a) - rank(b));
+    const id = blockIdOf({ projectId });
+    const ranked = shown.filter(ofProject).sort((a, b) => rank(a) - rank(b));
+    const byId = new Map(ranked.map((thread) => [thread.id, thread]));
+    const threads = orderedWithin(
+      ranked.map((thread) => thread.id),
+      orders[id],
+    ).map((threadId) => byId.get(threadId)!);
     const members = all.filter(ofProject);
     const total = Math.max(members.length, threads.length);
     const project = projectId === null ? undefined : known.get(projectId);
-    const id = blockIdOf({ projectId });
     return {
       id,
       name:
@@ -902,6 +940,10 @@ function GraphCanvas({
   onResizeCard,
   positions,
   onPlaceNode,
+  blockPlaces,
+  onPlaceBlock,
+  blockOrders,
+  onOrderBlock,
   onResetLayout,
   renderCardChat,
   focus,
@@ -928,9 +970,7 @@ function GraphCanvas({
   const quietUntil = useRef(0);
   const focused = useRef<number | null>(null);
   const [flashing, setFlashing] = useState<GraphFocus | null>(null);
-  const [drag, setDrag] = useState<{ id: string; offset: NodeOffset } | null>(
-    null,
-  );
+  const [drag, setDrag] = useState<GraphDrag | null>(null);
   const panZoomReady = useStore((state) => state.panZoom !== null);
   const [heights, setHeights] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
@@ -957,8 +997,16 @@ function GraphCanvas({
     : open;
   const shown = shownThreads(threads, open);
   const canvasWidth = narrow ? 0 : size.width;
-  const blocks = graphBlocks(shown, projects, onCanvas, heights, threads);
+  const blocks = graphBlocks(
+    shown,
+    projects,
+    onCanvas,
+    heights,
+    threads,
+    blockOrders,
+  );
   const perLine = perLineFor(shown.length, canvasWidth, THREAD_CARD_WIDTH);
+  const columns = Math.max(1, perLine);
   const root: GraphBox = {
     id: MANAGER_ID,
     width: narrow ? MANAGER_WIDTH_NARROW : MANAGER_WIDTH,
@@ -973,8 +1021,17 @@ function GraphCanvas({
       }
     }
   }
+  const placedBlocks = new Map<string, NodeOffset>();
+  if (!narrow) {
+    for (const block of blocks) {
+      const offset = blockPlaces[block.id];
+      if (offset !== undefined) {
+        placedBlocks.set(block.id, offset);
+      }
+    }
+  }
   const unopened =
-    onCanvas.size === 0 && pinned.size === 0
+    onCanvas.size === 0 && pinned.size === 0 && placedBlocks.size === 0
       ? null
       : layoutBlocks(
           root,
@@ -989,7 +1046,7 @@ function GraphCanvas({
             {
               id: headingIdOf(block.id),
               width: THREAD_CARD_WIDTH,
-              height: HEADING_HEIGHT,
+              height: BLOCK_HEAD,
             },
             ...block.items,
             ...(block.footer === undefined ? [] : [block.footer]),
@@ -1001,16 +1058,105 @@ function GraphCanvas({
             ...(block.footer === undefined ? [] : [block.footer.id]),
           ]),
         ),
+        blocks.map((block) => ({
+          id: block.id,
+          members: [
+            headingIdOf(block.id),
+            ...block.items.map((item) => item.id),
+            ...(block.footer === undefined ? [] : [block.footer.id]),
+          ],
+        })),
       )
-    : layoutBlocks(root, blocks, perLine, pinned, unopened?.width);
+    : layoutBlocks(
+        root,
+        blocks,
+        perLine,
+        pinned,
+        unopened?.width,
+        placedBlocks,
+      );
+  const freeItemsOf = (block: GraphBlock, except?: string): GraphBox[] =>
+    block.items.filter((item) => item.id !== except && !pinned.has(item.id));
+  const cardDrop = (runId: string, offset: NodeOffset): CardDrop | null => {
+    const id = `${THREAD_PREFIX}${runId}`;
+    const block = blocks.find((candidate) =>
+      candidate.items.some((item) => item.id === id),
+    );
+    const moved = withBoxAt(laidOut, MANAGER_ID, id, offset);
+    const box = moved.boxes.get(id);
+    const frame = block === undefined ? undefined : laidOut.boxes.get(block.id);
+    if (block === undefined || box === undefined || frame === undefined) {
+      return null;
+    }
+    const others = freeItemsOf(block, id);
+    const slot = {
+      id: dropSlotIdOf(runId),
+      width: box.width,
+      height: box.height,
+    };
+    const centre = {
+      x: box.x + box.width / 2,
+      y: box.y + Math.min(box.height / 2, CENTRE_DEPTH),
+    };
+    const index = slotIndexFor(block, others, slot, columns, frame, centre);
+    const items = others.toSpliced(index, 0, slot);
+    const withSlot = withBlockItems(moved, block, items, columns);
+    const room = withSlot.boxes.get(block.id)!;
+    const inside =
+      centre.x >= room.x &&
+      centre.x <= room.x + room.width &&
+      centre.y >= room.y &&
+      centre.y <= room.y + room.height;
+    return inside
+      ? {
+          geometry: withSlot,
+          blockId: block.id,
+          order: items.map((item) =>
+            item.id === slot.id ? runId : item.id.slice(THREAD_PREFIX.length),
+          ),
+        }
+      : {
+          geometry: withBlockItems(moved, block, others, columns),
+          blockId: block.id,
+          order: null,
+        };
+  };
+  const blockMembers = (blockId: string): string[] => {
+    const block = blocks.find((candidate) => candidate.id === blockId);
+    return block === undefined
+      ? []
+      : [
+          ...freeItemsOf(block).map((item) => item.id),
+          ...(block.footer === undefined ? [] : [block.footer.id]),
+        ];
+  };
   const drawn =
     drag === null || narrow
       ? laidOut
-      : withBoxAt(laidOut, MANAGER_ID, drag.id, drag.offset);
+      : drag.kind === 'block'
+        ? withBlockAt(
+            laidOut,
+            MANAGER_ID,
+            drag.id,
+            blockMembers(drag.id),
+            drag.offset,
+          )
+        : (cardDrop(drag.runId, drag.offset)?.geometry ??
+          withBoxAt(laidOut, MANAGER_ID, drag.id, drag.offset));
+  const moving = new Set<string>(
+    drag === null
+      ? []
+      : drag.kind === 'block'
+        ? [drag.id, ...blockMembers(drag.id)]
+        : [drag.id],
+  );
   const automatic = unopened ?? drawn;
   const dragGone =
     drag !== null &&
-    (narrow || !shown.some((t) => `thread:${t.id}` === drag.id));
+    (narrow ||
+      (drag.kind === 'block'
+        ? !blocks.some((block) => block.id === drag.id)
+        : !shown.some((t) => `${THREAD_PREFIX}${t.id}` === drag.id)));
   useEffect(() => {
     if (dragGone) {
       setDrag(null);
@@ -1127,38 +1273,49 @@ function GraphCanvas({
           change.dragging === true &&
           change.position !== undefined
         ) {
-          setDrag({ id: change.id, offset: offsetOf(change.position) });
+          const offset = offsetOf(change.position);
+          setDrag(
+            change.id.startsWith(THREAD_PREFIX)
+              ? {
+                  kind: 'card',
+                  id: change.id,
+                  runId: change.id.slice(THREAD_PREFIX.length),
+                  offset,
+                }
+              : { kind: 'block', id: change.id, offset },
+          );
         }
       }
     },
     [],
   );
   const place = (runId: string, to: { x: number; y: number }): void => {
-    const thread = shown.find((candidate) => candidate.id === runId);
-    const id = `thread:${runId}`;
-    const own = drawn.boxes.get(id);
-    const home =
-      thread === undefined ? undefined : drawn.boxes.get(blockIdOf(thread));
-    const centre =
-      own === undefined
-        ? to
-        : { x: to.x + own.width / 2, y: to.y + Math.min(own.height / 2, 60) };
-    if (
-      home !== undefined &&
-      centre.x >= home.x &&
-      centre.x <= home.x + home.width &&
-      centre.y >= home.y &&
-      centre.y <= home.y + home.height
-    ) {
+    const offset = offsetOf(to);
+    const drop = cardDrop(runId, offset);
+    if (drop === null || drop.order === null) {
+      onPlaceNode(runId, offset);
+      return;
+    }
+    const block = blocks.find((candidate) => candidate.id === drop.blockId)!;
+    const unchanged =
+      positions[runId] === undefined &&
+      freeItemsOf(block).every(
+        (item, index) =>
+          item.id.slice(THREAD_PREFIX.length) === drop.order![index],
+      );
+    if (positions[runId] !== undefined) {
       onUnplaceNode(runId);
-    } else {
-      onPlaceNode(runId, offsetOf(to));
+    }
+    if (!unchanged) {
+      onOrderBlock(drop.blockId, drop.order);
     }
   };
   const nodeDropped = useLatestCallback(
     (_event: unknown, node: GraphFlowNode) => {
       if (node.type === 'thread') {
         place(node.data.thread.id, node.position);
+      } else if (node.type === 'block' && drag?.id === node.id) {
+        onPlaceBlock(node.id, offsetOf(node.position));
       }
       setDrag(null);
     },
@@ -1170,7 +1327,12 @@ function GraphCanvas({
         place(runId, to);
         setDrag(null);
       } else {
-        setDrag({ id: `thread:${runId}`, offset: offsetOf(to) });
+        setDrag({
+          kind: 'card',
+          id: `${THREAD_PREFIX}${runId}`,
+          runId,
+          offset: offsetOf(to),
+        });
       }
     },
     [],
@@ -1207,7 +1369,7 @@ function GraphCanvas({
       width: box.width,
       height: box.height,
       handles: handlesFor(box.width, box.height),
-      className: drag?.id === id ? undefined : NODE_CLASS,
+      className: moving.has(id) ? undefined : NODE_CLASS,
       selectable: false,
       draggable: false,
       focusable: false,
@@ -1229,15 +1391,17 @@ function GraphCanvas({
   ];
   const contactEdges: ContactFlowEdge[] = [];
   for (const block of blocks) {
-    const id = narrow ? headingIdOf(block.id) : block.id;
+    const id = block.id;
     if (!drawn.boxes.has(id)) {
       continue;
     }
     nodes.push({
       ...base(id),
-      type: narrow ? 'heading' : 'block',
+      type: 'block',
       zIndex: -1,
       style: { pointerEvents: 'none' },
+      draggable: !narrow,
+      dragHandle: `.${BLOCK_HANDLE}`,
       data: {
         name: block.name,
         color: block.color,
@@ -1245,6 +1409,7 @@ function GraphCanvas({
         working: block.threads.filter(
           (thread) => thread.view.status === 'working',
         ).length,
+        movable: !narrow,
       },
     });
     const route = drawn.routes.get(id);
@@ -1321,6 +1486,15 @@ function GraphCanvas({
         },
       });
     }
+  }
+  if (drag?.kind === 'card' && drawn.boxes.has(dropSlotIdOf(drag.runId))) {
+    nodes.push({
+      ...base(dropSlotIdOf(drag.runId)),
+      type: 'dropSlot',
+      zIndex: -1,
+      style: { pointerEvents: 'none' },
+      data: {},
+    });
   }
   for (const block of blocks) {
     if (block.footer !== undefined && drawn.boxes.has(block.footer.id)) {
@@ -1442,7 +1616,11 @@ function GraphCanvas({
                     })
                   }
                   onReset={
-                    Object.keys(positions).length === 0 ? null : onResetLayout
+                    Object.keys(positions).length === 0 &&
+                    Object.keys(blockPlaces).length === 0 &&
+                    Object.keys(blockOrders).length === 0
+                      ? null
+                      : onResetLayout
                   }
                   defaultZoom={widthFit(automatic, size).zoom}
                   onResetZoom={() => {

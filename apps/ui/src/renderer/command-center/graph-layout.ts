@@ -146,6 +146,10 @@ const MIN_BLOCK_WIDTH = 220;
  * its items stand in reading order, at most `perLine` to a line, its footer
  * on a line of its own under them.
  *
+ * A block in `placed` stands at the root's top-left plus its offset, out of
+ * its line, wired from the root like a pinned box; the blocks of its line keep
+ * their places and only one it would touch moves, as for a pinned box.
+ *
  * An item in `pinned` stands at the root's top-left plus its offset instead,
  * out of its block, which shrinks around the rest from its own top-left; every
  * block keeps the place it has with nothing pinned, and only a block a pinned
@@ -163,6 +167,7 @@ export function layoutBlocks(
   perLine: number,
   pinned: ReadonlyMap<string, Point> = new Map(),
   frame?: number,
+  placed: ReadonlyMap<string, Point> = new Map(),
 ): GraphGeometry {
   const filled = blocks.filter(
     (block) => block.items.length > 0 || block.footer !== undefined,
@@ -213,7 +218,31 @@ export function layoutBlocks(
   boxes.set(root.id, placedRoot);
   const rootBottom = MARGIN + root.height;
 
+  const setBlock = (box: PlacedBox): void => {
+    boxes.set(box.id, box);
+    for (const item of shapes.get(box.id)!.items) {
+      boxes.set(item.box.id, {
+        ...item.box,
+        x: box.x + item.x,
+        y: box.y + item.y,
+      });
+    }
+  };
+
   const obstacles: PlacedBox[] = [];
+  const placedBlocks: PlacedBox[] = [];
+  for (const shape of shapes.values()) {
+    const offset = placed.get(shape.id);
+    if (offset !== undefined && shape.items.length > 0) {
+      placedBlocks.push({
+        id: shape.id,
+        width: shape.width,
+        height: shape.height,
+        x: placedRoot.x + offset.x,
+        y: placedRoot.y + offset.y,
+      });
+    }
+  }
   for (const item of filled.flatMap((block) => block.items)) {
     const offset = pinned.get(item.id);
     if (offset !== undefined) {
@@ -235,7 +264,9 @@ export function layoutBlocks(
       const shape = shapes.get(slot.id);
       const x = left;
       left += slot.width + COLUMN_GAP;
-      return shape === undefined || shape.items.length === 0
+      return shape === undefined ||
+        shape.items.length === 0 ||
+        placed.has(shape.id)
         ? []
         : [
             {
@@ -253,18 +284,19 @@ export function layoutBlocks(
     if (slots.length === 0) {
       continue;
     }
-    const placed: PlacedBox[] = [];
+    const fixed = [...obstacles, ...placedBlocks];
+    const inLine: PlacedBox[] = [];
     const displaced: PlacedBox[] = [];
     for (const { box } of slots) {
-      (obstacles.some((obstacle) => overlaps(box, obstacle))
+      (fixed.some((obstacle) => overlaps(box, obstacle))
         ? displaced
-        : placed
+        : inLine
       ).push(box);
     }
     for (const start of displaced) {
       let box = start;
       for (;;) {
-        const hit = [...obstacles, ...placed].filter((other) =>
+        const hit = [...fixed, ...inLine].filter((other) =>
           overlaps(box, other),
         );
         if (hit.length === 0) {
@@ -276,21 +308,12 @@ export function layoutBlocks(
             Math.max(...hit.map((other) => other.x + other.width)) + COLUMN_GAP,
         };
       }
-      placed.push(box);
+      inLine.push(box);
     }
-    for (const box of placed) {
-      boxes.set(box.id, box);
-      for (const item of shapes.get(box.id)!.items) {
-        boxes.set(item.box.id, {
-          ...item.box,
-          x: box.x + item.x,
-          y: box.y + item.y,
-        });
-      }
-    }
-    placed.sort((a, b) => a.x - b.x);
-    placedLines.push(placed);
-    top = Math.max(...placed.map((box) => box.y + box.height)) + LINE_GAP;
+    inLine.forEach(setBlock);
+    inLine.sort((a, b) => a.x - b.x);
+    placedLines.push(inLine);
+    top = Math.max(...inLine.map((box) => box.y + box.height)) + LINE_GAP;
   }
 
   placedLines.forEach((line, lineIndex) => {
@@ -314,9 +337,10 @@ export function layoutBlocks(
     }
   });
 
-  for (const box of obstacles) {
+  for (const box of [...obstacles, ...placedBlocks]) {
     routes.set(box.id, elbowFrom(placedRoot, box));
   }
+  placedBlocks.forEach(setBlock);
 
   const placedBoxes = [...boxes.values()];
   const right = Math.max(
@@ -375,15 +399,142 @@ export function withBoxAt(
 }
 
 /**
+ * `geometry` with one block, and every box in `members` with it, standing at
+ * the root's top-left plus `offset` and wired as a pinned box, everything else
+ * where it was: a block being dragged.
+ */
+export function withBlockAt(
+  geometry: GraphGeometry,
+  rootId: string,
+  blockId: string,
+  members: readonly string[],
+  offset: Point,
+): GraphGeometry {
+  const root = geometry.boxes.get(rootId);
+  const block = geometry.boxes.get(blockId);
+  if (root === undefined || block === undefined) {
+    return geometry;
+  }
+  const dx = root.x + offset.x - block.x;
+  const dy = root.y + offset.y - block.y;
+  const boxes = new Map(geometry.boxes);
+  for (const id of [blockId, ...members]) {
+    const box = boxes.get(id);
+    if (box !== undefined) {
+      boxes.set(id, { ...box, x: box.x + dx, y: box.y + dy });
+    }
+  }
+  return {
+    ...geometry,
+    boxes,
+    routes: new Map(geometry.routes).set(
+      blockId,
+      elbowFrom(root, boxes.get(blockId)!),
+    ),
+  };
+}
+
+/**
+ * Where among a block's `items` a box of `slot`'s size lands when dropped with
+ * its centre at `centre`: the reading-order index whose place for it, in the
+ * block standing at `origin`, lies nearest.
+ */
+export function slotIndexFor(
+  block: LayoutBlock,
+  items: readonly GraphBox[],
+  slot: GraphBox,
+  columns: number,
+  origin: Point,
+  centre: Point,
+): number {
+  let best = 0;
+  let nearest = Infinity;
+  for (let index = 0; index <= items.length; index += 1) {
+    const shape = shapeOf(
+      block,
+      items.toSpliced(index, 0, slot),
+      Math.max(1, columns),
+    );
+    const at = shape.items.find((item) => item.box.id === slot.id)!;
+    const distance = Math.hypot(
+      origin.x + at.x + slot.width / 2 - centre.x,
+      origin.y + at.y + Math.min(slot.height / 2, CENTRE_DEPTH) - centre.y,
+    );
+    if (distance < nearest) {
+      nearest = distance;
+      best = index;
+    }
+  }
+  return best;
+}
+
+/** How far down a box its centre is taken for dropping, so a tall open card is judged by its head. */
+export const CENTRE_DEPTH = 60;
+
+/**
+ * `geometry` with one block drawn around `items` in that order from its own
+ * top-left, its wire following its top's centre, everything else where it was:
+ * the block making room while one of its cards is dragged.
+ */
+export function withBlockItems(
+  geometry: GraphGeometry,
+  block: LayoutBlock,
+  items: readonly GraphBox[],
+  columns: number,
+): GraphGeometry {
+  const box = geometry.boxes.get(block.id);
+  if (box === undefined) {
+    return geometry;
+  }
+  const shape = shapeOf(block, items, Math.max(1, columns));
+  const boxes = new Map(geometry.boxes);
+  const reshaped = { ...box, width: shape.width, height: shape.height };
+  boxes.set(block.id, reshaped);
+  for (const item of shape.items) {
+    boxes.set(item.box.id, {
+      ...item.box,
+      x: box.x + item.x,
+      y: box.y + item.y,
+    });
+  }
+  const route = geometry.routes.get(block.id);
+  const routes = new Map(geometry.routes);
+  if (route !== undefined) {
+    routes.set(block.id, retargeted(route, box, reshaped));
+  }
+  return { ...geometry, boxes, routes };
+}
+
+function retargeted(
+  route: readonly Point[],
+  from: PlacedBox,
+  to: PlacedBox,
+): Point[] {
+  const was = from.x + from.width / 2;
+  const now = to.x + to.width / 2;
+  const points = [...route];
+  for (let index = points.length - 1; index > 0; index -= 1) {
+    if (points[index]!.x !== was) {
+      break;
+    }
+    points[index] = { ...points[index]!, x: now };
+  }
+  return withoutRepeats(points);
+}
+
+/**
  * The same tree as one column, for a narrow screen: the root on top, every
  * item below it in order, indented, and a wire running down the root's left
  * edge and turning into each box. A box in `unwired` (a project's name over
- * its threads, its "+N more") stands in the column with no wire.
+ * its threads, its "+N more") stands in the column with no wire. Each of
+ * `frames` is drawn as a box around its members, from the top of its first,
+ * with a gap before it so no two frames touch.
  */
 export function layoutColumn(
   root: GraphBox,
   items: readonly GraphBox[],
   unwired: ReadonlySet<string> = new Set(),
+  frames: readonly ColumnFrame[] = [],
 ): GraphGeometry {
   const boxes = new Map<string, PlacedBox>();
   const routes = new Map<string, Point[]>();
@@ -398,7 +549,15 @@ export function layoutColumn(
   };
   const top = place(root, MARGIN);
   const spine = top.x + STUB;
+  const opening = new Set(
+    frames.flatMap((frame, index) =>
+      index === 0 || frame.members[0] === undefined ? [] : [frame.members[0]],
+    ),
+  );
   for (const item of items) {
+    if (opening.has(item.id)) {
+      y += FRAME_GAP;
+    }
     const placed = place(item, MARGIN + INDENT);
     if (unwired.has(item.id)) {
       continue;
@@ -410,5 +569,38 @@ export function layoutColumn(
       { x: placed.x, y: middle },
     ]);
   }
-  return { width, height: y - STACK_GAP + MARGIN, boxes, routes };
+  let bottom = y - STACK_GAP;
+  for (const frame of frames) {
+    const members = frame.members.flatMap((id) => {
+      const box = boxes.get(id);
+      return box === undefined ? [] : [box];
+    });
+    if (members.length === 0) {
+      continue;
+    }
+    const left = Math.min(...members.map((box) => box.x)) - FRAME_PAD;
+    const right =
+      Math.max(...members.map((box) => box.x + box.width)) + FRAME_PAD;
+    const lowest =
+      Math.max(...members.map((box) => box.y + box.height)) + FRAME_PAD;
+    boxes.set(frame.id, {
+      id: frame.id,
+      x: left,
+      y: members[0]!.y,
+      width: right - left,
+      height: lowest - members[0]!.y,
+    });
+    width = Math.max(width, right + MARGIN);
+    bottom = Math.max(bottom, lowest);
+  }
+  return { width, height: bottom + MARGIN, boxes, routes };
 }
+
+/** A box the column draws around a run of its items: one project's heading and threads. */
+export interface ColumnFrame {
+  id: string;
+  members: readonly string[];
+}
+
+const FRAME_PAD = 12;
+const FRAME_GAP = 16;

@@ -15,6 +15,7 @@ import {
 } from 'vitest';
 
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
+import { NO_PROJECT_BLOCK } from './block-places';
 import { BLOCK_ATTENTION_ORDER } from './card-view';
 import type { ContactPulse, ContactState } from './contact-edge';
 import {
@@ -28,7 +29,6 @@ import {
   graphBlocks,
   GraphView,
   MAX_THREAD_NODES,
-  NO_PROJECT_BLOCK,
   shownThreads,
   wholeFit,
   widthFit,
@@ -247,6 +247,10 @@ describe('GraphView', () => {
           onResizeCard={() => undefined}
           positions={{}}
           onPlaceNode={() => undefined}
+          blockPlaces={{}}
+          onPlaceBlock={() => undefined}
+          blockOrders={{}}
+          onOrderBlock={() => undefined}
           onResetLayout={() => undefined}
           onFocused={() => undefined}
           renderCardChat={() => null}
@@ -699,23 +703,37 @@ describe('GraphView', () => {
     expect(all('contact-edge')).toHaveLength(4);
   });
 
-  it('shows a heading over each project’s cards in the phone column, with no frame around them', async () => {
+  it('frames each project’s cards in the phone column, headed by its name, in its colour, and never movable there', async () => {
     const threads = graphThreadsOf(4);
     await draw({ threads, narrow: true, projects: FIXTURE_PROJECTS });
 
-    expect(all('project-block')).toHaveLength(0);
+    expect(all('project-block').map((frame) => frame.dataset.color)).toEqual([
+      'blue',
+      'purple',
+    ]);
     expect(
-      all('project-heading').map((heading) => heading.textContent),
+      all('project-block-header').map((header) => header.textContent),
     ).toEqual([
       expect.stringContaining('QA Billing'),
       expect.stringContaining('QA Cache'),
     ]);
     for (const block of graphBlocks(shownThreads(threads), FIXTURE_PROJECTS)) {
-      const top = flowNode(`heading:${block.id}`).position.y;
+      const frame = flowNode(block.id);
+      expect(frame.draggable).toBe(false);
       for (const thread of block.threads) {
-        expect(nodeY('graph-thread', thread.id)).toBeGreaterThan(top);
+        const card = flowNode(`thread:${thread.id}`);
+        expect(card.position.y).toBeGreaterThan(frame.position.y);
+        expect(card.position.x).toBeGreaterThan(frame.position.x);
+        expect(card.position.y + (card.height ?? 0)).toBeLessThan(
+          frame.position.y + (frame.height ?? 0),
+        );
       }
     }
+    expect(
+      container.querySelector(
+        '[data-slot="project-block-header"].cc-block-handle',
+      ),
+    ).toBeNull();
   });
 
   it('puts the phone column’s flow pane under flow-touch-scroll, so a finger swipe scrolls the page rather than being eaten by the pane', async () => {
@@ -1024,7 +1042,7 @@ describe('GraphView', () => {
     expect(onPlaceNode).not.toHaveBeenCalled();
   });
 
-  it('holds every block frame where and as big as it was drawn while a card is dragged, until the drop', async () => {
+  it('holds every other block frame where and as big as it was drawn while a card is dragged, until the drop', async () => {
     await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
     const frames = () =>
       nodesOfType('block').map((node) => ({
@@ -1033,7 +1051,9 @@ describe('GraphView', () => {
         width: node.width,
         height: node.height,
       }));
-    const before = frames();
+    const others = () =>
+      frames().filter((frame) => frame.id !== 'block:project-billing');
+    const before = others();
     const start = flowNode('thread:thread-1').position;
     const cache = flowNode('block:project-cache').position;
     const dragTo = (position: { x: number; y: number }): void => {
@@ -1045,9 +1065,9 @@ describe('GraphView', () => {
     };
 
     dragTo({ x: start.x + 30, y: start.y + 20 });
-    expect(frames()).toEqual(before);
+    expect(others()).toEqual(before);
     dragTo({ x: cache.x + 10, y: cache.y + 10 });
-    expect(frames()).toEqual(before);
+    expect(others()).toEqual(before);
     expect(nodeAt('graph-thread', 'thread-1')).toEqual({
       x: cache.x + 10,
       y: cache.y + 10,
@@ -1114,7 +1134,7 @@ describe('GraphView', () => {
     expect(blockSize('block:project-billing')).toEqual(whole);
   });
 
-  it('draws each project block behind its threads, with no pointer of its own', async () => {
+  it('draws each project block behind its threads, with no pointer of its own but its header, which drags it', async () => {
     await draw({ threads: graphThreadsOf(4), projects: FIXTURE_PROJECTS });
 
     const blocks = nodesOfType('block');
@@ -1125,9 +1145,15 @@ describe('GraphView', () => {
     for (const node of blocks) {
       expect(node.zIndex).toBe(-1);
       expect(node.style?.pointerEvents).toBe('none');
-      expect(node.draggable).toBe(false);
+      expect(node.draggable).toBe(true);
+      expect(node.dragHandle).toBe('.cc-block-handle');
       expect(node.selectable).toBe(false);
     }
+    expect(
+      all('project-block-header').every((header) =>
+        header.classList.contains('cc-block-handle'),
+      ),
+    ).toBe(true);
     expect(all('project-block').map((frame) => frame.dataset.color)).toEqual([
       'blue',
       'purple',

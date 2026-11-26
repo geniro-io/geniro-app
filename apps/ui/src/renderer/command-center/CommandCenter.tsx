@@ -55,6 +55,8 @@ import { useProjects } from '../projects/use-projects';
 import { useRunConfigSources } from '../projects/use-run-config-sources';
 import { useSharedCapabilities } from '../use-capabilities';
 import { AnswerPopover } from './answer-popover';
+import { useBlockOrders } from './block-orders';
+import { blockIdOf, useBlockPlaces } from './block-places';
 import {
   managerIdentityOf,
   sameThreadIdentities,
@@ -187,6 +189,8 @@ export function CommandCenter({
   const [sidebar, setSidebar] = useState<SidebarTab | null>(null);
   const cards = useOpenCards(narrow);
   const nodePositions = useNodePositions();
+  const blockPlaces = useBlockPlaces();
+  const blockOrders = useBlockOrders();
   const [focus, setFocus] = useState<GraphFocus | null>(null);
   const [offBoard, setOffBoard] = useState<string | null>(null);
   const [archived, setArchived] = useState<{
@@ -281,8 +285,38 @@ export function CommandCenter({
       const onBoard = new Set(boardRunIds === '' ? [] : boardRunIds.split(','));
       cards.keepOnly(onBoard);
       nodePositions.keepOnly(onBoard);
+      blockOrders.keepOnly(onBoard);
     }
-  }, [boardRunIds, cards.keepOnly, nodePositions.keepOnly]);
+  }, [
+    boardRunIds,
+    cards.keepOnly,
+    nodePositions.keepOnly,
+    blockOrders.keepOnly,
+  ]);
+  const boardBlockIds =
+    board.cards === null
+      ? null
+      : [
+          ...new Set(
+            board.cards.map((card) =>
+              blockIdOf({ projectId: card.run.project?.id ?? null }),
+            ),
+          ),
+        ]
+          .sort()
+          .join(',');
+  useEffect(() => {
+    if (boardBlockIds !== null) {
+      blockPlaces.keepOnly(
+        new Set(boardBlockIds === '' ? [] : boardBlockIds.split(',')),
+      );
+    }
+  }, [boardBlockIds, blockPlaces.keepOnly]);
+  const resetLayout = useLatestCallback((): void => {
+    nodePositions.reset();
+    blockPlaces.reset();
+    blockOrders.reset();
+  }, []);
   const { projects } = useProjects(apis, client);
   const pullRequests = useThreadPullRequests(
     (board.cards ?? []).map((card) => card.run),
@@ -575,7 +609,11 @@ export function CommandCenter({
             positions={nodePositions.offsets}
             onPlaceNode={nodePositions.place}
             onUnplaceNode={nodePositions.forget}
-            onResetLayout={nodePositions.reset}
+            blockPlaces={blockPlaces.places}
+            onPlaceBlock={blockPlaces.place}
+            blockOrders={blockOrders.orders}
+            onOrderBlock={blockOrders.order}
+            onResetLayout={resetLayout}
             renderCardChat={renderCardChat}
             focus={focus}
             onFocused={(seq) =>

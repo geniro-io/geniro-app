@@ -182,7 +182,7 @@ export function TooltipLayer(): React.JSX.Element | null {
     };
 
     const consider = (event: PointerEvent): void => {
-      if (event.pointerType === 'touch') {
+      if (event.pointerType === 'touch' || event.buttons !== 0) {
         return;
       }
       const own = titledElement(event.target);

@@ -244,6 +244,7 @@ describe('TooltipLayer', () => {
     wait(16);
     pointer('pointermove', head, { x: 212, y: 18, buttons: 1 });
     wait(16);
+    pointer('pointerover', time, { x: 212, y: 18, buttons: 1 });
     wait(TOOLTIP_OPEN_DELAY_MS);
 
     expect(measured).toBe(0);

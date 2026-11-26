@@ -2990,6 +2990,12 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       });
 
       expect(geniro.failedCalls).toBe(1);
+      expect(
+        await reader.read(TURN(), { view: 'failures', tool: 'bash' }),
+      ).toMatchObject({
+        failedCalls: 3,
+        byTool: [{ tool: 'Bash', failed: 3, groups: 1 }],
+      });
       expect(second).toMatchObject({ threadsRead: 1, failedCalls: 1 });
       expect(
         (await reader.read(TURN(), { view: 'failures', runId: 'outside' }))
@@ -3054,6 +3060,45 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         /^x{400}… \[\+600 chars — view=item runId=source seq=10\]$/,
       );
     });
+
+    it.each(['failures', 'userMessages'] as const)(
+      'cuts every later view=%s page from the answer its first page was cut from, and refuses one that lapsed',
+      async (view) => {
+        const now = vi.spyOn(Date, 'now');
+        try {
+          now.mockReturnValue(1_000_000);
+          expect((await reader.read(TURN(), { view })).total).toBe(
+            view === 'failures' ? 2 : 3,
+          );
+          const fork = orm.em.fork();
+          (await fork.findOneOrFail(Run, { id: 'source' })).deletedAt =
+            new Date();
+          await fork.flush();
+
+          now.mockReturnValue(1_000_000 + 4 * 60_000);
+          const kept = await reader.read(TURN(), { view, cursor: 1 });
+          expect(kept.error).toBeUndefined();
+          expect(kept.total).toBe(view === 'failures' ? 2 : 3);
+          // The window is counted from the last read, not the first.
+          now.mockReturnValue(1_000_000 + 8 * 60_000);
+          expect((await reader.read(TURN(), { view, cursor: 1 })).total).toBe(
+            view === 'failures' ? 2 : 3,
+          );
+          expect(
+            (await reader.read(TURN(), { view, runId: 'second', cursor: 1 }))
+              .error,
+          ).toBe('RUNS_CHANGED');
+
+          now.mockReturnValue(1_000_000 + 20 * 60_000);
+          expect((await reader.read(TURN(), { view, cursor: 1 })).error).toBe(
+            'RUNS_CHANGED',
+          );
+          expect((await reader.read(TURN(), { view })).total).toBe(1);
+        } finally {
+          now.mockRestore();
+        }
+      },
+    );
 
     it('reads the one thread of a thread analysis', async () => {
       const answer = await reader.read(

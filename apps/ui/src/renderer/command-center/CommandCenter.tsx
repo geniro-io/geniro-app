@@ -491,6 +491,7 @@ export function CommandCenter({
     lessonsApi: apis.lessons,
     agentsApi: apis.agents,
     teamsApi: apis.teams,
+    chatsApi: apis.chats,
     archive: async (target, lessons) => {
       await apis.chats.archiveChat({ runId: target.id, lessons });
       setOffBoard(null);

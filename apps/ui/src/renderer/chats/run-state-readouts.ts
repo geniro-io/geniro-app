@@ -25,6 +25,18 @@ import { subagentRef } from './subagent-payload';
  */
 
 /**
+ * What a delegate is called when its own block is not in the window to ask:
+ * `subagentTitle`'s reading, from what the daemon could read off the launch.
+ */
+export function delegateLabel(
+  delegate: Pick<RunDelegateState, 'id' | 'label' | 'kind'>,
+): string {
+  return (
+    delegate.label ?? delegate.kind ?? `Sub-agent ${subagentRef(delegate.id)}`
+  );
+}
+
+/**
  * Each agent's sub-agent threads, with every delegate the run launched that the
  * window holds no block for added FIRST — those were launched before the
  * loaded page, so they come earlier in the conversation.
@@ -45,12 +57,7 @@ export function withDurableDelegates(
     threads.push({
       id: delegate.id,
       kind: 'subagent',
-      // `subagentTitle`'s reading, from what the daemon could read off the
-      // launch — the delegate's own block is not in the window to ask.
-      label:
-        delegate.label ??
-        delegate.kind ??
-        `Sub-agent ${subagentRef(delegate.id)}`,
+      label: delegateLabel(delegate),
       status: delegate.status,
       ...(delegate.processEnded ? { processEnded: true } : {}),
       sessionId: null,

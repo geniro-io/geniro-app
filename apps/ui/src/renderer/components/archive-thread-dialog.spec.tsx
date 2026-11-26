@@ -3,6 +3,7 @@ import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { emptyRunState } from '../__tests__/run-state';
 import type {
   ArchiveChatLessonsEnum,
   ThreadLessonEstimateDto,
@@ -10,6 +11,8 @@ import type {
 import type { DaemonApis } from '../daemon-api';
 import {
   archiveDialogCopy,
+  type ArchiveProcess,
+  archiveProcessesOf,
   type ArchiveTarget,
   ArchiveThreadDialog,
   archiveWorkOf,
@@ -118,6 +121,103 @@ describe('stillRunningLines', () => {
 
   it('lists nothing for a thread with nothing running', () => {
     expect(stillRunningLines(SETTLED, null)).toEqual([]);
+  });
+});
+
+describe('archiveProcessesOf', () => {
+  const owners = new Map([
+    ['senior', 'Tony Stark'],
+    ['handyman', 'Groot'],
+  ]);
+
+  it('names each open sub-agent, command and monitor with the member it belongs to', () => {
+    const state = {
+      ...emptyRunState(),
+      delegates: [
+        {
+          id: 'toolu_01',
+          memberId: 'senior',
+          callId: null,
+          label: 'Map the archive flow',
+          kind: 'Explore',
+          status: 'running' as const,
+          processEnded: false,
+        },
+      ],
+      shells: [
+        {
+          id: 'toolu_02',
+          command: 'pnpm dev --port 5176',
+          memberId: 'handyman',
+          callId: null,
+          startedAt: 0,
+        },
+      ],
+      monitors: [
+        {
+          id: 'm1',
+          description: 'CI on #681',
+          command: 'gh pr checks 681 --watch',
+          memberId: 'reviewer',
+          callId: null,
+          startedAt: '2026-11-26T12:00:00.000Z',
+          endsAt: '2026-11-26T13:00:00.000Z',
+        },
+      ],
+    };
+
+    expect(archiveProcessesOf(state, owners)).toEqual([
+      { kind: 'subagent', name: 'Map the archive flow', owner: 'Tony Stark' },
+      { kind: 'command', name: 'pnpm dev --port 5176', owner: 'Groot' },
+      { kind: 'monitor', name: 'CI on #681', owner: 'reviewer' },
+    ]);
+  });
+
+  it('leaves out a sub-agent that finished or whose process is gone', () => {
+    const delegate = {
+      id: 'toolu_01',
+      memberId: null,
+      callId: null,
+      label: null,
+      kind: null,
+      status: 'running' as const,
+      processEnded: false,
+    };
+    const state = {
+      ...emptyRunState(),
+      delegates: [
+        { ...delegate, id: 'toolu_done', status: 'completed' as const },
+        { ...delegate, id: 'toolu_gone', processEnded: true },
+        { ...delegate, id: 'toolu_0123456789abcdef' },
+      ],
+    };
+
+    expect(archiveProcessesOf(state, null)).toEqual([
+      { kind: 'subagent', name: 'Sub-agent abcdef', owner: null },
+    ]);
+  });
+});
+
+describe('stillRunningLines — named background processes', () => {
+  const processes: ArchiveProcess[] = [
+    { kind: 'command', name: 'pnpm dev --port 5176', owner: 'Groot' },
+    { kind: 'monitor', name: 'CI on #681', owner: null },
+  ];
+
+  it('names each process the run state holds, with whose it is', () => {
+    expect(
+      stillRunningLines(SETTLED_TEAM_WITH_BACKGROUND, null, processes),
+    ).toEqual([
+      'Command: pnpm dev --port 5176 · Groot',
+      'Monitor: CI on #681',
+      '1 more monitor',
+    ]);
+  });
+
+  it('counts only while the processes are unread', () => {
+    expect(stillRunningLines(SETTLED_TEAM_WITH_BACKGROUND, null, null)).toEqual(
+      ['1 background command', '2 monitors'],
+    );
   });
 });
 
@@ -265,6 +365,35 @@ describe('ArchiveThreadDialog', () => {
     expect(button('Stop & archive')).toBeTruthy();
   });
 
+  it('folds a long process line inside the dialog and keeps the whole line on hover', () => {
+    const command = `pnpm dev ${'--flag '.repeat(40)}`.trim();
+    act(() => {
+      root.render(
+        <ArchiveThreadDialog
+          target={{ ...SETTLED, work: { ...IDLE, commands: 1 } }}
+          processes={[{ kind: 'command', name: command, owner: null }]}
+          busy={false}
+          error={null}
+          lessons={null}
+          extractLessons={false}
+          lessonModel={null}
+          onExtractLessonsChange={vi.fn()}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />,
+      );
+    });
+
+    const item = container.querySelector(
+      '[data-slot="archive-still-running"] li',
+    );
+    expect(item?.getAttribute('title')).toBe(`Command: ${command}`);
+    expect(item?.firstElementChild?.className).toContain('line-clamp-2');
+    expect(item?.firstElementChild?.className).toContain(
+      '[overflow-wrap:anywhere]',
+    );
+  });
+
   it('draws the plain copy for a finished thread, with nothing stopped', () => {
     renderDialog({ target: { ...SETTLED, isTeam: true } });
 
@@ -365,11 +494,13 @@ type Archive = (
 function Harness({
   lessonsApi,
   teamsApi = null,
+  chatsApi = null,
   archive,
   target,
 }: {
   lessonsApi: DaemonApis['lessons'];
   teamsApi?: DaemonApis['teams'] | null;
+  chatsApi?: DaemonApis['chats'] | null;
   archive: Archive;
   target: ArchiveTarget;
 }): ReactElement {
@@ -377,6 +508,7 @@ function Harness({
     lessonsApi,
     agentsApi: null,
     teamsApi,
+    chatsApi,
     archive,
   });
   return (
@@ -604,5 +736,166 @@ describe('useArchiveThread — a running team run', () => {
 
     expect(listTeamRunNodes).not.toHaveBeenCalled();
     expect(items()).toEqual(['1 background command', '2 monitors']);
+  });
+});
+
+describe('useArchiveThread — background processes', () => {
+  const STATE = {
+    ...emptyRunState(),
+    shells: [
+      {
+        id: 'toolu_02',
+        command: 'sleep 600',
+        memberId: 'handyman',
+        callId: null,
+        startedAt: 0,
+      },
+    ],
+    monitors: [
+      {
+        id: 'm1',
+        description: 'Wait for the release file',
+        command: 'until [ -f /tmp/release ]; do sleep 5; done',
+        memberId: 'senior',
+        callId: null,
+        startedAt: '2026-11-26T12:00:00.000Z',
+        endsAt: '2026-11-26T13:00:00.000Z',
+      },
+    ],
+  };
+
+  function render(
+    target: ArchiveTarget,
+    readRunState: ReturnType<typeof vi.fn>,
+    getTeamRunSnapshot: ReturnType<typeof vi.fn> = vi.fn(() =>
+      Promise.resolve({
+        team: {
+          members: [
+            { id: 'senior', name: 'Tony Stark' },
+            { id: 'handyman', name: 'Groot' },
+          ],
+        },
+      }),
+    ),
+  ): void {
+    const lessonsApi = {
+      estimateLessons: vi.fn(() => Promise.resolve({ ...LESSONS, signals: 0 })),
+    } as unknown as DaemonApis['lessons'];
+    act(() => {
+      root.render(
+        <Harness
+          lessonsApi={lessonsApi}
+          teamsApi={
+            {
+              listTeamRunNodes: vi.fn(() => Promise.resolve([])),
+              getTeamRunSnapshot,
+            } as unknown as DaemonApis['teams']
+          }
+          chatsApi={{ readRunState } as unknown as DaemonApis['chats']}
+          archive={vi.fn<Archive>(() => Promise.resolve())}
+          target={target}
+        />,
+      );
+    });
+  }
+
+  function items(): string[] {
+    return [
+      ...container.querySelectorAll('[data-slot="archive-still-running"] li'),
+    ].map((item) => item.textContent ?? '');
+  }
+
+  const FINISHED_TEAM: ArchiveTarget = {
+    ...SETTLED,
+    isTeam: true,
+    work: { ...IDLE, commands: 1, monitors: 1 },
+  };
+
+  it('names each background process and its member, read when it opens', async () => {
+    const readRunState = vi.fn(() => Promise.resolve(STATE));
+    render(FINISHED_TEAM, readRunState);
+
+    await openDialog();
+
+    expect(readRunState).toHaveBeenCalledWith({ runId: 'run-1' });
+    expect(items()).toEqual([
+      'Command: sleep 600 · Groot',
+      'Monitor: Wait for the release file · Tony Stark',
+    ]);
+  });
+
+  it('names the processes by member id when the team cannot be read', async () => {
+    render(
+      FINISHED_TEAM,
+      vi.fn(() => Promise.resolve(STATE)),
+      vi.fn(() => Promise.reject(new Error('gone'))),
+    );
+
+    await openDialog();
+
+    expect(items()).toEqual([
+      'Command: sleep 600 · handyman',
+      'Monitor: Wait for the release file · senior',
+    ]);
+  });
+
+  it('falls back to counts when the run state cannot be read', async () => {
+    render(
+      FINISHED_TEAM,
+      vi.fn(() => Promise.reject(new Error('gone'))),
+    );
+
+    await openDialog();
+
+    expect(items()).toEqual(['1 background command', '1 monitor']);
+  });
+
+  it("names a chat's processes without an owner and reads no team", async () => {
+    const getTeamRunSnapshot = vi.fn();
+    render(
+      { ...SETTLED, work: { ...IDLE, commands: 1 } },
+      vi.fn(() =>
+        Promise.resolve({
+          ...emptyRunState(),
+          shells: [{ ...STATE.shells[0]!, memberId: null }],
+        }),
+      ),
+      getTeamRunSnapshot,
+    );
+
+    await openDialog();
+
+    expect(getTeamRunSnapshot).not.toHaveBeenCalled();
+    expect(items()).toEqual(['Command: sleep 600']);
+  });
+
+  it('reads no run state for a thread with nothing in the background', async () => {
+    const readRunState = vi.fn(() => Promise.resolve(STATE));
+    render({ ...SETTLED, isTeam: true }, readRunState);
+
+    await openDialog();
+
+    expect(readRunState).not.toHaveBeenCalled();
+    expect(button('Archive')).toBeTruthy();
+  });
+
+  it('drops a run state answer that lands after the dialog closed', async () => {
+    let answer: (state: unknown) => void = () => undefined;
+    const readRunState = vi.fn(() => new Promise(() => {}));
+    readRunState.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    render(FINISHED_TEAM, readRunState);
+    await openDialog();
+    await press('Cancel');
+    await openDialog();
+
+    await act(async () => {
+      answer(STATE);
+    });
+
+    expect(items()).toEqual(['1 background command', '1 monitor']);
   });
 });

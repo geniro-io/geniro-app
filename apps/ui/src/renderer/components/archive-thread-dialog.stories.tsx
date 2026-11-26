@@ -99,6 +99,39 @@ export const FinishedRunWithBackgroundWork: Story = {
   },
 };
 
+export const FinishedRunWithNamedProcesses: Story = {
+  args: {
+    target: {
+      id: 'run-5',
+      label: 'Release team',
+      work: { ...IDLE, subagents: 1, commands: 2, monitors: 1 },
+      isTeam: true,
+    },
+    processes: [
+      {
+        kind: 'subagent',
+        name: 'Map the archive flow',
+        owner: 'Tony Stark · Senior Engineer',
+      },
+      {
+        kind: 'command',
+        name: 'pnpm --filter @geniro/ui dev --port 5176 --strictPort -- --remote-debugging-port=9444 2>&1 | tee /tmp/geniro-stand-681/stand.log',
+        owner: 'Peter Parker · Middle Engineer',
+      },
+      {
+        kind: 'command',
+        name: 'sleep 600',
+        owner: 'Groot · Handyman',
+      },
+      {
+        kind: 'monitor',
+        name: 'CI on #681',
+        owner: 'Nick Fury · Manager',
+      },
+    ],
+  },
+};
+
 export const WithExtractLessons: Story = {
   args: {
     lessons: LESSONS,

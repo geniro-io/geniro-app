@@ -4188,6 +4188,7 @@ export function Chats({
     lessonsApi: apis.lessons,
     agentsApi,
     teamsApi: teamApi,
+    chatsApi: apis.chats,
     archive: (target, lessons) => archiveRun(target.id, lessons),
   });
   const handleArchiveRun = useLatestCallback(

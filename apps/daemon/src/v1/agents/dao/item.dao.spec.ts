@@ -1326,6 +1326,52 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('analysisPage', () => {
+    it('reads only the rows of the role asked for, so a page is not cut from every message', async () => {
+      const add = (seq: number, role: string) =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          kind: 'message',
+          role,
+          payload: JSON.stringify({ text: `m${seq}` }),
+        });
+      for (let seq = 0; seq < 6; seq += 1) {
+        await add(seq, seq % 3 === 0 ? 'user' : 'assistant');
+      }
+
+      const rows = await dao.analysisPage('run-a', {
+        afterSeq: -1,
+        maxSeq: 5,
+        limit: 2,
+        kinds: ['message'],
+        role: 'user',
+      });
+
+      expect(rows.map((row) => row.seq)).toEqual([0, 3]);
+    });
+  });
+
+  describe('rowsAtSeqs', () => {
+    it("reads the named rows' payloads at or below the snapshot, of that run only", async () => {
+      await insert('run-a', 1);
+      await insert('run-a', 4);
+      await insert('run-a', 9);
+      await insert('run-b', 2);
+
+      const rows = await dao.rowsAtSeqs('run-a', [1, 2, 4, 9], 5);
+
+      expect(
+        rows
+          .map((row) => [row.seq, row.payload])
+          .sort((a, b) => Number(a[0]) - Number(b[0])),
+      ).toEqual([
+        [1, JSON.stringify({ text: 'm1' })],
+        [4, JSON.stringify({ text: 'm4' })],
+      ]);
+    });
+  });
+
   describe('existingSeqs', () => {
     it('answers only the seqs the run holds at or below the snapshot', async () => {
       await insert('run-a', 1);

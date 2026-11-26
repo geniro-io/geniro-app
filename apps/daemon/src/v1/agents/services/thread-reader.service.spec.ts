@@ -49,6 +49,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { systemAnalysisTurn } from '../utils/analysed-runs';
+import { hostMcpServerName } from '../utils/host-question';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
@@ -1030,6 +1031,191 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     ).spans as Record<string, unknown>[];
     expect(spans).toHaveLength(1);
     expect(spans[0]).not.toHaveProperty('modelCosts');
+  });
+
+  describe('failed tool calls and tool names', () => {
+    const source = {
+      sourceRunId: 'source',
+      snapshotSeq: 7,
+      sourceWorking: false,
+    };
+
+    beforeEach(async () => {
+      await insert(0, 'message', { text: 'go' }, 0);
+      await insert(
+        1,
+        'tool_call',
+        { id: 't1', name: 'Bash', input: { command: 'ls' } },
+        1,
+      );
+      await insert(2, 'tool_result', { id: 't1', result: 'listed' }, 2);
+      await insert(
+        3,
+        'tool_call',
+        {
+          id: 't2',
+          name: 'mcp__geniro-x__memory_read',
+          input: { handle: 'm12' },
+        },
+        3,
+      );
+      await insert(
+        4,
+        'tool_result',
+        { id: 't2', result: 'INVALID_ARGS: ids is required', isError: true },
+        4,
+      );
+      await insert(
+        5,
+        'tool_call',
+        { id: 't3', name: 'Bash', input: { command: 'false' } },
+        5,
+      );
+      await insert(
+        6,
+        'tool_result',
+        { id: 't3', result: 'exit 1 ' + 'y'.repeat(1_000), isError: true },
+        6,
+      );
+      await insert(7, 'turn_complete', { usage: { durationMs: 7_000 } }, 7);
+    });
+
+    it('answers only the failed tool calls, each with its input and its clipped error text', async () => {
+      const spans = (await reader.read(source, { view: 'spans', failed: true }))
+        .spans as Record<string, unknown>[];
+
+      expect(spans.map((span) => [span.type, span.seq])).toEqual([
+        ['tool', 3],
+        ['tool', 5],
+      ]);
+      expect(spans[0]).toMatchObject({
+        input: JSON.stringify({ handle: 'm12' }),
+        error: 'INVALID_ARGS: ids is required',
+      });
+      expect(spans[1]!.error).toMatch(
+        /^exit 1 y+… \[\+\d+ chars — view=item seq=6\]$/,
+      );
+    });
+
+    it('reads every failed call and result row of a page in one statement', async () => {
+      const rowsAtSeqs = vi.spyOn(itemDao, 'rowsAtSeqs');
+
+      await reader.read(source, { view: 'spans', failed: true });
+
+      expect(rowsAtSeqs).toHaveBeenCalledTimes(1);
+      expect([...rowsAtSeqs.mock.calls[0]![1]].sort((a, b) => a - b)).toEqual([
+        3, 4, 5, 6,
+      ]);
+    });
+
+    it('answers only the tool calls whose name contains the tool filter, in any case', async () => {
+      const geniro = (
+        await reader.read(source, {
+          view: 'spans',
+          failed: true,
+          tool: 'MCP__GENIRO',
+        })
+      ).spans as Record<string, unknown>[];
+      const bash = (await reader.read(source, { view: 'spans', tool: 'bash' }))
+        .spans as Record<string, unknown>[];
+
+      expect(geniro.map((span) => span.seq)).toEqual([3]);
+      expect(bash.map((span) => span.seq)).toEqual([1, 5]);
+      expect(bash[0]).not.toHaveProperty('error');
+    });
+
+    it('leaves the error text off a page that did not ask for failed calls', async () => {
+      const spans = (
+        await reader.read(source, { view: 'spans', kinds: ['tool'] })
+      ).spans as Record<string, unknown>[];
+
+      expect(spans.find((span) => span.seq === 3)).toMatchObject({
+        failed: true,
+      });
+      for (const span of spans) {
+        expect(span).not.toHaveProperty('error');
+        expect(span).not.toHaveProperty('input');
+      }
+    });
+
+    it('reads tool spans only when failed is set, whatever kinds asks for', async () => {
+      const spans = (
+        await reader.read(source, {
+          view: 'spans',
+          failed: true,
+          kinds: ['tool', 'turn'],
+        })
+      ).spans as Record<string, unknown>[];
+
+      expect(spans.map((span) => [span.type, span.seq])).toEqual([
+        ['tool', 3],
+        ['tool', 5],
+      ]);
+    });
+
+    it('masks a registered secret in the error text', async () => {
+      registerSecret('sk-live-supersecret-token', 'api key');
+      await insert(
+        8,
+        'tool_call',
+        { id: 't4', name: 'Bash', input: { command: 'curl' } },
+        8,
+      );
+      await insert(
+        9,
+        'tool_result',
+        {
+          id: 't4',
+          result: 'denied for sk-live-supersecret-token',
+          isError: true,
+        },
+        9,
+      );
+
+      const spans = (
+        await reader.read(
+          { sourceRunId: 'source', snapshotSeq: 9, sourceWorking: false },
+          { view: 'spans', failed: true },
+        )
+      ).spans as Record<string, unknown>[];
+      const curl = spans.find((span) => span.seq === 8)!;
+
+      expect(curl.error).toContain('denied for');
+      expect(curl.error).not.toContain('sk-live-supersecret-token');
+    });
+  });
+
+  it("answers only the user's messages when items asks for role=user", async () => {
+    const fork = orm.em.fork();
+    for (let seq = 0; seq < 6; seq += 1) {
+      const at = new Date(T0 + seq * 1000);
+      fork.create(Item, {
+        runId: 'source',
+        seq,
+        kind: 'message',
+        role: seq % 2 === 0 ? 'user' : 'assistant',
+        payload: JSON.stringify({ text: 'said ' + seq }),
+        createdAt: at,
+        updatedAt: at,
+      });
+    }
+    await fork.flush();
+
+    const page = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 5, sourceWorking: false },
+      { view: 'items', kinds: ['message'], role: 'user' },
+    );
+
+    expect(
+      (page.items as { seq: number; role: string }[]).map((row) => [
+        row.seq,
+        row.role,
+      ]),
+    ).toEqual([
+      [0, 'user'],
+      [2, 'user'],
+      [4, 'user'],
+    ]);
   });
 
   it('never returns a row past the snapshot seq', async () => {
@@ -2677,6 +2863,250 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       for (const view of ['team', 'runs', 'project'] as const) {
         expect((await reader.read(TURN(), { view })).error).toBe('UNSUPPORTED');
       }
+    });
+  });
+
+  describe('reading across every analysed thread', () => {
+    const TURN = () =>
+      systemAnalysisTurn('analysis-x', [
+        { runId: 'source', snapshotSeq: 20, working: false },
+        { runId: 'second', snapshotSeq: 5, working: false },
+      ])!;
+
+    async function row(
+      runId: string,
+      seq: number,
+      kind: ItemKind,
+      payload: unknown,
+      role: string | null = null,
+    ): Promise<void> {
+      const fork = orm.em.fork();
+      const at = new Date(T0 + seq * 1000);
+      fork.create(Item, {
+        runId,
+        seq,
+        kind,
+        role,
+        payload: JSON.stringify(payload),
+        createdAt: at,
+        updatedAt: at,
+      });
+      await fork.flush();
+    }
+
+    async function failedCall(
+      runId: string,
+      seq: number,
+      name: string,
+      error: string,
+    ): Promise<void> {
+      await row(runId, seq, 'tool_call', { id: `t${seq}`, name, input: {} });
+      await row(runId, seq + 1, 'tool_result', {
+        id: `t${seq}`,
+        result: error,
+        isError: true,
+      });
+    }
+
+    beforeEach(async () => {
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'second',
+          status: 'completed',
+          title: 'Another thread',
+          agentKind: 'claude',
+        } as Run),
+      );
+      await fork.flush();
+      await row('source', 0, 'message', { text: 'fix the build' }, 'user');
+      await row('source', 1, 'message', { text: 'on it' }, 'assistant');
+      await failedCall('source', 2, 'Bash', 'Exit code 1\nfirst');
+      await failedCall('source', 4, 'Bash', 'Exit code 2\nsecond');
+      await row('source', 6, 'tool_call', {
+        id: 't6',
+        name: 'Read',
+        input: {},
+      });
+      await row('source', 7, 'tool_result', { id: 't6', result: 'fine' });
+      await failedCall(
+        'source',
+        8,
+        `mcp__${hostMcpServerName('source')}__memory_read`,
+        'INVALID_ARGS: ids is required',
+      );
+      await row('source', 10, 'message', { text: 'x'.repeat(1_000) }, 'user');
+      await row('source', 11, 'turn_complete', {
+        usage: { durationMs: 1_000 },
+      });
+      await row('second', 0, 'message', { text: 'why did it stop?' }, 'user');
+      await failedCall('second', 1, 'Bash', 'Exit code 127');
+      await row('second', 3, 'turn_complete', { usage: { durationMs: 1_000 } });
+      await failedCall('second', 6, 'Bash', 'Exit code 1 past the snapshot');
+      await row('second', 8, 'message', { text: 'past the snapshot' }, 'user');
+    });
+
+    it('answers every failed call of every thread in one read, grouped by tool and error signature', async () => {
+      const answer = await reader.read(TURN(), { view: 'failures' });
+
+      expect(answer).toMatchObject({
+        threadsRead: 2,
+        failedCalls: 4,
+        singleCallGroups: 1,
+        next: null,
+      });
+      expect(
+        (answer.groups as Record<string, unknown>[]).map((group) => [
+          group.tool,
+          group.signature,
+          group.count,
+          group.threads,
+        ]),
+      ).toEqual([
+        ['Bash', 'Exit code #', 3, 2],
+        ['mcp__geniro__memory_read', 'INVALID_ARGS: ids is required', 1, 1],
+      ]);
+      expect((answer.groups as Record<string, unknown>[])[0]!.examples).toEqual(
+        [
+          { runId: 'source', seq: 2 },
+          { runId: 'second', seq: 1 },
+          { runId: 'source', seq: 4 },
+        ],
+      );
+      expect(answer.byTool).toEqual([
+        { tool: 'Bash', failed: 3, groups: 1 },
+        { tool: 'mcp__geniro__memory_read', failed: 1, groups: 1 },
+      ]);
+    });
+
+    it('narrows the failures to one tool and to one thread', async () => {
+      const geniro = await reader.read(TURN(), {
+        view: 'failures',
+        tool: 'MCP__GENIRO',
+      });
+      const second = await reader.read(TURN(), {
+        view: 'failures',
+        runId: 'second',
+      });
+
+      expect(geniro.failedCalls).toBe(1);
+      expect(
+        await reader.read(TURN(), { view: 'failures', tool: 'bash' }),
+      ).toMatchObject({
+        failedCalls: 3,
+        byTool: [{ tool: 'Bash', failed: 3, groups: 1 }],
+      });
+      expect(second).toMatchObject({ threadsRead: 1, failedCalls: 1 });
+      expect(
+        (await reader.read(TURN(), { view: 'failures', runId: 'outside' }))
+          .error,
+      ).toBe('NOT_IN_DIGEST');
+    });
+
+    it('pages the groups under the byte budget, the summary on the first page only, every group once', async () => {
+      for (let n = 0; n < 120; n += 1) {
+        await failedCall(
+          'source',
+          100 + n * 2,
+          `tool_${n}`,
+          `broke ${'w'.repeat(200)}`,
+        );
+      }
+      const turn = systemAnalysisTurn('analysis-x', [
+        { runId: 'source', snapshotSeq: 400, working: false },
+      ])!;
+
+      const pages: Record<string, unknown>[] = [];
+      let cursor: number | undefined;
+      do {
+        const page = await reader.read(turn, { view: 'failures', cursor });
+        pages.push(page);
+        cursor = (page.next as { cursor: number } | null)?.cursor;
+      } while (cursor !== undefined);
+
+      expect(pages.length).toBeGreaterThan(1);
+      for (const page of pages) {
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+          PAGE_BYTES,
+        );
+      }
+      expect(pages[0]).toHaveProperty('byTool');
+      expect(pages[1]).not.toHaveProperty('byTool');
+      expect(pages.flatMap((page) => page.groups as unknown[]).length).toBe(
+        pages[0]!.total,
+      );
+      expect(pages[0]!.total).toBe(122);
+    });
+
+    it("answers what the user said in every thread up to each one's snapshot, a long message clipped with its pointer", async () => {
+      const answer = await reader.read(TURN(), { view: 'userMessages' });
+      const messages = answer.messages as {
+        runId: string;
+        seq: number;
+        text: string;
+      }[];
+
+      expect(answer).toMatchObject({
+        threadsRead: 2,
+        userMessages: 3,
+        next: null,
+      });
+      expect(messages.map((message) => [message.runId, message.seq])).toEqual([
+        ['source', 0],
+        ['source', 10],
+        ['second', 0],
+      ]);
+      expect(messages[1]!.text).toMatch(
+        /^x{400}… \[\+600 chars — view=item runId=source seq=10\]$/,
+      );
+    });
+
+    it.each(['failures', 'userMessages'] as const)(
+      'cuts every later view=%s page from the answer its first page was cut from, and refuses one that lapsed',
+      async (view) => {
+        const now = vi.spyOn(Date, 'now');
+        try {
+          now.mockReturnValue(1_000_000);
+          expect((await reader.read(TURN(), { view })).total).toBe(
+            view === 'failures' ? 2 : 3,
+          );
+          const fork = orm.em.fork();
+          (await fork.findOneOrFail(Run, { id: 'source' })).deletedAt =
+            new Date();
+          await fork.flush();
+
+          now.mockReturnValue(1_000_000 + 4 * 60_000);
+          const kept = await reader.read(TURN(), { view, cursor: 1 });
+          expect(kept.error).toBeUndefined();
+          expect(kept.total).toBe(view === 'failures' ? 2 : 3);
+          // The window is counted from the last read, not the first.
+          now.mockReturnValue(1_000_000 + 8 * 60_000);
+          expect((await reader.read(TURN(), { view, cursor: 1 })).total).toBe(
+            view === 'failures' ? 2 : 3,
+          );
+          expect(
+            (await reader.read(TURN(), { view, runId: 'second', cursor: 1 }))
+              .error,
+          ).toBe('RUNS_CHANGED');
+
+          now.mockReturnValue(1_000_000 + 20 * 60_000);
+          expect((await reader.read(TURN(), { view, cursor: 1 })).error).toBe(
+            'RUNS_CHANGED',
+          );
+          expect((await reader.read(TURN(), { view })).total).toBe(1);
+        } finally {
+          now.mockRestore();
+        }
+      },
+    );
+
+    it('reads the one thread of a thread analysis', async () => {
+      const answer = await reader.read(
+        { sourceRunId: 'second', snapshotSeq: 5, sourceWorking: false },
+        { view: 'userMessages' },
+      );
+
+      expect(answer).toMatchObject({ threadsRead: 1, userMessages: 1 });
     });
   });
 });

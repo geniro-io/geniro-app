@@ -1,6 +1,6 @@
+import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import { CALL_MODES } from '../../../teams/teams.types';
 import { COLD_RESUME_CONTEXT_PERCENT } from '../../../teams/utils/prompt-cache-standing';
-import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import {
   CALL_AGENT_SYNONYMS,
   MAX_CALL_TITLE_LENGTH,

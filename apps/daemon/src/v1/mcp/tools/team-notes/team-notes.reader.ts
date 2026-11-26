@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
 import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  clampCount,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
+import {
   TEAM_NOTES_DEFAULT_LIMIT,
   TEAM_NOTES_MAX_LIMIT,
   type TeamNoteEntry,
@@ -10,12 +16,6 @@ import {
 } from '../../../agents/chat.types';
 import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import { randomFenceTag } from '../../../agents/utils/fence-tag';
-import {
-  applyArgSynonyms,
-  type ArgSynonyms,
-  clampCount,
-  leadWithCall,
-} from '../../../../utils/tool-arg-synonyms';
 import { readToolArgs } from '../tool-args';
 
 export const TEAM_NOTES_SYNONYMS: ArgSynonyms = { after: 'since' };

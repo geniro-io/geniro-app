@@ -1,5 +1,5 @@
-import { STAGE_MOVE_ACTIONS } from '../../../agents/chat.types';
 import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
+import { STAGE_MOVE_ACTIONS } from '../../../agents/chat.types';
 import { MOVE_STAGE_SYNONYMS } from './move-stage.reader';
 
 export function moveStageSchema(): Record<string, unknown> {

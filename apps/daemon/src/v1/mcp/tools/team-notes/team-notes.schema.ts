@@ -1,9 +1,9 @@
+import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import {
   TEAM_NOTES_DEFAULT_LIMIT,
   TEAM_NOTES_MAX_LIMIT,
   TeamNoteKindSchema,
 } from '../../../agents/chat.types';
-import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import { TEAM_NOTES_SYNONYMS } from './team-notes.reader';
 
 /** `team_notes`' arguments — all optional. */

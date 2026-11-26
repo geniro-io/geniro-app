@@ -1,13 +1,13 @@
 import {
-  CALL_MODES,
-  type CallEnvelope,
-  type CallMode,
-} from '../../../teams/teams.types';
-import {
   applyArgSynonyms,
   type ArgSynonyms,
   leadWithCall,
 } from '../../../../utils/tool-arg-synonyms';
+import {
+  CALL_MODES,
+  type CallEnvelope,
+  type CallMode,
+} from '../../../teams/teams.types';
 import { invalidArgsEnvelope, unknownArgsEnvelope } from '../call-mcp-tool';
 
 /**

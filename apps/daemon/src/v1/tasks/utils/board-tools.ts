@@ -1,4 +1,8 @@
 import {
+  type ArgSynonyms,
+  withSynonymProperties,
+} from '../../../utils/tool-arg-synonyms';
+import {
   CHAT_APPROVAL_MODES,
   type ChatApprovalMode,
   type HostBoardTool,
@@ -22,10 +26,6 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from '../tasks.types';
-import {
-  type ArgSynonyms,
-  withSynonymProperties,
-} from '../../../utils/tool-arg-synonyms';
 
 /**
  * The board tools as an agent that has never seen this repository reads them.

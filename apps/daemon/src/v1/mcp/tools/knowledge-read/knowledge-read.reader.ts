@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { leadWithCall } from '../../../../utils/tool-arg-synonyms';
 import { HOST_KNOWLEDGE_SEARCH_TOOL } from '../../../agents/chat.types';
 import { PAGE_BYTES } from '../../../agents/services/thread-reader.service';
 import {
@@ -8,7 +9,6 @@ import {
   type KnowledgeDocumentDto,
 } from '../../../knowledge/knowledge.types';
 import { levelOfKey } from '../../../knowledge/utils/knowledge-text';
-import { leadWithCall } from '../../../../utils/tool-arg-synonyms';
 import type { ToolArgs } from '../../mcp.types';
 import { knowledgeHitLine } from '../knowledge-mcp-tool';
 import { pagedText } from '../paged-text';

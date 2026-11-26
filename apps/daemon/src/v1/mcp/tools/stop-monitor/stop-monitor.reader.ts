@@ -1,12 +1,12 @@
 import { z } from 'zod';
 
-import type { MonitorStopOutcome } from '../../../agents/chat.types';
-import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import {
   applyArgSynonyms,
   type ArgSynonyms,
   leadWithCall,
 } from '../../../../utils/tool-arg-synonyms';
+import type { MonitorStopOutcome } from '../../../agents/chat.types';
+import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import { readToolArgs } from '../tool-args';
 
 export const STOP_MONITOR_SYNONYMS: ArgSynonyms = {

@@ -11,6 +11,10 @@ import {
 import { BaseException } from '@packages/common';
 import type { z } from 'zod';
 
+import {
+  applyArgSynonyms,
+  leadWithCall,
+} from '../../../utils/tool-arg-synonyms';
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isHostBoardTool } from '../../agents/utils/host-board';
@@ -26,10 +30,6 @@ import {
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
-import {
-  applyArgSynonyms,
-  leadWithCall,
-} from '../../../utils/tool-arg-synonyms';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import type { TaskBoardToolAnswer } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
@@ -49,9 +49,9 @@ import {
 } from '../tasks.types';
 import { landsInArmedIntake, quietColumn } from '../utils/armed-intake';
 import {
-  BOARD_TOOLS,
   BOARD_TOOL_CALLS,
   BOARD_TOOL_SYNONYMS,
+  BOARD_TOOLS,
   boardToolArgs,
 } from '../utils/board-tools';
 import { reportImagePaths, rewriteReportImages } from '../utils/report-images';

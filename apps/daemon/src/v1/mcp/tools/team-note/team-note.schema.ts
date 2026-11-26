@@ -1,8 +1,8 @@
+import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import {
   TEAM_NOTE_MAX_CHARS,
   TeamNoteKindSchema,
 } from '../../../agents/chat.types';
-import { withSynonymProperties } from '../../../../utils/tool-arg-synonyms';
 import {
   TEAM_NOTE_SYNONYMS,
   TEAM_NOTE_WRITE_ACTIONS,

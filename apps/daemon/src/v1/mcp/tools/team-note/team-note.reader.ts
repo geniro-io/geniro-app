@@ -1,17 +1,17 @@
 import { z } from 'zod';
 
 import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
+import {
   TEAM_NOTE_MAX_CHARS,
   TeamNoteKindSchema,
   type TeamNoteWriteInput,
   type TeamNoteWriteOutcome,
 } from '../../../agents/chat.types';
 import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
-import {
-  applyArgSynonyms,
-  type ArgSynonyms,
-  leadWithCall,
-} from '../../../../utils/tool-arg-synonyms';
 import { readToolArgs } from '../tool-args';
 
 export const TEAM_NOTE_SYNONYMS: ArgSynonyms = { message: 'text' };

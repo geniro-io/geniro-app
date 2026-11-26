@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
 import { StageMoveActionSchema } from '../../../agents/chat.types';
 import type {
   StageMoveRequest,
@@ -7,11 +12,6 @@ import type {
   TeamMember,
 } from '../../../teams/teams.types';
 import { moveReply } from '../../../teams/utils/stage-text';
-import {
-  applyArgSynonyms,
-  type ArgSynonyms,
-  leadWithCall,
-} from '../../../../utils/tool-arg-synonyms';
 import { readToolArgs } from '../tool-args';
 
 export const MOVE_STAGE_SYNONYMS: ArgSynonyms = {

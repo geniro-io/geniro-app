@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  applyArgSynonyms,
+  type ArgSynonyms,
+  leadWithCall,
+} from '../../../../utils/tool-arg-synonyms';
 import { HOST_MEMORY_READ_TOOL } from '../../../agents/chat.types';
 import {
   MEMORY_HANDLE_PATTERN,
@@ -8,11 +13,6 @@ import {
   MEMORY_RESULT_PREFACE,
   type MemoryEntry,
 } from '../../../memory/memory.types';
-import {
-  applyArgSynonyms,
-  type ArgSynonyms,
-  leadWithCall,
-} from '../../../../utils/tool-arg-synonyms';
 import type { ToolArgs } from '../../mcp.types';
 import { memoryEntryText } from '../memory-mcp-tool';
 import { readToolArgs } from '../tool-args';

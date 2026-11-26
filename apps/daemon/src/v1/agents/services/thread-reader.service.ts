@@ -46,6 +46,8 @@ import { analysedRunIdsOf, analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
+import { eventLoopSlicer } from '../utils/event-loop-slices';
+import { type FailedCall, groupFailures } from '../utils/failure-groups';
 import { asRecord, parseJsonColumn } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import {
@@ -117,6 +119,20 @@ const FAILED_SPAN_TEXT_CHARS = 300;
 
 /** How many spans a page reads the failed calls' texts for at once. */
 const SPAN_TEXT_WINDOW = 40;
+
+/** How many failed calls' result rows view=failures reads in one statement. */
+const FAILURE_ROWS_READ = 200;
+
+/** How much of a failed call's error view=failures keeps to sign it; a signature reads its first line. */
+const FAILURE_TEXT_READ_CHARS = 4_000;
+
+/** A message on a view=userMessages page is clipped to this. */
+const USER_MESSAGE_CHARS = 400;
+
+const FAILURES_NOTE =
+  "Every failed tool call of the threads read, grouped by tool and error signature (the error's message or first line, with ids, paths, quoted text and numbers masked), largest group first: once a group shows count 1, every group after it is a single call (singleCallGroups says how many). Each group counts all its calls; examples names at most 3 of them, from different threads where it can, and error is the first one's text, clipped. A tool named other is a call its CLI titled with a command or a path. For every call of a group in one thread: view=spans runId=… failed=true tool=…; one call in full: view=item runId=… seq=….";
+
+const USER_MESSAGES_NOTE = `Every message the user sent in the threads read, oldest first per thread, each clipped to ${USER_MESSAGE_CHARS} characters with a pointer to view=item for the rest. Cards the user answered and approvals are not messages: view=items runId=… reads around one.`;
 
 /** At most this many rows are read for one `items` page. */
 const ITEMS_READ_LIMIT = 40;
@@ -436,6 +452,9 @@ export class ThreadReaderService {
           )),
         offset,
       );
+    }
+    if (args.view === 'failures' || args.view === 'userMessages') {
+      return this.acrossRuns(turn, args);
     }
     const source = await this.readSourceOf(turn, args.runId);
     if ('error' in source) {
@@ -943,6 +962,11 @@ export class ThreadReaderService {
       models: modelFigures(folded),
       next: "Runs with flags first: each flag is a problem the run's own agents recorded, and view=overview runId=… leads with them. Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open. view=pr runId=… pullRequest=… is one pull request's GitHub events beside its run.",
     });
+    return this.keepAnswer(key, answer);
+  }
+
+  /** Keeps a folded answer for its later pages, the oldest kept one going first. */
+  private keepAnswer(key: string, answer: Answer): Answer {
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });
     for (const stale of [...this.runsAnswers.keys()].slice(
@@ -955,7 +979,7 @@ export class ThreadReaderService {
   }
 
   /**
-   * The comparison kept for this run set while it is being paged, its time
+   * The answer kept for this run set while it is being paged, its time
    * renewed by every read, or null once it lapsed.
    */
   private keptRuns(key: string): Answer | null {
@@ -1468,7 +1492,7 @@ export class ThreadReaderService {
     let index = start;
     let texts = new Map<Answer, Answer>();
     for (; index < filtered.length; index += 1) {
-      if ((index - start) % SPAN_TEXT_WINDOW === 0) {
+      if (args.failed === true && (index - start) % SPAN_TEXT_WINDOW === 0) {
         texts = await this.failedToolTexts(
           source,
           filtered.slice(index, index + SPAN_TEXT_WINDOW),
@@ -1536,6 +1560,203 @@ export class ThreadReaderService {
         { ...textOf(span.seq, 'input'), ...textOf(span.resultSeq, 'result') },
       ]),
     );
+  }
+
+  /**
+   * view=failures and view=userMessages: one answer over every run the
+   * analysis reads (or the one `runId` names), folded at cursor 0, masked
+   * whole and kept for its later pages like view=runs.
+   */
+  private async acrossRuns(
+    turn: AnalysisReadScope,
+    args: ReadAnalyzedThreadArgs,
+  ): Promise<Answer> {
+    const runs = await this.runsToRead(turn, args.runId);
+    if ('error' in runs) {
+      return runs;
+    }
+    const failures = args.view === 'failures';
+    const key = JSON.stringify([args.view, runs, args.tool ?? null]);
+    const cursor = args.cursor ?? 0;
+    const kept = cursor > 0 ? this.keptRuns(key) : null;
+    if (cursor > 0 && kept === null) {
+      return {
+        error: 'RUNS_CHANGED',
+        message: `That answer is no longer held — read view=${args.view} again without cursor.`,
+      };
+    }
+    const answer =
+      kept ??
+      this.keepAnswer(
+        key,
+        maskedAnswer(
+          failures
+            ? await this.failures(runs, args.tool)
+            : await this.userMessages(runs),
+        ),
+      );
+    return recordsPage(answer, failures ? 'groups' : 'messages', cursor);
+  }
+
+  /** The runs a cross-run view reads: the one `runId` names, else every analysed run. */
+  private async runsToRead(
+    turn: AnalysisReadScope,
+    runId: string | undefined,
+  ): Promise<AnalysedRun[] | { error: string; message: string }> {
+    if (runId !== undefined) {
+      const source = await this.readSourceOf(turn, runId);
+      return 'error' in source
+        ? source
+        : [
+            {
+              runId: source.sourceRunId,
+              snapshotSeq: source.snapshotSeq,
+              working: source.sourceWorking,
+            },
+          ];
+    }
+    return (
+      turn.system?.runs ??
+      turn.team?.runs ?? [
+        {
+          runId: turn.sourceRunId,
+          snapshotSeq: turn.snapshotSeq,
+          working: turn.sourceWorking,
+        },
+      ]
+    );
+  }
+
+  /** Every failed tool call of `runs`, grouped by tool and error signature. */
+  private async failures(
+    runs: readonly AnalysedRun[],
+    tool: string | undefined,
+  ): Promise<Answer> {
+    const named = tool?.toLowerCase();
+    const yieldTurn = eventLoopSlicer();
+    const calls: FailedCall[] = [];
+    const gone: string[] = [];
+    for (const analysed of runs) {
+      const em = this.em.fork();
+      const run = await this.runDao.getById(analysed.runId, em);
+      if (run === null) {
+        gone.push(analysed.runId);
+        continue;
+      }
+      const reading = await this.timelines.read(
+        analysed.runId,
+        analysed.snapshotSeq,
+        analysed.working,
+      );
+      await yieldTurn();
+      const failed = (reading?.timeline.tools ?? []).flatMap((span) => {
+        if (!span.failed || span.resultSeq === null) {
+          return [];
+        }
+        const metric = toolMetricOf(
+          this.adapters,
+          run.id,
+          run.agentKind,
+          span.name,
+          null,
+        );
+        const label =
+          metric.server === null
+            ? metric.tool
+            : `mcp__${metric.server}__${metric.tool}`;
+        return named === undefined || label.toLowerCase().includes(named)
+          ? [{ span, label, resultSeq: span.resultSeq }]
+          : [];
+      });
+      for (let at = 0; at < failed.length; at += FAILURE_ROWS_READ) {
+        const chunk = failed.slice(at, at + FAILURE_ROWS_READ);
+        const rows = await this.itemDao.rowsAtSeqs(
+          analysed.runId,
+          chunk.map((entry) => entry.resultSeq),
+          analysed.snapshotSeq,
+          em,
+        );
+        const payloads = new Map(rows.map((row) => [row.seq, row.payload]));
+        for (const { span, label, resultSeq } of chunk) {
+          const payload = payloads.get(resultSeq);
+          calls.push({
+            runId: analysed.runId,
+            seq: span.seq,
+            resultSeq,
+            at: iso(span.startMs),
+            tool: label,
+            error:
+              payload === undefined
+                ? ''
+                : payloadFieldText(payload, 'result').slice(
+                    0,
+                    FAILURE_TEXT_READ_CHARS,
+                  ),
+          });
+        }
+        await yieldTurn();
+      }
+    }
+    const groups = groupFailures(calls, FAILED_SPAN_TEXT_CHARS);
+    const byTool = new Map<string, { failed: number; groups: number }>();
+    for (const group of groups) {
+      const entry = byTool.get(group.tool) ?? { failed: 0, groups: 0 };
+      entry.failed += group.count;
+      entry.groups += 1;
+      byTool.set(group.tool, entry);
+    }
+    return {
+      note: FAILURES_NOTE,
+      threadsRead: runs.length - gone.length,
+      ...(gone.length === 0 ? {} : { threadsGone: gone }),
+      ...(tool === undefined ? {} : { tool }),
+      failedCalls: calls.length,
+      singleCallGroups: groups.filter((group) => group.count === 1).length,
+      byTool: [...byTool]
+        .map(([name, figures]) => ({ tool: name, ...figures }))
+        .sort((a, b) => b.failed - a.failed || a.tool.localeCompare(b.tool)),
+      groups,
+    };
+  }
+
+  /** What the user said in each of `runs`, oldest first per thread, each message clipped. */
+  private async userMessages(runs: readonly AnalysedRun[]): Promise<Answer> {
+    const yieldTurn = eventLoopSlicer();
+    const messages: Answer[] = [];
+    const gone: string[] = [];
+    for (const analysed of runs) {
+      const em = this.em.fork();
+      if ((await this.runDao.getById(analysed.runId, em)) === null) {
+        gone.push(analysed.runId);
+        continue;
+      }
+      for (const row of await this.itemDao.userMessagesInOrder(
+        analysed.runId,
+        em,
+      )) {
+        if (row.seq > analysed.snapshotSeq) {
+          continue;
+        }
+        const text = payloadText(row.payload);
+        messages.push({
+          runId: analysed.runId,
+          seq: row.seq,
+          at: row.createdAt.toISOString(),
+          text:
+            text.length <= USER_MESSAGE_CHARS
+              ? text
+              : `${text.slice(0, USER_MESSAGE_CHARS)}… [+${text.length - USER_MESSAGE_CHARS} chars — view=item runId=${analysed.runId} seq=${row.seq}]`,
+        });
+      }
+      await yieldTurn();
+    }
+    return {
+      note: USER_MESSAGES_NOTE,
+      threadsRead: runs.length - gone.length,
+      ...(gone.length === 0 ? {} : { threadsGone: gone }),
+      userMessages: messages.length,
+      messages,
+    };
   }
 
   private async items(
@@ -1657,6 +1878,35 @@ export function pagedAnswer(answer: Answer, offset: number): Answer {
     JSON.stringify(answer),
     offset,
   );
+}
+
+/**
+ * One page of an answer's `listKey` records from `cursor`, under the
+ * byte budget; the rest of the answer rides on the first page only.
+ */
+function recordsPage(answer: Answer, listKey: string, cursor: number): Answer {
+  const records = (answer[listKey] as Answer[] | undefined) ?? [];
+  const header = Object.fromEntries(
+    Object.entries(answer).filter(([key]) => key !== listKey),
+  );
+  const page: Answer[] = [];
+  let used = ENVELOPE_BYTES + (cursor === 0 ? bytes(header) : 0);
+  let index = cursor;
+  for (; index < records.length; index += 1) {
+    const size = bytes(records[index]) + 1;
+    if (page.length > 0 && used + size > PAGE_BYTES) {
+      break;
+    }
+    page.push(records[index]!);
+    used += size;
+  }
+  return {
+    ...(cursor === 0 ? header : {}),
+    from: cursor,
+    total: records.length,
+    [listKey]: page,
+    next: index < records.length ? { cursor: index } : null,
+  };
 }
 
 function itemEntry(row: Item): Answer {

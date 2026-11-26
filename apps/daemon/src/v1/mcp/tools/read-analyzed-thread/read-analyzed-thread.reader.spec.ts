@@ -186,6 +186,25 @@ describe('readAnalyzedThreadArgs', () => {
       readAnalyzedThreadArgs({ view: 'history', section: 'everything' }).ok,
     ).toBe(false);
   });
+
+  it('takes role user or assistant on items and refuses any other role rather than reading every row', () => {
+    expect(
+      readAnalyzedThreadArgs({
+        view: 'items',
+        kinds: ['message'],
+        role: 'user',
+      }),
+    ).toEqual({
+      ok: true,
+      query: { view: 'items', kinds: ['message'], role: 'user' },
+    });
+    expect(
+      readAnalyzedThreadArgs({ view: 'items', role: 'assistant' }).ok,
+    ).toBe(true);
+    expect(readAnalyzedThreadArgs({ view: 'items', role: 'system' }).ok).toBe(
+      false,
+    );
+  });
 });
 
 describe('ReadAnalyzedThreadTool', () => {

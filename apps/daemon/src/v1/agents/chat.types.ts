@@ -462,6 +462,8 @@ export const ANALYSIS_VIEWS = [
   'project',
   'pr',
   'digest',
+  'failures',
+  'userMessages',
 ] as const;
 /** What view=history reads a page of; `diff` is one version's diff, on request. */
 export const ANALYSIS_HISTORY_SECTIONS = [
@@ -495,7 +497,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them. pr: the pull requests the run recorded, each with its life on GitHub after the run said it was done (pushes, bot and human review threads, failed checks, changes requested); with `pullRequest`, that one's GitHub events in time order beside the run's done marks and the run's nearest message before each",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them. pr: the pull requests the run recorded, each with its life on GitHub after the run said it was done (pushes, bot and human review threads, failed checks, changes requested); with `pullRequest`, that one's GitHub events in time order beside the run's done marks and the run's nearest message before each. failures: every failed tool call of every thread this analysis reads, in one answer, grouped by tool and error signature with counts and a few (runId, seq) examples per group, largest first — the way to cluster failures; runId narrows it to one thread. userMessages: everything the user said in every thread this analysis reads, each message clipped, oldest first per thread; runId narrows it to one thread",
     ),
   runId: z
     .string()
@@ -509,7 +511,9 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .int()
     .min(0)
     .optional()
-    .describe('spans: the `next.cursor` the previous page returned'),
+    .describe(
+      'spans, failures, userMessages: the `next.cursor` the previous page returned',
+    ),
   afterSeq: z
     .number()
     .int()
@@ -591,7 +595,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'spans: only tool calls whose name contains this, any case (e.g. "mcp__geniro" for geniro\'s own tools)',
+      'spans, failures: only tool calls whose name contains this, any case (e.g. "mcp__geniro" for geniro\'s own tools)',
     ),
   role: z
     .enum(ANALYSIS_ITEM_ROLES)

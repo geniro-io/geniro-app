@@ -289,13 +289,16 @@ describe('TimelinePanel — threads and messages', () => {
     expect(row.textContent).not.toContain('Untitled thread');
   });
 
-  it('marks a manager message awaiting a reply, and only that one', () => {
+  it('marks a manager message awaiting a reply on its second line, and only that one', () => {
     const el = render();
+    const manager = rowOf(el, 'manager_message');
 
     expect(
-      rowOf(el, 'manager_message').querySelector('[data-slot="badge"]')!
-        .textContent,
-    ).toBe('awaiting reply');
+      manager.querySelector('[data-slot="timeline-event-meta"]')!.textContent,
+    ).toContain('awaiting reply');
+    expect(manager.querySelector('p')!.textContent).not.toContain(
+      'awaiting reply',
+    );
     expect(rowOf(el, 'question').textContent).not.toContain('awaiting reply');
     expect(rowOf(el, 'thread_message').textContent).not.toContain(
       'awaiting reply',
@@ -461,7 +464,7 @@ describe('TimelinePanel — board card and project', () => {
     expect(metaOf(row)).toBe('stage: review');
   });
 
-  it('shows a project alone on a manager message, which has no label to join', () => {
+  it('gives a manager message its card on the first line and says the Manager sent it on the second', () => {
     const el = render({
       events: [
         eventOf('manager_message', 'm', {
@@ -470,15 +473,56 @@ describe('TimelinePanel — board card and project', () => {
           text: 'Go ahead.',
           task: CARD,
           project: APP,
+          awaitingReply: true,
         }),
       ],
     });
     const row = rowOf(el, 'manager_message');
+    const firstLine = row.querySelector('p')!;
 
     expect(
-      row.querySelector('[data-slot="timeline-thread-title"]')!.textContent,
+      firstLine.querySelector('[data-slot="timeline-task-identifier"]')!
+        .textContent,
+    ).toBe('GEN-12');
+    expect(
+      firstLine.querySelector('[data-slot="timeline-thread-title"]')!
+        .textContent,
     ).toBe('Ship the export');
-    expect(metaOf(row)).toBe('Geniro');
+    expect(firstLine.textContent).toBe('GEN-12Ship the export');
+    expect(metaOf(row)).toBe('Geniro · Message from the Managerawaiting reply');
+  });
+
+  it('puts only the card title and its key on the first line of every row that names a thread', () => {
+    const named = [
+      'manager_message',
+      'thread_message',
+      'thread_started',
+      'start_requested',
+      'pull_request',
+      'question',
+      'approval',
+      'stage',
+      'outcome',
+      'failed',
+    ] as const;
+    const el = render({
+      events: named.map((kind) =>
+        eventOf(kind, kind, {
+          threadRunId: 'run-card',
+          threadTitle: 'Build the export',
+          detail: kind === 'pull_request' ? '418' : null,
+          task: CARD,
+          project: APP,
+          awaitingReply: kind === 'manager_message',
+        }),
+      ),
+    });
+
+    for (const kind of named) {
+      const row = rowOf(el, kind);
+      expect(row.querySelector('p')!.textContent).toBe('GEN-12Ship the export');
+      expect(metaOf(row)).toMatch(/^Geniro · /);
+    }
   });
 
   it('keeps a You wrote row as it is, with no card, project or meta line', () => {

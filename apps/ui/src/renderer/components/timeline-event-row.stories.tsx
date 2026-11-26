@@ -48,16 +48,18 @@ export const WithDetailBadgeAndActions: Story = {
   args: {
     icon: MessageSquare,
     tone: 'primary',
-    sentence: (
+    sentence: TITLE,
+    meta: (
       <>
-        <span className="shrink-0 whitespace-nowrap">Manager →</span>
-        {TITLE}
+        <span className="shrink-0 whitespace-nowrap">
+          Message from the Manager
+        </span>
+        <Badge
+          variant="warning"
+          className="shrink-0 px-1.5 py-0 text-[11px] font-normal">
+          awaiting reply
+        </Badge>
       </>
-    ),
-    badge: (
-      <span className="shrink-0 rounded-pill bg-warning/10 px-1.5 text-[11px] text-warning">
-        awaiting reply
-      </span>
     ),
     detail:
       'Which bucket should the nightly export write to, and should it keep the last thirty days of files?',

@@ -69,6 +69,18 @@ export class NearDuplicateError extends Error {
   }
 }
 
+/**
+ * What the next press vouches past after a near-duplicate refusal: every
+ * entry the user was shown since the text last changed, since the daemon
+ * names only the similar entries a write did not vouch for.
+ */
+export function vouchedAfterRefusal(
+  vouched: readonly string[],
+  named: readonly string[],
+): string[] {
+  return [...new Set([...vouched, ...named])];
+}
+
 /** The line a near-duplicate refusal shows, naming the press that keeps the write anyway. */
 export function similarEntriesMessage(
   handles: readonly string[],
@@ -94,8 +106,8 @@ export interface MemoryEditor {
   setIndexed: (entry: MemoryEntry, indexed: boolean) => Promise<void>;
   /**
    * Save the open form: create or update at the read rev. A near-duplicate
-   * refusal keeps the form open, vouching past exactly the handles it named
-   * on the next save.
+   * refusal keeps the form open, vouching on the next save past the handles
+   * it named and the ones vouched for before, until the form changes.
    */
   submit: () => Promise<void>;
   /** Close the form, dropping what it said. */
@@ -200,7 +212,10 @@ export function useMemoryEditor(
     } catch (err: unknown) {
       const similar = nearDuplicateHandles(err);
       if (similar !== null && similar.length > 0) {
-        setEditing({ ...editing, vouched: similar });
+        setEditing({
+          ...editing,
+          vouched: vouchedAfterRefusal(editing.vouched, similar),
+        });
         setFormError(similarEntriesMessage(similar, 'Save'));
       } else {
         setFormError(describeDaemonError(err));

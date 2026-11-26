@@ -241,6 +241,40 @@ describe('TeamMemoryPanel', () => {
     });
   });
 
+  it('vouches on the third press past both entries two refusals named in turn', async () => {
+    const { apis, memories } = fakeApis();
+    const refusal = (handles: string): Error =>
+      new Error(
+        `daemon POST /v1/memories failed (409): {"code":"MEMORY_NEAR_DUPLICATE","message":"similar entries exist: ${handles}"}`,
+      );
+    memories.createMemory
+      .mockRejectedValueOnce(refusal('m3'))
+      .mockRejectedValueOnce(refusal('m7'));
+    await render(apis);
+
+    await press(button(container, 'New memory'));
+    const form = container.querySelector<HTMLElement>(
+      '[data-slot="memory-form"]',
+    )!;
+    await fill(form.querySelector<HTMLInputElement>('input')!, 'Pair up');
+    await fill(form.querySelector<HTMLTextAreaElement>('textarea')!, 'Pairs.');
+    await press(button(form, 'Add'));
+    await press(button(form, 'Add'));
+    expect(container.textContent).toContain('Similar entries exist: m7');
+    await press(button(form, 'Add'));
+
+    expect(memories.createMemory).toHaveBeenCalledTimes(3);
+    expect(memories.createMemory).toHaveBeenNthCalledWith(2, {
+      createMemoryDto: expect.objectContaining({ notDuplicateOf: ['m3'] }),
+    });
+    expect(memories.createMemory).toHaveBeenNthCalledWith(3, {
+      createMemoryDto: expect.objectContaining({
+        notDuplicateOf: ['m3', 'm7'],
+      }),
+    });
+    expect(container.querySelector('[data-slot="memory-form"]')).toBeNull();
+  });
+
   it('edits an entry at its revision, still filed under the team', async () => {
     const { apis, memories } = fakeApis();
     await render(apis);

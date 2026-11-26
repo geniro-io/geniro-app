@@ -14,7 +14,11 @@ import { SplitButton } from './split-button';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import type { MenuGroup } from './ui/menu';
-import { NearDuplicateError, similarEntriesMessage } from './use-memory-editor';
+import {
+  NearDuplicateError,
+  similarEntriesMessage,
+  vouchedAfterRefusal,
+} from './use-memory-editor';
 
 export type { LessonPlaces };
 
@@ -455,8 +459,8 @@ function messageOf(err: unknown): string {
 }
 
 /**
- * The handles a row's last near-duplicate refusal named, vouched past on its
- * next press until the row's text or target changes.
+ * The handles a row's near-duplicate refusals named, vouched past on its next
+ * press until the row's text or target changes.
  */
 function useVouch(setError: (error: string | null) => void): {
   body: LessonVouch;
@@ -476,7 +480,7 @@ function useVouch(setError: (error: string | null) => void): {
     settled: () => setVouched([]),
     refused: (err, action) => {
       if (err instanceof NearDuplicateError) {
-        setVouched(err.handles);
+        setVouched(vouchedAfterRefusal(vouched, err.handles));
         setError(similarEntriesMessage(err.handles, action));
       } else {
         setVouched([]);

@@ -749,7 +749,7 @@ describe('LessonsCard — the target a waiting lesson goes to', () => {
 });
 
 describe('LessonsCard — a save refused as like other entries', () => {
-  it('names them, and the next Save vouches past exactly the handles the last refusal named', async () => {
+  it('names them, and the next Save vouches past every handle a refusal named since the text last changed', async () => {
     const onSave = vi
       .fn<NonNullable<LessonsCardProps['onSave']>>()
       .mockRejectedValueOnce(new NearDuplicateError(['m30', 'm31']))
@@ -777,7 +777,7 @@ describe('LessonsCard — a save refused as like other entries', () => {
 
     await press(primaryButton(el));
     expect(onSave.mock.calls[2]?.[1]).toMatchObject({
-      notDuplicateOf: ['m40'],
+      notDuplicateOf: ['m30', 'm31', 'm40'],
     });
   });
 
@@ -819,6 +819,30 @@ describe('LessonsCard — a refines or broken-again lesson in memory', () => {
     expect(onUpdateRule).toHaveBeenLastCalledWith(LESSON_REFINES.id, {
       notDuplicateOf: ['m1106'],
     });
+  });
+
+  it('saves on the third Update when a second similar entry is named after the first', async () => {
+    const onUpdateRule = vi
+      .fn<NonNullable<LessonsCardProps['onUpdateRule']>>()
+      .mockRejectedValueOnce(new NearDuplicateError(['m2']))
+      .mockRejectedValueOnce(new NearDuplicateError(['m31']))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new NearDuplicateError(['m2']));
+    const el = await render({ lessons: [LESSON_REFINES], onUpdateRule });
+
+    await press(buttonNamed(el, 'Update m12'));
+    await press(buttonNamed(el, 'Update m12'));
+    expect(el.textContent).toContain(
+      'Similar entries exist: m31. Update again to keep this one anyway.',
+    );
+    await press(buttonNamed(el, 'Update m12'));
+
+    expect(onUpdateRule.mock.calls.map((call) => call[1])).toEqual([
+      {},
+      { notDuplicateOf: ['m2'] },
+      { notDuplicateOf: ['m2', 'm31'] },
+    ]);
+    expect(el.textContent).not.toContain('Similar entries exist');
   });
 
   it('drops the vouch and its line when the target changes after a refusal', async () => {

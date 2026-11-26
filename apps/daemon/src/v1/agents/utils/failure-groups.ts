@@ -7,6 +7,9 @@ export const FAILURE_GROUP_EXAMPLES = 3;
 /** Keys a JSON error body names its message under, most telling first. */
 const ERROR_KEYS = ['error', 'message', 'code', 'reason'] as const;
 
+/** A bare error code (`INVALID_ARGS`), which says why only with the message beside it. */
+const ERROR_CODE = /^[A-Z][A-Z0-9_]*$/;
+
 /**
  * What a failed call's error says, with the parts that differ between two
  * calls failing for one reason masked: ids, paths, quoted text and numbers.
@@ -15,13 +18,13 @@ const ERROR_KEYS = ['error', 'message', 'code', 'reason'] as const;
  */
 export function errorSignature(text: string): string {
   const stripped = text.replace(/<\/?tool_use_error>/g, '').trim();
-  const line =
-    jsonErrorOf(stripped) ??
+  const firstLine =
     stripped
       .split('\n')
       .map((part) => part.trim())
-      .find((part) => part.length > 0) ??
-    '';
+      .find((part) => part.length > 0) ?? '';
+  const line =
+    jsonErrorOf(stripped) ?? issuesLineOf(stripped, firstLine) ?? firstLine;
   const masked = line
     .replace(
       /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
@@ -34,6 +37,68 @@ export function errorSignature(text: string): string {
   return masked.length > SIGNATURE_CHARS
     ? `${masked.slice(0, SIGNATURE_CHARS)}…`
     : masked;
+}
+
+/**
+ * A first line that opens a JSON body (`INVALID_ARGS: [`, a list of
+ * validation issues), signed by what each issue says and where, since the
+ * line alone is the same for every malformed call of a tool.
+ */
+function issuesLineOf(text: string, firstLine: string): string | null {
+  if (!/[[{]$/.test(firstLine)) {
+    return null;
+  }
+  const open = text.indexOf(firstLine) + firstLine.length - 1;
+  const body = balancedJsonAt(text, open);
+  if (body === null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const said = (Array.isArray(parsed) ? parsed : [parsed]).flatMap((issue) => {
+    if (issue === null || typeof issue !== 'object') {
+      return [];
+    }
+    const { message, path } = issue as Record<string, unknown>;
+    if (typeof message !== 'string' || message.trim().length === 0) {
+      return [];
+    }
+    const where = Array.isArray(path) ? path.join('.') : '';
+    return [where.length > 0 ? `${where}: ${message.trim()}` : message.trim()];
+  });
+  return said.length === 0
+    ? null
+    : `${firstLine.slice(0, -1).trim()} ${said.join('; ')}`;
+}
+
+/** The JSON value that opens at `open`, up to its matching close; null when it never closes. */
+function balancedJsonAt(text: string, open: number): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let at = open; at < text.length; at += 1) {
+    const char = text[at];
+    if (inString) {
+      if (char === '\\') {
+        at += 1;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '[' || char === '{') {
+      depth += 1;
+    } else if (char === ']' || char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(open, at + 1);
+      }
+    }
+  }
+  return null;
 }
 
 function jsonErrorOf(text: string): string | null {
@@ -51,13 +116,17 @@ function jsonErrorOf(text: string): string | null {
     return null;
   }
   const record = first as Record<string, unknown>;
-  for (const key of ERROR_KEYS) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim().split('\n')[0]!;
-    }
+  const said = ERROR_KEYS.map((key) => record[key])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().split('\n')[0]!)
+    .filter((value) => value.length > 0);
+  const [head, next] = said;
+  if (head === undefined) {
+    return null;
   }
-  return null;
+  return ERROR_CODE.test(head) && next !== undefined
+    ? `${head}: ${next}`
+    : head;
 }
 
 /** One failed call as the groups count it. */

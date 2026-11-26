@@ -512,7 +512,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'spans, failures, userMessages: the `next.cursor` the previous page returned',
+      'spans, failures, userMessages, items with failed: the `next.cursor` the previous page returned',
     ),
   afterSeq: z
     .number()
@@ -588,14 +588,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "spans: only tool calls that failed, each with its input and its error text clipped — the way to collect a thread's failures without paging every tool span",
+      "spans, items: only tool calls that failed, each with its input and its error text clipped — the way to collect a thread's failures without paging every tool span or row; items answers the same page spans does",
     ),
   tool: z
     .string()
     .max(200)
     .optional()
     .describe(
-      'spans, failures: only tool calls whose name contains this, any case (e.g. "mcp__geniro" for geniro\'s own tools)',
+      'spans, failures, items with failed: only tool calls whose name contains this, any case (e.g. "mcp__geniro" for geniro\'s own tools)',
     ),
   role: z
     .enum(ANALYSIS_ITEM_ROLES)

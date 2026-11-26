@@ -251,15 +251,17 @@ export class MetricLedgerDao extends BaseDao<ToolCallEvent> {
     }));
   }
 
-  /** The failed tool calls of `[from, to)`: which run, which tool on which server. */
+  /** The failed tool calls of `[from, to)`: which run, its result row, which tool on which server. */
   async failedToolCalls(
     from: Date,
     to: Date,
     txEm?: EntityManager,
-  ): Promise<{ runId: string; tool: string; mcpServer: string | null }[]> {
+  ): Promise<
+    { runId: string; seq: number; tool: string; mcpServer: string | null }[]
+  > {
     const rows = await this.db(txEm)
       .selectFrom('tool_call_events')
-      .select(['run_id', 'tool', 'mcp_server'])
+      .select(['run_id', 'seq', 'tool', 'mcp_server'])
       .where('deleted_at', 'is', null)
       .where('ok', '=', 0)
       .where('occurred_at', '>=', from.getTime())
@@ -267,6 +269,7 @@ export class MetricLedgerDao extends BaseDao<ToolCallEvent> {
       .execute();
     return rows.map((row) => ({
       runId: row.run_id,
+      seq: row.seq,
       tool: row.tool,
       mcpServer: row.mcp_server,
     }));

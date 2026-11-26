@@ -75,6 +75,7 @@ export async function systemAnalysisDb() {
     runId: string,
     seq: number,
     createdAt: Date,
+    extra: Partial<Item> = {},
   ): Promise<void> => {
     await persistAll([
       Object.assign(new Item(), {
@@ -85,6 +86,7 @@ export async function systemAnalysisDb() {
         payload: JSON.stringify({ text: 'hi' }),
         createdAt,
         updatedAt: createdAt,
+        ...extra,
       }),
     ]);
   };
@@ -115,11 +117,12 @@ export async function systemAnalysisDb() {
     occurredAt: Date,
     tool: string,
     mcpServer: string | null = null,
+    seq = 0,
   ): Promise<void> => {
     await persistAll([
       Object.assign(new ToolCallEvent(), {
         runId,
-        seq: 0,
+        seq,
         occurredAt,
         tool,
         mcpServer,

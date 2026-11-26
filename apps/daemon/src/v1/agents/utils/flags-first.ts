@@ -4,7 +4,7 @@ const WHERE_THE_FLAGS_ARE = {
   thread: 'view=overview opens with them, under `flags`',
   runs: "view=runs counts each run's `flags`, and view=overview runId=… opens with that run's",
   period:
-    "view=digest opens with the period's flags, and view=overview runId=… with each thread's",
+    "view=digest lists the period's flags under `flags`, after its totals and threads, and view=overview runId=… opens with each thread's",
 } as const;
 
 /**

@@ -9,7 +9,10 @@ import type { ChatService } from '../../agents/services/chat.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { TeamRecommendationDao } from '../../stats/dao/team-recommendation.dao';
 import { SYSTEM_DIGEST_REUSE_MS } from '../system-analysis.types';
-import { SystemAnalysisService } from './system-analysis.service';
+import {
+  SystemAnalysisService,
+  systemDigestOf,
+} from './system-analysis.service';
 import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 import type { SystemDigestService } from './system-digest.service';
 
@@ -32,6 +35,43 @@ function buildOf(label: string, runIds: string[]): DigestBuild {
     runs: runIds.map((runId) => ({ runId, snapshotSeq: 1, working: false })),
   };
 }
+
+describe('systemDigestOf', () => {
+  it('reads a digest frozen before failed tool calls were split and signed', () => {
+    const { digest } = buildOf('2026-11-17T08:00:00.000Z', ['r1']);
+    const older = {
+      ...digest,
+      threads: [
+        {
+          runId: 'r1',
+          title: 'r1',
+          kind: 'chat' as const,
+          teamSlug: null,
+          projectId: null,
+          archived: false,
+          lastActivityAt: '2026-11-17T07:00:00.000Z',
+          score: 3,
+          signals: {
+            workFlags: 0,
+            disagreementFlags: 0,
+            outcome: null,
+            unmetGoals: 0,
+            refusedApprovals: 0,
+            corrections: 0,
+            analysisRefusals: 0,
+            failedToolCalls: 3,
+          },
+          failedTools: [{ tool: 'Bash', mcpServer: null, failures: 3 }],
+          snapshotSeq: 40,
+        },
+      ],
+    };
+
+    expect(systemDigestOf({ analysisDigest: JSON.stringify(older) })).toEqual(
+      older,
+    );
+  });
+});
 
 describe('SystemAnalysisService — the digest a start reads', () => {
   let build: ReturnType<

@@ -4,11 +4,14 @@ import type { AgentFlagWire } from '../../agents/chat.types';
 import {
   SYSTEM_ANALYSIS_MAX_THREADS,
   SYSTEM_DIGEST_GONE_FLAGS,
+  SYSTEM_DIGEST_TOOL_ERRORS,
+  SYSTEM_DIGEST_TOOL_ERRORS_PER_THREAD,
   SYSTEM_DIGEST_TOOLS_PER_THREAD,
   type SystemPeriod,
 } from '../system-analysis.types';
 import {
   type DigestCandidate,
+  type DigestFailedCall,
   digestScore,
   foldSystemDigest,
 } from './system-digest.fold';
@@ -42,6 +45,27 @@ function candidate(
     ...over,
   };
 }
+
+function failed(
+  tool: string,
+  mcpServer: string | null,
+  seq = 1,
+  error: string | null = null,
+): DigestFailedCall {
+  return { seq, tool, mcpServer, error };
+}
+
+const NO_SIGNALS = {
+  workFlags: 0,
+  disagreementFlags: 0,
+  outcome: null,
+  unmetGoals: 0,
+  refusedApprovals: 0,
+  corrections: 0,
+  analysisRefusals: 0,
+  failedToolCalls: 0,
+  failedToolCallsByKind: { geniro: 0, otherMcp: 0, shell: 0 },
+};
 
 function flag(
   runId: string,
@@ -81,7 +105,7 @@ function fold(over: Partial<Parameters<typeof foldSystemDigest>[0]> = {}) {
 }
 
 describe('digestScore', () => {
-  it('weighs each counted signal, with failed tool calls capped', () => {
+  it('weighs each counted signal, with failed MCP tool calls capped', () => {
     expect(
       digestScore({
         workFlags: 1,
@@ -92,21 +116,28 @@ describe('digestScore', () => {
         corrections: 1,
         analysisRefusals: 1,
         failedToolCalls: 40,
+        failedToolCallsByKind: { geniro: 30, otherMcp: 10, shell: 0 },
       }),
     ).toBe(35);
   });
 
   it('scores a thread with no signal at zero', () => {
+    expect(digestScore(NO_SIGNALS)).toBe(0);
+  });
+
+  it('weighs failed geniro and other MCP calls, and never shell or file tool failures', () => {
     expect(
       digestScore({
-        workFlags: 0,
-        disagreementFlags: 0,
-        outcome: null,
-        unmetGoals: 0,
-        refusedApprovals: 0,
-        corrections: 0,
-        analysisRefusals: 0,
-        failedToolCalls: 0,
+        ...NO_SIGNALS,
+        failedToolCalls: 9,
+        failedToolCallsByKind: { geniro: 2, otherMcp: 1, shell: 6 },
+      }),
+    ).toBe(3);
+    expect(
+      digestScore({
+        ...NO_SIGNALS,
+        failedToolCalls: 40,
+        failedToolCallsByKind: { geniro: 0, otherMcp: 0, shell: 40 },
       }),
     ).toBe(0);
   });
@@ -217,17 +248,14 @@ describe('foldSystemDigest', () => {
   });
 
   it('groups failed tool calls by tool and server, most frequent first, at most the per-thread limit', () => {
-    const failed = [
-      ...Array.from({ length: 3 }, () => ({ tool: 'read', mcpServer: null })),
-      ...Array.from({ length: 2 }, () => ({ tool: 'bash', mcpServer: 'git' })),
-      ...['t4', 't3', 't2', 't1', 't0', 't5'].map((tool) => ({
-        tool,
-        mcpServer: null,
-      })),
+    const calls = [
+      ...Array.from({ length: 3 }, () => failed('read', null)),
+      ...Array.from({ length: 2 }, () => failed('bash', 'git')),
+      ...['t4', 't3', 't2', 't1', 't0', 't5'].map((tool) => failed(tool, null)),
     ];
 
     const digest = fold({
-      candidates: [candidate('busy', { failedTools: failed })],
+      candidates: [candidate('busy', { failedTools: calls })],
     });
     const [thread] = digest.threads;
 
@@ -237,7 +265,12 @@ describe('foldSystemDigest', () => {
       { tool: 'bash', mcpServer: 'git', failures: 2 },
       { tool: 't0', mcpServer: null, failures: 1 },
     ]);
-    expect(thread?.signals.failedToolCalls).toBe(failed.length);
+    expect(thread?.signals.failedToolCalls).toBe(calls.length);
+    expect(thread?.signals.failedToolCallsByKind).toEqual({
+      geniro: 0,
+      otherMcp: 2,
+      shell: 9,
+    });
   });
 
   it('counts the lessons threads among the system threads', () => {
@@ -252,22 +285,201 @@ describe('foldSystemDigest', () => {
     expect(digest.totals.systemThreads).toBe(1);
   });
 
-  it('sums the failed tool calls of the threads it ranks', () => {
+  it('counts the failed tool calls of every thread, ranked or not, split by where the tool came from', () => {
     const digest = fold({
       candidates: [
         candidate('a', {
-          failedTools: [
-            { tool: 'x', mcpServer: null },
-            { tool: 'x', mcpServer: null },
-          ],
+          failedTools: [failed('x', null, 1), failed('x', null, 2)],
         }),
         candidate('b', {
-          failedTools: [{ tool: 'y', mcpServer: null }],
+          failedTools: [
+            failed('y', 'geniro', 1, 'INVALID_ARGS: no'),
+            failed('z', 'git', 2),
+          ],
         }),
       ],
     });
 
-    expect(digest.totals.failedToolCalls).toBe(3);
+    expect(digest.threads.map((thread) => thread.runId)).toEqual(['b']);
+    expect(digest.totals.failedToolCalls).toBe(4);
+    expect(digest.totals.failedToolCallsByKind).toEqual({
+      geniro: 1,
+      otherMcp: 1,
+      shell: 2,
+    });
+  });
+
+  it('leaves out a thread whose only signal is shell and file tool failures', () => {
+    const digest = fold({
+      candidates: [
+        candidate('shell-only', {
+          failedTools: Array.from({ length: 30 }, (_, seq) =>
+            failed('Bash', null, seq),
+          ),
+        }),
+      ],
+    });
+
+    expect(digest.threads).toEqual([]);
+    expect(digest.totals.threadsWithSignals).toBe(0);
+    expect(digest.totals.failedToolCallsByKind?.shell).toBe(30);
+  });
+
+  it("signs each thread's geniro tool failures with digits and ids masked, most frequent first, at most the per-thread limit", () => {
+    const calls = [
+      failed(
+        'stop_monitor',
+        'geniro',
+        10,
+        'INVALID_ARGS: already ended: exit code 1',
+      ),
+      failed(
+        'stop_monitor',
+        'geniro',
+        20,
+        'INVALID_ARGS: already ended: exit code 137',
+      ),
+      failed(
+        'stop_monitor',
+        'geniro',
+        30,
+        'INVALID_ARGS: already ended: exit code 2',
+      ),
+      failed(
+        'await_agent',
+        'geniro',
+        40,
+        'NO_SUCH_CALL: 1f2e3d4c-aaaa-bbbb-cccc-0123456789ab',
+      ),
+      ...['t1', 't2', 't3', 't4', 't5'].map((tool, index) =>
+        failed(tool, 'geniro', 50 + index, `E: ${tool}`),
+      ),
+      failed('Bash', null, 90, 'Exit code 2'),
+    ];
+
+    const digest = fold({
+      candidates: [candidate('busy', { failedTools: calls })],
+    });
+    const errors = digest.threads[0]?.geniroToolErrors ?? [];
+
+    expect(errors).toHaveLength(SYSTEM_DIGEST_TOOL_ERRORS_PER_THREAD);
+    expect(errors.slice(0, 2)).toEqual([
+      {
+        tool: 'stop_monitor',
+        signature: 'INVALID_ARGS: already ended: exit code #',
+        count: 3,
+        example: { runId: 'busy', seq: 10 },
+      },
+      {
+        tool: 'await_agent',
+        signature: 'NO_SUCH_CALL: <id>',
+        count: 1,
+        example: { runId: 'busy', seq: 40 },
+      },
+    ]);
+    expect(errors.map((error) => error.tool)).not.toContain('Bash');
+  });
+
+  it("signs the period's geniro tool failures over every thread, counting every call past the cap", () => {
+    const tools = Array.from(
+      { length: SYSTEM_DIGEST_TOOL_ERRORS + 2 },
+      (_, index) => `tool_${String(index).padStart(2, '0')}`,
+    );
+    const digest = fold({
+      candidates: [
+        candidate('quiet', {
+          failedTools: [
+            failed(
+              'stop_monitor',
+              'geniro',
+              5,
+              'INVALID_ARGS: already ended: exit code 1',
+            ),
+          ],
+        }),
+        candidate('busy', {
+          failedTools: [
+            failed(
+              'stop_monitor',
+              'geniro',
+              7,
+              'INVALID_ARGS: already ended: exit code 9',
+            ),
+            ...tools.map((tool, index) =>
+              failed(tool, 'geniro', 100 + index, 'NOT_FOUND'),
+            ),
+          ],
+        }),
+      ],
+      flags: [flag('busy', 'work')],
+    });
+
+    expect(digest.totals.geniroToolErrorGroups).toBe(tools.length + 1);
+    expect(digest.geniroToolErrors).toHaveLength(SYSTEM_DIGEST_TOOL_ERRORS);
+    expect(digest.geniroToolErrors?.[0]).toEqual({
+      tool: 'stop_monitor',
+      signature: 'INVALID_ARGS: already ended: exit code #',
+      count: 2,
+      threads: 2,
+      readable: true,
+      example: { runId: 'busy', seq: 7 },
+      error: 'INVALID_ARGS: already ended: exit code 9',
+    });
+  });
+
+  it('names an example from a thread the digest reads first, and marks one only an unread thread has', () => {
+    const ranked = Array.from(
+      { length: SYSTEM_ANALYSIS_MAX_THREADS },
+      (_, index) =>
+        candidate(`read-${String(index).padStart(2, '0')}`, {
+          analysisRefusals: 1,
+          failedTools: [
+            failed('goals', 'geniro', 1, 'INVALID_ARGS: no goal 4'),
+          ],
+        }),
+    );
+    const unread = candidate('unread', {
+      lastActivityAt: new Date('2026-11-02T10:00:00.000Z'),
+      failedTools: [
+        failed('goals', 'geniro', 9, 'INVALID_ARGS: no goal 7'),
+        failed('browser_click', 'geniro', 10, 'NO_SUCH_TAB: tab 3'),
+      ],
+    });
+
+    const digest = fold({ candidates: [unread, ...ranked] });
+    const byTool = new Map(
+      (digest.geniroToolErrors ?? []).map((error) => [error.tool, error]),
+    );
+
+    expect(digest.threads.map((thread) => thread.runId)).not.toContain(
+      'unread',
+    );
+    expect(byTool.get('goals')).toMatchObject({
+      count: SYSTEM_ANALYSIS_MAX_THREADS + 1,
+      readable: true,
+    });
+    expect(byTool.get('goals')?.example.runId).not.toBe('unread');
+    expect(byTool.get('browser_click')).toMatchObject({
+      count: 1,
+      readable: false,
+      example: { runId: 'unread', seq: 10 },
+    });
+  });
+
+  it('signs a geniro tool failure whose error text could not be read apart from the others', () => {
+    const digest = fold({
+      candidates: [
+        candidate('busy', {
+          failedTools: [failed('goals', 'geniro', 3, null)],
+        }),
+      ],
+    });
+
+    expect(digest.geniroToolErrors?.[0]).toMatchObject({
+      tool: 'goals',
+      signature: '(no error text)',
+      count: 1,
+    });
   });
 
   it('carries each read thread its identity, snapshot and score', () => {

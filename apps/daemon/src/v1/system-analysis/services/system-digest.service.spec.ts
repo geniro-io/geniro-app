@@ -77,6 +77,8 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
       threadsWithSignals: 2,
       flags: 3,
       failedToolCalls: 0,
+      failedToolCallsByKind: { geniro: 0, otherMcp: 0, shell: 0 },
+      geniroToolErrorGroups: 0,
       systemThreads: 1,
     });
     expect(digest.flags.map((flag) => flag.handle)).toEqual(['F-b1', 'F-b2']);
@@ -85,6 +87,65 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
     expect(runs.map((run) => run.snapshotSeq)).toEqual(
       digest.threads.map((thread) => thread.snapshotSeq),
     );
+  });
+
+  it("reads the error text of geniro's own failed calls off their result rows and only counts the rest", async () => {
+    await db.seedRun('tools-chat', { updatedAt: AT });
+    await db.seedItem('tools-chat', 0, AT);
+    for (const [seq, code] of [
+      [11, 1],
+      [12, 137],
+    ] as const) {
+      await db.seedItem('tools-chat', seq, AT, {
+        kind: 'tool_result',
+        role: 'tool',
+        payload: JSON.stringify({
+          result: `INVALID_ARGS: already ended: exit code ${code}`,
+          isError: true,
+        }),
+      });
+      await db.seedToolCall('tools-chat', AT, 'stop_monitor', 'geniro', seq);
+    }
+    await db.seedItem('tools-chat', 13, AT, {
+      kind: 'tool_result',
+      role: 'tool',
+      payload: JSON.stringify({ result: 'Exit code 2', isError: true }),
+    });
+    await db.seedToolCall('tools-chat', AT, 'Bash', null, 13);
+    await db.seedToolCall('tools-chat', AT, 'search', 'docs', 14);
+
+    await db.seedRun('shell-chat', { updatedAt: AT });
+    await db.seedItem('shell-chat', 0, AT);
+    await db.seedToolCall('shell-chat', AT, 'Bash', null, 1);
+    await db.seedToolCall('shell-chat', AT, 'Read', null, 2);
+
+    const { digest } = await digests.build(PERIOD);
+
+    expect(digest.threads.map((thread) => thread.runId)).toEqual([
+      'tools-chat',
+    ]);
+    expect(digest.threads[0]?.signals.failedToolCallsByKind).toEqual({
+      geniro: 2,
+      otherMcp: 1,
+      shell: 1,
+    });
+    expect(digest.threads[0]?.score).toBe(3);
+    expect(digest.totals.failedToolCallsByKind).toEqual({
+      geniro: 2,
+      otherMcp: 1,
+      shell: 3,
+    });
+    expect(digest.geniroToolErrors).toEqual([
+      {
+        tool: 'stop_monitor',
+        signature: 'INVALID_ARGS: already ended: exit code #',
+        count: 2,
+        threads: 1,
+        readable: true,
+        example: { runId: 'tools-chat', seq: 11 },
+        error: 'INVALID_ARGS: already ended: exit code 1',
+      },
+    ]);
   });
 
   it('yields the event loop while it reads the transcripts of several candidates', async () => {

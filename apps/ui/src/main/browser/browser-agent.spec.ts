@@ -646,6 +646,39 @@ describe('runBrowserAgentRequest', () => {
     expect(tab.op).toBeNull();
   });
 
+  it.each([
+    [0, 0],
+    [0, 600],
+  ])(
+    'refuses at once to capture a tab whose page measures %i×%i, naming the way out',
+    async (width, height) => {
+      const { host, debug } = rig();
+      debug.handlers['Runtime.evaluate'] = (params) =>
+        params?.expression === '[innerWidth, innerHeight]'
+          ? { result: { value: [width, height] } }
+          : {};
+
+      const reply = await runBrowserAgentRequest(
+        host,
+        request({
+          kind: 'screenshot',
+          tab: 't1',
+          fullPage: false,
+          view: false,
+        }),
+      );
+
+      expect(reply).toEqual({
+        id: 'q1',
+        ok: false,
+        error: `Tab t1 is hidden (viewport ${width}×${height}), so it cannot be captured — open the address in a new tab with browser_open`,
+      });
+      expect(
+        debug.sendCommand.mock.calls.map(([method]) => method),
+      ).not.toContain('Page.captureScreenshot');
+    },
+  );
+
   it('refuses a screenshot over the size cap', async () => {
     const { host, debug } = rig();
     debug.handlers['Page.captureScreenshot'] = () => ({

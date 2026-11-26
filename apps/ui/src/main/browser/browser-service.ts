@@ -35,6 +35,17 @@ import {
 const RECENT_LIMIT = 20;
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
 
+const rounded = (bounds: BrowserBounds): BrowserBounds => ({
+  x: Math.round(bounds.x),
+  y: Math.round(bounds.y),
+  width: Math.round(bounds.width),
+  height: Math.round(bounds.height),
+});
+
+/** A hidden or minimized window paints none of its views, so an agent cannot capture a page in it. */
+const paints = (win: BrowserWindow): boolean =>
+  win.isVisible() && !win.isMinimized();
+
 export interface BrowserTab {
   readonly id: string;
   readonly runId: string;
@@ -166,6 +177,7 @@ export class BrowserService {
   private readonly chats = new Map<string, ChatBrowser>();
   private readonly byContents = new WeakMap<object, BrowserTab>();
   private readonly insecureHosts = new WeakMap<Session, Set<string>>();
+  private readonly watchedWindows = new WeakSet<BrowserWindow>();
   private readonly onCertificateError: (
     event: { preventDefault(): void },
     contents: object,
@@ -593,10 +605,19 @@ export class BrowserService {
     op.bind(() => {
       if (tab.op === op) {
         tab.op = null;
+        this.relayout(tab.runId);
         this.emitRun(tab.runId);
       }
     });
+    this.relayout(tab.runId);
     this.emitRun(tab.runId);
+  }
+
+  private relayout(runId: string): void {
+    const chat = this.chats.get(runId);
+    if (chat !== undefined) {
+      this.layout(chat);
+    }
   }
 
   shutdown(): void {
@@ -745,28 +766,78 @@ export class BrowserService {
   private layout(chat: ChatBrowser): void {
     const host = chat.poppedOut ? chat.popout : this.options.mainWindow();
     const bounds = chat.poppedOut ? chat.popoutBounds : chat.bounds;
+    if (host !== null && !host.isDestroyed()) {
+      this.watchPainting(host);
+    }
     for (const tab of chat.tabs.values()) {
       if (
         host === null ||
         host.isDestroyed() ||
         bounds === null ||
-        tab.id !== chat.activeTabId
+        tab.id !== chat.activeTabId ||
+        (tab.op !== null && !paints(host))
       ) {
         this.detach(tab);
+        this.keepSized(chat, tab);
         continue;
       }
       if (tab.attachedTo !== host) {
         this.detach(tab);
         this.attach(tab, host);
       }
-      tab.view.setBounds({
-        x: Math.round(bounds.x),
-        y: Math.round(bounds.y),
-        width: Math.round(bounds.width),
-        height: Math.round(bounds.height),
-      });
+      tab.view.setBounds(rounded(bounds));
       tab.view.setVisible(true);
     }
+  }
+
+  private watchPainting(win: BrowserWindow): void {
+    if (this.watchedWindows.has(win)) {
+      return;
+    }
+    this.watchedWindows.add(win);
+    const relayoutDriven = (): void => {
+      for (const chat of this.chats.values()) {
+        if ([...chat.tabs.values()].some((tab) => tab.op !== null)) {
+          this.layout(chat);
+        }
+      }
+    };
+    win.on('hide', relayoutDriven);
+    win.on('show', relayoutDriven);
+    win.on('minimize', relayoutDriven);
+    win.on('restore', relayoutDriven);
+  }
+
+  /** A view off every window paints only while it has a size: at 0×0 a capture waits forever for a frame. */
+  private keepSized(chat: ChatBrowser, tab: BrowserTab): void {
+    const { width, height } = tab.view.getBounds();
+    if (width > 0 && height > 0) {
+      return;
+    }
+    const size = this.paneSize(chat);
+    if (size !== null) {
+      tab.view.setBounds(size);
+    }
+  }
+
+  private paneSize(chat: ChatBrowser): BrowserBounds | null {
+    const pane = chat.poppedOut ? chat.popoutBounds : chat.bounds;
+    if (pane !== null) {
+      return rounded(pane);
+    }
+    for (const other of chat.tabs.values()) {
+      const shown = other.view.getBounds();
+      if (shown.width > 0 && shown.height > 0) {
+        return shown;
+      }
+    }
+    const win =
+      (chat.poppedOut ? chat.popout : null) ?? this.options.mainWindow();
+    if (win === null || win.isDestroyed()) {
+      return null;
+    }
+    const { width, height } = win.getContentBounds();
+    return { x: 0, y: 0, width, height };
   }
 
   private tabState(tab: BrowserTab): BrowserTabState {

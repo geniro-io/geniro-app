@@ -24,7 +24,10 @@ interface FakeView {
 }
 
 interface FakeWindow extends EventEmitter {
+  destroyed: boolean;
   focused: boolean;
+  visible: boolean;
+  minimized: boolean;
   contentView: {
     addChildView: ReturnType<typeof vi.fn>;
     removeChildView: ReturnType<typeof vi.fn>;
@@ -112,6 +115,8 @@ vi.mock('electron', async () => {
     static getAllWindows = (): Window[] => h.windows as unknown as Window[];
     destroyed = false;
     focused = true;
+    visible = true;
+    minimized = false;
     contentView = { addChildView: vi.fn(), removeChildView: vi.fn() };
     webContents = {
       send: vi.fn(),
@@ -122,6 +127,8 @@ vi.mock('electron', async () => {
     };
     isDestroyed = (): boolean => this.destroyed;
     isFocused = (): boolean => this.focused;
+    isVisible = (): boolean => this.visible;
+    isMinimized = (): boolean => this.minimized;
     getContentBounds = () => ({ x: 0, y: 0, width: 900, height: 600 });
     focus = vi.fn();
     destroy = vi.fn(() => {
@@ -222,6 +229,146 @@ beforeEach(() => {
 });
 
 describe('BrowserService', () => {
+  it('gives a tab opened while the pane is closed the window size, so its page paints and can be captured', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: 'Dev' });
+    const view = h.views[0] as FakeView;
+
+    expect(main.contentView.addChildView).not.toHaveBeenCalled();
+    expect(view.setBounds).toHaveBeenLastCalledWith({
+      x: 0,
+      y: 0,
+      width: 900,
+      height: 600,
+    });
+  });
+
+  it('gives a tab opened while its chat is off screen the size of the pane its other tabs were shown in', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://a.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    service.setBounds('run-1', null, asWindow(main));
+    await service.openTab('run-1', 'https://b.test/', { openedBy: 'Dev' });
+    const second = h.views[1] as FakeView;
+
+    expect(main.contentView.addChildView).not.toHaveBeenCalledWith(second);
+    expect(second.setBounds).toHaveBeenLastCalledWith(DOCKED);
+  });
+
+  it('keeps a size on a background tab that was never shown, after another tab takes the pane', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://a.test/', { openedBy: 'Dev' });
+    await service.openTab('run-1', 'https://b.test/', { openedBy: 'Dev' });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    const background = h.views[0] as FakeView;
+
+    expect(main.contentView.addChildView).not.toHaveBeenCalledWith(background);
+    expect(background.setBounds).toHaveBeenLastCalledWith({
+      x: 0,
+      y: 0,
+      width: 900,
+      height: 600,
+    });
+  });
+
+  it('leaves a tab without a size when no window is left to read one from', async () => {
+    const { service, main } = makeService();
+    main.destroyed = true;
+
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: 'Dev' });
+
+    expect((h.views[0] as FakeView).setBounds).not.toHaveBeenCalled();
+  });
+
+  it('keeps an agent-driven tab on a window that paints', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    const tab = service.getTab('run-1', 't1');
+
+    service.attachAgentOp(
+      tab as NonNullable<typeof tab>,
+      new AgentOp({ memberName: 'Dev', allowedHosts: null }),
+    );
+
+    expect(main.contentView.removeChildView).not.toHaveBeenCalled();
+  });
+
+  it('leaves the tab on a hidden window while no agent drives it', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    const tab = service.getTab('run-1', 't1');
+    const op = new AgentOp({ memberName: 'Dev', allowedHosts: null });
+    service.attachAgentOp(tab as NonNullable<typeof tab>, op);
+    op.end();
+
+    main.visible = false;
+    main.emit('hide');
+
+    expect(main.contentView.removeChildView).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'hidden',
+      'hide',
+      'show',
+      (win: FakeWindow, painting: boolean) => (win.visible = painting),
+    ],
+    [
+      'minimized',
+      'minimize',
+      'restore',
+      (win: FakeWindow, painting: boolean) => (win.minimized = !painting),
+    ],
+  ])(
+    'takes an agent-driven tab off its window when the window is %s mid-operation, and back when it returns',
+    async (_state, leaveEvent, returnEvent, paint) => {
+      const { service, main } = makeService();
+      await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+      service.setBounds('run-1', DOCKED, asWindow(main));
+      const view = h.views[0] as FakeView;
+      const tab = service.getTab('run-1', 't1');
+      service.attachAgentOp(
+        tab as NonNullable<typeof tab>,
+        new AgentOp({ memberName: 'Dev', allowedHosts: null }),
+      );
+
+      paint(main, false);
+      main.emit(leaveEvent);
+      expect(main.contentView.removeChildView).toHaveBeenLastCalledWith(view);
+
+      main.contentView.addChildView.mockClear();
+      paint(main, true);
+      main.emit(returnEvent);
+      expect(main.contentView.addChildView).toHaveBeenCalledWith(view);
+    },
+  );
+
+  it.each([
+    ['hidden', (win: FakeWindow) => (win.visible = false)],
+    ['minimized', (win: FakeWindow) => (win.minimized = true)],
+  ])(
+    'takes an agent-driven tab off a %s window for the operation, where it cannot paint, and puts it back after',
+    async (_state, leave) => {
+      const { service, main } = makeService();
+      await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+      service.setBounds('run-1', DOCKED, asWindow(main));
+      const view = h.views[0] as FakeView;
+      const tab = service.getTab('run-1', 't1');
+      leave(main);
+      const op = new AgentOp({ memberName: 'Dev', allowedHosts: null });
+
+      service.attachAgentOp(tab as NonNullable<typeof tab>, op);
+
+      expect(main.contentView.removeChildView).toHaveBeenLastCalledWith(view);
+      main.contentView.addChildView.mockClear();
+      op.end();
+      expect(main.contentView.addChildView).toHaveBeenCalledWith(view);
+    },
+  );
+
   it('opens window.open targets as a tab in the same session', async () => {
     const { service } = makeService();
     await service.openTab('run-1', 'https://stand.test/', { openedBy: null });

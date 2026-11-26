@@ -6,7 +6,10 @@ import {
 } from '@nestjs/common';
 
 import { environment } from '../../../environments';
-import { HEARTBEAT_EVERY_MS, writeHeartbeat } from '../../../utils/previous-stop';
+import {
+  HEARTBEAT_EVERY_MS,
+  writeHeartbeat,
+} from '../../../utils/previous-stop';
 
 /**
  * Keeps `daemon-heartbeat.json` current — pid, start, the beat's time and the
@@ -19,9 +22,7 @@ export class DaemonHeartbeatService
   implements OnApplicationBootstrap, OnModuleDestroy
 {
   private readonly logger = new Logger(DaemonHeartbeatService.name);
-  private readonly startedAt = Math.round(
-    Date.now() - process.uptime() * 1000,
-  );
+  private readonly startedAt = Math.round(Date.now() - process.uptime() * 1000);
   private timer: ReturnType<typeof setInterval> | null = null;
   private failing = false;
 

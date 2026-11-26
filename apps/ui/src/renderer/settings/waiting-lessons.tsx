@@ -345,8 +345,8 @@ export function SavedLessons({
           Saved to memory · {proposals.length}
         </h3>
         <p className="m-0 text-xs text-muted-foreground">
-          Lessons that went into memory as entries of their own. Undo forgets
-          the entry; Edit makes it yours.
+          Lessons now in memory. Undo forgets a new entry, or puts back an agent
+          note a lesson changed by itself; Edit makes a new entry yours.
         </p>
       </div>
       <ul className="m-0 flex list-none flex-col gap-3 p-0">

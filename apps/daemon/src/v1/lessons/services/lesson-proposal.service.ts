@@ -417,7 +417,7 @@ export class LessonProposalService {
     if (entry.rev !== applied.rev) {
       throw new ConflictException(
         'LESSON_ENTRY_CHANGED',
-        `${entry.handle} changed after the lesson updated it — change it in Settings → Memory instead`,
+        `${entry.handle} changed after the lesson ${applied.kind === 'refined' ? 'updated it' : 'moved it into the memory index'} — change it in Settings → Memory instead`,
       );
     }
     savedEntryOrThrow(

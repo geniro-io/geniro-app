@@ -1450,10 +1450,32 @@ describe('LessonProposalService.undo on a lesson that changed an agent note by i
 
     await expect(service.undo('lp-1')).rejects.toMatchObject({
       errorCode: 'LESSON_ENTRY_CHANGED',
+      message: expect.stringContaining('after the lesson updated it'),
     });
     expect(memory.restoreText).not.toHaveBeenCalled();
     expect(row.status).toBe('saved');
     expect(rows.write).not.toHaveBeenCalled();
+  });
+
+  it('says the lesson moved the note into the index, not that it updated it, when refusing to undo that', async () => {
+    const row = autoApplied(JSON.stringify({ kind: 'indexed', rev: 3 }));
+    const { service, memory } = build(row, undefined, {
+      ...FILED_ENTRY,
+      rev: 4,
+    });
+
+    const refusal = service.undo('lp-1');
+
+    await expect(refusal).rejects.toMatchObject({
+      errorCode: 'LESSON_ENTRY_CHANGED',
+      message: expect.stringContaining(
+        'after the lesson moved it into the memory index',
+      ),
+    });
+    await expect(refusal).rejects.not.toMatchObject({
+      message: expect.stringContaining('updated it'),
+    });
+    expect(memory.setIndexed).not.toHaveBeenCalled();
   });
 
   it('reads as undoable on the wire, but refuses Edit', async () => {

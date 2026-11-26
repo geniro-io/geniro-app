@@ -34,6 +34,7 @@ import {
 
 import type { ThreadAttention } from '../components/thread-labels';
 import { Button } from '../components/ui/button';
+import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
@@ -415,16 +416,10 @@ const ManagerNode = memo(function ManagerNode({
         data-slot="graph-manager"
         data-started={started}
         aria-label={`Manager, ${state}: ${threads} threads, ${working} working, ${awaiting} awaiting a reply, ${pendingStarts} waiting to start`}
-        className={cn(
-          'flex size-full flex-col gap-2.5 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card px-3 py-2.5 text-left shadow-md',
-          started && manager.working && 'cc-breathe-primary',
-        )}>
+        className="flex size-full flex-col gap-2.5 rounded-card border border-primary/50 bg-linear-to-b from-primary/10 to-card px-3 py-2.5 text-left shadow-md">
         <span className="flex min-w-0 items-center gap-3">
-          <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
             <RadioTower aria-hidden="true" className="size-4.5" />
-            {started && manager.working ? (
-              <span className="absolute -top-0.5 -right-0.5 size-2.5 animate-pulse rounded-full bg-primary ring-2 ring-card motion-reduce:animate-none" />
-            ) : null}
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex items-center gap-2">
@@ -432,11 +427,12 @@ const ManagerNode = memo(function ManagerNode({
               <span
                 data-slot="graph-manager-state"
                 className={cn(
-                  'rounded-pill px-1.5 text-xs',
+                  'flex items-center gap-1 rounded-pill px-1.5 text-xs',
                   started && manager.working
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-foreground/80',
                 )}>
+                {started && manager.working ? <Spinner pace="stepped" /> : null}
                 {state}
               </span>
             </span>

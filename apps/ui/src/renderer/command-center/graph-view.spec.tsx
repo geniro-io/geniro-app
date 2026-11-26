@@ -411,6 +411,12 @@ describe('GraphView', () => {
       manager.querySelector('[data-slot="graph-manager-state"]')!.textContent,
     ).toBe('Working');
     expect(
+      manager.querySelector(
+        '[data-slot="graph-manager-state"] [data-slot="spinner"].spinner-stepped',
+      ),
+    ).not.toBeNull();
+    expect(manager.className).not.toContain('cc-breathe');
+    expect(
       manager.querySelector('[data-slot="graph-manager-line"]')!.textContent,
     ).toBe('Claude · opus · active 3m ago');
     expect(all('graph-manager-threads')[0]!.textContent).toBe('5threads');
@@ -419,6 +425,16 @@ describe('GraphView', () => {
       '1awaiting reply',
     );
     expect(all('graph-manager-starts')[0]!.textContent).toBe('2Starts waiting');
+  });
+
+  it('shows no loader on an idle manager', async () => {
+    await draw({ threads: graphThreadsOf(2) });
+    const manager = all('graph-manager')[0]!;
+
+    expect(
+      manager.querySelector('[data-slot="graph-manager-state"]')!.textContent,
+    ).toBe('Idle');
+    expect(manager.querySelector('[data-slot="spinner"]')).toBeNull();
   });
 
   it('keeps the manager on top before its chat exists', async () => {

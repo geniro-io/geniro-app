@@ -470,14 +470,17 @@ describe('ThreadCard — labels', () => {
   });
 });
 
-describe('ThreadCard — motion', () => {
-  it('runs a border around a working card, and breathes in warning while it waits on the user', () => {
+describe('ThreadCard — working', () => {
+  it('shows the loader in the head of a working card, with no looping border or glow', () => {
     const working = render({ attention: 'working' });
-    expect(working.classList.contains('cc-running-border')).toBe(true);
-    expect(working.classList.contains('cc-breathe-success')).toBe(false);
+    expect(
+      working.querySelector(
+        '[data-slot="thread-card-head"] [data-slot="spinner"].spinner-stepped',
+      ),
+    ).not.toBeNull();
+    expect(working.className).not.toMatch(/cc-running-border|cc-breathe/);
     const asking = render({ attention: 'question', onAnswer: vi.fn() });
-    expect(asking.classList.contains('cc-breathe-warning')).toBe(true);
-    expect(asking.classList.contains('cc-running-border')).toBe(false);
+    expect(asking.className).not.toMatch(/cc-running-border|cc-breathe/);
   });
 
   it.each<ThreadAttention>([
@@ -486,10 +489,10 @@ describe('ThreadCard — motion', () => {
     'quiet',
     'inactive',
     'done',
-  ])('gives a %s card neither the running border nor a breath', (attention) => {
-    const el = render({ attention });
-    expect(el.classList.contains('cc-running-border')).toBe(false);
-    expect(el.className.includes('cc-breathe')).toBe(false);
+  ])('shows no loader on a %s card', (attention) => {
+    expect(
+      render({ attention }).querySelector('[data-slot="spinner"]'),
+    ).toBeNull();
   });
 });
 

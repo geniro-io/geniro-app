@@ -175,6 +175,17 @@ describe('memory_search', () => {
     expect(line()).toContain('1 result');
   });
 
+  it('reads the query sent as keywords', () => {
+    draw(
+      pair(
+        'memory_search',
+        { keywords: 'seeds' },
+        { text: [PREFACE, HIT('m9', 'Seeds')].join('\n') },
+      ),
+    );
+    expect(line()).toBe('Searched memory · 1 result “seeds”');
+  });
+
   it('names no count for a failed search and says it is running while it is', () => {
     draw(
       pair(
@@ -216,6 +227,27 @@ describe('memory_read', () => {
       ),
     );
     expect(line()).toBe('Read memory · m12');
+  });
+
+  it('lists the one handle a read sent as handle, and the handles a read sent as handles', () => {
+    draw(
+      pair(
+        'memory_read',
+        { handle: '12' },
+        { text: `${PREFACE}\n\nm12 (rev 1, global, user) — A` },
+      ),
+    );
+    expect(line()).toBe('Read memory · m12');
+    draw(
+      pair(
+        'memory_read',
+        { handles: ['m3', '5'] },
+        {
+          text: `${PREFACE}\n\nm3 (rev 1, global, user) — A\n\nm5 (rev 2, global, user) — B`,
+        },
+      ),
+    );
+    expect(line()).toBe('Read memory · m3, m5');
   });
 
   it('marks a handle the result could not find', () => {

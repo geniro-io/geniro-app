@@ -653,7 +653,8 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     for (const report of ['   ', 'x'.repeat(TASK_REPORT_MAX + 1)]) {
       const answer = await call('update_task', { report }, 'run-1');
       expect(answer.isError).toBe(true);
-      expect(answer.text).toMatch(/^INVALID_ARGS: 'report'/);
+      expect(answer.text).toMatch(/^INVALID_ARGS: call update_task\(/);
+      expect(answer.text.split('\n')[1]).toMatch(/^'report'/);
     }
     expect((await fresh(task.id))?.report).toBeNull();
   });
@@ -746,7 +747,57 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     const answer = await call('update_task', { task: 'GEN-1' });
 
     expect(answer.isError).toBe(true);
-    expect(answer.text).toMatch(/^INVALID_ARGS: nothing to change/);
+    expect(answer.text.split('\n')[0]).toMatch(
+      /^INVALID_ARGS: call update_task\(/,
+    );
+    expect(answer.text.split('\n')[1]).toMatch(/^nothing to change/);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['key', { key: 'gen-1' }],
+    ['task_id', { task_id: 'GEN-1' }],
+    ['id', { id: 'GEN-1' }],
+  ])('reads a card named by its %s as its task', async (_name, ref) => {
+    await call('create_task', { project: 'GEN', title: 'x' });
+
+    const answer = await call('get_task', ref);
+
+    expect(answer.isError).toBe(false);
+    expect(jsonOf(answer.text)).toMatchObject({ key: 'GEN-1', title: 'x' });
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['task_id', { task_id: 'GEN-1' }],
+    ['id', { id: 'GEN-1' }],
+  ])('changes a card named by its %s', async (_name, ref) => {
+    await call('create_task', { project: 'GEN', title: 'old' });
+
+    const answer = await call('update_task', { ...ref, title: 'new' });
+
+    expect(answer.isError).toBe(false);
+    expect(answer.text).toMatch(/^Updated GEN-1: changed title/);
+    const [stored] = await taskDao.listAll(orm.em.fork());
+    expect(stored).toMatchObject({ title: 'new' });
+  });
+
+  it('refuses a card named under two names that disagree, changing neither', async () => {
+    await call('create_task', { project: 'GEN', title: 'x' });
+
+    const answer = await call('update_task', {
+      task: 'GEN-1',
+      key: 'GEN-2',
+      title: 'y',
+    });
+
+    expect(answer.isError).toBe(true);
+    expect(answer.text.split('\n')[0]).toMatch(
+      /^INVALID_ARGS: call update_task\(/,
+    );
+    expect(answer.text.split('\n')[1]).toBe(
+      'send task once — task and key name the same argument and disagree',
+    );
+    const [stored] = await taskDao.listAll(orm.em.fork());
+    expect(stored).toMatchObject({ title: 'x' });
   });
 
   it('reads the card its run works when no card is named', async () => {

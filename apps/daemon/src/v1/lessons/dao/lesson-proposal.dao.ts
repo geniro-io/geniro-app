@@ -40,6 +40,35 @@ export class LessonProposalDao extends BaseDao<LessonProposal> {
     });
   }
 
+  /** One page of every proposal, newest first, strictly older than the cursor row. */
+  page(
+    before: { createdAt: Date; id: string } | null,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<LessonProposal[]> {
+    const where: FilterQuery<LessonProposal> =
+      before === null
+        ? {}
+        : {
+            $or: [
+              { createdAt: { $lt: before.createdAt } },
+              { createdAt: before.createdAt, id: { $lt: before.id } },
+            ],
+          };
+    return this.getRepo(txEm).find(where, {
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      limit,
+      disableIdentityMap: true,
+    });
+  }
+
+  countIn(
+    statuses: readonly LessonProposalStatus[],
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.getRepo(txEm).count({ status: { $in: [...statuses] } });
+  }
+
   /** How many lessons were saved to memory since a moment, by the user or on their own. */
   savedSince(since: Date, txEm?: EntityManager): Promise<number> {
     return this.getRepo(txEm).count({

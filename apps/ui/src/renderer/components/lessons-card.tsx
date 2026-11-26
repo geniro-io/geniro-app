@@ -39,7 +39,9 @@ export type LessonOutcomeStatus =
   | 'rejected'
   | 'undone'
   | 'skipped_duplicate'
-  | 'dropped_by_check';
+  | 'dropped_by_check'
+  | 'checking'
+  | 'failed';
 
 /** The decision on one lesson, as its `lesson_outcome` row states it. */
 export interface LessonOutcomeView {
@@ -607,6 +609,8 @@ export function DecidedRow({
   lesson,
   outcome,
   places,
+  source = null,
+  detailed = false,
   onUndo,
   onEdit,
   onApprove,
@@ -614,6 +618,10 @@ export function DecidedRow({
   lesson: LessonView;
   outcome: LessonOutcomeView;
   places: LessonPlaces;
+  /** Leads a meta line above the title, where a list names the thread a lesson came from. */
+  source?: React.ReactNode;
+  /** Also draws the rule and the Why fold, for a list read apart from its thread. */
+  detailed?: boolean;
   onUndo?: LessonsCardProps['onUndo'];
   onEdit?: LessonsCardProps['onEdit'];
   onApprove?: LessonsCardProps['onApprove'];
@@ -680,12 +688,28 @@ export function DecidedRow({
     run('approve', () => onApprove(lesson.id));
   };
 
-  const muted = outcome.status !== 'saved' && outcome.status !== 'pending';
+  const muted =
+    outcome.status !== 'saved' &&
+    outcome.status !== 'pending' &&
+    outcome.status !== 'checking';
   const statusText = decidedStatusText(outcome, edited, places, lesson);
   const undoDisabled = busy || onUndo === undefined;
 
   return (
-    <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
+    <div
+      data-slot="decided-lesson-row"
+      className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
+      {source === null ? null : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          {source}
+          {detailed ? (
+            <>
+              <MetaDot />
+              <span>{SIGNAL_LABELS[lesson.signalKind]}</span>
+            </>
+          ) : null}
+        </div>
+      )}
       {editing ? (
         <div className="flex min-w-0 flex-col gap-2">
           <Input
@@ -714,6 +738,22 @@ export function DecidedRow({
           {outcome.title}
         </p>
       )}
+      {detailed && !editing ? (
+        <>
+          {(outcome.rule ?? lesson.rule).trim() ===
+          outcome.title.trim() ? null : (
+            <p
+              className={
+                muted
+                  ? 'm-0 text-sm break-words text-muted-foreground'
+                  : 'm-0 text-sm break-words'
+              }>
+              {outcome.rule ?? lesson.rule}
+            </p>
+          )}
+          <LessonWhy lesson={lesson} />
+        </>
+      ) : null}
       {editing ? (
         <>
           <p className="m-0 text-xs text-muted-foreground">{statusText}</p>
@@ -847,8 +887,54 @@ function decidedStatusText(
         ? '✗ Rejected'
         : `✗ Rejected — ${outcome.reason}`;
     case 'dropped_by_check':
-      return 'Dropped by the check';
+      return outcome.reason === null
+        ? 'Dropped by the check'
+        : `Dropped by the check — ${outcome.reason}`;
+    case 'checking':
+      return 'Being checked by a second model';
+    case 'failed':
+      return 'Not saved: the reflection failed';
   }
+}
+
+function LessonWhy({
+  lesson,
+  onShowInThread,
+}: {
+  lesson: LessonView;
+  onShowInThread?: LessonsCardProps['onShowInThread'];
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Disclosure
+      label={
+        <span title="Why the reflection proposed this, and the message it quotes.">
+          {`Why · message #${lesson.evidence.seq}`}
+        </span>
+      }
+      open={open}
+      onToggle={() => setOpen((value) => !value)}>
+      <div className="flex min-w-0 flex-col gap-1 text-xs">
+        <p className="m-0">{lesson.why}</p>
+        <p className="m-0 text-muted-foreground">
+          {`“${lesson.evidence.quote}”`}
+          {onShowInThread === undefined ? null : (
+            <>
+              {' '}
+              <Button
+                size="sm"
+                variant="link"
+                title="Scroll the chat to the message this lesson is based on."
+                className="h-auto p-0 text-xs"
+                onClick={() => onShowInThread(lesson.evidence.seq)}>
+                Show in thread
+              </Button>
+            </>
+          )}
+        </p>
+      </div>
+    </Disclosure>
+  );
 }
 
 const UPDATE_CHOICE = 'update';
@@ -952,7 +1038,6 @@ export function LessonRow({
   const [rule, setRule] = useState(lesson.rule);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const [request, setRequest] = useState<
     'save' | 'update' | 'moveUp' | 'reject' | null
   >(null);
@@ -1139,34 +1224,7 @@ export function LessonRow({
           )}
         </div>
       )}
-      <Disclosure
-        label={
-          <span title="Why the reflection proposed this, and the message it quotes.">
-            {`Why · message #${lesson.evidence.seq}`}
-          </span>
-        }
-        open={detailsOpen}
-        onToggle={() => setDetailsOpen((value) => !value)}>
-        <div className="flex min-w-0 flex-col gap-1 text-xs">
-          <p className="m-0">{lesson.why}</p>
-          <p className="m-0 text-muted-foreground">
-            {`“${lesson.evidence.quote}”`}
-            {onShowInThread === undefined ? null : (
-              <>
-                {' '}
-                <Button
-                  size="sm"
-                  variant="link"
-                  title="Scroll the chat to the message this lesson is based on."
-                  className="h-auto p-0 text-xs"
-                  onClick={() => onShowInThread(lesson.evidence.seq)}>
-                  Show in thread
-                </Button>
-              </>
-            )}
-          </p>
-        </div>
-      </Disclosure>
+      <LessonWhy lesson={lesson} onShowInThread={onShowInThread} />
       {proposedUnavailable === null ? null : (
         <p className="m-0 text-xs text-muted-foreground">
           {`Proposed for ${targetWords(lesson.target, places)}, which is unavailable: ${proposedUnavailable}.`}

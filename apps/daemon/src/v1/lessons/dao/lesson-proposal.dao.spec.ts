@@ -273,4 +273,44 @@ describe('LessonProposalDao (in-memory sqlite)', () => {
       expect(rows.map((row) => row.id)).toEqual(['a-proposed']);
     });
   });
+
+  describe('page', () => {
+    beforeEach(async () => {
+      await insert({ id: 'p1', createdAt: new Date(1_000) });
+      await insert({ id: 'p2', status: 'saved', createdAt: new Date(2_000) });
+      await insert({
+        id: 'p3a',
+        status: 'rejected',
+        createdAt: new Date(3_000),
+      });
+      await insert({ id: 'p3b', status: 'undone', createdAt: new Date(3_000) });
+      await insert({
+        id: 'p4',
+        status: 'checking',
+        createdAt: new Date(4_000),
+      });
+    });
+
+    it('reads every status newest first, and walks on from the cursor row without skipping one sharing its instant', async () => {
+      const first = await dao.page(null, 2);
+      const second = await dao.page(
+        { createdAt: first[1]!.createdAt, id: first[1]!.id },
+        2,
+      );
+      const third = await dao.page(
+        { createdAt: second[1]!.createdAt, id: second[1]!.id },
+        2,
+      );
+
+      expect(first.map((row) => row.id)).toEqual(['p4', 'p3b']);
+      expect(second.map((row) => row.id)).toEqual(['p3a', 'p2']);
+      expect(third.map((row) => row.id)).toEqual(['p1']);
+    });
+
+    it('counts the statuses named over every row, past any page', async () => {
+      expect(await dao.countIn(['saved', 'rejected', 'undone'])).toBe(3);
+      expect(await dao.countIn(['proposed', 'checking'])).toBe(2);
+      expect(await dao.countIn([])).toBe(0);
+    });
+  });
 });

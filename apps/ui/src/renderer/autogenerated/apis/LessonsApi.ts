@@ -16,6 +16,7 @@
 import * as runtime from '../runtime';
 import type {
   EditLessonDto,
+  LessonHistoryPageDto,
   LessonProposal,
   LessonProposalListDto,
   LessonReflectionFactsDto,
@@ -51,6 +52,11 @@ export interface LessonsApiGetLessonReflectionRequest {
 
 export interface LessonsApiGetThreadLessonsStateRequest {
     runId: string;
+}
+
+export interface LessonsApiListLessonHistoryRequest {
+    limit?: number;
+    before?: string;
 }
 
 export interface LessonsApiListLessonProposalsRequest {
@@ -372,6 +378,51 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async getThreadLessonsState(requestParameters: LessonsApiGetThreadLessonsStateRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadLessonsStateDto> {
         const response = await this.getThreadLessonsStateRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listLessonHistoryRaw(requestParameters: LessonsApiListLessonHistoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonHistoryPageDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['before'] != null) {
+            queryParameters['before'] = requestParameters['before'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/history`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listLessonHistory(requestParameters: LessonsApiListLessonHistoryRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonHistoryPageDto> {
+        const response = await this.listLessonHistoryRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

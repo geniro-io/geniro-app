@@ -1337,6 +1337,7 @@ export function Memory({
           capabilitiesLoading={capabilitiesLoading}
           cliDetections={cliDetections}
           lessonsApi={lessonsApi}
+          knowledgeApi={knowledgeApi}
           client={lessonsClient}
           remote={remote}
           agentWrites={memory === null ? null : current.agentWrites}

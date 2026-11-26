@@ -6,9 +6,12 @@ import {
   documentsReaderOf,
   WAITING_LESSON_STATUSES,
 } from '../chats/lessons-api-context';
+import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import {
   DecidedRow,
+  type LessonDocumentsReader,
   type LessonEdit,
+  type LessonOutcomeView,
   LessonRow,
   type LessonRuleEdit,
   type LessonSaveRequest,
@@ -110,11 +113,21 @@ function lessonOf(proposal: LessonProposal): LessonView {
 
 function SourceLine({
   proposal,
+  dated = false,
 }: {
   proposal: LessonProposal;
+  dated?: boolean;
 }): React.JSX.Element {
   return (
     <span className="inline-flex max-w-full min-w-0 items-center gap-1.5">
+      {dated ? (
+        <time
+          dateTime={proposal.createdAt}
+          title={`Found ${formatDateTime(proposal.createdAt)}`}
+          className="shrink-0 tabular-nums">
+          {formatRelativeTime(proposal.createdAt)}
+        </time>
+      ) : null}
       <span className="min-w-0 truncate">
         {proposal.sourceTitle ?? 'Untitled thread'}
       </span>
@@ -127,6 +140,133 @@ function SourceLine({
   );
 }
 
+type Lessons = DaemonApis['lessons'];
+
+type DecidedStatus = Exclude<
+  LessonProposal['status'],
+  'proposed' | 'check_failed'
+>;
+
+function outcomeOf(
+  proposal: LessonProposal,
+  status: DecidedStatus,
+): LessonOutcomeView {
+  return {
+    proposalId: proposal.id,
+    status: status === 'saved' && proposal.memoryPending ? 'pending' : status,
+    by: 'user',
+    title: proposal.title,
+    rule: proposal.rule,
+    target: proposal.target,
+    memoryHandle: proposal.memoryHandle,
+    resultRef: proposal.resultRef,
+    reason:
+      proposal.status === 'rejected'
+        ? proposal.rejectReason
+        : proposal.status === 'dropped_by_check'
+          ? proposal.checkReason
+          : null,
+  };
+}
+
+/**
+ * One lesson as Settings lists it, whatever became of it: one still waiting
+ * gets the card's own row and actions, a decided one the card's decided row,
+ * with Undo and Edit on an entry of its own and Approve on one still pending.
+ */
+export function LessonProposalRow({
+  proposal,
+  lessonsApi,
+  readDocuments = null,
+  detailed = false,
+  onChanged,
+}: {
+  proposal: LessonProposal;
+  lessonsApi: Lessons | null;
+  readDocuments?: LessonDocumentsReader | null;
+  detailed?: boolean;
+  onChanged: () => void;
+}): React.JSX.Element {
+  const source = <SourceLine proposal={proposal} dated={detailed} />;
+  const act = <T,>(
+    call: ((api: Lessons) => Promise<T>) | null,
+  ): (() => Promise<void>) | undefined =>
+    lessonsApi === null || call === null
+      ? undefined
+      : () => described(call(lessonsApi)).then(onChanged);
+  const { status } = proposal;
+  if (status === 'proposed' || status === 'check_failed') {
+    return (
+      <LessonRow
+        lesson={lessonOf(proposal)}
+        places={proposal.places}
+        moveUp={proposal.moveUp}
+        readDocuments={readDocuments}
+        source={source}
+        onSave={
+          lessonsApi === null
+            ? undefined
+            : (proposalId: string, request: LessonSaveRequest) =>
+                described(
+                  lessonsApi.saveLesson({ proposalId, saveLessonDto: request }),
+                ).then(onChanged)
+        }
+        onReject={
+          lessonsApi === null
+            ? undefined
+            : (proposalId: string, reason: string | null) =>
+                described(
+                  lessonsApi.rejectLesson({
+                    proposalId,
+                    rejectLessonDto: reason === null ? {} : { reason },
+                  }),
+                ).then(onChanged)
+        }
+        onUpdateRule={
+          lessonsApi === null
+            ? undefined
+            : (proposalId: string, edit: LessonRuleEdit) =>
+                described(
+                  lessonsApi.updateLessonRule({
+                    proposalId,
+                    updateLessonRuleDto: edit,
+                  }),
+                ).then(onChanged)
+        }
+        onMoveUp={act((api) => api.moveLessonUp({ proposalId: proposal.id }))}
+      />
+    );
+  }
+  const ownEntry = proposal.undoable;
+  return (
+    <DecidedRow
+      lesson={lessonOf(proposal)}
+      places={proposal.places}
+      outcome={outcomeOf(proposal, status)}
+      source={source}
+      detailed={detailed}
+      onUndo={
+        ownEntry
+          ? act((api) => api.undoLesson({ proposalId: proposal.id }))
+          : undefined
+      }
+      onEdit={
+        ownEntry && lessonsApi !== null
+          ? (proposalId: string, edit: LessonEdit) =>
+              described(
+                lessonsApi.editLesson({ proposalId, editLessonDto: edit }),
+              ).then(onChanged)
+          : undefined
+      }
+      onApprove={
+        ownEntry && proposal.memoryPending
+          ? act((api) => api.approveLesson({ proposalId: proposal.id }))
+          : undefined
+      }
+    />
+  );
+}
+
 /** The lessons waiting on the user, one row each, decided with the card's own actions. */
 export function WaitingLessons({
   waiting,
@@ -134,7 +274,7 @@ export function WaitingLessons({
   knowledgeApi,
 }: {
   waiting: WaitingLessonsState;
-  lessonsApi: DaemonApis['lessons'] | null;
+  lessonsApi: Lessons | null;
   knowledgeApi: DaemonApis['knowledge'] | null;
 }): React.JSX.Element {
   const readDocuments = documentsReaderOf(knowledgeApi);
@@ -161,53 +301,11 @@ export function WaitingLessons({
             key={proposal.id}
             data-slot="waiting-lesson"
             className="min-w-0 py-3 first:pt-0 last:pb-0">
-            <LessonRow
-              lesson={lessonOf(proposal)}
-              places={proposal.places}
-              moveUp={proposal.moveUp}
+            <LessonProposalRow
+              proposal={proposal}
+              lessonsApi={lessonsApi}
               readDocuments={readDocuments}
-              source={<SourceLine proposal={proposal} />}
-              onSave={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string, request: LessonSaveRequest) =>
-                      described(
-                        lessonsApi.saveLesson({
-                          proposalId,
-                          saveLessonDto: request,
-                        }),
-                      ).then(waiting.reload)
-              }
-              onReject={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string, reason: string | null) =>
-                      described(
-                        lessonsApi.rejectLesson({
-                          proposalId,
-                          rejectLessonDto: reason === null ? {} : { reason },
-                        }),
-                      ).then(waiting.reload)
-              }
-              onUpdateRule={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string, edit: LessonRuleEdit) =>
-                      described(
-                        lessonsApi.updateLessonRule({
-                          proposalId,
-                          updateLessonRuleDto: edit,
-                        }),
-                      ).then(waiting.reload)
-              }
-              onMoveUp={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string) =>
-                      described(lessonsApi.moveLessonUp({ proposalId })).then(
-                        waiting.reload,
-                      )
-              }
+              onChanged={waiting.reload}
             />
           </li>
         ))}
@@ -228,7 +326,7 @@ export function SavedLessons({
   lessonsApi,
 }: {
   saved: WaitingLessonsState;
-  lessonsApi: DaemonApis['lessons'] | null;
+  lessonsApi: Lessons | null;
 }): React.JSX.Element | null {
   const proposals = saved.proposals ?? [];
   const { shown, expanded, setExpanded } = useShowAll(proposals, SAVED_SHOWN);
@@ -252,42 +350,10 @@ export function SavedLessons({
       <ul className="m-0 flex list-none flex-col gap-3 p-0">
         {shown.map((proposal) => (
           <li key={proposal.id} data-slot="saved-lesson" className="min-w-0">
-            <p className="m-0 mb-1 text-xs text-muted-foreground">
-              <SourceLine proposal={proposal} />
-            </p>
-            <DecidedRow
-              lesson={lessonOf(proposal)}
-              places={proposal.places}
-              outcome={{
-                proposalId: proposal.id,
-                status: 'saved',
-                by: 'user',
-                title: proposal.title,
-                rule: proposal.rule,
-                target: proposal.target,
-                memoryHandle: proposal.memoryHandle,
-                resultRef: proposal.resultRef,
-                reason: null,
-              }}
-              onUndo={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string) =>
-                      described(lessonsApi.undoLesson({ proposalId })).then(
-                        saved.reload,
-                      )
-              }
-              onEdit={
-                lessonsApi === null
-                  ? undefined
-                  : (proposalId: string, edit: LessonEdit) =>
-                      described(
-                        lessonsApi.editLesson({
-                          proposalId,
-                          editLessonDto: edit,
-                        }),
-                      ).then(saved.reload)
-              }
+            <LessonProposalRow
+              proposal={proposal}
+              lessonsApi={lessonsApi}
+              onChanged={saved.reload}
             />
           </li>
         ))}

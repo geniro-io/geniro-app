@@ -442,6 +442,13 @@ export function registerIpc(
     updateSettingsRemotePolicy,
     async (_event, patch: unknown) => {
       const parsed = settingsPatchSchema.parse(patch);
+      if (parsed.semanticSearch !== undefined) {
+        // The switch is setSearchByMeaning's: a failed download turns it off between the page's read and this write.
+        parsed.semanticSearch = {
+          ...parsed.semanticSearch,
+          enabled: readSettings().semanticSearch.enabled,
+        };
+      }
       const settings = updateSettings(parsed);
       // Both are read when the daemon PROCESS is launched — CLI paths ride its
       // env, the inspector is a launch flag — so neither can take effect on the

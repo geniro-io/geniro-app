@@ -122,6 +122,36 @@ describe('GlobalChatSearchService search by meaning', () => {
     expect(byWords.hits.map((hit) => hit.itemId)).toEqual(['filler']);
   });
 
+  it('says in partialReason what search by meaning leaves to words, after the cut it made', async () => {
+    const note =
+      'Search by meaning covers only chats from the last 30 days; older messages are found by their words alone.';
+    fake.notes = { chats: note };
+    fake.answerChats = () => [{ itemId: 'pic', runId: RUN_A, similarity: 0.9 }];
+
+    const fused = await service.search({
+      query: 'screenshots',
+      limit: 30,
+      includeArchived: true,
+    });
+    const cut = await service.search({
+      query: 'screenshots',
+      limit: 1,
+      includeArchived: true,
+    });
+    fake.answerChats = () => null;
+    const wordsOnly = await service.search({
+      query: 'screenshots',
+      limit: 30,
+      includeArchived: true,
+    });
+
+    expect(fused.partialReason).toBe(note);
+    expect(cut.partialReason).toBe(
+      `Showing the best 1 matches — add a word to narrow it. ${note}`,
+    );
+    expect(wordsOnly.partialReason).toBe(note);
+  });
+
   it('puts the best fused hit first with score 1 and keeps the others below it', async () => {
     fake.answerChats = () => [{ itemId: 'pic', runId: RUN_A, similarity: 0.9 }];
 

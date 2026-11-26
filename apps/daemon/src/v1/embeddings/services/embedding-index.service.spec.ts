@@ -47,7 +47,10 @@ const ON: EmbeddingConfig = {
   model: MODEL,
   pendingModel: null,
   onBattery: false,
+  sources: { memory: true, knowledge: true, chats: true },
+  chatWindowDays: null,
 };
+const DAY_MS = 24 * 60 * 60_000;
 const CHAT_PAGE = 32;
 
 type Handler<Op extends WorkerOp> = (
@@ -76,6 +79,7 @@ class FakeEmbeddingProcess {
     knowledge: new Map(),
   };
   readonly chats = new Map<string, string>();
+  readonly chatCreated = new Map<string, number>();
   readonly meta = new Map<string, string>();
   private readonly events = new Subject<EmbeddingProcessEvent>();
 
@@ -145,8 +149,36 @@ class FakeEmbeddingProcess {
       case 'indexChats':
         for (const item of request.items) {
           this.chats.set(item.itemId, item.textHash);
+          this.chatCreated.set(item.itemId, item.createdAt);
         }
         return { stored: request.items.length };
+      case 'dropSource': {
+        if (request.source !== 'chats') {
+          const deleted = this.stored[request.source].size;
+          this.stored[request.source].clear();
+          return { deleted };
+        }
+        const deleted = this.chats.size;
+        this.chats.clear();
+        this.chatCreated.clear();
+        for (const key of [...this.meta.keys()]) {
+          if (key.startsWith('chats:')) {
+            this.meta.delete(key);
+          }
+        }
+        return { deleted };
+      }
+      case 'deleteChatsBefore': {
+        let deleted = 0;
+        for (const [itemId, createdAt] of [...this.chatCreated]) {
+          if (createdAt < request.createdBefore) {
+            this.chats.delete(itemId);
+            this.chatCreated.delete(itemId);
+            deleted += 1;
+          }
+        }
+        return { deleted };
+      }
       case 'counts':
         return {
           memory: this.stored.memory.size,
@@ -216,12 +248,17 @@ class FakeChats implements ChatSourceProvider {
   totalCalls = 0;
   totalGate: Promise<void> | null = null;
 
-  add(rowid: number, runId: string, itemId = `c${rowid}`): void {
+  add(
+    rowid: number,
+    runId: string,
+    itemId = `c${rowid}`,
+    createdAt = rowid,
+  ): void {
     this.rows.push({
       rowid,
       itemId,
       runId,
-      createdAt: rowid,
+      createdAt,
       textHash: `chat-${itemId}`,
       text: `message ${itemId}`,
     });
@@ -232,10 +269,12 @@ class FakeChats implements ChatSourceProvider {
     this.rows.splice(0, this.rows.length, ...kept);
   }
 
-  async total(): Promise<number> {
+  async total(createdAfter: number | null): Promise<number> {
     this.totalCalls++;
     await this.totalGate;
-    return this.rows.length;
+    return this.rows.filter(
+      (row) => createdAfter === null || row.createdAt >= createdAfter,
+    ).length;
   }
 
   async newestRowid(): Promise<number> {
@@ -981,6 +1020,292 @@ describe('EmbeddingIndexService', () => {
         active: MODEL,
         pending: null,
       });
+    });
+  });
+
+  describe('sources and the chat window', () => {
+    let knowledge: FakeDocuments;
+
+    beforeEach(() => {
+      knowledge = new FakeDocuments('knowledge');
+      index.registerDocuments(knowledge);
+    });
+
+    it('embeds nothing of a source switched off, drops its vectors and leaves its searches to words', async () => {
+      memory.set('m1', 'one');
+      knowledge.set('k1', 'doc');
+      process.stored.memory.set('old', 'hash-old');
+
+      await index.setConfig({
+        ...ON,
+        sources: { memory: false, knowledge: true, chats: true },
+      });
+      await waitReady();
+      memory.set('m2', 'two');
+      index.enqueue('memory', ['m2']);
+      await waitReady();
+
+      expect(indexedIds('memory')).toEqual([]);
+      expect(indexedIds('knowledge')).toEqual(['k1']);
+      expect(process.requests).toContainEqual({
+        op: 'dropSource',
+        source: 'memory',
+      });
+      expect(process.stored.memory.size).toBe(0);
+      expect(
+        process.requests.some(
+          (request) => request.op === 'missing' && request.source === 'memory',
+        ),
+      ).toBe(false);
+      const asked = process.requests.length;
+      expect(await index.scoreDocuments('memory', 'q', null, 5)).toBeNull();
+      expect(process.requests.length).toBe(asked);
+      expect((await index.status()).counts.memory).toEqual({
+        indexed: 0,
+        total: 0,
+      });
+    });
+
+    it('backfills a source again once it is switched back on', async () => {
+      memory.set('m1', 'one');
+      await index.setConfig({
+        ...ON,
+        sources: { memory: false, knowledge: true, chats: true },
+      });
+      await waitReady();
+
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(indexedIds('memory')).toEqual(['m1']);
+      expect(
+        (await statusAfter(EMBEDDING_TOTALS_FRESH_MS)).counts.memory,
+      ).toEqual({
+        indexed: 1,
+        total: 1,
+      });
+    });
+
+    it('walks no chats while chats are off, drops their vectors and cursors, and walks them anew when switched back on', async () => {
+      chats.add(1, 'r1');
+      chats.add(2, 'r1');
+      index.registerChats(chats);
+      await index.setConfig(ON);
+      await waitReady();
+      expect(indexedChatIds()).toEqual(['c2', 'c1']);
+
+      await index.setConfig({
+        ...ON,
+        sources: { memory: true, knowledge: true, chats: false },
+      });
+      await waitReady();
+      expect(process.chats.size).toBe(0);
+      expect(process.meta.get('chats:gemma@rev-1:fwd')).toBeUndefined();
+      expect(await index.searchChats('q', 5, null)).toBeNull();
+      expect(await index.status()).toMatchObject({
+        state: 'ready',
+        counts: { chats: { indexed: 0, total: 0, paused: null } },
+      });
+
+      const before = indexedChatIds().length;
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(indexedChatIds().slice(before)).toEqual(['c2', 'c1']);
+      expect(process.chats.size).toBe(2);
+    });
+
+    it('embeds only chats inside the window and drops the vectors of older ones', async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'old-1', now - 40 * DAY_MS);
+      chats.add(2, 'r1', 'old-2', now - 31 * DAY_MS);
+      chats.add(3, 'r2', 'new-1', now - 10 * DAY_MS);
+      chats.add(4, 'r2', 'new-2', now - DAY_MS);
+      process.chats.set('ancient', 'hash');
+      process.chatCreated.set('ancient', now - 400 * DAY_MS);
+      index.registerChats(chats);
+
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+
+      expect(indexedChatIds()).toEqual(['new-2', 'new-1']);
+      expect(process.chats.has('ancient')).toBe(false);
+      const trim = process.requests.find(
+        (request) => request.op === 'deleteChatsBefore',
+      );
+      expect(trim).toBeDefined();
+      if (trim?.op === 'deleteChatsBefore') {
+        expect(Math.abs(trim.createdBefore - (now - 30 * DAY_MS))).toBeLessThan(
+          60_000,
+        );
+      }
+      expect(await index.status()).toMatchObject({
+        state: 'ready',
+        counts: { chats: { indexed: 2, total: 2 } },
+      });
+      expect(process.meta.get('chat_window_days')).toBe('30');
+    });
+
+    it('drops chats that fall out of the window as days pass, on the daily sweep', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
+      try {
+        const now = Date.now();
+        chats.add(1, 'r1', 'aging', now - 29 * DAY_MS);
+        index.registerChats(chats);
+        await index.setConfig({ ...ON, chatWindowDays: 30 });
+        await vi.waitFor(() => expect(process.chats.has('aging')).toBe(true));
+
+        await vi.advanceTimersByTimeAsync(EMBEDDING_SWEEP_INTERVAL_MS * 2);
+
+        await vi.waitFor(() => expect(process.chats.has('aging')).toBe(false));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('walks the chats again when the window widens, so the messages it now takes in are embedded', async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'old', now - 60 * DAY_MS);
+      chats.add(2, 'r1', 'mid', now - 20 * DAY_MS);
+      chats.add(3, 'r1', 'new', now - DAY_MS);
+      index.registerChats(chats);
+      await index.setConfig({ ...ON, chatWindowDays: 7 });
+      await waitReady();
+      expect(indexedChatIds()).toEqual(['new']);
+
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+      expect([...process.chats.keys()].sort()).toEqual(['mid', 'new']);
+
+      await index.setConfig({ ...ON, chatWindowDays: null });
+      await waitReady();
+      expect([...process.chats.keys()].sort()).toEqual(['mid', 'new', 'old']);
+      expect(process.meta.get('chat_window_days')).toBe('all');
+    });
+
+    it('keeps walking past a message dated before the window when newer ones lie below it', async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'below', now - DAY_MS);
+      for (let rowid = 2; rowid <= CHAT_PAGE; rowid++) {
+        chats.add(rowid, 'r1', `imported-${rowid}`, now - 90 * DAY_MS);
+      }
+      chats.add(CHAT_PAGE + 1, 'r1', 'top', now - DAY_MS);
+      index.registerChats(chats);
+
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+
+      expect(indexedChatIds()).toEqual(['top', 'below']);
+    });
+
+    it('tries the purge again on the next push after it failed', async () => {
+      memory.set('m1', 'one');
+      process.stored.memory.set('m1', 'hash-one');
+      let failures = 1;
+      process.handlers.dropSource = (request) => {
+        if (failures > 0) {
+          failures -= 1;
+          return Promise.reject(new Error('the embedding process exited'));
+        }
+        return process.answer(request) as WorkerResults['dropSource'];
+      };
+      const off = {
+        ...ON,
+        sources: { memory: false, knowledge: true, chats: true },
+      };
+
+      await index.setConfig(off);
+      await vi.waitFor(() => expect(failures).toBe(0));
+      expect(process.stored.memory.size).toBe(1);
+      await index.setConfig(off);
+
+      await vi.waitFor(() => expect(process.stored.memory.size).toBe(0));
+    });
+
+    it('purges nothing on a push that changes neither the sources nor the window', async () => {
+      await index.setConfig({ ...ON, chatWindowDays: 30 });
+      await waitReady();
+      const asked = process.requests.length;
+
+      await index.setConfig({ ...ON, chatWindowDays: 30, onBattery: true });
+      await waitReady();
+
+      expect(
+        process.requests
+          .slice(asked)
+          .some(
+            (request) =>
+              request.op === 'deleteChatsBefore' || request.op === 'dropSource',
+          ),
+      ).toBe(false);
+    });
+
+    it("walks the pending model's chats again too when the window widens", async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'old', now - 60 * DAY_MS);
+      chats.add(2, 'r1', 'new', now - DAY_MS);
+      index.registerChats(chats);
+      await index.setConfig({ ...ON, pendingModel: NEXT, chatWindowDays: 7 });
+      await waitReady();
+
+      await index.setConfig({
+        ...ON,
+        pendingModel: NEXT,
+        chatWindowDays: null,
+      });
+      await waitReady();
+
+      const pendingIds = process.requests.flatMap((request) =>
+        request.op === 'indexChats' && request.slot === 'pending'
+          ? request.items.map((item) => item.itemId)
+          : [],
+      );
+      expect(pendingIds).toContain('old');
+    });
+
+    it('walks the chats again for a window wider than the stored one after a restart', async () => {
+      const now = Date.now();
+      chats.add(1, 'r1', 'old', now - 60 * DAY_MS);
+      chats.add(2, 'r1', 'new', now - DAY_MS);
+      process.meta.set('chat_window_days', '7');
+      process.meta.set('chats:gemma@rev-1:fwd', '2');
+      process.meta.set('chats:gemma@rev-1:back', '0');
+      process.chats.set('new', 'chat-new');
+      process.chatCreated.set('new', now - DAY_MS);
+      index.registerChats(chats);
+
+      await index.setConfig(ON);
+      await waitReady();
+
+      expect(process.chats.has('old')).toBe(true);
+    });
+
+    it('says which source search by meaning leaves to words, and nothing while it is off or covers all', async () => {
+      expect(index.meaningNote('memory')).toBeNull();
+
+      await index.setConfig(ON);
+      expect(index.meaningNote('memory')).toBeNull();
+      expect(index.meaningNote('chats')).toBeNull();
+
+      await index.setConfig({
+        ...ON,
+        sources: { memory: true, knowledge: false, chats: true },
+        chatWindowDays: 30,
+      });
+      expect(index.meaningNote('knowledge')).toBe(
+        'Search by meaning is off for knowledge documents in Settings → Search, so only word matches are listed.',
+      );
+      expect(index.meaningNote('chats')).toBe(
+        'Search by meaning covers only chats from the last 30 days; older messages are found by their words alone.',
+      );
+      expect(index.meaningNote('memory')).toBeNull();
+
+      await index.setConfig({
+        ...ON,
+        enabled: false,
+        sources: { memory: false, knowledge: false, chats: false },
+      });
+      expect(index.meaningNote('memory')).toBeNull();
     });
   });
 });

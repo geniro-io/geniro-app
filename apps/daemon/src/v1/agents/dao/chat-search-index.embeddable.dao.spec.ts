@@ -141,6 +141,35 @@ describe('ChatSearchIndexDao embeddings reads', () => {
     ).toBe(0);
   });
 
+  it('counts only the messages created at or after a cutoff when one is given', async () => {
+    const later = new Date('2026-03-01T00:00:00Z');
+    await db.item('late-a', {
+      runId: RUN_A,
+      seq: 7,
+      payload: long('Billing late'),
+      createdAt: later,
+    });
+    const dao = db.dao();
+
+    expect(
+      await dao.embeddableCountBetween(0, Number.MAX_SAFE_INTEGER, null),
+    ).toBe(5);
+    expect(
+      await dao.embeddableCountBetween(
+        0,
+        Number.MAX_SAFE_INTEGER,
+        later.getTime(),
+      ),
+    ).toBe(1);
+    expect(
+      await dao.embeddableCountBetween(
+        0,
+        Number.MAX_SAFE_INTEGER,
+        later.getTime() + 1,
+      ),
+    ).toBe(0);
+  });
+
   it('leaves out messages too short to mean anything by meaning, counted or listed', async () => {
     const dao = db.dao();
 

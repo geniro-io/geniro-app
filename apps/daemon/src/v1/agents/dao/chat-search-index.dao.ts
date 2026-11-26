@@ -112,13 +112,20 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
     return rows.map((row) => row.id);
   }
 
-  /** How many messages search by meaning embeds with an `items` rowid in `(after, upTo]`: user and assistant messages long enough to mean something. */
-  async embeddableCountBetween(after: number, upTo: number): Promise<number> {
-    const row = await this.embeddable()
+  /** How many messages search by meaning embeds with an `items` rowid in `(after, upTo]`, created at or after `createdAfter` (epoch ms) unless it is null: user and assistant messages long enough to mean something. */
+  async embeddableCountBetween(
+    after: number,
+    upTo: number,
+    createdAfter: number | null = null,
+  ): Promise<number> {
+    let query = this.embeddable()
       .select((eb) => eb.fn.countAll<number>().as('n'))
       .where('i.rowid', '>', after)
-      .where('i.rowid', '<=', upTo)
-      .executeTakeFirst();
+      .where('i.rowid', '<=', upTo);
+    if (createdAfter !== null) {
+      query = query.where('i.created_at', '>=', createdAfter);
+    }
+    const row = await query.executeTakeFirst();
     return Number(row?.n ?? 0);
   }
 

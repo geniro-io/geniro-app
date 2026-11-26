@@ -1,6 +1,7 @@
 import type {
   ChatScore,
   DocumentSource,
+  EmbeddingSource,
   SourceScore,
 } from '../embeddings.types';
 import type { EmbeddingIndexService } from '../services/embedding-index.service';
@@ -30,6 +31,7 @@ export class FakeEmbeddingIndex {
   readonly enqueued: { source: DocumentSource; sourceIds: string[] }[] = [];
   readonly deleted: { source: DocumentSource; sourceIds: string[] }[] = [];
   readonly deletedRuns: string[][] = [];
+  notes: Partial<Record<EmbeddingSource, string>> = {};
   answerScores: (
     call: MeaningQuery,
   ) => SourceScore[] | null | Promise<SourceScore[] | null> = () => null;
@@ -56,6 +58,10 @@ export class FakeEmbeddingIndex {
     const call = { query, k, runIds };
     this.chatCalls.push(call);
     return this.answerChats(call);
+  }
+
+  meaningNote(source: EmbeddingSource): string | null {
+    return this.notes[source] ?? null;
   }
 
   enqueue(source: DocumentSource, sourceIds: readonly string[]): void {

@@ -220,6 +220,8 @@ export type KnowledgeRunSearch = z.infer<typeof KnowledgeRunSearchSchema>;
 export const KnowledgeListSchema = z.object({
   documents: z.array(KnowledgeHeadSchema),
   next: z.string().nullable(),
+  /** With `q`: what the search left to words while search by meaning is on (a source switched off), else null. */
+  meaningNote: z.string().nullable(),
 });
 export type KnowledgeList = z.infer<typeof KnowledgeListSchema>;
 

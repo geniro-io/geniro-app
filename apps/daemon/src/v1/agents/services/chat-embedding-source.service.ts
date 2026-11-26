@@ -45,7 +45,7 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
       return;
     }
     const provider: ChatSourceProvider = {
-      total: () => this.embeddableTotal(),
+      total: (createdAfter) => this.embeddableTotal(createdAfter),
       newestRowid: () => this.index.newestItemRowid(),
       before: async (rowid, limit) =>
         (await this.index.embeddableRows(rowid, 'before', limit)).map(
@@ -73,7 +73,7 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
       .subscribe(() => embeddings.chatAdded());
   }
 
-  private async embeddableTotal(): Promise<number> {
+  private async embeddableTotal(createdAfter: number | null): Promise<number> {
     const newest = await this.index.newestItemRowid();
     const yieldIfHeld = eventLoopSlicer();
     let total = 0;
@@ -82,6 +82,7 @@ export class ChatEmbeddingSourceService implements OnModuleInit {
       total += await this.index.embeddableCountBetween(
         after,
         Math.min(after + EMBEDDING_CHAT_COUNT_WINDOW, newest),
+        createdAfter,
       );
     }
     return total;

@@ -34,6 +34,12 @@ export class KnowledgeSearchTool extends KnowledgeMcpTool {
       read.query.query,
       read.query.limit,
     );
-    return this.masked(knowledgeSearchResultText(found, read.query.query));
+    return this.masked(
+      knowledgeSearchResultText(
+        found,
+        read.query.query,
+        read.query.query ? this.knowledge.meaningNote() : null,
+      ),
+    );
   }
 }

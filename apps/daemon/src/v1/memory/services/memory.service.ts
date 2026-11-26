@@ -746,6 +746,11 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     return found.map(toHit);
   }
 
+  /** What `search` leaves to words while search by meaning is on, or null. */
+  meaningNote(): string | null {
+    return this.embeddings?.meaningNote('memory') ?? null;
+  }
+
   /** Today's word search: every word, else any word, ranked by bm25 relevance. */
   private async wordCandidates(
     query: string,

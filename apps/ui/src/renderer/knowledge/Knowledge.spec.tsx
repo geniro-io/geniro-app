@@ -141,9 +141,14 @@ async function type(input: HTMLInputElement, value: string): Promise<void> {
   });
 }
 
-const page = (documents = [aKnowledgeHead()], next: string | null = null) => ({
+const page = (
+  documents = [aKnowledgeHead()],
+  next: string | null = null,
+  meaningNote: string | null = null,
+) => ({
   documents,
   next,
+  meaningNote,
 });
 
 beforeEach(() => {
@@ -206,6 +211,29 @@ describe('Knowledge — the list', () => {
     expect(knowledgeApi.listKnowledge).toHaveBeenLastCalledWith(
       expect.objectContaining({ q: 'release' }),
     );
+  });
+
+  it('says what a search left to words when the daemon reports it, and nothing without a query', async () => {
+    const note =
+      'Search by meaning is off for knowledge documents in Settings → Search, so only word matches are listed.';
+    const el = await mount();
+    expect(el.textContent).not.toContain(note);
+    knowledgeApi.listKnowledge.mockResolvedValue(
+      page([aKnowledgeHead()], null, note),
+    );
+
+    await type(
+      el.querySelector<HTMLInputElement>('[aria-label="Search documents"]')!,
+      'release',
+    );
+    await act(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 300);
+        }),
+    );
+
+    expect(el.textContent).toContain(note);
   });
 
   it('shows how many wait, and that chip opens the waiting filter', async () => {

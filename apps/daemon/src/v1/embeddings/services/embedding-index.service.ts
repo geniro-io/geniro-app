@@ -17,7 +17,9 @@ import {
   EMBEDDING_CHAT_POLL_MS,
   EMBEDDING_CHAT_STEP_ITEMS,
   EMBEDDING_CONTROL_TIMEOUT_MS,
+  EMBEDDING_DAY_MS,
   EMBEDDING_QUERY_TIMEOUT_MS,
+  EMBEDDING_SOURCES,
   EMBEDDING_SWEEP_INTERVAL_MS,
   EMBEDDING_TOTALS_FRESH_MS,
   type EmbeddingConfig,
@@ -25,6 +27,7 @@ import {
   type EmbeddingModelRef,
   type EmbeddingsChangedEvent,
   type EmbeddingsDatabase,
+  type EmbeddingSource,
   type EmbeddingStatus,
   type ModelSlot,
   type SourceScore,
@@ -36,6 +39,11 @@ const DOCUMENT_BATCH = 16;
 const DOCUMENT_SOURCES: readonly DocumentSource[] = ['memory', 'knowledge'];
 const SLOTS: readonly ModelSlot[] = ['active', 'pending'];
 const RESUME_MARGIN_MS = 100;
+const SOURCE_WORDS: Record<EmbeddingSource, string> = {
+  memory: 'memory',
+  knowledge: 'knowledge documents',
+  chats: 'chats',
+};
 
 /** Where the forward cursors step back to once the newest rowid is `newest`: a step's worth below it. */
 function rewoundFloor(newest: number): number {
@@ -75,6 +83,36 @@ function forwardCursorKey(model: EmbeddingModelRef): string {
   return `chats:${keyOf(model)}:fwd`;
 }
 
+const CHAT_WINDOW_KEY = 'chat_window_days';
+const ALL_TIME = 'all';
+
+function windowValue(days: number | null): string {
+  return days === null ? ALL_TIME : String(days);
+}
+
+/** Whether chats `days` back reach further than the window the index was last trimmed to. */
+function widens(days: number | null, stored: string): boolean {
+  return stored !== ALL_TIME && (days === null || days > Number(stored));
+}
+
+function scopeChanged(before: EmbeddingConfig, next: EmbeddingConfig): boolean {
+  return (
+    before.chatWindowDays !== next.chatWindowDays ||
+    EMBEDDING_SOURCES.some(
+      (source) => before.sources[source] !== next.sources[source],
+    )
+  );
+}
+
+function withinWindow<T extends { createdAt: number }>(
+  rows: readonly T[],
+  cutoff: number | null,
+): T[] {
+  return cutoff === null
+    ? [...rows]
+    : rows.filter((row) => row.createdAt >= cutoff);
+}
+
 /**
  * What search by meaning knows and does: the config Electron main pushed, the
  * queue of texts to embed (memory before knowledge before chats), the chat
@@ -110,6 +148,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   private totalsReading: Promise<void> | null = null;
   private changedTimer: NodeJS.Timeout | null = null;
   private resumeTimer: NodeJS.Timeout | null = null;
+  private purgeDue = false;
 
   constructor(private readonly process: EmbeddingProcessService) {
     this.process.changes().subscribe((event) => {
@@ -164,6 +203,9 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       active: this.carried(next.model),
       pending: next.pendingModel ? this.carried(next.pendingModel) : null,
     };
+    if (!wasEnabled || scopeChanged(before, next)) {
+      this.applySources();
+    }
     await this.process
       .setModels(next.model, next.pendingModel)
       .catch((err: unknown) =>
@@ -188,13 +230,17 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
 
   /** A chat message was stored. While chats wait for power nothing indexes it, so readers are told the total may have moved. */
   chatAdded(): void {
-    if (this.enabled && this.config.onBattery) {
+    if (this.enabled && this.config.onBattery && this.config.sources.chats) {
       this.emit('progress');
     }
   }
 
   enqueue(source: DocumentSource, sourceIds: readonly string[]): void {
-    if (!this.enabled || sourceIds.length === 0) {
+    if (
+      !this.enabled ||
+      !this.config.sources[source] ||
+      sourceIds.length === 0
+    ) {
       return;
     }
     const queue = this.jobs.get(source);
@@ -258,7 +304,11 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     sourceIds: readonly string[] | null,
     limit: number,
   ): Promise<SourceScore[] | null> {
-    if (!this.enabled || (sourceIds !== null && sourceIds.length === 0)) {
+    if (
+      !this.enabled ||
+      !this.config.sources[source] ||
+      (sourceIds !== null && sourceIds.length === 0)
+    ) {
       return null;
     }
     try {
@@ -286,7 +336,11 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     k: number,
     runIds: readonly string[] | null,
   ): Promise<ChatScore[] | null> {
-    if (!this.enabled || (runIds !== null && runIds.length === 0)) {
+    if (
+      !this.enabled ||
+      !this.config.sources.chats ||
+      (runIds !== null && runIds.length === 0)
+    ) {
       return null;
     }
     try {
@@ -305,6 +359,25 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       );
       return null;
     }
+  }
+
+  /**
+   * The one sentence a search of `source` adds while search by meaning is on
+   * but leaves part of that source to word search; null when nothing is left
+   * out or search by meaning is off altogether.
+   */
+  meaningNote(source: EmbeddingSource): string | null {
+    if (!this.enabled) {
+      return null;
+    }
+    if (!this.config.sources[source]) {
+      return `Search by meaning is off for ${SOURCE_WORDS[source]} in Settings → Search, so only word matches are listed.`;
+    }
+    const days = this.config.chatWindowDays;
+    if (source === 'chats' && days !== null) {
+      return `Search by meaning covers only chats from the last ${days} ${days === 1 ? 'day' : 'days'}; older messages are found by their words alone.`;
+    }
+    return null;
   }
 
   async status(): Promise<EmbeddingStatus> {
@@ -348,7 +421,10 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
           indexed: Math.min(counts.chats, this.totals.chats),
           total: this.totals.chats,
           paused:
-            this.config.onBattery && chatsLeft && this.enabled
+            this.config.onBattery &&
+            chatsLeft &&
+            this.enabled &&
+            this.config.sources.chats
               ? 'battery'
               : null,
         },
@@ -453,6 +529,13 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
         this.emit('progress');
       }
     }
+    if (this.purgeDue) {
+      this.purgeDue = false;
+      await this.purgeExcluded().catch((err: unknown) => {
+        this.purgeDue = true;
+        throw err;
+      });
+    }
     while (!this.stopped && this.enabled) {
       let moved = false;
       for (const slot of SLOTS) {
@@ -464,7 +547,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
         if (moved) {
           break;
         }
-        if (!this.config.onBattery) {
+        if (!this.config.onBattery && this.config.sources.chats) {
           moved = await this.chatStep(slot, progress);
           if (moved) {
             break;
@@ -484,7 +567,7 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
   ): Promise<boolean> {
     for (const source of DOCUMENT_SOURCES) {
       const provider = this.documentProviders.get(source);
-      if (!provider) {
+      if (!provider || !this.config.sources[source]) {
         continue;
       }
       if (!progress.backfilled.has(source)) {
@@ -571,10 +654,14 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       return false;
     }
     await this.loadCursors(progress, chats);
+    const cutoff = this.chatCutoff();
     const forward = progress.forward ?? 0;
     const fresh = await chats.after(forward, EMBEDDING_CHAT_STEP_ITEMS);
     if (fresh.length > 0) {
-      await this.indexChats(slot, fresh);
+      const inWindow = withinWindow(fresh, cutoff);
+      if (inWindow.length > 0) {
+        await this.indexChats(slot, inWindow);
+      }
       progress.forward = Math.max(...fresh.map((row) => row.rowid));
       await this.saveCursor(progress, 'fwd', progress.forward);
       await this.refreshCounts(slot, progress);
@@ -592,7 +679,12 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       await this.saveCursor(progress, 'back', 0);
       return false;
     }
-    await this.indexChats(slot, older);
+    const kept = withinWindow(older, cutoff);
+    if (kept.length === 0) {
+      progress.chatsDone = true;
+      return false;
+    }
+    await this.indexChats(slot, kept);
     progress.back = Math.min(...older.map((row) => row.rowid));
     await this.saveCursor(progress, 'back', progress.back);
     await this.refreshCounts(slot, progress);
@@ -762,11 +854,15 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     for (const source of DOCUMENT_SOURCES) {
       const provider = this.documentProviders.get(source);
       if (provider) {
-        this.totals[source] = (await provider.inventory()).length;
+        this.totals[source] = this.config.sources[source]
+          ? (await provider.inventory()).length
+          : 0;
       }
     }
     if (this.chatProvider) {
-      this.totals.chats = await this.chatProvider.total();
+      this.totals.chats = this.config.sources.chats
+        ? await this.chatProvider.total(this.chatCutoff())
+        : 0;
     }
   }
 
@@ -777,9 +873,14 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     }
     const documentsDone = DOCUMENT_SOURCES.every(
       (source) =>
-        !this.documentProviders.has(source) || progress.backfilled.has(source),
+        !this.documentProviders.has(source) ||
+        !this.config.sources[source] ||
+        progress.backfilled.has(source),
     );
-    const chatsDone = this.chatProvider === null || progress.chatsDone;
+    const chatsDone =
+      this.chatProvider === null ||
+      !this.config.sources.chats ||
+      progress.chatsDone;
     return documentsDone && chatsDone && this.backlog() === 0;
   }
 
@@ -891,7 +992,8 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       !chats ||
       forward === null ||
       forward === undefined ||
-      this.config.onBattery
+      this.config.onBattery ||
+      !this.config.sources.chats
     ) {
       return;
     }
@@ -905,6 +1007,10 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
     if (!chats || !this.enabled) {
       return;
     }
+    if (this.config.sources.chats && this.config.chatWindowDays !== null) {
+      this.purgeDue = true;
+      this.kick();
+    }
     try {
       await this.process.request(
         { op: 'keepRuns', runIds: await chats.liveRunIds() },
@@ -914,6 +1020,106 @@ export class EmbeddingIndexService implements OnApplicationShutdown {
       this.logger.warn(
         `the daily sweep of deleted chats' vectors failed: ${String(err)}`,
       );
+    }
+  }
+
+  /** Epoch ms before which chats are left to word search, or null for all of them. */
+  private chatCutoff(): number | null {
+    const days = this.config.chatWindowDays;
+    return days === null ? null : Date.now() - days * EMBEDDING_DAY_MS;
+  }
+
+  /** What a push changes at once in memory; the vectors it leaves out go in {@link purgeExcluded}, the next work's first step. */
+  private applySources(): void {
+    for (const source of DOCUMENT_SOURCES) {
+      if (!this.config.sources[source]) {
+        this.jobs.get(source)?.clear();
+        this.totals[source] = 0;
+        for (const slot of SLOTS) {
+          this.progress[slot]?.backfilled.delete(source);
+        }
+      }
+    }
+    if (!this.config.sources.chats) {
+      this.totals.chats = 0;
+      this.forgetChatCursors();
+    }
+    this.totalsReadAt = 0;
+    this.purgeDue = true;
+  }
+
+  private forgetChatCursors(): void {
+    for (const slot of SLOTS) {
+      const progress = this.progress[slot];
+      if (progress) {
+        progress.forward = null;
+        progress.back = null;
+        progress.chatsDone = false;
+      }
+    }
+  }
+
+  /**
+   * Drops the vectors the settings leave out: every vector of a source
+   * switched off, and chats older than the window. A window wider than the one
+   * the index was last trimmed to walks the chats again from the newest, since
+   * the cursors had passed the messages it now takes in. The stored window is
+   * compared rather than the previous push, which a restart loses.
+   */
+  private async purgeExcluded(): Promise<void> {
+    for (const source of EMBEDDING_SOURCES) {
+      if (!this.config.sources[source]) {
+        await this.process.request(
+          { op: 'dropSource', source },
+          EMBEDDING_BATCH_TIMEOUT_MS,
+        );
+      }
+    }
+    if (!this.config.sources.chats) {
+      return;
+    }
+    const days = this.config.chatWindowDays;
+    const stored =
+      (await this.process.request(
+        { op: 'getMeta', key: CHAT_WINDOW_KEY },
+        EMBEDDING_CONTROL_TIMEOUT_MS,
+      )) ?? ALL_TIME;
+    if (widens(days, stored)) {
+      this.forgetChatCursors();
+      for (const model of [this.config.model, this.config.pendingModel]) {
+        if (!model) {
+          continue;
+        }
+        for (const which of ['fwd', 'back'] as const) {
+          await this.process.request(
+            {
+              op: 'setMeta',
+              key: `chats:${keyOf(model)}:${which}`,
+              value: null,
+            },
+            EMBEDDING_CONTROL_TIMEOUT_MS,
+          );
+        }
+      }
+    }
+    const cutoff = this.chatCutoff();
+    if (cutoff !== null) {
+      await this.process.request(
+        { op: 'deleteChatsBefore', createdBefore: cutoff },
+        EMBEDDING_BATCH_TIMEOUT_MS,
+      );
+    }
+    if (windowValue(days) !== stored) {
+      await this.process.request(
+        { op: 'setMeta', key: CHAT_WINDOW_KEY, value: windowValue(days) },
+        EMBEDDING_CONTROL_TIMEOUT_MS,
+      );
+    }
+    for (const slot of SLOTS) {
+      const progress = this.progress[slot];
+      if (progress?.countsRead) {
+        await this.refreshCounts(slot, progress);
+      }
     }
   }
 

@@ -74,7 +74,11 @@ const mocks = vi.hoisted(() => {
       checker: null,
     },
     knowledge: { enabled: true, agentWrites: 'review' },
-    semanticSearch: { enabled: false },
+    semanticSearch: {
+      enabled: false,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: null,
+    },
     resourceAlerts: {
       enabled: true,
       threadMemoryBytes: 8 * 1024 ** 3,
@@ -289,6 +293,33 @@ describe('registerIpc daemon configuration refresh', () => {
     restart.mockClear();
     await handler(IPC.updateSettings)(event, { checkForUpdates: false });
     expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('keeps the search-by-meaning switch as main holds it when the page saves the sources or the window', async () => {
+    mocks.readSettings.mockReturnValueOnce({
+      ...mocks.settings,
+      semanticSearch: {
+        enabled: false,
+        sources: { memory: true, knowledge: true, chats: true },
+        chatWindowDays: null,
+      },
+    });
+
+    await handler(IPC.updateSettings)(event, {
+      semanticSearch: {
+        enabled: true,
+        sources: { memory: true, knowledge: false, chats: true },
+        chatWindowDays: 30,
+      },
+    });
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      semanticSearch: {
+        enabled: false,
+        sources: { memory: true, knowledge: false, chats: true },
+        chatWindowDays: 30,
+      },
+    });
   });
 
   it('restarts after the daemon-inspector toggle, which only a new process can honour', async () => {

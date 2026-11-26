@@ -71,6 +71,17 @@ describe('KnowledgeService search by meaning', () => {
     await db.orm.close();
   });
 
+  it("carries the index's note on a page search, and none on a plain listing", async () => {
+    await service.create(RELEASE);
+    const note =
+      'Search by meaning is off for knowledge documents in Settings → Search, so only word matches are listed.';
+    fake.notes = { knowledge: note };
+
+    expect((await service.list({ q: 'release' })).meaningNote).toBe(note);
+    expect((await service.list({})).meaningNote).toBeNull();
+    expect(service.meaningNote()).toBe(note);
+  });
+
   it('fuses the word matches with the meaning matches, and keeps a meaning-only document', async () => {
     const release = appliedDocument(await service.create(RELEASE));
     const deploy = appliedDocument(await service.create(DEPLOY));

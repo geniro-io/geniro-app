@@ -5817,6 +5817,18 @@ export interface EmbeddingConfigAckDto {
      * @memberof EmbeddingConfigAckDto
      */
     onBattery: boolean;
+    /**
+     * 
+     * @type {EmbeddingSources}
+     * @memberof EmbeddingConfigAckDto
+     */
+    sources: EmbeddingSources;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingConfigAckDto
+     */
+    chatWindowDays: number | null;
 }
 /**
  * 
@@ -5848,6 +5860,18 @@ export interface EmbeddingConfigDto {
      * @memberof EmbeddingConfigDto
      */
     onBattery: boolean;
+    /**
+     * 
+     * @type {EmbeddingSources}
+     * @memberof EmbeddingConfigDto
+     */
+    sources: EmbeddingSources;
+    /**
+     * 
+     * @type {number}
+     * @memberof EmbeddingConfigDto
+     */
+    chatWindowDays: number | null;
 }
 /**
  * 
@@ -5879,6 +5903,31 @@ export interface EmbeddingModelRef {
      * @memberof EmbeddingModelRef
      */
     dim: number;
+}
+/**
+ * 
+ * @export
+ * @interface EmbeddingSources
+ */
+export interface EmbeddingSources {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingSources
+     */
+    memory: boolean;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingSources
+     */
+    knowledge: boolean;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof EmbeddingSources
+     */
+    chats: boolean;
 }
 /**
  * 
@@ -7646,6 +7695,12 @@ export interface KnowledgeListDto {
      * @memberof KnowledgeListDto
      */
     next: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeListDto
+     */
+    meaningNote: string | null;
 }
 /**
  * 

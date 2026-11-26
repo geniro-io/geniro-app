@@ -21,6 +21,8 @@ export interface KnowledgeQuery {
 export interface KnowledgeListState {
   /** Null until the first answer. */
   documents: KnowledgeHead[] | null;
+  /** What the daemon says a search left to words while search by meaning is on. */
+  meaningNote: string | null;
   error: string | null;
   hasMore: boolean;
   loadMore: () => void;
@@ -43,6 +45,7 @@ export function useKnowledgeList(
 ): KnowledgeListState {
   const [documents, setDocuments] = useState<KnowledgeHead[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
+  const [meaningNote, setMeaningNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
 
@@ -70,6 +73,9 @@ export function useKnowledgeList(
               : [...(held ?? []), ...page.documents],
           );
           setNext(page.next);
+          if (cursor === null) {
+            setMeaningNote(page.meaningNote);
+          }
           setError(null);
         })
         .catch((err: unknown) => {
@@ -100,6 +106,7 @@ export function useKnowledgeList(
 
   return {
     documents,
+    meaningNote,
     error,
     hasMore: next !== null,
     loadMore: () => read(next),

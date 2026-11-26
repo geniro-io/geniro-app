@@ -877,6 +877,72 @@ describe('memory settings', () => {
   });
 });
 
+describe('semantic search settings', () => {
+  it('a file with only the switch reads every source on and all time', () => {
+    writeRaw({ semanticSearch: { enabled: true }, onboardingComplete: true });
+
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: true,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: null,
+    });
+  });
+
+  it('a broken source falls back to on, and the switch and the other sources keep their values', () => {
+    writeRaw({
+      semanticSearch: {
+        enabled: true,
+        sources: { memory: false, knowledge: true, chats: 'yes' },
+      },
+      onboardingComplete: true,
+    });
+
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: true,
+      sources: { memory: false, knowledge: true, chats: true },
+      chatWindowDays: null,
+    });
+  });
+
+  it('a semanticSearch or sources that is no object reads as the defaults, keeping what else is valid', () => {
+    writeRaw({ semanticSearch: 'on', onboardingComplete: true });
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: false,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: null,
+    });
+
+    writeRaw({
+      semanticSearch: { enabled: true, sources: 'x', chatWindowDays: 7 },
+      onboardingComplete: true,
+    });
+    expect(readSettings().semanticSearch).toEqual({
+      enabled: true,
+      sources: { memory: true, knowledge: true, chats: true },
+      chatWindowDays: 7,
+    });
+  });
+
+  it('keeps a whole-day window and reads any other value as all time', () => {
+    writeRaw({
+      semanticSearch: { enabled: true, chatWindowDays: 30 },
+      onboardingComplete: true,
+    });
+    expect(readSettings().semanticSearch.chatWindowDays).toBe(30);
+
+    for (const chatWindowDays of [0, 4000, 2.5, '30']) {
+      writeRaw({
+        semanticSearch: { enabled: true, chatWindowDays },
+        onboardingComplete: true,
+      });
+
+      const settings = readSettings();
+      expect(settings.semanticSearch.chatWindowDays).toBeNull();
+      expect(settings.semanticSearch.enabled).toBe(true);
+    }
+  });
+});
+
 describe('knowledge settings', () => {
   it('a half-valid knowledge object keeps its valid field and defaults the other', () => {
     writeRaw({ knowledge: { enabled: false, agentWrites: 'bogus' } });

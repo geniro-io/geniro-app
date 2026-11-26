@@ -46,11 +46,16 @@ export function readKnowledgeSearchArgs(
 export function knowledgeSearchResultText(
   { hits, total }: KnowledgeSearchResult,
   query: string | undefined,
+  meaningNote: string | null = null,
 ): string {
+  const note = meaningNote === null ? [] : [meaningNote];
   if (hits.length === 0) {
-    return query
-      ? `No knowledge document this run sees matches ${JSON.stringify(query)}.`
-      : 'This run sees no knowledge documents.';
+    return [
+      query
+        ? `No knowledge document this run sees matches ${JSON.stringify(query)}.`
+        : 'This run sees no knowledge documents.',
+      ...note,
+    ].join('\n');
   }
   const shown =
     total > hits.length
@@ -59,5 +64,6 @@ export function knowledgeSearchResultText(
   return [
     `Knowledge documents this run sees — ${shown} Unmarked ones were written or approved by the user:`,
     ...hits.map(knowledgeHitLine),
+    ...note,
   ].join('\n');
 }

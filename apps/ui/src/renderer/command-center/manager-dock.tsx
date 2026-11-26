@@ -23,6 +23,7 @@ export function ManagerDock({
   hidden,
   active,
   threadIdentities,
+  threadReports,
   onOpenThread,
   onTurnSettled,
   onDiscarded,
@@ -36,6 +37,8 @@ export function ManagerDock({
   active: boolean;
   /** The board's threads as the manager's transcript names them. */
   threadIdentities: ReadonlyMap<string, ThreadIdentity>;
+  /** What each board thread last reported, for the Done cards in the manager's transcript. */
+  threadReports: ReadonlyMap<string, string>;
   onOpenThread: (runId: string) => void;
   onTurnSettled: () => void;
   /** The manager is gone; the page offers to start a new one on the same settings. */
@@ -86,6 +89,8 @@ export function ManagerDock({
         composerPlaceholder: 'What should your threads do?',
         onTurnSettled,
         threadIdentities,
+        threadReports,
+        commandCenterManager: true,
         onOpenThread,
       }}
     />

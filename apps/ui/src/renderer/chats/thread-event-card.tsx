@@ -1,14 +1,18 @@
-import { MessageSquare, Reply } from 'lucide-react';
+import { ChevronDown, MessageSquare, Reply, X } from 'lucide-react';
 import { memo, useContext } from 'react';
 
 import {
+  ArchivedThreadBadge,
   ArchiveThreadButton,
   ArchiveThreadIcon,
+  UnarchiveThreadButton,
   useThreadArchive,
+  useThreadUnarchive,
 } from '../components/thread-archive';
 import {
   bareThreadIdentity,
   ThreadActionButton,
+  ThreadFoot,
   type ThreadIdentity,
 } from '../components/thread-head';
 import {
@@ -17,11 +21,19 @@ import {
   type ThreadEventKind,
 } from './agent-event-card';
 import { plainPreview } from './brief-text';
+import { ChatLink } from './browser/chat-link';
+import {
+  isNewestDone,
+  ThreadArchivedContext,
+  ThreadDoneNewestContext,
+  ThreadReportsContext,
+} from './thread-done-context';
 import {
   sentOutcomeWords,
   type ThreadMessageRow,
 } from './thread-message-payload';
 import { ThreadOpenContext, useThreadIdentity } from './thread-title';
+import { useThreadFlag } from './thread-ui-memory';
 
 export type { ThreadEventKind } from './agent-event-card';
 
@@ -41,6 +53,8 @@ export interface ThreadEventCardProps {
   /** The manager's short name for the thread (`t22`). */
   handle?: string | null;
   pullRequest?: number | null;
+  /** When the row was written, which a Done card's foot dates it by. */
+  at?: string | null;
   /** Where the text's Show more is remembered within the thread. */
   memoryKey?: string;
 }
@@ -53,7 +67,21 @@ function identityOf(
   const identity = known ?? bareThreadIdentity(title);
   return identity.pullRequest !== null || pullRequest === null
     ? identity
-    : { ...identity, pullRequest: { number: pullRequest, state: null } };
+    : {
+        ...identity,
+        pullRequest: { number: pullRequest, state: null, url: null },
+      };
+}
+
+function linkPullRequest(url: string, label: React.ReactNode): React.ReactNode {
+  return (
+    <ChatLink
+      href={url}
+      data-slot="thread-event-pull-request-link"
+      className="shrink-0 rounded-sm outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring">
+      {label}
+    </ChatLink>
+  );
 }
 
 /**
@@ -72,13 +100,94 @@ export const ThreadEventCard = memo(function ThreadEventCard({
   outcome = null,
   handle = null,
   pullRequest = null,
+  at = null,
   memoryKey,
 }: ThreadEventCardProps): React.JSX.Element {
   const known = useThreadIdentity(runId);
   const open = useContext(ThreadOpenContext);
   const archive = useThreadArchive(runId);
-  const identity = identityOf(known, title, pullRequest);
+  const unarchive = useThreadUnarchive(runId);
+  const archivedMap = useContext(ThreadArchivedContext);
+  const archived =
+    kind === 'done' && (archivedMap?.get(runId) ?? null) !== null;
+  const reports = useContext(ThreadReportsContext);
+  const [hidden, setHidden] = useThreadFlag(
+    kind === 'done' ? `thread-done-hidden:${runId}` : undefined,
+    false,
+  );
+  const heading = identityOf(known, title, pullRequest);
+  const identity = kind === 'done' ? { ...heading, status: null } : heading;
   const reply = inReplyTo === null ? '' : plainPreview(inReplyTo);
+  if (kind === 'done' && hidden) {
+    return (
+      <AgentEventCard
+        kind="done"
+        slot="thread-event"
+        line={
+          <p
+            data-slot="thread-event-dismissed"
+            className="flex min-w-0 items-center gap-1.5 text-xs leading-5">
+            <span className="min-w-0 truncate font-medium text-foreground">
+              {identity.title}
+            </span>
+            <span className="shrink-0 text-muted-foreground">finished</span>
+          </p>
+        }
+        actions={
+          <ThreadActionButton
+            slot="thread-event-show"
+            label={`Show ${identity.title}`}
+            title="Show this card again"
+            icon={<ChevronDown aria-hidden="true" />}
+            onClick={() => setHidden(false)}>
+            Show
+          </ThreadActionButton>
+        }
+        data={{ 'data-run': runId }}
+      />
+    );
+  }
+  if (archived) {
+    return (
+      <div data-slot="thread-event-archived" className="opacity-70">
+        <AgentEventCard
+          kind="done"
+          slot="thread-event"
+          line={
+            <p className="flex min-w-0 items-center gap-1.5 text-xs leading-5">
+              <span className="min-w-0 truncate font-medium text-foreground">
+                {identity.title}
+              </span>
+              <ArchivedThreadBadge />
+            </p>
+          }
+          actions={
+            <>
+              {open === null ? null : (
+                <ThreadActionButton
+                  slot="thread-event-open"
+                  label={`Open ${identity.title}`}
+                  title="Open this thread's chat"
+                  icon={<MessageSquare aria-hidden="true" />}
+                  onClick={() => open(runId)}>
+                  Open chat
+                </ThreadActionButton>
+              )}
+              {unarchive === null ? null : (
+                <UnarchiveThreadButton
+                  slot="thread-event-unarchive"
+                  title={identity.title}
+                  onUnarchive={unarchive}
+                />
+              )}
+            </>
+          }
+          data={{ 'data-run': runId }}
+        />
+      </div>
+    );
+  }
+  const shownText = kind === 'done' ? (reports?.get(runId) ?? text) : text;
   return (
     <AgentEventCard
       kind={kind}
@@ -87,8 +196,10 @@ export const ThreadEventCard = memo(function ThreadEventCard({
       handle={handle}
       member={member}
       onOpen={open === null ? undefined : () => open(runId)}
+      fullHead={kind === 'done'}
+      linkPullRequest={linkPullRequest}
       headAside={
-        archive === null ? undefined : (
+        archive === null || kind === 'done' ? undefined : (
           <ArchiveThreadIcon title={identity.title} onArchive={archive} />
         )
       }
@@ -104,11 +215,11 @@ export const ThreadEventCard = memo(function ThreadEventCard({
           </p>
         )
       }
-      text={text}
+      text={shownText}
       memoryKey={memoryKey}
-      actions={
-        kind !== 'done' || (open === null && archive === null) ? null : (
-          <>
+      foot={
+        kind !== 'done' ? undefined : (
+          <ThreadFoot slot="thread-event" at={at}>
             {open === null ? null : (
               <ThreadActionButton
                 slot="thread-event-open"
@@ -119,6 +230,14 @@ export const ThreadEventCard = memo(function ThreadEventCard({
                 Open chat
               </ThreadActionButton>
             )}
+            <ThreadActionButton
+              slot="thread-event-dismiss"
+              label={`Hide ${identity.title}`}
+              title="Hide this card"
+              icon={<X aria-hidden="true" />}
+              onClick={() => setHidden(true)}>
+              Dismiss
+            </ThreadActionButton>
             {archive === null ? null : (
               <ArchiveThreadButton
                 slot="thread-event-archive"
@@ -126,7 +245,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
                 onArchive={archive}
               />
             )}
-          </>
+          </ThreadFoot>
         )
       }
       outcome={outcome === null ? null : { text: outcome }}
@@ -141,9 +260,15 @@ export const ThreadEventCard = memo(function ThreadEventCard({
 /** A transcript row about another thread, drawn as its event cards. */
 export function ThreadEventRow({
   row,
+  seq,
+  at = null,
 }: {
   row: ThreadMessageRow;
-}): React.JSX.Element {
+  seq?: number;
+  /** When the row was written. */
+  at?: string | null;
+}): React.JSX.Element | null {
+  const newest = useContext(ThreadDoneNewestContext);
   switch (row.kind) {
     case 'received':
       return (
@@ -180,10 +305,16 @@ export function ThreadEventRow({
           outcome={sentOutcomeWords(row.sent)}
         />
       );
-    case 'done':
+    case 'done': {
+      const shown = row.done.filter(
+        (done) => seq === undefined || isNewestDone(newest, done.runId, seq),
+      );
+      if (shown.length === 0) {
+        return null;
+      }
       return (
         <ThreadEventStack>
-          {row.done.map((done) => (
+          {shown.map((done) => (
             <ThreadEventCard
               key={done.runId}
               kind="done"
@@ -192,10 +323,14 @@ export function ThreadEventRow({
               handle={done.handle}
               text={done.summary}
               pullRequest={done.pullRequest}
+              at={at}
             />
           ))}
         </ThreadEventStack>
       );
+    }
+    case 'waiting':
+      return null;
   }
 }
 

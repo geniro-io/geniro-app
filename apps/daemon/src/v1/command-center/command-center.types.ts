@@ -55,6 +55,12 @@ export const CommandCenterCardSchema = z
       .string()
       .nullable()
       .describe('What the thread is doing now, one line'),
+    report: z
+      .string()
+      .nullable()
+      .describe(
+        "What a finished thread reported: its recorded outcome, else its agent's newest message; null while it is not finished",
+      ),
     contact: z.object({
       lastAt: z
         .string()

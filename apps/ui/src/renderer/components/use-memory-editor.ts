@@ -18,6 +18,27 @@ export type MemoryEditing =
       vouched: string[];
     };
 
+/** The edit form opened on `entry`, filed in `scope` — its own unless a surface pins one. */
+export function editingOf(
+  entry: MemoryEntry,
+  scope: Pick<MemoryFormValue, 'projectId' | 'teamSlug'> = {
+    projectId: entry.projectId,
+    teamSlug: entry.teamSlug,
+  },
+): MemoryEditing {
+  return {
+    kind: 'edit',
+    entry,
+    vouched: [],
+    value: {
+      title: entry.title,
+      body: entry.body,
+      type: entry.type,
+      ...scope,
+    },
+  };
+}
+
 /** Whether the entry waits on the user's approval before any agent sees it. */
 export function awaitsApproval(entry: MemoryEntry): boolean {
   return entry.status === 'pending';

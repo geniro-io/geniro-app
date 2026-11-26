@@ -154,6 +154,7 @@ function cardOf(
     task: null,
     note: null,
     activity: null,
+    report: null,
   };
 }
 
@@ -730,6 +731,26 @@ describe('CommandCenter — the phone sidebar and the focus', () => {
       probes.graph!.onFocused(focus.seq);
     });
     expect(probes.graph!.focus).toBeNull();
+  });
+
+  it('hands the graph a seq it has not handled for a thread shown after the last focus was cleared', async () => {
+    await renderPage();
+    act(() => {
+      probes.dock!.onOpenThread('run-b');
+    });
+    const first = probes.graph!.focus!;
+    act(() => {
+      probes.graph!.onFocused(first.seq);
+    });
+    expect(probes.graph!.focus).toBeNull();
+
+    act(() => {
+      probes.dock!.onOpenThread('run-b');
+    });
+
+    const second = probes.graph!.focus!;
+    expect(second.runId).toBe('run-b');
+    expect(second.seq).toBeGreaterThan(first.seq);
   });
 });
 

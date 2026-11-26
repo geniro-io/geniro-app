@@ -95,6 +95,7 @@ import {
   formatDuration,
   TurnDurationContext,
 } from './turn-duration';
+import { WaitingItemsCard } from './waiting-items-card';
 
 /**
  * The tool call a working row says the agent is writing, or null — the pair
@@ -573,7 +574,11 @@ export const TranscriptItem = memo(function TranscriptItem({
       // sentence the daemon wrote for it.
       const threadRow = readThreadMessageRow(item.payload);
       if (threadRow !== null) {
-        return <ThreadEventRow row={threadRow} />;
+        return threadRow.kind === 'waiting' ? (
+          <WaitingItemsCard row={threadRow.waiting} />
+        ) : (
+          <ThreadEventRow row={threadRow} seq={item.seq} at={item.createdAt} />
+        );
       }
       // What became of an agent's calls — one finished, failed, asked or was
       // left without an answer — one card per call, recorded keys or, on a row

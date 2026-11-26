@@ -35,6 +35,22 @@ export class KnowledgeRevisionDao extends BaseDao<KnowledgeRevision> {
     return new Map(rows.map((row) => [row.document_id, Number(row.count)]));
   }
 
+  /** Every revision that waits on review, oldest first, without its body. */
+  async pendingHeads(
+    em: EntityManager = this.em,
+  ): Promise<{ id: string; title: string }[]> {
+    const rows = await em.find(
+      KnowledgeRevision,
+      { status: 'pending' },
+      {
+        fields: ['id', 'title'],
+        orderBy: { createdAt: 'asc', id: 'asc' },
+        disableIdentityMap: true,
+      },
+    );
+    return rows.map((row) => ({ id: row.id, title: row.title }));
+  }
+
   /** Newest first; bodies are left for the one revision opened. */
   async heads(
     documentId: string,

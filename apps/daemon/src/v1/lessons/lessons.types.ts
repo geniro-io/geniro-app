@@ -85,6 +85,12 @@ export const LESSON_PROPOSAL_STATUSES = [
   'failed',
 ] as const;
 export type LessonProposalStatus = (typeof LESSON_PROPOSAL_STATUSES)[number];
+
+/** A lesson waiting on the user's decision. */
+export const LESSON_WAITING_STATUSES = [
+  'proposed',
+  'check_failed',
+] as const satisfies readonly LessonProposalStatus[];
 export const LessonProposalStatusSchema = z
   .enum(LESSON_PROPOSAL_STATUSES)
   .meta({ id: 'LessonProposalStatus' });

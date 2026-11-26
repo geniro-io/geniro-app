@@ -1,3 +1,4 @@
+import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import { ThreadFace, type ThreadFaceLook } from './thread-face';
 import {
   PullRequestLabel,
@@ -90,10 +91,13 @@ export function ThreadHead({
   ringClassName,
   wrap = false,
   compact = false,
+  linkPullRequest,
 }: {
   identity: ThreadIdentity;
   slot: string;
   onOpen?: () => void;
+  /** Makes the pull request's label open it, where the view can open a link. */
+  linkPullRequest?: (url: string, label: React.ReactNode) => React.ReactNode;
   /** Drawn at the end of the title line. */
   aside?: React.ReactNode;
   ringClassName?: string;
@@ -114,13 +118,18 @@ export function ThreadHead({
       )}
     />
   );
-  const pullRequest =
+  const pullRequestLabel =
     identity.pullRequest === null ? null : (
       <PullRequestLabel
         pullRequest={identity.pullRequest}
         slot={`${slot}-pull-request`}
       />
     );
+  const pullRequestUrl = identity.pullRequest?.url ?? null;
+  const pullRequest =
+    pullRequestUrl === null || linkPullRequest === undefined
+      ? pullRequestLabel
+      : linkPullRequest(pullRequestUrl, pullRequestLabel);
   const trailing =
     aside === undefined ? null : (
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -182,6 +191,45 @@ export function ThreadHead({
         </div>
         {labels}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A thread card's foot: when it last moved, after an optional mark, and its
+ * actions at the end of the line, off the title so the title keeps its room.
+ */
+export function ThreadFoot({
+  slot,
+  at,
+  now,
+  lead,
+  children,
+}: {
+  slot: string;
+  /** The moment the foot dates the card by; null draws no time. */
+  at: string | null;
+  now?: number;
+  /** Drawn before the time, e.g. a mark that the thread sat idle. */
+  lead?: React.ReactNode;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div
+      data-slot={`${slot}-foot`}
+      className="flex h-6 shrink-0 items-center justify-between gap-2">
+      {at === null ? (
+        <span />
+      ) : (
+        <span
+          data-slot={`${slot}-time`}
+          title={formatDateTime(at)}
+          className="flex min-w-0 shrink-0 items-center gap-1 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+          {lead}
+          {formatRelativeTime(at, now)}
+        </span>
+      )}
+      <span className="flex shrink-0 items-center gap-1.5">{children}</span>
     </div>
   );
 }

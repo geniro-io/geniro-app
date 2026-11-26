@@ -190,7 +190,7 @@ describe('WorkingThreadsCard', () => {
         runId: 'a',
         identity: {
           title: 'Export the CSV',
-          pullRequest: { number: 146, state: 'open' },
+          pullRequest: { number: 146, state: 'open', url: null },
           boardCard: { identifier: 'PRI-10', title: 'Export', status: 'todo' },
           project: 'Geniro',
           projectColor: 'teal',

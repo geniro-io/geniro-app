@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ThreadMessageDao } from '../../agents/dao/thread-message.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -83,6 +84,7 @@ describe('CommandCenterService.board', () => {
     service = new CommandCenterService(
       db.em,
       runDao,
+      new ItemDao(db.em),
       chats as unknown as ChatService,
       executor as unknown as TeamExecutorService,
       inbox,
@@ -183,6 +185,45 @@ describe('CommandCenterService.board', () => {
       'done-card': 'done',
       'review-card': 'in_review',
       'idle-card': 'idle',
+    });
+  });
+
+  it("reports a finished thread's newest agent message, never the user's newer one, and nothing for an unfinished thread", async () => {
+    await seedChatAged('done-card', HOUR);
+    await db.seedItem(
+      'done-card',
+      2,
+      new Date(now - 30 * MINUTE),
+      'message',
+      { text: 'Cache cleared, PR is up' },
+      { role: 'assistant' },
+    );
+    await db.seedItem(
+      'done-card',
+      3,
+      new Date(now - 10 * MINUTE),
+      'message',
+      { text: 'thanks' },
+      { role: 'user' },
+    );
+    await db.seedTask('done-card', 'done');
+    await seedChatAged('working-card', HOUR);
+    await db.seedItem(
+      'working-card',
+      2,
+      new Date(now - 30 * MINUTE),
+      'message',
+      { text: 'Still on it' },
+      { role: 'assistant' },
+    );
+
+    const board = await service.board();
+
+    expect(
+      Object.fromEntries(board.cards.map((card) => [card.run.id, card.report])),
+    ).toEqual({
+      'done-card': 'Cache cleared, PR is up',
+      'working-card': null,
     });
   });
 

@@ -69,7 +69,9 @@ export function graphThreadsOf(count: number): GraphThread[] {
               }
             : { kind: 'agent', icon: 'bot', name: 'Claude' },
         pullRequest:
-          index % 3 === 0 ? { number: 400 + n, state: 'open' } : null,
+          index % 3 === 0
+            ? { number: 400 + n, state: 'open', url: null }
+            : null,
         note: index === 1 ? 'waits for billing API v2' : null,
         lastMessage:
           index % 2 === 0

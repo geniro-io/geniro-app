@@ -36,19 +36,19 @@ export class RunNoticeWriter {
     await this.write(runId, row.kind, row.role, row.payload);
   }
 
-  /** A host row that opens no turn. Never throws; a deleted run gets no row. */
+  /** A host row that opens no turn; false when no row was written. Never throws; a deleted run gets no row. */
   async info(
     runId: string,
     message: string,
-    fields?: Pick<HostRowWire, 'threadDone'>,
-  ): Promise<void> {
+    fields?: Pick<HostRowWire, 'threadDone' | 'waitingItems'>,
+  ): Promise<boolean> {
     const payload: HostRowWire = {
       severity: 'info',
       message,
       woke: false,
       ...fields,
     };
-    await this.write(runId, 'system', null, payload);
+    return this.write(runId, 'system', null, payload);
   }
 
   private async write(
@@ -56,11 +56,11 @@ export class RunNoticeWriter {
     kind: ItemKind,
     role: string | null,
     payload: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const em = this.em.fork();
       if ((await this.runDao.getById(runId, em)) === null) {
-        return;
+        return false;
       }
       await persistItemAndEmit(
         {
@@ -79,10 +79,12 @@ export class RunNoticeWriter {
           payload,
         },
       );
+      return true;
     } catch (err) {
       this.logger.error(
         `run ${runId} notice row failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   }
 }

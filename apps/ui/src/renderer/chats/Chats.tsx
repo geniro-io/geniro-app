@@ -365,6 +365,7 @@ import {
 } from './task-payload';
 import { agentNameOf } from './team-note-author';
 import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
+import { newestDoneSeqByRun } from './thread-done-context';
 import { hasThreadNotes } from './thread-notes';
 import {
   deliverRelayedImages,
@@ -467,6 +468,7 @@ import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import type { SurfaceHost } from './use-surface';
 import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
+import { useThreadArchived } from './use-thread-archived';
 import {
   lessonsMarkOf,
   type ThreadLessonsMark,
@@ -484,6 +486,7 @@ import {
   useTranscriptJump,
 } from './use-transcript-jump';
 import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
+import { useWaitingItems } from './use-waiting-items';
 import { useWaitingMessages } from './use-waiting-messages';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
@@ -4992,6 +4995,23 @@ export function Chats({
     const inCalls = anchors.filter(isCallRow);
     return inCalls.length === 0 ? items : mergeAnchorRows(items, inCalls);
   }, [items, anchors]);
+  const managerChat = hosted?.commandCenterManager === true;
+  const threadDoneNewest = useMemo(
+    () => (managerChat ? newestDoneSeqByRun(transcriptRows) : null),
+    [managerChat, transcriptRows],
+  );
+  const doneRunIds = useMemo(
+    () => (threadDoneNewest === null ? null : [...threadDoneNewest.keys()]),
+    [threadDoneNewest],
+  );
+  const threadArchived = useThreadArchived(apis, client, doneRunIds);
+  const waitingItems = useWaitingItems(
+    apis,
+    client,
+    managerChat,
+    projects,
+    teams,
+  );
   const verdicts = useMemo(
     () => collectVerdicts(transcriptRows),
     [transcriptRows],
@@ -10946,6 +10966,10 @@ export function Chats({
                             : handleActivateRun
                         }
                         threadIdentities={hosted?.threadIdentities}
+                        threadDoneNewest={threadDoneNewest}
+                        threadArchived={threadArchived}
+                        threadReports={hosted?.threadReports ?? null}
+                        waitingItems={waitingItems}
                         openMemory={onOpenMemory ?? null}
                         openKnowledge={onOpenKnowledge ? openKnowledge : null}
                         collapseToolSteps={collapseToolSteps}

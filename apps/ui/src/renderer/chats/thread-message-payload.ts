@@ -45,12 +45,19 @@ export interface ThreadDone {
   pullRequest: number | null;
 }
 
+/** Review items of one kind the manager announced: one id is one item's card, more are a summary. */
+export interface WaitingItemsRowView {
+  kind: 'memory' | 'lesson' | 'knowledge';
+  items: { id: string; title: string }[];
+}
+
 /** The one shape a thread-message row carries. */
 export type ThreadMessageRow =
   | { kind: 'received'; messages: ReceivedThreadMessage[] }
   | { kind: 'woken'; fromRunId: string; fromTitle: string }
   | { kind: 'sent'; sent: ThreadMessageSent }
-  | { kind: 'done'; done: ThreadDone[] };
+  | { kind: 'done'; done: ThreadDone[] }
+  | { kind: 'waiting'; waiting: WaitingItemsRowView };
 
 const REASONS: ReadonlySet<string> = new Set(
   Object.values(WaitingMessageDtoReasonEnum),
@@ -65,7 +72,7 @@ const OUTCOMES: ReadonlySet<string> = new Set<ThreadMessageOutcome>([
  * The thread-message row a system item carries, or null when it carries none.
  *
  * TWIN PARSER: the `threadMessages`, `threadWake`, `threadMessageSent` and
- * `threadDone` fields of `HostRowWire` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ * `threadDone` and `waitingItems` fields of `HostRowWire` in `apps/daemon/src/v1/agents/chat.types.ts`.
  */
 export function readThreadMessageRow(
   payload: unknown,
@@ -92,7 +99,43 @@ export function readThreadMessageRow(
         return read === null ? [] : [read];
       })
     : [];
-  return done.length === 0 ? null : { kind: 'done', done };
+  if (done.length > 0) {
+    return { kind: 'done', done };
+  }
+  const waiting = readWaiting(bag.waitingItems);
+  return waiting === null ? null : { kind: 'waiting', waiting };
+}
+
+const WAITING_KINDS: ReadonlySet<string> = new Set<WaitingItemsRowView['kind']>(
+  ['memory', 'lesson', 'knowledge'],
+);
+
+function readWaiting(value: unknown): WaitingItemsRowView | null {
+  if (value === null || typeof value !== 'object') {
+    return null;
+  }
+  const { kind, items } = value as Record<string, unknown>;
+  if (
+    typeof kind !== 'string' ||
+    !WAITING_KINDS.has(kind) ||
+    !Array.isArray(items)
+  ) {
+    return null;
+  }
+  const read: WaitingItemsRowView['items'] = [];
+  for (const entry of items) {
+    if (entry === null || typeof entry !== 'object') {
+      return null;
+    }
+    const { id, title } = entry as Record<string, unknown>;
+    if (typeof id !== 'string' || typeof title !== 'string') {
+      return null;
+    }
+    read.push({ id, title });
+  }
+  return read.length === 0
+    ? null
+    : { kind: kind as WaitingItemsRowView['kind'], items: read };
 }
 
 function readDone(value: unknown): ThreadDone | null {

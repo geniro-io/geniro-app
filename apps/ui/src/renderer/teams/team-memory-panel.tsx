@@ -15,6 +15,7 @@ import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
 import {
   awaitsApproval,
+  editingOf,
   type MemoryEditing,
   movableReach,
   useMemoryEditor,
@@ -104,18 +105,7 @@ export function TeamMemoryPanel({
         showReach
         onEdit={() => {
           setFormError(null);
-          setEditing({
-            kind: 'edit',
-            entry,
-            vouched: [],
-            value: {
-              title: entry.title,
-              body: entry.body,
-              type: entry.type,
-              projectId: null,
-              teamSlug: slug,
-            },
-          });
+          setEditing(editingOf(entry, { projectId: null, teamSlug: slug }));
         }}
         onForget={() => void setStatus(entry, 'forgotten')}
         onApprove={

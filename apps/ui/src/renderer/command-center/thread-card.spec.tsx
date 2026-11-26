@@ -346,7 +346,9 @@ describe('ThreadCard — content', () => {
   });
 
   it('shows the pull request with its number and state word', () => {
-    const el = render({ pullRequest: { number: 412, state: 'merged' } });
+    const el = render({
+      pullRequest: { number: 412, state: 'merged', url: null },
+    });
 
     const chip = el.querySelector<HTMLElement>(
       '[data-slot="thread-card-pull-request"]',
@@ -507,7 +509,7 @@ describe('ThreadCard — archive', () => {
     expect(archive).toHaveBeenCalledTimes(1);
   });
 
-  it('offers the footer Archive only on a finished thread, and it archives the same thread', () => {
+  it('offers the worded Archive only on a finished thread, as its one archive control, and it archives the same thread', () => {
     const archive = vi.fn();
     const finished = render(
       { runId: 'run-1', attention: 'done' },
@@ -516,7 +518,7 @@ describe('ThreadCard — archive', () => {
 
     expect(
       finished.querySelector('[data-slot="thread-head-archive"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     act(() => {
       finished
         .querySelector<HTMLButtonElement>('[data-slot="thread-card-archive"]')!
@@ -531,6 +533,9 @@ describe('ThreadCard — archive', () => {
     expect(
       working.querySelector('[data-slot="thread-card-archive"]'),
     ).toBeNull();
+    expect(
+      working.querySelector('[data-slot="thread-head-archive"]'),
+    ).not.toBeNull();
   });
 
   it('draws no archive without a provider standing, even on a finished thread', () => {

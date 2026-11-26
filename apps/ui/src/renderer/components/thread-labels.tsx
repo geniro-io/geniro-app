@@ -135,6 +135,8 @@ export type ThreadPullRequestState = 'open' | 'merged' | 'closed' | 'draft';
 export interface ThreadPullRequest {
   number: number;
   state: ThreadPullRequestState | null;
+  /** Where it opens, or null where the view does not know. */
+  url: string | null;
 }
 
 const PULL_REQUEST_META: Record<

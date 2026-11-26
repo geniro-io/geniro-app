@@ -15,9 +15,11 @@ import {
   MANAGER_TITLE,
   orderByAttention,
   sameThreadIdentities,
+  sameThreadReports,
   statusTextOf,
   threadCardViewOf,
   threadIdentitiesOf,
+  threadReportsOf,
 } from './card-view';
 import { projectColorsOf } from './project-colors';
 
@@ -280,6 +282,7 @@ const boardCard = (project: { id: string; name: string } | null) =>
     task: null,
     note: null,
     activity: null,
+    report: null,
   }) as unknown as Parameters<typeof threadCardViewOf>[0];
 
 describe('threadCardViewOf — the run it names', () => {
@@ -358,7 +361,38 @@ describe('threadIdentitiesOf', () => {
       task: null,
       note: null,
       activity: null,
+      report: null,
     }) as unknown as Parameters<typeof threadCardViewOf>[0];
+
+  it("names the pull request the thread opened at its captured address while GitHub's answer is not in", () => {
+    const card = boardCard('run-web', {});
+    const withPr = {
+      ...card,
+      run: {
+        ...card.run,
+        pullRequests: [
+          {
+            number: 7,
+            url: 'https://github.com/acme/web/pull/7',
+            opened: false,
+          },
+          {
+            number: 9,
+            url: 'https://github.com/acme/web/pull/9',
+            opened: true,
+          },
+        ],
+      },
+    } as unknown as Parameters<typeof threadCardViewOf>[0];
+
+    expect(
+      threadCardViewOf(withPr, null, [], new Map(), NOW).pullRequest,
+    ).toEqual({
+      number: 9,
+      state: 'open',
+      url: 'https://github.com/acme/web/pull/9',
+    });
+  });
 
   it('heads each board thread with what its node on the graph shows: status, labels, pull request and face', () => {
     const cards = [
@@ -391,6 +425,7 @@ describe('threadIdentitiesOf', () => {
       number: 12,
       state: 'merged',
       isDraft: false,
+      url: 'https://github.com/acme/web/pull/12',
     } as unknown as PullRequestInfo;
 
     const identities = threadIdentitiesOf(
@@ -426,6 +461,7 @@ describe('threadIdentitiesOf', () => {
     expect(identities.get('run-web')?.pullRequest).toEqual({
       number: 12,
       state: 'merged',
+      url: 'https://github.com/acme/web/pull/12',
     });
     expect(identities.get('run-web')?.face).toEqual({
       kind: 'agent',
@@ -468,6 +504,43 @@ describe('threadIdentitiesOf', () => {
       projectColor: null,
     });
     expect(identities.get('run-web')?.title).toBe('Thread run-web');
+  });
+});
+
+describe('threadReportsOf', () => {
+  const card = (id: string, report: string | null, lastMessage: string) =>
+    ({
+      run: { id, outcome: null, lastMessage },
+      report,
+    }) as unknown as Parameters<typeof threadReportsOf>[0][number];
+
+  it("reads each thread's report as the daemon wrote it, never the run's last message of any role", () => {
+    const reports = threadReportsOf([
+      card('a', 'Cache cleared', 'thanks, looks right'),
+      card('b', 'Only report', 'Only report'),
+    ]);
+    expect(reports.get('a')).toBe('Cache cleared');
+    expect(reports.get('b')).toBe('Only report');
+  });
+
+  it('leaves out a thread that reported nothing, even with a last message', () => {
+    const reports = threadReportsOf([
+      card('a', null, 'thanks'),
+      card('b', '  ', 'thanks'),
+    ]);
+    expect(reports.size).toBe(0);
+  });
+});
+
+describe('sameThreadReports', () => {
+  it('holds equal text and tells a changed one or a missing thread apart', () => {
+    expect(
+      sameThreadReports(new Map([['a', 'x']]), new Map([['a', 'x']])),
+    ).toBe(true);
+    expect(
+      sameThreadReports(new Map([['a', 'x']]), new Map([['a', 'y']])),
+    ).toBe(false);
+    expect(sameThreadReports(new Map([['a', 'x']]), new Map())).toBe(false);
   });
 });
 

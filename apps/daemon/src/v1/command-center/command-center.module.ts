@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { LessonsModule } from '../lessons/lessons.module';
+import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { TeamsModule } from '../teams/teams.module';
@@ -16,6 +19,8 @@ import { CommandCenterNotifyService } from './services/command-center-notify.ser
 import { CommandCenterOpsService } from './services/command-center-ops.service';
 import { CommandCenterStartsService } from './services/command-center-starts.service';
 import { CommandCenterTimelineService } from './services/command-center-timeline.service';
+import { CommandCenterWaitingService } from './services/command-center-waiting.service';
+import { ManagerAnnouncementsService } from './services/manager-announcements.service';
 
 /**
  * The command center: one board over every active thread, and the manager
@@ -29,7 +34,15 @@ import { CommandCenterTimelineService } from './services/command-center-timeline
  * fan-out subscriber, on `TaskEventBus`'s terms.
  */
 @Module({
-  imports: [AgentsModule, TeamsModule, TasksModule, ProjectsModule],
+  imports: [
+    AgentsModule,
+    TeamsModule,
+    TasksModule,
+    ProjectsModule,
+    MemoryModule,
+    LessonsModule,
+    KnowledgeModule,
+  ],
   controllers: [CommandCenterController],
   providers: [
     CommandCenterRosterDao,
@@ -43,6 +56,8 @@ import { CommandCenterTimelineService } from './services/command-center-timeline
     CommandCenterEventsService,
     CommandCenterNotifyService,
     CommandCenterTimelineService,
+    CommandCenterWaitingService,
+    ManagerAnnouncementsService,
   ],
   exports: [CommandCenterEventBus],
 })

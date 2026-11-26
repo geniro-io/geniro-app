@@ -45,6 +45,8 @@ import {
 import {
   ThreadArchiveContext,
   type ThreadArchiveOf,
+  ThreadUnarchiveContext,
+  type ThreadUnarchiveOf,
 } from '../components/thread-archive';
 import { bareThreadIdentity } from '../components/thread-head';
 import { Badge } from '../components/ui/badge';
@@ -64,10 +66,12 @@ import { blockIdOf, useBlockPlaces } from './block-places';
 import {
   managerIdentityOf,
   sameThreadIdentities,
+  sameThreadReports,
   type TeamFace,
   teamFacesOf,
   threadCardViewOf,
   threadIdentitiesOf,
+  threadReportsOf,
 } from './card-view';
 import { workingThreadsInGraphOrder } from './graph-order';
 import type { GraphFocus } from './graph-view';
@@ -200,6 +204,7 @@ export function CommandCenter({
   const blockPlaces = useBlockPlaces();
   const blockOrders = useBlockOrders();
   const [focus, setFocus] = useState<GraphFocus | null>(null);
+  const focusSeq = useRef(0);
   const [offBoard, setOffBoard] = useState<string | null>(null);
   const [archived, setArchived] = useState<{
     runId: string;
@@ -395,6 +400,24 @@ export function CommandCenter({
   }
   const threadIdentities = heldIdentities.kept;
 
+  const builtReports = useMemo(
+    () => threadReportsOf(board.cards ?? []),
+    [board.cards],
+  );
+  const [heldReports, setHeldReports] = useState({
+    built: builtReports,
+    kept: builtReports,
+  });
+  if (heldReports.built !== builtReports) {
+    setHeldReports({
+      built: builtReports,
+      kept: sameThreadReports(builtReports, heldReports.kept)
+        ? heldReports.kept
+        : builtReports,
+    });
+  }
+  const threadReports = heldReports.kept;
+
   const bandOf = (card: CommandCenterCard): CardBand => {
     const view = viewOf(card);
     return { attention: view.attention, lastAt: view.lastAt };
@@ -447,7 +470,8 @@ export function CommandCenter({
     if (!fromWindow) {
       setFront('cards');
     }
-    setFocus((last) => ({ runId, seq: (last?.seq ?? 0) + 1 }));
+    focusSeq.current += 1;
+    setFocus({ runId, seq: focusSeq.current });
   };
   const showThread = useLatestCallback(
     (runId: string): void => openThread(runId, false),
@@ -532,6 +556,11 @@ export function CommandCenter({
       })
       .catch((err: unknown) => setUndoError(String(err)));
   }, []);
+
+  const unarchiveOf = useLatestCallback<ThreadUnarchiveOf>(
+    (runId) => () => undoArchive(runId),
+    [undoArchive],
+  );
 
   const workingThreads = (board.cards ?? []).flatMap((card) => {
     if (card.column !== 'working' && card.column !== 'waiting') {
@@ -686,272 +715,279 @@ export function CommandCenter({
   return (
     <ThreadContextReaderContext.Provider value={contextReader}>
       <ThreadArchiveContext.Provider value={archiveOf}>
-        <div className="relative flex h-full min-h-0 flex-col">
-          <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-sm font-semibold max-sm:hidden">
-                Command center
-              </h1>
-              <Select
-                aria-label="Project"
-                variant="ghost"
-                side="bottom"
-                groups={projectGroups}
-                value={projectFilter}
-                onValueChange={setProjectFilter}
-              />
-            </div>
-            <div className="flex min-w-0 items-center justify-end gap-1">
-              <Button
-                type="button"
-                variant={sidebar === 'needs' ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
-                data-slot="command-center-needs-toggle"
-                aria-pressed={sidebar === 'needs'}
-                title="Questions and approvals your threads wait on — answer them here"
-                onClick={() => toggleSidebar('needs')}>
-                <MessageCircleQuestion
-                  aria-hidden="true"
-                  className="size-3.5"
+        <ThreadUnarchiveContext.Provider value={unarchiveOf}>
+          <div className="relative flex h-full min-h-0 flex-col">
+            <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-sm font-semibold max-sm:hidden">
+                  Command center
+                </h1>
+                <Select
+                  aria-label="Project"
+                  variant="ghost"
+                  side="bottom"
+                  groups={projectGroups}
+                  value={projectFilter}
+                  onValueChange={setProjectFilter}
                 />
-                <span className="max-sm:sr-only">Needs you</span>
-                {needsCount === 0 ? null : (
-                  <Badge
-                    variant="warning"
-                    data-slot="command-center-needs-count"
-                    className="px-1.5 py-0 tabular-nums">
-                    {needsCount}
-                  </Badge>
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant={sidebar === 'timeline' ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
-                data-slot="command-center-timeline-toggle"
-                aria-pressed={sidebar === 'timeline'}
-                title="Everything the manager and its threads did, newest first"
-                onClick={() => toggleSidebar('timeline')}>
-                <History aria-hidden="true" className="size-3.5" />
-                <span className="max-sm:sr-only">Timeline</span>
-              </Button>
-            </div>
-          </header>
-          {board.error === null ? null : (
-            <ErrorBanner
-              message={board.error}
-              onDismiss={board.reload}
-              action={
+              </div>
+              <div className="flex min-w-0 items-center justify-end gap-1">
                 <Button
                   type="button"
+                  variant={sidebar === 'needs' ? 'secondary' : 'ghost'}
                   size="sm"
-                  variant="outline"
-                  onClick={board.reload}>
-                  Retry
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  data-slot="command-center-needs-toggle"
+                  aria-pressed={sidebar === 'needs'}
+                  title="Questions and approvals your threads wait on — answer them here"
+                  onClick={() => toggleSidebar('needs')}>
+                  <MessageCircleQuestion
+                    aria-hidden="true"
+                    className="size-3.5"
+                  />
+                  <span className="max-sm:sr-only">Needs you</span>
+                  {needsCount === 0 ? null : (
+                    <Badge
+                      variant="warning"
+                      data-slot="command-center-needs-count"
+                      className="px-1.5 py-0 tabular-nums">
+                      {needsCount}
+                    </Badge>
+                  )}
                 </Button>
-              }
-            />
-          )}
-          <div className="relative flex min-h-0 flex-1">
-            <div
-              {...{ [WORKING_THREADS_CEILING]: '' }}
-              className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-              {graph}
-              {chatToggleHidden ? null : (
                 <Button
                   type="button"
-                  size="icon"
-                  data-slot="command-center-chat-toggle"
-                  aria-label={
-                    chatOpen
-                      ? 'Close the manager’s chat'
-                      : 'Open the manager’s chat'
-                  }
-                  aria-pressed={chatOpen}
-                  title={chatOpen ? 'Close the chat' : 'Chat with the manager'}
-                  className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
-                  onClick={() => {
-                    setChatOpen((open) => !open);
-                    setFront('manager');
-                  }}>
-                  <MessageSquare aria-hidden="true" className="size-5" />
-                  {manager?.working === true ? (
-                    <span
-                      aria-hidden="true"
-                      data-slot="command-center-chat-working"
-                      className="absolute -top-0.5 -right-0.5 size-3 animate-pulse rounded-full bg-success ring-2 ring-background motion-reduce:animate-none"
-                    />
-                  ) : null}
+                  variant={sidebar === 'timeline' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  data-slot="command-center-timeline-toggle"
+                  aria-pressed={sidebar === 'timeline'}
+                  title="Everything the manager and its threads did, newest first"
+                  onClick={() => toggleSidebar('timeline')}>
+                  <History aria-hidden="true" className="size-3.5" />
+                  <span className="max-sm:sr-only">Timeline</span>
                 </Button>
-              )}
-              {chatToggleHidden || workingThreads.length === 0 ? null : (
-                <div className="pointer-events-none absolute right-17 bottom-4 z-20 flex h-11 items-center">
-                  <WorkingThreadsCard
-                    threads={workingThreads}
-                    onOpenThread={showThread}
-                    onOpenHere={showThread}
-                  />
-                </div>
-              )}
-              <FloatingWindow
-                slot="command-center-chat"
-                label="Manager chat"
-                title="Manager"
-                open={chatOpen}
-                phone={narrow}
-                initialRect={managerWindowRect}
-                onActivate={() => setFront('manager')}
-                fullHead={
-                  <WorkingStrip
-                    threads={workingStrip}
-                    onOpenThread={showThreadFromWindow}
-                  />
-                }
-                onClose={() => setChatOpen(false)}>
-                {managerRunId === null ? (
-                  managerChoice.choice === null ? null : (
-                    <ManagerStart
-                      apis={apis}
-                      choice={managerChoice.choice}
-                      onPick={managerChoice.pick}
-                      cliDetections={sources.cliDetections}
-                      capabilities={capabilities}
-                      capabilitiesLoading={capabilitiesLoading}
-                      approvalCapabilityFor={sources.approvalCapabilityFor}
-                      recentConfigDirs={sources.recentConfigDirs}
-                      configProfiles={sources.configProfiles}
-                      onOpened={board.reload}
-                    />
-                  )
-                ) : client === null || managerChoice.choice === null ? null : (
-                  <ManagerDock
-                    apis={apis}
-                    handle={handle}
-                    client={client}
-                    choice={managerChoice.choice}
-                    hidden={!chatOpen}
-                    active={active}
-                    threadIdentities={threadIdentities}
-                    onOpenThread={showThreadFromWindow}
-                    onTurnSettled={board.reload}
-                    onDiscarded={board.reload}
-                  />
-                )}
-              </FloatingWindow>
-              {answering !== null && !answeringHidden ? (
-                <AnswerPopover
-                  anchor={answering.anchor}
-                  title={
-                    threadIdentities.get(answering.runId)?.title ??
-                    answering.title ??
-                    'Thread'
-                  }
-                  projectColor={
-                    threadIdentities.get(answering.runId)?.projectColor ?? null
-                  }
-                  requests={answeringRequests}
-                  error={openRequests.error}
-                  onAnswer={openRequests.answer}
-                  onShowThread={() => {
-                    showThread(answering.runId);
-                    setAnswering(null);
-                  }}
-                  onClose={() => setAnswering(null)}
-                />
-              ) : null}
-            </div>
-            {sidebar === null ? null : (
-              <aside
-                aria-label="Command center sidebar"
-                data-slot="command-center-sidebar"
-                className={cn(
-                  'flex min-h-0 flex-col border-l border-border bg-card',
-                  narrow ? 'absolute inset-0 z-30' : 'w-[400px] shrink-0',
-                )}>
-                <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
-                  <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
-                    {sidebar === 'needs'
-                      ? needsCount === 0
-                        ? 'Needs you'
-                        : `Needs you · ${needsCount}`
-                      : 'Timeline'}
-                  </h2>
+              </div>
+            </header>
+            {board.error === null ? null : (
+              <ErrorBanner
+                message={board.error}
+                onDismiss={board.reload}
+                action={
                   <Button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    aria-label="Close the sidebar"
-                    title="Close"
-                    onClick={() => setSidebar(null)}>
-                    <X aria-hidden="true" className="size-4" />
+                    size="sm"
+                    variant="outline"
+                    onClick={board.reload}>
+                    Retry
                   </Button>
-                </div>
-                {sidebar === 'needs' ? (
-                  <NeedsYouPanel
-                    requests={openRequests.requests}
-                    error={openRequests.error}
-                    focusRunId={null}
-                    onAnswer={openRequests.answer}
-                    onOpenThread={showThread}
-                  />
-                ) : (
-                  <TimelinePanel
-                    events={timeline.events}
-                    loading={timeline.loading}
-                    error={timeline.error}
-                    hasMore={timeline.hasMore}
-                    onLoadOlder={timeline.loadOlder}
-                    onShowThread={showThread}
-                    onReply={replyFrom}
-                    openItemIds={openItemIds}
-                    now={now}
-                  />
-                )}
-              </aside>
+                }
+              />
             )}
+            <div className="relative flex min-h-0 flex-1">
+              <div
+                {...{ [WORKING_THREADS_CEILING]: '' }}
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                {graph}
+                {chatToggleHidden ? null : (
+                  <Button
+                    type="button"
+                    size="icon"
+                    data-slot="command-center-chat-toggle"
+                    aria-label={
+                      chatOpen
+                        ? 'Close the manager’s chat'
+                        : 'Open the manager’s chat'
+                    }
+                    aria-pressed={chatOpen}
+                    title={
+                      chatOpen ? 'Close the chat' : 'Chat with the manager'
+                    }
+                    className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
+                    onClick={() => {
+                      setChatOpen((open) => !open);
+                      setFront('manager');
+                    }}>
+                    <MessageSquare aria-hidden="true" className="size-5" />
+                    {manager?.working === true ? (
+                      <span
+                        aria-hidden="true"
+                        data-slot="command-center-chat-working"
+                        className="absolute -top-0.5 -right-0.5 size-3 animate-pulse rounded-full bg-success ring-2 ring-background motion-reduce:animate-none"
+                      />
+                    ) : null}
+                  </Button>
+                )}
+                {chatToggleHidden || workingThreads.length === 0 ? null : (
+                  <div className="pointer-events-none absolute right-17 bottom-4 z-20 flex h-11 items-center">
+                    <WorkingThreadsCard
+                      threads={workingThreads}
+                      onOpenThread={showThread}
+                      onOpenHere={showThread}
+                    />
+                  </div>
+                )}
+                <FloatingWindow
+                  slot="command-center-chat"
+                  label="Manager chat"
+                  title="Manager"
+                  open={chatOpen}
+                  phone={narrow}
+                  initialRect={managerWindowRect}
+                  onActivate={() => setFront('manager')}
+                  fullHead={
+                    <WorkingStrip
+                      threads={workingStrip}
+                      onOpenThread={showThreadFromWindow}
+                    />
+                  }
+                  onClose={() => setChatOpen(false)}>
+                  {managerRunId === null ? (
+                    managerChoice.choice === null ? null : (
+                      <ManagerStart
+                        apis={apis}
+                        choice={managerChoice.choice}
+                        onPick={managerChoice.pick}
+                        cliDetections={sources.cliDetections}
+                        capabilities={capabilities}
+                        capabilitiesLoading={capabilitiesLoading}
+                        approvalCapabilityFor={sources.approvalCapabilityFor}
+                        recentConfigDirs={sources.recentConfigDirs}
+                        configProfiles={sources.configProfiles}
+                        onOpened={board.reload}
+                      />
+                    )
+                  ) : client === null ||
+                    managerChoice.choice === null ? null : (
+                    <ManagerDock
+                      apis={apis}
+                      handle={handle}
+                      client={client}
+                      choice={managerChoice.choice}
+                      hidden={!chatOpen}
+                      active={active}
+                      threadIdentities={threadIdentities}
+                      threadReports={threadReports}
+                      onOpenThread={showThreadFromWindow}
+                      onTurnSettled={board.reload}
+                      onDiscarded={board.reload}
+                    />
+                  )}
+                </FloatingWindow>
+                {answering !== null && !answeringHidden ? (
+                  <AnswerPopover
+                    anchor={answering.anchor}
+                    title={
+                      threadIdentities.get(answering.runId)?.title ??
+                      answering.title ??
+                      'Thread'
+                    }
+                    projectColor={
+                      threadIdentities.get(answering.runId)?.projectColor ??
+                      null
+                    }
+                    requests={answeringRequests}
+                    error={openRequests.error}
+                    onAnswer={openRequests.answer}
+                    onShowThread={() => {
+                      showThread(answering.runId);
+                      setAnswering(null);
+                    }}
+                    onClose={() => setAnswering(null)}
+                  />
+                ) : null}
+              </div>
+              {sidebar === null ? null : (
+                <aside
+                  aria-label="Command center sidebar"
+                  data-slot="command-center-sidebar"
+                  className={cn(
+                    'flex min-h-0 flex-col border-l border-border bg-card',
+                    narrow ? 'absolute inset-0 z-30' : 'w-[400px] shrink-0',
+                  )}>
+                  <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
+                    <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {sidebar === 'needs'
+                        ? needsCount === 0
+                          ? 'Needs you'
+                          : `Needs you · ${needsCount}`
+                        : 'Timeline'}
+                    </h2>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      aria-label="Close the sidebar"
+                      title="Close"
+                      onClick={() => setSidebar(null)}>
+                      <X aria-hidden="true" className="size-4" />
+                    </Button>
+                  </div>
+                  {sidebar === 'needs' ? (
+                    <NeedsYouPanel
+                      requests={openRequests.requests}
+                      error={openRequests.error}
+                      focusRunId={null}
+                      onAnswer={openRequests.answer}
+                      onOpenThread={showThread}
+                    />
+                  ) : (
+                    <TimelinePanel
+                      events={timeline.events}
+                      loading={timeline.loading}
+                      error={timeline.error}
+                      hasMore={timeline.hasMore}
+                      onLoadOlder={timeline.loadOlder}
+                      onShowThread={showThread}
+                      onReply={replyFrom}
+                      openItemIds={openItemIds}
+                      now={now}
+                    />
+                  )}
+                </aside>
+              )}
+            </div>
+            {offBoard === null ? null : (
+              <ActionNotice
+                key={offBoard}
+                className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
+                icon={<Archive className="size-4" />}
+                title="This thread is no longer on the board"
+                detail="It was archived or removed; Chats still has it."
+                action={{
+                  label: 'Open in Chats',
+                  onAction: () => {
+                    setOffBoard(null);
+                    onOpenThread(offBoard);
+                  },
+                }}
+                onDismiss={() => setOffBoard(null)}
+              />
+            )}
+            {archived === null ? null : (
+              <ActionNotice
+                key={archived.runId}
+                className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
+                icon={<Archive className="size-4" />}
+                title={`Archived ${archived.title}`}
+                detail={
+                  undoError ??
+                  'It left the board; Undo puts it back where it was.'
+                }
+                action={{
+                  label: 'Undo',
+                  onAction: () => undoArchive(archived.runId),
+                }}
+                onDismiss={() => {
+                  setArchived(null);
+                  setUndoError(null);
+                }}
+              />
+            )}
+            {archiveFlow.dialog}
           </div>
-          {offBoard === null ? null : (
-            <ActionNotice
-              key={offBoard}
-              className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
-              icon={<Archive className="size-4" />}
-              title="This thread is no longer on the board"
-              detail="It was archived or removed; Chats still has it."
-              action={{
-                label: 'Open in Chats',
-                onAction: () => {
-                  setOffBoard(null);
-                  onOpenThread(offBoard);
-                },
-              }}
-              onDismiss={() => setOffBoard(null)}
-            />
-          )}
-          {archived === null ? null : (
-            <ActionNotice
-              key={archived.runId}
-              className="absolute bottom-4 left-1/2 z-40 w-[min(34rem,calc(100%-2rem))] -translate-x-1/2"
-              icon={<Archive className="size-4" />}
-              title={`Archived ${archived.title}`}
-              detail={
-                undoError ??
-                'It left the board; Undo puts it back where it was.'
-              }
-              action={{
-                label: 'Undo',
-                onAction: () => undoArchive(archived.runId),
-              }}
-              onDismiss={() => {
-                setArchived(null);
-                setUndoError(null);
-              }}
-            />
-          )}
-          {archiveFlow.dialog}
-        </div>
+        </ThreadUnarchiveContext.Provider>
       </ThreadArchiveContext.Provider>
     </ThreadContextReaderContext.Provider>
   );

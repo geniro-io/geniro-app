@@ -10,7 +10,6 @@ import {
 
 import type { ProfileColor } from '../../shared/contracts';
 import { plainPreview } from '../chats/brief-text';
-import { formatDateTime, formatRelativeTime } from '../chats/relative-time';
 import {
   ArchiveThreadButton,
   ArchiveThreadIcon,
@@ -18,6 +17,7 @@ import {
 } from '../components/thread-archive';
 import type { ThreadFaceLook } from '../components/thread-face';
 import {
+  ThreadFoot,
   ThreadHead,
   ThreadHeadIcon,
   type ThreadIdentity,
@@ -50,7 +50,11 @@ export interface ThreadCardProps {
   isTeam: boolean;
   /** The thread's face: its agent, its team's members, or a plain mark. */
   face: ThreadFaceLook;
-  pullRequest: { number: number; state: ThreadPullRequestState } | null;
+  pullRequest: {
+    number: number;
+    state: ThreadPullRequestState;
+    url: string | null;
+  } | null;
   note: string | null;
   /** The thread's latest message, as the thread list previews it. */
   lastMessage: string | null;
@@ -373,63 +377,53 @@ export function ThreadCard({
           {preview}
         </p>
       )}
-      <div className="flex h-6 shrink-0 items-center justify-between gap-2">
-        <span
-          data-slot="thread-card-time"
-          title={formatDateTime(lastAt)}
-          className="flex min-w-0 shrink-0 items-center gap-1 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-          {idleDays === null ? null : (
+      <ThreadFoot
+        slot="thread-card"
+        at={lastAt}
+        now={now}
+        lead={
+          idleDays === null ? null : (
             <Moon
               aria-label={`Nobody has touched this thread for ${idleDays} days`}
               data-slot="thread-card-idle"
               className="size-3 shrink-0"
             />
-          )}
-          {formatRelativeTime(lastAt, now)}
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5">
-          {archive === null || attention !== 'done' ? null : (
-            <ArchiveThreadButton
-              slot="thread-card-archive"
-              title={title}
-              onArchive={archive}
-            />
-          )}
-          {onAnswer === undefined ? null : (
-            <Button
-              type="button"
-              size="sm"
-              data-slot="thread-card-answer"
-              className="h-6 gap-1 rounded-full px-2.5 text-xs"
-              onClick={(event) => onAnswer(event.currentTarget)}>
-              {answerKind === 'approval' ? (
-                <ShieldCheck aria-hidden="true" className="size-3.5" />
-              ) : (
-                <MessageCircleQuestion
-                  aria-hidden="true"
-                  className="size-3.5"
-                />
-              )}
-              {answerKind === 'approval' ? 'Review' : 'Answer'}
-            </Button>
-          )}
-          <span
-            data-slot="thread-card-actions"
-            className="flex items-center gap-0.5">
-            {onToggleCard === undefined ? null : (
-              <ShowChatIcon
-                title={title}
-                open={false}
-                onToggle={onToggleCard}
-              />
+          )
+        }>
+        {archive === null || attention !== 'done' ? null : (
+          <ArchiveThreadButton
+            slot="thread-card-archive"
+            title={title}
+            onArchive={archive}
+          />
+        )}
+        {onAnswer === undefined ? null : (
+          <Button
+            type="button"
+            size="sm"
+            data-slot="thread-card-answer"
+            className="h-6 gap-1 rounded-full px-2.5 text-xs"
+            onClick={(event) => onAnswer(event.currentTarget)}>
+            {answerKind === 'approval' ? (
+              <ShieldCheck aria-hidden="true" className="size-3.5" />
+            ) : (
+              <MessageCircleQuestion aria-hidden="true" className="size-3.5" />
             )}
-            {archive === null ? null : (
-              <ArchiveThreadIcon title={title} onArchive={archive} />
-            )}
-            <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
-          </span>
+            {answerKind === 'approval' ? 'Review' : 'Answer'}
+          </Button>
+        )}
+        <span
+          data-slot="thread-card-actions"
+          className="flex items-center gap-0.5">
+          {onToggleCard === undefined ? null : (
+            <ShowChatIcon title={title} open={false} onToggle={onToggleCard} />
+          )}
+          {archive === null || attention === 'done' ? null : (
+            <ArchiveThreadIcon title={title} onArchive={archive} />
+          )}
+          <OpenInChatsIcon title={title} onOpen={onOpenInChats} />
         </span>
-      </div>
+      </ThreadFoot>
     </article>
   );
 }

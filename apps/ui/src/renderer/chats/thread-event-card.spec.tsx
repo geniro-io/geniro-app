@@ -1,15 +1,24 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { mountIntoDocument } from '../__tests__/mount-into-document';
 import {
   ThreadArchiveContext,
   type ThreadArchiveOf,
+  ThreadUnarchiveContext,
 } from '../components/thread-archive';
 import type { ThreadIdentity } from '../components/thread-head';
+import {
+  type ThreadArchived,
+  ThreadArchivedContext,
+  ThreadDoneNewestContext,
+  ThreadReportsContext,
+} from './thread-done-context';
 import { ThreadEventCard, ThreadEventRow } from './thread-event-card';
+import type { ThreadMessageRow } from './thread-message-payload';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -20,7 +29,11 @@ const render = mountIntoDocument();
 const PELICAN: ThreadIdentity = {
   title: 'Pelican — fix the login redirect',
   face: { kind: 'agent', icon: 'terminal', name: 'claude' },
-  pullRequest: { number: 88, state: 'open' },
+  pullRequest: {
+    number: 88,
+    state: 'open',
+    url: 'https://github.com/acme/app/pull/88',
+  },
   status: { attention: 'working', text: 'Working' },
   agentLabel: 'claude',
   isTeam: false,
@@ -82,6 +95,50 @@ describe('ThreadEventCard', () => {
       el.querySelector<HTMLElement>('[data-slot="thread-event-project-dot"]')
         ?.dataset.color,
     ).toBe('teal');
+  });
+
+  it("opens a finished thread's pull request from its label, at the pull request's own address", () => {
+    const el = render(
+      <ThreadIdentityContext.Provider value={IDENTITIES}>
+        <ThreadEventCard kind="done" runId="r-pelican" title="Pelican" />
+      </ThreadIdentityContext.Provider>,
+    );
+
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-slot="thread-event-pull-request-link"]',
+    );
+    expect(link?.getAttribute('href')).toBe(
+      'https://github.com/acme/app/pull/88',
+    );
+    expect(
+      link?.querySelector('[data-slot="thread-event-pull-request"]')
+        ?.textContent,
+    ).toContain(`#${88}`);
+  });
+
+  it('draws a pull request whose address is unknown as a plain label, and none for a thread without one', () => {
+    const unknown = render(
+      <ThreadEventCard
+        kind="done"
+        runId="r-otter"
+        title="Otter"
+        pullRequest={146}
+      />,
+    );
+    expect(
+      unknown.querySelector('[data-slot="thread-event-pull-request"]')
+        ?.textContent,
+    ).toContain(`#${146}`);
+    expect(
+      unknown.querySelector('[data-slot="thread-event-pull-request-link"]'),
+    ).toBeNull();
+
+    const none = render(
+      <ThreadEventCard kind="done" runId="r-otter" title="Otter" />,
+    );
+    expect(
+      none.querySelector('[data-slot="thread-event-pull-request"]'),
+    ).toBeNull();
   });
 
   it('spans the transcript column rather than stopping short of it', () => {
@@ -419,9 +476,133 @@ describe('ThreadEventRow', () => {
   });
 });
 
+describe("ThreadEventCard — a finished thread drawn as the graph's card", () => {
+  const CREW: ThreadIdentity = {
+    ...PELICAN,
+    face: {
+      kind: 'team',
+      total: 4,
+      people: [
+        { key: 'lead', name: 'Lead' },
+        { key: 'senior', name: 'Senior Engineer' },
+        { key: 'qa', name: 'QA' },
+      ],
+    },
+    isTeam: true,
+    agentLabel: 'Dev Team',
+  };
+
+  it("heads it with the node's full head: the title folds onto two lines instead of being cut beside the labels", () => {
+    const el = render(
+      <ThreadIdentityContext.Provider value={IDENTITIES}>
+        <ThreadEventCard kind="done" runId="r-pelican" title="Pelican" />
+      </ThreadIdentityContext.Provider>,
+    );
+    const head = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-head"]',
+    )!;
+    expect(head.dataset.compact).toBeUndefined();
+    const title = el.querySelector('[data-slot="thread-event-title"]')!;
+    expect(title.className).toContain('line-clamp-2');
+    expect(title.className).not.toContain('truncate');
+    expect(
+      title.parentElement?.contains(
+        el.querySelector('[data-slot="thread-event-project"]'),
+      ),
+    ).toBe(false);
+  });
+
+  it('says Done once, in its event line, with no status chip in its head', () => {
+    const finished: ThreadIdentity = {
+      ...PELICAN,
+      status: { attention: 'done', text: 'Done' },
+    };
+    const el = render(
+      <ThreadIdentityContext.Provider
+        value={new Map([['r-pelican', finished]])}>
+        <ThreadEventCard kind="done" runId="r-pelican" title="Pelican" />
+      </ThreadIdentityContext.Provider>,
+    );
+
+    expect(el.querySelector('[data-slot="thread-event-status"]')).toBeNull();
+    expect(el.textContent?.match(/Done/g)).toHaveLength(1);
+    expect(
+      el.querySelector('[data-slot="thread-event-project"]'),
+    ).not.toBeNull();
+  });
+
+  it('keeps the one-line head on every other event', () => {
+    const el = render(
+      <ThreadIdentityContext.Provider value={IDENTITIES}>
+        <ThreadEventCard kind="received" runId="r-pelican" title="Pelican" />
+      </ThreadIdentityContext.Provider>,
+    );
+    expect(
+      el.querySelector<HTMLElement>('[data-slot="thread-event-head"]')?.dataset
+        .compact,
+    ).toBe('true');
+  });
+
+  it("shows a team thread's members' faces, as its node does", () => {
+    const el = render(
+      <ThreadIdentityContext.Provider value={new Map([['r-crew', CREW]])}>
+        <ThreadEventCard kind="done" runId="r-crew" title="Crew" />
+      </ThreadIdentityContext.Provider>,
+    );
+    const face = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-face"]',
+    )!;
+    expect(face.dataset.face).toBe('team');
+    expect(face.dataset.size).toBe('md');
+    expect(face.getAttribute('aria-label')).toBe('4 members');
+  });
+
+  it('puts the time it finished and its actions in a foot, Archive worded with its icon', () => {
+    const el = render(
+      <ThreadArchiveContext.Provider value={() => vi.fn()}>
+        <ThreadOpenContext.Provider value={vi.fn()}>
+          <ThreadIdentityContext.Provider value={IDENTITIES}>
+            <ThreadEventCard
+              kind="done"
+              runId="r-pelican"
+              title="Pelican"
+              text="Merged."
+              at="2026-11-26T09:00:00Z"
+            />
+          </ThreadIdentityContext.Provider>
+        </ThreadOpenContext.Provider>
+      </ThreadArchiveContext.Provider>,
+    );
+    const foot = el.querySelector<HTMLElement>(
+      '[data-slot="thread-event-foot"]',
+    )!;
+    expect(
+      foot
+        .querySelector('[data-slot="thread-event-time"]')
+        ?.getAttribute('title'),
+    ).toContain('2026');
+    const archive = foot.querySelector<HTMLElement>(
+      '[data-slot="thread-event-archive"]',
+    )!;
+    expect(archive.textContent).toBe('Archive');
+    expect(archive.querySelector('svg')).not.toBeNull();
+    expect(
+      foot.querySelector('[data-slot="thread-event-open"]'),
+    ).not.toBeNull();
+    expect(
+      foot.querySelector('[data-slot="thread-event-dismiss"]'),
+    ).not.toBeNull();
+    expect(el.querySelector('[data-slot="thread-event-actions"]')).toBeNull();
+    expect(card(el).lastElementChild).toBe(foot);
+  });
+});
+
 describe('ThreadEventCard — archive', () => {
-  it.each(['sent', 'received', 'woken', 'done'] as const)(
-    'heads a %s event with the archive icon of its thread, once the provider offers one',
+  const ARCHIVE_CONTROLS =
+    '[data-slot="thread-head-archive"], [data-slot="thread-event-archive"], [data-slot="thread-event-unarchive"]';
+
+  it.each(['sent', 'received', 'woken'] as const)(
+    'heads a %s event with the archive icon of its thread as its one archive control',
     (kind) => {
       const el = render(
         <ThreadArchiveContext.Provider value={() => vi.fn()}>
@@ -430,10 +611,28 @@ describe('ThreadEventCard — archive', () => {
       );
 
       expect(
-        el.querySelector('[data-slot="thread-head-archive"]'),
-      ).not.toBeNull();
+        [...el.querySelectorAll<HTMLElement>(ARCHIVE_CONTROLS)].map(
+          (control) => control.dataset.slot,
+        ),
+      ).toEqual(['thread-head-archive']);
     },
   );
+
+  it('offers a finished thread one Archive control, the worded button, and no head icon beside it', () => {
+    const el = render(
+      <ThreadArchiveContext.Provider value={() => vi.fn()}>
+        <ThreadIdentityContext.Provider value={IDENTITIES}>
+          <ThreadEventCard kind="done" runId="r-pelican" title="Pelican" />
+        </ThreadIdentityContext.Provider>
+      </ThreadArchiveContext.Provider>,
+    );
+
+    expect(
+      [...el.querySelectorAll<HTMLElement>(ARCHIVE_CONTROLS)].map(
+        (control) => control.dataset.slot,
+      ),
+    ).toEqual(['thread-event-archive']);
+  });
 
   it('draws the Archive button on a finished thread only, and archives its thread from it', () => {
     const archive = vi.fn();
@@ -496,5 +695,247 @@ describe('ThreadEventCard — archive', () => {
 
     expect(el.querySelector('[data-slot="thread-head-archive"]')).toBeNull();
     expect(el.querySelector('[data-slot="thread-event-archive"]')).toBeNull();
+  });
+
+  describe('a finished thread', () => {
+    const DONE_ROW = (
+      runId: string,
+      summary: string | null,
+    ): ThreadMessageRow => ({
+      kind: 'done',
+      done: [
+        { runId, title: 'Otter', handle: 't22', summary, pullRequest: null },
+      ],
+    });
+
+    function press(el: HTMLElement, slot: string): void {
+      act(() => {
+        el.querySelector<HTMLButtonElement>(`[data-slot="${slot}"]`)!.click();
+      });
+    }
+
+    it('draws only the entry in the newest row of its thread, and nothing from an older duplicate', () => {
+      const newest = new Map([['r-otter', 9]]);
+      const old = render(
+        <ThreadDoneNewestContext.Provider value={newest}>
+          <ThreadEventRow row={DONE_ROW('r-otter', 'old')} seq={3} />
+        </ThreadDoneNewestContext.Provider>,
+      );
+      expect(old.querySelector('[data-slot="thread-event-card"]')).toBeNull();
+      expect(old.querySelector('[data-slot="thread-event-stack"]')).toBeNull();
+
+      const latest = render(
+        <ThreadDoneNewestContext.Provider value={newest}>
+          <ThreadEventRow row={DONE_ROW('r-otter', 'new')} seq={9} />
+        </ThreadDoneNewestContext.Provider>,
+      );
+      expect(card(latest).dataset.run).toBe('r-otter');
+    });
+
+    it('shows the live report in place of the frozen summary, and the frozen one without it', () => {
+      const live = render(
+        <ThreadReportsContext.Provider
+          value={new Map([['r-otter', 'Live report from the thread']])}>
+          <ThreadEventCard
+            kind="done"
+            runId="r-otter"
+            title="Otter"
+            text="Frozen summary"
+          />
+        </ThreadReportsContext.Provider>,
+      );
+      const text = live.querySelector(
+        '[data-slot="thread-event-text"]',
+      )?.textContent;
+      expect(text).toContain('Live report from the thread');
+      expect(text).not.toContain('Frozen summary');
+
+      const frozen = render(
+        <ThreadReportsContext.Provider value={new Map()}>
+          <ThreadEventCard
+            kind="done"
+            runId="r-otter"
+            title="Otter"
+            text="Frozen summary"
+          />
+        </ThreadReportsContext.Provider>,
+      );
+      expect(
+        frozen.querySelector('[data-slot="thread-event-text"]')?.textContent,
+      ).toContain('Frozen summary');
+    });
+
+    it('collapses to one line on Dismiss and comes back on Show, still offering Open chat and Archive', () => {
+      const opened: string[] = [];
+      const archive = vi.fn();
+      const el = render(
+        <ThreadArchiveContext.Provider value={() => archive}>
+          <ThreadOpenContext.Provider value={(runId) => opened.push(runId)}>
+            <ThreadEventCard
+              kind="done"
+              runId="r-otter"
+              title="Otter"
+              text="Frozen summary"
+            />
+          </ThreadOpenContext.Provider>
+        </ThreadArchiveContext.Provider>,
+      );
+      expect(
+        el.querySelector('[data-slot="thread-event-open"]'),
+      ).not.toBeNull();
+      expect(
+        el.querySelector('[data-slot="thread-event-archive"]'),
+      ).not.toBeNull();
+      expect(
+        el
+          .querySelector('[data-slot="thread-event-dismiss"]')
+          ?.getAttribute('title'),
+      ).toBe('Hide this card');
+
+      press(el, 'thread-event-dismiss');
+      expect(
+        el.querySelector('[data-slot="thread-event-dismissed"]')?.textContent,
+      ).toBe('Otterfinished');
+      expect(el.querySelector('[data-slot="thread-event-text"]')).toBeNull();
+      expect(el.querySelector('[data-slot="thread-event-open"]')).toBeNull();
+
+      press(el, 'thread-event-show');
+      expect(
+        el.querySelector('[data-slot="thread-event-dismissed"]'),
+      ).toBeNull();
+      expect(
+        el.querySelector('[data-slot="thread-event-text"]')?.textContent,
+      ).toContain('Frozen summary');
+    });
+
+    it('offers Dismiss on a finished thread only', () => {
+      const sent = render(
+        <ThreadEventCard kind="sent" runId="r-otter" title="Otter" />,
+      );
+      expect(
+        sent.querySelector('[data-slot="thread-event-dismiss"]'),
+      ).toBeNull();
+    });
+  });
+});
+
+describe('ThreadEventCard — archived Done card', () => {
+  const slot = (el: HTMLElement, name: string) =>
+    el.querySelector<HTMLButtonElement>(`[data-slot="${name}"]`);
+
+  function drawDone(
+    archived: ThreadArchived | null,
+    unarchive: () => void,
+  ): React.ReactElement {
+    return (
+      <ThreadArchivedContext.Provider value={archived}>
+        <ThreadArchiveContext.Provider value={() => vi.fn()}>
+          <ThreadUnarchiveContext.Provider value={() => unarchive}>
+            <ThreadOpenContext.Provider value={() => undefined}>
+              <ThreadEventCard
+                kind="done"
+                runId="r-otter"
+                title="Otter"
+                text="Frozen summary"
+              />
+            </ThreadOpenContext.Provider>
+          </ThreadUnarchiveContext.Provider>
+        </ThreadArchiveContext.Provider>
+      </ThreadArchivedContext.Provider>
+    );
+  }
+
+  it('shows the Archived badge and Unarchive, no Archive and no summary, and unarchives through the provided action', () => {
+    const unarchive = vi.fn();
+    const el = render(
+      drawDone(new Map([['r-otter', '2026-11-20T10:00:00Z']]), unarchive),
+    );
+
+    expect(
+      el.querySelector('[data-slot="thread-archived-badge"]')?.textContent,
+    ).toBe('Archived');
+    expect(
+      [
+        ...el.querySelectorAll<HTMLElement>(
+          '[data-slot="thread-head-archive"], [data-slot="thread-event-archive"], [data-slot="thread-event-unarchive"]',
+        ),
+      ].map((control) => control.dataset.slot),
+    ).toEqual(['thread-event-unarchive']);
+    expect(slot(el, 'thread-event-open')).not.toBeNull();
+    expect(el.querySelector('[data-slot="thread-event-text"]')).toBeNull();
+    expect(
+      el.querySelector('[data-slot="thread-event-archived"]')?.className,
+    ).toContain('opacity-70');
+
+    act(() => slot(el, 'thread-event-unarchive')!.click());
+    expect(unarchive).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips back to the whole card when the same card sees the map change to null', () => {
+    let setMap: (next: ThreadArchived) => void = () => undefined;
+    function Flip(): React.ReactElement {
+      const [map, set] = useState<ThreadArchived>(
+        new Map([['r-otter', '2026-11-20T10:00:00Z']]),
+      );
+      setMap = set;
+      return drawDone(map, vi.fn());
+    }
+    const el = render(<Flip />);
+    expect(
+      el.querySelector('[data-slot="thread-archived-badge"]'),
+    ).not.toBeNull();
+
+    act(() => setMap(new Map([['r-otter', null]])));
+    expect(el.querySelector('[data-slot="thread-archived-badge"]')).toBeNull();
+    expect(
+      [
+        ...el.querySelectorAll<HTMLElement>(
+          '[data-slot="thread-head-archive"], [data-slot="thread-event-archive"], [data-slot="thread-event-unarchive"]',
+        ),
+      ].map((control) => control.dataset.slot),
+    ).toEqual(['thread-event-archive']);
+    expect(
+      el.querySelector('[data-slot="thread-event-text"]')?.textContent,
+    ).toContain('Frozen summary');
+  });
+
+  it('does not dim a thread the map has not read yet', () => {
+    const el = render(drawDone(new Map(), vi.fn()));
+    expect(el.querySelector('[data-slot="thread-event-archived"]')).toBeNull();
+  });
+});
+
+describe('ThreadEventCard — Dismiss under thread memory', () => {
+  it('stays dismissed after the card remounts inside the same thread', () => {
+    localStorage.clear();
+    const tree = (
+      <ThreadUiMemoryContext.Provider value="manager-run">
+        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+      </ThreadUiMemoryContext.Provider>
+    );
+    const first = render(tree);
+    act(() =>
+      first
+        .querySelector<HTMLButtonElement>('[data-slot="thread-event-dismiss"]')!
+        .click(),
+    );
+    expect(
+      first.querySelector('[data-slot="thread-event-dismissed"]'),
+    ).not.toBeNull();
+
+    const second = render(tree);
+    expect(
+      second.querySelector('[data-slot="thread-event-dismissed"]'),
+    ).not.toBeNull();
+
+    const otherThread = render(
+      <ThreadUiMemoryContext.Provider value="another-run">
+        <ThreadEventCard kind="done" runId="r-otter" title="Otter" />
+      </ThreadUiMemoryContext.Provider>,
+    );
+    expect(
+      otherThread.querySelector('[data-slot="thread-event-dismissed"]'),
+    ).toBeNull();
+    localStorage.clear();
   });
 });

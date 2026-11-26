@@ -4,11 +4,16 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ArchivedThreadBadge,
   ArchiveThreadButton,
   ArchiveThreadIcon,
   ThreadArchiveContext,
   type ThreadArchiveOf,
+  ThreadUnarchiveContext,
+  type ThreadUnarchiveOf,
+  UnarchiveThreadButton,
   useThreadArchive,
+  useThreadUnarchive,
 } from './thread-archive';
 
 (
@@ -136,5 +141,80 @@ describe('ArchiveThreadButton', () => {
     );
     click(button);
     expect(onArchive).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useThreadUnarchive', () => {
+  function UnarchiveProbe({ runId }: { runId: string | null }): ReactElement {
+    const unarchive = useThreadUnarchive(runId);
+    return (
+      <button
+        type="button"
+        data-slot="probe"
+        disabled={unarchive === null}
+        onClick={() => unarchive?.()}>
+        Probe
+      </button>
+    );
+  }
+
+  function renderUnarchive(
+    runId: string | null,
+    unarchiveOf: ThreadUnarchiveOf | null,
+  ): HTMLButtonElement {
+    act(() => {
+      root.render(
+        <ThreadUnarchiveContext.Provider value={unarchiveOf}>
+          <UnarchiveProbe runId={runId} />
+        </ThreadUnarchiveContext.Provider>,
+      );
+    });
+    return container.querySelector<HTMLButtonElement>('[data-slot="probe"]')!;
+  }
+
+  it('offers nothing without a provider or a thread', () => {
+    const unarchiveOf = vi.fn<ThreadUnarchiveOf>(() => vi.fn());
+    expect(renderUnarchive('run-1', null).disabled).toBe(true);
+    expect(renderUnarchive(null, unarchiveOf).disabled).toBe(true);
+    expect(unarchiveOf).not.toHaveBeenCalled();
+  });
+
+  it('runs the provider action for the thread on click', () => {
+    const unarchive = vi.fn();
+    const unarchiveOf = vi.fn<ThreadUnarchiveOf>(() => unarchive);
+    const probe = renderUnarchive('run-1', unarchiveOf);
+    expect(unarchiveOf).toHaveBeenCalledWith('run-1');
+    click(probe);
+    expect(unarchive).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('UnarchiveThreadButton and ArchivedThreadBadge', () => {
+  it('puts the thread back on click and labels the badge', () => {
+    const onUnarchive = vi.fn();
+    act(() => {
+      root.render(
+        <>
+          <ArchivedThreadBadge />
+          <UnarchiveThreadButton
+            slot="thread-card-unarchive"
+            title="Fix the login redirect"
+            onUnarchive={onUnarchive}
+          />
+        </>,
+      );
+    });
+    expect(
+      container.querySelector('[data-slot="thread-archived-badge"]')
+        ?.textContent,
+    ).toBe('Archived');
+    const button = container.querySelector(
+      '[data-slot="thread-card-unarchive"]',
+    );
+    expect(button?.getAttribute('aria-label')).toBe(
+      'Unarchive Fix the login redirect',
+    );
+    click(button);
+    expect(onUnarchive).toHaveBeenCalledTimes(1);
   });
 });

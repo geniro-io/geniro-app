@@ -1,6 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { ArchiveThreadButton, ArchiveThreadIcon } from './thread-archive';
+import {
+  ArchivedThreadBadge,
+  ArchiveThreadButton,
+  ArchiveThreadIcon,
+  UnarchiveThreadButton,
+} from './thread-archive';
 
 function ThreadArchiveControls(): React.JSX.Element {
   return (
@@ -13,6 +18,12 @@ function ThreadArchiveControls(): React.JSX.Element {
         slot="story-archive"
         title="Fix the login redirect"
         onArchive={() => undefined}
+      />
+      <ArchivedThreadBadge />
+      <UnarchiveThreadButton
+        slot="story-unarchive"
+        title="Fix the login redirect"
+        onUnarchive={() => undefined}
       />
     </div>
   );

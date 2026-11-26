@@ -52,4 +52,8 @@ export interface HostedThread {
   onOpenThread?: (runId: string) => void;
   /** The threads this surface can name the way its canvas does — see `ThreadIdentityContext`. */
   threadIdentities?: ReadonlyMap<string, ThreadIdentity>;
+  /** What each thread last reported, read live by the surface — see `ThreadReportsContext`. */
+  threadReports?: ReadonlyMap<string, string>;
+  /** The conversation is the command center's manager, whose transcript draws review-item cards. */
+  commandCenterManager?: boolean;
 }

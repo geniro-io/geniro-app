@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
+import { ThreadUnarchiveContext } from '../components/thread-archive';
 import type { ThreadIdentity } from '../components/thread-head';
+import { ThreadArchivedContext } from './thread-done-context';
 import { ThreadEventCard } from './thread-event-card';
 import { ThreadIdentityContext, ThreadOpenContext } from './thread-title';
 
@@ -16,7 +18,11 @@ const IDENTITIES = new Map<string, ThreadIdentity>([
     {
       title: 'NCDEX_IND: add agro commodities',
       face: { kind: 'agent', icon: 'terminal', name: 'claude' },
-      pullRequest: { number: 146, state: 'open' },
+      pullRequest: {
+        number: 146,
+        state: 'open',
+        url: 'https://github.com/acme/app/pull/146',
+      },
       status: { attention: 'working', text: 'Working' },
       agentLabel: 'claude',
       isTeam: false,
@@ -151,6 +157,29 @@ export const Done: Story = {
     pullRequest: 146,
     text: 'PRI-10 cancelled. Key attempts stopped, PR #146 closed unmerged with a comment, the board card moved to done.',
   },
+};
+
+export const DoneDismissed: Story = {
+  args: Done.args,
+  play: async ({ canvasElement }) => {
+    canvasElement
+      .querySelector<HTMLButtonElement>('[data-slot="thread-event-dismiss"]')
+      ?.click();
+  },
+};
+
+export const DoneArchived: Story = {
+  args: Done.args,
+  decorators: [
+    (story) => (
+      <ThreadArchivedContext.Provider
+        value={new Map([['r-ncdex', '2026-11-20T10:00:00Z']])}>
+        <ThreadUnarchiveContext.Provider value={() => () => {}}>
+          {story()}
+        </ThreadUnarchiveContext.Provider>
+      </ThreadArchivedContext.Provider>
+    ),
+  ],
 };
 
 export const UnknownThread: Story = {

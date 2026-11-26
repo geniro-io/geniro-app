@@ -253,6 +253,10 @@ export interface AgentEventCardProps {
   waiting?: boolean;
   onOpen?: () => void;
   headAside?: React.ReactNode;
+  /** Heads the card as the command center's node does: the title folds onto two lines and the labels run onto their own. */
+  fullHead?: boolean;
+  /** Makes the head's pull request label open it — see `ThreadHead`. */
+  linkPullRequest?: (url: string, label: React.ReactNode) => React.ReactNode;
   /** Drawn between the head and the text. */
   lead?: React.ReactNode;
   text?: string | null;
@@ -264,6 +268,8 @@ export interface AgentEventCardProps {
   body?: React.ReactNode;
   actions?: React.ReactNode;
   outcome?: EventOutcome | null;
+  /** Drawn last, e.g. the card's time and its actions. */
+  foot?: React.ReactNode;
   data?: Record<`data-${string}`, string | undefined>;
 }
 
@@ -284,6 +290,8 @@ export function AgentEventCard({
   waiting = false,
   onOpen,
   headAside,
+  fullHead = false,
+  linkPullRequest,
   lead,
   text = null,
   memoryKey,
@@ -291,6 +299,7 @@ export function AgentEventCard({
   body,
   actions,
   outcome = null,
+  foot,
   data,
 }: AgentEventCardProps): React.JSX.Element {
   const meta = KIND_META[kind];
@@ -334,7 +343,9 @@ export function AgentEventCard({
           slot={slot}
           onOpen={onOpen}
           aside={headAside}
-          compact
+          linkPullRequest={linkPullRequest}
+          wrap={fullHead}
+          compact={!fullHead}
         />
       ) : null}
       {lead}
@@ -374,6 +385,7 @@ export function AgentEventCard({
           <span className="min-w-0 break-words">{outcome.text}</span>
         </p>
       )}
+      {foot}
     </article>
   );
 }

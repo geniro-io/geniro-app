@@ -814,18 +814,22 @@ describe('compact event cards', () => {
     );
   });
 
-  it('draws Open chat on the event line of a finished thread', () => {
+  it("draws Open chat in a finished thread's foot, not on its event line", () => {
     const el = render(
       <ThreadOpenContext.Provider value={vi.fn()}>
         <ThreadEventCard kind="done" runId="run-9" title="Billing fixes" />
       </ThreadOpenContext.Provider>,
     );
-    const top = card(el, 'thread-event').firstElementChild as HTMLElement;
+    const article = card(el, 'thread-event');
     const open = el.querySelector<HTMLElement>(
       '[data-slot="thread-event-open"]',
     );
-    expect(top.dataset.slot).toBe('thread-event-top');
-    expect(top.contains(open)).toBe(true);
+    expect((article.firstElementChild as HTMLElement).contains(open)).toBe(
+      false,
+    );
+    const foot = article.lastElementChild as HTMLElement;
+    expect(foot.dataset.slot).toBe('thread-event-foot');
+    expect(foot.contains(open)).toBe(true);
   });
 });
 

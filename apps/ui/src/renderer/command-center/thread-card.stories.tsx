@@ -105,7 +105,7 @@ export const Team: Story = {
 export const WithPullRequestAndNote: Story = {
   args: {
     title: 'Wire the thread-start conductor',
-    pullRequest: { number: 417, state: 'draft' },
+    pullRequest: { number: 417, state: 'draft', url: null },
     note: 'Waiting for the other thread to land its migration first.',
     boardCard: {
       identifier: 'GEN-417',

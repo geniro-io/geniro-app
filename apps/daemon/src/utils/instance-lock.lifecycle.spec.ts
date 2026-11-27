@@ -68,4 +68,29 @@ describe('InstanceLockLifecycle', () => {
     await shutdown;
     expect(releaseInstanceLock).toHaveBeenCalledOnce();
   });
+
+  it('releases the lock only once every kept agent process has ended, after the drain too', async () => {
+    releaseInstanceLock.mockClear();
+    let processesEnded!: () => void;
+    const closeAll = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          processesEnded = resolve;
+        }),
+    );
+    const lifecycle = new InstanceLockLifecycle(
+      { drain: vi.fn(() => Promise.resolve()) } as unknown as ProcessRegistry,
+      { closeAll } as unknown as AgentSessionRegistry,
+    );
+
+    const shutdown = lifecycle.onApplicationShutdown();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(releaseInstanceLock).not.toHaveBeenCalled();
+
+    processesEnded();
+    await shutdown;
+    expect(releaseInstanceLock).toHaveBeenCalledOnce();
+  });
 });

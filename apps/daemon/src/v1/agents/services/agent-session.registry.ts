@@ -42,6 +42,7 @@ import type {
   SessionCloseOptions,
   StoppedCommands,
 } from '../utils/spawn-cli';
+import { SHUTDOWN_DRAIN_MS } from './process-registry';
 import { currentRunOwner } from './run-process-attribution.service';
 
 /**
@@ -378,6 +379,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   private readonly runUsedAt = new Map<string, number>();
   private shuttingDown = false;
+  /** Every process {@link closeAll} has signalled, until the daemon is gone. */
+  private readonly endingForShutdown = new Set<SessionEntry>();
+  /** When {@link closeAll} stops waiting for them; set by its first call. */
+  private shutdownDeadline: number | null = null;
   private readonly leftCommandListeners = new Set<
     (runId: string, left: StoppedCommands) => void
   >();
@@ -1222,29 +1227,49 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return entry && entry.session.alive ? entry.agent : null;
   }
 
-  onApplicationShutdown(): void {
-    this.closeAll();
+  onApplicationShutdown(): Promise<void> {
+    return this.closeAll();
   }
 
   /**
-   * Close every process on the way out. Idempotent.
+   * Close every process on the way out, and resolve once each one has ended or
+   * {@link SHUTDOWN_DRAIN_MS} after the first call. Idempotent.
    *
    * `ProcessRegistry` cancels the in-flight TURNS and drains them; this ends
    * the processes those turns were running on, which nothing else would. The
-   * pidfile and instance-lock hooks call it too, after the drain: they run
-   * before this module's own hook, and must not release while a kept process
-   * is still running.
+   * pidfile and instance-lock hooks call it too, and await it: they run before
+   * this module's own hook, and must not release while a kept process is still
+   * running. The wait is also what lets a group that ignores its SIGTERM get
+   * the SIGKILL armed for it, a timer in this process.
    */
-  closeAll(): void {
+  closeAll(): Promise<void> {
     this.shuttingDown = true;
+    this.shutdownDeadline ??= Date.now() + SHUTDOWN_DRAIN_MS;
     // A graceful close still under way would outlive the daemon: `cursor-agent
     // acp` ignores EOF, and its deadline is a timer in this process.
     for (const [entry, key] of [...this.closing]) {
       this.escalate(key, entry);
+      this.endingForShutdown.add(entry);
     }
     for (const [runId, entry] of [...this.entries]) {
       this.closeEntry(runId, entry, 'the daemon is shutting down');
+      this.endingForShutdown.add(entry);
     }
+    const ended = Promise.all(
+      [...this.endingForShutdown]
+        .filter((entry) => !this.closeFailed.has(entry))
+        .map((entry) => entry.session.closed),
+    );
+    return new Promise((resolve) => {
+      const deadline = setTimeout(
+        resolve,
+        Math.max(0, (this.shutdownDeadline ?? 0) - Date.now()),
+      );
+      void ended.then(() => {
+        clearTimeout(deadline);
+        resolve();
+      });
+    });
   }
 
   /**

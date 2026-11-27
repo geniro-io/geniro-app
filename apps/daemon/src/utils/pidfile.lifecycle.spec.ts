@@ -63,4 +63,29 @@ describe('PidfileLifecycle', () => {
     await shutdown;
     expect(removePidfile).toHaveBeenCalledOnce();
   });
+
+  it('removes the pidfile only once every kept agent process has ended, after the drain too', async () => {
+    removePidfile.mockClear();
+    let processesEnded!: () => void;
+    const closeAll = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          processesEnded = resolve;
+        }),
+    );
+    const lifecycle = new PidfileLifecycle(
+      { drain: vi.fn(() => Promise.resolve()) } as unknown as ProcessRegistry,
+      { closeAll } as unknown as AgentSessionRegistry,
+    );
+
+    const shutdown = lifecycle.onApplicationShutdown();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(removePidfile).not.toHaveBeenCalled();
+
+    processesEnded();
+    await shutdown;
+    expect(removePidfile).toHaveBeenCalledOnce();
+  });
 });

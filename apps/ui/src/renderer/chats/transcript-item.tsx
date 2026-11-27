@@ -44,6 +44,8 @@ import { RowsShownOnCardsContext } from './rows-shown-on-cards';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
+import { SettingsNoticeCard } from './settings-attention-cards';
+import { readSettingsNoticeRow } from './settings-notice-payload';
 import { settlesOnContinuation, teamPassStatus } from './settled-status';
 import {
   readStageChangePayload,
@@ -574,6 +576,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;
+      }
+      const settingsNotice = readSettingsNoticeRow(item.payload);
+      if (settingsNotice !== null) {
+        return <SettingsNoticeCard row={settingsNotice} />;
       }
       // Anything between this thread and another one: one card, not the
       // sentence the daemon wrote for it.

@@ -5923,6 +5923,14 @@ export interface HostRowWire {
    * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
    */
   waitingItems?: WaitingItemsRow;
+  /**
+   * Something waiting on the user in Settings, announced in the command
+   * center's manager chat once per notice (`command_center_notices`).
+   *
+   * TWIN PARSER: read by `readSettingsNoticeRow` in
+   * `apps/ui/src/renderer/chats/settings-notice-payload.ts`.
+   */
+  settingsNotice?: SettingsNoticeRow;
 }
 
 /** What a call event row says of the callee and the call it is about. */
@@ -6017,6 +6025,22 @@ export const WAITING_ITEMS_SUMMARY_OVER = 5;
 export interface WaitingItemsRow {
   kind: WaitingItemKind;
   items: { id: string; title: string }[];
+}
+
+export const SETTINGS_NOTICE_KINDS = [
+  'app-update',
+  'agent-updates',
+  'agent-sign-in',
+  'share-sign-in',
+  'memory-conflicts',
+] as const;
+export type SettingsNoticeKind = (typeof SETTINGS_NOTICE_KINDS)[number];
+
+/** The notice a manager-chat row stands for; its card reads the notice's state by `noticeId`. */
+export interface SettingsNoticeRow {
+  noticeId: string;
+  kind: SettingsNoticeKind;
+  key: string;
 }
 
 export type ThreadMessageStatus = 'waiting' | 'delivered' | 'cancelled';

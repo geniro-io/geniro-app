@@ -190,6 +190,11 @@ const lessonsApi = vi.hoisted(() => ({
 const sharesApi = vi.hoisted(() => ({
   listShares: vi.fn(() => Promise.resolve({ shares: [] })),
 }));
+const commandCenterApi = vi.hoisted(() => ({
+  listCommandCenterNotices: vi.fn(() => Promise.resolve({ notices: [] })),
+  reportCommandCenterNoticeReadings: vi.fn(() => Promise.resolve()),
+  dismissCommandCenterNotice: vi.fn(),
+}));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
@@ -208,6 +213,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     projects: projectsApi,
     shares: sharesApi,
     lessons: lessonsApi,
+    commandCenter: commandCenterApi,
   })),
 }));
 // The module reads `window.geniro` once at import, before this spec installs its
@@ -22524,9 +22530,11 @@ describe('Chats — one hosted conversation', () => {
     });
   }
 
-  it('ends only the command center manager’s transcript with what waits in Settings', async () => {
+  it('draws a Settings notice at its own row of the manager transcript, not after the conversation', async () => {
     (
-      window as unknown as { geniro: { detectClis: ReturnType<typeof vi.fn> } }
+      window as unknown as {
+        geniro: { detectClis: ReturnType<typeof vi.fn> };
+      }
     ).geniro.detectClis.mockResolvedValue([
       {
         kind: 'claude',
@@ -22541,6 +22549,42 @@ describe('Chats — one hosted conversation', () => {
         },
       },
     ]);
+    api.listRunItems.mockResolvedValue([
+      hostedRow(msg(0, 'user', 'before the notice')),
+      hostedRow({
+        id: 'i1',
+        runId: 'r1',
+        memberId: null,
+        seq: 1,
+        kind: 'system',
+        role: null,
+        payload: {
+          severity: 'info',
+          message: 'Agent updates are available',
+          woke: false,
+          settingsNotice: {
+            noticeId: 'n1',
+            kind: 'agent-updates',
+            key: 'agent-updates:claude',
+          },
+        },
+        createdAt: 'now',
+      }),
+      hostedRow(msg(2, 'assistant', 'after the notice')),
+    ]);
+    commandCenterApi.listCommandCenterNotices.mockResolvedValue({
+      notices: [
+        {
+          id: 'n1',
+          kind: 'agent-updates',
+          key: 'agent-updates:claude',
+          items: ['claude@3'],
+          openedAt: 'now',
+          resolvedAt: null,
+          dismissedAt: null,
+        },
+      ],
+    } as never);
     const { client } = makeClient();
     const quiet = (): (() => void) => () => undefined;
     for (const name of [
@@ -22548,6 +22592,7 @@ describe('Chats — one hosted conversation', () => {
       'onLessonsChanged',
       'onKnowledgeChanged',
       'onSharesChanged',
+      'onCommandCenterChanged',
     ] as const) {
       Object.assign(client, { [name]: client[name] ?? quiet });
     }
@@ -22555,15 +22600,30 @@ describe('Chats — one hosted conversation', () => {
       hosted: hostedThread({ commandCenterManager: true }),
     });
 
-    const cards = manager.querySelector('[data-slot="settings-attention"]');
-    expect(cards?.closest('[data-slot="transcript"]')).not.toBeNull();
-    expect(cards?.textContent).toContain('claude 2 → 3');
+    const card = manager.querySelector<HTMLElement>(
+      '[data-slot="settings-attention-card"]',
+    );
+    expect(card?.textContent).toContain('claude 2 → 3');
+    const textOf = (needle: string): Node =>
+      [...manager.querySelectorAll('*')].find(
+        (node) => node.children.length === 0 && node.textContent === needle,
+      ) as Node;
+    const following = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(
+      textOf('before the notice').compareDocumentPosition(card as Node) &
+        following,
+    ).toBe(following);
+    expect(
+      (card as Node).compareDocumentPosition(textOf('after the notice')) &
+        following,
+    ).toBe(following);
 
     const other = await mount(makeClient().client, undefined, {
       hosted: hostedThread(),
     });
-
-    expect(other.querySelector('[data-slot="settings-attention"]')).toBeNull();
+    expect(
+      other.querySelector('[data-slot="settings-attention-card"]'),
+    ).toBeNull();
   });
 
   it('draws the working threads its surface names in the corner, and opens a pressed one through the surface', async () => {

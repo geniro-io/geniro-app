@@ -4,6 +4,7 @@ import {
   CustomInstructionsSchema,
   RunProjectRefSchema,
   RunWireSchema,
+  SETTINGS_NOTICE_KINDS,
 } from '../agents/chat.types';
 import { TaskStatusSchema } from '../tasks/tasks.types';
 import { chatChipsSchema } from '../teams/teams.types';
@@ -246,6 +247,75 @@ export const CommandCenterTimelineSchema = z.object({
 });
 export type CommandCenterTimeline = z.infer<typeof CommandCenterTimelineSchema>;
 
+export const SettingsNoticeKindSchema = z
+  .enum(SETTINGS_NOTICE_KINDS)
+  .meta({ id: 'SettingsNoticeKind' });
+
+/** The kinds whose readings live in Electron main, reported by the desktop window. */
+export const REPORTED_NOTICE_KINDS = [
+  'app-update',
+  'agent-updates',
+  'agent-sign-in',
+] as const satisfies readonly (typeof SETTINGS_NOTICE_KINDS)[number][];
+export type ReportedNoticeKind = (typeof REPORTED_NOTICE_KINDS)[number];
+
+export const NOTICE_ITEMS_MAX = 200;
+export const NOTICE_ITEM_MAX_CHARS = 500;
+
+export const SettingsNoticeSchema = z
+  .object({
+    id: z.string(),
+    kind: SettingsNoticeKindSchema,
+    key: z
+      .string()
+      .describe(
+        'What the notice is about: its kind, or `share-sign-in:<destination id>`',
+      ),
+    items: z
+      .array(z.string())
+      .describe(
+        'Every item it has shown: a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id',
+      ),
+    openedAt: z.string().describe('When it was first read, ISO 8601'),
+    resolvedAt: z
+      .string()
+      .nullable()
+      .describe('When its reason went, ISO 8601; null while it stands'),
+    dismissedAt: z
+      .string()
+      .nullable()
+      .describe('When the user dismissed it, ISO 8601; null when not'),
+  })
+  .meta({ id: 'SettingsNotice' });
+export type SettingsNotice = z.infer<typeof SettingsNoticeSchema>;
+
+// No `.meta({ id })` — a RESPONSE DTO ROOT.
+export const SettingsNoticesSchema = z.object({
+  notices: z.array(SettingsNoticeSchema),
+});
+
+/**
+ * What the desktop window reads now for the kinds Electron main holds: a kind
+ * listed with no items has nothing waiting, a kind left out was not read.
+ */
+export const SettingsNoticeReadingsSchema = z
+  .object({
+    readings: z
+      .array(
+        z.object({
+          kind: z.enum(REPORTED_NOTICE_KINDS),
+          items: z
+            .array(z.string().min(1).max(NOTICE_ITEM_MAX_CHARS))
+            .max(NOTICE_ITEMS_MAX),
+        }),
+      )
+      .max(REPORTED_NOTICE_KINDS.length),
+  })
+  .meta({ id: 'SettingsNoticeReadings' });
+export type SettingsNoticeReadings = z.infer<
+  typeof SettingsNoticeReadingsSchema
+>;
+
 /** Why the roster holds a thread. */
 export const RosterReasonSchema = z.enum(['auto', 'manager', 'user']);
 export type RosterReason = z.infer<typeof RosterReasonSchema>;
@@ -256,7 +326,8 @@ export type RosterReason = z.infer<typeof RosterReasonSchema>;
  */
 export interface CommandCenterChangedEvent {
   runIds: string[];
-  reason: 'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start';
+  reason:
+    'status' | 'items' | 'roster' | 'task' | 'refiled' | 'start' | 'notices';
 }
 
 /**

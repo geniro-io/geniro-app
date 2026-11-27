@@ -22,6 +22,7 @@ import type {
   CommandCenterStart,
   CommandCenterThreadStartState,
   CommandCenterTimeline,
+  SettingsNotice,
 } from '../command-center.types';
 import {
   CommandCenterBoardDto,
@@ -34,11 +35,15 @@ import {
   CommandCenterThreadStartStateDto,
   CommandCenterTimelineDto,
   CommandCenterTimelineQueryDto,
+  SettingsNoticeDto,
+  SettingsNoticeReadingsDto,
+  SettingsNoticesDto,
   StartCommandCenterChatDto,
   StartThreadRunDto,
 } from '../dto/command-center.dto';
 import { CommandCenterService } from '../services/command-center.service';
 import { CommandCenterChatService } from '../services/command-center-chat.service';
+import { CommandCenterNoticesService } from '../services/command-center-notices.service';
 import { CommandCenterStartsService } from '../services/command-center-starts.service';
 import { CommandCenterTimelineService } from '../services/command-center-timeline.service';
 
@@ -51,6 +56,7 @@ export class CommandCenterController {
     private readonly managers: CommandCenterChatService,
     private readonly starts: CommandCenterStartsService,
     private readonly timelines: CommandCenterTimelineService,
+    private readonly notices: CommandCenterNoticesService,
   ) {}
 
   /** Every active thread as a card, or just the named ones. */
@@ -103,6 +109,31 @@ export class CommandCenterController {
   @ZodResponse({ status: 200, type: CommandCenterChatsDiscardedDto })
   discard(): Promise<{ deleted: number }> {
     return this.managers.reset();
+  }
+
+  /** The manager chat's Settings notices, oldest first, for the cards drawn at their rows. */
+  @Get('notices')
+  @ApiOperation({ operationId: 'listCommandCenterNotices' })
+  @ZodResponse({ status: 200, type: SettingsNoticesDto })
+  async listNotices(): Promise<{ notices: SettingsNotice[] }> {
+    return { notices: await this.notices.list() };
+  }
+
+  /** What the desktop window reads of the Geniro update and the agent CLIs — desktop only: those readings live in Electron main. */
+  @Put('notices/readings')
+  @UseGuards(DesktopOnlyGuard)
+  @HttpCode(204)
+  @ApiOperation({ operationId: 'reportCommandCenterNoticeReadings' })
+  reportNoticeReadings(@Body() dto: SettingsNoticeReadingsDto): Promise<void> {
+    return this.notices.report(dto);
+  }
+
+  /** The user put a notice away, on any device: its card is gone until a new notice opens. */
+  @Post('notices/:noticeId/dismiss')
+  @ApiOperation({ operationId: 'dismissCommandCenterNotice' })
+  @ZodResponse({ status: 201, type: SettingsNoticeDto })
+  dismissNotice(@Param('noticeId') noticeId: string): Promise<SettingsNotice> {
+    return this.notices.dismiss(noticeId);
   }
 
   /** The approved starts Electron main's drain starts. */

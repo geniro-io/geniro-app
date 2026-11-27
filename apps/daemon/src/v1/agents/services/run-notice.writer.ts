@@ -40,7 +40,10 @@ export class RunNoticeWriter {
   async info(
     runId: string,
     message: string,
-    fields?: Pick<HostRowWire, 'threadDone' | 'waitingItems'>,
+    fields?: Pick<
+      HostRowWire,
+      'threadDone' | 'waitingItems' | 'settingsNotice'
+    >,
   ): Promise<boolean> {
     const payload: HostRowWire = {
       severity: 'info',

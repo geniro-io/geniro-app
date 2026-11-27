@@ -6,7 +6,7 @@ import {
   KeyRound,
   Link2,
 } from 'lucide-react';
-import { useContext, useEffect } from 'react';
+import { useContext } from 'react';
 
 import type { CliDetection, ConfigProfile } from '../../shared/contracts';
 import { agentDisplayName, AgentIdentityContext } from '../agent-identity';
@@ -17,38 +17,33 @@ import { ErrorText } from '../components/error-text';
 import { SignInAction } from '../components/sign-in-action';
 import { Button } from '../components/ui/button';
 import type { DaemonApis } from '../daemon-api';
-import type { DaemonClient } from '../daemon-client';
-import { isRemoteRuntime } from '../remote/remote-session';
-import {
-  cliUpdatesAvailable,
-  useCliAttention,
-} from '../settings/use-cli-attention';
+import { cliUpdatesAvailable } from '../settings/use-cli-attention';
 import type { CliUpdatesController } from '../settings/use-cli-updates';
 import { updateStatusText } from '../updates/update-status';
-import {
-  type UpdateController,
-  useUpdateState,
-} from '../updates/use-update-state';
-import {
-  type CliLoginController,
-  isLoginOver,
-  useCliLogin,
-} from '../use-cli-login';
+import type { UpdateController } from '../updates/use-update-state';
+import { type CliLoginController, isLoginOver } from '../use-cli-login';
 import { NoticeCard } from './notice-card';
 import {
   appUpdateWaits,
   configDirName,
-  ON_SHARES,
-  readMemoryFindings,
-  readWaitingShares,
   type ShareWait,
-  shareWaitsByPlace,
-  useCardDismissal,
-  useConfigProfiles,
+  shareWaitOf,
 } from './settings-attention';
-import { ON_MEMORY, useWaitingSet } from './use-waiting-items';
+import type { SettingsNoticeRowView } from './settings-notice-payload';
+import { SettingsNoticesContext } from './settings-notices-context';
 
 const SLOT = 'settings-attention';
+
+/**
+ * TWIN PARSER: the `agent-sign-in` key of `readingsByKey` in
+ * `apps/daemon/src/v1/command-center/utils/notice-plan.ts`.
+ */
+function signInNoticeKey(account: {
+  kind: string;
+  configDir: string | null;
+}): string {
+  return `agent-sign-in:${account.kind}:${account.configDir ?? ''}`;
+}
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -90,18 +85,13 @@ export function AgentUpdatesCard({
   rows,
   updates,
   nameOf,
+  onDismiss,
 }: {
   rows: readonly CliDetection[];
   updates: CliUpdatesController;
   nameOf: (kind: string) => string;
+  onDismiss?: () => void;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    'agent-updates',
-    rows.map(
-      (detection) =>
-        `${detection.kind}@${detection.update.latestVersion ?? ''}`,
-    ),
-  );
   return (
     <NoticeCard
       slot={SLOT}
@@ -109,7 +99,7 @@ export function AgentUpdatesCard({
       icon={CircleArrowUp}
       label="Update available"
       heading={plural(rows.length, 'agent', 'agents')}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <Rows>
         {rows.map((detection) => {
           const running = updates.updating.has(detection.kind);
@@ -152,16 +142,14 @@ export function AgentSignInCard({
   login,
   nameOf,
   profiles,
+  onDismiss,
 }: {
   rows: readonly SignedOutAccount[];
   login: CliLoginController;
   nameOf: (kind: string) => string;
   profiles: readonly ConfigProfile[];
+  onDismiss?: () => void;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    'agent-sign-in',
-    rows.map((row) => `${row.kind}:${row.configDir ?? ''}`),
-  );
   const busy =
     login.starting !== null ||
     (login.login !== null && !isLoginOver(login.login.session));
@@ -177,7 +165,7 @@ export function AgentSignInCard({
       settled={rows.length === 0}
       settledIcon={CircleCheck}
       settledLabel="Signed in"
-      dismissal={dismissable ? dismissal : undefined}>
+      onDismiss={dismissable ? onDismiss : undefined}>
       {rows.length === 0 ? null : (
         <Rows>
           {rows.map((row) => {
@@ -228,15 +216,13 @@ export function AgentSignInCard({
 export function AppUpdateCard({
   update,
   remote,
+  onDismiss,
 }: {
   update: UpdateController;
   remote: boolean;
+  onDismiss?: () => void;
 }): React.JSX.Element | null {
   const state = update.state;
-  const dismissal = useCardDismissal(
-    'app-update',
-    state === null ? [] : [state.version ?? ''],
-  );
   if (state === null) {
     return null;
   }
@@ -247,7 +233,7 @@ export function AppUpdateCard({
       icon={Download}
       label="Update available"
       heading="Geniro"
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <div className="flex min-w-0 items-center gap-3 [&>button]:shrink-0">
         <p
           data-slot="settings-attention-app-update"
@@ -268,14 +254,12 @@ export function AppUpdateCard({
 export function ShareSignInCard({
   wait,
   api,
+  onDismiss,
 }: {
   wait: ShareWait;
   api: DaemonApis['shares'];
+  onDismiss?: () => void;
 }): React.JSX.Element {
-  const dismissal = useCardDismissal(
-    `share-sign-in:${wait.destinationId}`,
-    wait.shareIds,
-  );
   return (
     <NoticeCard
       slot={SLOT}
@@ -283,7 +267,7 @@ export function ShareSignInCard({
       icon={Link2}
       label="Waiting for sign-in"
       heading={wait.label}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <p
         data-slot="settings-attention-share-count"
         className="m-0 text-sm break-words">
@@ -303,12 +287,13 @@ export function ShareSignInCard({
 export function MemoryConflictsCard({
   findingIds,
   onOpen,
+  onDismiss,
 }: {
   findingIds: readonly string[];
   onOpen: (() => void) | null;
+  onDismiss?: () => void;
 }): React.JSX.Element {
   const count = findingIds.length;
-  const dismissal = useCardDismissal('memory-conflicts', findingIds);
   return (
     <NoticeCard
       slot={SLOT}
@@ -316,7 +301,7 @@ export function MemoryConflictsCard({
       icon={GitCompareArrows}
       label="Waiting for your decision"
       heading={plural(count, 'memory conflict', 'memory conflicts')}
-      dismissal={dismissal}>
+      onDismiss={onDismiss}>
       <p
         data-slot="settings-attention-conflicts"
         className="m-0 text-sm break-words">
@@ -344,100 +329,89 @@ export function MemoryConflictsCard({
 }
 
 /**
- * What waits on the user in Settings, drawn at the foot of the manager's chat
- * while it waits, from the same live readings Settings draws: agent updates,
- * signed-out agent accounts, a Geniro update, shares waiting on a sign-in and
- * memory conflicts. Nothing here is a transcript row, so a card goes once its
- * reason does, wherever it was settled.
+ * A Settings notice's row in the manager chat: the card Settings' own live
+ * readings draw for it while the notice stands and was not dismissed, nothing
+ * otherwise. A sign-in under way keeps its card until it ends.
  */
-export function SettingsAttentionCards({
-  apis,
-  client,
-  active,
-  onOpenMemoryConflicts,
-  remote = isRemoteRuntime(),
+export function SettingsNoticeCard({
+  row,
 }: {
-  apis: DaemonApis;
-  client: DaemonClient | null;
-  active: boolean;
-  onOpenMemoryConflicts: (() => void) | null;
-  remote?: boolean;
+  row: SettingsNoticeRowView;
 }): React.JSX.Element | null {
+  const store = useContext(SettingsNoticesContext);
   const identities = useContext(AgentIdentityContext);
-  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
-  const cli = useCliAttention();
-  const { refresh } = cli;
-  useEffect(() => {
-    if (active) {
-      refresh(false);
-    }
-  }, [active, refresh]);
-  const login = useCliLogin(apis, () => refresh(true));
-  const update = useUpdateState();
-  const profiles = useConfigProfiles();
-  const shares = useWaitingSet(
-    apis,
-    client,
-    active && !remote,
-    readWaitingShares,
-    ON_SHARES,
-  );
-  const findings = useWaitingSet(
-    apis,
-    client,
-    active,
-    readMemoryFindings,
-    ON_MEMORY,
-  );
-
-  const updateRows = cliUpdatesAvailable(cli.detections ?? []);
-  const signInRows = (cli.detections ?? []).flatMap(signedOutAccountRows);
-  const shareWaits =
-    shares.items === null ? [] : shareWaitsByPlace(shares.items.values());
-  const conflictIds = findings.items === null ? [] : [...findings.items.keys()];
-  const showSignIn = signInRows.length > 0 || login.login !== null;
-  const showAppUpdate = appUpdateWaits(update.state);
-
+  if (store === null) {
+    return null;
+  }
+  const notice = store.notices?.get(row.noticeId);
+  const signing = store.login.login ?? store.login.starting;
+  const signingIn =
+    row.kind === 'agent-sign-in' &&
+    signing !== null &&
+    signing.server === null &&
+    row.key === signInNoticeKey(signing);
   if (
-    updateRows.length === 0 &&
-    !showSignIn &&
-    !showAppUpdate &&
-    shareWaits.length === 0 &&
-    conflictIds.length === 0
+    notice === undefined ||
+    (!signingIn && (notice.resolvedAt !== null || notice.dismissedAt !== null))
   ) {
     return null;
   }
-  return (
-    <div data-slot={SLOT} className="flex min-w-0 flex-col gap-2.5">
-      {showAppUpdate ? <AppUpdateCard update={update} remote={remote} /> : null}
-      {updateRows.length === 0 ? null : (
+  const onDismiss = (): void => store.dismiss(row.noticeId);
+  const nameOf = (kind: string): string => agentDisplayName(identities, kind);
+  const detections = store.detections ?? [];
+  switch (row.kind) {
+    case 'app-update':
+      return appUpdateWaits(store.update.state) ? (
+        <AppUpdateCard
+          update={store.update}
+          remote={store.remote}
+          onDismiss={onDismiss}
+        />
+      ) : null;
+    case 'agent-updates': {
+      const rows = cliUpdatesAvailable(detections).filter(
+        (detection) => row.key === `agent-updates:${detection.kind}`,
+      );
+      return rows.length === 0 ? null : (
         <AgentUpdatesCard
-          rows={updateRows}
-          updates={cli.updates}
+          rows={rows}
+          updates={store.cliUpdates}
           nameOf={nameOf}
+          onDismiss={onDismiss}
         />
-      )}
-      {showSignIn ? (
+      );
+    }
+    case 'agent-sign-in': {
+      const rows = detections
+        .flatMap(signedOutAccountRows)
+        .filter((account) => row.key === signInNoticeKey(account));
+      return rows.length === 0 && !signingIn ? null : (
         <AgentSignInCard
-          rows={signInRows}
-          login={login}
+          rows={rows}
+          login={store.login}
           nameOf={nameOf}
-          profiles={profiles}
+          profiles={store.profiles}
+          onDismiss={onDismiss}
         />
-      ) : null}
-      {shareWaits.map((wait) => (
+      );
+    }
+    case 'share-sign-in': {
+      const wait = shareWaitOf(store.shareWaits, row.key);
+      return wait === null ? null : (
         <ShareSignInCard
-          key={wait.destinationId}
           wait={wait}
-          api={apis.shares}
+          api={store.apis.shares}
+          onDismiss={onDismiss}
         />
-      ))}
-      {conflictIds.length === 0 ? null : (
+      );
+    }
+    case 'memory-conflicts':
+      return store.conflictIds.length === 0 ? null : (
         <MemoryConflictsCard
-          findingIds={conflictIds}
-          onOpen={onOpenMemoryConflicts}
+          findingIds={store.conflictIds}
+          onOpen={store.onOpenMemoryConflicts}
+          onDismiss={onDismiss}
         />
-      )}
-    </div>
-  );
+      );
+  }
 }

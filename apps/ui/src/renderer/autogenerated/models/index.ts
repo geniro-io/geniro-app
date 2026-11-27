@@ -17264,6 +17264,128 @@ export interface SetTeamRunPoolMemberDto {
 /**
  * 
  * @export
+ * @interface SettingsNotice
+ */
+export interface SettingsNotice {
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    id: string;
+    /**
+     * 
+     * @type {SettingsNoticeKind}
+     * @memberof SettingsNotice
+     */
+    kind: SettingsNoticeKind;
+    /**
+     * What the notice is about: its kind, or `share-sign-in:<destination id>`
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    key: string;
+    /**
+     * Every item it has shown: a version, `<cli>@<version>`, `<cli>:<config dir>`, a share id or a memory finding id
+     * @type {Array<string>}
+     * @memberof SettingsNotice
+     */
+    items: Array<string>;
+    /**
+     * When it was first read, ISO 8601
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    openedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    resolvedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNotice
+     */
+    dismissedAt: string | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const SettingsNoticeKind = {
+    AppUpdate: 'app-update',
+    AgentUpdates: 'agent-updates',
+    AgentSignIn: 'agent-sign-in',
+    ShareSignIn: 'share-sign-in',
+    MemoryConflicts: 'memory-conflicts'
+} as const;
+export type SettingsNoticeKind = typeof SettingsNoticeKind[keyof typeof SettingsNoticeKind];
+
+/**
+ * 
+ * @export
+ * @interface SettingsNoticeReadingsDto
+ */
+export interface SettingsNoticeReadingsDto {
+    /**
+     * 
+     * @type {Array<SettingsNoticeReadingsDtoReadingsInner>}
+     * @memberof SettingsNoticeReadingsDto
+     */
+    readings: Array<SettingsNoticeReadingsDtoReadingsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface SettingsNoticeReadingsDtoReadingsInner
+ */
+export interface SettingsNoticeReadingsDtoReadingsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    kind: SettingsNoticeReadingsDtoReadingsInnerKindEnum;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    items: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const SettingsNoticeReadingsDtoReadingsInnerKindEnum = {
+    AppUpdate: 'app-update',
+    AgentUpdates: 'agent-updates',
+    AgentSignIn: 'agent-sign-in'
+} as const;
+export type SettingsNoticeReadingsDtoReadingsInnerKindEnum = typeof SettingsNoticeReadingsDtoReadingsInnerKindEnum[keyof typeof SettingsNoticeReadingsDtoReadingsInnerKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface SettingsNoticesDto
+ */
+export interface SettingsNoticesDto {
+    /**
+     * 
+     * @type {Array<SettingsNotice>}
+     * @memberof SettingsNoticesDto
+     */
+    notices: Array<SettingsNotice>;
+}
+/**
+ * 
+ * @export
  * @interface Share
  */
 export interface Share {

@@ -3,7 +3,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { loginShellPath, parseLoginShellPath } from './login-shell-path';
 
@@ -49,39 +58,47 @@ describe('parseLoginShellPath', () => {
  * user's rc files; it ignores the `-ilc` it is handed.
  */
 describe('loginShellPath', () => {
+  const BODY_ENV = 'GENIRO_SPEC_SHELL_BODY';
+  let shellDir = '';
+  let shell = '';
   let scratch = '';
+
+  /**
+   * One script for the whole file, run once before any case. macOS assesses a
+   * new executable on its first exec — measured at 350–730ms before its first
+   * line runs — so a script per case spent that on every case. Each case hands
+   * the script its body through the environment, which the spawned shell
+   * inherits.
+   *
+   * The time bounds below are wide for the machine's load. Each is still far
+   * inside what the regression it guards would take: the old code waited for
+   * the deadline, for a background job, or forever.
+   */
+  beforeAll(() => {
+    shellDir = mkdtempSync(join(tmpdir(), 'geniro-login-shell-bin-'));
+    shell = join(shellDir, 'shell.sh');
+    writeFileSync(shell, `#!/bin/sh\neval "$${BODY_ENV}"\n`, {
+      mode: 0o755,
+    });
+    execFileSync(shell, [], { env: { ...process.env, [BODY_ENV]: '' } });
+  });
+
+  afterAll(() => {
+    rmSync(shellDir, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     scratch = mkdtempSync(join(tmpdir(), 'geniro-login-shell-'));
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  /**
-   * A freshly written script, run once before it is handed over. macOS assesses
-   * a new executable on its first exec — measured at ~400ms before its first
-   * line runs — and under a whole suite's load that stretched past a case's
-   * deadline, so the script never started and the case was timing the
-   * assessment and the machine instead of the code. The warm-up run exits at
-   * its first line.
-   *
-   * The time bounds below are wide for the same reason. Each is still far
-   * inside what the regression it guards would take: the old code waited for
-   * the deadline, for a background job, or forever.
-   */
   const fakeShell = (body: string): string => {
-    const path = join(scratch, 'shell.sh');
-    writeFileSync(
-      path,
-      `#!/bin/sh\n[ -n "$GENIRO_SPEC_WARMUP" ] && exit 0\n${body}\n`,
-      { mode: 0o755 },
-    );
-    execFileSync(path, [], {
-      env: { ...process.env, GENIRO_SPEC_WARMUP: '1' },
-    });
-    return path;
+    vi.stubEnv(BODY_ENV, body);
+    return shell;
   };
 
   const isAlive = (pid: number): boolean => {
@@ -94,11 +111,11 @@ describe('loginShellPath', () => {
   };
 
   it('resolves the PATH the shell echoes', async () => {
-    const shell = fakeShell(
+    const path = fakeShell(
       'echo "rc banner"\necho "__GENIRO_PATH__/opt/homebrew/bin:/usr/bin"',
     );
 
-    await expect(loginShellPath(3000, shell)).resolves.toBe(
+    await expect(loginShellPath(3000, path)).resolves.toBe(
       '/opt/homebrew/bin:/usr/bin',
     );
   });
@@ -106,13 +123,13 @@ describe('loginShellPath', () => {
   it('answers at once when an rc file READS its stdin, rather than waiting on it', async () => {
     // With stdin an open pipe nobody writes to, a `read` in an rc file blocks
     // until the deadline — and past it, since the shell ignores a SIGTERM.
-    const shell = fakeShell(
+    const fake = fakeShell(
       'trap \'\' TERM\nread answer\necho "__GENIRO_PATH__/a:/b"',
     );
     const started = Date.now();
 
     // A 20s deadline the old code would have waited out; the answer is EOF.
-    const path = await loginShellPath(20_000, shell);
+    const path = await loginShellPath(20_000, fake);
 
     expect(path).toBe('/a:/b');
     expect(Date.now() - started).toBeLessThan(10_000);
@@ -120,12 +137,15 @@ describe('loginShellPath', () => {
 
   it('KILLS a shell that ignores SIGTERM and never answers, and resolves null', async () => {
     const pidFile = join(scratch, 'pid');
-    const shell = fakeShell(
-      `echo $$ > ${JSON.stringify(pidFile)}\ntrap '' TERM\nwhile :; do sleep 1; done`,
+    // The trap goes first, so a pid on disk proves SIGTERM was already ignored
+    // when the deadline struck. The warm shell gets there in ~6ms, 150ms at
+    // most under load.
+    const fake = fakeShell(
+      `trap '' TERM\necho $$ > ${JSON.stringify(pidFile)}\nwhile :; do sleep 1; done`,
     );
     const started = Date.now();
 
-    const path = await loginShellPath(4000, shell);
+    const path = await loginShellPath(1500, fake);
 
     expect(path).toBeNull();
     // The old code sent SIGTERM, which this shell ignores, and waited for it
@@ -145,13 +165,13 @@ describe('loginShellPath', () => {
     // stdout, and `close` then waits for the JOB. The echo is the shell's last
     // act, so its exit is the moment the answer is complete.
     const jobPidFile = join(scratch, 'job-pid');
-    const shell = fakeShell(
+    const fake = fakeShell(
       `(sleep 20) &\necho $! > ${JSON.stringify(jobPidFile)}\necho "__GENIRO_PATH__/a:/b"`,
     );
     const started = Date.now();
 
     try {
-      const path = await loginShellPath(30_000, shell);
+      const path = await loginShellPath(30_000, fake);
 
       expect(path).toBe('/a:/b');
       // The old code waited for the 20s job to let go of the pipe.

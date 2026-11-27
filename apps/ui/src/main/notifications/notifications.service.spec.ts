@@ -328,12 +328,19 @@ describe('the on-demand test banner', () => {
       () => ({ notificationsEnabled: true }),
       fakeNotifier(true, null),
     );
+    vi.useFakeTimers();
 
-    const result = await service.testPost(target());
+    try {
+      const pending = service.testPost(target());
+      await vi.runAllTimersAsync();
+      const result = await pending;
 
-    expect(result).toMatchObject({ posted: true, shown: null });
-    expect(result.reason).toContain('did not report back');
-  }, 10_000);
+      expect(result).toMatchObject({ posted: true, shown: null });
+      expect(result.reason).toContain('did not report back');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('says it is the SETTING when the switch is off, and posts nothing', async () => {
     const notifier = fakeNotifier();

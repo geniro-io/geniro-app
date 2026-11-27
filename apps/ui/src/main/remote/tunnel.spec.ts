@@ -611,6 +611,22 @@ describe('RemoteTunnel', () => {
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     });
 
+    it('says the client could not connect, in its own words, and offers a new address when it never connected', async () => {
+      const { tunnel, child } = harness({
+        connectWaitMs: 30,
+        probePublic: async () => 'not-yet',
+      });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+
+      const state = await started;
+      expect(state.status).toBe('error');
+      expect(state.error).toContain('cloudflared could not connect');
+      expect(state.error).toContain('it reported no error');
+      expect(state.error).toContain('get a new address');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
     it('shows a connected address with a warning once this Mac has only been unable to check it, past the wait', async () => {
       const log = vi.fn<TunnelLog>();
       const { tunnel, child } = harness({

@@ -503,7 +503,7 @@ export class RemoteTunnel {
               ? `The public address answers, but ${chosen.label} never reported its connection within ${minutes} minutes. Close it and get a new address.`
               : connected
                 ? `The public address did not answer within ${minutes} minutes, though ${chosen.label} connected. Close it and get a new address.`
-                : `${chosen.label} could not connect within ${minutes} minutes: ${complaint ?? 'it reported no error'}`,
+                : `${chosen.label} could not connect within ${minutes} minutes: ${complaint ?? 'it reported no error'}. Close it and get a new address.`,
             true,
           );
         }, this.connectWaitMs);

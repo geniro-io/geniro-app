@@ -166,6 +166,17 @@ describe('StorageService', () => {
     expect(usage.unclaimed).toEqual([]);
   });
 
+  it('files the kill guard as app state, never unclaimed', async () => {
+    write(join(root, 'kill-guard', 'kill-check'));
+
+    const usage = await service.usage();
+
+    expect(group(usage, 'appState')?.entries.map((e) => e.name)).toEqual([
+      'kill-guard',
+    ]);
+    expect(usage.unclaimed).toEqual([]);
+  });
+
   it('files member pictures with the teams, never as a leftover or unclaimed', async () => {
     write(join(root, 'avatars', `${'a'.repeat(64)}.png`), 4_000);
 

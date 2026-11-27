@@ -5426,8 +5426,21 @@ export function Chats({
     (activeRun?.teamId !== null &&
       activeRun?.teamId !== undefined &&
       !nodeReadingsLoaded);
+  const [measureChatColumn, chatColumn] = useElementSize<HTMLElement>();
+  const touchDevice = useTouchDevice();
+  const chatColumnHeight = useSettledValue(
+    chatColumn.height,
+    COLUMN_SETTLE_MS,
+    0,
+  );
+  // On a touch screen an open question's place depends on the column height,
+  // so the first frame waits for it too: drawn earlier, the card would start
+  // pinned and then move into the feed.
+  const awaitingColumn =
+    touchDevice && openRequests.length > 0 && chatColumnHeight === 0;
   const threadOpening =
-    loadingHistory || (activeRunId !== drawnRunId && awaitingFirstReads);
+    loadingHistory ||
+    (activeRunId !== drawnRunId && (awaitingFirstReads || awaitingColumn));
   useEffect(() => {
     if (loadingHistory) {
       setDrawnRunId(null);
@@ -6954,13 +6967,6 @@ export function Chats({
   useEffect(() => {
     drawnEntriesRef.current = transcriptEntries;
   }, [transcriptEntries]);
-  const [measureChatColumn, chatColumn] = useElementSize<HTMLElement>();
-  const touchDevice = useTouchDevice();
-  const chatColumnHeight = useSettledValue(
-    chatColumn.height,
-    COLUMN_SETTLE_MS,
-    0,
-  );
   const questionPlacementsRef = useRef<ReadonlyMap<string, QuestionPlacement>>(
     new Map(),
   );
@@ -6989,10 +6995,13 @@ export function Chats({
   ]);
   const pinnedRequests = useMemo(
     () =>
-      openRequests.filter(
-        (request) => questionPlacements.get(request.id) !== 'feed',
-      ),
-    [openRequests, questionPlacements],
+      openRequests.filter((request) => {
+        const placement = questionPlacements.get(request.id);
+        // On a touch screen an undecided question waits for its place rather
+        // than being pinned first and moved.
+        return placement === undefined ? !touchDevice : placement === 'pinned';
+      }),
+    [openRequests, questionPlacements, touchDevice],
   );
   /**
    * The one shown: the NEWEST, which is what the turn is actually blocked on.

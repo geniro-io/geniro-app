@@ -13,7 +13,6 @@ import {
   ANSWERS_RETRY_MS,
   ANSWERS_SAVE_DELAY_MS,
   ArtifactFrame,
-  CLIPPED_FRAME_MAX_HEIGHT,
   MAX_ANSWER_NAME,
   MAX_INLINE_HEIGHT,
 } from './artifact-frame';
@@ -112,20 +111,19 @@ describe('ArtifactFrame — clipped, for a touch screen', () => {
       (b) => b.textContent === 'Open full screen',
     );
 
-  it('is as tall as a long page, so the page has nothing of its own to scroll, and cuts it at the inline height under a fade', async () => {
+  it('gives the page no scroll of its own, so a swipe over it scrolls the chat', async () => {
+    await renderClipped();
+    expect(frame()?.getAttribute('scrolling')).toBe('no');
+  });
+
+  it('keeps a long page at the inline height, so the page lays out as it does unclipped, and fades it out with the action', async () => {
     await renderClipped();
     await reportHeight(2400);
 
-    expect(frame()?.style.height).toBe('2400px');
-    const cut = frame()?.parentElement;
-    expect(cut?.style.maxHeight).toBe(`${MAX_INLINE_HEIGHT}px`);
-    expect(cut?.className).toContain('overflow-clip');
-    // A border inside the frame's own height would leave the page a couple of
-    // pixels to scroll, and a swipe over it would move the page, not the chat.
-    expect(frame()?.className).not.toMatch(/(^|\s)border(\s|$)/);
-    expect(cut?.className).toMatch(/(^|\s)border(\s|$)/);
-    expect(cut?.className).toContain('box-content');
-    expect(cut?.className).toContain('mask-b-from-70%');
+    // A frame grown to the page would feed the page's own viewport height: a
+    // hero of `100vh` grew with it and pushed what it centres out of view.
+    expect(frame()?.style.height).toBe(`${MAX_INLINE_HEIGHT}px`);
+    expect(frame()?.className).toContain('mask-b-from-70%');
     expect(clip()?.getAttribute('data-cut-off')).toBe('true');
     expect(action()).toBeDefined();
   });
@@ -135,16 +133,9 @@ describe('ArtifactFrame — clipped, for a touch screen', () => {
     await reportHeight(300);
 
     expect(frame()?.style.height).toBe('300px');
-    expect(frame()?.parentElement?.className).not.toContain('mask-b-from');
+    expect(frame()?.className).not.toContain('mask-b-from');
     expect(clip()?.getAttribute('data-cut-off')).toBe('false');
     expect(action()).toBeUndefined();
-  });
-
-  it('stops a page that grows with its frame at its own bound', async () => {
-    await renderClipped();
-    await reportHeight(99_000);
-
-    expect(frame()?.style.height).toBe(`${CLIPPED_FRAME_MAX_HEIGHT}px`);
   });
 });
 
@@ -257,9 +248,9 @@ describe('ArtifactFrame', () => {
     expect(frame()?.style.height).toBe(before);
   });
 
-  it('keeps its own border when it is not clipped', async () => {
+  it('lets an unclipped page scroll inside its frame', async () => {
     await render();
-    expect(frame()?.className).toMatch(/(^|\s)border(\s|$)/);
+    expect(frame()?.hasAttribute('scrolling')).toBe(false);
     expect(frame()?.className).toContain('rounded-lg');
   });
 

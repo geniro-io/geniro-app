@@ -386,7 +386,8 @@ describe('ArtifactCard — on a touch screen', () => {
     await render();
     await reportHeight(2400);
 
-    expect(inlineFrame()?.style.height).toBe('2400px');
+    expect(inlineFrame()?.style.height).toBe('520px');
+    expect(inlineFrame()?.getAttribute('scrolling')).toBe('no');
     expect(
       container
         .querySelector('[data-slot="artifact-frame-clip"]')
@@ -407,6 +408,7 @@ describe('ArtifactCard — on a touch screen', () => {
     await reportHeight(2400);
 
     expect(inlineFrame()?.style.height).toBe('520px');
+    expect(inlineFrame()?.hasAttribute('scrolling')).toBe(false);
     expect(
       container.querySelector('[data-slot="artifact-frame-clip"]'),
     ).toBeNull();

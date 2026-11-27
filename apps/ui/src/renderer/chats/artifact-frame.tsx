@@ -131,14 +131,6 @@ const INITIAL_HEIGHT = 240;
 export const MAX_INLINE_HEIGHT = 520;
 
 /**
- * How tall a CLIPPED frame may grow. It is as tall as its page, so the page has
- * nothing of its own to scroll and a swipe over it scrolls the chat; the bound
- * stops a page that grows with its frame (a `100vh` body with a margin) from
- * growing it without end.
- */
-export const CLIPPED_FRAME_MAX_HEIGHT = 8000;
-
-/**
  * One published artifact, rendered in a sandbox.
  *
  * **The `sandbox` attribute is the whole security model, and what it OMITS is
@@ -183,10 +175,11 @@ export function ArtifactFrame({
   /** Take the room the container gives, rather than sizing to the content. */
   fill?: boolean;
   /**
-   * Show the top of the page without a scroll of its own: the frame is as tall
-   * as the page and cut at the inline height, under a fade when the page is
-   * taller. For a touch screen, where a swipe that starts on a page which can
-   * scroll moves the page instead of the chat around it; taps still reach it.
+   * Show the top of the page without a scroll of its own: the inline frame, at
+   * the inline height so the page lays out exactly as it does unclipped, which
+   * the page cannot scroll, under a fade when the page is taller. For a touch
+   * screen, where a swipe that starts on a page which can scroll moves the page
+   * instead of the chat around it; taps still reach it.
    */
   clipped?: boolean;
   /** Drawn over the fade of a clipped page taller than the inline height. */
@@ -459,9 +452,6 @@ export function ArtifactFrame({
 
   const inlineClip = clipped && !fill;
   const cutOff = inlineClip && height > MAX_INLINE_HEIGHT;
-  const frameHeight = inlineClip
-    ? Math.min(height, CLIPPED_FRAME_MAX_HEIGHT)
-    : Math.min(height, MAX_INLINE_HEIGHT);
 
   const iframe = (
     <iframe
@@ -473,13 +463,14 @@ export function ArtifactFrame({
       title={artifact.title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
+      scrolling={inlineClip ? 'no' : undefined}
       onLoad={postTheme}
       className={cn(
-        'w-full bg-transparent',
-        !inlineClip && 'rounded-lg border border-border',
+        'w-full rounded-lg border border-border bg-transparent',
+        cutOff && 'mask-b-from-70%',
         className,
       )}
-      style={fill ? undefined : { height: frameHeight }}
+      style={fill ? undefined : { height: Math.min(height, MAX_INLINE_HEIGHT) }}
     />
   );
 
@@ -490,16 +481,7 @@ export function ArtifactFrame({
           data-slot="artifact-frame-clip"
           data-cut-off={cutOff}
           className="relative">
-          {/* The border sits on this box, outside its content, so the frame is
-              exactly as tall as the page and leaves it no pixel to scroll. */}
-          <div
-            className={cn(
-              'box-content overflow-clip rounded-lg border border-border',
-              cutOff && 'mask-b-from-70%',
-            )}
-            style={{ maxHeight: MAX_INLINE_HEIGHT }}>
-            {iframe}
-          </div>
+          {iframe}
           {cutOff && clippedAction !== null && (
             <div className="absolute inset-x-0 bottom-3 flex justify-center">
               {clippedAction}

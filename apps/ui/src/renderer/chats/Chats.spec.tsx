@@ -17389,6 +17389,28 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       );
     });
 
+    it('never draws the card pinned while the column is settling on a touch device', async () => {
+      columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 1;
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      expect(pinned(container)).toBeNull();
+      expect(approveButtons(container)).toHaveLength(0);
+      expect(transcript(container).textContent).not.toContain(
+        'waiting on your answer',
+      );
+
+      await settle();
+
+      expect(pinned(container)).toBeNull();
+      expect(approveButtons(transcript(container))).toHaveLength(1);
+    });
+
     it('pins the open card as before off a touch device, however low the column', async () => {
       touchDevice = false;
       columnHeight = PIN_QUESTION_MIN_COLUMN_PX - 300;

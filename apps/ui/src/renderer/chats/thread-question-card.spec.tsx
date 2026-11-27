@@ -616,6 +616,7 @@ describe('a relayed question once settled', () => {
             toolName={THREAD_QUESTION_CARD}
             input={{
               ...RELAYED_QUESTION,
+              toolName: 'ask_user_question',
               attachments: [
                 {
                   kind: 'artifact',

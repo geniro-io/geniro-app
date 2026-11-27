@@ -231,7 +231,7 @@ describe('ThreadStartCard', () => {
     const open = vi.fn<(runId: string) => void>();
     await render(<ThreadStartCard pair={pair(FILED)} />, reader, open);
     expect(stateText()).toBe('Starting…');
-    expect(container.querySelector('[data-slot="thread-card-go"]')).toBeNull();
+    expect(container.querySelector('[data-slot="thread-start-go"]')).toBeNull();
 
     current = card({
       runId: 'run-new',
@@ -256,7 +256,7 @@ describe('ThreadStartCard', () => {
         ?.getAttribute('title'),
     ).toContain('In progress');
     const button = container.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-go"]',
+      '[data-slot="thread-start-go"]',
     );
     expect(button).not.toBeNull();
     expect(
@@ -565,6 +565,33 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
     ).toBe('The project has no agent configured');
   });
 
+  it('puts Go to thread borderless at the end of the labels row, after the chips', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('started', { runId: 'run-7' })),
+    );
+    await renderThread(reader, vi.fn());
+
+    const labels = container.querySelector('[data-slot="thread-start-labels"]');
+    const button = container.querySelector('[data-slot="thread-start-go"]');
+    expect(button?.closest('[data-slot="thread-start-labels"]')).toBe(labels);
+    expect(labels?.lastElementChild?.contains(button ?? null)).toBe(true);
+    expect(labels?.lastElementChild?.classList).toContain('ml-auto');
+    expect(button?.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
+  it('shows a failed start’s reason above the labels, in the blocked tone', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('failed', { failure: 'No agent configured' })),
+    );
+    await renderThread(reader);
+
+    const note = container.querySelector('[data-slot="thread-start-note"]');
+    expect(note?.classList).toContain('text-destructive');
+    expect(note?.nextElementSibling?.getAttribute('data-slot')).toBe(
+      'thread-start-labels',
+    );
+  });
+
   it('shows Started, and opens the thread that started', async () => {
     const { reader } = fakeThreadReader(() =>
       Promise.resolve(start('started', { runId: 'run-7' })),
@@ -574,7 +601,7 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
 
     expect(stateText()).toBe('Started');
     const button = container.querySelector<HTMLButtonElement>(
-      '[data-slot="thread-card-go"]',
+      '[data-slot="thread-start-go"]',
     );
     expect(button).not.toBeNull();
     act(() => button!.click());

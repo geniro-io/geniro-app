@@ -32,6 +32,11 @@ function digestOf(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+// toEqual walks a Buffer byte by byte, ~760 ms of CPU for PAYLOAD; a digest takes ~1 ms.
+async function digestOfFile(path: string): Promise<string> {
+  return digestOf(await readFile(path));
+}
+
 let root: string;
 let server: Server;
 let base: string;
@@ -86,7 +91,7 @@ describe('downloadTo', () => {
     });
 
     expect(digest).toBe(digestOf(PAYLOAD));
-    expect(await readFile(dest)).toEqual(PAYLOAD);
+    expect(await digestOfFile(dest)).toBe(digestOf(PAYLOAD));
     expect(progress.at(-1)).toEqual({
       fraction: 1,
       receivedBytes: PAYLOAD.length,
@@ -105,7 +110,7 @@ describe('downloadTo', () => {
 
     expect(await downloadTo(urlOf('/model.bin'), dest)).toBe(digestOf(PAYLOAD));
     expect(ranges).toEqual([undefined]);
-    expect(await readFile(dest)).toEqual(PAYLOAD);
+    expect(await digestOfFile(dest)).toBe(digestOf(PAYLOAD));
   });
 
   it('resumes a partial file with a Range request and digests the whole file', async () => {
@@ -129,7 +134,7 @@ describe('downloadTo', () => {
 
     expect(ranges).toEqual([`bytes=${head.length}-`]);
     expect(digest).toBe(digestOf(PAYLOAD));
-    expect(await readFile(dest)).toEqual(PAYLOAD);
+    expect(await digestOfFile(dest)).toBe(digestOf(PAYLOAD));
     expect(progress[0]!.receivedBytes).toBeGreaterThan(head.length);
     expect(progress.at(-1)).toEqual({
       fraction: 1,
@@ -151,7 +156,7 @@ describe('downloadTo', () => {
       digestOf(PAYLOAD),
     );
     expect(ranges).toEqual(['bytes=100000-']);
-    expect(await readFile(dest)).toEqual(PAYLOAD);
+    expect(await digestOfFile(dest)).toBe(digestOf(PAYLOAD));
   });
 
   it('takes a 416 as complete when the server reports the same length', async () => {
@@ -191,7 +196,7 @@ describe('downloadTo', () => {
       digestOf(PAYLOAD),
     );
     expect(ranges).toEqual(['bytes=1000-', undefined]);
-    expect(await readFile(dest)).toEqual(PAYLOAD);
+    expect(await digestOfFile(dest)).toBe(digestOf(PAYLOAD));
   });
 
   it('answers a non-2xx status with DownloadHttpError carrying the status', async () => {

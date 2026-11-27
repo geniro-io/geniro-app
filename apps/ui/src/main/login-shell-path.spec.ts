@@ -111,11 +111,11 @@ describe('loginShellPath', () => {
   };
 
   it('resolves the PATH the shell echoes', async () => {
-    const path = fakeShell(
+    const fake = fakeShell(
       'echo "rc banner"\necho "__GENIRO_PATH__/opt/homebrew/bin:/usr/bin"',
     );
 
-    await expect(loginShellPath(3000, path)).resolves.toBe(
+    await expect(loginShellPath(3000, fake)).resolves.toBe(
       '/opt/homebrew/bin:/usr/bin',
     );
   });

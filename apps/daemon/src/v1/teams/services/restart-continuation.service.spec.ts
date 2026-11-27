@@ -6,6 +6,10 @@ import type { RestartContinuation } from '../../agents/chat.types';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import type { ChatService } from '../../agents/services/chat.service';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import type { Run } from '../../runs/entity/run.entity';
 import {
   RESTART_CONTINUE_ATTEMPTS,
@@ -16,6 +20,7 @@ import type { TeamExecutorService } from './team-executor.service';
 
 const TEAM_RECORD: RestartContinuation = {
   cause: 'self-update',
+  held: false,
   turns: [{ memberId: 'lead' }],
   calls: [],
   failedCalls: [],
@@ -24,6 +29,7 @@ const TEAM_RECORD: RestartContinuation = {
 
 const CHAT_RECORD: RestartContinuation = {
   cause: 'restart',
+  held: false,
   turns: [{ memberId: 'agent' }],
   calls: [],
   failedCalls: [],
@@ -65,6 +71,7 @@ function setup(runs: Partial<Run>[]) {
       async (): Promise<'continued' | 'busy' | 'gone'> => 'continued',
     ),
     abandonRestartContinuation: vi.fn(async () => undefined),
+    setHeldContinuation: vi.fn(),
   };
   const sessions = { oweKeyNote: vi.fn(() => true) };
   const em = { fork: () => ({}) } as unknown as EntityManager;
@@ -274,5 +281,178 @@ describe('RestartContinuationService', () => {
 
     expect(ctx.teams.continueAfterRestart).not.toHaveBeenCalled();
     expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+  });
+});
+
+const HELD_RECORD: RestartContinuation = {
+  cause: 'unknown',
+  held: true,
+  turns: [{ memberId: 'lead' }],
+  calls: [],
+  failedCalls: [],
+  monitors: [
+    {
+      memberId: 'lead',
+      conversationId: null,
+      id: 'm1',
+      description: 'PR checks',
+      command: 'gh pr checks 7 --watch',
+      remainingMs: null,
+    },
+    {
+      memberId: 'critic',
+      conversationId: 'call-2',
+      id: 'm2',
+      description: 'CI',
+      command: 'gh run watch 9',
+      remainingMs: null,
+    },
+  ],
+};
+
+describe('RestartContinuationService with runs a crash cut off', () => {
+  const heldRun = (id: string, extra: Partial<Run> = {}): Partial<Run> => ({
+    id,
+    teamId: 'crew',
+    title: `Run ${id}`,
+    status: 'running',
+    archivedAt: null,
+    restartContinuation: JSON.stringify(HELD_RECORD),
+    ...extra,
+  });
+
+  it('leaves a held run to the user when it drains', async () => {
+    const ctx = setup([heldRun('team-1')]);
+
+    await ctx.service.drain();
+
+    expect(ctx.teams.continueAfterRestart).not.toHaveBeenCalled();
+    expect(ctx.rows.get('team-1')!.restartContinuation).not.toBeNull();
+  });
+
+  it('lists only the held team runs that are not archived', async () => {
+    const ctx = setup([
+      heldRun('team-1'),
+      heldRun('team-2', { archivedAt: new Date() }),
+      {
+        id: 'team-3',
+        teamId: 'crew',
+        restartContinuation: JSON.stringify(TEAM_RECORD),
+      },
+      { id: 'chat-1', teamId: null, restartContinuation: JSON.stringify(CHAT_RECORD) },
+    ]);
+
+    expect(await ctx.service.listHeld()).toEqual([
+      { runId: 'team-1', title: 'Run team-1', cause: 'unknown' },
+    ]);
+  });
+
+  it('continues each chosen run as an update continues it and ends each declined one as a crash does', async () => {
+    const ctx = setup([heldRun('team-1'), heldRun('team-2')]);
+
+    const answered = await ctx.service.answerHeld({
+      continueRunIds: ['team-1'],
+      declineRunIds: ['team-2'],
+    });
+
+    expect(answered).toEqual({ continued: ['team-1'], declined: ['team-2'] });
+    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledTimes(1);
+    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledWith('team-1', {
+      ...HELD_RECORD,
+      held: false,
+    });
+    expect(ctx.teams.abandonRestartContinuation).toHaveBeenCalledTimes(1);
+    expect(ctx.teams.abandonRestartContinuation).toHaveBeenCalledWith(
+      'team-2',
+      'unknown',
+      true,
+    );
+    expect(ctx.rows.get('team-1')!.restartContinuation).toBeNull();
+    expect(ctx.rows.get('team-2')!.restartContinuation).toBeNull();
+  });
+
+  it('tells each declined run’s monitor owners, in their own conversations, which monitors stopped', async () => {
+    const ctx = setup([heldRun('team-2')]);
+
+    await ctx.service.answerHeld({ continueRunIds: [], declineRunIds: ['team-2'] });
+
+    expect(ctx.sessions.oweKeyNote).toHaveBeenCalledWith(
+      nodeSessionKey('team-2', 'lead'),
+      expect.stringContaining('m1 — PR checks — `gh pr checks 7 --watch`'),
+    );
+    expect(ctx.sessions.oweKeyNote).toHaveBeenCalledWith(
+      callSessionKey('team-2', 'call-2'),
+      expect.stringContaining('m2 — CI — `gh run watch 9`'),
+    );
+  });
+
+  it('ends no run that had already settled when it declines one that only lost its monitors', async () => {
+    const ctx = setup([heldRun('team-2', { status: 'completed' })]);
+
+    await ctx.service.answerHeld({ continueRunIds: [], declineRunIds: ['team-2'] });
+
+    expect(ctx.teams.abandonRestartContinuation).not.toHaveBeenCalled();
+    expect(ctx.rows.get('team-2')!.restartContinuation).toBeNull();
+    expect(ctx.sessions.oweKeyNote).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a run that is not held, an unknown one, and a second answer', async () => {
+    const ctx = setup([
+      heldRun('team-1'),
+      {
+        id: 'team-3',
+        teamId: 'crew',
+        restartContinuation: JSON.stringify(TEAM_RECORD),
+      },
+    ]);
+
+    const first = await ctx.service.answerHeld({
+      continueRunIds: ['team-1', 'team-3', 'nope'],
+      declineRunIds: ['team-1'],
+    });
+    const second = await ctx.service.answerHeld({
+      continueRunIds: ['team-1'],
+      declineRunIds: [],
+    });
+
+    expect(first).toEqual({ continued: ['team-1'], declined: [] });
+    expect(second).toEqual({ continued: [], declined: [] });
+    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledTimes(1);
+    expect(ctx.teams.abandonRestartContinuation).not.toHaveBeenCalled();
+  });
+
+  it('makes the team records an earlier stop owed wait for the user, and leaves chats alone', async () => {
+    const ctx = setup([
+      {
+        id: 'team-3',
+        teamId: 'crew',
+        restartContinuation: JSON.stringify(TEAM_RECORD),
+      },
+      { id: 'chat-1', teamId: null, restartContinuation: JSON.stringify(CHAT_RECORD) },
+    ]);
+
+    await ctx.service.holdTeamContinuations();
+    await ctx.service.drain();
+
+    expect(
+      JSON.parse(ctx.rows.get('team-3')!.restartContinuation!),
+    ).toMatchObject({ cause: 'self-update', held: true });
+    expect(ctx.teams.continueAfterRestart).not.toHaveBeenCalled();
+    expect(ctx.chats.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('installs the continuation a user message into a held run starts', async () => {
+    const ctx = setup([heldRun('team-1')]);
+    ctx.service.onModuleInit();
+    const install = ctx.teams.setHeldContinuation.mock.calls[0]?.[0] as (
+      runId: string,
+    ) => Promise<void>;
+
+    await install('team-1');
+
+    expect(ctx.teams.continueAfterRestart).toHaveBeenCalledWith('team-1', {
+      ...HELD_RECORD,
+      held: false,
+    });
   });
 });

@@ -14,6 +14,7 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
+import type { InterruptCause } from '../../utils/stop-cause';
 import type { AgentUsage } from './adapters/adapter.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';
@@ -8451,12 +8452,15 @@ export interface PersistedResetWake {
 }
 
 /**
- * The work a stop the app made on purpose cut off, kept on the run row
- * (`Run.restartContinuation`) from the boot that found it until the drain after
- * listen has continued it. Daemon-internal: never on the wire.
+ * The work a stop cut off, kept on the run row (`Run.restartContinuation`)
+ * from the boot that found it until the drain after listen has continued it —
+ * or, while `held`, until the user chose whether to continue it.
+ * Daemon-internal: never on the wire.
  */
 export interface RestartContinuation {
-  cause: 'self-update' | 'restart';
+  cause: InterruptCause;
+  /** Waits for the user's choice: never continued unattended. */
+  held: boolean;
   /** Own-conversation turns the stop cut off, each continued with a note. */
   turns: RestartContinuationTurn[];
   /** Calls whose callee was working, each continued once under its own id. */

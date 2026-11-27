@@ -19,10 +19,10 @@ import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { environment } from '../../../environments';
 import {
-  continuesUnattended,
   type InterruptCause,
   interruptCauseClause,
   peekStopCause,
+  resumesUnattended,
 } from '../../../utils/stop-cause';
 import {
   type AgentEvent,
@@ -980,7 +980,7 @@ export class TeamExecutorService
 
   beforeApplicationShutdown(): void {
     this.shuttingDown = true;
-    this.shutdownContinues = continuesUnattended(
+    this.shutdownContinues = resumesUnattended(
       peekStopCause(environment.userDataDir),
     );
   }
@@ -1304,6 +1304,14 @@ export class TeamExecutorService
    */
   private monitorOutputHeld: (runId: string, caller: string) => boolean = () =>
     false;
+
+  /**
+   * Continues a run a crash cut off that waits for the user's choice — the
+   * restart continuation's, installed by it, so a message the user writes into
+   * such a run continues it first.
+   */
+  private heldContinuation: (runId: string) => Promise<void> = async () =>
+    undefined;
 
   /**
    * What to do when one of a LIVE run's sessions is closed by something other
@@ -1973,7 +1981,8 @@ export class TeamExecutorService
    */
   async abandonRestartContinuation(
     runId: string,
-    cause: RestartContinuation['cause'],
+    cause: InterruptCause,
+    declined = false,
   ): Promise<void> {
     if (this.registry.has(runId)) {
       return;
@@ -1983,7 +1992,7 @@ export class TeamExecutorService
     const lastActivity = (
       await this.itemDao.latestItemAtPerRun([runId], em)
     ).get(runId);
-    const message = `team run interrupted — ${clause} while it was running, and it could not be continued`;
+    const message = `team run interrupted — ${clause} while it was running, and ${declined ? 'you chose not to continue it' : 'it could not be continued'}`;
     const seq = await this.seqs.reserve(runId);
     await this.persist(em, runId, null, seq, 'error', null, {
       message,
@@ -2560,6 +2569,11 @@ export class TeamExecutorService
     }
   }
 
+  /** Installed by the restart continuation — see {@link heldContinuation}. */
+  setHeldContinuation(continueHeld: (runId: string) => Promise<void>): void {
+    this.heldContinuation = continueHeld;
+  }
+
   /** Installed by the monitor delivery — see {@link monitorOutputHeld}. */
   setMonitorOutputHeld(
     check: (runId: string, caller: string) => boolean,
@@ -2602,6 +2616,9 @@ export class TeamExecutorService
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
     this.commandEndWakes?.userSpoke(runId);
+    if (readRestartContinuation(run.restartContinuation ?? null)?.held) {
+      await this.heldContinuation(runId);
+    }
     return this.messageSends.send(
       runId,
       storedText ?? text,
@@ -4473,7 +4490,7 @@ export class TeamExecutorService
         }
         let seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
         const owed = readRestartContinuation(run.restartContinuation ?? null);
-        const continues = continuesUnattended(cause) && run.archivedAt === null;
+        const continues = run.archivedAt === null;
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not the lead's standing cards, which are put back at boot from their
@@ -4507,28 +4524,30 @@ export class TeamExecutorService
           );
         }
         if (continues) {
+          const held = !resumesUnattended(cause);
           const kept = await this.keepOpenForContinuation(
             em,
             run,
             history,
             seq,
-            { cause, owed },
+            { cause, held, owed },
           );
           if (kept !== null) {
-            const message = `team run interrupted — ${interruptCauseClause(cause, detail)} while it was running — work continues`;
-            if (owed === null) {
+            const message = `team run interrupted — ${interruptCauseClause(cause, detail)} while it was running — ${held ? 'it continues once you choose to continue it' : 'work continues'}`;
+            if (owed === null || (held && !owed.held)) {
               await this.persist(em, run.id, null, kept, 'error', null, {
                 message,
                 // Written at BOOT — see the chat twin in `ChatService`.
                 interrupted: true,
                 interruptCause: cause,
+                ...(detail !== null ? { interruptDetail: detail } : {}),
                 continues: true,
               });
             }
             await this.flagInterrupted(
               run.id,
               cause,
-              owed === null ? kept : null,
+              owed === null || (held && !owed.held) ? kept : null,
               message,
               lastActivity.get(run.id),
             );
@@ -4575,9 +4594,9 @@ export class TeamExecutorService
   }
 
   /**
-   * The boot half of a team run an update or a restart cut off: what it was
-   * doing is written into `Run.restartContinuation` for the drain after
-   * listen, and the run stays `running`. Each cut-off own turn and each call
+   * The boot half of a team run a stop cut off: what it was doing is written
+   * into `Run.restartContinuation` for the drain after listen — held for the
+   * user's choice after a crash — and the run stays `running`. Each cut-off own turn and each call
    * whose callee was working is kept; the rows that opened them are closed
    * here, marked `continues` so the transcript reads no ending into them, and
    * the turn the drain opens is the only one shown working. A member whose
@@ -4595,8 +4614,13 @@ export class TeamExecutorService
     from: number,
     {
       cause,
+      held,
       owed,
-    }: { cause: 'self-update' | 'restart'; owed: RestartContinuation | null },
+    }: {
+      cause: InterruptCause;
+      held: boolean;
+      owed: RestartContinuation | null;
+    },
   ): Promise<number | null> {
     let seq = from;
     const carded = new Set(
@@ -4648,6 +4672,7 @@ export class TeamExecutorService
     );
     const record = mergeRestartContinuations(owed, {
       cause,
+      held,
       turns: [...turns].map((memberId) => ({ memberId })),
       calls,
       failedCalls: closing.flatMap(({ call, again }) =>

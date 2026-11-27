@@ -44,6 +44,7 @@ const monitor: RestartContinuationMonitor = {
 
 const record: RestartContinuation = {
   cause: 'self-update',
+  held: false,
   turns: [{ memberId: 'agent' }],
   calls: [call],
   failedCalls: [failed],
@@ -57,7 +58,7 @@ describe('readRestartContinuation', () => {
     expect(readRestartContinuation('{not json')).toBeNull();
   });
 
-  it.each(['quit', 'crash', 'unknown', 'mystery'])(
+  it.each(['mystery', '', 7])(
     'reads a record whose cause is %s as no record',
     (cause) => {
       expect(
@@ -72,6 +73,35 @@ describe('readRestartContinuation', () => {
       ).toBeNull();
     },
   );
+
+  it.each([
+    ['quit', false],
+    ['self-update', false],
+    ['restart', false],
+    ['crash', true],
+    ['unknown', true],
+  ] as const)(
+    'reads a record cut off by a %s as waiting for the user: %s',
+    (cause, held) => {
+      expect(
+        readRestartContinuation(
+          JSON.stringify({ cause, turns: [{ memberId: 'agent' }] }),
+        ),
+      ).toMatchObject({ cause, held });
+    },
+  );
+
+  it('keeps a record marked held waiting even under a cause that continues', () => {
+    expect(
+      readRestartContinuation(
+        JSON.stringify({
+          cause: 'quit',
+          held: true,
+          turns: [{ memberId: 'agent' }],
+        }),
+      ),
+    ).toMatchObject({ cause: 'quit', held: true });
+  });
 
   it('reads a record that owes nothing as no record', () => {
     expect(
@@ -93,6 +123,7 @@ describe('readRestartContinuation', () => {
   it('reads a record that owes only its monitors', () => {
     const monitorsOnly: RestartContinuation = {
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],
@@ -121,6 +152,7 @@ describe('readRestartContinuation', () => {
     });
     expect(readRestartContinuation(json)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [{ memberId: 'agent' }],
       calls: [call],
       failedCalls: [],
@@ -142,6 +174,7 @@ describe('readRestartContinuation', () => {
     });
     expect(readRestartContinuation(json)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [
@@ -170,6 +203,7 @@ describe('readRestartContinuation', () => {
     });
     expect(readRestartContinuation(json)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [
         { ...call, member: null },
@@ -193,6 +227,7 @@ describe('readRestartContinuation', () => {
     });
     expect(readRestartContinuation(json)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],
@@ -220,6 +255,7 @@ describe('readRestartContinuation', () => {
     });
     expect(readRestartContinuation(json)).toEqual({
       cause: 'self-update',
+      held: false,
       turns: [],
       calls: [
         {
@@ -254,6 +290,7 @@ describe('restartContinuationColumn', () => {
     expect(
       restartContinuationColumn({
         cause: 'restart',
+        held: false,
         turns: [],
         calls: [],
         failedCalls: [],
@@ -272,6 +309,7 @@ describe('restartContinuationColumn', () => {
 describe('isEmptyContinuation', () => {
   const none: RestartContinuation = {
     cause: 'restart',
+    held: false,
     turns: [],
     calls: [],
     failedCalls: [],
@@ -297,6 +335,7 @@ describe('mergeRestartContinuations', () => {
   it('joins two records once per entry, with the newer cause and the newer reading of an entry', () => {
     const older: RestartContinuation = {
       cause: 'self-update',
+      held: false,
       turns: [{ memberId: 'agent' }, { memberId: 'writer' }],
       calls: [call],
       failedCalls: [],
@@ -304,6 +343,7 @@ describe('mergeRestartContinuations', () => {
     };
     const newer: RestartContinuation = {
       cause: 'restart',
+      held: false,
       turns: [{ memberId: 'agent' }],
       calls: [
         { ...call, sessionId: 'sess-2' },
@@ -318,6 +358,7 @@ describe('mergeRestartContinuations', () => {
 
     expect(mergeRestartContinuations(older, newer)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [{ memberId: 'agent' }, { memberId: 'writer' }],
       calls: [
         { ...call, sessionId: 'sess-2' },
@@ -332,10 +373,45 @@ describe('mergeRestartContinuations', () => {
   });
 });
 
+describe('mergeRestartContinuations of a held record', () => {
+  const heldRecord: RestartContinuation = {
+    cause: 'unknown',
+    held: true,
+    turns: [{ memberId: 'agent' }],
+    calls: [],
+    failedCalls: [],
+    monitors: [],
+  };
+
+  it('keeps a crash record waiting, under its cause, when a later quit adds to it', () => {
+    const merged = mergeRestartContinuations(heldRecord, {
+      ...heldRecord,
+      cause: 'quit',
+      held: false,
+      turns: [{ memberId: 'critic' }],
+    });
+    expect(merged).toMatchObject({ cause: 'unknown', held: true });
+    expect(merged.turns).toEqual([
+      { memberId: 'agent' },
+      { memberId: 'critic' },
+    ]);
+  });
+
+  it('makes a continuing record wait once a crash adds to it', () => {
+    expect(
+      mergeRestartContinuations(
+        { ...heldRecord, cause: 'quit', held: false },
+        heldRecord,
+      ),
+    ).toMatchObject({ cause: 'unknown', held: true });
+  });
+});
+
 describe('mergeRestartContinuations with failed calls', () => {
   it('keeps a call the newer boot failed out of the calls that continue', () => {
     const older: RestartContinuation = {
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [call],
       failedCalls: [],
@@ -343,6 +419,7 @@ describe('mergeRestartContinuations with failed calls', () => {
     };
     const newer: RestartContinuation = {
       cause: 'restart',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [{ ...failed, callId: 'call-3' }],

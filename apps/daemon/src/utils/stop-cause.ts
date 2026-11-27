@@ -38,20 +38,23 @@ const INTERRUPT_CAUSE_CLAUSE: Record<InterruptCause, string> = {
 };
 
 /**
- * Whether work cut off by this cause may be continued with no one looking.
+ * Whether work cut off by this cause may be continued with no one looking: a
+ * team run by the daemon itself, a board card by its autopilot.
  *
  * Only a stop the app made on purpose and recorded: after a crash, or a stop
  * nobody announced, the agent may have been halfway through an edit, and
- * re-sending the brief would repeat it.
+ * re-sending the brief would repeat it, so a team run waits for the user's
+ * choice instead.
  */
-export function resumesUnattended(cause: InterruptCause): boolean {
+export function resumesUnattended(
+  cause: InterruptCause,
+): cause is 'quit' | 'self-update' | 'restart' {
   return cause === 'quit' || cause === 'self-update' || cause === 'restart';
 }
 
 /**
- * Whether work cut off by this cause is continued by the daemon itself, in the
- * same sessions, with no one sending a message: only after an update or a
- * restart. A quit leaves the board's own resume to {@link resumesUnattended}.
+ * Whether a chat's cut-off turn is continued by the daemon itself, in the same
+ * session, with no one sending a message: only after an update or a restart.
  */
 export function continuesUnattended(
   cause: InterruptCause,

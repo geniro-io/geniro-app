@@ -10169,6 +10169,7 @@ describe('ChatService', () => {
         readRestartContinuation(after?.restartContinuation ?? null),
       ).toEqual({
         cause,
+        held: false,
         turns: [{ memberId: 'agent' }],
         calls: [],
         failedCalls: [],

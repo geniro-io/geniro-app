@@ -25,6 +25,7 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import type * as stopCauseModule from '../../../utils/stop-cause';
+import type { InterruptCause } from '../../../utils/stop-cause';
 import { type FakeChild, fakeSpawn } from '../../agents/__tests__/fake-child';
 import { fakeEntityManager } from '../../agents/__tests__/fake-entity-manager';
 import { FakeWallTurnDao } from '../../agents/__tests__/fake-wall-turn-dao';
@@ -5154,9 +5155,32 @@ describe('TeamExecutorService', () => {
     return orphan;
   }
 
+  it('names HOW the previous daemon ended on the row of a run it holds for the user', async () => {
+    const ctx = setup();
+    const orphan = await seedOpenCall(ctx);
+
+    await ctx.service.reconcileOrphanedRuns(
+      'unknown',
+      'killed by SIGKILL, memory 1.2 GB',
+    );
+
+    const written = ctx.itemDao.items
+      .filter((i) => i.runId === orphan.id && i.seq >= openCallRows.length)
+      .map((i) => JSON.parse(i.payload) as Record<string, unknown>);
+    expect(written).toContainEqual({
+      message:
+        'team run interrupted — the daemon stopped unexpectedly (killed by SIGKILL, memory 1.2 GB) while it was running — it continues once you choose to continue it',
+      interrupted: true,
+      interruptCause: 'unknown',
+      interruptDetail: 'killed by SIGKILL, memory 1.2 GB',
+      continues: true,
+    });
+  });
+
   it('names HOW the previous daemon ended on the interrupted row and on the call it closed', async () => {
     const ctx = setup();
     const orphan = await seedOpenCall(ctx);
+    ctx.runDao.runs.get(orphan.id)!.archivedAt = new Date();
 
     await ctx.service.reconcileOrphanedRuns(
       'unknown',
@@ -5199,6 +5223,7 @@ describe('TeamExecutorService', () => {
     const ctx = setup();
     const { service, itemDao } = ctx;
     const orphan = await seedOpenCall(ctx);
+    ctx.runDao.runs.get(orphan.id)!.archivedAt = new Date();
 
     await service.reconcileOrphanedRuns('crash');
 
@@ -5285,9 +5310,15 @@ describe('TeamExecutorService', () => {
       return orphan;
     }
 
-    it.each(['self-update', 'restart'] as const)(
-      'after a %s keeps the run running and records its cut-off turn and call for the drain',
-      async (cause) => {
+    it.each([
+      ['self-update', false],
+      ['restart', false],
+      ['quit', false],
+      ['crash', true],
+      ['unknown', true],
+    ] as const)(
+      'after a %s keeps the run running and records its cut-off turn and call, waiting for the user: %s',
+      async (cause, held) => {
         const ctx = setup();
         const orphan = await cutOffRun(ctx);
         ctx.callContextDao.sessions.set('call-1', ['sess-poet']);
@@ -5298,6 +5329,7 @@ describe('TeamExecutorService', () => {
         expect(run.status).toBe('running');
         expect(readRestartContinuation(run.restartContinuation)).toEqual({
           cause,
+          held,
           turns: [{ memberId: 'orch' }],
           calls: [
             {
@@ -5391,7 +5423,7 @@ describe('TeamExecutorService', () => {
       ).toEqual([{ nodeId: 'poet', status: 'failed', callId: 'call-1' }]);
     });
 
-    it('a crash after the record was written drops it and fails the run as today', async () => {
+    it('a crash after the record was written holds it for the user and says so on a new row', async () => {
       const ctx = setup();
       const orphan = await cutOffRun(ctx);
       await ctx.service.reconcileOrphanedRuns('self-update');
@@ -5399,17 +5431,41 @@ describe('TeamExecutorService', () => {
       await ctx.service.reconcileOrphanedRuns('crash');
 
       const run = ctx.runDao.runs.get(orphan.id)!;
-      expect(run.status).toBe('failed');
-      expect(run.restartContinuation).toBeNull();
+      expect(run.status).toBe('running');
+      expect(readRestartContinuation(run.restartContinuation)).toMatchObject({
+        cause: 'crash',
+        held: true,
+        turns: [{ memberId: 'orch' }],
+      });
       const errors = ctx.itemDao.items.filter(
         (i) => i.runId === orphan.id && i.kind === 'error',
       );
-      expect(JSON.parse(errors.at(-1)!.payload)).toEqual({
+      expect(errors).toHaveLength(2);
+      expect(JSON.parse(errors.at(-1)!.payload)).toMatchObject({
         message:
-          'team run interrupted — the daemon crashed while it was running',
-        interrupted: true,
+          'team run interrupted — the daemon crashed while it was running — it continues once you choose to continue it',
         interruptCause: 'crash',
+        continues: true,
       });
+    });
+
+    it('a quit after a crash keeps the run waiting for the user, under the crash', async () => {
+      const ctx = setup();
+      const orphan = await cutOffRun(ctx);
+      await ctx.service.reconcileOrphanedRuns('crash');
+
+      await ctx.service.reconcileOrphanedRuns('quit');
+
+      expect(
+        readRestartContinuation(
+          ctx.runDao.runs.get(orphan.id)!.restartContinuation,
+        ),
+      ).toMatchObject({ cause: 'crash', held: true });
+      expect(
+        ctx.itemDao.items.filter(
+          (i) => i.runId === orphan.id && i.kind === 'error',
+        ),
+      ).toHaveLength(1);
     });
 
     it('a second restart before the drain keeps one record and writes no second boot row', async () => {
@@ -5430,17 +5486,6 @@ describe('TeamExecutorService', () => {
       expect(record?.cause).toBe('self-update');
       expect(record?.calls.map((call) => call.callId)).toEqual(['call-1']);
       expect(record?.turns).toEqual([{ memberId: 'orch' }]);
-    });
-
-    it('quit is not continued: the run fails as today', async () => {
-      const ctx = setup();
-      const orphan = await cutOffRun(ctx);
-
-      await ctx.service.reconcileOrphanedRuns('quit');
-
-      const run = ctx.runDao.runs.get(orphan.id)!;
-      expect(run.status).toBe('failed');
-      expect(run.restartContinuation ?? null).toBeNull();
     });
 
     async function soloTurnRun(
@@ -18121,7 +18166,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     ).toEqual([]);
   });
 
-  it.each(['self-update', 'restart'] as const)(
+  it.each(['self-update', 'restart', 'quit'] as const)(
     'keeps the usage of a turn a %s cut off, on its turn_cancelled row marked as continued',
     async (cause) => {
       stopCause.peek.mockReturnValueOnce(cause);
@@ -18185,8 +18230,8 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     },
   );
 
-  it('keeps the usage of a turn a quit cut off, on a plain turn_cancelled row as before', async () => {
-    stopCause.peek.mockReturnValueOnce('quit');
+  it('keeps the usage of a turn a stop nobody announced cut off, on a plain turn_cancelled row as before', async () => {
+    stopCause.peek.mockReturnValueOnce('unknown');
     const { service, claude, itemDao } = setup();
     const run = await service.startRun({
       slug: 'bg',
@@ -18211,7 +18256,10 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
   });
 
   describe('continued after an update or a restart', () => {
-    async function cutOffByUpdate(leadCutOff: boolean) {
+    async function cutOffByUpdate(
+      leadCutOff: boolean,
+      cause: InterruptCause = 'self-update',
+    ) {
       const ctx = setup();
       const run = await ctx.service.startRun({
         slug: 'bg',
@@ -18264,12 +18312,90 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       }
       ctx.runDao.runs.get(run.id)!.status = 'running';
       ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
-      await ctx.service.reconcileOrphanedRuns('self-update');
+      await ctx.service.reconcileOrphanedRuns(cause);
       const record = readRestartContinuation(
         ctx.runDao.runs.get(run.id)!.restartContinuation,
       );
       return { ...ctx, run, record: record! };
     }
+
+    it('continues a run a quit cut off: the call under its own id in its session, and the lead told it was a quit', async () => {
+      const ctx = await cutOffByUpdate(true, 'quit');
+      expect(ctx.record).toMatchObject({ cause: 'quit', held: false });
+      const before = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('continued');
+      await drain();
+
+      const fresh = ctx.claude.starts.slice(before);
+      const lead = fresh.find((t) => t.input.prompt.includes('collect it'));
+      const callee = fresh.find((t) => t.input.prompt.includes('on this call'));
+      expect(lead!.input.prompt).toMatch(
+        /^\[geniro\] The app was quit while you were working\. That stop was geniro's, not the user's: /,
+      );
+      expect(callee!.input.prompt).toMatch(
+        /^\[geniro\] The app was quit while you were working on this call\./,
+      );
+      expect(callee!.input.resumeSessionId).toBe('sess-callee');
+      expect(
+        ctx.itemDao.items.filter(
+          (i) => i.runId === ctx.run.id && i.kind === 'call_started',
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('continues a run a crash cut off first when the user writes into it, then delivers the message', async () => {
+      const ctx = await cutOffByUpdate(true, 'crash');
+      expect(ctx.record).toMatchObject({ cause: 'crash', held: true });
+      const order: string[] = [];
+      ctx.service.setHeldContinuation(async (runId) => {
+        order.push(`continue:${runId}`);
+      });
+      const before = ctx.claude.starts.length;
+
+      await ctx.service.sendMessage(ctx.run.id, 'carry on');
+      order.push('sent');
+      await drain();
+
+      expect(order).toEqual([`continue:${ctx.run.id}`, 'sent']);
+      expect(
+        ctx.claude.starts.slice(before).map((t) => t.input.prompt),
+      ).toContainEqual(expect.stringContaining('carry on'));
+    });
+
+    it('sends a message into a run no crash holds without continuing anything first', async () => {
+      const ctx = await cutOffByUpdate(true, 'self-update');
+      const continued = vi.fn(async () => undefined);
+      ctx.service.setHeldContinuation(continued);
+      ctx.runDao.runs.get(ctx.run.id)!.restartContinuation = null;
+
+      await ctx.service.sendMessage(ctx.run.id, 'carry on');
+
+      expect(continued).not.toHaveBeenCalled();
+    });
+
+    it('ends a run the user chose not to continue, saying so', async () => {
+      const ctx = await cutOffByUpdate(true, 'crash');
+
+      await ctx.service.abandonRestartContinuation(ctx.run.id, 'crash', true);
+
+      expect(ctx.runDao.runs.get(ctx.run.id)!.status).toBe('failed');
+      const errors = ctx.itemDao.items.filter(
+        (i) => i.runId === ctx.run.id && i.kind === 'error',
+      );
+      expect(JSON.parse(errors.at(-1)!.payload)).toMatchObject({
+        message:
+          'team run interrupted — the daemon crashed while it was running, and you chose not to continue it',
+        interruptCause: 'crash',
+      });
+      expect(
+        ctx.itemDao.items.some(
+          (i) => i.runId === ctx.run.id && i.kind === 'call_result',
+        ),
+      ).toBe(true);
+    });
 
     it('continues the cut-off call under its own id in its session, and the lead with one note', async () => {
       const ctx = await cutOffByUpdate(true);
@@ -18436,6 +18562,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       expect(
         await ctx.service.continueAfterRestart(run.id, {
           cause: 'restart',
+          held: false,
           turns: [],
           calls: [],
           failedCalls: [
@@ -18476,6 +18603,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
 
       await ctx.service.continueAfterRestart(run.id, {
         cause: 'restart',
+        held: false,
         turns: [],
         calls: [],
         failedCalls: [
@@ -18511,6 +18639,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
 
       await ctx.service.continueAfterRestart(run.id, {
         cause: 'self-update',
+        held: false,
         turns: [],
         calls: [],
         failedCalls: [],

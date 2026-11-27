@@ -182,20 +182,40 @@ describe('MonitorOutcomeSweep', () => {
     },
   );
 
-  it("owes a team member's own conversation a note instead of waking it", async () => {
-    const h = harness({ teamId: 'wf', archivedAt: null });
-    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
-    expect(h.holdInterrupted).not.toHaveBeenCalled();
-    expect(h.setRestartContinuation).not.toHaveBeenCalled();
-    expect(h.write).toHaveBeenCalledTimes(1);
-    expect(h.oweKeyNote).toHaveBeenCalledWith(
-      nodeSessionKey('run-1', 'agent'),
-      expect.stringContaining('m2 — CI — command not recorded'),
-    );
-    expect(h.oweRunNote).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['quit', false],
+    ['crash', true],
+    ['unknown', true],
+  ] as const)(
+    "keeps a team member's cut-off monitor in the run's record after a %s, waiting for the user: %s",
+    async (cause, held) => {
+      const h = harness({ teamId: 'wf', archivedAt: null });
+      expect(await h.sweep.sweep(cause, ['run-1'])).toEqual([]);
+      expect(h.holdInterrupted).not.toHaveBeenCalled();
+      expect(recordWritten(h)).toEqual({
+        cause,
+        held,
+        turns: [],
+        calls: [],
+        failedCalls: [],
+        monitors: [
+          {
+            memberId: 'agent',
+            conversationId: null,
+            id: 'm2',
+            description: 'CI',
+            command: null,
+            remainingMs: null,
+          },
+        ],
+      });
+      expect(h.write).toHaveBeenCalledTimes(1);
+      expect(h.oweKeyNote).not.toHaveBeenCalled();
+      expect(h.oweRunNote).not.toHaveBeenCalled();
+    },
+  );
 
-  it("files a callee's interrupted end under its call and owes that conversation the note", async () => {
+  it("files a callee's interrupted end under its call and records it for that conversation", async () => {
     const h = harness({ teamId: 'wf', archivedAt: null }, [
       row(1, 'm1', 'start', 'call-3', 'call-1'),
     ]);
@@ -208,16 +228,15 @@ describe('MonitorOutcomeSweep', () => {
         conversationId: 'call-1',
       },
       expect.objectContaining({ id: 'm1', end: { kind: 'interrupted' } }),
-      false,
+      true,
     );
-    expect(h.oweKeyNote).toHaveBeenCalledWith(
-      callSessionKey('run-1', 'call-1'),
-      expect.stringContaining('m1 — CI — command not recorded'),
-    );
-    expect(h.oweRunNote).not.toHaveBeenCalled();
+    expect(recordWritten(h)).toMatchObject({
+      monitors: [{ id: 'm1', memberId: 'agent', conversationId: 'call-1' }],
+    });
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
   });
 
-  it("still owes the callee's conversation once a delivered batch, which names none, is its newest row", async () => {
+  it("still records the callee's conversation once a delivered batch, which names none, is its newest row", async () => {
     // A wake inside the call is filed as `wakeHeldCallee` files it: the
     // delivery's row plus the call, no conversation.
     const delivered: RowFixture = {
@@ -248,10 +267,9 @@ describe('MonitorOutcomeSweep', () => {
       delivered,
     ]);
     await h.sweep.sweep('quit', ['run-1']);
-    expect(h.oweKeyNote).toHaveBeenCalledWith(
-      callSessionKey('run-1', 'call-1'),
-      expect.stringContaining('m1 — CI — command not recorded'),
-    );
+    expect(recordWritten(h)).toMatchObject({
+      monitors: [{ id: 'm1', conversationId: 'call-1' }],
+    });
   });
 
   it('hands the registry every id the run already used, so none is minted again', async () => {
@@ -316,6 +334,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
       expect(await h.sweep.sweep(cause, ['run-1'])).toEqual([]);
       expect(recordWritten(h)).toEqual({
         cause,
+        held: false,
         turns: [],
         calls: [],
         failedCalls: [],
@@ -360,6 +379,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     await h.sweep.sweep('self-update', ['run-1']);
     expect(recordWritten(h)).toEqual({
       cause: 'self-update',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],
@@ -373,23 +393,30 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     });
   });
 
-  it("gives a team member's conversation a note naming the command after a quit, with no record", async () => {
+  it("keeps a team run's cut-off monitor waiting under the crash it was held for when a quit follows", async () => {
+    const owed = JSON.stringify({
+      cause: 'unknown',
+      held: true,
+      turns: [{ memberId: 'agent' }],
+    });
     const h = harness(
-      { teamId: 'wf', archivedAt: null, status: 'running' },
+      {
+        teamId: 'wf',
+        archivedAt: null,
+        status: 'running',
+        restartContinuation: owed,
+      },
       [row(3, 'm1', 'start')],
       [monitorCall(2, { command: 'npm run watch' })],
     );
     expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
-    expect(h.setRestartContinuation).not.toHaveBeenCalled();
-    expect(h.oweKeyNote).toHaveBeenCalledWith(
-      nodeSessionKey('run-1', 'agent'),
-      expect.stringContaining('m1 — CI — `npm run watch` (~6 min were left)'),
-    );
-    expect(h.write).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ id: 'm1' }),
-      false,
-    );
+    expect(recordWritten(h)).toMatchObject({
+      cause: 'unknown',
+      held: true,
+      turns: [{ memberId: 'agent' }],
+      monitors: [{ id: 'm1', command: 'npm run watch' }],
+    });
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
   });
 
   it("merges a chat's cut-off monitor into the record it is owed, keeping its turn and holding no turn", async () => {
@@ -409,6 +436,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(recordWritten(h)).toEqual({
       cause: 'restart',
+      held: false,
       turns: [{ memberId: 'agent' }],
       calls: [],
       failedCalls: [],
@@ -464,6 +492,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     await h.sweep.sweep('self-update', ['run-1']);
     expect(recordWritten(h)).toEqual({
       cause: 'self-update',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],
@@ -540,6 +569,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     await h.sweep.sweep('self-update', ['run-1']);
     expect(recordWritten(h)).toEqual({
       cause: 'self-update',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],
@@ -558,6 +588,7 @@ describe('MonitorOutcomeSweep after an update or a restart', () => {
     await h.sweep.sweep('self-update', ['run-1']);
     expect(recordWritten(h)).toEqual({
       cause: 'self-update',
+      held: false,
       turns: [],
       calls: [],
       failedCalls: [],

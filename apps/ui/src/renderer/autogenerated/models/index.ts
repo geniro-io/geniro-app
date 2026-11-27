@@ -1894,6 +1894,25 @@ export interface AnalyzeThreadDto {
 /**
  * 
  * @export
+ * @interface AnswerHeldRunsDto
+ */
+export interface AnswerHeldRunsDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof AnswerHeldRunsDto
+     */
+    continueRunIds: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof AnswerHeldRunsDto
+     */
+    declineRunIds: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface AppProcessThread
  */
 export interface AppProcessThread {
@@ -7075,6 +7094,77 @@ export const HealthProblemLevelEnum = {
 } as const;
 export type HealthProblemLevelEnum = typeof HealthProblemLevelEnum[keyof typeof HealthProblemLevelEnum];
 
+/**
+ * 
+ * @export
+ * @interface HeldRun
+ */
+export interface HeldRun {
+    /**
+     * 
+     * @type {string}
+     * @memberof HeldRun
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof HeldRun
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HeldRun
+     */
+    cause: HeldRunCauseEnum;
+}
+
+
+/**
+ * @export
+ */
+export const HeldRunCauseEnum = {
+    Quit: 'quit',
+    SelfUpdate: 'self-update',
+    Restart: 'restart',
+    Crash: 'crash',
+    Unknown: 'unknown'
+} as const;
+export type HeldRunCauseEnum = typeof HeldRunCauseEnum[keyof typeof HeldRunCauseEnum];
+
+/**
+ * 
+ * @export
+ * @interface HeldRunsAnsweredDto
+ */
+export interface HeldRunsAnsweredDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof HeldRunsAnsweredDto
+     */
+    continued: Array<string>;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof HeldRunsAnsweredDto
+     */
+    declined: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface HeldRunsDto
+ */
+export interface HeldRunsDto {
+    /**
+     * 
+     * @type {Array<HeldRun>}
+     * @memberof HeldRunsDto
+     */
+    runs: Array<HeldRun>;
+}
 /**
  * 
  * @export

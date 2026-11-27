@@ -18,6 +18,7 @@ import {
   ThreadStartReaderContext,
 } from './thread-start-card';
 import { ThreadOpenContext } from './thread-title';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import {
   groupTranscript,
   isCardEntry,
@@ -466,6 +467,77 @@ describe('ThreadStartCard — a thread filed with no board card', () => {
         ?.textContent,
     ).toBe('ManifestOS');
     expect(stateText()).toBe('Waiting for your Start');
+  });
+
+  it('draws no Show more under a brief that fits its three lines', async () => {
+    const { reader } = fakeThreadReader(() =>
+      Promise.resolve(start('started', { runId: 'thread-1' })),
+    );
+    await renderThread(reader);
+
+    const brief = container.querySelector('[data-slot="thread-start-brief"]');
+    expect(brief?.classList.contains('line-clamp-3')).toBe(true);
+    expect(container.textContent).not.toContain('Show more');
+  });
+
+  it('holds a longer brief to three lines with a Show more that unfolds it, remembered in the thread', async () => {
+    const heights = (element: HTMLElement): boolean =>
+      element.dataset.slot === 'thread-start-brief' &&
+      element.classList.contains('line-clamp-3');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heights(this) ? 120 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heights(this) ? 48 : 0;
+      },
+    });
+    try {
+      const { reader } = fakeThreadReader(() =>
+        Promise.resolve(start('started', { runId: 'thread-1' })),
+      );
+      const draw = (): Promise<void> =>
+        act(async () => {
+          root.render(
+            <ThreadUiMemoryContext.Provider value="brief-run">
+              <ThreadStartReaderContext.Provider value={reader}>
+                <ThreadStartCard pair={pair(STARTED_ANSWER, ARGS)} />
+              </ThreadStartReaderContext.Provider>
+            </ThreadUiMemoryContext.Provider>,
+          );
+        });
+      const brief = (): Element | null =>
+        container.querySelector('[data-slot="thread-start-brief"]');
+      const toggle = (): HTMLButtonElement | undefined =>
+        [...container.querySelectorAll('button')].find((button) =>
+          /Show (more|less)/.test(button.textContent ?? ''),
+        );
+      await draw();
+
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(true);
+      expect(toggle()?.textContent).toBe(' Show more');
+      expect(toggle()?.querySelector('svg')).not.toBeNull();
+
+      await act(async () => {
+        toggle()?.click();
+      });
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(false);
+      expect(toggle()?.textContent).toBe(' Show less');
+
+      await act(async () => {
+        root.render(null);
+      });
+      await draw();
+      expect(brief()?.classList.contains('line-clamp-3')).toBe(false);
+      expect(toggle()?.textContent).toBe(' Show less');
+    } finally {
+      delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
   });
 
   it('reads an approved start as Starting and a declined one as Declined', async () => {

@@ -18,7 +18,8 @@ const clampedVariants = cva('m-0 whitespace-pre-wrap break-words', {
 /**
  * Text held to a few lines, with a Show more / Show less toggle that appears
  * only when the text is cut. Given `onOpen`, the toggle opens the whole text
- * elsewhere instead of unfolding it in place.
+ * elsewhere instead of unfolding it in place. Given `expanded`, whether it is
+ * unfolded is the caller's, told through `onExpandedChange`.
  */
 export function ClampedText({
   text,
@@ -29,6 +30,9 @@ export function ClampedText({
   onOpen,
   openLabel = 'Open full text',
   actions,
+  expanded: expandedByCaller,
+  onExpandedChange,
+  toggleLabel,
 }: {
   text: string;
   lines: 2 | 3 | 4 | 10;
@@ -39,9 +43,21 @@ export function ClampedText({
   openLabel?: React.ReactNode;
   /** Controls drawn beside the toggle, shown whether or not the text is cut. */
   actions?: React.ReactNode;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  /** What the in-place toggle says, unfolded or not; Show more / Show less without it. */
+  toggleLabel?: (expanded: boolean) => React.ReactNode;
 }): React.JSX.Element {
   const bodyRef = useRef<HTMLParagraphElement | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [ownExpanded, setOwnExpanded] = useState(false);
+  const expanded = expandedByCaller ?? ownExpanded;
+  const toggle = (): void => {
+    if (onExpandedChange === undefined) {
+      setOwnExpanded(!expanded);
+    } else {
+      onExpandedChange(!expanded);
+    }
+  };
   const [overflowing, setOverflowing] = useState(false);
 
   useLayoutEffect(() => {
@@ -81,16 +97,18 @@ export function ClampedText({
             <button
               type="button"
               aria-expanded={onOpen === undefined ? expanded : undefined}
-              onClick={onOpen ?? (() => setExpanded((current) => !current))}
+              onClick={onOpen ?? toggle}
               className={cn(
                 'self-start rounded-md text-xs font-medium text-muted-foreground hover:text-foreground',
                 toggleClassName,
               )}>
               {onOpen !== undefined
                 ? openLabel
-                : expanded
-                  ? 'Show less'
-                  : 'Show more'}
+                : toggleLabel !== undefined
+                  ? toggleLabel(expanded)
+                  : expanded
+                    ? 'Show less'
+                    : 'Show more'}
             </button>
           ) : null}
           {actions}

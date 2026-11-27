@@ -19,7 +19,6 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
-import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { taskIdentifier } from '../../projects/utils/project-key';
@@ -71,10 +70,11 @@ function folded(text: string): string {
  * The manager's starts: `start_thread` files a backlog card and records a
  * start request on it; the user's Start (or a manager chat in `auto`)
  * approves it; Electron main's drain prepares the worktree and starts the run
- * with `startedBy: 'manager'`; the manager is woken when it has started or
- * failed. The request lives on the task row, so a restart loses nothing: the
- * Start cards still waiting are tracked again at boot, and a start the
- * manager was not told about is told then.
+ * with `startedBy: 'manager'`; once it has started it joins the manager's
+ * roster, and the manager is woken only when it failed. The request lives on
+ * the task row, so a restart loses nothing: the Start cards still waiting are
+ * tracked again at boot, and a started thread not yet on the roster is put on
+ * it then.
  */
 @Injectable()
 export class CommandCenterStartsService
@@ -94,7 +94,6 @@ export class CommandCenterStartsService
     private readonly tasks: TasksService,
     private readonly taskEvents: TaskEventBus,
     private readonly managers: CommandCenterChatService,
-    private readonly notices: RunNoticeWriter,
     private readonly threadStarts: CommandCenterThreadStartDao,
     private readonly taskRuns: TaskRunsService,
     private readonly agents: AgentEventBus,
@@ -505,11 +504,11 @@ export class CommandCenterStartsService
     }
   }
 
-  /** Put a started cardless thread on its manager's roster and tell the manager, once. */
+  /** Put a started cardless thread on its manager's roster, once. */
   private async reportThread(
     row: Pick<
       CommandCenterThreadStart,
-      'id' | 'managerRunId' | 'title' | 'note' | 'watch'
+      'id' | 'managerRunId' | 'note' | 'watch'
     > & { runId: string },
   ): Promise<void> {
     await this.managers.addToRoster(
@@ -520,7 +519,6 @@ export class CommandCenterStartsService
       row.watch,
     );
     await this.threadStarts.markReported(row.id, new Date());
-    await this.notices.info(row.managerRunId, `Started "${row.title}"`);
   }
 
   private projectNamed(
@@ -602,7 +600,7 @@ export class CommandCenterStartsService
     }
   }
 
-  /** Tell each manager about the threads it asked for that have started. */
+  /** Put each thread a manager asked for on its roster once it has started. */
   private async reportStarted(): Promise<void> {
     try {
       const em = this.em.fork();
@@ -635,7 +633,6 @@ export class CommandCenterStartsService
       await this.taskDao.releaseStartReport(task.id, managerRunId, em);
       throw error;
     }
-    await this.notices.info(managerRunId, `Started "${task.title}"`);
   }
 
   /** Track every Start card still waiting again, and tell what a restart left untold. */

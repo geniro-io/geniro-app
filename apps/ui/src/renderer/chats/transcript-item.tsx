@@ -40,6 +40,7 @@ import { formatClockTime } from './relative-time';
 import { RetryContext } from './retry-context';
 import { ReviewMessageCard } from './review-message-card';
 import { readReviewPayload } from './review-payload';
+import { RowsShownOnCardsContext } from './rows-shown-on-cards';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
@@ -216,6 +217,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   namesSender?: boolean;
 }): React.JSX.Element | null {
   const cardBacked = useContext(CardBackedRequestsContext);
+  const shownOnCards = useContext(RowsShownOnCardsContext);
   const notSent = useContext(NotSentMessagesContext);
   const resolveSignIn = useContext(CliLoginContext);
   const retry = useContext(RetryContext);
@@ -554,7 +556,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       return <MessageBubble variant="note">{line}</MessageBubble>;
     }
     case 'system': {
-      if (isDeliveryAcknowledgement(item.payload)) {
+      if (
+        isDeliveryAcknowledgement(item.payload) ||
+        shownOnCards.has(item.id)
+      ) {
         return null;
       }
       // Drawn on the user messages it names instead, once they are on screen.

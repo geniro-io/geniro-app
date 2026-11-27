@@ -67,6 +67,7 @@ import {
   SystemRecommendationsApplyContext,
 } from './recommendations-apply-context';
 import { RetryContext } from './retry-context';
+import { RowsShownOnCardsContext } from './rows-shown-on-cards';
 import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
@@ -143,6 +144,8 @@ export interface TranscriptValues {
   threadReports?: ThreadReports | null;
   /** The manager's waiting review items — see `WaitingItemsContext`. */
   waitingItems?: WaitingItemsStore | null;
+  /** Host rows a loaded card already says — see `RowsShownOnCardsContext`. */
+  rowsShownOnCards?: ReadonlySet<string>;
 }
 
 /**
@@ -406,6 +409,7 @@ export function ChatProviders({
 }
 
 const NO_THREAD_IDENTITIES: ReadonlyMap<string, ThreadIdentity> = new Map();
+const NO_ROWS_SHOWN_ON_CARDS: ReadonlySet<string> = new Set();
 
 /** Provides the {@link TranscriptValues} — see there for who passes them where. */
 export function TranscriptContexts({
@@ -427,6 +431,7 @@ export function TranscriptContexts({
   threadArchived = null,
   threadReports = null,
   waitingItems = null,
+  rowsShownOnCards = NO_ROWS_SHOWN_ON_CARDS,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -455,7 +460,10 @@ export function TranscriptContexts({
                                       value={threadReports}>
                                       <WaitingItemsContext.Provider
                                         value={waitingItems}>
-                                        {children}
+                                        <RowsShownOnCardsContext.Provider
+                                          value={rowsShownOnCards}>
+                                          {children}
+                                        </RowsShownOnCardsContext.Provider>
                                       </WaitingItemsContext.Provider>
                                     </ThreadReportsContext.Provider>
                                   </ThreadArchivedContext.Provider>

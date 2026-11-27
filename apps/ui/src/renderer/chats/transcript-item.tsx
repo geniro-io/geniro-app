@@ -29,9 +29,10 @@ import {
 import { isGeniroCardKind } from './geniro-tool';
 import {
   ComposingRow,
-  formatElapsed,
   liveRowKind,
   ThinkingRow,
+  ThoughtFor,
+  thoughtMsOf,
   WorkingRow,
 } from './live-row';
 import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
@@ -346,7 +347,6 @@ export const TranscriptItem = memo(function TranscriptItem({
       // `ThinkingDisclosure`; a short stretch is left alone.
       const reasoning = payloadString(item.payload, 'text') ?? '';
       const headings = reasoningHeadings(reasoning);
-      const thoughtMs = payloadNumber(item.payload, 'thoughtMs');
       return (
         <MessageBubble
           variant="reasoning"
@@ -366,13 +366,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           ) : (
             <ReasoningHeadings headings={headings} />
           )}
-          {thoughtMs === null || thoughtMs < 1_000 ? null : (
-            <div
-              data-slot="thought-for"
-              className="text-muted-foreground mt-1.5 text-xs not-italic">
-              Thought for {formatElapsed(thoughtMs)}
-            </div>
-          )}
+          <ThoughtFor ms={thoughtMsOf(item.payload)} />
         </MessageBubble>
       );
     }

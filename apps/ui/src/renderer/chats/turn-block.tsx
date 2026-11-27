@@ -5,11 +5,12 @@ import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { EntryCard } from './entry-card';
 import { jumpAnchorProps } from './jump-target';
-import { liveRowKind } from './live-row';
+import { liveRowKind, ThoughtFor, thoughtMsOf } from './live-row';
 import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
 import {
   reasoningRunFoldKey,
   type ReasoningRunPiece,
+  runThoughtMs,
   withReasoningRuns,
 } from './reasoning-runs';
 import { formatClockTime } from './relative-time';
@@ -106,6 +107,7 @@ export const TurnBlock = memo(function TurnBlock({
             headings={piece.headings}
             memoryKey={reasoningRunFoldKey(piece)}
           />
+          <ThoughtFor ms={runThoughtMs(piece)} />
         </TranscriptRow>
       );
     }
@@ -198,6 +200,7 @@ export const TurnBlock = memo(function TurnBlock({
           ) : (
             <ReasoningHeadings headings={headings} />
           )}
+          <ThoughtFor ms={thoughtMsOf(item.payload)} />
         </div>
       );
     }

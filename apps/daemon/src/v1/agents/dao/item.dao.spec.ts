@@ -418,16 +418,30 @@ describe('ItemDao (in-memory sqlite)', () => {
         callId: 'nested',
         callerConversationId: 'incoming',
       });
-      for (let seq = 6; seq < 216; seq += 1) {
-        await add(seq, 'helper', 'message', { text: 'busy callee' });
-      }
+      await dao.createMany(
+        Array.from({ length: 210 }, (_, i) => ({
+          runId: 'run-a',
+          seq: 6 + i,
+          memberId: 'helper',
+          kind: 'message' as const,
+          role: null,
+          payload: JSON.stringify({ text: 'busy callee' }),
+        })),
+      );
       await insert('another-run', 1);
       expect(
         (await dao.nodePoolContextRows('run-a', 'root')).map((row) => row.seq),
       ).toEqual([0, 1, 2]);
-      for (let seq = 216; seq < 426; seq += 1) {
-        await add(seq, 'root', 'message', { text: 'recent root work' });
-      }
+      await dao.createMany(
+        Array.from({ length: 210 }, (_, i) => ({
+          runId: 'run-a',
+          seq: 216 + i,
+          memberId: 'root',
+          kind: 'message' as const,
+          role: null,
+          payload: JSON.stringify({ text: 'recent root work' }),
+        })),
+      );
       const recent = await dao.nodePoolContextRows('run-a', 'root');
       expect(recent).toHaveLength(200);
       expect(recent[0]!.seq).toBe(226);
@@ -944,6 +958,139 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews).toEqual(
         new Map(runIds.map((runId, i) => [runId, `answered ${i}`])),
       );
+    });
+
+    it('reads a long chat list in batches, not one statement per run', async () => {
+      const runIds = Array.from({ length: 1_201 }, (_, i) => `run-${i}`);
+      const at = new Date(1_000);
+      await orm.em.fork().insertMany(
+        Item,
+        runIds.map((runId, i) => ({
+          id: `${runId}-0`,
+          runId,
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: `answered ${i}` }),
+          createdAt: at,
+          updatedAt: at,
+        })),
+      );
+
+      const sent = await statementsOf(() =>
+        dao.latestMessageTextPerRun(runIds),
+      );
+
+      expect(sent).toBe(4);
+    });
+
+    it('takes the newer of two messages on the newest seq by createdAt, then by id', async () => {
+      await orm.em.fork().insertMany(Item, [
+        {
+          id: 'row-a',
+          runId: 'run-a',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'user',
+          payload: JSON.stringify({ text: 'older' }),
+          createdAt: new Date(1_000),
+          updatedAt: new Date(1_000),
+        },
+        {
+          id: 'row-b',
+          runId: 'run-a',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'later' }),
+          createdAt: new Date(2_000),
+          updatedAt: new Date(2_000),
+        },
+        {
+          id: 'row-c',
+          runId: 'run-b',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'user',
+          payload: JSON.stringify({ text: 'lower id' }),
+          createdAt: new Date(3_000),
+          updatedAt: new Date(3_000),
+        },
+        {
+          id: 'row-z',
+          runId: 'run-b',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({ text: 'higher id' }),
+          createdAt: new Date(3_000),
+          updatedAt: new Date(3_000),
+        },
+      ]);
+
+      const previews = await dao.latestMessageTextPerRun(['run-a', 'run-b']);
+
+      expect(previews.get('run-a')).toBe('later');
+      expect(previews.get('run-b')).toBe('higher id');
+    });
+
+    it('falls back within the newest seq only, when the head says nothing', async () => {
+      await orm.em.fork().insertMany(Item, [
+        {
+          id: 'c-0',
+          runId: 'run-c',
+          seq: 0,
+          kind: 'message' as const,
+          role: 'user',
+          payload: JSON.stringify({ text: 'earlier seq' }),
+          createdAt: new Date(1_000),
+          updatedAt: new Date(1_000),
+        },
+        {
+          id: 'c-1',
+          runId: 'run-c',
+          seq: 1,
+          kind: 'message' as const,
+          role: 'user',
+          payload: JSON.stringify({ text: 'same seq' }),
+          createdAt: new Date(2_000),
+          updatedAt: new Date(2_000),
+        },
+        {
+          id: 'c-2',
+          runId: 'run-c',
+          seq: 1,
+          kind: 'message' as const,
+          role: 'assistant',
+          payload: JSON.stringify({}),
+          createdAt: new Date(3_000),
+          updatedAt: new Date(3_000),
+        },
+      ]);
+
+      const previews = await dao.latestMessageTextPerRun(['run-c']);
+
+      expect(previews.get('run-c')).toBe('same seq');
+    });
+
+    it('skips a soft-deleted newest message — the one before it is the preview', async () => {
+      await insert('run-a', 0, 'message', JSON.stringify({ text: 'before' }));
+      const deleted = await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({ text: 'deleted' }),
+      );
+      await orm.em
+        .fork()
+        .createQueryBuilder(Item)
+        .update({ deletedAt: new Date() })
+        .where({ id: deleted.id })
+        .execute();
+
+      const previews = await dao.latestMessageTextPerRun(['run-a']);
+
+      expect(previews.get('run-a')).toBe('before');
     });
 
     it('scopes to the requested runIds; an empty request yields an empty map', async () => {
@@ -1999,9 +2146,14 @@ describe('ItemDao (in-memory sqlite)', () => {
 
   it('reads the boot reconcile rows of more runs than one query may name', async () => {
     const runIds = Array.from({ length: 501 }, (_, i) => `run-${i}`);
-    for (const runId of runIds) {
-      await insert(runId, 0, 'subagent_info', JSON.stringify({ id: runId }));
-    }
+    await dao.createMany(
+      runIds.map((runId) => ({
+        runId,
+        seq: 0,
+        kind: 'subagent_info' as const,
+        payload: JSON.stringify({ id: runId }),
+      })),
+    );
 
     const rows = await dao.subagentInfoRowsOfRuns(runIds);
 

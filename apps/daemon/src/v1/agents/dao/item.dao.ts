@@ -103,7 +103,8 @@ const PAYLOAD_ID_BATCH = 1000;
 
 /**
  * How many `UNION ALL` arms one {@link ItemDao.newestRowsInCalls} statement
- * holds — one per call and kind — under SQLite's 500-arm compound limit.
+ * holds — one per call and kind — or one {@link ItemDao.latestMessageTextPerRun}
+ * statement holds, one per run, under SQLite's 500-arm compound limit.
  */
 const ARMS_PER_READ = 400;
 
@@ -672,13 +673,15 @@ export class ItemDao extends BaseDao<Item> {
    * looking for the chat you were last in. Alternation is the price of the
    * asked-for behaviour, and a preview tracks where a conversation has got to.
    *
-   * One read per run, walking its `(run_id, kind, seq)` index from the newest
-   * message down and stopping at the first that is the run's own: the
-   * exclusions are text matches, so a read that collected every run's heads at
-   * once had to open the payload of EVERY message of every listed run.
-   * Measured on a 5.9 GB profile: 0.6 s of an archive listing's 0.8 s, and one
-   * statement of the old shape took 7 s on a cold cache, because a `kind`
-   * beside an OR of `(run_id, seq)` pairs sends SQLite to the `kind` index.
+   * One statement per {@link ARMS_PER_READ} runs. Each run is its own arm: a
+   * `LIMIT 1` walk of its `(run_id, kind, seq)` index from the newest message
+   * down to the first one that is the run's own, and the heads' payloads are
+   * read by id in the same statement. The arms are not one `OR` over the run
+   * ids: a `kind` beside an OR of `(run_id, seq)` pairs sends SQLite to the
+   * `kind` index, and that shape took 7 s on a cold cache of a 5.9 GB profile.
+   * The exclusions are text matches, so each arm opens the payloads of its
+   * run's newest messages only, where a window over every listed run's
+   * messages would open the payload of EVERY one of them.
    * Runs with no message items (or a head with neither text nor pictures) are
    * simply absent from the map.
    */
@@ -687,24 +690,61 @@ export class ItemDao extends BaseDao<Item> {
     txEm?: EntityManager,
   ): Promise<Map<string, string>> {
     const repo = this.getRepo(txEm);
-    const previews = new Map<string, string>();
-    for (const runId of runIds) {
+    const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
+      convertValues: false,
+    });
+    const newestMessageOf = (runId: string) => {
       // Newest first, ties broken the same way as the reading below, so the
       // row found is the one that reading would let win.
-      const head = await repo.findOne(
-        { runId, kind: 'message', $and: [NOT_A_DELEGATE, NOT_IN_A_CALL] },
-        {
-          orderBy: { seq: 'desc', createdAt: 'desc', id: 'desc' },
-          fields: ['seq', 'payload'],
-          disableIdentityMap: true,
-        },
-      );
-      if (head === null) {
+      const messages = db
+        .selectFrom('items')
+        .select('id')
+        .where('run_id', '=', runId)
+        .where('kind', '=', 'message')
+        .where('deleted_at', 'is', null)
+        .where('payload', 'not like', '%parentToolUseId%')
+        .where('payload', 'not like', '%"callId":%');
+      return db
+        .selectFrom(
+          messages
+            .orderBy('seq', 'desc')
+            .orderBy('created_at', 'desc')
+            .orderBy('id', 'desc')
+            .limit(1)
+            .as('arm'),
+        )
+        .select('arm.id');
+    };
+    const runs = [...new Set(runIds)];
+    const heads = new Map<string, { seq: number; preview: string | null }>();
+    for (let at = 0; at < runs.length; at += ARMS_PER_READ) {
+      if (at > 0) {
+        await yieldToEventLoop();
+      }
+      const [first, ...rest] = runs
+        .slice(at, at + ARMS_PER_READ)
+        .map(newestMessageOf);
+      const newest = rest.reduce((union, arm) => union.unionAll(arm), first!);
+      const rows = await db
+        .selectFrom('items')
+        .select(['run_id', 'seq', 'payload'])
+        .where('id', 'in', newest)
+        .execute();
+      for (const row of rows) {
+        heads.set(row.run_id, {
+          seq: row.seq,
+          preview: messagePreview(row.payload),
+        });
+      }
+    }
+    const previews = new Map<string, string>();
+    for (const runId of runs) {
+      const head = heads.get(runId);
+      if (head === undefined) {
         continue;
       }
-      const preview = messagePreview(head.payload);
-      if (preview !== null) {
-        previews.set(runId, preview);
+      if (head.preview !== null) {
+        previews.set(runId, head.preview);
         continue;
       }
       // `(runId, seq)` is not a key: a transcript written before

@@ -3,7 +3,6 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import {
   type InterruptCause,
-  parseInterruptCause,
   resumesUnattended,
 } from '../../../utils/stop-cause';
 import { ItemDao } from '../../agents/dao/item.dao';
@@ -13,11 +12,8 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { RunIdleReapService } from '../../agents/services/run-idle-reap.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
-import {
-  asRecord,
-  parseJsonColumn,
-  payloadString,
-} from '../../agents/utils/json-util';
+import { parseJsonColumn, payloadString } from '../../agents/utils/json-util';
+import { interruptionOf } from '../../agents/utils/run-interruption';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import {
@@ -29,7 +25,6 @@ import { isBreakerOpen } from '../../projects/utils/breaker';
 import {
   type AgentKind,
   isTerminalRunStatus,
-  type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
 import { resetInstantFrom } from '../../teams/utils/reset-instant';
@@ -66,25 +61,6 @@ const ENDED_TASK_STATUS: Partial<Record<RunStatus, TaskStatus>> = {
  * rather than by anything the agent or the user did.
  */
 type RunEnding = RunStatus | 'interrupted';
-
-/**
- * The rows the boot reconcile writes AFTER an interruption's closing `error`,
- * which {@link TaskSettleService.interruptCauseOf} looks past to find it.
- *
- * `ChatService.reconcileOrphanedRuns` follows its error with `unanswerable`
- * rows, `TeamExecutorService.reconcileOrphanedRuns` adds a `status` per open
- * member turn and a `call_result` per open call, and the delegate and shell boot
- * sweeps that run after both close what the dead process left out. None of
- * them is the run carrying on; all of them are bookkeeping about how it
- * stopped.
- */
-const INTERRUPTION_TRAILERS: readonly ItemKind[] = [
-  'unanswerable',
-  'status',
-  'call_result',
-  'subagent_info',
-  'shell_info',
-];
 
 /**
  * Where an interrupted card waits to be picked up again, when the project's
@@ -125,7 +101,7 @@ export class TaskSettleService implements OnModuleInit {
     private readonly tasks: TasksService,
     /**
      * Read for one question only — whether a failed run's LAST word is the
-     * boot reconcile's `interrupted` row (see {@link interruptCauseOf}). The
+     * boot reconcile's `interrupted` row (see `interruptionOf`). The
      * run's status cannot say it: an interrupted run is closed `failed`.
      */
     private readonly itemDao: ItemDao,
@@ -361,7 +337,9 @@ export class TaskSettleService implements OnModuleInit {
     }
     const worked = task.status === 'in_progress';
     const interruptedBy =
-      status === 'failed' ? await this.interruptCauseOf(runId, em) : null;
+      status === 'failed'
+        ? ((await interruptionOf(this.itemDao, runId, em))?.cause ?? null)
+        : null;
     const ending: RunEnding = interruptedBy !== null ? 'interrupted' : status;
     const limitUntil =
       ending === 'failed'
@@ -449,38 +427,6 @@ export class TaskSettleService implements OnModuleInit {
     if (from === 'reconcile') {
       await this.recordOutcome(task.projectId, ending, worked, limitUntil, em);
     }
-  }
-
-  /**
-   * Why this run was cut off, when its last word is the boot reconcile saying
-   * so — the `error` row carrying `interrupted: true` (and the cause) that
-   * `ChatService.reconcileOrphanedRuns` and
-   * `TeamExecutorService.reconcileOrphanedRuns` write for a run the daemon
-   * stopped under (a SIGKILL, or a shutdown, which leaves a working run
-   * `running` on purpose so that it is closed this way).
-   *
-   * The LAST word, not merely the newest error: a thread continued after an
-   * interruption and then failed for real has moved on from it, so the newest
-   * row that is not one of the reconcile's own trailers
-   * ({@link INTERRUPTION_TRAILERS}) has to BE that error. One indexed query
-   * for one row. Null when the run was not cut off.
-   */
-  private async interruptCauseOf(
-    runId: string,
-    em: EntityManager,
-  ): Promise<InterruptCause | null> {
-    const last = await this.itemDao.getOne(
-      { runId, kind: { $nin: [...INTERRUPTION_TRAILERS] } },
-      { orderBy: { seq: 'desc' }, disableIdentityMap: true },
-      em,
-    );
-    if (last?.kind !== 'error') {
-      return null;
-    }
-    const payload = asRecord(parseJsonColumn(last.payload));
-    return payload?.interrupted === true
-      ? parseInterruptCause(payload.interruptCause)
-      : null;
   }
 
   /**

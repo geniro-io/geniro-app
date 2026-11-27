@@ -1,4 +1,7 @@
-import { interruptCauseClause } from '../../../utils/stop-cause';
+import {
+  type InterruptCause,
+  interruptCauseClause,
+} from '../../../utils/stop-cause';
 import type {
   RestartContinuation,
   RestartContinuationCall,
@@ -190,7 +193,7 @@ function readMonitor(value: unknown): RestartContinuationMonitor[] {
  * was doing: its own turn, a call it answers, or nothing.
  */
 export function restartContinuationPrompt(
-  cause: RestartContinuation['cause'],
+  cause: InterruptCause,
   {
     working,
     calls,

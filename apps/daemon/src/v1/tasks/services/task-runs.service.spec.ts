@@ -95,6 +95,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let taskDao: TaskDao;
   let projectDao: ProjectDao;
   let runDao: RunDao;
+  let itemDao: ItemDao;
   let em: EntityManager;
   let projectId: string;
   /**
@@ -226,6 +227,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
     runDao = new RunDao(em);
+    itemDao = new ItemDao(em);
     tasks = new TasksService(
       em,
       taskDao,
@@ -388,20 +390,18 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         ),
       } as unknown as TeamOverlayService,
       runTeams,
-      (() => {
-        const itemDao = new ItemDao(em);
-        return new TurnFolderService(
-          em,
-          runDao,
-          projectDao,
-          new ProjectRootsService(em),
-          itemDao,
-          new AgentEventBus(),
-          new ItemCallIndexService(itemDao, runDao, em),
-          new ItemSeqAllocator(em, itemDao),
-          new AgentSessionRegistry(4),
-        );
-      })(),
+      new TurnFolderService(
+        em,
+        runDao,
+        projectDao,
+        new ProjectRootsService(em),
+        itemDao,
+        new AgentEventBus(),
+        new ItemCallIndexService(itemDao, runDao, em),
+        new ItemSeqAllocator(em, itemDao),
+        new AgentSessionRegistry(4),
+      ),
+      itemDao,
       worktreesRoot,
     );
     // Asks by default, so a team card is unattended-incapable unless a test
@@ -1079,6 +1079,64 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
   });
 
+  it('continues an interrupted chat with the note, not the card’s brief', async () => {
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    await interrupt('run-1', 'quit');
+
+    await service.start(task.id, start());
+
+    expect(createChat).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sent = sendMessage.mock.calls[0]?.[1] as string;
+    expect(sent).not.toBe('ship it');
+    expect(sent).toMatch(
+      /^\[geniro\] The app was quit while you were working\./,
+    );
+    expect(sent).not.toContain('Failed and not continued');
+  });
+
+  it('sends the user’s own words into an interrupted chat, not the note', async () => {
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    await interrupt('run-1', 'quit');
+
+    await service.start(
+      task.id,
+      start({ prompt: 'Carry on with the migration.' }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'run-1',
+      'Carry on with the migration.',
+    );
+  });
+
+  it('continues an interrupted chat with the note when the press also moves it back into its worktree', async () => {
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    await interrupt('run-1', 'quit');
+    const checkout = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-moved-')));
+    await runDao.rehome(
+      'run-1',
+      worktree,
+      checkout,
+      { startSha: null, startDirty: null },
+      orm.em.fork(),
+    );
+
+    await service.start(task.id, start());
+
+    expect((await runDao.getById('run-1', orm.em.fork()))?.cwd).toBe(worktree);
+    const sent = sendMessage.mock.calls[0]?.[1] as string;
+    expect(sent).toMatch(
+      /^\[geniro\] The app was quit while you were working\./,
+    );
+  });
+
   it("moves a run its folder's deletion moved back into the worktree this press cut, before the turn", async () => {
     const task = await seed();
     await service.start(task.id, start());
@@ -1421,6 +1479,69 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     startTeamRun.mockClear();
   };
 
+  /**
+   * What the boot reconcile leaves on a run the daemon's stop cut off: the
+   * run `failed`, its `interrupted` error, and a `call_result` per call it
+   * closed after that error.
+   */
+  const interrupt = async (
+    runId: string,
+    cause: string,
+    calls: { callId: string; calleeNodeId: string; status: string }[] = [],
+    monitorsCutOff = 0,
+  ): Promise<void> => {
+    const cutOff = await runDao.getById(runId);
+    (cutOff as Run).status = 'failed';
+    await em.flush();
+    await itemDao.create({
+      runId,
+      seq: 1,
+      kind: 'error',
+      role: null,
+      payload: JSON.stringify({
+        message: 'run interrupted while it was running',
+        interrupted: true,
+        interruptCause: cause,
+      }),
+    });
+    let seq = 2;
+    for (const call of calls) {
+      await itemDao.create({
+        runId,
+        seq: seq++,
+        kind: 'call_result',
+        role: null,
+        payload: JSON.stringify({
+          ...call,
+          callerNodeId: 'manager',
+          mode: 'async',
+        }),
+      });
+    }
+    for (let index = 0; index < monitorsCutOff; index += 1) {
+      await itemDao.create({
+        runId,
+        seq: seq++,
+        kind: 'system',
+        role: null,
+        payload: JSON.stringify({
+          severity: 'info',
+          message: `monitor m${index} ended: interrupted — geniro restarted`,
+          monitors: [
+            {
+              id: `m${index}`,
+              description: 'a check',
+              event: 'end',
+              end: { kind: 'interrupted' },
+              lines: [],
+              omitted: 0,
+            },
+          ],
+        }),
+      });
+    }
+  };
+
   describe('a team card run again', () => {
     it("moves a team run its folder's deletion moved back into the worktree this press cut", async () => {
       const task = await seed();
@@ -1578,6 +1699,131 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
       expect(sendTeamMessage).toHaveBeenCalledWith('wf-run-1', 'ship it');
       expect(startTeamRun).not.toHaveBeenCalled();
+    });
+
+    it('continues an INTERRUPTED run without sending the card’s brief into it again', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      const task = await seed({
+        title: 'Fix the cap',
+        description: 'Off by one.',
+      });
+      await runTeamAndReturn(task.id);
+      await interrupt('wf-run-1', 'quit');
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      expect(startTeamRun).not.toHaveBeenCalled();
+      expect(sendTeamMessage).toHaveBeenCalledTimes(1);
+      const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
+      expect(sent).not.toContain('Off by one.');
+      expect(sent).toMatch(
+        /^\[geniro\] The app was quit while you were working\. That stop was geniro's, not the user's/,
+      );
+    });
+
+    it('names each call the interruption closed in the note an interrupted run is continued with', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      const task = await seed();
+      await runTeamAndReturn(task.id);
+      await interrupt('wf-run-1', 'quit', [
+        { callId: 'call-21', calleeNodeId: 'engineer', status: 'error' },
+        { callId: 'call-19', calleeNodeId: 'qa', status: 'ok' },
+      ]);
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
+      expect(sent).toContain('Failed and not continued: call-21 (engineer)');
+      expect(sent).not.toContain('call-19');
+    });
+
+    it('continues a run whose interruption the monitor sweep wrote after, with the note naming the closed call', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      snapshotApprovals = { 'dev-team': 'auto' };
+      const task = await seed({
+        title: 'Fix the cap',
+        description: 'Off by one.',
+      });
+      await runTeamAndReturn(task.id);
+      await interrupt(
+        'wf-run-1',
+        'quit',
+        [{ callId: 'call-21', calleeNodeId: 'engineer', status: 'error' }],
+        1,
+      );
+
+      await service.start(task.id, start({ startedBy: 'autopilot' }));
+
+      const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
+      expect(sent).not.toContain('Off by one.');
+      expect(sent).toMatch(
+        /^\[geniro\] The app was quit while you were working\./,
+      );
+      expect(sent).toContain('Failed and not continued: call-21 (engineer)');
+    });
+
+    it('sends the user’s own words into an interrupted run, not the note', async () => {
+      const task = await seed();
+      await runTeamAndReturn(task.id);
+      await interrupt('wf-run-1', 'quit');
+
+      await service.start(task.id, start({ prompt: 'Now add the tests.' }));
+
+      expect(sendTeamMessage).toHaveBeenCalledWith(
+        'wf-run-1',
+        'Now add the tests.',
+      );
+    });
+
+    it('continues an interrupted team run with the note when the press also moves it back into its worktree', async () => {
+      const task = await seed();
+      await runTeamAndReturn(task.id);
+      await interrupt('wf-run-1', 'quit');
+      const checkout = realpathSync(
+        mkdtempSync(join(tmpdir(), 'geniro-moved-team-')),
+      );
+      await runDao.rehome(
+        'wf-run-1',
+        worktree,
+        checkout,
+        { startSha: null, startDirty: null },
+        orm.em.fork(),
+      );
+
+      await service.start(task.id, start());
+
+      expect((await runDao.getById('wf-run-1', orm.em.fork()))?.cwd).toBe(
+        worktree,
+      );
+      const sent = sendTeamMessage.mock.calls[0]?.[1] as string;
+      expect(sent).toMatch(
+        /^\[geniro\] The app was quit while you were working\./,
+      );
+    });
+
+    it('sends the brief again to a run that failed for real after an interruption was continued', async () => {
+      const task = await seed({
+        title: 'Fix the cap',
+        description: 'Off by one.',
+      });
+      await runTeamAndReturn(task.id);
+      await interrupt('wf-run-1', 'quit');
+      await itemDao.create({
+        runId: 'wf-run-1',
+        seq: 10,
+        kind: 'error',
+        role: null,
+        payload: JSON.stringify({ message: 'the CLI exited with code 1' }),
+      });
+
+      await service.start(task.id, start());
+
+      expect(sendTeamMessage).toHaveBeenCalledWith(
+        'wf-run-1',
+        'Fix the cap\n\nOff by one.',
+      );
     });
 
     it('starts the AUTOPILOT a new run when the run’s own team can still ask', async () => {

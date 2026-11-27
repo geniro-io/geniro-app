@@ -36,6 +36,13 @@ export const SETTLED_LOGIN_RETENTION_MS = 10 * 60_000;
 export const LOGIN_OUTPUT_TAIL_CHARS = 64 * 1024;
 
 /**
+ * How long starting a sign-in waits for the CLI to print its URL before
+ * answering anyway. Only a plain `waiting` sign-in waits: a code prompt or an
+ * ended run is already something to show.
+ */
+export const URL_WAIT_MS = 4_000;
+
+/**
  * Where a sign-in the daemon is running has got to.
  *
  * - `waiting` — the CLI is up and the browser round-trip has not finished.

@@ -444,6 +444,24 @@ describe('TaskQueueService (in-memory sqlite)', () => {
         expect(queue.eligible.map((task) => task.title)).toEqual(['finished']);
       },
     );
+
+    it('is still held as stopped when its user stopped it before carrying the thread on', async () => {
+      await arm({ autopilotIntakeStatus: 'in_progress' });
+      const run = await addFinishedRun(null);
+      const task = await addTask('stopped', 'in_progress', 0, run.id);
+      await taskDao.setStoppedAt(task.id, new Date(), em);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.eligible).toEqual([]);
+      expect(queue.blocked).toEqual([
+        expect.objectContaining({
+          title: 'stopped',
+          kind: 'stopped',
+          reason: STOPPED_BY_USER_REASON,
+        }),
+      ]);
+    });
   });
 
   it('hands out the folder each CARD names, else the project one', async () => {

@@ -132,11 +132,6 @@ export class TaskQueueService {
       if (working.has(task.id)) {
         continue;
       }
-      // Its run completed and the agent has the card. An intake the autopilot
-      // starts from would send its brief into that finished thread every tick.
-      if (leavesFinishedCardsAlone(raw.intakeStatus) && finished.has(task.id)) {
-        continue;
-      }
       // A card whose last run the USER stopped is theirs to restart. The
       // settle moves a cancelled card back to the intake column so a press can
       // start it again — which is also exactly what the armed autopilot reads
@@ -159,6 +154,11 @@ export class TaskQueueService {
           kind: 'stopped',
           retryInMs: null,
         });
+        continue;
+      }
+      // Its run completed and the agent has the card. An intake the autopilot
+      // starts from would send its brief into that finished thread every tick.
+      if (leavesFinishedCardsAlone(raw.intakeStatus) && finished.has(task.id)) {
         continue;
       }
       // The same resolution the start route performs, asked here so the

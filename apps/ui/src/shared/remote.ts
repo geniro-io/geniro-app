@@ -82,6 +82,8 @@ export interface RemoteTunnelState {
   error: string | null;
   /** The client's latest complaint while it connects, only in `starting`. */
   detail: string | null;
+  /** In `open`: shown without this Mac having seen it answer, because it could not check. */
+  unchecked: boolean;
 }
 
 /**
@@ -97,6 +99,7 @@ export const TUNNEL_OFF: RemoteTunnelState = {
   url: null,
   error: null,
   detail: null,
+  unchecked: false,
 };
 
 /** What Settings draws, and what the "open in browser" action builds a link from. */

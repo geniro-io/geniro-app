@@ -7,6 +7,7 @@ import {
   Smartphone,
   Tablet,
   Trash2,
+  TriangleAlert,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
@@ -131,6 +132,21 @@ function TunnelPanel({
                 label={`Public (via ${tunnel.provider ?? 'tunnel'})`}
                 url={tunnel.url}
               />
+            ) : null}
+            {open && tunnel.url && tunnel.unchecked ? (
+              <p
+                data-slot="tunnel-unchecked"
+                className="m-0 flex items-start gap-1.5 text-xs text-warning">
+                <TriangleAlert
+                  aria-hidden="true"
+                  className="mt-px size-3.5 shrink-0"
+                />
+                <span>
+                  This address could not be verified from this Mac. It should
+                  still open on your phone; if it does not, close it and get a
+                  new address.
+                </span>
+              </p>
             ) : null}
             {tunnel.status === 'error' && tunnel.error ? (
               <ErrorText>{tunnel.error}</ErrorText>

@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events';
 import { mkdtempSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -412,5 +414,84 @@ describe('RemoteAccess.revokeDevice against a real gateway', () => {
 
     expect(await settlesWithin(stolenSocket.closed, 1_000)).toBe(true);
     expect(await settlesWithin(keptSocket.closed, 300)).toBe(false);
+  });
+});
+
+describe('a tunnel that is still starting', () => {
+  const stops: (() => Promise<void>)[] = [];
+  afterEach(async () => {
+    await Promise.all(stops.splice(0).map((stop) => stop()));
+  });
+
+  function getSession(
+    port: number,
+    host: string,
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/__geniro/session',
+          headers: { host },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => {
+            body += chunk.toString();
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('lets the public check reach the session route on the exact host the client printed, and refuses its siblings', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new Readable({ read() {} }),
+      stderr: new Readable({ read() {} }),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+        return true;
+      }),
+    });
+    const tunnel = new RemoteTunnel({
+      spawnProcess: vi.fn(() => child) as never,
+      resolveBin: (name) => `/opt/homebrew/bin/${name}`,
+      probePublic: async () => 'not-yet',
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'geniro-remote-access-'));
+    const remoteAccess = new RemoteAccess({
+      ipcRegistry: new IpcRegistry(),
+      daemonHandle: () => null,
+      pairing: new Pairing(),
+      deviceRegistry: new DeviceRegistry({
+        filePath: join(dir, 'remote-devices.json'),
+      }),
+      tunnel,
+      readSettings: () => ({ remoteAccessEnabled: true }),
+      staticRoot: mkdtempSync(join(tmpdir(), 'geniro-remote-access-static-')),
+      gatewayOverrides: { preferredPort: 0, allowedHostNames: ['my-mac'] },
+    });
+    await remoteAccess.sync();
+    stops.push(() => remoteAccess.stop());
+    const port = remoteAccess.state().port!;
+
+    void remoteAccess.startTunnel();
+    child.stderr.push('INF |  https://late-name.trycloudflare.com  |\n');
+    await vi.waitFor(() => {
+      expect(tunnel.allowedHosts()).toEqual(['late-name.trycloudflare.com']);
+    });
+
+    const own = await getSession(port, 'late-name.trycloudflare.com');
+    expect(own.status).toBe(200);
+    expect(JSON.parse(own.body)).toEqual({ paired: false, deviceId: null });
+    expect(
+      (await getSession(port, 'other-name.trycloudflare.com')).status,
+    ).toBe(403);
   });
 });

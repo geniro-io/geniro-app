@@ -9,6 +9,7 @@ import type {
 } from '../../shared/remote';
 import type { IpcRegistry } from '../ipc-registry';
 import { readSettings } from '../settings';
+import { reportMainLog } from '../window-diagnostics';
 import { DeviceRegistry } from './device-registry';
 import { type GatewayOptions, RemoteGateway } from './gateway';
 import { Pairing } from './pairing';
@@ -79,7 +80,13 @@ export class RemoteAccess {
 
   constructor(options: RemoteAccessOptions) {
     this.readSettingsFn = options.readSettings ?? readSettings;
-    this.tunnel = options.tunnel ?? new RemoteTunnel();
+    this.tunnel =
+      options.tunnel ??
+      new RemoteTunnel({
+        log: (level, message, context) => {
+          void reportMainLog(options.daemonHandle(), level, message, context);
+        },
+      });
     this.pairing = options.pairing ?? new Pairing();
     this.deviceRegistry =
       options.deviceRegistry ??
@@ -103,13 +110,10 @@ export class RemoteAccess {
         // same one `../` `createWindow` uses to reach `out/renderer`, not two.
         staticRoot: options.staticRoot ?? join(__dirname, '../renderer'),
         devServerUrl: options.devServerUrl,
-        // The ONE seam through which an open tunnel widens the Host guard,
-        // read fresh per request: closing the tunnel narrows the guard back
-        // in the same instant rather than at the next launch.
-        extraAllowedHosts: () => {
-          const pattern = this.tunnel.allowedHostPattern();
-          return pattern ? [pattern] : [];
-        },
+        // The ONE seam through which a tunnel widens the Host guard, read
+        // fresh per request: closing the tunnel narrows the guard back in the
+        // same instant rather than at the next launch.
+        extraAllowedHosts: () => this.tunnel.allowedHosts(),
         ...options.gatewayOverrides,
       });
   }

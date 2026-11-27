@@ -6410,6 +6410,40 @@ describe('where a session’s detached commands run', () => {
     ]);
   });
 
+  it('records a heredoc’s program once the shell has exec’d it, by its whole line alone', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, 'perl -'),
+      row(300, 100, 300, 'perl -e sleep 9'),
+    ]);
+    background(
+      child,
+      'b1',
+      't1',
+      '/bin/zsh -lc "perl - <<\'PL\'\nsleep 361\nPL"',
+    );
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
+  it('never records a heredoc’s program for it where another running command reads as that process', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(200, 100, 200, 'perl -'),
+    ]);
+    background(child, 'b1', 't1', "perl - <<'PL'\nsleep 361\nPL");
+    background(child, 'b2', 't2', 'perl - < job.pl');
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')).toEqual([]);
+    expect(session.recordedGroupsOf('t2')?.map((group) => group.pgid)).toEqual([
+      200,
+    ]);
+  });
+
   it('never records for a command a process another running command already holds', async () => {
     let table = [
       ...CLI_AND_MCP,

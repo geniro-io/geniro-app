@@ -24,8 +24,10 @@ import {
   descendantsOf,
   endedRecordOf,
   groupSubtree,
+  heredocPrograms,
   isGroupAnchored,
   listProcesses,
+  pidsRunningProgram,
   type ProcessRow,
   type RecordedGroup,
   recordedPidsRunning,
@@ -3088,6 +3090,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     const claimed = new Map(
       running.map((workId) => [workId, groupSubtree(rows, anchoredOf(workId))]),
     );
+    const commandOf = (workId: string): string | undefined => {
+      const call = shellWork.get(workId) ?? delegateCommandCalls.get(workId);
+      return (
+        (call === undefined ? undefined : callCommands.get(call)) ??
+        executeCalls.get(workId)?.command
+      );
+    };
     for (const workId of running) {
       const anchored = anchoredOf(workId);
       const own = claimed.get(workId) ?? new Set<number>();
@@ -3106,10 +3115,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           (anchored.length === 0 || own.has(row.pid)),
       );
       const pgids = new Set(anchored.map((group) => group.pgid));
-      const call = shellWork.get(workId) ?? delegateCommandCalls.get(workId);
-      const command =
-        (call === undefined ? undefined : callCommands.get(call)) ??
-        executeCalls.get(workId)?.command;
+      const command = commandOf(workId);
       const matched =
         command === undefined
           ? []
@@ -3117,6 +3123,29 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
               ...commandTargets(searched, command),
               ...recordedPidsRunning(tree, records, command),
             ];
+      if (command !== undefined && matched.length === 0) {
+        // A heredoc's program, once the shell has exec'd it, reads as nothing
+        // but its name. It is taken only by that whole line, and only where no
+        // other running command reads as that process.
+        const theirs = new Set(
+          running
+            .filter((other) => other !== workId)
+            .flatMap((other) => {
+              const text = commandOf(other);
+              return text === undefined ? [] : commandTargets(searched, text);
+            })
+            .flatMap((pid) => [
+              pid,
+              ...descendantsOf(rows, pid).map((row) => row.pid),
+            ]),
+        );
+        const free = searched.filter((row) => !theirs.has(row.pid));
+        matched.push(
+          ...heredocPrograms(command).flatMap((program) =>
+            pidsRunningProgram(free, program),
+          ),
+        );
+      }
       // A program the command started may lead a group of its own (a
       // browser, a `setsid` child): it is still the command's own process.
       for (const pid of [

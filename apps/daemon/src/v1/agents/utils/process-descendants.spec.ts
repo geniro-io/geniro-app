@@ -6,8 +6,10 @@ import {
   commandTargets,
   descendantsOf,
   endedRecordOf,
+  heredocPrograms,
   isCommandRunning,
   parseProcessRows,
+  pidsRunningProgram,
   type ProcessRow,
   recordedPidsRunning,
 } from './process-descendants';
@@ -351,6 +353,29 @@ describe('commandTargets', () => {
     expect(commandTargets(tree, "''")).toEqual([]);
     expect(commandTargets(tree, '"\\"\\""')).toEqual([]);
     expect(commandTargets(tree, "grep -r 'nothing here'")).toEqual([]);
+  });
+});
+
+describe('heredocPrograms', () => {
+  it('names the program a heredoc feeds, as the table shows it once the shell has exec’d it', () => {
+    expect(
+      heredocPrograms('/bin/zsh -lc "cd /tmp\nperl - <<\'PL\'\nsleep 1\nPL"'),
+    ).toEqual(['perl -']);
+    expect(heredocPrograms('node - <<JS\nsetTimeout(() => {}, 9)\nJS')).toEqual(
+      ['node -'],
+    );
+    expect(heredocPrograms('perl -e "sleep 1" # no heredoc')).toEqual([]);
+  });
+
+  it('takes a row only by its whole line, by name or by path', () => {
+    const rows: ProcessRow[] = [
+      { pid: 1, ppid: 0, args: 'perl -' },
+      { pid: 2, ppid: 0, args: '/usr/bin/perl -' },
+      { pid: 3, ppid: 0, args: 'perl -e sleep 9' },
+      { pid: 4, ppid: 0, args: 'superl -' },
+    ];
+
+    expect(pidsRunningProgram(rows, 'perl -')).toEqual([1, 2]);
   });
 });
 

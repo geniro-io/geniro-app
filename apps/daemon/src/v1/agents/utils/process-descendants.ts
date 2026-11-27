@@ -391,6 +391,36 @@ export function commandTargets(
   return [];
 }
 
+/**
+ * The programs a command feeds a heredoc to, as `ps` shows each once the
+ * shell has exec'd it (`perl -`, `node -`): nothing of the script is left in
+ * the table. Too bare for a Stop, which {@link commandTargets} never reads them
+ * for; a caller recording where a command runs may, through
+ * {@link pidsRunningProgram}.
+ */
+export function heredocPrograms(command: string): string[] {
+  const body = unwrapShell(command.trim());
+  return specific(
+    commandSegments(body ?? command).flatMap((segment) => {
+      const read = readSegment(normalizeCommand(segment));
+      return read?.feedsHeredoc === true ? [read.text] : [];
+    }),
+  );
+}
+
+/** The rows whose whole command line is `program`, by name or by path. */
+export function pidsRunningProgram(
+  rows: readonly ProcessRow[],
+  program: string,
+): number[] {
+  return rows
+    .filter((row) => {
+      const line = normalizeCommand(row.args);
+      return line === program || line.endsWith(`/${program}`);
+    })
+    .map((row) => row.pid);
+}
+
 /** What any of `others` matches among `owned`, with everything it started. */
 function heldByOthers(
   owned: readonly ProcessRow[],
@@ -498,13 +528,25 @@ const HEREDOC_START = /(?<!<)<<-?\s*(['"]?)([A-Za-z0-9_]+)\1/;
 
 /**
  * What a segment leaves running once `nohup`, `env` and the shell have exec'd
- * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
- * assignments dropped, and everything from the first redirection or a `#`
- * comment on cut, since `ps` never shows either — outside quotes only. None for
- * a heredoc: what is left of it is a bare program name, which would match every
- * other run of that program in the tree.
+ * away (see {@link readSegment}). None for a heredoc: what is left of it is a
+ * bare program name, which would match every other run of that program in the
+ * tree.
  */
 function commandCore(segment: string): string | null {
+  const read = readSegment(segment);
+  return read === null || read.feedsHeredoc ? null : read.text;
+}
+
+/**
+ * A segment as `ps` shows it once `nohup`, `env` and the shell have exec'd
+ * away: a leading `nohup`, the `env [-i] [-u NAME]…` and `NAME=value`
+ * assignments dropped, and everything from the first redirection or a `#`
+ * comment on cut, since `ps` never shows either — outside quotes only.
+ * `feedsHeredoc` when the cut was a heredoc's `<<`.
+ */
+function readSegment(
+  segment: string,
+): { text: string; feedsHeredoc: boolean } | null {
   const words = segment.trim().split(' ');
   if (words[0] === 'nohup') {
     words.shift();
@@ -523,10 +565,12 @@ function commandCore(segment: string): string | null {
   }
   const rest: string[] = [];
   let quote: string | null = null;
+  let feedsHeredoc = false;
   for (const word of words) {
     if (quote === null) {
       if (/^\d*<<(?!<)/.test(word)) {
-        return null;
+        feedsHeredoc = true;
+        break;
       }
       if (word.startsWith('#') || /^\d*[<>]/.test(word)) {
         break;
@@ -539,7 +583,7 @@ function commandCore(segment: string): string | null {
   if (program === undefined || program === '' || SHELL_BUILTINS.has(program)) {
     return null;
   }
-  return rest.join(' ');
+  return { text: rest.join(' '), feedsHeredoc };
 }
 
 /** The quote still open once `word` is read, from `open` before it. */

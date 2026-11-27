@@ -1876,7 +1876,11 @@ export class TeamExecutorService
         .sort(
           (a, b) => (callNumber(a.callId) ?? 0) - (callNumber(b.callId) ?? 0),
         )
-        .map(async (call) => {
+        .map(async (recorded) => {
+          const call = {
+            ...recorded,
+            sessionId: await this.resumableCallSession(team, recorded, run.cwd),
+          };
           const prompt = restartContinuationPrompt(record.cause, {
             working: 'call',
             calls: callsOf(call.calleeMemberId, call.conversationId),
@@ -2117,6 +2121,36 @@ export class TeamExecutorService
       detail: message,
       minutesLost: minutesLostBetween(lastActivityAt?.getTime() ?? now, now),
     });
+  }
+
+  /**
+   * A cut-off call's saved session, or null when its CLI never wrote it — a
+   * session assigned at spawn whose process died before the CLI read its
+   * prompt — so the call continues fresh with its transcript excerpt.
+   */
+  private async resumableCallSession(
+    team: Team,
+    call: RestartContinuationCall,
+    cwd: string | null,
+  ): Promise<string | null> {
+    const sessionId = call.sessionId;
+    const callee = team.members.find(
+      (member) => member.id === call.calleeMemberId,
+    );
+    if (sessionId === null || callee === undefined) {
+      return sessionId;
+    }
+    const runner =
+      (call.member !== null ? poolMemberNode(callee, call.member) : null) ??
+      callee;
+    const resumable = await this.adapterFor(runner.agent)
+      .sessionResumable({
+        sessionId,
+        configDir: runner.configDir ?? null,
+        cwd,
+      })
+      .catch(() => true);
+    return resumable ? sessionId : null;
   }
 
   /** A cut-off call the continuation could not re-open, closed as today. */
@@ -6837,6 +6871,13 @@ export class TeamExecutorService
         em,
         separateCallState,
       );
+      const rememberCallSession = (callId: string, sessionId: string): void => {
+        enqueue(() =>
+          this.callContextDao
+            .rememberSession(runId, callId, node.id, sessionId, em)
+            .catch(() => {}),
+        );
+      };
       /**
        * Every member's turn can raise a question — a callee's goes to its
        * caller, any other to the user's card — so every turn spawns in the
@@ -7187,6 +7228,16 @@ export class TeamExecutorService
             }
             return;
           }
+          if (event.type === 'session_assigned') {
+            // Recorded before the CLI's own `session` so a call cut off while
+            // its CLI starts is continued in this session; nothing in memory
+            // takes it, since the CLI may never write it.
+            if (callContext) {
+              await saveSessionId(event.sessionId);
+              rememberCallSession(callContext.callId, event.sessionId);
+            }
+            return;
+          }
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
             if (!callContext) {
@@ -7213,17 +7264,7 @@ export class TeamExecutorService
             }
             await saveSessionId(event.sessionId);
             if (callContext) {
-              enqueue(() =>
-                this.callContextDao
-                  .rememberSession(
-                    runId,
-                    callContext.callId,
-                    node.id,
-                    event.sessionId,
-                    em,
-                  )
-                  .catch(() => {}),
-              );
+              rememberCallSession(callContext.callId, event.sessionId);
             }
             return;
           }

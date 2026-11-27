@@ -66,6 +66,7 @@ import {
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RELOAD_COMMANDS_SUBTYPE,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SESSION_ID_FLAG,
   CLAUDE_SETTINGS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_SYSTEM_PROMPT_INLINE_MAX_BYTES,
@@ -145,6 +146,7 @@ describe('ClaudeAdapter', () => {
     await handle.done;
 
     expect(events).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
       { type: 'session', sessionId: 's1' },
       { type: 'text', text: 'hi' },
       {
@@ -503,6 +505,86 @@ describe('ClaudeAdapter', () => {
     );
   });
 
+  it('opens a fresh process under a session id it announces before init', () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj' },
+      (e) => events.push(e),
+    );
+    const args = captured.args ?? [];
+    const assigned = args[args.indexOf(CLAUDE_SESSION_ID_FLAG) + 1];
+
+    expect(assigned).toMatch(/^[0-9a-f-]{36}$/);
+    expect(args).not.toContain(CLAUDE_RESUME_FLAG);
+    expect(events).toEqual([{ type: 'session_assigned', sessionId: assigned }]);
+
+    child.stdout.emitData(
+      `${JSON.stringify({ type: 'system', subtype: 'init', session_id: assigned })}\n`,
+    );
+    expect(events.at(-1)).toEqual({ type: 'session', sessionId: assigned });
+  });
+
+  it('assigns no session id to a process that resumes one', () => {
+    const { spawn, captured } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      { prompt: 'go', cwd: '/proj', resumeSessionId: 'prev-1' },
+      (e) => events.push(e),
+    );
+
+    expect(captured.args).not.toContain(CLAUDE_SESSION_ID_FLAG);
+    expect(events.map((event) => event.type)).not.toContain('session_assigned');
+  });
+
+  it('announces the assigned id once from the MCP-gated driver too', async () => {
+    const { spawn, child, captured } = fakeSpawn();
+    const events: AgentEvent[] = [];
+    new ClaudeAdapter({ spawn }).start({ prompt: 'go', cwd: '/proj' }, (e) =>
+      events.push(e),
+    );
+    const args = captured.args ?? [];
+    const assigned = args[args.indexOf(CLAUDE_SESSION_ID_FLAG) + 1];
+    child.stdout.emitData(
+      `${JSON.stringify({ type: 'system', subtype: 'init', session_id: assigned })}\n`,
+    );
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({ type: 'session', sessionId: assigned }),
+    );
+
+    expect(events.filter((event) => event.type === 'session_assigned')).toEqual(
+      [{ type: 'session_assigned', sessionId: assigned }],
+    );
+    expect(events[0]).toEqual({
+      type: 'session_assigned',
+      sessionId: assigned,
+    });
+  });
+
+  it('answers whether a session can be resumed from its file in the profile', async () => {
+    const profile = tempDir('claude-resumable-');
+    const written = '11111111-2222-4333-8444-555555555555';
+    const project = join(profile, 'projects', '-proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, `${written}.jsonl`), '{}\n');
+    const adapter = new ClaudeAdapter({ waitForMcpServers: false });
+
+    await expect(
+      adapter.sessionResumable({
+        sessionId: written,
+        configDir: profile,
+        cwd: '/proj',
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      adapter.sessionResumable({
+        sessionId: '99999999-2222-4333-8444-555555555555',
+        configDir: profile,
+        cwd: '/proj',
+      }),
+    ).resolves.toBe(false);
+  });
+
   it('emits turn_cancelled when the process is killed', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
@@ -515,7 +597,10 @@ describe('ClaudeAdapter', () => {
     await handle.done;
 
     expect(child.killSignal).toBe('SIGTERM');
-    expect(events).toEqual([{ type: 'turn_cancelled' }]);
+    expect(events).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
+      { type: 'turn_cancelled' },
+    ]);
   });
 
   it('emits an error event on a non-zero exit with the stderr tail', async () => {
@@ -530,6 +615,7 @@ describe('ClaudeAdapter', () => {
     await handle.done;
 
     expect(events).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
       {
         type: 'error',
         message: 'claude exited with code 1: not authenticated',
@@ -554,6 +640,7 @@ describe('ClaudeAdapter', () => {
     await handle.done;
 
     expect(events).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
       {
         type: 'error',
         message: expect.stringContaining('OAuth session expired'),
@@ -669,8 +756,8 @@ describe('ClaudeAdapter', () => {
     child.emit('close', 1, null);
     await handle.done;
 
-    expect(events[0]).toMatchObject({ type: 'error' });
-    expect((events[0] as { recovery?: string }).recovery).toBeUndefined();
+    expect(events[1]).toMatchObject({ type: 'error' });
+    expect((events[1] as { recovery?: string }).recovery).toBeUndefined();
   });
 });
 
@@ -691,7 +778,9 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     fake.child.stdout.emitData(
       '{"type":"control_request","request_id":"r","request":{"subtype":"initialize"}}\n',
     );
-    expect(seen).toEqual([]);
+    expect(seen).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
+    ]);
     expect(warnings).toEqual([
       "claude: unmodelled control_request subtype 'initialize' — dropped",
     ]);
@@ -984,7 +1073,14 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       () => {},
     );
 
-    expect(asking.captured.args).toEqual(plain.captured.args);
+    // Each spawn opens its own session, so only that id may differ.
+    const sessionIdless = (args: readonly string[] | undefined) =>
+      (args ?? []).map((arg, at, all) =>
+        all[at - 1] === CLAUDE_SESSION_ID_FLAG ? '<session>' : arg,
+      );
+    expect(sessionIdless(asking.captured.args)).toEqual(
+      sessionIdless(plain.captured.args),
+    );
     expect(asking.captured.args).not.toContain('--permission-mode');
     expect(endSpy).toHaveBeenCalled();
   });
@@ -1150,7 +1246,10 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
       })}\n`,
     );
 
-    expect(events).toEqual([{ type: 'text_delta', text: 'The sea' }]);
+    expect(events).toEqual([
+      { type: 'session_assigned', sessionId: expect.any(String) },
+      { type: 'text_delta', text: 'The sea' },
+    ]);
   });
 
   it('keeps stdin open in ask mode, answers via control_response, closes on the terminal event', async () => {
@@ -2620,6 +2719,8 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
       ...CLAUDE_BASE_ARGS,
       CLAUDE_SETTINGS_FLAG,
       '{"crossSessionInbound":"refuse"}',
+      CLAUDE_SESSION_ID_FLAG,
+      expect.any(String),
       '--disallowedTools',
       'Monitor',
       'ListAgents',

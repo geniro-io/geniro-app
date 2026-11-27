@@ -58,6 +58,7 @@ import type {
   RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
   TurnDriver,
@@ -154,6 +155,7 @@ import {
   CLAUDE_READ_ONLY_TOOLS,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
+  CLAUDE_SESSION_ID_FLAG,
   CLAUDE_SESSION_STATE_EVENTS_ENV,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SETTINGS_FLAG,
@@ -178,7 +180,10 @@ import {
   ClaudeProbeService,
   supportFromVerdict,
 } from './claude-probe.service';
-import { ClaudeTurnDriver } from './claude-turn.driver';
+import {
+  announceAssignedSession,
+  ClaudeTurnDriver,
+} from './claude-turn.driver';
 import {
   codeModeModelRefusal,
   codeModeParameter,
@@ -255,6 +260,7 @@ import {
   carryClaudeSession,
   claudeProjectDirName,
   deleteClaudeSession,
+  findSessionFile,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
@@ -1110,6 +1116,8 @@ export class ClaudeAdapter extends AgentAdapter {
   /** Each turn's Code Mode, read once: `sessionKey` and the argv both ask. */
   private readonly turnCodeModes = new WeakMap<AgentTurnInput, boolean>();
   private readonly systemPromptPaths = new WeakMap<AgentTurnInput, string>();
+  /** The id `buildArgs` opened a fresh process's session under, for its driver. */
+  private readonly assignedSessionIds = new WeakMap<AgentTurnInput, string>();
 
   /**
    * The `--permission-mode` probe for the installed binary, or null when this
@@ -1637,6 +1645,23 @@ export class ClaudeAdapter extends AgentAdapter {
     ref: SubagentRecoveryRef,
   ): Promise<RecoveredSubagentOutcome | null> {
     return recoverClaudeSubagent(this.profileDir(ref.configDir), ref);
+  }
+
+  /**
+   * The transcript file exists in the profile. The CLI writes it only once it
+   * reads the first prompt, so an id assigned at spawn names nothing on disk
+   * when the process died before that (`CLAUDE_SESSION_ID_FLAG`).
+   */
+  override async sessionResumable(
+    input: SessionResumableInput,
+  ): Promise<boolean> {
+    return (
+      (await findSessionFile(
+        this.profileDir(input.configDir),
+        input.sessionId,
+        input.cwd,
+      )) !== null
+    );
   }
 
   /** The `pr-link` lines the session's transcript carries. */
@@ -2333,6 +2358,10 @@ export class ClaudeAdapter extends AgentAdapter {
         // is that figure plus the turn. Registered here, read at its `init`.
         this.seedRestoredCost(input);
       }
+    } else {
+      const sessionId = randomUUID();
+      this.assignedSessionIds.set(input, sessionId);
+      args.push(CLAUDE_SESSION_ID_FLAG, sessionId);
     }
     // Claude's endpoint is a per-turn config file `prepareTurn` writes from
     // this same field, so having it IS the grant.
@@ -2884,6 +2913,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     const delegateSettler = this.delegateSettlerFor(input);
     const mapMessage = this.messageMapperFor(input);
+    const assignedSessionId = this.assignedSessionIds.get(input) ?? null;
     if (!this.waitsForMcpServers(input)) {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with
@@ -2894,6 +2924,7 @@ export class ClaudeAdapter extends AgentAdapter {
       return {
         ...driver,
         onStdinReady: (io) => {
+          announceAssignedSession(io, assignedSessionId);
           delegateSettler.attach(io);
           driver.onStdinReady?.(io);
         },
@@ -2920,6 +2951,7 @@ export class ClaudeAdapter extends AgentAdapter {
         this.buildApprovalResponse(id, allow, updatedInput, option),
       logger: this.options.logger,
       delegateSettler,
+      assignedSessionId,
     });
   }
 

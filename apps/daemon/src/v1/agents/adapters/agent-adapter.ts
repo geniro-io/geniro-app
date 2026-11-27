@@ -107,6 +107,7 @@ import type {
   RecoveredSubagentOutcome,
   SessionPullRequest,
   SessionPullRequestsInput,
+  SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
   TurnDriver,
@@ -640,6 +641,20 @@ export abstract class AgentAdapter {
       carried: false,
       reason: reason ?? 'this CLI cannot move a conversation between profiles',
     };
+  }
+
+  /**
+   * Whether `--resume` (or its protocol twin) can reach this conversation —
+   * false only when the CLI's own store shows it was never written, as for a
+   * session id announced at spawn (`session_assigned`) whose process died
+   * before the CLI read its prompt.
+   *
+   * The default is yes, which is what every caller did before asking: a CLI
+   * that has not measured where it keeps sessions is resumed as it always was.
+   * Must NEVER throw.
+   */
+  sessionResumable(_input: SessionResumableInput): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   /**

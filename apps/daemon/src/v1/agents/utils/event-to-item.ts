@@ -67,6 +67,8 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
   switch (event.type) {
     case 'session':
       return null; // captured into node_state, not a transcript item
+    case 'session_assigned':
+      return null; // recorded for a team call's continuation, not a transcript item
     case 'slash_commands':
       return null; // captured into the skill-harvest store, not a transcript item
     case 'mcp_servers':

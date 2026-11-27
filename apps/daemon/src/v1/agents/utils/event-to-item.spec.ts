@@ -17,6 +17,9 @@ import { forgetMaskedCookieValues } from './host-browser';
 describe('mapEventToItem', () => {
   it('drops session events — captured into node_state, never the transcript', () => {
     expect(mapEventToItem({ type: 'session', sessionId: 's1' })).toBeNull();
+    expect(
+      mapEventToItem({ type: 'session_assigned', sessionId: 's1' }),
+    ).toBeNull();
   });
 
   it('drops slash_commands reports — skill-harvest store, never the transcript', () => {

@@ -288,7 +288,7 @@ export function WorkingThreadsCard({
           'group relative min-w-0 rounded-xl text-left font-normal',
           CONTROL_HOVER,
         )}
-        panelClassName="w-[26rem] p-0"
+        panelClassName="w-[26rem] max-w-[calc(100vw-1rem)] p-0"
         onOpenChange={onOpenChange}
         trigger={
           <AgentsTile

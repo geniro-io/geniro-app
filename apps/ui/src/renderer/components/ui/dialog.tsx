@@ -15,8 +15,7 @@ const FOCUSABLE_SELECTOR =
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
  * Closes on Escape, backdrop click, or the corner ✕, unless `dismissible` is
- * false. Owns the modal focus
- * contract (no dep): on open, focus moves to `initialFocus` when given, else to
+ * false. Owns the modal focus contract (no dep): on open, focus moves to `initialFocus` when given, else to
  * the first focusable child after the ✕ (the card itself as fallback), Tab
  * cycles inside the card, and close
  * restores focus to the opener — aria-modal promises assistive tech the

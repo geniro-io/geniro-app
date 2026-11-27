@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   commandLiveness,
   commandNeedles,
+  commandTargets,
   descendantsOf,
   endedRecordOf,
   isCommandRunning,
@@ -227,6 +228,63 @@ describe('commandNeedles', () => {
 
   it('keeps nothing too short to be specific', () => {
     expect(commandNeedles('ls')).toEqual([]);
+  });
+});
+
+describe('commandTargets', () => {
+  // The shapes measured under claude's Bash tool: the command is eval'd from a
+  // single-quoted string, each quote of it written as '"'"', and the program
+  // it execs shows its argv with no quotes at all.
+  const claudeShell = (command: string): string =>
+    `/bin/zsh -c source /Users/u/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval '${command.replace(/'/g, `'"'"'`)}' < /dev/null && pwd -P >| /tmp/claude-1-cwd`;
+
+  it('finds a command that holds quotes, through the shell claude evals it in', () => {
+    const tree: ProcessRow[] = [
+      { pid: 200, ppid: 100, args: claudeShell("perl -e 'sleep 327'") },
+      { pid: 201, ppid: 200, args: 'perl -e sleep 327' },
+    ];
+
+    expect(commandTargets(tree, "perl -e 'sleep 327'")).toEqual([200]);
+  });
+
+  it('finds a command with escaped double quotes once its shell has gone', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 1, args: 'perl -e print "hi"; sleep 99' },
+    ];
+
+    expect(commandTargets(tree, 'perl -e "print \\"hi\\"; sleep 99"')).toEqual([
+      201,
+    ]);
+  });
+
+  it('finds a quoted command a shell was handed whole, once that shell has exec’d it', () => {
+    const tree: ProcessRow[] = [
+      { pid: 201, ppid: 100, args: 'perl -e sleep 300' },
+    ];
+
+    expect(commandTargets(tree, `/bin/zsh -lc "perl -e 'sleep 300'"`)).toEqual([
+      201,
+    ]);
+  });
+
+  it('takes only what the text as written matches when it matches anything', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: "/bin/sh -c perl -e 'x y z'" },
+      { pid: 400, ppid: 100, args: 'perl -e x y z' },
+    ];
+
+    expect(commandTargets(tree, "perl -e 'x y z'")).toEqual([300]);
+  });
+
+  it('matches nothing for a command that is only quoting, or that nothing runs', () => {
+    const tree: ProcessRow[] = [
+      { pid: 300, ppid: 100, args: claudeShell('tail -f /dev/zero') },
+      { pid: 301, ppid: 300, args: 'tail -f /dev/zero' },
+    ];
+
+    expect(commandTargets(tree, "''")).toEqual([]);
+    expect(commandTargets(tree, '"\\"\\""')).toEqual([]);
+    expect(commandTargets(tree, "grep -r 'nothing here'")).toEqual([]);
   });
 });
 

@@ -264,6 +264,10 @@ function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function withoutQuoting(value: string): string {
+  return value.replace(/['"\\]/g, '');
+}
+
 /**
  * Every string a command the agent wrote can appear as in the process table —
  * the command itself first, then what its shell actually leaves running.
@@ -310,6 +314,12 @@ export function commandNeedles(command: string): string[] {
  * needle that matches anything, each kept only when no ancestor of it matched
  * too — the wrapper and what it wraps are one command, stopped through the top.
  *
+ * The table never carries the agent's quoting as written: claude evals the
+ * command from a single-quoted string (each `'` written `'"'"'`), and the
+ * program a shell execs shows its argv with no quotes at all. So when no needle
+ * matches as written, the needles and the rows are compared again with their
+ * quoting removed.
+ *
  * `owned` must already be confined to one run's own process tree: the derived
  * needles are looser than the command (see {@link commandNeedles}).
  */
@@ -317,12 +327,38 @@ export function commandTargets(
   owned: readonly ProcessRow[],
   command: string,
 ): number[] {
-  for (const needle of commandNeedles(command)) {
-    const matched = new Set(pidsRunningCommand(owned, needle));
+  const unquoted = owned.map((row) => ({
+    ...row,
+    args: withoutQuoting(row.args),
+  }));
+  const asWritten = commandNeedles(command);
+  const unquotedNeedles = [...new Set(asWritten.map(withoutQuoting))].filter(
+    (needle) => needle.length >= MIN_NEEDLE_CHARS,
+  );
+  const readings: [readonly ProcessRow[], string[]][] = [
+    [owned, asWritten],
+    [unquoted, unquotedNeedles],
+  ];
+  for (const [rows, needles] of readings) {
+    const targets = topMatches(rows, needles);
+    if (targets.length > 0) {
+      return targets;
+    }
+  }
+  return [];
+}
+
+/** The matches of the first needle that matches anything, wrappers over what they wrap. */
+function topMatches(
+  rows: readonly ProcessRow[],
+  needles: readonly string[],
+): number[] {
+  for (const needle of needles) {
+    const matched = new Set(pidsRunningCommand(rows, needle));
     if (matched.size === 0) {
       continue;
     }
-    const parentOf = new Map(owned.map((row) => [row.pid, row.ppid]));
+    const parentOf = new Map(rows.map((row) => [row.pid, row.ppid]));
     return [...matched].filter((pid) => {
       const seen = new Set<number>([pid]);
       let parent = parentOf.get(pid);

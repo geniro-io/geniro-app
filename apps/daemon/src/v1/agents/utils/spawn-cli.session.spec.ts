@@ -6370,6 +6370,31 @@ describe('where a session’s detached commands run', () => {
     ]);
   });
 
+  it('records the group of a command holding quotes, which the table shows eval-escaped and then unquoted', async () => {
+    const { session, child, reads } = openRecordingSession(() => [
+      ...CLI_AND_MCP,
+      row(
+        200,
+        100,
+        200,
+        `/bin/zsh -c eval 'perl -e '"'"'sleep 300'"'"'' < /dev/null`,
+      ),
+      row(201, 200, 200, 'perl -e sleep 300', 2_000_000),
+    ]);
+    background(child, 'b1', 't1', "perl -e 'sleep 300'");
+    await afterReading(reads, 1);
+
+    expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
   it('finds a command whose text is not in the table through the CLI’s own record', async () => {
     const heredoc = "python3 << 'PY'\nprint(1)\nPY";
     const { session, child, reads } = openRecordingSession(

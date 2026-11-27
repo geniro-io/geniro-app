@@ -136,6 +136,7 @@ import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { TurnFolderService } from '../../agents/services/turn-folder.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { WriteFailureNotices } from '../../agents/services/write-failure.notices';
@@ -1093,6 +1094,8 @@ export class TeamExecutorService
     /** The lead's `save_plugin`, optional on `artifacts`' terms. */
     @Optional() private readonly pluginCards?: PluginProposalBroker,
     @Optional() private readonly contextRecorder?: FreshSessionContextRecorder,
+    /** The pages a question card is about, optional on `artifacts`' terms. */
+    @Optional() private readonly questionAttachments?: QuestionAttachmentsService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -3789,9 +3792,17 @@ export class TeamExecutorService
     memberId: string,
     questions: HostQuestion[],
     title: string | null,
+    artifacts: readonly string[],
   ): Promise<HostQuestionOutcome> {
     return (
-      this.memberQuestionCards?.ask(runId, memberId, questions, title) ??
+      this.memberQuestionCards?.ask(
+        runId,
+        memberId,
+        questions,
+        title,
+        undefined,
+        artifacts,
+      ) ??
       Promise.resolve({
         status: 'unavailable',
         reason: 'no question card can be put up in this run',
@@ -6589,6 +6600,7 @@ export class TeamExecutorService
         questions: HostQuestion[],
         title: string | null,
         signal?: AbortSignal,
+        artifacts: readonly string[] = [],
       ): Promise<HostQuestionOutcome> => {
         const key = StandingQuestions.keyFor(title, questions);
         const input = hostQuestionCardInput(title, questions);
@@ -6604,6 +6616,12 @@ export class TeamExecutorService
                 toolName: HOST_QUESTION_TOOL,
                 input,
                 questions: hostCardQuestions(questions),
+                ...(await this.questionAttachments?.cardFields(
+                  runId,
+                  title,
+                  hostCardQuestions(questions),
+                  artifacts,
+                )),
                 nodeId: node.id,
               });
             } catch (err) {
@@ -7547,13 +7565,22 @@ export class TeamExecutorService
                 // sends back as the verdict's `requestId`.
                 ...(cardId !== null ? { id: cardId } : {}),
                 ...(event.type === 'approval_request'
-                  ? await threadCardFields(
-                      this.runDao,
-                      this.em.fork(),
-                      hostMcpServerName(runId),
-                      event.toolName,
-                      event.input,
-                    )
+                  ? {
+                      ...(await threadCardFields(
+                        this.runDao,
+                        this.em.fork(),
+                        hostMcpServerName(runId),
+                        event.toolName,
+                        event.input,
+                      )),
+                      ...(await this.questionAttachments?.cardFields(
+                        runId,
+                        null,
+                        mapped.payload.questions,
+                        [],
+                        callContext?.callId,
+                      )),
+                    }
                   : {}),
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
@@ -8087,12 +8114,18 @@ export class TeamExecutorService
           ? this.userQuestions.register(
               runId,
               caller,
-              (questions, title, signal) =>
+              (questions, title, signal, artifacts = []) =>
                 callContext !== undefined
                   ? askCaller(callContext.callId, questions, title, signal)
                   : deferQuestions
-                    ? this.askMemberDeferred(runId, node.id, questions, title)
-                    : askUser(questions, title, signal),
+                    ? this.askMemberDeferred(
+                        runId,
+                        node.id,
+                        questions,
+                        title,
+                        artifacts,
+                      )
+                    : askUser(questions, title, signal, artifacts),
               { answersAtOnce: deferQuestions },
             )
           : null;

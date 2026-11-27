@@ -1,3 +1,5 @@
+import { MAX_QUESTION_ATTACHMENTS } from '../../../agents/utils/question-attachments';
+import { MAX_QUESTION_ARTIFACT_ID_LENGTH } from './ask-user-question.reader';
 import {
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
@@ -59,6 +61,12 @@ export function askUserQuestionSchema(): Record<string, unknown> {
           },
           required: ['question', 'options'],
         },
+      },
+      artifacts: {
+        type: 'array',
+        description: `Optional: the ids of pages you published with show_artifact in this thread that the question is about — at most ${MAX_QUESTION_ATTACHMENTS}. The card shows them beside the question. An id this thread never published refuses the call.`,
+        items: { type: 'string', maxLength: MAX_QUESTION_ARTIFACT_ID_LENGTH },
+        maxItems: MAX_QUESTION_ATTACHMENTS,
       },
     },
     required: ['questions'],

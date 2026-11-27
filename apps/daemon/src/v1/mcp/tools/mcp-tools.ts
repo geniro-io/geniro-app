@@ -5,6 +5,7 @@ import type { AttachmentStoreService } from '../../agents/services/attachment-st
 import type { BrowserBroker } from '../../agents/services/browser.broker';
 import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ChatArtifactsService } from '../../agents/services/chat-artifacts.service';
+import type { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { CommandCenterBroker } from '../../agents/services/command-center.broker';
 import type { CommandCenterOpsBroker } from '../../agents/services/command-center-ops.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
@@ -163,6 +164,8 @@ export interface McpToolDeps {
   teamOverlays: TeamOverlayService;
   teamProposals: TeamProposalService;
   chatTeams: ChatTeamService;
+  /** Checks `ask_user_question`'s `artifacts`; optional for the positional specs. */
+  questionPages?: QuestionAttachmentsService;
   shares: ShareService;
   threadDelivery: ThreadDeliveryService;
   commandCenters: CommandCenterBroker;
@@ -201,7 +204,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new GoalsTool(deps.goals, deps.goalWriters),
     new AnswerReviewCommentTool(deps.reviewComments),
     new FlagIssueTool(deps.flags),
-    new AskUserQuestionTool(deps.questions),
+    new AskUserQuestionTool(deps.questions, deps.questionPages),
     new ShowChartTool(deps.charts),
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),

@@ -3697,8 +3697,6 @@ const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
   [HOST_TEAM_NOTE_TOOL]: 'team members only; their own descriptions carry it',
   [HOST_TEAM_NOTES_TOOL]: 'team members only; their own descriptions carry it',
   [HOST_MOVE_STAGE_TOOL]: 'staged team runs only; the stage map names it',
-  [HOST_QUESTION_TOOL]:
-    'the CLI’s own question tool comes first; the preamble words every question',
   [HOST_REMOVE_ACTION_TOOL]:
     'companion of publish_action, named in its description',
   [HOST_STOP_MONITOR_TOOL]: 'companion of monitor, named in its description',

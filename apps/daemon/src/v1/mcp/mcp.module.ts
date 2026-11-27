@@ -8,6 +8,7 @@ import { AttachmentStoreService } from '../agents/services/attachment-store.serv
 import { BrowserBroker } from '../agents/services/browser.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
 import { ChatArtifactsService } from '../agents/services/chat-artifacts.service';
+import { QuestionAttachmentsService } from '../agents/services/question-attachments.service';
 import { CommandCenterBroker } from '../agents/services/command-center.broker';
 import { CommandCenterOpsBroker } from '../agents/services/command-center-ops.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
@@ -147,6 +148,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         pluginCards: PluginProposalBroker,
         pluginProposals: PluginProposalService,
         chatTeams: ChatTeamService,
+        questionPages: QuestionAttachmentsService,
       ) =>
         createMcpTools({
           calls,
@@ -200,6 +202,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           pluginCards,
           pluginProposals,
           chatTeams,
+          questionPages,
         }),
       inject: [
         CallBroker,
@@ -253,6 +256,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         PluginProposalBroker,
         PluginProposalService,
         ChatTeamService,
+        QuestionAttachmentsService,
       ],
     },
     McpServerService,

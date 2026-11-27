@@ -330,6 +330,7 @@ import { SurfaceBroker, type SurfaceDrawer } from './surface.broker';
 import { SurfaceService } from './surface.service';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
+import { QuestionAttachmentsService } from './question-attachments.service';
 import { ThreadInboxService } from './thread-inbox.service';
 import { TurnFolderService } from './turn-folder.service';
 import { UserQuestionBroker } from './user-question.broker';
@@ -974,6 +975,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly surfaces?: SurfaceService,
     /** `save_plugin`'s sink and the writer behind its Approve. Optional for the positional specs. */
     @Optional() private readonly pluginCards?: PluginProposalBroker,
+    /** The pages a question card is about. Optional for the positional specs. */
+    @Optional() private readonly questionAttachments?: QuestionAttachmentsService,
   ) {}
 
   /**
@@ -2231,9 +2234,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     key: string,
     questions: HostQuestion[],
     title: string | null,
+    artifacts: readonly string[],
   ): Promise<HostQuestionOutcome> {
     return this.withDeferredClaim(runId, key, () =>
-      this.raiseDeferredQuestion(em, runId, key, questions, title),
+      this.raiseDeferredQuestion(em, runId, key, questions, title, artifacts),
     );
   }
 
@@ -2366,12 +2370,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     key: string,
     questions: HostQuestion[],
     title: string | null,
+    artifacts: readonly string[],
   ): Promise<HostQuestionOutcome> {
     const standing = await this.standingCard(em, runId, key);
     if (standing !== null) {
       return standing;
     }
     const requestId = randomUUID();
+    const cardQuestions = hostCardQuestions(questions);
     const snapshot: PendingQuestionSnapshot = {
       kind: 'question',
       requestId,
@@ -2386,7 +2392,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         id: requestId,
         toolName: HOST_QUESTION_TOOL,
         input: deferredCardInput(snapshot),
-        questions: hostCardQuestions(questions),
+        questions: cardQuestions,
+        ...(await this.questionAttachments?.cardFields(
+          runId,
+          title,
+          cardQuestions,
+          artifacts,
+        )),
       },
       'the question card could not be written',
     );
@@ -4752,6 +4764,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               hostMcpServerName(runId),
               event.toolName,
               event.input,
+            )),
+            ...(await this.questionAttachments?.cardFields(
+              runId,
+              null,
+              mapped.payload.questions,
             )),
           },
         );
@@ -7288,6 +7305,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         questions: HostQuestion[],
         title: string | null,
         signal?: AbortSignal,
+        artifacts: readonly string[] = [],
       ): Promise<HostQuestionOutcome> => {
         // What IDENTIFIES an ask: every word the card shows. A retry after the
         // client's deadline re-sends exactly this — observed on the reported
@@ -7302,7 +7320,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // is the BLOCKING path, whose whole premise is that the call is still
         // there to be resolved when the user presses a button.
         if (adapter.getConfig().hostQuestionDeferredReason !== null) {
-          return await this.askUserDeferred(em, runId, key, questions, title);
+          return await this.askUserDeferred(
+            em,
+            runId,
+            key,
+            questions,
+            title,
+            artifacts,
+          );
         }
         const input = hostQuestionCardInput(title, questions);
         return await askThroughStanding(
@@ -7323,6 +7348,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   toolName: HOST_QUESTION_TOOL,
                   input,
                   questions: hostCardQuestions(questions),
+                  ...(await this.questionAttachments?.cardFields(
+                    runId,
+                    title,
+                    hostCardQuestions(questions),
+                    artifacts,
+                  )),
                 },
               );
             } catch (err) {
@@ -8382,6 +8413,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                       hostServerName,
                       event.toolName,
                       event.input,
+                    )),
+                    ...(await this.questionAttachments?.cardFields(
+                      runId,
+                      null,
+                      mapped.payload.questions,
                     )),
                   },
                 );

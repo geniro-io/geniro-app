@@ -1,5 +1,65 @@
 import { MAX_ANSWER_LENGTH } from '../../../agents/chat.types';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../../agents/utils/host-question';
+import { MAX_QUESTION_ATTACHMENTS } from '../../../agents/utils/question-attachments';
+
+export const MAX_QUESTION_ARTIFACT_ID_LENGTH = 200;
+
+/**
+ * The page ids passed in `artifacts`, in order with repeats dropped, or what is
+ * wrong with them. Over the caps is refused, never cut, as the text caps are.
+ */
+export function readQuestionArtifacts(
+  args: Record<string, unknown>,
+): { ok: true; ids: string[] } | { ok: false; error: string } {
+  const value = args.artifacts;
+  if (value === undefined || value === null) {
+    return { ok: true, ids: [] };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: "'artifacts' must be an array of page ids you published with show_artifact.",
+    };
+  }
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      return {
+        ok: false,
+        error: "each entry of 'artifacts' must be a page id: a non-empty string.",
+      };
+    }
+    if (entry.trim().length > MAX_QUESTION_ARTIFACT_ID_LENGTH) {
+      return {
+        ok: false,
+        error: `a page id in 'artifacts' may be at most ${MAX_QUESTION_ARTIFACT_ID_LENGTH} characters.`,
+      };
+    }
+    if (!ids.includes(entry.trim())) {
+      ids.push(entry.trim());
+    }
+  }
+  if (ids.length > MAX_QUESTION_ATTACHMENTS) {
+    return {
+      ok: false,
+      error: `'artifacts' may name at most ${MAX_QUESTION_ATTACHMENTS} pages.`,
+    };
+  }
+  return { ok: true, ids };
+}
+
+/** Why the call is refused: an id this thread never published, and the ids it did. */
+export function unknownQuestionArtifactsText(
+  unknown: readonly string[],
+  published: readonly string[],
+): string {
+  const named = unknown.map((id) => `'${id}'`).join(', ');
+  const known =
+    published.length === 0
+      ? 'This thread has published no page yet.'
+      : `This thread's pages: ${published.map((id) => `'${id}'`).join(', ')}.`;
+  return `'artifacts' names ${named}, which this thread never published with show_artifact. ${known} The question was not asked.`;
+}
 
 /**
  * The card's optional heading, read and bounded here with the rest of the

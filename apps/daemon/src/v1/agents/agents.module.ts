@@ -77,6 +77,7 @@ import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatActionsService } from './services/chat-actions.service';
 import { ChatArtifactsService } from './services/chat-artifacts.service';
+import { QuestionAttachmentsService } from './services/question-attachments.service';
 import { ChatEmbeddingSourceService } from './services/chat-embedding-source.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
@@ -256,6 +257,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     GlobalChatSearchService,
     ChatActionsService,
     ChatArtifactsService,
+    QuestionAttachmentsService,
     ChatTeamNotesService,
     ChatRunOutcomesService,
     ChatTimelineService,
@@ -798,6 +800,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // executor is the turn that persists that row.
     ArtifactStoreService,
     ChatArtifactsService,
+    QuestionAttachmentsService,
     // For v1/shares, which encrypts the same document a saved file carries.
     ArtifactPageService,
     PlanBroker,

@@ -472,7 +472,7 @@ export function BrowserPane({
           </>
         )}
         <BrowserAddressField
-          className="flex-1"
+          className="min-w-28 flex-1"
           address={active?.url ?? ''}
           loading={loading}
           onSubmit={openAddress}
@@ -482,10 +482,11 @@ export function BrowserPane({
             data-slot="browser-driving-banner"
             role="status"
             title={`${active.drivenBy} is driving this tab`}
-            className="flex h-8 min-w-0 max-w-[60%] shrink items-center gap-1.5 rounded-md bg-muted pr-0.5 pl-2 text-sm">
+            className="flex h-8 min-w-0 shrink items-center gap-1.5 rounded-md bg-muted pr-0.5 pl-2 text-sm">
             <Bot className="size-4 shrink-0 text-primary" aria-hidden="true" />
             <span className="min-w-0 truncate">
-              {active.drivenBy} is driving this tab
+              {active.drivenBy}
+              <span className="sr-only"> is driving this tab</span>
             </span>
             <Button
               type="button"

@@ -852,6 +852,40 @@ describe('BrowserService', () => {
     expect(ask()).toHaveBeenCalledWith(true);
   });
 
+  it('reloads a tab and clears its error, from the toolbar and for an agent alike', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://one.test/', { openedBy: null });
+    const contents = h.views[0]?.webContents as FakeContents & {
+      reload: ReturnType<typeof vi.fn>;
+    };
+    const tab = service.getTab('run-1', 't1') as NonNullable<
+      ReturnType<BrowserService['getTab']>
+    >;
+    const fail = (): void => {
+      contents.emit(
+        'did-fail-load',
+        {},
+        -105,
+        'NAME_NOT_RESOLVED',
+        'https://one.test/',
+        true,
+      );
+    };
+
+    fail();
+    main.webContents.send.mockClear();
+    service.history('run-1', 't1', 'reload');
+    const fromToolbar = stateEvents(main).at(-1)?.state.tabs[0]?.error;
+    fail();
+    main.webContents.send.mockClear();
+    service.reload(tab);
+    const forAgent = stateEvents(main).at(-1)?.state.tabs[0]?.error;
+
+    expect(contents.reload).toHaveBeenCalledTimes(2);
+    expect(fromToolbar).toBeNull();
+    expect(forAgent).toBeNull();
+  });
+
   it('closes a tab and selects its neighbour', async () => {
     const { service } = makeService();
     await service.openTab('run-1', 'https://one.test/', { openedBy: null });
@@ -963,6 +997,43 @@ describe('BrowserService page that asks to stay', () => {
 
     expect(h.showMessageBoxSync).toHaveBeenCalledOnce();
     expect(attempt.preventDefault).not.toHaveBeenCalled();
+  });
+
+  const driveWithAgent = (
+    service: BrowserService,
+    leavesGuardedPage: boolean,
+  ): AgentOp => {
+    const op = new AgentOp({ memberName: 'Dev', allowedHosts: null });
+    op.leavesGuardedPage = leavesGuardedPage;
+    service.attachAgentOp(
+      service.getTab('run-1', 't1') as NonNullable<
+        ReturnType<BrowserService['getTab']>
+      >,
+      op,
+    );
+    return op;
+  };
+
+  it('lets the guard keep the page for an agent and tells its operation', async () => {
+    const { service, contents } = await openDockedTab();
+    const op = driveWithAgent(service, false);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(attempt.preventDefault).not.toHaveBeenCalled();
+    expect(op.unloadBlocked).toBe(true);
+    expect(h.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('leaves the page for an agent operation that forces it, without asking', async () => {
+    const { service, contents } = await openDockedTab();
+    const op = driveWithAgent(service, true);
+
+    const attempt = leaveAttempt(contents);
+
+    expect(attempt.preventDefault).toHaveBeenCalledOnce();
+    expect(op.unloadBlocked).toBe(false);
+    expect(h.showMessageBoxSync).not.toHaveBeenCalled();
   });
 });
 

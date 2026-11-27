@@ -54,6 +54,7 @@ export interface BrowserAgentHost {
     options?: OpenTabOptions,
   ): Promise<string>;
   loadUrl(tab: BrowserTab, url: string): void;
+  reload(tab: BrowserTab): void;
   closeTab(runId: string, tabId: string): Promise<void>;
   attachAgentOp(tab: BrowserTab, op: AgentOp): void;
   labelTab(
@@ -223,6 +224,91 @@ function waitForLoad(tab: BrowserTab, ms: number): Promise<void> {
     const timer = setTimeout(done, ms);
     contents.on('did-stop-loading', done);
   });
+}
+
+const UNLOAD_BLOCKED =
+  'The page did not navigate: its beforeunload handler blocked leaving (an unsaved-changes guard). Dismiss the unsaved state, or pass force: true.';
+
+/** Watches for the main frame committing a new document, or a same-document navigation when `sameDocument` allows it. */
+function watchCommit(
+  tab: BrowserTab,
+  sameDocument: boolean,
+): { committed: () => boolean; stop: () => void } {
+  const contents = tab.view.webContents;
+  let committed = false;
+  const onNavigate = (): void => {
+    committed = true;
+  };
+  const onInPage = (
+    _event: unknown,
+    _url: string,
+    isMainFrame: boolean,
+  ): void => {
+    if (sameDocument && isMainFrame) {
+      committed = true;
+    }
+  };
+  contents.on('did-navigate', onNavigate);
+  contents.on('did-navigate-in-page', onInPage);
+  return {
+    committed: () => committed,
+    stop: () => {
+      contents.removeListener('did-navigate', onNavigate);
+      contents.removeListener('did-navigate-in-page', onInPage);
+    },
+  };
+}
+
+async function navigateTab(
+  ctx: Ctx,
+  url: string,
+  force: boolean,
+): Promise<Done> {
+  const contents = ctx.tab.view.webContents;
+  const reload = contents.getURL() === url;
+  ctx.op.leavesGuardedPage = force;
+  const commit = watchCommit(ctx.tab, !reload);
+  const deadline = Date.now() + LOAD_WAIT_MS;
+  try {
+    const loaded = waitForLoad(ctx.tab, LOAD_WAIT_MS);
+    if (reload) {
+      ctx.host.reload(ctx.tab);
+    } else {
+      ctx.host.loadUrl(ctx.tab, url);
+    }
+    await loaded;
+    while (
+      !commit.committed() &&
+      !ctx.op.unloadBlocked &&
+      contents.isLoading() &&
+      Date.now() < deadline
+    ) {
+      await waitForLoad(ctx.tab, deadline - Date.now());
+    }
+  } finally {
+    commit.stop();
+  }
+  checkOp(ctx.op);
+  if (ctx.tab.error !== null) {
+    throw new AgentError(`Could not load ${url}: ${ctx.tab.error.description}`);
+  }
+  if (!commit.committed()) {
+    if (ctx.op.unloadBlocked) {
+      throw new AgentError(UNLOAD_BLOCKED);
+    }
+    const loading = contents.isLoading()
+      ? ' while the new page is still loading'
+      : '';
+    throw new AgentError(
+      `The page did not navigate: tab ${ctx.tab.id} still shows ${contents.getURL()}${loading}.`,
+    );
+  }
+  const shown = contents.getURL() || url;
+  return {
+    text: reload
+      ? `Reloaded tab ${ctx.tab.id} at ${shown}`
+      : `Navigated tab ${ctx.tab.id} to ${shown}`,
+  };
 }
 
 function checkOp(op: AgentOp): void {
@@ -959,21 +1045,7 @@ async function execute(
         req,
         op.tab,
         [new URL(url).hostname],
-        async (ctx) => {
-          const loaded = waitForLoad(ctx.tab, LOAD_WAIT_MS);
-          host.loadUrl(ctx.tab, url);
-          await loaded;
-          checkOp(ctx.op);
-          if (ctx.tab.error !== null) {
-            throw new AgentError(
-              `Could not load ${url}: ${ctx.tab.error.description}`,
-            );
-          }
-          const contents = ctx.tab.view.webContents;
-          return {
-            text: `Navigated tab ${ctx.tab.id} to ${contents.getURL() || url}`,
-          };
-        },
+        (ctx) => navigateTab(ctx, url, op.force === true),
         false,
       );
     }

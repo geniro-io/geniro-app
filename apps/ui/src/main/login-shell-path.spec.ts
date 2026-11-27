@@ -140,24 +140,33 @@ describe('loginShellPath', () => {
     // The trap goes first, so a pid on disk proves SIGTERM was already ignored
     // when the deadline struck. The warm shell gets there in ~6ms, 150ms at
     // most under load.
+    // Bounded, so a shell this case fails to kill still ends on its own.
     const fake = fakeShell(
-      `trap '' TERM\necho $$ > ${JSON.stringify(pidFile)}\nwhile :; do sleep 1; done`,
+      `trap '' TERM\necho $$ > ${JSON.stringify(pidFile)}\ni=0\nwhile [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done`,
     );
     const started = Date.now();
 
-    const path = await loginShellPath(1500, fake);
+    try {
+      const path = await loginShellPath(1500, fake);
 
-    expect(path).toBeNull();
-    // The old code sent SIGTERM, which this shell ignores, and waited for it
-    // to exit — forever.
-    expect(Date.now() - started).toBeLessThan(15_000);
-    const pid = Number(readFileSync(pidFile, 'utf8').trim());
-    // SIGKILL is delivered by the time the promise has resolved; the kernel
-    // reaps asynchronously, so allow it the moment it needs.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(isAlive(pid)).toBe(false);
+      expect(path).toBeNull();
+      // The old code sent SIGTERM, which this shell ignores, and waited for it
+      // to exit — forever.
+      expect(Date.now() - started).toBeLessThan(15_000);
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      // SIGKILL is delivered by the time the promise has resolved; the kernel
+      // reaps asynchronously, so allow it the moment it needs.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      try {
+        process.kill(Number(readFileSync(pidFile, 'utf8').trim()), 'SIGKILL');
+      } catch {
+        // Already gone, or never started.
+      }
+    }
   }, 30_000);
 
   it('does not wait for a background job that still holds the pipe once the shell has exited', async () => {

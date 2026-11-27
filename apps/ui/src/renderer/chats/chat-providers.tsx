@@ -75,6 +75,8 @@ import { TeamNoteOpenContext } from './team-note-row';
 import {
   type ThreadArchived,
   ThreadArchivedContext,
+  type ThreadDoneDismissals,
+  ThreadDoneDismissalsContext,
   type ThreadDoneNewest,
   ThreadDoneNewestContext,
   type ThreadReports,
@@ -138,6 +140,8 @@ export interface TranscriptValues {
   openKnowledge?: ((target: KnowledgeOpenTarget) => void) | null;
   /** The newest Done row of each thread — see `ThreadDoneNewestContext`. */
   threadDoneNewest?: ThreadDoneNewest | null;
+  /** How far each thread's Done cards were dismissed — see `ThreadDoneDismissalsContext`. */
+  threadDoneDismissals?: ThreadDoneDismissals | null;
   /** When each Done thread was archived — see `ThreadArchivedContext`. */
   threadArchived?: ThreadArchived | null;
   /** What each thread last reported — see `ThreadReportsContext`. */
@@ -428,6 +432,7 @@ export function TranscriptContexts({
   openKnowledge = null,
   callAnswerPairs = NO_CALL_ANSWER_PAIRS,
   threadDoneNewest = null,
+  threadDoneDismissals = null,
   threadArchived = null,
   threadReports = null,
   waitingItems = null,
@@ -454,19 +459,22 @@ export function TranscriptContexts({
                                 value={callAnswerPairs}>
                                 <ThreadDoneNewestContext.Provider
                                   value={threadDoneNewest}>
-                                  <ThreadArchivedContext.Provider
-                                    value={threadArchived}>
-                                    <ThreadReportsContext.Provider
-                                      value={threadReports}>
-                                      <WaitingItemsContext.Provider
-                                        value={waitingItems}>
-                                        <RowsShownOnCardsContext.Provider
-                                          value={rowsShownOnCards}>
-                                          {children}
-                                        </RowsShownOnCardsContext.Provider>
-                                      </WaitingItemsContext.Provider>
-                                    </ThreadReportsContext.Provider>
-                                  </ThreadArchivedContext.Provider>
+                                  <ThreadDoneDismissalsContext.Provider
+                                    value={threadDoneDismissals}>
+                                    <ThreadArchivedContext.Provider
+                                      value={threadArchived}>
+                                      <ThreadReportsContext.Provider
+                                        value={threadReports}>
+                                        <WaitingItemsContext.Provider
+                                          value={waitingItems}>
+                                          <RowsShownOnCardsContext.Provider
+                                            value={rowsShownOnCards}>
+                                            {children}
+                                          </RowsShownOnCardsContext.Provider>
+                                        </WaitingItemsContext.Provider>
+                                      </ThreadReportsContext.Provider>
+                                    </ThreadArchivedContext.Provider>
+                                  </ThreadDoneDismissalsContext.Provider>
                                 </ThreadDoneNewestContext.Provider>
                               </CallAnswerPairsContext.Provider>
                             </ThreadIdentityContext.Provider>

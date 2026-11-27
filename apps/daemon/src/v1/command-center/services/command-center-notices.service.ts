@@ -11,8 +11,11 @@ import { NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import type { SettingsNoticeKind } from '../../agents/chat.types';
+import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { RunNoticeWriter } from '../../agents/services/run-notice.writer';
+import { itemToWire } from '../../agents/utils/item-wire';
+import { asRecord } from '../../agents/utils/json-util';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { MemoryFindingsService } from '../../memory/services/memory-findings.service';
@@ -21,7 +24,9 @@ import { ShareEventBus } from '../../shares/services/share-events.bus';
 import type {
   SettingsNotice,
   SettingsNoticeReadings,
+  SettingsNotices,
 } from '../command-center.types';
+import { CommandCenterDoneDismissalDao } from '../dao/command-center-done-dismissal.dao';
 import { CommandCenterNoticeDao } from '../dao/command-center-notice.dao';
 import type { CommandCenterNotice } from '../entity/command-center-notice.entity';
 import {
@@ -68,12 +73,23 @@ export function noticeToWire(row: CommandCenterNotice): SettingsNotice {
   };
 }
 
+/** Whether the manager chat row `payload` announces `runId` as done. */
+function announcesDone(payload: unknown, runId: string): boolean {
+  const done = asRecord(payload)?.threadDone;
+  return (
+    Array.isArray(done) &&
+    done.some((entry) => asRecord(entry)?.runId === runId)
+  );
+}
+
 /**
  * The manager chat's Settings notices: each one a row written into the chat
  * when its first reading lands, then resolved, widened or dismissed there.
  * Shares waiting on a sign-in and memory conflicts are read here; the Geniro
  * update and the agent CLIs live in Electron main, so the desktop window
- * reports them. Every change of one manager runs in order.
+ * reports them, and the last report is kept so a manager started later gets
+ * its rows. Every change of one manager runs in order. It also keeps how far
+ * the user dismissed each thread's Done cards.
  */
 @Injectable()
 export class CommandCenterNoticesService
@@ -82,11 +98,14 @@ export class CommandCenterNoticesService
   private readonly logger = new Logger(CommandCenterNoticesService.name);
   private readonly chain = new KeyedChain();
   private readonly subscriptions: Subscription[] = [];
+  private lastReported: SettingsNoticeReadings | null = null;
 
   constructor(
     private readonly notices: RunNoticeWriter,
     private readonly board: CommandCenterService,
     private readonly dao: CommandCenterNoticeDao,
+    private readonly doneDismissals: CommandCenterDoneDismissalDao,
+    private readonly items: ItemDao,
     private readonly shares: ShareService,
     private readonly findings: MemoryFindingsService,
     private readonly shareEvents: ShareEventBus,
@@ -109,7 +128,10 @@ export class CommandCenterNoticesService
         }
       }),
       this.agents.allDeleted().subscribe((runId) => {
-        void this.dao.deleteOf(runId).catch((error: unknown) => {
+        void Promise.all([
+          this.dao.deleteOf(runId),
+          this.doneDismissals.deleteOf(runId),
+        ]).catch((error: unknown) => {
           this.logger.warn(
             `notices of ${runId} not dropped with it: ${messageOf(error)}`,
           );
@@ -128,19 +150,31 @@ export class CommandCenterNoticesService
     }
   }
 
-  async list(): Promise<SettingsNotice[]> {
+  async list(): Promise<SettingsNotices> {
     const managerRunId = await this.board.managerRunId();
     if (managerRunId === null) {
-      return [];
+      return { notices: [], doneDismissals: [] };
     }
-    return (await this.dao.list(managerRunId)).map(noticeToWire);
+    const [notices, dismissals] = await Promise.all([
+      this.dao.list(managerRunId),
+      this.doneDismissals.list(managerRunId),
+    ]);
+    return {
+      notices: notices.map(noticeToWire),
+      doneDismissals: dismissals.map(({ runId, throughSeq }) => ({
+        runId,
+        throughSeq,
+      })),
+    };
   }
 
-  async report({ readings }: SettingsNoticeReadings): Promise<void> {
+  async report(reported: SettingsNoticeReadings): Promise<void> {
+    this.lastReported = reported;
     const managerRunId = await this.board.managerRunId();
     if (managerRunId === null) {
       return;
     }
+    const { readings } = reported;
     await this.apply(
       managerRunId,
       new Set(readings.map((reading) => reading.kind)),
@@ -165,6 +199,35 @@ export class CommandCenterNoticesService
     return noticeToWire(after ?? row);
   }
 
+  /**
+   * The user put a thread's Done card away, on any device: every Done row of
+   * that thread up to `seq` draws nothing, and its next finish is a new card.
+   */
+  async dismissDone(runId: string, seq: number): Promise<SettingsNotices> {
+    const managerRunId = await this.board.managerRunId();
+    const row =
+      managerRunId === null
+        ? null
+        : await this.items.rowAtSeq(managerRunId, seq);
+    if (
+      managerRunId === null ||
+      row === null ||
+      !announcesDone(itemToWire(row).payload, runId)
+    ) {
+      throw new NotFoundException(
+        'DONE_ROW_NOT_FOUND',
+        `no Done row of ${runId} at seq ${seq}`,
+      );
+    }
+    const changed = await this.chain.run(managerRunId, () =>
+      this.doneDismissals.dismiss(managerRunId, runId, seq, new Date()),
+    );
+    if (changed) {
+      this.boardEvents.publishChanged([managerRunId], 'notices');
+    }
+    return this.list();
+  }
+
   async review(kind: 'share-sign-in' | 'memory-conflicts'): Promise<void> {
     try {
       const managerRunId = await this.board.managerRunId();
@@ -181,6 +244,11 @@ export class CommandCenterNoticesService
   private reviewAll(): void {
     void this.review('share-sign-in');
     void this.review('memory-conflicts');
+    if (this.lastReported !== null) {
+      void this.report(this.lastReported).catch((error: unknown) => {
+        this.logger.warn(`reported notices not reviewed: ${messageOf(error)}`);
+      });
+    }
   }
 
   private async readObserved(

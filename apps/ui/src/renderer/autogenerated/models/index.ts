@@ -5755,6 +5755,19 @@ export interface DigestThreadFailedToolsInner {
 /**
  * 
  * @export
+ * @interface DismissThreadDoneDto
+ */
+export interface DismissThreadDoneDto {
+    /**
+     * The manager chat seq of the Done row whose card is dismissed
+     * @type {number}
+     * @memberof DismissThreadDoneDto
+     */
+    seq: number;
+}
+/**
+ * 
+ * @export
  * @interface DisplayedPullRequest
  */
 export interface DisplayedPullRequest {
@@ -17382,6 +17395,12 @@ export interface SettingsNoticesDto {
      * @memberof SettingsNoticesDto
      */
     notices: Array<SettingsNotice>;
+    /**
+     * How far each thread's Done cards were dismissed
+     * @type {Array<ThreadDoneDismissal>}
+     * @memberof SettingsNoticesDto
+     */
+    doneDismissals: Array<ThreadDoneDismissal>;
 }
 /**
  * 
@@ -21385,6 +21404,25 @@ export interface ThreadAnalysisDto {
      * @memberof ThreadAnalysisDto
      */
     analysis: ThreadOverviewDtoAnalysisAnalysis | null;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadDoneDismissal
+ */
+export interface ThreadDoneDismissal {
+    /**
+     * The thread whose Done cards were dismissed
+     * @type {string}
+     * @memberof ThreadDoneDismissal
+     */
+    runId: string;
+    /**
+     * The manager chat seq of the newest Done row dismissed; every Done row of the thread at or below it draws nothing
+     * @type {number}
+     * @memberof ThreadDoneDismissal
+     */
+    throughSeq: number;
 }
 /**
  * 

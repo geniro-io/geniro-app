@@ -87,9 +87,10 @@ describe('CommandCenterController', () => {
       ).toThrow(ForbiddenException);
     });
 
-    it('lets any device read and dismiss them', () => {
+    it('lets any device read and dismiss them, and dismiss a Done card', () => {
       expect(guardsOf('listNotices')).toEqual([]);
       expect(guardsOf('dismissNotice')).toEqual([]);
+      expect(guardsOf('dismissDone')).toEqual([]);
     });
 
     it('refuses a reading with more items than a notice holds, or a kind the daemon reads itself', () => {

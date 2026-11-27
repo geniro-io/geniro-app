@@ -9,6 +9,7 @@ import {
   CommandCenterStartsSchema,
   CommandCenterThreadStartStateSchema,
   CommandCenterTimelineSchema,
+  DismissThreadDoneSchema,
   SettingsNoticeReadingsSchema,
   SettingsNoticeSchema,
   SettingsNoticesSchema,
@@ -123,4 +124,8 @@ export class SettingsNoticeDto extends createZodDto(SettingsNoticeSchema) {}
 
 export class SettingsNoticeReadingsDto extends createZodDto(
   SettingsNoticeReadingsSchema,
+) {}
+
+export class DismissThreadDoneDto extends createZodDto(
+  DismissThreadDoneSchema,
 ) {}

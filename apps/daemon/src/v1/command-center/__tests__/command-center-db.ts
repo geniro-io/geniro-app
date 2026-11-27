@@ -13,6 +13,7 @@ import { Run } from '../../runs/entity/run.entity';
 import { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import { UsageActivity } from '../../stats/entity/usage-activity.entity';
 import { Task } from '../../tasks/entity/task.entity';
+import { CommandCenterDoneDismissal } from '../entity/command-center-done-dismissal.entity';
 import { CommandCenterNotice } from '../entity/command-center-notice.entity';
 import { CommandCenterRosterEntry } from '../entity/command-center-roster.entity';
 import { CommandCenterThreadStart } from '../entity/command-center-thread-start.entity';
@@ -32,6 +33,7 @@ export async function commandCenterDb() {
         CommandCenterRosterEntry,
         CommandCenterThreadStart,
         CommandCenterNotice,
+        CommandCenterDoneDismissal,
       ],
       allowGlobalContext: true,
       namingStrategy: UnderscoreNamingStrategy,

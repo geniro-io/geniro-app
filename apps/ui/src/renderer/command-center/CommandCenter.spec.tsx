@@ -23,6 +23,7 @@ const { probes, fakes } = vi.hoisted(() => {
       dock: null as {
         onOpenThread: (runId: string) => void;
         workingThreads: readonly WorkingThread[];
+        managerNotices?: unknown;
       } | null,
     },
     fakes: {
@@ -35,6 +36,7 @@ const { probes, fakes } = vi.hoisted(() => {
       managerChoice: unset,
       pullRequests: unset,
       apis: unset,
+      managerNotices: unset,
     },
   };
 });
@@ -64,6 +66,9 @@ vi.mock('./use-manager-choice', () => ({
 vi.mock('../chats/use-thread-pull-requests', async (importOriginal) => ({
   ...(await importOriginal<typeof chatsUseThreadPullRequestsModule>()),
   useThreadPullRequests: () => fakes.pullRequests,
+}));
+vi.mock('../chats/use-manager-notices', () => ({
+  useManagerNotices: () => fakes.managerNotices,
 }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof daemonApiModule>()),
@@ -193,6 +198,16 @@ function boardOf(cards: unknown[]): unknown {
   };
 }
 
+function managerNoticesOf(unresolved: number) {
+  return {
+    notices: new Map(),
+    doneDismissedThrough: new Map(),
+    unresolved,
+    dismiss: vi.fn(),
+    dismissDone: vi.fn(),
+  };
+}
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -226,6 +241,7 @@ beforeEach(() => {
   fakes.managerChoice = { choice: { kind: 'claude' }, pick: vi.fn() };
   fakes.pullRequests = { byKey: new Map() };
   fakes.apis = { teams: { listTeams: () => Promise.resolve([]) } };
+  fakes.managerNotices = managerNoticesOf(0);
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -1474,5 +1490,45 @@ describe('CommandCenter — the working threads in the manager chat’s corner',
     await renderPage();
 
     expect(workingOf()).toEqual(['run-old', 'run-new']);
+  });
+});
+
+describe('CommandCenter — the count of unresolved notifications on the chat button', () => {
+  const toggle = (): HTMLElement =>
+    container.querySelector<HTMLElement>(
+      '[data-slot="command-center-chat-toggle"]',
+    )!;
+  const badge = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>(
+      '[data-slot="command-center-chat-notices"]',
+    );
+
+  it('shows how many notices wait while the chat is closed, and names them in the button', async () => {
+    fakes.managerNotices = managerNoticesOf(3);
+    await renderPage();
+
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+    expect(badge()?.textContent).toBe('3');
+    expect(toggle().getAttribute('aria-label')).toBe(
+      'Open the manager’s chat, 3 notifications waiting',
+    );
+  });
+
+  it('draws no count once nothing waits, and caps a large one', async () => {
+    await renderPage();
+    expect(badge()).toBeNull();
+    expect(toggle().getAttribute('aria-label')).toBe('Open the manager’s chat');
+
+    fakes.managerNotices = managerNoticesOf(120);
+    await renderPage();
+    expect(badge()?.textContent).toBe('99+');
+  });
+
+  it('hands the same notices to the manager chat it counts', async () => {
+    const notices = managerNoticesOf(1);
+    fakes.managerNotices = notices;
+    await renderPage();
+
+    expect(probes.dock?.managerNotices).toBe(notices);
   });
 });

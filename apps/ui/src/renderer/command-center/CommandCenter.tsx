@@ -22,6 +22,7 @@ import {
   ThreadContextReaderContext,
   threadContextReaderOf,
 } from '../chats/thread-question-context';
+import { useManagerNotices } from '../chats/use-manager-notices';
 import {
   rowPullRequestOf,
   useThreadPullRequests,
@@ -175,6 +176,14 @@ export function CommandCenter({
   );
   const managerChoice = useManagerChoice(sources.cliDetections);
   const board = useCommandCenterBoard(apis, client, active);
+  const managerNotices = useManagerNotices(apis, client);
+  const unresolvedNotices = managerNotices.unresolved;
+  const noticesSuffix =
+    unresolvedNotices === 0
+      ? ''
+      : unresolvedNotices === 1
+        ? ', 1 notification waiting'
+        : `, ${unresolvedNotices} notifications waiting`;
   const unknownTeams = [
     ...new Set(
       (board.cards ?? []).flatMap((card) =>
@@ -804,21 +813,23 @@ export function CommandCenter({
                     type="button"
                     size="icon"
                     data-slot="command-center-chat-toggle"
-                    aria-label={
-                      chatOpen
-                        ? 'Close the manager’s chat'
-                        : 'Open the manager’s chat'
-                    }
+                    aria-label={`${chatOpen ? 'Close the manager’s chat' : 'Open the manager’s chat'}${noticesSuffix}`}
                     aria-pressed={chatOpen}
-                    title={
-                      chatOpen ? 'Close the chat' : 'Chat with the manager'
-                    }
+                    title={`${chatOpen ? 'Close the chat' : 'Chat with the manager'}${noticesSuffix}`}
                     className="absolute right-4 bottom-4 z-20 size-11 rounded-full shadow-panel-md"
                     onClick={() => {
                       setChatOpen((open) => !open);
                       setFront('manager');
                     }}>
                     <MessageSquare aria-hidden="true" className="size-5" />
+                    {unresolvedNotices > 0 ? (
+                      <span
+                        aria-hidden="true"
+                        data-slot="command-center-chat-notices"
+                        className="absolute -top-1 -left-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-foreground px-1 text-[10px] leading-none font-semibold text-background tabular-nums ring-2 ring-background">
+                        {unresolvedNotices > 99 ? '99+' : unresolvedNotices}
+                      </span>
+                    ) : null}
                     {manager?.working === true ? (
                       <span
                         aria-hidden="true"
@@ -875,6 +886,7 @@ export function CommandCenter({
                       workingThreads={managerWorkingThreads}
                       onOpenThread={showThreadFromWindow}
                       onOpenMemoryConflicts={onOpenMemoryConflicts}
+                      managerNotices={managerNotices}
                       onTurnSettled={board.reload}
                       onDiscarded={board.reload}
                     />

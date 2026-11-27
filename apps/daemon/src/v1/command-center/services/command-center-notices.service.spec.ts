@@ -14,6 +14,7 @@ import type { MemoryFindingsService } from '../../memory/services/memory-finding
 import type { ShareService } from '../../shares/services/share.service';
 import type { ShareEventBus } from '../../shares/services/share-events.bus';
 import { commandCenterDb } from '../__tests__/command-center-db';
+import { CommandCenterDoneDismissalDao } from '../dao/command-center-done-dismissal.dao';
 import { CommandCenterNoticeDao } from '../dao/command-center-notice.dao';
 import type { CommandCenterService } from './command-center.service';
 import type { CommandCenterEventBus } from './command-center-events.bus';
@@ -67,6 +68,8 @@ describe('CommandCenterNoticesService', () => {
           managerRunId: vi.fn(() => Promise.resolve(managerRunId)),
         } as unknown as CommandCenterService,
         new CommandCenterNoticeDao(db.em),
+        new CommandCenterDoneDismissalDao(db.em),
+        itemDao,
         {
           list: vi.fn(() => Promise.resolve(shares)),
         } as unknown as ShareService,
@@ -108,6 +111,12 @@ describe('CommandCenterNoticesService', () => {
       .filter((payload) => payload.settingsNotice !== undefined) as never;
   }
 
+  const listed = async (
+    made: CommandCenterNoticesService = service,
+  ): Promise<
+    Awaited<ReturnType<CommandCenterNoticesService['list']>>['notices']
+  > => (await made.list()).notices;
+
   const update = (...items: string[]) => ({
     readings: [{ kind: 'app-update' as const, items }],
   });
@@ -116,7 +125,7 @@ describe('CommandCenterNoticesService', () => {
     await service.report(update('1.4.0'));
 
     const rows = await noticeRows();
-    const [notice] = await service.list();
+    const [notice] = await listed();
     expect(rows).toEqual([
       expect.objectContaining({
         message: 'A Geniro update is available',
@@ -161,7 +170,7 @@ describe('CommandCenterNoticesService', () => {
     await service.report(update('1.5.0'));
 
     expect(await noticeRows()).toHaveLength(1);
-    expect((await service.list())[0]!.items).toEqual(['1.4.0', '1.5.0']);
+    expect((await listed())[0]!.items).toEqual(['1.4.0', '1.5.0']);
   });
 
   it('resolves a notice once its reason goes and opens a new row when it comes back', async () => {
@@ -173,7 +182,7 @@ describe('CommandCenterNoticesService', () => {
       readings: [{ kind: 'agent-sign-in', items: ['claude:'] }],
     });
 
-    const notices = await service.list();
+    const notices = await listed();
     expect(notices).toHaveLength(2);
     expect(notices.map((entry) => entry.key)).toEqual([
       'agent-sign-in:claude:',
@@ -190,28 +199,28 @@ describe('CommandCenterNoticesService', () => {
       readings: [{ kind: 'agent-updates', items: [] }],
     });
 
-    expect((await service.list())[0]!.resolvedAt).toBeNull();
+    expect((await listed())[0]!.resolvedAt).toBeNull();
   });
 
   it('keeps a dismissal across a restart and writes nothing for the items it showed', async () => {
     await service.report(update('1.4.0'));
-    const [notice] = await service.list();
+    const [notice] = await listed();
 
     const dismissed = await service.dismiss(notice!.id);
     await make().report(update('1.4.0'));
 
     expect(dismissed.dismissedAt).not.toBeNull();
-    expect((await make().list())[0]!.dismissedAt).not.toBeNull();
+    expect((await listed(make()))[0]!.dismissedAt).not.toBeNull();
     expect(await noticeRows()).toHaveLength(1);
   });
 
   it('opens a new row when a dismissed update is followed by a newer version', async () => {
     await service.report(update('1.4.0'));
-    await service.dismiss((await service.list())[0]!.id);
+    await service.dismiss((await listed())[0]!.id);
 
     await service.report(update('1.5.0'));
 
-    const notices = await service.list();
+    const notices = await listed();
     expect(notices).toHaveLength(2);
     expect(notices[0]).toMatchObject({ items: ['1.4.0'] });
     expect(notices[0]!.resolvedAt).not.toBeNull();
@@ -243,11 +252,11 @@ describe('CommandCenterNoticesService', () => {
     expect((await noticeRows()).map((row) => row.settingsNotice.key)).toEqual([
       'share-sign-in:gcloud',
     ]);
-    expect((await service.list())[0]!.items).toEqual(['s1', 's2']);
+    expect((await listed())[0]!.items).toEqual(['s1', 's2']);
 
     shares = [];
     await service.review('share-sign-in');
-    expect((await service.list())[0]!.resolvedAt).not.toBeNull();
+    expect((await listed())[0]!.resolvedAt).not.toBeNull();
   });
 
   it('announces memory conflicts as one notice of their finding ids', async () => {
@@ -255,7 +264,7 @@ describe('CommandCenterNoticesService', () => {
 
     await service.review('memory-conflicts');
 
-    expect(await service.list()).toEqual([
+    expect(await listed()).toEqual([
       expect.objectContaining({
         kind: 'memory-conflicts',
         key: 'memory-conflicts',
@@ -269,7 +278,7 @@ describe('CommandCenterNoticesService', () => {
 
     await service.report(update('1.4.0'));
 
-    expect(await service.list()).toEqual([]);
+    expect(await listed()).toEqual([]);
   });
 
   it('opens no notice whose chat row could not be written, so the next reading opens it again', async () => {
@@ -278,7 +287,7 @@ describe('CommandCenterNoticesService', () => {
     } as unknown as RunNoticeWriter);
 
     await failing.report(update('1.4.0'));
-    expect(await failing.list()).toEqual([]);
+    expect(await listed(failing)).toEqual([]);
 
     await service.report(update('1.4.0'));
     expect(await noticeRows()).toHaveLength(1);
@@ -309,13 +318,13 @@ describe('CommandCenterNoticesService', () => {
     ];
     shareChanges.next({});
     await vi.waitFor(async () => {
-      expect(await service.list()).toHaveLength(1);
+      expect(await listed()).toHaveLength(1);
     });
 
     findingIds = ['f1'];
     memoryChanges.next({});
     await vi.waitFor(async () => {
-      expect(await service.list()).toHaveLength(2);
+      expect(await listed()).toHaveLength(2);
     });
 
     const review = vi.spyOn(service, 'review');
@@ -335,7 +344,7 @@ describe('CommandCenterNoticesService', () => {
     service.onApplicationBootstrap();
 
     await vi.waitFor(async () => {
-      expect(await service.list()).toEqual([
+      expect(await listed()).toEqual([
         expect.objectContaining({ kind: 'memory-conflicts' }),
       ]);
     });
@@ -347,6 +356,102 @@ describe('CommandCenterNoticesService', () => {
     deleted.next(MANAGER);
     await vi.waitFor(async () => {
       expect(await new CommandCenterNoticeDao(db.em).list(MANAGER)).toEqual([]);
+    });
+  });
+
+  it('keeps a report made while there is no manager chat and writes its rows once one joins the roster', async () => {
+    managerRunId = null;
+    await service.report(update('1.4.0'));
+    expect(await noticeRows()).toEqual([]);
+
+    managerRunId = MANAGER;
+    boardChanges.next({ reason: 'roster' });
+
+    await vi.waitFor(async () => {
+      expect((await noticeRows()).map((row) => row.settingsNotice.key)).toEqual(
+        ['app-update'],
+      );
+    });
+    expect((await listed())[0]!.items).toEqual(['1.4.0']);
+  });
+
+  describe('Done cards', () => {
+    const done = (runId: string) => ({
+      runId,
+      title: runId,
+      handle: 't1',
+      summary: null,
+      pullRequest: null,
+    });
+
+    async function doneRowSeq(...runIds: string[]): Promise<number> {
+      const writer = new RunNoticeWriter(
+        db.em,
+        new RunDao(db.em),
+        new ItemDao(db.em),
+        new AgentEventBus(),
+        NO_CALL_INDEX,
+        new ItemSeqAllocator(db.em, new ItemDao(db.em)),
+      );
+      await writer.info(MANAGER, 'done', { threadDone: runIds.map(done) });
+      const rows = await new ItemDao(db.em).rowsOfKinds(MANAGER, ['system']);
+      return Math.max(...rows.map((row) => row.seq));
+    }
+
+    it('records a dismissed Done card for every device and announces it', async () => {
+      const seq = await doneRowSeq('thread-a', 'thread-b');
+
+      const answer = await service.dismissDone('thread-b', seq);
+
+      expect(answer.doneDismissals).toEqual([
+        { runId: 'thread-b', throughSeq: seq },
+      ]);
+      expect((await make().list()).doneDismissals).toEqual([
+        { runId: 'thread-b', throughSeq: seq },
+      ]);
+      expect(publishChanged).toHaveBeenCalledWith([MANAGER], 'notices');
+    });
+
+    it('moves a thread forward to its newer finish and never back to an older one', async () => {
+      const first = await doneRowSeq('thread-a');
+      const second = await doneRowSeq('thread-a');
+
+      await service.dismissDone('thread-a', second);
+      publishChanged.mockClear();
+      await service.dismissDone('thread-a', first);
+
+      expect((await service.list()).doneDismissals).toEqual([
+        { runId: 'thread-a', throughSeq: second },
+      ]);
+      expect(publishChanged).not.toHaveBeenCalled();
+    });
+
+    it('refuses a seq that is not a Done row of that thread', async () => {
+      const seq = await doneRowSeq('thread-a');
+
+      await expect(service.dismissDone('thread-b', seq)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(
+        service.dismissDone('thread-a', seq + 50),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      managerRunId = null;
+      await expect(service.dismissDone('thread-a', seq)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      managerRunId = MANAGER;
+      expect((await service.list()).doneDismissals).toEqual([]);
+    });
+
+    it('drops its dismissals with the manager run', async () => {
+      await service.dismissDone('thread-a', await doneRowSeq('thread-a'));
+
+      deleted.next(MANAGER);
+      await vi.waitFor(async () => {
+        expect(
+          await new CommandCenterDoneDismissalDao(db.em).list(MANAGER),
+        ).toEqual([]);
+      });
     });
   });
 });

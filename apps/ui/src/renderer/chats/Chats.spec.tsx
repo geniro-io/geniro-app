@@ -22572,19 +22572,26 @@ describe('Chats — one hosted conversation', () => {
       }),
       hostedRow(msg(2, 'assistant', 'after the notice')),
     ]);
-    commandCenterApi.listCommandCenterNotices.mockResolvedValue({
-      notices: [
-        {
-          id: 'n1',
-          kind: 'agent-updates',
-          key: 'agent-updates:claude',
-          items: ['claude@3'],
-          openedAt: 'now',
-          resolvedAt: null,
-          dismissedAt: null,
-        },
-      ],
-    } as never);
+    const managerNotices = {
+      notices: new Map([
+        [
+          'n1',
+          {
+            id: 'n1',
+            kind: 'agent-updates' as const,
+            key: 'agent-updates:claude',
+            items: ['claude@3'],
+            openedAt: 'now',
+            resolvedAt: null,
+            dismissedAt: null,
+          },
+        ],
+      ]),
+      doneDismissedThrough: new Map<string, number>(),
+      unresolved: 1,
+      dismiss: vi.fn(),
+      dismissDone: vi.fn(),
+    };
     const { client } = makeClient();
     const quiet = (): (() => void) => () => undefined;
     for (const name of [
@@ -22597,7 +22604,7 @@ describe('Chats — one hosted conversation', () => {
       Object.assign(client, { [name]: client[name] ?? quiet });
     }
     const manager = await mount(client, undefined, {
-      hosted: hostedThread({ commandCenterManager: true }),
+      hosted: hostedThread({ commandCenterManager: true, managerNotices }),
     });
 
     const card = manager.querySelector<HTMLElement>(
@@ -22624,6 +22631,73 @@ describe('Chats — one hosted conversation', () => {
     expect(
       other.querySelector('[data-slot="settings-attention-card"]'),
     ).toBeNull();
+  });
+
+  it("hides a Done card the manager's notices say was dismissed, and sends a Dismiss with its row to them", async () => {
+    const doneRow = (seq: number, runId: string) =>
+      hostedRow({
+        id: `done-${seq}`,
+        runId: 'r1',
+        memberId: null,
+        seq,
+        kind: 'system',
+        role: null,
+        payload: {
+          severity: 'info',
+          message: 'done',
+          woke: false,
+          threadDone: [
+            {
+              runId,
+              title: runId,
+              handle: 't1',
+              summary: 'Finished',
+              pullRequest: null,
+            },
+          ],
+        },
+        createdAt: 'now',
+      });
+    api.listRunItems.mockResolvedValue([
+      doneRow(1, 'thread-a'),
+      doneRow(2, 'thread-b'),
+    ]);
+    const dismissDone = vi.fn();
+    const managerNotices = {
+      notices: new Map(),
+      doneDismissedThrough: new Map([['thread-a', 1]]),
+      unresolved: 0,
+      dismiss: vi.fn(),
+      dismissDone,
+    };
+    const { client } = makeClient();
+    const quiet = (): (() => void) => () => undefined;
+    for (const name of [
+      'onMemoryChanged',
+      'onLessonsChanged',
+      'onKnowledgeChanged',
+      'onSharesChanged',
+      'onCommandCenterChanged',
+    ] as const) {
+      Object.assign(client, { [name]: client[name] ?? quiet });
+    }
+    const manager = await mount(client, undefined, {
+      hosted: hostedThread({ commandCenterManager: true, managerNotices }),
+    });
+
+    const drawn = [
+      ...manager.querySelectorAll<HTMLElement>(
+        '[data-slot="thread-event-card"]',
+      ),
+    ].map((card) => card.dataset.run);
+    expect(drawn).toEqual(['thread-b']);
+
+    act(() => {
+      manager
+        .querySelector<HTMLButtonElement>('[data-slot="thread-event-dismiss"]')!
+        .click();
+    });
+    expect(dismissDone).toHaveBeenCalledWith('thread-b', 2);
   });
 
   it('draws the working threads its surface names in the corner, and opens a pressed one through the surface', async () => {

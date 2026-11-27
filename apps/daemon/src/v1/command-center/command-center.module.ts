@@ -9,6 +9,7 @@ import { SharesModule } from '../shares/shares.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { TeamsModule } from '../teams/teams.module';
 import { CommandCenterController } from './controllers/command-center.controller';
+import { CommandCenterDoneDismissalDao } from './dao/command-center-done-dismissal.dao';
 import { CommandCenterNoticeDao } from './dao/command-center-notice.dao';
 import { CommandCenterRosterDao } from './dao/command-center-roster.dao';
 import { CommandCenterThreadStartDao } from './dao/command-center-thread-start.dao';
@@ -49,6 +50,7 @@ import { ManagerAnnouncementsService } from './services/manager-announcements.se
   ],
   controllers: [CommandCenterController],
   providers: [
+    CommandCenterDoneDismissalDao,
     CommandCenterNoticeDao,
     CommandCenterRosterDao,
     CommandCenterThreadStartDao,

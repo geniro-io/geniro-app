@@ -289,10 +289,37 @@ export const SettingsNoticeSchema = z
   .meta({ id: 'SettingsNotice' });
 export type SettingsNotice = z.infer<typeof SettingsNoticeSchema>;
 
+export const ThreadDoneDismissalSchema = z
+  .object({
+    runId: z.string().describe('The thread whose Done cards were dismissed'),
+    throughSeq: z
+      .number()
+      .int()
+      .describe(
+        'The manager chat seq of the newest Done row dismissed; every Done row of the thread at or below it draws nothing',
+      ),
+  })
+  .meta({ id: 'ThreadDoneDismissal' });
+export type ThreadDoneDismissal = z.infer<typeof ThreadDoneDismissalSchema>;
+
 // No `.meta({ id })` — a RESPONSE DTO ROOT.
 export const SettingsNoticesSchema = z.object({
   notices: z.array(SettingsNoticeSchema),
+  doneDismissals: z
+    .array(ThreadDoneDismissalSchema)
+    .describe("How far each thread's Done cards were dismissed"),
 });
+export type SettingsNotices = z.infer<typeof SettingsNoticesSchema>;
+
+export const DismissThreadDoneSchema = z
+  .object({
+    seq: z
+      .number()
+      .int()
+      .min(1)
+      .describe('The manager chat seq of the Done row whose card is dismissed'),
+  })
+  .meta({ id: 'DismissThreadDone' });
 
 /**
  * What the desktop window reads now for the kinds Electron main holds: a kind

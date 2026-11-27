@@ -5017,6 +5017,17 @@ export function Chats({
     [threadDoneNewest],
   );
   const threadArchived = useThreadArchived(apis, client, doneRunIds);
+  const managerNotices = hosted?.managerNotices;
+  const threadDoneDismissals = useMemo(
+    () =>
+      managerChat && managerNotices !== undefined
+        ? {
+            through: managerNotices.doneDismissedThrough,
+            dismiss: managerNotices.dismissDone,
+          }
+        : null,
+    [managerChat, managerNotices],
+  );
   const waitingItems = useWaitingItems(
     apis,
     client,
@@ -11004,6 +11015,7 @@ export function Chats({
                         }
                         threadIdentities={hosted?.threadIdentities}
                         threadDoneNewest={threadDoneNewest}
+                        threadDoneDismissals={threadDoneDismissals}
                         rowsShownOnCards={shownOnCards}
                         threadArchived={threadArchived}
                         threadReports={hosted?.threadReports ?? null}
@@ -11021,6 +11033,7 @@ export function Chats({
                           apis={apis}
                           client={client}
                           active={active}
+                          manager={hosted?.managerNotices ?? null}
                           onOpenMemoryConflicts={
                             hosted?.onOpenMemoryConflicts ?? null
                           }>

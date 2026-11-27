@@ -23,6 +23,7 @@ import type {
   CommandCenterThreadStartState,
   CommandCenterTimeline,
   SettingsNotice,
+  SettingsNotices,
 } from '../command-center.types';
 import {
   CommandCenterBoardDto,
@@ -35,6 +36,7 @@ import {
   CommandCenterThreadStartStateDto,
   CommandCenterTimelineDto,
   CommandCenterTimelineQueryDto,
+  DismissThreadDoneDto,
   SettingsNoticeDto,
   SettingsNoticeReadingsDto,
   SettingsNoticesDto,
@@ -111,12 +113,12 @@ export class CommandCenterController {
     return this.managers.reset();
   }
 
-  /** The manager chat's Settings notices, oldest first, for the cards drawn at their rows. */
+  /** The manager chat's Settings notices, oldest first, and how far each thread's Done cards were dismissed. */
   @Get('notices')
   @ApiOperation({ operationId: 'listCommandCenterNotices' })
   @ZodResponse({ status: 200, type: SettingsNoticesDto })
-  async listNotices(): Promise<{ notices: SettingsNotice[] }> {
-    return { notices: await this.notices.list() };
+  listNotices(): Promise<SettingsNotices> {
+    return this.notices.list();
   }
 
   /** What the desktop window reads of the Geniro update and the agent CLIs — desktop only: those readings live in Electron main. */
@@ -134,6 +136,17 @@ export class CommandCenterController {
   @ZodResponse({ status: 201, type: SettingsNoticeDto })
   dismissNotice(@Param('noticeId') noticeId: string): Promise<SettingsNotice> {
     return this.notices.dismiss(noticeId);
+  }
+
+  /** The user put a thread's Done card away, on any device: it is gone until the thread finishes again. */
+  @Post('done/:runId/dismiss')
+  @ApiOperation({ operationId: 'dismissCommandCenterThreadDone' })
+  @ZodResponse({ status: 201, type: SettingsNoticesDto })
+  dismissDone(
+    @Param('runId') runId: string,
+    @Body() dto: DismissThreadDoneDto,
+  ): Promise<SettingsNotices> {
+    return this.notices.dismissDone(runId, dto.seq);
   }
 
   /** The approved starts Electron main's drain starts. */

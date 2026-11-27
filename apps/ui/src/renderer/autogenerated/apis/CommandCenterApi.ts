@@ -22,6 +22,7 @@ import type {
   CommandCenterStartsDto,
   CommandCenterThreadStartState,
   CommandCenterTimelineDto,
+  DismissThreadDoneDto,
   RunDto,
   SettingsNotice,
   SettingsNoticeReadingsDto,
@@ -32,6 +33,11 @@ import type {
 
 export interface CommandCenterApiDismissCommandCenterNoticeRequest {
     noticeId: string;
+}
+
+export interface CommandCenterApiDismissCommandCenterThreadDoneRequest {
+    runId: string;
+    dismissThreadDoneDto: DismissThreadDoneDto;
 }
 
 export interface CommandCenterApiListCommandCenterStartsRequest {
@@ -157,6 +163,61 @@ export class CommandCenterApi extends runtime.BaseAPI {
      */
     async dismissCommandCenterNotice(requestParameters: CommandCenterApiDismissCommandCenterNoticeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SettingsNotice> {
         const response = await this.dismissCommandCenterNoticeRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async dismissCommandCenterThreadDoneRaw(requestParameters: CommandCenterApiDismissCommandCenterThreadDoneRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SettingsNoticesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling dismissCommandCenterThreadDone().'
+            );
+        }
+
+        if (requestParameters['dismissThreadDoneDto'] == null) {
+            throw new runtime.RequiredError(
+                'dismissThreadDoneDto',
+                'Required parameter "dismissThreadDoneDto" was null or undefined when calling dismissCommandCenterThreadDone().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/command-center/done/{runId}/dismiss`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['dismissThreadDoneDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissCommandCenterThreadDone(requestParameters: CommandCenterApiDismissCommandCenterThreadDoneRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SettingsNoticesDto> {
+        const response = await this.dismissCommandCenterThreadDoneRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

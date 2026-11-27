@@ -1,4 +1,4 @@
-import { ChevronDown, MessageSquare, Reply, X } from 'lucide-react';
+import { MessageSquare, Reply, X } from 'lucide-react';
 import { memo, useContext } from 'react';
 
 import {
@@ -23,8 +23,10 @@ import {
 import { plainPreview } from './brief-text';
 import { ChatLink } from './browser/chat-link';
 import {
+  isDoneDismissed,
   isNewestDone,
   ThreadArchivedContext,
+  ThreadDoneDismissalsContext,
   ThreadDoneNewestContext,
   ThreadReportsContext,
 } from './thread-done-context';
@@ -33,7 +35,6 @@ import {
   type ThreadMessageRow,
 } from './thread-message-payload';
 import { ThreadOpenContext, useThreadIdentity } from './thread-title';
-import { useThreadFlag } from './thread-ui-memory';
 
 export type { ThreadEventKind } from './agent-event-card';
 
@@ -55,6 +56,8 @@ export interface ThreadEventCardProps {
   pullRequest?: number | null;
   /** When the row was written, which a Done card's foot dates it by. */
   at?: string | null;
+  /** The row's seq, by which a Done card is dismissed. */
+  seq?: number | null;
   /** Where the text's Show more is remembered within the thread. */
   memoryKey?: string;
 }
@@ -101,6 +104,7 @@ export const ThreadEventCard = memo(function ThreadEventCard({
   handle = null,
   pullRequest = null,
   at = null,
+  seq = null,
   memoryKey,
 }: ThreadEventCardProps): React.JSX.Element {
   const known = useThreadIdentity(runId);
@@ -111,42 +115,10 @@ export const ThreadEventCard = memo(function ThreadEventCard({
   const archived =
     kind === 'done' && (archivedMap?.get(runId) ?? null) !== null;
   const reports = useContext(ThreadReportsContext);
-  const [hidden, setHidden] = useThreadFlag(
-    kind === 'done' ? `thread-done-hidden:${runId}` : undefined,
-    false,
-  );
+  const dismissals = useContext(ThreadDoneDismissalsContext);
   const heading = identityOf(known, title, pullRequest);
   const identity = kind === 'done' ? { ...heading, status: null } : heading;
   const reply = inReplyTo === null ? '' : plainPreview(inReplyTo);
-  if (kind === 'done' && hidden) {
-    return (
-      <AgentEventCard
-        kind="done"
-        slot="thread-event"
-        line={
-          <p
-            data-slot="thread-event-dismissed"
-            className="flex min-w-0 items-center gap-1.5 text-xs leading-5">
-            <span className="min-w-0 truncate font-medium text-foreground">
-              {identity.title}
-            </span>
-            <span className="shrink-0 text-muted-foreground">finished</span>
-          </p>
-        }
-        actions={
-          <ThreadActionButton
-            slot="thread-event-show"
-            label={`Show ${identity.title}`}
-            title="Show this card again"
-            icon={<ChevronDown aria-hidden="true" />}
-            onClick={() => setHidden(false)}>
-            Show
-          </ThreadActionButton>
-        }
-        data={{ 'data-run': runId }}
-      />
-    );
-  }
   if (archived) {
     return (
       <div data-slot="thread-event-archived" className="opacity-70">
@@ -230,14 +202,16 @@ export const ThreadEventCard = memo(function ThreadEventCard({
                 Open chat
               </ThreadActionButton>
             )}
-            <ThreadActionButton
-              slot="thread-event-dismiss"
-              label={`Hide ${identity.title}`}
-              title="Hide this card"
-              icon={<X aria-hidden="true" />}
-              onClick={() => setHidden(true)}>
-              Dismiss
-            </ThreadActionButton>
+            {dismissals === null || seq === null ? null : (
+              <ThreadActionButton
+                slot="thread-event-dismiss"
+                label={`Dismiss ${identity.title}`}
+                title="Remove this card on every device; the thread's next finish brings a new one"
+                icon={<X aria-hidden="true" />}
+                onClick={() => dismissals.dismiss(runId, seq)}>
+                Dismiss
+              </ThreadActionButton>
+            )}
             {archive === null ? null : (
               <ArchiveThreadButton
                 slot="thread-event-archive"
@@ -269,6 +243,7 @@ export function ThreadEventRow({
   at?: string | null;
 }): React.JSX.Element | null {
   const newest = useContext(ThreadDoneNewestContext);
+  const dismissals = useContext(ThreadDoneDismissalsContext);
   switch (row.kind) {
     case 'received':
       return (
@@ -307,7 +282,10 @@ export function ThreadEventRow({
       );
     case 'done': {
       const shown = row.done.filter(
-        (done) => seq === undefined || isNewestDone(newest, done.runId, seq),
+        (done) =>
+          seq === undefined ||
+          (isNewestDone(newest, done.runId, seq) &&
+            !isDoneDismissed(dismissals, done.runId, seq)),
       );
       if (shown.length === 0) {
         return null;
@@ -324,6 +302,7 @@ export function ThreadEventRow({
               text={done.summary}
               pullRequest={done.pullRequest}
               at={at}
+              seq={seq ?? null}
             />
           ))}
         </ThreadEventStack>

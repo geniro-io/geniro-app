@@ -24,6 +24,7 @@ import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { SettingsNoticeCard } from './settings-attention-cards';
 import { SettingsNoticesScope } from './settings-notices-scope';
+import { useManagerNotices } from './use-manager-notices';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -83,7 +84,6 @@ let startCliLogin: ReturnType<typeof vi.fn>;
 let startShareSignIn: ReturnType<typeof vi.fn>;
 let notices: SettingsNotice[];
 let listCommandCenterNotices: ReturnType<typeof vi.fn>;
-let reportCommandCenterNoticeReadings: ReturnType<typeof vi.fn>;
 let dismissCommandCenterNotice: ReturnType<typeof vi.fn>;
 let commandCenterChanged: (event: { runIds: string[]; reason: string }) => void;
 let memoryChanged: () => void;
@@ -101,7 +101,6 @@ function apis(): DaemonApis {
     memories: { listMemoryFindings },
     commandCenter: {
       listCommandCenterNotices,
-      reportCommandCenterNoticeReadings,
       dismissCommandCenterNotice,
     },
     cliAuth: {
@@ -135,6 +134,32 @@ const client = {
 
 const theApis = { current: null as DaemonApis | null };
 
+function Scoped({
+  active,
+  remote,
+  onOpenMemoryConflicts,
+  children,
+}: {
+  active: boolean;
+  remote: boolean;
+  onOpenMemoryConflicts: (() => void) | null;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const manager = useManagerNotices(theApis.current as DaemonApis, client);
+  return (
+    <SettingsNoticesScope
+      enabled
+      apis={theApis.current as DaemonApis}
+      client={client}
+      active={active}
+      remote={remote}
+      manager={manager}
+      onOpenMemoryConflicts={onOpenMemoryConflicts}>
+      {children}
+    </SettingsNoticesScope>
+  );
+}
+
 async function draw(
   props: Partial<{
     active: boolean;
@@ -147,10 +172,7 @@ async function draw(
   const rows = props.rows ?? everyNotice();
   await act(async () => {
     root.render(
-      <SettingsNoticesScope
-        enabled
-        apis={theApis.current as DaemonApis}
-        client={client}
+      <Scoped
         active={props.active ?? true}
         remote={props.remote ?? false}
         onOpenMemoryConflicts={props.onOpenMemoryConflicts ?? null}>
@@ -160,7 +182,7 @@ async function draw(
             row={{ noticeId: row.id, kind: row.kind, key: row.key }}
           />
         ))}
-      </SettingsNoticesScope>,
+      </Scoped>,
     );
   });
 }
@@ -188,9 +210,11 @@ beforeEach(() => {
   detections = [];
   notices = everyNotice();
   listCommandCenterNotices = vi.fn(() =>
-    Promise.resolve({ notices: notices.map((entry) => ({ ...entry })) }),
+    Promise.resolve({
+      notices: notices.map((entry) => ({ ...entry })),
+      doneDismissals: [],
+    }),
   );
-  reportCommandCenterNoticeReadings = vi.fn(() => Promise.resolve());
   dismissCommandCenterNotice = vi.fn(({ noticeId }: { noticeId: string }) => {
     notices = notices.map((entry) =>
       entry.id === noticeId
@@ -665,34 +689,5 @@ describe('dismissing a settings card', () => {
     expect(
       button(cards('agent-sign-in')[0] as HTMLElement, 'Dismiss'),
     ).toBeNull();
-  });
-});
-
-describe('reporting what Electron main reads', () => {
-  it('reports the Geniro update and the agent CLIs from the desktop window', async () => {
-    appUpdate = updateState({ phase: 'available', version: '2.4.0' });
-    detections = [
-      det('claude', { update: withUpdate('2.0.0') }),
-      det('codex', { loggedIn: false }),
-    ];
-    await draw();
-
-    expect(reportCommandCenterNoticeReadings).toHaveBeenLastCalledWith({
-      settingsNoticeReadingsDto: {
-        readings: [
-          { kind: 'app-update', items: ['2.4.0'] },
-          { kind: 'agent-updates', items: ['claude@2.0.0'] },
-          { kind: 'agent-sign-in', items: ['codex:'] },
-        ],
-      },
-    });
-  });
-
-  it('reports nothing from a paired device, or while the chat is off screen', async () => {
-    appUpdate = updateState({ phase: 'available', version: '2.4.0' });
-    await draw({ remote: true });
-    await draw({ remote: false, active: false });
-
-    expect(reportCommandCenterNoticeReadings).not.toHaveBeenCalled();
   });
 });

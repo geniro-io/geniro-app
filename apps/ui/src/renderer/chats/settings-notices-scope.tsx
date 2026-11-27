@@ -1,12 +1,14 @@
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { SettingsNoticesContext } from './settings-notices-context';
+import type { ManagerNotices } from './use-manager-notices';
 import { useSettingsNotices } from './use-settings-notices';
 
 interface ScopeProps {
   apis: DaemonApis;
   client: DaemonClient | null;
   active: boolean;
+  manager: ManagerNotices | null;
   onOpenMemoryConflicts: (() => void) | null;
   remote?: boolean;
   children: React.ReactNode;

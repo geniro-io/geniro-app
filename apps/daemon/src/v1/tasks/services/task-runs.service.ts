@@ -8,6 +8,7 @@ import {
 
 import { interruptedReason } from '../../../utils/stop-cause';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { TurnFolderService } from '../../agents/services/turn-folder.service';
@@ -30,6 +31,7 @@ import {
   type ResolvedRunTarget,
   type ResolvedTeamTarget,
   type StartTaskRun,
+  type TaskRunStarter,
   type TaskWire,
 } from '../tasks.types';
 import { composeLabelInstructions } from '../utils/label-instructions-prompt';
@@ -118,6 +120,7 @@ export class TaskRunsService {
     private readonly overlays: TeamOverlayService,
     private readonly runTeams: RunTeamService,
     private readonly turnFolders: TurnFolderService,
+    private readonly bus: AgentEventBus,
     /** Test seam only — nothing in the app passes it. */
     @Optional() worktreesRoot?: string,
   ) {
@@ -141,6 +144,7 @@ export class TaskRunsService {
       // exists: a press that failed leaves the card stopped, since nothing the
       // user asked for has happened yet. The same start proves its worktree
       // could be made, so a prepare failure on record is over too.
+      this.announceStart(wire.runId, input.startedBy ?? 'user');
       const em = this.em.fork();
       await this.taskDao.setStoppedAt(taskId, null, em);
       await this.taskDao.setPrepareFailure(taskId, null, em);
@@ -375,7 +379,19 @@ export class TaskRunsService {
         throw error;
       }
     }
+    this.announceStart(run.id, input.startedBy);
     return { runId: run.id };
+  }
+
+  /** A run started for the board, for the usage counters: the autopilot's, or a person's or the manager's. */
+  private announceStart(runId: string | null, startedBy: TaskRunStarter): void {
+    this.bus.publishUsageSignal({
+      kind: 'capability',
+      runId,
+      capability:
+        startedBy === 'autopilot' ? 'autopilot_card_start' : 'card_start',
+      ok: true,
+    });
   }
 
   /**

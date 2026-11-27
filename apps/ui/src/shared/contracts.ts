@@ -261,6 +261,17 @@ export const DEFAULT_HISTORY_PAGE_SIZE: HistoryPageSize = 1000;
  * whose route refuses a value outside these bounds.
  */
 export const DEFAULT_KEPT_SESSION_IDLE_MINUTES = 60;
+
+/**
+ * The per-call tool log's retention choices in Settings → System analysis
+ * (`Settings.toolCallLogRetentionDays`): 30 days, 90, a year, or forever.
+ *
+ * TWIN: `TOOL_CALL_LOG_RETENTION_MAX_DAYS` in `apps/daemon/src/v1/stats/stats.types.ts`,
+ * whose route refuses a value past it.
+ */
+export const TOOL_CALL_LOG_RETENTION_CHOICES = [30, 90, 365, null] as const;
+export const DEFAULT_TOOL_CALL_LOG_RETENTION_DAYS = 90;
+export const TOOL_CALL_LOG_RETENTION_MAX_DAYS = 3650;
 export const MIN_KEPT_SESSION_IDLE_MINUTES = 5;
 export const MAX_KEPT_SESSION_IDLE_MINUTES = 180;
 
@@ -700,6 +711,13 @@ export interface Settings {
    */
   archiveRetentionDays: number | null;
   /**
+   * Days of the per-call tool log the daemon keeps (`tool_call_events`), or
+   * `null` to keep it forever. Desktop only, pushed to the daemon, which
+   * prunes older rows daily once their counts are in the usage counters; the
+   * counters themselves are kept for good.
+   */
+  toolCallLogRetentionDays: number | null;
+  /**
    * Forget a memory entry that has gone cold for this many days, or `null` to
    * never forget on its own. Pushed to the daemon beside `memory` (as
    * `autoForgetAfterDays`), which runs the sweep daily; the sweep only forgets
@@ -973,6 +991,7 @@ export const DEFAULT_SETTINGS: Settings = {
   semanticSearch: DEFAULT_SEMANTIC_SEARCH,
   resourceAlerts: DEFAULT_RESOURCE_ALERTS,
   archiveRetentionDays: null,
+  toolCallLogRetentionDays: DEFAULT_TOOL_CALL_LOG_RETENTION_DAYS,
   memoryAutoForgetAfterDays: null,
   memoryRemoveNotUseful: true,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,

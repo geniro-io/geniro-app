@@ -10,17 +10,21 @@ import { GENIRO_ORM_RUNTIME } from '../../../db/sqlite.driver';
 import { AgentFlag } from '../../runs/entity/agent-flag.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
-import { AGENT_FLAGS_PER_CONVERSATION } from '../chat.types';
+import { AGENT_FLAGS_PER_CONVERSATION, type UsageSignal } from '../chat.types';
 import { AgentFlagDao } from '../dao/agent-flag.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { agentFlagWire } from '../utils/agent-flags';
+import { AgentEventBus } from './agent-events.bus';
 import { FlagBroker } from './flag.broker';
 
 describe('FlagBroker.raiseAutomatic', () => {
   let orm: MikroORM;
   let broker: FlagBroker;
   let flags: AgentFlagDao;
+  const usageBus = new AgentEventBus();
+  const signals: UsageSignal[] = [];
+  usageBus.allUsageSignals().subscribe((signal) => signals.push(signal));
   const disposers: (() => void)[] = [];
 
   beforeAll(async () => {
@@ -42,6 +46,7 @@ describe('FlagBroker.raiseAutomatic', () => {
       new RunDao(orm.em),
       new ItemDao(orm.em),
       flags,
+      usageBus,
     );
   });
 
@@ -143,6 +148,23 @@ describe('FlagBroker.raiseAutomatic', () => {
     await broker.raiseAutomatic('run-1', auto('tool_failure:browser_click'));
     const [row] = await flags.forRun('run-1', 100);
     expect(row?.seq).toBe(12);
+  });
+
+  it('announces a written automatic flag to the usage counters, and nothing for a skipped one', async () => {
+    await seedRun('run-signal');
+    signals.length = 0;
+
+    await broker.raiseAutomatic('run-signal', auto('tool_failure:memory_read'));
+    await broker.raiseAutomatic('run-signal', auto('tool_failure:memory_read'));
+
+    expect(signals).toEqual([
+      {
+        kind: 'capability',
+        runId: 'run-signal',
+        capability: 'automatic_flag',
+        ok: true,
+      },
+    ]);
   });
 
   it('writes one flag per cause per thread, racing calls and later calls included', async () => {

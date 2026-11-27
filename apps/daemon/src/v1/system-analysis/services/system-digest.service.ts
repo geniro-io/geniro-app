@@ -20,6 +20,7 @@ import { GENIRO_MCP_SERVER } from '../../agents/utils/tool-metric';
 import { LessonProposalDao } from '../../lessons/dao/lesson-proposal.dao';
 import { readLessonSignals } from '../../lessons/utils/read-lesson-signals';
 import { MetricLedgerDao } from '../../stats/dao/metric-ledger.dao';
+import { ToolUsageService } from '../../stats/services/tool-usage.service';
 import {
   SYSTEM_DIGEST_PAYLOAD_CANDIDATES,
   type SystemDigest,
@@ -28,6 +29,7 @@ import {
   type DigestCandidate,
   type DigestFailedCall,
   digestScore,
+  digestToolUsage,
   failedToolCallsByKind,
   foldSystemDigest,
 } from '../utils/system-digest.fold';
@@ -61,6 +63,7 @@ export class SystemDigestService {
     private readonly flagDao: AgentFlagDao,
     private readonly ledger: MetricLedgerDao,
     private readonly lessonProposals: LessonProposalDao,
+    private readonly toolUsage: ToolUsageService,
   ) {}
 
   /** The digest, and the threads it ranks pinned at their snapshots: what a system analysis reads. */
@@ -143,6 +146,16 @@ export class SystemDigestService {
       flags: wires,
       goneRunIds,
     });
+    const usage = digestToolUsage(
+      await this.toolUsage.list(),
+      period.to.toISOString(),
+    );
+    digest.toolUsage = usage;
+    digest.totals.toolUsage = {
+      subjects: usage.subjects,
+      calls: usage.calls,
+      neverCalled: usage.neverCalled.length,
+    };
     const runs: AnalysedRun[] = [];
     for (const thread of digest.threads) {
       const snapshot = await runSnapshotOf(

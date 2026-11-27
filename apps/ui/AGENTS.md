@@ -96,6 +96,7 @@ The rules live in `.claude/rules/renderer-*.md`; start from `renderer-components
 - `agentOptions`: `{<cli>: {<optionId>: on}}`, from capabilities `options[]`. It is snapshotted onto the run.
 - `notificationsEnabled`: one switch for every notification kind.
 - `archiveRetentionDays`: `null` by default. It arms a permanent deletion sweep (`POST /v1/chats/sweep-archived`), and the daemon learns the window from the client.
+- `toolCallLogRetentionDays`: `90` by default (30 / 90 / 365 / `null` = forever, `TOOL_CALL_LOG_RETENTION_CHOICES`). Desktop only; pushed by `main/tool-usage-config-push.ts` (`PUT /v1/stats/tool-usage/config`) on every daemon start and settings write. The daemon deletes `tool_call_events` rows older than it once the usage-counter backfill is done, and nothing before the first push.
 - `customInstructions`: see `.claude/rules/ui-settings.md`.
 - `commandCenterInstructions`: the command center manager's standing instructions (`''` = none), screened for control characters like `customInstructions` and not snapshotted per run. Pushed to the daemon (`PUT /v1/command-center/instructions`, `command-center-instructions-push.ts`, through `onSettingsWritten`), as is every daemon start; the daemon reads it into the manager's brief from its next turn and holds it in memory.
 - `replyLanguage`: the language every agent is told to reply in (`''` = not set), at most 64 characters (twin of the daemon's `REPLY_LANGUAGE_MAX_LENGTH`). Sent at every run start beside `customInstructions`.

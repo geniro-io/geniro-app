@@ -10,6 +10,7 @@ import { MetricLedgerDao } from './dao/metric-ledger.dao';
 import { TeamRecommendationDao } from './dao/team-recommendation.dao';
 import { TeamVersionDao } from './dao/team-version.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
+import { UsageCounterDao } from './dao/usage-counter.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
 import { RecommendationLedgerService } from './services/recommendation-ledger.service';
 import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
@@ -19,10 +20,17 @@ import { TeamLedgerService } from './services/team-ledger.service';
 import { TeamStatsService } from './services/team-stats.service';
 import { TeamVersionsService } from './services/team-versions.service';
 import { ThreadMetricsLedgerService } from './services/thread-metrics-ledger.service';
+import { ToolCallLogRetentionService } from './services/tool-call-log-retention.service';
+import { ToolUsageService } from './services/tool-usage.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
+import { UsageCounterService } from './services/usage-counter.service';
+import { UsageCounterBackfillService } from './services/usage-counter-backfill.service';
 import { UsageEventBus } from './services/usage-events.bus';
+import { UsageObserverService } from './services/usage-observer.service';
 import { UsageRecorderService } from './services/usage-recorder.service';
+import { UsageRegistryService } from './services/usage-registry.service';
+import { UsageRunFactsService } from './services/usage-run-facts.service';
 
 /**
  * The usage ledger and the stats it answers.
@@ -63,17 +71,29 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     TeamStatsService,
     MetricLedgerDao,
     ThreadMetricsLedgerService,
+    UsageCounterDao,
+    UsageRunFactsService,
+    UsageCounterService,
+    UsageRegistryService,
+    UsageCounterBackfillService,
+    UsageObserverService,
+    ToolCallLogRetentionService,
+    ToolUsageService,
   ],
   // The bus, and the team history. The WS gateway announces each recorded
   // turn so an open Stats page can refresh, and the MCP host's analysis reader
   // answers a team's history from these ledgers — the same direction as
   // everything else here: both sit above this module, which observes nothing
-  // above it.
+  // above it. The MCP module hands its tool names to the usage registry, and
+  // the system digest reads the usage counters.
   exports: [
     UsageEventBus,
     TeamHistoryService,
     MetricLedgerDao,
     TeamRecommendationDao,
+    UsageRegistryService,
+    ToolUsageService,
+    UsageCounterBackfillService,
   ],
 })
 export class StatsModule {}

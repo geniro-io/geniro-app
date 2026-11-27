@@ -63,6 +63,7 @@ import { MigrationRunnerService } from './v1/migrations/services/migration-runne
 import { MigrationFailedError } from './v1/migrations/utils/migration-failed-error';
 import { ShareService } from './v1/shares/services/share.service';
 import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
+import { UsageCounterBackfillService } from './v1/stats/services/usage-counter-backfill.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 import { RestartContinuationService } from './v1/teams/services/restart-continuation.service';
@@ -148,6 +149,7 @@ let threadDelivery: ThreadDeliveryService | null = null;
 let wallWork: WallWorkService | null = null;
 let payloadRefs: PayloadRefsSweepService | null = null;
 let memoryUsage: MemoryUsageBackfillService | null = null;
+let toolUsage: UsageCounterBackfillService | null = null;
 let memoryMarks: MemoryReviewService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
@@ -223,6 +225,9 @@ bootstrapper.addExtension(
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
         void wallWork?.sweepAllQuietly();
+        // The tool journal's history into the usage counters, once, window by
+        // window; live counting already covers everything after its cutoff.
+        void toolUsage?.runQuietly();
         // Off the boot path for the same reason: it copies the payload fields
         // lookups filter on into their columns for every row written before
         // the columns existed — a run it has not reached is read the slow way.
@@ -360,6 +365,7 @@ bootstrapper.addExtension(
       wallWork = app.get(WallWorkService);
       payloadRefs = app.get(PayloadRefsSweepService);
       memoryUsage = app.get(MemoryUsageBackfillService);
+      toolUsage = app.get(UsageCounterBackfillService);
       memoryMarks = app.get(MemoryReviewService);
       pullRequests = app.get(PullRequestCaptureService);
 

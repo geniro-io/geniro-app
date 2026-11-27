@@ -6,13 +6,16 @@ import {
   SYSTEM_DIGEST_GONE_FLAGS,
   SYSTEM_DIGEST_TOOL_ERRORS,
   SYSTEM_DIGEST_TOOL_ERRORS_PER_THREAD,
+  SYSTEM_DIGEST_TOOL_USAGE_ROWS,
   SYSTEM_DIGEST_TOOLS_PER_THREAD,
+  SystemDigestSchema,
   type SystemPeriod,
 } from '../system-analysis.types';
 import {
   type DigestCandidate,
   type DigestFailedCall,
   digestScore,
+  digestToolUsage,
   foldSystemDigest,
 } from './system-digest.fold';
 
@@ -497,5 +500,75 @@ describe('foldSystemDigest', () => {
       score: 5,
     });
     expect(digest.period).toEqual(PERIOD);
+  });
+});
+
+describe('digestToolUsage', () => {
+  const row = (subject: string, calls: number) => ({
+    subjectKind: 'tool' as const,
+    subject,
+    source: '',
+    calls,
+    subagentCalls: 0,
+    errors: 0,
+    refused: 0,
+    avgDurationMs: null,
+    avgResultChars: null,
+    firstAt: null,
+    lastAt: null,
+    firstKnownAt: null,
+    offeredSessions: null,
+    removalEligible: false,
+  });
+
+  it('keeps the most called subjects up to the cap, counts the rest, and lists every never-called one', () => {
+    const rows = Array.from(
+      { length: SYSTEM_DIGEST_TOOL_USAGE_ROWS + 2 },
+      (_, i) => row(`t${i}`, 1_000 - i),
+    );
+    const usage = digestToolUsage(
+      {
+        countingSince: '2026-10-01T00:00:00.000Z',
+        liveSince: '2026-11-20T00:00:00.000Z',
+        rows,
+        neverCalled: [
+          { ...row('note_thread', 0), source: 'geniro', removalEligible: true },
+        ],
+      },
+      '2026-11-27T10:00:00.000Z',
+    );
+
+    expect(usage.rows).toHaveLength(SYSTEM_DIGEST_TOOL_USAGE_ROWS);
+    expect(usage.leftOut).toBe(2);
+    expect(usage.subjects).toBe(SYSTEM_DIGEST_TOOL_USAGE_ROWS + 2);
+    expect(usage.rows[0]).toMatchObject({ name: 't0', calls: 1_000 });
+    expect(usage.neverCalled).toEqual([
+      expect.objectContaining({
+        name: 'note_thread',
+        removable: true,
+        source: 'geniro',
+      }),
+    ]);
+  });
+
+  it('still reads a digest frozen before tool usage existed', () => {
+    expect(
+      SystemDigestSchema.safeParse({
+        period: {
+          from: '2026-11-01T00:00:00.000Z',
+          to: '2026-11-08T00:00:00.000Z',
+          days: 7,
+        },
+        totals: {
+          threadsWithSignals: 0,
+          flags: 0,
+          failedToolCalls: 0,
+          systemThreads: 0,
+        },
+        flags: [],
+        goneFlags: [],
+        threads: [],
+      }).success,
+    ).toBe(true);
   });
 });

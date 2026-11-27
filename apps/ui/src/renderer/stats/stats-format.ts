@@ -94,6 +94,25 @@ export function dayRangeTitle(fromIso: string, toIso: string): string {
     : `${formatDayTitle(from)} – ${formatDayTitle(to)}`;
 }
 
+/** An instant as a day with its year: `Aug 10, 2026`. */
+export function formatDayStamp(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/** An instant as a day and a time: `Aug 10, 3:05 PM`. */
+export function formatMoment(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 /**
  * A plain count, grouped: `4`, `1,882`.
  *

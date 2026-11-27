@@ -10,6 +10,7 @@ import {
   recommendation,
   SAMPLED_TEAM_STATS,
   SYSTEM_ITEMS,
+  SYSTEM_TOOL_ITEM,
   TEAM_STATS,
   TIMING,
 } from '../__fixtures__/recommendations';
@@ -328,6 +329,23 @@ export const SystemStartFailed: Story = {
             backup: null,
           },
         }}
+        actions={{ projects: SYSTEM_PROJECTS, onAction: () => undefined }}
+      />
+    </div>
+  ),
+};
+
+export const SystemToolItem: Story = {
+  render: () => (
+    <div className="w-[600px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary="Two changes to Geniro itself: the reader hides the error of a failed call, and the preamble does not say when to flag an issue."
+        timing={null}
+        team={false}
+        items={[...SYSTEM_ITEMS, SYSTEM_TOOL_ITEM]}
+        applied={null}
+        outcomes={{}}
         actions={{ projects: SYSTEM_PROJECTS, onAction: () => undefined }}
       />
     </div>

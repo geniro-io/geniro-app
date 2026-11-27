@@ -8,8 +8,6 @@ import {
   ThreadOutcomePayloadSchema,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
-import { NodeStateDao } from '../../agents/dao/node-state.dao';
-import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import {
@@ -18,11 +16,18 @@ import {
   parseJsonColumn,
 } from '../../agents/utils/json-util';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
-import { librarySlugOf } from '../../agents/utils/run-kind';
 import { toolMetricOf } from '../../agents/utils/tool-metric';
 import { usageFiguresFrom } from '../../agents/utils/usage-figures';
-import type { AgentKind } from '../../runs/runs.types';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
+import type { CapabilityId } from '../utils/capability-catalog';
+import { usageKey, useDelta } from '../utils/usage-counter-delta';
+import { resultCharsOf } from '../utils/usage-observation';
+import { UsageCounterService } from './usage-counter.service';
+import { UsageCounterBackfillService } from './usage-counter-backfill.service';
+import {
+  type UsageRunFacts,
+  UsageRunFactsService,
+} from './usage-run-facts.service';
 
 /** Tool calls held open in memory waiting for their result; the oldest go first past it. */
 const OPEN_CALLS_MAX = 20_000;
@@ -33,17 +38,12 @@ interface OpenCall {
   at: number;
 }
 
-interface RunFacts {
-  teamSlug: string | null;
-  agentKind: AgentKind | null;
-  createdAt: Date;
-}
-
 /**
  * Counts the thread metrics as they happen, into ledgers that outlive the run: one
- * `tool_call_events` row per finished tool call (with the MCP server its adapter reads
- * off the tool's name), a `stage` row per stage change, a `call` row per ended
- * agent-to-agent call and a `thread_outcome` row per run. It OBSERVES the item stream,
+ * `tool_call_events` row per finished tool call of an agent (with the MCP server its
+ * adapter reads off the tool's name), a `stage` row per stage change, a `call` row per
+ * ended agent-to-agent call and a `thread_outcome` row per run. Every finished call,
+ * a sub-agent's included, and each of those moves also adds to the usage counters. It OBSERVES the item stream,
  * like `RunOutcomeLedgerService`: the agents and teams modules write the rows and
  * cannot depend on this one.
  *
@@ -55,17 +55,16 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
   private readonly logger = new Logger(ThreadMetricsLedgerService.name);
   private readonly writes = new KeyedChain();
   private readonly open = new Map<string, OpenCall>();
-  private readonly runs = new Map<string, RunFacts>();
-  private readonly members = new Map<string, AgentKind | null>();
 
   constructor(
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
-    private readonly runDao: RunDao,
-    private readonly nodeStateDao: NodeStateDao,
     private readonly itemDao: ItemDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly ledger: MetricLedgerDao,
+    private readonly facts: UsageRunFactsService,
+    private readonly counters: UsageCounterService,
+    private readonly backfill: UsageCounterBackfillService,
   ) {}
 
   onModuleInit(): void {
@@ -110,12 +109,10 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
 
   private forget(runId: string): void {
     this.writes.forget(runId);
-    this.runs.delete(runId);
     const prefix = `${runId}\u0000`;
-    for (const key of [...this.open.keys(), ...this.members.keys()]) {
+    for (const key of this.open.keys()) {
       if (key.startsWith(prefix)) {
         this.open.delete(key);
-        this.members.delete(key);
       }
     }
   }
@@ -124,11 +121,7 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
     const payload = asRecord(item.payload);
     const id = asString(payload?.id);
     const name = asString(payload?.name);
-    if (
-      id === null ||
-      name === null ||
-      asString(payload?.parentToolUseId) !== null
-    ) {
+    if (id === null || name === null) {
       return;
     }
     if (this.open.size >= OPEN_CALLS_MAX) {
@@ -137,33 +130,37 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
         this.open.delete(oldest);
       }
     }
-    this.open.set(callKey(runId, item, id), {
-      name,
-      kind: asString(payload?.toolKind),
-      at: Date.parse(item.createdAt),
-    });
+    this.open.set(
+      callKey(runId, item, id, asString(payload?.parentToolUseId)),
+      {
+        name,
+        kind: asString(payload?.toolKind),
+        at: Date.parse(item.createdAt),
+      },
+    );
   }
 
   private async recordToolCall(runId: string, item: ItemWire): Promise<void> {
     const payload = asRecord(item.payload);
     const id = asString(payload?.id);
-    if (id === null || asString(payload?.parentToolUseId) !== null) {
+    if (id === null) {
       return;
     }
-    const key = callKey(runId, item, id);
+    const parent = asString(payload?.parentToolUseId);
+    const key = callKey(runId, item, id, parent);
     const call =
-      this.open.get(key) ?? (await this.callFromRows(runId, item, id));
+      this.open.get(key) ?? (await this.callFromRows(runId, item, id, parent));
     this.open.delete(key);
     const name = call?.name ?? asString(payload?.name);
     if (name === null) {
       return;
     }
     const em = this.em.fork();
-    const run = await this.runFacts(runId, em);
+    const run = await this.facts.run(runId, em);
     if (run === null) {
       return;
     }
-    const agentKind = await this.agentOf(runId, item.memberId, run, em);
+    const agentKind = await this.facts.agentOf(runId, item.memberId, run, em);
     const metric = toolMetricOf(
       this.adapters,
       runId,
@@ -172,21 +169,49 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
       call?.kind ?? null,
     );
     const at = Date.parse(item.createdAt);
-    await this.ledger.insertToolCall(
-      {
-        runId,
-        seq: item.seq,
-        occurredAt: new Date(at),
-        teamSlug: run.teamSlug,
-        memberId: item.memberId,
+    const ok = payload?.isError !== true;
+    const durationMs =
+      call === null || !(at >= call.at) ? null : Math.round(at - call.at);
+    if (parent === null) {
+      await this.ledger.insertToolCall(
+        {
+          runId,
+          seq: item.seq,
+          occurredAt: new Date(at),
+          teamSlug: run.teamSlug,
+          memberId: item.memberId,
+          agentKind,
+          tool: metric.tool,
+          mcpServer: metric.server,
+          ok,
+          durationMs,
+        },
+        em,
+      );
+      const cutoff = this.backfill.cutoff;
+      if (cutoff !== null && at < cutoff) {
+        return;
+      }
+    }
+    const chars = resultCharsOf(payload?.result);
+    this.counters.add(
+      usageKey(
+        {
+          subjectKind: 'tool',
+          subject: metric.tool,
+          source: metric.server ?? '',
+        },
         agentKind,
-        tool: metric.tool,
-        mcpServer: metric.server,
-        ok: payload?.isError !== true,
-        durationMs:
-          call === null || !(at >= call.at) ? null : Math.round(at - call.at),
+        parent === null ? 'direct' : 'subagent',
+        run.projectId,
+      ),
+      {
+        ...useDelta(at, ok),
+        durationMsTotal: durationMs ?? 0,
+        timedCalls: durationMs === null ? 0 : 1,
+        resultCharsTotal: chars ?? 0,
+        sizedCalls: chars === null ? 0 : 1,
       },
-      em,
     );
   }
 
@@ -195,6 +220,7 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
     runId: string,
     result: ItemWire,
     id: string,
+    parent: string | null,
   ): Promise<OpenCall | null> {
     const rows = await this.itemDao.rowsByPayloadId(runId, ['tool_call'], [id]);
     const row = rows
@@ -202,7 +228,9 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
         (r) =>
           r.memberId === result.memberId &&
           (r.inCall ?? '') === (result.inCall ?? '') &&
-          r.seq < result.seq,
+          r.seq < result.seq &&
+          asString(asRecord(parseJsonColumn(r.payload))?.parentToolUseId) ===
+            parent,
       )
       .sort((a, b) => b.seq - a.seq)[0];
     if (row === undefined) {
@@ -230,11 +258,12 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
     }
     const change = parsed.data;
     const em = this.em.fork();
-    const run = await this.runFacts(runId, em);
+    const run = await this.facts.run(runId, em);
     if (run === null) {
       return;
     }
     const occurredAt = new Date(item.createdAt);
+    await this.countCapability(runId, item, run, 'stage_move', true, em);
     const enteredAt =
       change.action === 'complete'
         ? ((await this.ledger.lastStageMoveAt(runId, item.seq, em)) ??
@@ -269,10 +298,18 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
       return;
     }
     const em = this.em.fork();
-    const run = await this.runFacts(runId, em);
+    const run = await this.facts.run(runId, em);
     if (run === null) {
       return;
     }
+    await this.countCapability(
+      runId,
+      item,
+      run,
+      'agent_call',
+      payload?.status === 'ok',
+      em,
+    );
     const rows = await this.itemDao.rowsOfCall(
       runId,
       callId,
@@ -316,8 +353,20 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
       return;
     }
     const em = this.em.fork();
-    if ((await this.runFacts(runId, em)) === null) {
+    const run = await this.facts.run(runId, em);
+    if (run === null) {
       return;
+    }
+    const recorded = await this.ledger.threadOutcomes({ runIds: [runId] }, em);
+    if (recorded.length === 0) {
+      await this.countCapability(
+        runId,
+        item,
+        run,
+        'thread_outcome',
+        parsed.data.kind !== 'failed' && parsed.data.kind !== 'abandoned',
+        em,
+      );
     }
     await this.ledger.upsertThreadOutcome(
       {
@@ -332,52 +381,36 @@ export class ThreadMetricsLedgerService implements OnModuleInit {
     );
   }
 
-  /**
-   * The run's team, agent and start, read once (its deletion forgets it); null
-   * for a run already gone.
-   */
-  private async runFacts(
+  private async countCapability(
     runId: string,
+    item: ItemWire,
+    run: UsageRunFacts,
+    capability: CapabilityId,
+    ok: boolean,
     em: EntityManager,
-  ): Promise<RunFacts | null> {
-    const cached = this.runs.get(runId);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const [run] = await this.runDao.runFacts([runId], em);
-    if (run === undefined) {
-      return null;
-    }
-    const facts = {
-      teamSlug: librarySlugOf(run.teamId),
-      agentKind: run.agentKind,
-      createdAt: run.createdAt,
-    };
-    this.runs.set(runId, facts);
-    return facts;
-  }
-
-  private async agentOf(
-    runId: string,
-    memberId: string | null,
-    run: RunFacts,
-    em: EntityManager,
-  ): Promise<AgentKind | null> {
-    if (memberId === null) {
-      return run.agentKind;
-    }
-    const key = `${runId}\u0000${memberId}`;
-    if (this.members.has(key)) {
-      return this.members.get(key) ?? null;
-    }
-    const state = await this.nodeStateDao.getByRunNode(runId, memberId, em);
-    const kind = state?.agentKind ?? run.agentKind;
-    this.members.set(key, kind);
-    return kind;
+  ): Promise<void> {
+    const agentKind = await this.facts.agentOf(runId, item.memberId, run, em);
+    this.counters.add(
+      usageKey(
+        { subjectKind: 'capability', subject: capability, source: '' },
+        agentKind,
+        'direct',
+        run.projectId,
+      ),
+      useDelta(Date.parse(item.createdAt), ok),
+    );
   }
 }
 
-/** A call's key: an ACP CLI numbers its calls from one in every session, so the conversation is part of it. */
-function callKey(runId: string, item: ItemWire, id: string): string {
-  return `${runId}\u0000${item.memberId ?? ''}\u0000${item.inCall ?? ''}\u0000${id}`;
+/**
+ * A call's key: an ACP CLI numbers its calls from one in every session, so the
+ * conversation, and the sub-agent session a call ran in, are part of it.
+ */
+function callKey(
+  runId: string,
+  item: ItemWire,
+  id: string,
+  parent: string | null,
+): string {
+  return `${runId}\u0000${item.memberId ?? ''}\u0000${item.inCall ?? ''}\u0000${parent ?? ''}\u0000${id}`;
 }

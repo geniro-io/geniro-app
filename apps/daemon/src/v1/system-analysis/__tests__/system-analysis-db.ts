@@ -20,6 +20,9 @@ import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { TeamRecommendation } from '../../stats/entity/team-recommendation.entity';
 import { ToolCallEvent } from '../../stats/entity/tool-call-event.entity';
 import { UsageActivity } from '../../stats/entity/usage-activity.entity';
+import { UsageCounter } from '../../stats/entity/usage-counter.entity';
+import { UsageCounterBackfill } from '../../stats/entity/usage-counter-backfill.entity';
+import { UsageSubject } from '../../stats/entity/usage-subject.entity';
 import { Task } from '../../tasks/entity/task.entity';
 
 export async function systemAnalysisDb() {
@@ -37,6 +40,9 @@ export async function systemAnalysisDb() {
         LessonProposal,
         ToolCallEvent,
         UsageActivity,
+        UsageCounter,
+        UsageSubject,
+        UsageCounterBackfill,
         TeamRecommendation,
         Project,
         Task,

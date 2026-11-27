@@ -1,4 +1,5 @@
 import { cva } from 'class-variance-authority';
+import { ArrowDown } from 'lucide-react';
 
 import { cn } from './ui/utils';
 
@@ -12,6 +13,14 @@ export interface FigureColumn<Row> {
   title?: (row: Row) => string | undefined;
   /** Takes the width the other columns leave, for a bar drawn in the cell. */
   fill?: boolean;
+  /** Pressing the header sorts the table by this key, when the table is sortable. */
+  sortKey?: string;
+}
+
+/** Which column a sortable {@link FigureTable} is sorted by, and how a header press asks for another. */
+export interface FigureTableSort {
+  key: string;
+  onSort: (key: string) => void;
 }
 
 const cellVariants = cva('px-2 py-1.5 align-baseline', {
@@ -36,6 +45,7 @@ export function FigureTable<Row>({
   emptyLabel,
   ariaLabel,
   className,
+  sort,
 }: {
   columns: readonly FigureColumn<Row>[];
   rows: readonly Row[];
@@ -43,6 +53,7 @@ export function FigureTable<Row>({
   emptyLabel: string;
   ariaLabel: string;
   className?: string;
+  sort?: FigureTableSort;
 }): React.JSX.Element {
   if (rows.length === 0) {
     return (
@@ -61,17 +72,40 @@ export function FigureTable<Row>({
         className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-xs text-muted-foreground">
-            {columns.map((column) => (
-              <th
-                key={column.header}
-                scope="col"
-                className={cn(
-                  cellVariants({ align: column.align, fill: column.fill }),
-                  'font-medium',
-                )}>
-                {column.header}
-              </th>
-            ))}
+            {columns.map((column) => {
+              const sortKey = sort === undefined ? undefined : column.sortKey;
+              const sorted = sortKey !== undefined && sort?.key === sortKey;
+              return (
+                <th
+                  key={column.header}
+                  scope="col"
+                  aria-sort={sorted ? 'descending' : undefined}
+                  className={cn(
+                    cellVariants({ align: column.align, fill: column.fill }),
+                    'font-medium',
+                  )}>
+                  {sortKey === undefined ? (
+                    column.header
+                  ) : (
+                    <button
+                      type="button"
+                      data-slot="figure-table-sort"
+                      title={`Sort by ${column.header}`}
+                      onClick={() => sort?.onSort(sortKey)}
+                      className={cn(
+                        'inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs font-medium outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                        sorted && 'text-foreground',
+                      )}>
+                      {column.header}
+                      <ArrowDown
+                        aria-hidden
+                        className={cn('size-3', !sorted && 'invisible')}
+                      />
+                    </button>
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>

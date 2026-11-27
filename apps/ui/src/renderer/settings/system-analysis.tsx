@@ -43,7 +43,9 @@ import {
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { formatMoment } from '../stats/stats-format';
 import { ChoiceModelSettings } from './memory-triage-settings';
+import { ToolUsageGroup } from './tool-usage-group';
 import {
   saveAnalysisSetup,
   SYSTEM_ANALYSIS_PAGE_SIZE,
@@ -91,15 +93,6 @@ const AGENT_BLANK = {
   configDir: null,
 } satisfies Partial<AnalysisConfig>;
 
-function formatWhen(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function totalsText(totals: SystemDigestTotals): string {
   return [
     plural(
@@ -135,8 +128,9 @@ export interface SystemAnalysisPageProps {
   /** The daemon's system-analysis routes; null until the daemon is reached. */
   api: DaemonApis['systemAnalyses'] | null;
   /** Announces each start, Apply and card start, so the past analyses re-read. */
-  client: Pick<DaemonClient, 'onSystemAnalysesChanged'> | null;
+  client: Pick<DaemonClient, 'onSystemAnalysesChanged' | 'onReconnect'> | null;
   agentsApi: DaemonApis['agents'] | null;
+  statsApi: DaemonApis['stats'] | null;
   cliDetections: readonly CliDetection[] | null;
   capabilities: CapabilitiesDto | null;
   capabilitiesLoading: boolean;
@@ -150,6 +144,7 @@ export function SystemAnalysisPage({
   api,
   client,
   agentsApi,
+  statsApi,
   cliDetections,
   capabilities,
   capabilitiesLoading,
@@ -282,6 +277,8 @@ export function SystemAnalysisPage({
         )}
         {startError === null ? null : <ErrorText>{startError}</ErrorText>}
       </SettingsGroup>
+
+      <ToolUsageGroup api={statsApi} client={client} remote={remote} />
 
       <SettingsGroup
         icon={<History />}
@@ -556,7 +553,7 @@ function PastAnalyses({
                   CARD_BUTTON_CLASS,
                 )}>
                 <span className="font-medium tabular-nums">
-                  {formatWhen(row.run.createdAt)}
+                  {formatMoment(row.run.createdAt)}
                 </span>
                 <span className="text-muted-foreground">
                   {row.period === null

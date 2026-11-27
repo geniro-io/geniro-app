@@ -133,6 +133,39 @@ export const SYSTEM_ITEMS: RecommendationView[] = [
   }),
 ];
 
+/** A system analysis's item about one tool, with the counters' figures the daemon froze. */
+export const SYSTEM_TOOL_ITEM: RecommendationView = recommendation('G-3', {
+  target: 'geniro',
+  kind: 'code',
+  location: 'memory_read',
+  title: 'Answer an unknown handle with the closest ones',
+  change:
+    'memory_read answers an unknown handle with the three closest handles instead of a bare refusal.',
+  minutesSaved: 2,
+  costSavedUsd: null,
+  outcome: 'Refusals of memory_read drop by half',
+  confidence: 3,
+  risk: 'low',
+  tool: {
+    subjectKind: 'tool',
+    subject: 'memory_read',
+    source: 'geniro',
+    verdict: 'improve',
+    figures: {
+      calls: 412,
+      subagent: 38,
+      errors: 61,
+      refused: 47,
+      avgMs: 180,
+      avgChars: null,
+      lastAt: '2026-11-26T15:04:00.000Z',
+      knownSince: '2026-09-02T08:00:00.000Z',
+      offered: 1290,
+      asOf: '2026-11-27T10:00:00.000Z',
+    },
+  },
+});
+
 export const ITEMS: RecommendationView[] = [
   recommendation('W-1'),
   recommendation('W-2', {

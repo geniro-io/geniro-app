@@ -5,7 +5,14 @@ import { GoalDao } from '../../agents/dao/goal.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { LessonProposalDao } from '../../lessons/dao/lesson-proposal.dao';
+import { ProjectDao } from '../../projects/dao/project.dao';
 import { MetricLedgerDao } from '../../stats/dao/metric-ledger.dao';
+import { UsageCounterDao } from '../../stats/dao/usage-counter.dao';
+import { ToolUsageService } from '../../stats/services/tool-usage.service';
+import { UsageCounterService } from '../../stats/services/usage-counter.service';
+import { UsageCounterBackfillService } from '../../stats/services/usage-counter-backfill.service';
+import { UsageRegistryService } from '../../stats/services/usage-registry.service';
+import { emptyDelta } from '../../stats/utils/usage-counter-delta';
 import {
   type SystemAnalysisDb,
   systemAnalysisDb,
@@ -22,10 +29,14 @@ const AT = new Date('2026-11-05T10:00:00.000Z');
 describe('SystemDigestService.build (in-memory sqlite)', () => {
   let db: SystemAnalysisDb;
   let digests: SystemDigestService;
+  let counterDao: UsageCounterDao;
+  let registry: UsageRegistryService;
 
   beforeEach(async () => {
     db = await systemAnalysisDb();
     const em = db.em.fork();
+    counterDao = new UsageCounterDao(db.em);
+    registry = new UsageRegistryService(counterDao);
     digests = new SystemDigestService(
       db.em,
       new RunDao(em),
@@ -34,7 +45,66 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
       new AgentFlagDao(em),
       new MetricLedgerDao(em),
       new LessonProposalDao(em),
+      new ToolUsageService(
+        db.em,
+        counterDao,
+        new UsageCounterService(counterDao),
+        registry,
+        new UsageCounterBackfillService(db.em, counterDao, new RunDao(em)),
+        new ProjectDao(db.em),
+      ),
     );
+  });
+
+  it('freezes the usage counters into the digest, with the most called first and every never-called subject, and their line in the totals', async () => {
+    await registry.registerGeniroTools(['note_thread', 'memory_read']);
+    await counterDao.add([
+      {
+        subjectKind: 'tool',
+        subject: 'memory_read',
+        source: 'geniro',
+        agentKind: 'claude',
+        origin: 'direct',
+        projectId: '',
+        ...emptyDelta(),
+        calls: 7,
+        errors: 2,
+        refused: 1,
+      },
+      {
+        subjectKind: 'tool',
+        subject: 'Bash',
+        source: '',
+        agentKind: 'claude',
+        origin: 'subagent',
+        projectId: '',
+        ...emptyDelta(),
+        calls: 3,
+      },
+    ]);
+
+    const { digest } = await digests.build(PERIOD);
+
+    expect(digest.toolUsage).toMatchObject({
+      asOf: PERIOD.to.toISOString(),
+      subjects: 2,
+      calls: 10,
+      leftOut: 0,
+    });
+    expect(
+      digest.toolUsage?.rows.map((row) => [row.name, row.calls, row.subagent]),
+    ).toEqual([
+      ['memory_read', 7, 0],
+      ['Bash', 3, 3],
+    ]);
+    expect(digest.toolUsage?.neverCalled.map((row) => row.name)).toContain(
+      'note_thread',
+    );
+    expect(digest.totals.toolUsage).toEqual({
+      subjects: 2,
+      calls: 10,
+      neverCalled: digest.toolUsage?.neverCalled.length,
+    });
   });
 
   afterEach(async () => {
@@ -80,6 +150,7 @@ describe('SystemDigestService.build (in-memory sqlite)', () => {
       failedToolCallsByKind: { geniro: 0, otherMcp: 0, shell: 0 },
       geniroToolErrorGroups: 0,
       systemThreads: 1,
+      toolUsage: { subjects: 0, calls: 0, neverCalled: 0 },
     });
     expect(digest.flags.map((flag) => flag.handle)).toEqual(['F-b1', 'F-b2']);
     expect(digest.goneFlags.map((flag) => flag.handle)).toEqual(['F-gone']);

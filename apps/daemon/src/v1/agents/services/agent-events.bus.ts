@@ -13,6 +13,7 @@ import type {
   RunWire,
   ThreadMessagesChange,
   ThreadMessageSent,
+  UsageSignal,
 } from '../chat.types';
 import { RunContextRegistry } from './run-context.registry';
 
@@ -47,6 +48,7 @@ export class AgentEventBus {
   private readonly runCreated = new Subject<RunCreatedEvent>();
   private readonly pullRequestsCaptured =
     new Subject<PullRequestsCapturedEvent>();
+  private readonly usageSignals = new Subject<UsageSignal>();
 
   publish(event: RunItemEvent): void {
     this.subject.next(event);
@@ -264,5 +266,19 @@ export class AgentEventBus {
   /** Captured pull requests, for the single subscriber that counts them. */
   allPullRequestsCaptured(): Observable<PullRequestsCapturedEvent> {
     return this.pullRequestsCaptured.asObservable();
+  }
+
+  /**
+   * A use the item stream cannot show — a tool list served, a Geniro tool's
+   * answer, a capability a service ran. The usage counters observe it from
+   * `v1/stats`, which imports this module and not the reverse.
+   */
+  publishUsageSignal(signal: UsageSignal): void {
+    this.usageSignals.next(signal);
+  }
+
+  /** Usage signals, for the single subscriber that counts them. */
+  allUsageSignals(): Observable<UsageSignal> {
+    return this.usageSignals.asObservable();
   }
 }

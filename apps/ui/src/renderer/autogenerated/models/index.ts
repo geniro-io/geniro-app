@@ -19252,6 +19252,37 @@ export interface SystemDigestTotals {
      * @memberof SystemDigestTotals
      */
     systemThreads: number;
+    /**
+     * 
+     * @type {SystemDigestTotalsToolUsage}
+     * @memberof SystemDigestTotals
+     */
+    toolUsage?: SystemDigestTotalsToolUsage;
+}
+/**
+ * 
+ * @export
+ * @interface SystemDigestTotalsToolUsage
+ */
+export interface SystemDigestTotalsToolUsage {
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotalsToolUsage
+     */
+    subjects: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotalsToolUsage
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof SystemDigestTotalsToolUsage
+     */
+    neverCalled: number;
 }
 /**
  * 
@@ -21821,6 +21852,290 @@ export interface ThreadOverviewDtoTotals {
      * @memberof ThreadOverviewDtoTotals
      */
     pausedSpans: Array<PausedSpan>;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageConfigAckDto
+ */
+export interface ToolUsageConfigAckDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageConfigAckDto
+     */
+    toolCallLogRetentionDays: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageConfigDto
+ */
+export interface ToolUsageConfigDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageConfigDto
+     */
+    toolCallLogRetentionDays: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageListDto
+ */
+export interface ToolUsageListDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageListDto
+     */
+    countingSince: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageListDto
+     */
+    liveSince: string | null;
+    /**
+     * every subject with a call
+     * @type {Array<ToolUsageRow>}
+     * @memberof ToolUsageListDto
+     */
+    rows: Array<ToolUsageRow>;
+    /**
+     * Geniro tools and capabilities this build has, never used
+     * @type {Array<ToolUsageRow>}
+     * @memberof ToolUsageListDto
+     */
+    neverCalled: Array<ToolUsageRow>;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageRow
+ */
+export interface ToolUsageRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    subjectKind: ToolUsageRowSubjectKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    subject: string;
+    /**
+     * the MCP server a tool came from (geniro for this app's own); empty for a CLI's own tool and for non-tools
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    source: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    calls: number;
+    /**
+     * of the calls, made by sub-agents
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    subagentCalls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    errors: number;
+    /**
+     * refusals the daemon attributed: a Geniro tool refused the input, or the user denied the permission
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    refused: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    avgDurationMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    avgResultChars: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    firstAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    lastAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageRow
+     */
+    firstKnownAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageRow
+     */
+    offeredSessions: number | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ToolUsageRow
+     */
+    removalEligible: boolean;
+}
+
+
+/**
+ * @export
+ */
+export const ToolUsageRowSubjectKindEnum = {
+    Tool: 'tool',
+    Capability: 'capability',
+    Skill: 'skill',
+    Command: 'command'
+} as const;
+export type ToolUsageRowSubjectKindEnum = typeof ToolUsageRowSubjectKindEnum[keyof typeof ToolUsageRowSubjectKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface ToolUsageSubjectDto
+ */
+export interface ToolUsageSubjectDto {
+    /**
+     * 
+     * @type {ToolUsageRow}
+     * @memberof ToolUsageSubjectDto
+     */
+    row: ToolUsageRow;
+    /**
+     * 
+     * @type {Array<ToolUsageSubjectDtoByAgentInner>}
+     * @memberof ToolUsageSubjectDto
+     */
+    byAgent: Array<ToolUsageSubjectDtoByAgentInner>;
+    /**
+     * 
+     * @type {Array<ToolUsageSubjectDtoByOriginInner>}
+     * @memberof ToolUsageSubjectDto
+     */
+    byOrigin: Array<ToolUsageSubjectDtoByOriginInner>;
+    /**
+     * 
+     * @type {Array<ToolUsageSubjectDtoByProjectInner>}
+     * @memberof ToolUsageSubjectDto
+     */
+    byProject: Array<ToolUsageSubjectDtoByProjectInner>;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageSubjectDtoByAgentInner
+ */
+export interface ToolUsageSubjectDtoByAgentInner {
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByAgentInner
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByAgentInner
+     */
+    errors: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageSubjectDtoByAgentInner
+     */
+    agentKind: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUsageSubjectDtoByOriginInner
+ */
+export interface ToolUsageSubjectDtoByOriginInner {
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByOriginInner
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByOriginInner
+     */
+    errors: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageSubjectDtoByOriginInner
+     */
+    origin: ToolUsageSubjectDtoByOriginInnerOriginEnum;
+}
+
+
+/**
+ * @export
+ */
+export const ToolUsageSubjectDtoByOriginInnerOriginEnum = {
+    Direct: 'direct',
+    Subagent: 'subagent'
+} as const;
+export type ToolUsageSubjectDtoByOriginInnerOriginEnum = typeof ToolUsageSubjectDtoByOriginInnerOriginEnum[keyof typeof ToolUsageSubjectDtoByOriginInnerOriginEnum];
+
+/**
+ * 
+ * @export
+ * @interface ToolUsageSubjectDtoByProjectInner
+ */
+export interface ToolUsageSubjectDtoByProjectInner {
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByProjectInner
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUsageSubjectDtoByProjectInner
+     */
+    errors: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageSubjectDtoByProjectInner
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUsageSubjectDtoByProjectInner
+     */
+    name: string | null;
 }
 /**
  * 

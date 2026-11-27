@@ -7,13 +7,15 @@ import {
   ListToolsRequestSchema,
   type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { cameViaRemote } from '../../../auth/remote-marker';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { HostToolResultLedger } from '../../agents/services/host-tool-result.ledger';
 import { hostEndpointPath } from '../../agents/utils/host-endpoint';
+import { UsageRegistryService } from '../../stats/services/usage-registry.service';
 import type { CallEnvelope } from '../../teams/teams.types';
 import { callerKey } from '../../teams/utils/caller-key';
 import { closeQuietly } from '../../teams/utils/close-quietly';
@@ -23,6 +25,14 @@ import {
   type ServedToolCall,
   ToolFailureFlagsService,
 } from './tool-failure-flags.service';
+
+/** A refusal is an error answer geniro served without a failure of its own. */
+function answerOutcome(result: McpToolResult): 'ok' | 'refused' | 'failed' {
+  if (result.failure !== undefined) {
+    return 'failed';
+  }
+  return result.isError === true ? 'refused' : 'ok';
+}
 
 /** A tool's answer as the MCP wire carries it: its pictures become `image` parts after the text. */
 function wireResult({ failure: _, ...result }: McpToolResult): CallToolResult {
@@ -71,7 +81,7 @@ function wireResult({ failure: _, ...result }: McpToolResult): CallToolResult {
  * client cannot parse, so nothing may escape to it.
  */
 @Injectable()
-export class McpServerService {
+export class McpServerService implements OnModuleInit {
   private readonly logger = new Logger(McpServerService.name);
 
   /**
@@ -98,7 +108,16 @@ export class McpServerService {
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly servedResults: HostToolResultLedger,
     private readonly toolFailures: ToolFailureFlagsService,
+    private readonly bus: AgentEventBus,
+    private readonly usageRegistry: UsageRegistryService,
   ) {}
+
+  /** Every name this endpoint can serve, for the usage counters' "never called". */
+  async onModuleInit(): Promise<void> {
+    await this.usageRegistry.registerGeniroTools(
+      this.tools.flatMap((tool) => tool.names()),
+    );
+  }
 
   /** Serve one stateless MCP request for `(run, caller member)`. */
   async handlePost(
@@ -296,7 +315,15 @@ export class McpServerService {
       // have been handed an endpoint at all, and an empty list says so
       // honestly.
       const context = { runId, memberId, conversationId };
-      return { tools: this.tools.flatMap((tool) => tool.list(context)) };
+      const tools = this.tools.flatMap((tool) => tool.list(context));
+      this.bus.publishUsageSignal({
+        kind: 'tools_offered',
+        runId,
+        memberId,
+        conversationId,
+        tools: tools.map((tool) => tool.name),
+      });
+      return { tools };
     });
 
     const endpointPath = hostEndpointPath(runId, memberId, conversationId);
@@ -346,6 +373,13 @@ export class McpServerService {
         throw err;
       }
       this.toolFailures.answered(served, result);
+      this.bus.publishUsageSignal({
+        kind: 'geniro_tool_answered',
+        runId,
+        memberId,
+        tool: name,
+        outcome: answerOutcome(result),
+      });
       return answer(wireResult(result));
     });
 

@@ -8,6 +8,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import {
   type AnalysedRun,
   type AnalysisTurn,
+  type DigestToolUsage,
   type FoldedRun,
   type ItemWire,
   MAX_RECOMMENDATIONS_PER_TARGET,
@@ -15,9 +16,11 @@ import {
   type PullRequestLifecycle,
   type RecommendationItem,
   type RecommendationsPayload,
+  RecommendationsPayloadSchema,
   type RecommendationsReport,
   type RecommendationsTeamPopulation,
   type RunFold,
+  type ToolUsageFigures,
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
@@ -26,6 +29,7 @@ import {
   AnalysisReportsService,
   checkItems,
   checkMembers,
+  checkToolItems,
 } from './analysis-reports.service';
 import type { ThreadReaderService } from './thread-reader.service';
 import type { ThreadTimelineService } from './thread-timeline.service';
@@ -1616,11 +1620,18 @@ const SYSTEM_MEMBER: MemberAssessment = {
   items: ['G-1'],
 };
 
-function systemSink() {
+function systemSink(toolUsage: DigestToolUsage | null = null) {
   const written: { kind: string; payload: object }[] = [];
   const service = new AnalysisReportsService(
     { fork: () => ({}) } as unknown as EntityManager,
-    {} as RunDao,
+    {
+      getById: () =>
+        Promise.resolve({
+          analysisDigest: JSON.stringify(
+            toolUsage === null ? {} : { toolUsage },
+          ),
+        }),
+    } as unknown as RunDao,
     {
       existingSeqs: (_runId: string, seqs: number[]) =>
         Promise.resolve(new Set(seqs)),
@@ -1776,5 +1787,173 @@ describe('checkMembers — a system card', () => {
     expect(
       checkMembers({ hotspots: [], items: [GENIRO_ITEM] }, 'system', new Set()),
     ).toEqual([]);
+  });
+});
+
+describe('AnalysisReportsService — tool items', () => {
+  const figures = (extra: Partial<ToolUsageFigures>): ToolUsageFigures => ({
+    kind: 'tool',
+    name: 'note_thread',
+    source: 'geniro',
+    calls: 0,
+    subagent: 0,
+    errors: 0,
+    refused: 0,
+    avgMs: null,
+    avgChars: null,
+    firstAt: null,
+    lastAt: null,
+    knownSince: '2026-09-01T00:00:00.000Z',
+    offered: 12,
+    removable: false,
+    ...extra,
+  });
+  const usage = (
+    rows: ToolUsageFigures[],
+    neverCalled: ToolUsageFigures[],
+  ): DigestToolUsage => ({
+    asOf: '2026-11-27T10:00:00.000Z',
+    countingSince: '2026-10-01T00:00:00.000Z',
+    liveSince: '2026-11-20T00:00:00.000Z',
+    subjects: rows.length,
+    calls: rows.reduce((sum, row) => sum + row.calls, 0),
+    leftOut: 0,
+    rows,
+    neverCalled,
+  });
+  const toolItem = (
+    tool: NonNullable<RecommendationItem['tool']>,
+  ): RecommendationItem => ({
+    ...GENIRO_ITEM,
+    tool,
+  });
+  const memoryRead = figures({
+    name: 'memory_read',
+    calls: 40,
+    errors: 9,
+    refused: 6,
+  });
+
+  it('files the figures the daemon froze onto the card, never ones the model typed', async () => {
+    const { report, written } = systemSink(usage([memoryRead], []));
+
+    expect(
+      await report(
+        {
+          whole: {
+            hotspots: [],
+            items: [
+              toolItem({
+                subjectKind: 'tool',
+                subject: 'memory_read',
+                source: 'geniro',
+                verdict: 'improve',
+              }),
+            ],
+          },
+        },
+        null,
+        null,
+      ),
+    ).toMatchObject({ status: 'recorded' });
+    const payload = RecommendationsPayloadSchema.parse(written[0]?.payload);
+    expect(payload.items[0]?.tool?.figures).toEqual({
+      ...memoryRead,
+      asOf: '2026-11-27T10:00:00.000Z',
+    });
+  });
+
+  it('refuses a tool subject on anything but a G- item of a system analysis', () => {
+    expect(
+      checkToolItems(
+        {
+          hotspots: [],
+          items: [
+            {
+              ...ITEM,
+              tool: {
+                subjectKind: 'tool',
+                subject: 'memory_read',
+                source: 'geniro',
+                verdict: 'keep',
+              },
+            },
+          ],
+        },
+        'team',
+        usage([memoryRead], []),
+      ),
+    ).toEqual([expect.stringContaining('TOOL_SUBJECT_NOT_FOR_TARGET')]);
+  });
+
+  it('refuses a subject the frozen digest does not list, source included', () => {
+    expect(
+      checkToolItems(
+        {
+          hotspots: [],
+          items: [
+            toolItem({
+              subjectKind: 'tool',
+              subject: 'memory_read',
+              source: '',
+              verdict: 'improve',
+            }),
+          ],
+        },
+        'system',
+        usage([memoryRead], []),
+      ),
+    ).toEqual([expect.stringContaining('UNKNOWN_TOOL_SUBJECT')]);
+  });
+
+  it('refuses Remove below the threshold, naming the figures, and accepts it on an eligible tool', () => {
+    const unused = figures({});
+    const eligible = figures({
+      name: 'start_thread',
+      offered: 80,
+      removable: true,
+    });
+    const problems = checkToolItems(
+      {
+        hotspots: [],
+        items: [
+          toolItem({
+            subjectKind: 'tool',
+            subject: 'note_thread',
+            source: 'geniro',
+            verdict: 'remove',
+          }),
+          {
+            ...toolItem({
+              subjectKind: 'tool',
+              subject: 'start_thread',
+              source: 'geniro',
+              verdict: 'remove',
+            }),
+            id: 'G-2',
+          },
+        ],
+      },
+      'system',
+      usage([], [unused, eligible]),
+    );
+
+    expect(problems).toEqual([
+      expect.stringMatching(
+        /REMOVE_BELOW_THRESHOLD — G-1: .*known since 2026-09-01T00:00:00.000Z, offered in 12 sessions, called 0 times/,
+      ),
+    ]);
+  });
+
+  it('still reads a card filed before tool items existed', () => {
+    expect(
+      RecommendationsPayloadSchema.safeParse({
+        hotspots: [],
+        items: [GENIRO_ITEM],
+        sourceRunId: 'thread-a',
+        sourceKind: 'system',
+        timing: null,
+      }).success,
+    ).toBe(true);
   });
 });

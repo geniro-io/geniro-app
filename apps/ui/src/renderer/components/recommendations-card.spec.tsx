@@ -12,6 +12,7 @@ import {
   recommendation,
   SAMPLED_TEAM_STATS,
   SYSTEM_ITEMS,
+  SYSTEM_TOOL_ITEM,
   TEAM_POPULATION,
   TEAM_STATS,
   TIMING,
@@ -1378,5 +1379,53 @@ describe('systemOutcomeOf', () => {
     ['skipped', 'filed QB-3'],
   ] as const)('reads %s %s as no filing', (status, note) => {
     expect(systemOutcomeOf({ status, note })).toBeNull();
+  });
+});
+
+describe('RecommendationsCard — a tool item', () => {
+  const card = (items: typeof SYSTEM_ITEMS) =>
+    render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        team={false}
+        items={items}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+
+  it('shows the verdict, and the frozen figures with their date under Data, leaving out what was not measured', () => {
+    const el = card([SYSTEM_TOOL_ITEM]);
+
+    expect(
+      el.querySelector('[data-slot="recommendation-verdict"]')?.textContent,
+    ).toBe('Improve');
+    expect(
+      el.querySelector('[data-slot="recommendation-tool-data"]'),
+    ).toBeNull();
+
+    click(button(el, 'Data'));
+
+    const data =
+      el.querySelector('[data-slot="recommendation-tool-data"]')?.textContent ??
+      '';
+    expect(data).toContain('memory_read · Geniro tool');
+    expect(data).toContain('412 (38 by sub-agents)');
+    expect(data).toContain('Refused47');
+    expect(data).toContain('Offered in sessions1,290');
+    expect(data).toContain('From the counters as of');
+    expect(data).not.toContain('Avg result size');
+  });
+
+  it('shows neither a verdict nor Data on an item about no tool', () => {
+    const el = card(SYSTEM_ITEMS);
+
+    expect(el.querySelector('[data-slot="recommendation-verdict"]')).toBeNull();
+    expect(
+      [...el.querySelectorAll('button')].some((b) => b.textContent === 'Data'),
+    ).toBe(false);
   });
 });

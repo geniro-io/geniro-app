@@ -23,6 +23,10 @@ import type {
   TeamStatsDto,
   TeamVersionRestoredDto,
   TeamVersionsDto,
+  ToolUsageConfigAckDto,
+  ToolUsageConfigDto,
+  ToolUsageListDto,
+  ToolUsageSubjectDto,
   UsageStatsDto,
 } from '../models/index';
 
@@ -32,6 +36,12 @@ export interface StatsApiReadTeamStatsRequest {
 
 export interface StatsApiReadTeamVersionsRequest {
     slug: string;
+}
+
+export interface StatsApiReadToolUsageSubjectRequest {
+    subjectKind: ReadToolUsageSubjectSubjectKindEnum;
+    subject: string;
+    source?: string;
 }
 
 export interface StatsApiReadUsageStatsRequest {
@@ -49,6 +59,10 @@ export interface StatsApiResolveLineBaselineRequest {
 
 export interface StatsApiRestoreTeamVersionRequest {
     restoreTeamVersionDto: RestoreTeamVersionDto;
+}
+
+export interface StatsApiSetToolUsageConfigRequest {
+    toolUsageConfigDto: ToolUsageConfigDto;
 }
 
 /**
@@ -146,6 +160,106 @@ export class StatsApi extends runtime.BaseAPI {
      */
     async readTeamVersions(requestParameters: StatsApiReadTeamVersionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamVersionsDto> {
         const response = await this.readTeamVersionsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readToolUsageRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ToolUsageListDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/tool-usage`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readToolUsage(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ToolUsageListDto> {
+        const response = await this.readToolUsageRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readToolUsageSubjectRaw(requestParameters: StatsApiReadToolUsageSubjectRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ToolUsageSubjectDto>> {
+        if (requestParameters['subjectKind'] == null) {
+            throw new runtime.RequiredError(
+                'subjectKind',
+                'Required parameter "subjectKind" was null or undefined when calling readToolUsageSubject().'
+            );
+        }
+
+        if (requestParameters['subject'] == null) {
+            throw new runtime.RequiredError(
+                'subject',
+                'Required parameter "subject" was null or undefined when calling readToolUsageSubject().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['subjectKind'] != null) {
+            queryParameters['subjectKind'] = requestParameters['subjectKind'];
+        }
+
+        if (requestParameters['subject'] != null) {
+            queryParameters['subject'] = requestParameters['subject'];
+        }
+
+        if (requestParameters['source'] != null) {
+            queryParameters['source'] = requestParameters['source'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/tool-usage/subject`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readToolUsageSubject(requestParameters: StatsApiReadToolUsageSubjectRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ToolUsageSubjectDto> {
+        const response = await this.readToolUsageSubjectRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -335,4 +449,62 @@ export class StatsApi extends runtime.BaseAPI {
         return await response.value();
     }
 
+    /**
+     * 
+     */
+    async setToolUsageConfigRaw(requestParameters: StatsApiSetToolUsageConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ToolUsageConfigAckDto>> {
+        if (requestParameters['toolUsageConfigDto'] == null) {
+            throw new runtime.RequiredError(
+                'toolUsageConfigDto',
+                'Required parameter "toolUsageConfigDto" was null or undefined when calling setToolUsageConfig().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/tool-usage/config`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['toolUsageConfigDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setToolUsageConfig(requestParameters: StatsApiSetToolUsageConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ToolUsageConfigAckDto> {
+        const response = await this.setToolUsageConfigRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
 }
+
+/**
+ * @export
+ */
+export const ReadToolUsageSubjectSubjectKindEnum = {
+    Tool: 'tool',
+    Capability: 'capability',
+    Skill: 'skill',
+    Command: 'command'
+} as const;
+export type ReadToolUsageSubjectSubjectKindEnum = typeof ReadToolUsageSubjectSubjectKindEnum[keyof typeof ReadToolUsageSubjectSubjectKindEnum];

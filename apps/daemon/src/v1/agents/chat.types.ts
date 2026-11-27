@@ -751,6 +751,108 @@ const RecommendationImpactSchema = z.object({
     ),
 });
 
+/** What a usage counter counts. */
+export const USAGE_SUBJECT_KINDS = [
+  'tool',
+  'capability',
+  'skill',
+  'command',
+] as const;
+export type UsageSubjectKind = (typeof USAGE_SUBJECT_KINDS)[number];
+
+/** What a system analysis proposes for one tool or capability. */
+export const TOOL_VERDICTS = [
+  'improve',
+  'remove',
+  'merge',
+  'keep',
+  'other',
+] as const;
+export type ToolVerdict = (typeof TOOL_VERDICTS)[number];
+
+/** One subject's figures from the usage counters, as the system digest freezes them. */
+export const ToolUsageFiguresSchema = z
+  .object({
+    kind: z.enum(USAGE_SUBJECT_KINDS),
+    name: z.string(),
+    source: z
+      .string()
+      .describe("the MCP server (geniro for this app's own); empty otherwise"),
+    calls: z.number().int(),
+    subagent: z.number().int().describe('of the calls, made by sub-agents'),
+    errors: z.number().int(),
+    refused: z
+      .number()
+      .int()
+      .describe(
+        'input Geniro refused, or a permission the user denied; such a call usually also ended as an error, so most refusals are counted in errors too',
+      ),
+    avgMs: z.number().nullable(),
+    avgChars: z
+      .number()
+      .nullable()
+      .describe('average result size in characters'),
+    firstAt: z.iso.datetime().nullable(),
+    lastAt: z.iso.datetime().nullable(),
+    knownSince: z.iso
+      .datetime()
+      .nullable()
+      .describe('when this build first had it; Geniro tools and capabilities'),
+    offered: z
+      .number()
+      .int()
+      .nullable()
+      .describe('CLI sessions a Geniro tool was listed to'),
+    removable: z
+      .boolean()
+      .describe(
+        'whether Remove may be proposed: known 30+ days, offered in 50+ sessions, never called',
+      ),
+  })
+  .meta({ id: 'ToolUsageFigures' });
+export type ToolUsageFigures = z.infer<typeof ToolUsageFiguresSchema>;
+
+/** The usage counters as a system analysis reads them (`view=digest` `toolUsage`). */
+export const DigestToolUsageSchema = z
+  .object({
+    asOf: z.iso.datetime().describe('when the counters were read'),
+    countingSince: z.iso.datetime().nullable(),
+    liveSince: z.iso
+      .datetime()
+      .nullable()
+      .describe(
+        'capabilities, sub-agent calls and offers are counted from here',
+      ),
+    subjects: z.number().int().describe('subjects with at least one call'),
+    calls: z.number().int(),
+    leftOut: z
+      .number()
+      .int()
+      .describe('subjects with calls past the rows shown, the least called'),
+    rows: z.array(ToolUsageFiguresSchema).describe('the most called first'),
+    neverCalled: z
+      .array(ToolUsageFiguresSchema)
+      .describe('Geniro tools and capabilities this build has, never used'),
+  })
+  .meta({ id: 'DigestToolUsage' });
+export type DigestToolUsage = z.infer<typeof DigestToolUsageSchema>;
+
+/** A G- item's subject among the usage counters, and the verdict on it. */
+export const RecommendationToolSchema = z.object({
+  subjectKind: z.enum(USAGE_SUBJECT_KINDS),
+  subject: z
+    .string()
+    .min(1)
+    .max(256)
+    .describe('the name exactly as view=digest toolUsage lists it'),
+  source: z
+    .string()
+    .max(256)
+    .default('')
+    .describe('its source as toolUsage lists it; empty for none'),
+  verdict: z.enum(TOOL_VERDICTS),
+});
+
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
     'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; O-1, O-2… project overlay; K-1, K-2… knowledge; X-1, X-2… another repository; G-1, G-2… geniro itself (a system analysis only)',
@@ -828,6 +930,9 @@ export const RecommendationItemSchema = z.object({
     .describe(
       'A system analysis: the handles of the flags this item answers (view=digest lists them)',
     ),
+  tool: RecommendationToolSchema.optional().describe(
+    'A system analysis G- item about one tool or capability: which, as view=digest toolUsage names it, and the verdict. The daemon copies its figures onto the card; never restate them',
+  ),
   rootCause: z.string().min(1).max(600),
   impact: RecommendationImpactSchema,
   risk: z.object({
@@ -1009,6 +1114,13 @@ const CardRecommendationItemSchema = RecommendationItemSchema.extend({
     costSavedUsd: true,
     outcome: true,
   }),
+  tool: RecommendationToolSchema.extend({
+    figures: ToolUsageFiguresSchema.extend({ asOf: z.iso.datetime() })
+      .optional()
+      .describe(
+        "the counters' figures the daemon froze when the card was filed",
+      ),
+  }).optional(),
 });
 export type CardRecommendationItem = z.infer<
   typeof CardRecommendationItemSchema
@@ -7527,6 +7639,48 @@ export interface RunFacts {
   agentKind: AgentKind | null;
   createdAt: Date;
 }
+
+/** {@link RunFacts} plus what the usage counters key a run by. */
+export interface RunUsageFacts extends RunFacts {
+  projectId: string | null;
+  analysisPurpose: AnalysisPurpose | null;
+  analysisTeamSlug: string | null;
+}
+
+/** Capabilities a module outside the item stream reports as used. */
+export const SIGNALLED_CAPABILITIES = [
+  'automatic_flag',
+  'autopilot_card_start',
+  'card_start',
+] as const;
+export type SignalledCapability = (typeof SIGNALLED_CAPABILITIES)[number];
+
+/**
+ * A use the item stream cannot show, published for the usage counters
+ * (`AgentEventBus.publishUsageSignal`). Names and outcomes only — never a
+ * tool's arguments or result.
+ */
+export type UsageSignal =
+  | {
+      kind: 'tools_offered';
+      runId: string;
+      memberId: string | null;
+      conversationId: string | null;
+      tools: readonly string[];
+    }
+  | {
+      kind: 'geniro_tool_answered';
+      runId: string;
+      memberId: string | null;
+      tool: string;
+      outcome: 'ok' | 'refused' | 'failed';
+    }
+  | {
+      kind: 'capability';
+      runId: string | null;
+      capability: SignalledCapability;
+      ok: boolean;
+    };
 
 /** One pull request a thread has been seen to OPEN, read out of its own transcript. */
 export interface CapturedPullRequest {

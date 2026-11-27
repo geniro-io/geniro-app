@@ -23,7 +23,10 @@ import {
   systemAnalysisDb,
 } from '../__tests__/system-analysis-db';
 import type { SystemApply } from '../system-analysis.types';
-import { SystemAnalysisApplyService } from './system-analysis-apply.service';
+import {
+  cardBrief,
+  SystemAnalysisApplyService,
+} from './system-analysis-apply.service';
 import { SystemAnalysisEventBus } from './system-analysis-events.bus';
 
 const ANALYSIS = 'analysis-1';
@@ -494,5 +497,63 @@ describe('SystemAnalysisApplyService.apply (in-memory sqlite)', () => {
 
     expect(again.apply).not.toBeNull();
     expect(await tasksOf(PROJECT)).toHaveLength(2);
+  });
+});
+
+describe('cardBrief', () => {
+  const base = {
+    id: 'G-1',
+    target: 'geniro' as const,
+    territory: 'process' as const,
+    kind: 'code',
+    location: 'daemon: memory_read',
+    title: 'Explain bad handles',
+    change: 'Answer an unknown handle with the closest ones.',
+    evidence: [{ seq: 4, quote: 'unknown handle' }],
+    rootCause: 'Agents guess handles.',
+    impact: { minutesSaved: 1, basis: 'flags', confidence: 3 },
+    risk: { level: 'low' as const, note: 'none' },
+  };
+
+  it("puts the verdict and the counters' frozen figures into the filed card's text", () => {
+    const brief = cardBrief({
+      ...base,
+      tool: {
+        subjectKind: 'tool',
+        subject: 'memory_read',
+        source: 'geniro',
+        verdict: 'improve',
+        figures: {
+          kind: 'tool',
+          name: 'memory_read',
+          source: 'geniro',
+          calls: 40,
+          subagent: 3,
+          errors: 9,
+          refused: 6,
+          avgMs: 120,
+          avgChars: null,
+          firstAt: null,
+          lastAt: '2026-11-26T10:00:00.000Z',
+          knownSince: '2026-09-01T00:00:00.000Z',
+          offered: 300,
+          removable: false,
+          asOf: '2026-11-27T10:00:00.000Z',
+        },
+      },
+    });
+
+    expect(brief).toContain(
+      '## Data (from the counters as of 2026-11-27T10:00:00.000Z)',
+    );
+    expect(brief).toContain('Verdict: improve — tool memory_read (geniro)');
+    expect(brief).toContain('- Calls: 40');
+    expect(brief).toContain('- Refused: 6');
+    expect(brief).toContain('- Offered in sessions: 300');
+    expect(brief).not.toContain('Average result size');
+  });
+
+  it('adds no data section to an item with no tool', () => {
+    expect(cardBrief(base)).not.toContain('## Data');
   });
 });

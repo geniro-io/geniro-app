@@ -249,24 +249,29 @@ function collectRendererFiles(dir: string, out: string[]): void {
 }
 
 describe('type-setting wrapper convention (the `[&_button]` escape hatch)', () => {
-  it('leaves no type-setting wrapper around an unguarded, unsized button', () => {
-    const files: string[] = [];
-    collectRendererFiles(RENDERER_ROOT, files);
-    expect(files.length).toBeGreaterThan(50); // sanity: the walk actually found the tree
+  it(
+    'leaves no type-setting wrapper around an unguarded, unsized button',
+    // A synchronous sweep: vitest checks a deadline only after it returns, so any number is a CPU-speed assertion.
+    { timeout: Number.POSITIVE_INFINITY },
+    () => {
+      const files: string[] = [];
+      collectRendererFiles(RENDERER_ROOT, files);
+      expect(files.length).toBeGreaterThan(50); // sanity: the walk actually found the tree
 
-    const violations: string[] = [];
-    for (const file of files) {
-      const text = readFileSync(file, 'utf8');
-      const found = findWrapperViolations(parse(file, text));
-      for (const v of found) {
-        violations.push(
-          `${relative(RENDERER_ROOT, file)}:${v.line}  wrapper="${v.wrapperClass}"`,
-        );
+      const violations: string[] = [];
+      for (const file of files) {
+        const text = readFileSync(file, 'utf8');
+        const found = findWrapperViolations(parse(file, text));
+        for (const v of found) {
+          violations.push(
+            `${relative(RENDERER_ROOT, file)}:${v.line}  wrapper="${v.wrapperClass}"`,
+          );
+        }
       }
-    }
 
-    expect(violations).toEqual([]);
-  });
+      expect(violations).toEqual([]);
+    },
+  );
 
   it('actually has teeth: flags a wrapper missing the override, clears one that has it', () => {
     // The exact shape of the historical bug — SectionLabel's caption before the

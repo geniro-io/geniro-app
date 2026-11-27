@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { codexThreadHistory, readCodexThreads } from './codex-threads.utils';
+import {
+  codexThreadHistory,
+  codexThreadHoldsPrompt,
+  readCodexThreads,
+} from './codex-threads.utils';
 
 describe('readCodexThreads', () => {
   it('titles a thread by its name, else its opening line, and stamps in ms', () => {
@@ -118,5 +122,42 @@ describe('codexThreadHistory', () => {
 
   it('answers null for a reply carrying no thread', () => {
     expect(codexThreadHistory({}, 10)).toBeNull();
+  });
+});
+
+describe('codexThreadHoldsPrompt', () => {
+  const userMessage = (text: string) => ({
+    type: 'userMessage',
+    id: 'um',
+    content: [{ type: 'text', text, text_elements: [] }],
+  });
+
+  it('holds a prompt once a turn carries the user’s words', () => {
+    expect(
+      codexThreadHoldsPrompt({
+        thread: { id: 't', turns: [{ id: 'u1', items: [userMessage('go')] }] },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { name: 'no turns', turns: [] },
+    { name: 'a turn with no items', turns: [{ id: 'u1', items: [] }] },
+    {
+      name: 'a turn with only the agent’s words',
+      turns: [
+        { id: 'u1', items: [{ type: 'agentMessage', id: 'am', text: 'hi' }] },
+      ],
+    },
+    {
+      name: 'a user message with no text',
+      turns: [{ id: 'u1', items: [userMessage('')] }],
+    },
+  ])('holds none with $name', ({ turns }) => {
+    expect(codexThreadHoldsPrompt({ thread: { id: 't', turns } })).toBe(false);
+  });
+
+  it('answers null for a reply carrying no thread', () => {
+    expect(codexThreadHoldsPrompt({})).toBeNull();
   });
 });

@@ -2281,6 +2281,57 @@ describe('CursorAcpAdapter — the notice for a failure, and for a refused load'
   });
 });
 
+describe('CursorAcpAdapter.sessionResumable', () => {
+  const stores: string[] = [];
+  afterEach(() => {
+    for (const store of stores.splice(0)) {
+      rmSync(store, { recursive: true, force: true });
+    }
+  });
+
+  function resumable(prepare: (store: string) => void): Promise<boolean> {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-resumable-store-'));
+    stores.push(store);
+    prepare(store);
+    return new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      sessionStoreDir: store,
+    }).sessionResumable({ sessionId: 's', configDir: null, cwd: '/proj' });
+  }
+
+  it('resumes a session whose store saved its prompt', async () => {
+    await expect(resumable(saveConversation)).resolves.toBe(true);
+  });
+
+  it('does not resume a session with no checkpoint yet', async () => {
+    await expect(
+      resumable((store) => {
+        mkdirSync(join(store, 's'));
+        const db = new DatabaseSync(join(store, 's', 'store.db'));
+        db.exec('CREATE TABLE meta (value TEXT)');
+        db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
+        db.prepare('INSERT INTO meta (value) VALUES (?)').run(
+          Buffer.from(JSON.stringify({ latestRootBlobId: '' })).toString('hex'),
+        );
+        db.close();
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('does not resume a session the CLI never wrote', async () => {
+    await expect(resumable(() => {})).resolves.toBe(false);
+  });
+
+  it('resumes as before when the store cannot be read', async () => {
+    await expect(
+      resumable((store) => {
+        mkdirSync(join(store, 's'));
+        writeFileSync(join(store, 's', 'store.db'), 'not a sqlite database');
+      }),
+    ).resolves.toBe(true);
+  });
+});
+
 describe('CursorAcpAdapter — background sub-agents', () => {
   /**
    * Every frame below is transcribed from the wire, cursor-agent

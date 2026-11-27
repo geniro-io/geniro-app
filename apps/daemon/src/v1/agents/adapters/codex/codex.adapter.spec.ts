@@ -2143,6 +2143,92 @@ describe('CodexAdapter.deleteSessionTranscript', () => {
   });
 });
 
+describe('CodexAdapter.sessionResumable', () => {
+  const input = {
+    sessionId: THREAD,
+    configDir: '/profiles/codex',
+    cwd: '/repo',
+  };
+  const thread = (turns: unknown[]) =>
+    answered({ thread: { id: THREAD, turns } });
+  const prompted = thread([
+    {
+      id: 'u1',
+      items: [
+        {
+          type: 'userMessage',
+          id: 'um',
+          content: [{ type: 'text', text: 'the brief', text_elements: [] }],
+        },
+      ],
+    },
+  ]);
+
+  it('resumes a thread holding its prompt, read in the call’s profile from the home folder', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'codex-resumable-home-'));
+    onTestFinished(() => rmSync(home, { recursive: true, force: true }));
+    const cwds: (string | URL | undefined)[] = [];
+    const server = oneshotSpawn(prompted);
+    const spawnFn = ((...args: Parameters<typeof spawn>) => {
+      cwds.push(args[2]?.cwd);
+      return server.groupSpawnFn(...args);
+    }) as typeof spawn;
+
+    await expect(
+      adapterWith({ groupSpawnFn: spawnFn, homeDir: home }).sessionResumable(
+        input,
+      ),
+    ).resolves.toBe(true);
+    expect(paramsSentFor(server.calls[0]!.stdin, 'thread/read')).toEqual({
+      threadId: THREAD,
+      includeTurns: true,
+    });
+    expect(server.calls[0]!.env.CODEX_HOME).toBe('/profiles/codex');
+    expect(cwds).toEqual([home]);
+  });
+
+  it('does not resume a thread whose turn kept no prompt', async () => {
+    const { groupSpawnFn } = oneshotSpawn(
+      thread([{ id: 'u1', status: 'interrupted', items: [] }]),
+    );
+
+    await expect(
+      adapterWith({ groupSpawnFn }).sessionResumable(input),
+    ).resolves.toBe(false);
+  });
+
+  it('does not resume a thread codex refuses to read', async () => {
+    const { groupSpawnFn } = oneshotSpawn(
+      `{"id":1,"result":{"userAgent":"codex"}}\n${JSON.stringify({ id: 2, error: { code: -32600, message: `thread not loaded: ${THREAD}` } })}\n`,
+    );
+
+    await expect(
+      adapterWith({ groupSpawnFn }).sessionResumable(input),
+    ).resolves.toBe(false);
+  });
+
+  it.each(['', '{bad}\n', answered({ thread: null })])(
+    'resumes as before when codex gives no reading: %j',
+    async (stdout) => {
+      const { groupSpawnFn } = oneshotSpawn(stdout);
+
+      await expect(
+        adapterWith({ groupSpawnFn }).sessionResumable(input),
+      ).resolves.toBe(true);
+    },
+  );
+
+  it('resumes as before when codex cannot be started', async () => {
+    const spawnFn = (() => {
+      throw new Error('codex unavailable');
+    }) as typeof spawn;
+
+    await expect(
+      adapterWith({ groupSpawnFn: spawnFn }).sessionResumable(input),
+    ).resolves.toBe(true);
+  });
+});
+
 describe('CodexAdapter.recoverSubagent', () => {
   const ref: SubagentRecoveryRef = {
     agentKind: AgentKind.Codex,

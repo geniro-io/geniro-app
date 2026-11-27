@@ -91,3 +91,22 @@ export function codexThreadHistory(
   const droppedBefore = Math.max(0, events.length - limit);
   return { events: events.slice(droppedBefore), droppedBefore };
 }
+
+/**
+ * Whether a `thread/read` result read with its turns holds a user message,
+ * or null when it names no thread.
+ */
+export function codexThreadHoldsPrompt(result: unknown): boolean | null {
+  const thread = asRecord(asRecord(result)?.thread);
+  if (thread === null) {
+    return null;
+  }
+  return asArray(thread.turns).some((turn) =>
+    asArray(asRecord(turn)?.items).some((entry) => {
+      const item = readCodexItem(entry);
+      return (
+        item?.type === 'userMessage' && userMessageText(item.record) !== ''
+      );
+    }),
+  );
+}

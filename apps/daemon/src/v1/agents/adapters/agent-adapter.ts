@@ -644,10 +644,10 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * Whether `--resume` (or its protocol twin) can reach this conversation —
-   * false only when the CLI's own store shows it was never written, as for a
-   * session id announced at spawn (`session_assigned`) whose process died
-   * before the CLI read its prompt.
+   * Whether `--resume` (or its protocol twin) can reach this conversation
+   * with its prompt in it — false only when the CLI's own store shows it was
+   * never written or saved no prompt, as for a session whose process died
+   * before or just after the CLI read its first prompt.
    *
    * The default is yes, which is what every caller did before asking: a CLI
    * that has not measured where it keeps sessions is resumed as it always was.

@@ -7,3 +7,7 @@
 ### Improved
 
 - Quitting Geniro no longer stops your team runs: they carry on by themselves when you open it again, like after an update
+
+### Fixed
+
+- Quitting Geniro while a team lead waits on another agent no longer takes seven seconds and a forced stop

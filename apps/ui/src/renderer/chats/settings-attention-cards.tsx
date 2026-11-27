@@ -10,40 +10,31 @@ import { useContext } from 'react';
 
 import type { CliDetection, ConfigProfile } from '../../shared/contracts';
 import { agentDisplayName, AgentIdentityContext } from '../agent-identity';
-import { type SignedOutAccount, signedOutAccountRows } from '../cli-sign-ins';
+import { accountLogins, type SignedOutAccount } from '../cli-sign-ins';
 import { AppUpdateActions } from '../components/app-update-actions';
 import { CliLoginProgress } from '../components/cli-login-progress';
 import { ErrorText } from '../components/error-text';
 import { SignInAction } from '../components/sign-in-action';
 import { Button } from '../components/ui/button';
 import type { DaemonApis } from '../daemon-api';
-import { cliUpdatesAvailable } from '../settings/use-cli-attention';
 import type { CliUpdatesController } from '../settings/use-cli-updates';
 import { updateStatusText } from '../updates/update-status';
 import type { UpdateController } from '../updates/use-update-state';
-import { type CliLoginController, isLoginOver } from '../use-cli-login';
+import { type CliLoginController, loginUnderWay } from '../use-cli-login';
 import { NoticeCard } from './notice-card';
 import {
+  appUpdateUnsettled,
   appUpdateWaits,
   configDirName,
+  newestNoticeVersion,
   type ShareWait,
   shareWaitOf,
+  signInNoticeKey,
 } from './settings-attention';
 import type { SettingsNoticeRowView } from './settings-notice-payload';
 import { SettingsNoticesContext } from './settings-notices-context';
 
 const SLOT = 'settings-attention';
-
-/**
- * TWIN PARSER: the `agent-sign-in` key of `readingsByKey` in
- * `apps/daemon/src/v1/command-center/utils/notice-plan.ts`.
- */
-function signInNoticeKey(account: {
-  kind: string;
-  configDir: string | null;
-}): string {
-  return `agent-sign-in:${account.kind}:${account.configDir ?? ''}`;
-}
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -143,16 +134,17 @@ export function AgentSignInCard({
   nameOf,
   profiles,
   onDismiss,
+  ownsLogin = true,
 }: {
   rows: readonly SignedOutAccount[];
   login: CliLoginController;
   nameOf: (kind: string) => string;
   profiles: readonly ConfigProfile[];
   onDismiss?: () => void;
+  /** Whether the sign-in under way, or just ended, is this card's: only then is its progress drawn here. */
+  ownsLogin?: boolean;
 }): React.JSX.Element {
-  const busy =
-    login.starting !== null ||
-    (login.login !== null && !isLoginOver(login.login.session));
+  const busy = loginUnderWay(login);
   const dismissable =
     rows.length > 0 && login.starting === null && login.login === null;
   return (
@@ -199,7 +191,7 @@ export function AgentSignInCard({
           })}
         </Rows>
       )}
-      {login.login === null ? null : (
+      {login.login === null || !ownsLogin ? null : (
         <CliLoginProgress
           variant="inline"
           session={login.login.session}
@@ -216,14 +208,23 @@ export function AgentSignInCard({
 export function AppUpdateCard({
   update,
   remote,
+  offered = null,
   onDismiss,
 }: {
   update: UpdateController;
   remote: boolean;
+  /** The version the notice offered, said while this launch does not know whether it still waits. */
+  offered?: string | null;
   onDismiss?: () => void;
 }): React.JSX.Element | null {
   const state = update.state;
-  if (state === null) {
+  const text =
+    state !== null && (appUpdateWaits(state) || state.phase === 'error')
+      ? updateStatusText(state)
+      : offered === null
+        ? null
+        : `Geniro ${offered} is available.`;
+  if (text === null) {
     return null;
   }
   return (
@@ -238,7 +239,7 @@ export function AppUpdateCard({
         <p
           data-slot="settings-attention-app-update"
           className="m-0 min-w-0 flex-1 text-sm break-words">
-          {updateStatusText(state)}
+          {text}
         </p>
         {remote ? null : <AppUpdateActions update={update} />}
       </div>
@@ -331,7 +332,9 @@ export function MemoryConflictsCard({
 /**
  * A Settings notice's row in the manager chat: the card Settings' own live
  * readings draw for it while the notice stands and was not dismissed, nothing
- * otherwise. A sign-in under way keeps its card until it ends.
+ * otherwise. While a live reading is not known (a check under way, an account
+ * not asked yet) the card is drawn from what the notice holds. A sign-in under
+ * way keeps its card until it ends.
  */
 export function SettingsNoticeCard({
   row,
@@ -344,34 +347,51 @@ export function SettingsNoticeCard({
     return null;
   }
   const notice = store.notices?.get(row.noticeId);
-  const signing = store.login.login ?? store.login.starting;
-  const signingIn =
+  const signing = store.login.starting ?? store.login.login;
+  const ownsLogin =
     row.kind === 'agent-sign-in' &&
     signing !== null &&
     signing.server === null &&
     row.key === signInNoticeKey(signing);
+  const signingIn = ownsLogin && loginUnderWay(store.login);
   if (
     notice === undefined ||
     (!signingIn && (notice.resolvedAt !== null || notice.dismissedAt !== null))
   ) {
     return null;
   }
+  const offered = newestNoticeVersion(notice.items);
   const onDismiss = (): void => store.dismiss(row.noticeId);
   const nameOf = (kind: string): string => agentDisplayName(identities, kind);
   const detections = store.detections ?? [];
   switch (row.kind) {
     case 'app-update':
-      return appUpdateWaits(store.update.state) ? (
+      return appUpdateWaits(store.update.state) ||
+        appUpdateUnsettled(store.update.state) ? (
         <AppUpdateCard
           update={store.update}
           remote={store.remote}
+          offered={offered}
           onDismiss={onDismiss}
         />
       ) : null;
     case 'agent-updates': {
-      const rows = cliUpdatesAvailable(detections).filter(
-        (detection) => row.key === `agent-updates:${detection.kind}`,
-      );
+      const rows = detections
+        .filter(
+          (detection) =>
+            row.key === `agent-updates:${detection.kind}` &&
+            detection.found &&
+            detection.update.available !== false &&
+            (detection.update.available === true || offered !== null),
+        )
+        .map((detection) =>
+          offered === null
+            ? detection
+            : {
+                ...detection,
+                update: { ...detection.update, latestVersion: offered },
+              },
+        );
       return rows.length === 0 ? null : (
         <AgentUpdatesCard
           rows={rows}
@@ -383,14 +403,19 @@ export function SettingsNoticeCard({
     }
     case 'agent-sign-in': {
       const rows = detections
-        .flatMap(signedOutAccountRows)
-        .filter((account) => row.key === signInNoticeKey(account));
+        .flatMap(accountLogins)
+        .filter(
+          (account) =>
+            account.loggedIn !== true && row.key === signInNoticeKey(account),
+        )
+        .map(({ kind, configDir }) => ({ kind, configDir }));
       return rows.length === 0 && !signingIn ? null : (
         <AgentSignInCard
           rows={rows}
           login={store.login}
           nameOf={nameOf}
           profiles={store.profiles}
+          ownsLogin={ownsLogin}
           onDismiss={onDismiss}
         />
       );

@@ -184,6 +184,11 @@ export class CommandCenterNoticesService
             readingsByKey(reading.kind, reading.items),
           ),
         ),
+      new Set(
+        readings.flatMap((reading) =>
+          readingsByKey(reading.kind, reading.unsettled).map(({ key }) => key),
+        ),
+      ),
     );
   }
 
@@ -278,6 +283,7 @@ export class CommandCenterNoticesService
     managerRunId: string,
     kinds: ReadonlySet<SettingsNoticeKind>,
     read: () => Promise<NoticeReading[]>,
+    unsettled: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     return this.chain.run(managerRunId, async () => {
       const readings = await read();
@@ -290,7 +296,7 @@ export class CommandCenterNoticesService
           dismissed: row.dismissedAt !== null,
         }),
       );
-      const steps = planNotices(open, kinds, readings);
+      const steps = planNotices(open, kinds, readings, unsettled);
       if (steps.length === 0) {
         return;
       }

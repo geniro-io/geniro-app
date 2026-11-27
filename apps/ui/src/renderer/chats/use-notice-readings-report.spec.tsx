@@ -89,9 +89,13 @@ describe('useNoticeReadingsReport', () => {
     expect(reportCommandCenterNoticeReadings).toHaveBeenLastCalledWith({
       settingsNoticeReadingsDto: {
         readings: [
-          { kind: 'app-update', items: ['2.4.0'] },
-          { kind: 'agent-updates', items: ['claude@2.0.0'] },
-          { kind: 'agent-sign-in', items: ['codex:'] },
+          { kind: 'app-update', items: ['2.4.0'], unsettled: [] },
+          {
+            kind: 'agent-updates',
+            items: ['claude@2.0.0'],
+            unsettled: ['codex@'],
+          },
+          { kind: 'agent-sign-in', items: ['codex:'], unsettled: [] },
         ],
       },
     });
@@ -109,8 +113,8 @@ describe('useNoticeReadingsReport', () => {
     expect(reportCommandCenterNoticeReadings).toHaveBeenLastCalledWith({
       settingsNoticeReadingsDto: {
         readings: [
-          { kind: 'agent-updates', items: [] },
-          { kind: 'agent-sign-in', items: [] },
+          { kind: 'agent-updates', items: [], unsettled: ['codex@'] },
+          { kind: 'agent-sign-in', items: [], unsettled: [] },
         ],
       },
     });

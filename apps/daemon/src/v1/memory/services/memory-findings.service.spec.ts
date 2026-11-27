@@ -156,6 +156,25 @@ describe('MemoryFindingsService', () => {
     expectOnePairOf(await db.findings.candidatePairs(), global, team);
   });
 
+  it('announces a recorded finding and a dismissal to every client, and not a dismissal of no finding', async () => {
+    const first = await save('Pnpm workspace rule', NONE);
+    const second = await save('Pnpm workspace rule', NONE, undefined, first);
+    const seen: { memoryId: string | null; change: string }[] = [];
+    const subscription = db.events
+      .allChanges()
+      .subscribe(({ memoryId, change }) => seen.push({ memoryId, change }));
+
+    const finding = await judge(first, second);
+    await db.findings.dismiss(finding.id);
+    await db.findings.dismiss('no-such-finding');
+    subscription.unsubscribe();
+
+    expect(seen).toEqual([
+      { memoryId: null, change: 'findings' },
+      { memoryId: null, change: 'findings' },
+    ]);
+  });
+
   it('Undo leaves a dismissed pair dismissed, and brings back a pair it had only hidden', async () => {
     const dismissedA = await save('Pnpm workspace rule', NONE);
     const dismissedB = await save(

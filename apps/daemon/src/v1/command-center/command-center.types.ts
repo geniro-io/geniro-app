@@ -323,7 +323,8 @@ export const DismissThreadDoneSchema = z
 
 /**
  * What the desktop window reads now for the kinds Electron main holds: a kind
- * listed with no items has nothing waiting, a kind left out was not read.
+ * listed with no items has nothing waiting, a kind left out was not read, and
+ * an unsettled item is one whose answer is not known right now.
  */
 export const SettingsNoticeReadingsSchema = z
   .object({
@@ -334,6 +335,12 @@ export const SettingsNoticeReadingsSchema = z
           items: z
             .array(z.string().min(1).max(NOTICE_ITEM_MAX_CHARS))
             .max(NOTICE_ITEMS_MAX),
+          unsettled: z
+            .array(z.string().min(1).max(NOTICE_ITEM_MAX_CHARS))
+            .max(NOTICE_ITEMS_MAX)
+            .describe(
+              'Items not known right now (a check under way or failed, an account not asked yet): their notices stay as they are',
+            ),
         }),
       )
       .max(REPORTED_NOTICE_KINDS.length),

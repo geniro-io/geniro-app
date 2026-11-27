@@ -48,14 +48,16 @@ export type NoticeStep =
 
 /**
  * What a reading of `kinds` does to the open notices. A key read with no items
- * resolves its notice. A key with no open notice opens one. An item the open
- * notice never showed widens it, or — once it was dismissed — resolves it and
- * opens a new one, so a dismissed notice comes back only as a new notice.
+ * resolves its notice, unless the key is `unsettled`: a reading not known right
+ * now leaves its notice as it is. A key with no open notice opens one. An item
+ * the open notice never showed widens it, or — once it was dismissed — resolves
+ * it and opens a new one, so a dismissed notice comes back only as a new notice.
  */
 export function planNotices(
   open: readonly OpenNotice[],
   kinds: ReadonlySet<SettingsNoticeKind>,
   readings: readonly NoticeReading[],
+  unsettled: ReadonlySet<string> = new Set(),
 ): NoticeStep[] {
   const read = new Map<string, NoticeReading>();
   for (const reading of readings) {
@@ -71,7 +73,7 @@ export function planNotices(
     }
     if (read.has(notice.key) && !openByKey.has(notice.key)) {
       openByKey.set(notice.key, notice);
-    } else {
+    } else if (!unsettled.has(notice.key)) {
       steps.push({ op: 'resolve', id: notice.id });
     }
   }

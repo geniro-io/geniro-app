@@ -103,22 +103,61 @@ describe('reportedNoticeReadings', () => {
         updateState({ phase: 'available', version: '2.4.0' }),
       ),
     ).toEqual([
-      { kind: 'app-update', items: ['2.4.0'] },
-      { kind: 'agent-updates', items: ['claude@2.0.0'] },
-      { kind: 'agent-sign-in', items: ['codex:', 'codex:/cfg/work'] },
+      { kind: 'app-update', items: ['2.4.0'], unsettled: [] },
+      { kind: 'agent-updates', items: ['claude@2.0.0'], unsettled: ['codex@'] },
+      {
+        kind: 'agent-sign-in',
+        items: ['codex:', 'codex:/cfg/work'],
+        unsettled: [],
+      },
+    ]);
+  });
+
+  it('reports what is not known right now as unsettled, never as nothing waiting', () => {
+    for (const phase of ['idle', 'checking', 'error'] as const) {
+      expect(
+        reportedNoticeReadings(null, updateState({ phase, version: null }))[0],
+      ).toEqual({ kind: 'app-update', items: [], unsettled: ['unknown'] });
+    }
+    expect(
+      reportedNoticeReadings(
+        [
+          detection('claude', {
+            loggedIn: null,
+            profileLogins: { '/cfg/work': null, '/cfg/home': false },
+          }),
+          detection('codex', { found: false, loggedIn: null }),
+        ],
+        null,
+      ),
+    ).toEqual([
+      { kind: 'agent-updates', items: [], unsettled: ['claude@'] },
+      {
+        kind: 'agent-sign-in',
+        items: ['claude:/cfg/home'],
+        unsettled: ['claude:', 'claude:/cfg/work'],
+      },
     ]);
   });
 
   it('reports a kind it read with nothing waiting as empty, so its notice closes', () => {
     expect(
       reportedNoticeReadings(
-        [detection('claude')],
+        [
+          detection('claude', {
+            update: {
+              available: false,
+              latestVersion: null,
+              checkUnavailableReason: null,
+            },
+          }),
+        ],
         updateState({ phase: 'up-to-date' }),
       ),
     ).toEqual([
-      { kind: 'app-update', items: [] },
-      { kind: 'agent-updates', items: [] },
-      { kind: 'agent-sign-in', items: [] },
+      { kind: 'app-update', items: [], unsettled: [] },
+      { kind: 'agent-updates', items: [], unsettled: [] },
+      { kind: 'agent-sign-in', items: [], unsettled: [] },
     ]);
   });
 });

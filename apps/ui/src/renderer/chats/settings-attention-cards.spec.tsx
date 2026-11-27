@@ -81,6 +81,7 @@ let findings: MemoryFinding[];
 let listShares: ReturnType<typeof vi.fn>;
 let listMemoryFindings: ReturnType<typeof vi.fn>;
 let startCliLogin: ReturnType<typeof vi.fn>;
+let cancelCliLogin: ReturnType<typeof vi.fn>;
 let startShareSignIn: ReturnType<typeof vi.fn>;
 let notices: SettingsNotice[];
 let listCommandCenterNotices: ReturnType<typeof vi.fn>;
@@ -106,7 +107,7 @@ function apis(): DaemonApis {
     cliAuth: {
       startCliLogin,
       submitCliLoginCode: vi.fn(),
-      cancelCliLogin: vi.fn(),
+      cancelCliLogin,
     },
   } as unknown as DaemonApis;
 }
@@ -251,6 +252,14 @@ beforeEach(() => {
     Promise.resolve({
       id: 'login-1',
       status: 'waiting',
+      url: null,
+      message: null,
+    }),
+  );
+  cancelCliLogin = vi.fn(() =>
+    Promise.resolve({
+      id: 'login-1',
+      status: 'cancelled',
       url: null,
       message: null,
     }),
@@ -689,5 +698,129 @@ describe('dismissing a settings card', () => {
     expect(
       button(cards('agent-sign-in')[0] as HTMLElement, 'Dismiss'),
     ).toBeNull();
+  });
+  it('takes the card of a sign-in cancelled after its account signed in elsewhere away, leaving nothing in its place', async () => {
+    detections = [det('claude', { profileLogins: { '/cfg/work': false } })];
+    await draw();
+    await act(async () => {
+      button(cards('agent-sign-in')[0] as HTMLElement, 'Sign in')?.click();
+    });
+    notices = notices.map((entry) =>
+      entry.key === 'agent-sign-in:claude:/cfg/work'
+        ? { ...entry, resolvedAt: '2026-11-27T11:00:00.000Z' }
+        : entry,
+    );
+    detections = [det('claude', { profileLogins: { '/cfg/work': true } })];
+    await act(async () => {
+      commandCenterChanged({ runIds: ['manager'], reason: 'notices' });
+    });
+    expect(cards('agent-sign-in')).toHaveLength(1);
+
+    await act(async () => {
+      button(cards('agent-sign-in')[0] as HTMLElement, 'Cancel')?.click();
+    });
+
+    expect(cancelCliLogin).toHaveBeenCalledTimes(1);
+    expect(cards('agent-sign-in')).toEqual([]);
+  });
+
+  it('draws a sign-in under way on the card of its own account only', async () => {
+    detections = [
+      det('claude', { loggedIn: false, profileLogins: { '/cfg/work': false } }),
+    ];
+    await draw();
+    const [home, work] = cards('agent-sign-in') as [HTMLElement, HTMLElement];
+    await act(async () => {
+      button(work, 'Sign in')?.click();
+    });
+
+    expect(home.querySelector('[data-slot="cli-login-progress"]')).toBeNull();
+    expect(
+      work.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
+  });
+
+  it('keeps drawing an open notice from what it holds while this launch does not know its answer yet', async () => {
+    appUpdate = updateState({ phase: 'idle', version: null });
+    detections = [
+      det('claude', {
+        loggedIn: null,
+        update: {
+          available: null,
+          latestVersion: null,
+          checkUnavailableReason: null,
+        },
+      }),
+    ];
+    notices = [
+      notice('app-update', 'app-update', { items: ['2.4.0'] }),
+      notice('agent-updates', 'agent-updates:claude', {
+        items: ['claude@2.0.0'],
+      }),
+      notice('agent-sign-in', 'agent-sign-in:claude:'),
+    ];
+    await draw({ rows: notices });
+
+    expect(cards('app-update')[0]?.textContent).toContain(
+      'Geniro 2.4.0 is available.',
+    );
+    expect(
+      cards('agent-updates')[0]?.querySelector(
+        '[data-slot="settings-attention-update"]',
+      )?.textContent,
+    ).toBe('claude 1.0.0 → 2.0.0Update');
+    expect(
+      cards('agent-sign-in')[0]?.querySelector(
+        '[data-slot="settings-attention-sign-in"]',
+      )?.textContent,
+    ).toBe('claudeSign in');
+  });
+
+  it('draws nothing at an open notice once the CLI answers that nothing waits', async () => {
+    notices = [
+      notice('agent-updates', 'agent-updates:claude', {
+        items: ['claude@2.0.0'],
+      }),
+      notice('agent-sign-in', 'agent-sign-in:claude:'),
+    ];
+    detections = [
+      det('claude', {
+        update: {
+          available: false,
+          latestVersion: null,
+          checkUnavailableReason: null,
+        },
+      }),
+    ];
+    await draw({ rows: notices });
+
+    expect(cards()).toEqual([]);
+  });
+
+  it('names the version the notice holds and reads the CLIs again when the notices change elsewhere', async () => {
+    detections = [det('cursor-agent', { update: withUpdate('2026.12.01') })];
+    notices = [
+      notice('agent-updates', 'agent-updates:cursor-agent', {
+        items: ['cursor-agent@2026.12.01'],
+      }),
+    ];
+    await draw({ rows: notices });
+    const reads = detectClis.mock.calls.length;
+
+    notices = [
+      notice('agent-updates', 'agent-updates:cursor-agent', {
+        items: ['cursor-agent@2026.12.01', 'cursor-agent@2026.12.05'],
+      }),
+    ];
+    await act(async () => {
+      commandCenterChanged({ runIds: ['manager'], reason: 'notices' });
+    });
+
+    expect(detectClis.mock.calls.length).toBeGreaterThan(reads);
+    expect(
+      cards('agent-updates')[0]?.querySelector(
+        '[data-slot="settings-attention-update"]',
+      )?.textContent,
+    ).toBe('cursor-agent 1.0.0 → 2026.12.05Update');
   });
 });

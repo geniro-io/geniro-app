@@ -79,6 +79,27 @@ describe('planNotices', () => {
     ]);
   });
 
+  it('leaves a notice whose key is unsettled as it is, and resolves the others of its kind', () => {
+    const work = open({
+      id: 'n2',
+      kind: 'agent-sign-in',
+      key: 'agent-sign-in:claude:/cfg/work',
+    });
+    const home = open({
+      id: 'n3',
+      kind: 'agent-sign-in',
+      key: 'agent-sign-in:claude:',
+    });
+    expect(
+      planNotices(
+        [work, home],
+        new Set<SettingsNoticeKind>(['agent-sign-in']),
+        [],
+        new Set(['agent-sign-in:claude:/cfg/work']),
+      ),
+    ).toEqual([{ op: 'resolve', id: 'n3' }]);
+  });
+
   it('leaves the notices of kinds this reading did not cover alone', () => {
     expect(
       planNotices([open()], new Set<SettingsNoticeKind>(['agent-updates']), []),

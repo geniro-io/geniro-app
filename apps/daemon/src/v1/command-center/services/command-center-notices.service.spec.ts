@@ -118,7 +118,7 @@ describe('CommandCenterNoticesService', () => {
   > => (await made.list()).notices;
 
   const update = (...items: string[]) => ({
-    readings: [{ kind: 'app-update' as const, items }],
+    readings: [{ kind: 'app-update' as const, items, unsettled: [] }],
   });
 
   it('writes one chat row for a new Geniro update, named by its notice', async () => {
@@ -175,11 +175,13 @@ describe('CommandCenterNoticesService', () => {
 
   it('resolves a notice once its reason goes and opens a new row when it comes back', async () => {
     await service.report({
-      readings: [{ kind: 'agent-sign-in', items: ['claude:'] }],
+      readings: [{ kind: 'agent-sign-in', items: ['claude:'], unsettled: [] }],
     });
-    await service.report({ readings: [{ kind: 'agent-sign-in', items: [] }] });
     await service.report({
-      readings: [{ kind: 'agent-sign-in', items: ['claude:'] }],
+      readings: [{ kind: 'agent-sign-in', items: [], unsettled: [] }],
+    });
+    await service.report({
+      readings: [{ kind: 'agent-sign-in', items: ['claude:'], unsettled: [] }],
     });
 
     const notices = await listed();
@@ -196,7 +198,7 @@ describe('CommandCenterNoticesService', () => {
   it('leaves the kinds a report did not read alone', async () => {
     await service.report(update('1.4.0'));
     await service.report({
-      readings: [{ kind: 'agent-updates', items: [] }],
+      readings: [{ kind: 'agent-updates', items: [], unsettled: [] }],
     });
 
     expect((await listed())[0]!.resolvedAt).toBeNull();
@@ -211,6 +213,48 @@ describe('CommandCenterNoticesService', () => {
 
     expect(dismissed.dismissedAt).not.toBeNull();
     expect((await listed(make()))[0]!.dismissedAt).not.toBeNull();
+    expect(await noticeRows()).toHaveLength(1);
+  });
+
+  it('leaves a notice open while its reading is not known, a check under way or a restart', async () => {
+    const unknown = {
+      readings: [
+        { kind: 'app-update' as const, items: [], unsettled: ['unknown'] },
+        {
+          kind: 'agent-sign-in' as const,
+          items: [],
+          unsettled: ['claude:'],
+        },
+      ],
+    };
+    await service.report(update('1.4.0'));
+    await service.report({
+      readings: [{ kind: 'agent-sign-in', items: ['claude:'], unsettled: [] }],
+    });
+
+    await service.report(unknown);
+    await make().report(unknown);
+    await service.report(update('1.4.0'));
+
+    const notices = await listed();
+    expect(notices).toHaveLength(2);
+    expect(notices.every((entry) => entry.resolvedAt === null)).toBe(true);
+    expect(await noticeRows()).toHaveLength(2);
+  });
+
+  it('keeps a dismissed update away when a check of the same version runs again', async () => {
+    await service.report(update('1.4.0'));
+    await service.dismiss((await listed())[0]!.id);
+
+    await service.report({
+      readings: [{ kind: 'app-update', items: [], unsettled: ['1.4.0'] }],
+    });
+    await service.report(update('1.4.0'));
+
+    const notices = await listed();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.resolvedAt).toBeNull();
+    expect(notices[0]!.dismissedAt).not.toBeNull();
     expect(await noticeRows()).toHaveLength(1);
   });
 
@@ -295,12 +339,22 @@ describe('CommandCenterNoticesService', () => {
 
   it('gives each CLI update and each signed-out account a row of its own', async () => {
     await service.report({
-      readings: [{ kind: 'agent-updates', items: ['claude@2.0.0'] }],
+      readings: [
+        { kind: 'agent-updates', items: ['claude@2.0.0'], unsettled: [] },
+      ],
     });
     await service.report({
       readings: [
-        { kind: 'agent-updates', items: ['claude@2.0.0', 'codex@0.9.0'] },
-        { kind: 'agent-sign-in', items: ['claude:', 'claude:/cfg/work'] },
+        {
+          kind: 'agent-updates',
+          items: ['claude@2.0.0', 'codex@0.9.0'],
+          unsettled: [],
+        },
+        {
+          kind: 'agent-sign-in',
+          items: ['claude:', 'claude:/cfg/work'],
+          unsettled: [],
+        },
       ],
     });
 

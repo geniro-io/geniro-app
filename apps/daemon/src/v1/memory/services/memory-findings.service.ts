@@ -23,6 +23,7 @@ import {
   textsKey,
 } from '../utils/memory-pairs';
 import { toEntry } from './memory.service';
+import { MemoryEventBus } from './memory-events.bus';
 
 /** Entries read, or searched for partners, between two yields of the loop. */
 const WINDOW = 100;
@@ -52,6 +53,7 @@ export class MemoryFindingsService {
     private readonly em: EntityManager,
     private readonly memories: MemoryDao,
     private readonly findings: MemoryReviewFindingDao,
+    private readonly events: MemoryEventBus,
   ) {}
 
   /** Every likely pair not yet checked at its current texts, in a stable order. */
@@ -166,6 +168,9 @@ export class MemoryFindingsService {
   async record(checks: readonly MemoryCheckRecord[]): Promise<MemoryFinding[]> {
     const em = this.em.fork();
     const ids = await this.findings.record(checks, new Date(), em);
+    if (ids.size > 0) {
+      this.announce();
+    }
     return this.openFindings(em, [...ids.values()]);
   }
 
@@ -179,7 +184,25 @@ export class MemoryFindingsService {
    * until either text changes. False when there is no such finding.
    */
   async dismiss(id: string): Promise<boolean> {
-    return this.findings.dismiss(id, new Date(), this.em.fork());
+    const dismissed = await this.findings.dismiss(
+      id,
+      new Date(),
+      this.em.fork(),
+    );
+    if (dismissed) {
+      this.announce();
+    }
+    return dismissed;
+  }
+
+  private announce(): void {
+    this.events.publish({
+      memoryId: null,
+      change: 'findings',
+      status: 'active',
+      projectId: null,
+      teamSlug: null,
+    });
   }
 
   private async openFindings(

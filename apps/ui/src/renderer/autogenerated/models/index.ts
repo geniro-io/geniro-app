@@ -17370,6 +17370,12 @@ export interface SettingsNoticeReadingsDtoReadingsInner {
      * @memberof SettingsNoticeReadingsDtoReadingsInner
      */
     items: Array<string>;
+    /**
+     * Items not known right now (a check under way or failed, an account not asked yet): their notices stay as they are
+     * @type {Array<string>}
+     * @memberof SettingsNoticeReadingsDtoReadingsInner
+     */
+    unsettled: Array<string>;
 }
 
 

@@ -41,11 +41,12 @@ export function useSettingsNotices({
 }): SettingsNoticesStore {
   const cli = useCliAttention();
   const { refresh } = cli;
+  const notices = manager?.notices ?? null;
   useEffect(() => {
     if (active) {
       refresh(false);
     }
-  }, [active, refresh]);
+  }, [active, notices, refresh]);
   const login = useCliLogin(apis, () => refresh(true));
   const update = useUpdateState();
   const profiles = useConfigProfiles();
@@ -63,7 +64,6 @@ export function useSettingsNotices({
     readMemoryFindings,
     ON_MEMORY,
   );
-  const notices = manager?.notices ?? null;
   const dismiss = manager?.dismiss ?? ignoreDismiss;
 
   const shareWaits = useMemo(

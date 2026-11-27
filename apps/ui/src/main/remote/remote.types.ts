@@ -54,6 +54,18 @@ export const TUNNEL_CONNECT_WAIT_MS = 5 * 60_000;
  */
 export const TUNNEL_PUBLIC_PROBE_INTERVAL_MS = 1_000;
 
+/**
+ * How long after its URL line a connected cloudflared address is shown, with a
+ * warning, when this Mac has only ever been unable to check it (a network that
+ * intercepts DNS or TLS). Above the 20.3 s the slowest of five measured quick
+ * tunnels took to reach Cloudflare's nameservers; nothing publishes the real
+ * figure.
+ */
+export const TUNNEL_UNCHECKED_SHOW_AFTER_MS = 30_000;
+
+/** How many checks in a row must have been unable to run before an address is shown unchecked. */
+export const TUNNEL_UNCHECKED_MIN_RESULTS = 3;
+
 /** How long one DNS question of that check may take. */
 export const TUNNEL_PUBLIC_DNS_TIMEOUT_MS = 2_000;
 

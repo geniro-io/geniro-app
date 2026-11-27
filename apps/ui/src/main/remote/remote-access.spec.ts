@@ -462,7 +462,7 @@ describe('a tunnel that is still starting', () => {
     const tunnel = new RemoteTunnel({
       spawnProcess: vi.fn(() => child) as never,
       resolveBin: (name) => `/opt/homebrew/bin/${name}`,
-      probePublic: async () => false,
+      probePublic: async () => 'not-yet',
     });
     const dir = mkdtempSync(join(tmpdir(), 'geniro-remote-access-'));
     const remoteAccess = new RemoteAccess({

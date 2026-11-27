@@ -15,6 +15,7 @@ import {
   tunnelHostPattern,
   type TunnelLog,
 } from './tunnel';
+import type { PublicProbeOutcome } from './tunnel-public-probe';
 
 /**
  * A stand-in for a spawned tunnel client: two readable streams and the
@@ -43,6 +44,8 @@ function fakeChild(): EventEmitter & {
   return child;
 }
 
+const answersAlways = async (): Promise<PublicProbeOutcome> => 'answers';
+
 const REGISTERED =
   'INF Registered tunnel connection connIndex=0 ip=198.41.192.47 location=ala02 protocol=quic\n';
 
@@ -50,7 +53,8 @@ function harness(
   options: {
     bins?: string[];
     connectWaitMs?: number;
-    probePublic?: (url: string) => Promise<boolean>;
+    probePublic?: (url: string) => Promise<PublicProbeOutcome>;
+    uncheckedAfterMs?: number;
     log?: TunnelLog;
   } = {},
 ) {
@@ -64,7 +68,8 @@ function harness(
     urlWaitMs: 50,
     connectWaitMs: options.connectWaitMs ?? 1_000,
     publicProbeIntervalMs: 1,
-    probePublic: options.probePublic ?? (async () => true),
+    probePublic: options.probePublic ?? answersAlways,
+    uncheckedAfterMs: options.uncheckedAfterMs,
     log: options.log,
   });
   return { tunnel, child, spawnProcess };
@@ -266,7 +271,7 @@ describe('RemoteTunnel', () => {
       spawnProcess: vi.fn(() => child) as never,
       resolveBin: (name) => `/opt/homebrew/bin/${name}`,
       urlWaitMs: 1_000,
-      probePublic: async () => true,
+      probePublic: answersAlways,
       livenessPollMs: 5,
       probeReady,
     });
@@ -299,7 +304,7 @@ describe('RemoteTunnel', () => {
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) => `/opt/homebrew/bin/${name}`,
         urlWaitMs: 50,
-        probePublic: async () => true,
+        probePublic: answersAlways,
         livenessPollMs: POLL_MS,
         probeReady: (url) => {
           probed.push(url);
@@ -516,7 +521,7 @@ describe('RemoteTunnel', () => {
     it('stays starting after the URL line until the address answers', async () => {
       let registered = false;
       const { tunnel, child } = harness({
-        probePublic: async () => registered,
+        probePublic: async () => (registered ? 'answers' : 'not-yet'),
       });
       const started = tunnel.start(47616);
       child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
@@ -536,7 +541,9 @@ describe('RemoteTunnel', () => {
     it('holds a connected address until it answers through the public address', async () => {
       const child = fakeChild();
       let answers = false;
-      const probePublic = vi.fn(async () => answers);
+      const probePublic = vi.fn(async (): Promise<PublicProbeOutcome> =>
+        answers ? 'answers' : 'not-yet',
+      );
       const tunnel = new RemoteTunnel({
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) => `/opt/homebrew/bin/${name}`,
@@ -568,6 +575,7 @@ describe('RemoteTunnel', () => {
       const state = await started;
       expect(state.status).toBe('open');
       expect(state.url).toBe('https://late-name.trycloudflare.com');
+      expect(state.unchecked).toBe(false);
       expect(tunnel.allowedHosts()).toEqual(['*.trycloudflare.com']);
       const calls = probePublic.mock.calls.length;
       await delivered();
@@ -578,7 +586,7 @@ describe('RemoteTunnel', () => {
     it('gives up when the public address never answers though the client connected, and reaps it', async () => {
       const { tunnel, child } = harness({
         connectWaitMs: 30,
-        probePublic: async () => false,
+        probePublic: async () => 'not-yet',
       });
       const started = tunnel.start(47616);
       child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
@@ -603,8 +611,84 @@ describe('RemoteTunnel', () => {
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     });
 
+    it('shows a connected address with a warning once this Mac has only been unable to check it, past the wait', async () => {
+      const log = vi.fn<TunnelLog>();
+      const { tunnel, child } = harness({
+        probePublic: async () => 'cannot-check',
+        uncheckedAfterMs: 30,
+        log,
+      });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(REGISTERED);
+
+      const state = await started;
+      expect(state).toMatchObject({
+        status: 'open',
+        url: 'https://abc.trycloudflare.com',
+        unchecked: true,
+        error: null,
+      });
+      expect(tunnel.allowedHosts()).toEqual(['*.trycloudflare.com']);
+      expect(log.mock.calls.map(([, message]) => message)).toContain(
+        'Public address shown unchecked: this Mac could not check it',
+      );
+      await tunnel.stop();
+    });
+
+    it('does not show an unchecked address before the wait is over', async () => {
+      const { tunnel, child } = harness({
+        probePublic: async () => 'cannot-check',
+        uncheckedAfterMs: 60_000,
+        connectWaitMs: 120_000,
+      });
+      void tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(REGISTERED);
+      await delivered();
+      await delivered();
+
+      expect(tunnel.state()).toMatchObject({ status: 'starting', url: null });
+      await tunnel.stop();
+    });
+
+    it('does not show an unchecked address while the client has no connection', async () => {
+      const { tunnel, child } = harness({
+        probePublic: async () => 'cannot-check',
+        uncheckedAfterMs: 0,
+        connectWaitMs: 120_000,
+      });
+      void tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      await delivered();
+      await delivered();
+
+      expect(tunnel.state()).toMatchObject({ status: 'starting', url: null });
+      await tunnel.stop();
+    });
+
+    it('stays strict when a working check says the address does not answer yet, and gives up at the wait', async () => {
+      let call = 0;
+      const { tunnel, child } = harness({
+        probePublic: async () =>
+          ++call % 2 === 0 ? 'not-yet' : 'cannot-check',
+        uncheckedAfterMs: 0,
+        connectWaitMs: 60,
+      });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(REGISTERED);
+
+      const state = await started;
+      expect(call).toBeGreaterThan(3);
+      expect(state.status).toBe('error');
+      expect(state.error).toContain('did not answer');
+    });
+
     it('admits and checks the address the client printed last while it starts', async () => {
-      const probePublic = vi.fn(async () => false);
+      const probePublic = vi.fn(
+        async (): Promise<PublicProbeOutcome> => 'not-yet',
+      );
       const { tunnel, child } = harness({ probePublic });
       void tunnel.start(47616);
       child.stderr.push('INF |  https://first-name.trycloudflare.com  |\n');
@@ -625,7 +709,7 @@ describe('RemoteTunnel', () => {
       const tunnel = new RemoteTunnel({
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) => `/opt/homebrew/bin/${name}`,
-        probePublic: async () => true,
+        probePublic: answersAlways,
         livenessPollMs: 2,
         probeReady: async () => ready,
       });
@@ -664,7 +748,7 @@ describe('RemoteTunnel', () => {
     it('gives up in the client’s own words when it never connects, and reaps it', async () => {
       const { tunnel, child } = harness({
         connectWaitMs: 20,
-        probePublic: async () => false,
+        probePublic: async () => 'not-yet',
       });
       const started = tunnel.start(47616);
       child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
@@ -683,7 +767,9 @@ describe('RemoteTunnel', () => {
       const child = fakeChild();
       child.kill = vi.fn(() => true);
       let answers = false;
-      const probePublic = vi.fn(async () => answers);
+      const probePublic = vi.fn(async (): Promise<PublicProbeOutcome> =>
+        answers ? 'answers' : 'not-yet',
+      );
       const tunnel = new RemoteTunnel({
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) => `/opt/homebrew/bin/${name}`,
@@ -708,7 +794,9 @@ describe('RemoteTunnel', () => {
     it('takes ngrok’s URL line as working, with no wait on top', async () => {
       vi.useFakeTimers();
       const child = fakeChild();
-      const probePublic = vi.fn(async () => false);
+      const probePublic = vi.fn(
+        async (): Promise<PublicProbeOutcome> => 'not-yet',
+      );
       const tunnel = new RemoteTunnel({
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) =>

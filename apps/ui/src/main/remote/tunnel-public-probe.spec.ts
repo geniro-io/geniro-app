@@ -16,10 +16,15 @@ function deps(overrides: Partial<PublicProbeDeps> = {}) {
     zoneNameservers: vi.fn<PublicProbeDeps['zoneNameservers']>(async () => [
       '173.245.58.193',
     ]),
-    resolveAt: vi.fn<PublicProbeDeps['resolveAt']>(async () => [
-      '104.16.230.132',
-    ]),
-    reachesGateway: vi.fn<PublicProbeDeps['reachesGateway']>(async () => true),
+    answersAsAuthority: vi.fn<PublicProbeDeps['answersAsAuthority']>(
+      async () => true,
+    ),
+    resolveAt: vi.fn<PublicProbeDeps['resolveAt']>(async () => ({
+      addresses: ['104.16.230.132', '104.16.231.132'],
+    })),
+    reachesGateway: vi.fn<PublicProbeDeps['reachesGateway']>(
+      async () => 'answers',
+    ),
     ...overrides,
   };
 }
@@ -55,9 +60,10 @@ describe('isGatewaySessionAnswer', () => {
 describe('createPublicProbe', () => {
   it("asks the zone's own nameservers for the name and requests the gateway at their answer", async () => {
     const d = deps();
-    expect(await createPublicProbe(d)(URL_A)).toBe(true);
+    expect(await createPublicProbe(d)(URL_A)).toBe('answers');
 
     expect(d.zoneNameservers).toHaveBeenCalledWith('trycloudflare.com');
+    expect(d.answersAsAuthority).toHaveBeenCalledWith(['173.245.58.193']);
     expect(d.resolveAt).toHaveBeenCalledWith(
       ['173.245.58.193'],
       'late-name.trycloudflare.com',
@@ -68,15 +74,70 @@ describe('createPublicProbe', () => {
     );
   });
 
-  it('does not request the address while its name is not in DNS yet', async () => {
-    const d = deps({ resolveAt: vi.fn(async () => []) });
-    expect(await createPublicProbe(d)(URL_A)).toBe(false);
+  it('never asks for the new name where a resolver on the way answers for the zone, and asks that only once', async () => {
+    const d = deps({ answersAsAuthority: vi.fn(async () => false) });
+    const probe = createPublicProbe(d);
+
+    expect(await probe(URL_A)).toBe('cannot-check');
+    expect(await probe(URL_A)).toBe('cannot-check');
+    expect(d.resolveAt).not.toHaveBeenCalled();
+    expect(d.reachesGateway).not.toHaveBeenCalled();
+    expect(d.answersAsAuthority).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again whether the nameservers are the real ones after they could not be reached', async () => {
+    const answersAsAuthority = vi
+      .fn<PublicProbeDeps['answersAsAuthority']>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(true);
+    const d = deps({ answersAsAuthority });
+    const probe = createPublicProbe(d);
+
+    expect(await probe(URL_A)).toBe('cannot-check');
+    expect(d.resolveAt).not.toHaveBeenCalled();
+    expect(await probe(URL_A)).toBe('answers');
+    expect(answersAsAuthority).toHaveBeenCalledTimes(2);
+  });
+
+  it('says not yet while the name is not in DNS, without requesting the address', async () => {
+    const d = deps({ resolveAt: vi.fn(async () => 'missing' as const) });
+    expect(await createPublicProbe(d)(URL_A)).toBe('not-yet');
     expect(d.reachesGateway).not.toHaveBeenCalled();
   });
 
-  it('answers no when the edge does not reach the gateway', async () => {
-    const d = deps({ reachesGateway: vi.fn(async () => false) });
-    expect(await createPublicProbe(d)(URL_A)).toBe(false);
+  it('says it cannot check when the nameservers stop answering', async () => {
+    const d = deps({ resolveAt: vi.fn(async () => 'unreachable' as const) });
+    expect(await createPublicProbe(d)(URL_A)).toBe('cannot-check');
+  });
+
+  it('takes the edge answering with something else as not yet', async () => {
+    const d = deps({ reachesGateway: vi.fn(async () => 'not-yet' as const) });
+    expect(await createPublicProbe(d)(URL_A)).toBe('not-yet');
+    expect(d.reachesGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries the next address when this Mac cannot reach the first, and no more than two', async () => {
+    const reachesGateway = vi
+      .fn<PublicProbeDeps['reachesGateway']>()
+      .mockResolvedValueOnce('cannot-check')
+      .mockResolvedValueOnce('answers');
+    expect(await createPublicProbe(deps({ reachesGateway }))(URL_A)).toBe(
+      'answers',
+    );
+    expect(reachesGateway).toHaveBeenLastCalledWith(
+      'late-name.trycloudflare.com',
+      '104.16.231.132',
+    );
+
+    const never = vi.fn(async () => 'cannot-check' as const);
+    const three = deps({
+      resolveAt: vi.fn(async () => ({
+        addresses: ['1.1.1.1', '2.2.2.2', '3.3.3.3'],
+      })),
+      reachesGateway: never,
+    });
+    expect(await createPublicProbe(three)(URL_A)).toBe('cannot-check');
+    expect(never).toHaveBeenCalledTimes(2);
   });
 
   it('reads the nameservers once, and again after a read that found none', async () => {
@@ -87,32 +148,32 @@ describe('createPublicProbe', () => {
     const d = deps({ zoneNameservers });
     const probe = createPublicProbe(d);
 
-    expect(await probe(URL_A)).toBe(false);
+    expect(await probe(URL_A)).toBe('cannot-check');
     expect(d.resolveAt).not.toHaveBeenCalled();
-    expect(await probe(URL_A)).toBe(true);
-    expect(await probe(URL_A)).toBe(true);
+    expect(await probe(URL_A)).toBe('answers');
+    expect(await probe(URL_A)).toBe('answers');
     expect(zoneNameservers).toHaveBeenCalledTimes(2);
   });
 
-  it('answers no for an address with no zone of its own, asking nothing', async () => {
+  it('cannot check an address with no zone of its own, asking nothing', async () => {
     const d = deps();
-    expect(await createPublicProbe(d)('https://evil.app')).toBe(false);
+    expect(await createPublicProbe(d)('https://evil.app')).toBe('cannot-check');
     expect(d.zoneNameservers).not.toHaveBeenCalled();
   });
 
-  it('answers no rather than throwing when a lookup or the request fails', async () => {
+  it('says it cannot check rather than throwing when a lookup or the request throws', async () => {
     const d = deps({
       resolveAt: vi.fn(async () => {
         throw new Error('ESERVFAIL');
       }),
     });
-    expect(await createPublicProbe(d)(URL_A)).toBe(false);
+    expect(await createPublicProbe(d)(URL_A)).toBe('cannot-check');
     const e = deps({
       reachesGateway: vi.fn(async () => {
         throw new Error('ECONNRESET');
       }),
     });
-    expect(await createPublicProbe(e)(URL_A)).toBe(false);
+    expect(await createPublicProbe(e)(URL_A)).toBe('cannot-check');
   });
 });
 
@@ -152,7 +213,7 @@ describe('reachesGateway', () => {
 
     expect(
       await reachesGateway(HOST, '127.0.0.1', { request, port: s.port }),
-    ).toBe(true);
+    ).toBe('answers');
     expect(s.seen).toEqual([
       { host: `${HOST}:${String(s.port)}`, path: '/__geniro/session' },
     ]);
@@ -173,16 +234,16 @@ describe('reachesGateway', () => {
     for (const s of [edge, other, huge]) {
       expect(
         await reachesGateway(HOST, '127.0.0.1', { request, port: s.port }),
-      ).toBe(false);
+      ).toBe('not-yet');
     }
   });
 
-  it('answers no when nothing listens at the address', async () => {
+  it('says it cannot check when the connection fails below HTTP', async () => {
     const s = await stand((res) => res.end());
     await closers.pop()?.();
 
     expect(
       await reachesGateway(HOST, '127.0.0.1', { request, port: s.port }),
-    ).toBe(false);
+    ).toBe('cannot-check');
   });
 });

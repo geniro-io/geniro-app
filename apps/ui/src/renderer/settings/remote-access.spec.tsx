@@ -338,6 +338,7 @@ describe('RemoteAccess — the public address', () => {
       url: 'https://keyword-portsmouth.trycloudflare.com',
       error: null,
       detail: null,
+      unchecked: false,
     },
   };
 
@@ -349,6 +350,7 @@ describe('RemoteAccess — the public address', () => {
       url: null,
       error: null,
       detail: 'lookup argotunnel.com on 100.95.0.253:53: i/o timeout',
+      unchecked: false,
     },
   };
 
@@ -403,6 +405,31 @@ describe('RemoteAccess — the public address', () => {
     );
   });
 
+  it('warns, beside the address, when this Mac could not verify it', async () => {
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...OPEN,
+      tunnel: { ...OPEN.tunnel, unchecked: true },
+    } satisfies RemoteAccessState);
+    await mount();
+
+    const warning = container.querySelector('[data-slot="tunnel-unchecked"]');
+    expect(warning?.textContent).toContain(
+      'could not be verified from this Mac',
+    );
+    expect(container.textContent).toContain(
+      'https://keyword-portsmouth.trycloudflare.com',
+    );
+  });
+
+  it('shows no warning beside an address it saw answer', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(OPEN);
+    await mount();
+
+    expect(
+      container.querySelector('[data-slot="tunnel-unchecked"]'),
+    ).toBeNull();
+  });
+
   it('closes it on the second press, through the other channel', async () => {
     geniro.getRemoteAccess.mockResolvedValue(OPEN);
     geniro.stopRemoteTunnel.mockResolvedValue(LISTENING);
@@ -426,6 +453,7 @@ describe('RemoteAccess — the public address', () => {
         url: null,
         error: 'ngrok stopped (exit 1): authentication failed',
         detail: null,
+        unchecked: false,
       },
     } satisfies RemoteAccessState);
     await mount();

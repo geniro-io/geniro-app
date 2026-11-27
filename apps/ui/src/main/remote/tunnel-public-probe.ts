@@ -46,13 +46,41 @@ export function isGatewaySessionAnswer(body: string): boolean {
   );
 }
 
+/**
+ * What one check found: the address `answers` through the gateway; it does
+ * `not-yet` (its name is not in DNS, or the edge answered with something that
+ * is not the gateway); or this Mac `cannot-check` it (the nameservers cannot be
+ * reached or are not the zone's own, or the request failed below HTTP).
+ */
+export type PublicProbeOutcome = 'answers' | 'not-yet' | 'cannot-check';
+
+/** What the zone's nameservers said about a name: its addresses, that it does not exist, or nothing. */
+export type NameAnswer = { addresses: string[] } | 'missing' | 'unreachable';
+
 export interface PublicProbeDeps {
   /** The addresses of the nameservers that hold `zone`. */
   zoneNameservers(zone: string): Promise<string[]>;
-  /** The addresses `servers` give for `host`, asked of them alone. */
-  resolveAt(servers: string[], host: string): Promise<string[]>;
-  /** Whether `https://host` reached at `address` answers with this gateway's session route. */
-  reachesGateway(host: string, address: string): Promise<boolean>;
+  /**
+   * Whether `servers` behave as the zone's own nameservers, which refuse a
+   * name outside it; false when a resolver on the way answers instead; null
+   * when they could not be reached.
+   */
+  answersAsAuthority(servers: string[]): Promise<boolean | null>;
+  /** What `servers` say about `host`, asked of them alone. */
+  resolveAt(servers: string[], host: string): Promise<NameAnswer>;
+  /** What `https://host` reached at `address` answers on this gateway's session route. */
+  reachesGateway(host: string, address: string): Promise<PublicProbeOutcome>;
+}
+
+/** A name that exists nowhere, so only a recursive resolver answers for it rather than refusing. */
+const OUTSIDE_ANY_ZONE = 'geniro-check.invalid';
+
+const NO_SUCH_NAME = new Set(['ENOTFOUND', 'ENODATA']);
+
+function errorCode(err: unknown): string | null {
+  return err instanceof Error && 'code' in err && typeof err.code === 'string'
+    ? err.code
+    : null;
 }
 
 async function zoneNameservers(zone: string): Promise<string[]> {
@@ -75,17 +103,50 @@ async function zoneNameservers(zone: string): Promise<string[]> {
     .map((entry) => entry.address);
 }
 
-async function resolveAt(servers: string[], host: string): Promise<string[]> {
+function resolverAt(servers: string[]): Resolver {
   const resolver = new Resolver({
     timeout: TUNNEL_PUBLIC_DNS_TIMEOUT_MS,
     tries: 1,
   });
   resolver.setServers(servers);
-  const v4 = await resolver.resolve4(host).catch((): string[] => []);
-  if (v4.length > 0) {
-    return v4;
+  return resolver;
+}
+
+async function answersAsAuthority(servers: string[]): Promise<boolean | null> {
+  try {
+    await resolverAt(servers).resolve4(OUTSIDE_ANY_ZONE);
+    return false;
+  } catch (err) {
+    const code = errorCode(err);
+    if (code === 'EREFUSED') {
+      return true;
+    }
+    return code !== null && NO_SUCH_NAME.has(code) ? false : null;
   }
-  return resolver.resolve6(host).catch((): string[] => []);
+}
+
+async function resolveAt(servers: string[], host: string): Promise<NameAnswer> {
+  const resolver = resolverAt(servers);
+  let missing = false;
+  for (const ask of [
+    () => resolver.resolve4(host),
+    () => resolver.resolve6(host),
+  ]) {
+    try {
+      const addresses = await ask();
+      if (addresses.length > 0) {
+        return { addresses };
+      }
+      missing = true;
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === null || !NO_SUCH_NAME.has(code)) {
+        return 'unreachable';
+      }
+      missing = true;
+    }
+  }
+  return missing ? 'missing' : 'unreachable';
 }
 
 function withDeadline<T>(
@@ -119,7 +180,7 @@ export function reachesGateway(
   host: string,
   address: string,
   options: GatewayRequestOptions = {},
-): Promise<boolean> {
+): Promise<PublicProbeOutcome> {
   const family = isIP(address);
   const pinned: LookupFunction = (_name, lookupOptions, callback) => {
     if (lookupOptions.all) {
@@ -129,15 +190,16 @@ export function reachesGateway(
     callback(null, address, family);
   };
   const send = options.request ?? httpsRequest;
-  return new Promise<boolean>((resolve) => {
+  return new Promise<PublicProbeOutcome>((resolve) => {
+    let answered = false;
     const deadline = setTimeout(() => {
       req.destroy();
-      resolve(false);
+      resolve(answered ? 'not-yet' : 'cannot-check');
     }, TUNNEL_PUBLIC_PROBE_TIMEOUT_MS);
     deadline.unref?.();
-    const done = (answer: boolean): void => {
+    const done = (outcome: PublicProbeOutcome): void => {
       clearTimeout(deadline);
-      resolve(answer);
+      resolve(outcome);
     };
     const req = send(
       {
@@ -151,13 +213,14 @@ export function reachesGateway(
         agent: false,
       },
       (res) => {
+        answered = true;
         const chunks: Buffer[] = [];
         let size = 0;
         res.on('data', (chunk: Buffer) => {
           size += chunk.length;
           if (size > TUNNEL_PUBLIC_ANSWER_MAX_BYTES) {
             req.destroy();
-            done(false);
+            done('not-yet');
             return;
           }
           chunks.push(chunk);
@@ -165,14 +228,16 @@ export function reachesGateway(
         res.on('end', () => {
           done(
             res.statusCode === 200 &&
-              isGatewaySessionAnswer(Buffer.concat(chunks).toString('utf8')),
+              isGatewaySessionAnswer(Buffer.concat(chunks).toString('utf8'))
+              ? 'answers'
+              : 'not-yet',
           );
         });
-        res.on('error', () => done(false));
-        res.on('close', () => done(false));
+        res.on('error', () => done('not-yet'));
+        res.on('close', () => done('not-yet'));
       },
     );
-    req.on('error', () => done(false));
+    req.on('error', () => done(answered ? 'not-yet' : 'cannot-check'));
     req.end();
   });
 }
@@ -184,9 +249,13 @@ const SYSTEM: PublicProbeDeps = {
       TUNNEL_PUBLIC_NAMESERVERS_TIMEOUT_MS,
       [],
     ),
+  answersAsAuthority,
   resolveAt,
   reachesGateway: (host, address) => reachesGateway(host, address),
 };
+
+/** How many of the name's addresses one check tries before it gives up on this Mac reaching any. */
+const ADDRESSES_TRIED = 2;
 
 /**
  * A check that a tunnel's public address is served end to end: its name is
@@ -194,32 +263,54 @@ const SYSTEM: PublicProbeDeps = {
  *
  * The new name is asked of the zone's own nameservers and never of the system
  * resolver: a lookup that beats the record is kept as NXDOMAIN by the user's
- * router, which is the dead address this check exists to prevent. The zone's
- * nameservers are read on the first call and again after a failed read.
+ * router, which is the dead address this check exists to prevent. Before that,
+ * the nameservers are asked once for a name outside every zone: a network that
+ * hands port 53 to its own resolver answers it where the real ones refuse, and
+ * on such a network the new name is never asked at all. The zone's nameservers
+ * are read on the first call and again after a failed read.
  */
 export function createPublicProbe(
   deps: PublicProbeDeps = SYSTEM,
-): (url: string) => Promise<boolean> {
+): (url: string) => Promise<PublicProbeOutcome> {
   let nameservers: Promise<string[]> | null = null;
+  let authority: boolean | null = null;
   return async (url) => {
     const zone = tunnelZone(url);
     if (!zone) {
-      return false;
+      return 'cannot-check';
     }
     const host = new URL(url).hostname.toLowerCase();
     nameservers ??= deps.zoneNameservers(zone).catch((): string[] => []);
     const servers = await nameservers;
     if (servers.length === 0) {
       nameservers = null;
-      return false;
+      return 'cannot-check';
     }
-    const addresses = await deps
+    if (authority === null) {
+      authority = await deps
+        .answersAsAuthority(servers)
+        .catch((): boolean | null => null);
+    }
+    if (authority !== true) {
+      return 'cannot-check';
+    }
+    const name = await deps
       .resolveAt(servers, host)
-      .catch((): string[] => []);
-    const [address] = addresses;
-    if (!address) {
-      return false;
+      .catch((): NameAnswer => 'unreachable');
+    if (name === 'missing') {
+      return 'not-yet';
     }
-    return deps.reachesGateway(host, address).catch(() => false);
+    if (name === 'unreachable') {
+      return 'cannot-check';
+    }
+    for (const address of name.addresses.slice(0, ADDRESSES_TRIED)) {
+      const outcome = await deps
+        .reachesGateway(host, address)
+        .catch((): PublicProbeOutcome => 'cannot-check');
+      if (outcome !== 'cannot-check') {
+        return outcome;
+      }
+    }
+    return 'cannot-check';
   };
 }

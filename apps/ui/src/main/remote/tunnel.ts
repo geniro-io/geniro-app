@@ -1,6 +1,10 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 
-import type { RemoteTunnelState, TunnelProviderId } from '../../shared/remote';
+import {
+  type RemoteTunnelState,
+  TUNNEL_OFF,
+  type TunnelProviderId,
+} from '../../shared/remote';
 import { resolveBinary } from '../resolve-binary';
 import {
   TUNNEL_ANSWER_GAP_MS,
@@ -11,9 +15,15 @@ import {
   TUNNEL_OUTPUT_KEPT,
   TUNNEL_PUBLIC_PROBE_INTERVAL_MS,
   TUNNEL_READY_PROBE_TIMEOUT_MS,
+  TUNNEL_UNCHECKED_MIN_RESULTS,
+  TUNNEL_UNCHECKED_SHOW_AFTER_MS,
   TUNNEL_URL_WAIT_MS,
 } from './remote.types';
-import { createPublicProbe, tunnelZone } from './tunnel-public-probe';
+import {
+  createPublicProbe,
+  type PublicProbeOutcome,
+  tunnelZone,
+} from './tunnel-public-probe';
 
 /**
  * One tunnel client geniro knows how to drive.
@@ -114,14 +124,6 @@ const PROVIDERS: readonly TunnelProvider[] = [
 
 const WAITING_FOR_ANSWER = 'waiting for the public address to answer';
 
-const OFF: RemoteTunnelState = {
-  status: 'off',
-  provider: null,
-  url: null,
-  error: null,
-  detail: null,
-};
-
 /**
  * The `*.suffix` the host guard is widened by while a tunnel serves this URL.
  *
@@ -176,7 +178,9 @@ export interface RemoteTunnelOptions {
   /** Test seam for the public check's pace; defaults to {@link TUNNEL_PUBLIC_PROBE_INTERVAL_MS}. */
   publicProbeIntervalMs?: number;
   /** Test seam for the public check; defaults to a fresh {@link createPublicProbe} per start. */
-  probePublic?: (url: string) => Promise<boolean>;
+  probePublic?: (url: string) => Promise<PublicProbeOutcome>;
+  /** Test seam for showing an address this Mac cannot check; defaults to {@link TUNNEL_UNCHECKED_SHOW_AFTER_MS}. */
+  uncheckedAfterMs?: number;
   log?: TunnelLog;
   /** Test seam for the liveness poll; defaults to {@link TUNNEL_LIVENESS_POLL_MS}. */
   livenessPollMs?: number;
@@ -242,7 +246,7 @@ export async function probeReady(url: string): Promise<boolean> {
  */
 export class RemoteTunnel {
   private child: ChildProcess | null = null;
-  private current: RemoteTunnelState = OFF;
+  private current: RemoteTunnelState = TUNNEL_OFF;
   /** An in-flight `start()`, so two presses cannot open two clients. */
   private starting: Promise<RemoteTunnelState> | null = null;
   private readonly spawnProcess: typeof spawn;
@@ -250,7 +254,9 @@ export class RemoteTunnel {
   private readonly urlWaitMs: number;
   private readonly connectWaitMs: number;
   private readonly publicProbeIntervalMs: number;
-  private readonly probePublicFn: ((url: string) => Promise<boolean>) | null;
+  private readonly probePublicFn:
+    ((url: string) => Promise<PublicProbeOutcome>) | null;
+  private readonly uncheckedAfterMs: number;
   private readonly log: TunnelLog;
   /** The address a starting client printed, admitted by the guard so the public check can reach the gateway. */
   private pendingUrl: string | null = null;
@@ -268,6 +274,8 @@ export class RemoteTunnel {
     this.publicProbeIntervalMs =
       options.publicProbeIntervalMs ?? TUNNEL_PUBLIC_PROBE_INTERVAL_MS;
     this.probePublicFn = options.probePublic ?? null;
+    this.uncheckedAfterMs =
+      options.uncheckedAfterMs ?? TUNNEL_UNCHECKED_SHOW_AFTER_MS;
     this.log = options.log ?? (() => undefined);
     this.livenessPollMs = options.livenessPollMs ?? TUNNEL_LIVENESS_POLL_MS;
     this.probeReadyFn = options.probeReady ?? probeReady;
@@ -320,7 +328,7 @@ export class RemoteTunnel {
     const provider = this.current.provider;
     this.child = null;
     this.pendingUrl = null;
-    this.current = OFF;
+    this.current = TUNNEL_OFF;
     this.stopLiveness();
     if (child) {
       this.log('info', 'Public address closed', {
@@ -342,6 +350,7 @@ export class RemoteTunnel {
         error:
           'No tunnel client found. Install one with `brew install cloudflared` (no account needed) or `brew install ngrok`.',
         detail: null,
+        unchecked: false,
       };
       return this.current;
     }
@@ -353,6 +362,7 @@ export class RemoteTunnel {
       url: null,
       error: null,
       detail: null,
+      unchecked: false,
     };
 
     const child = this.spawnProcess(bin, chosen.args(port), {
@@ -380,6 +390,8 @@ export class RemoteTunnel {
       let urlAt: number | null = null;
       let connected = !chosen.connected;
       let answering = !chosen.connected;
+      let uncheckedRun = 0;
+      let shownUnchecked = false;
       let complaint: string | null = null;
       let probeTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (next: RemoteTunnelState): void => {
@@ -405,14 +417,18 @@ export class RemoteTunnel {
           this.child !== child ||
           publicUrl === null ||
           !connected ||
-          !answering
+          (!answering && !shownUnchecked)
         ) {
           return;
         }
         if (!settled) {
           this.log(
             'info',
-            urlAt === null ? 'Public address open' : 'Public address answers',
+            urlAt === null
+              ? 'Public address open'
+              : answering
+                ? 'Public address answers'
+                : 'Public address shown unchecked: this Mac could not check it',
             urlAt === null
               ? { source: 'tunnel', provider: chosen.id }
               : {
@@ -430,6 +446,7 @@ export class RemoteTunnel {
           url: publicUrl,
           error: null,
           detail: null,
+          unchecked: !answering,
         };
         finish(this.current);
       };
@@ -447,15 +464,30 @@ export class RemoteTunnel {
           return;
         }
         void probePublic(publicUrl)
-          .catch(() => false)
-          .then((answers) => {
+          .catch((): PublicProbeOutcome => 'cannot-check')
+          .then((outcome) => {
             if (settled || this.child !== child) {
               return;
             }
-            if (answers) {
+            if (outcome === 'answers') {
               answering = true;
               openIfServing();
               return;
+            }
+            // Strict while the check runs and the address does not answer;
+            // only a run of checks that could not run at all, past the slowest
+            // measured name, shows the address unchecked.
+            uncheckedRun = outcome === 'cannot-check' ? uncheckedRun + 1 : 0;
+            if (
+              uncheckedRun >= TUNNEL_UNCHECKED_MIN_RESULTS &&
+              urlAt !== null &&
+              Date.now() - urlAt >= this.uncheckedAfterMs
+            ) {
+              shownUnchecked = true;
+              openIfServing();
+              if (settled) {
+                return;
+              }
             }
             probeTimer = setTimeout(checkPublic, this.publicProbeIntervalMs);
             probeTimer.unref?.();
@@ -612,6 +644,7 @@ export class RemoteTunnel {
       url: null,
       error,
       detail: null,
+      unchecked: false,
     };
     if (reapClient) {
       void reap(child);

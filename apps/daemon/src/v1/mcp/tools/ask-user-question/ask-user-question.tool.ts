@@ -1,4 +1,5 @@
 import { HOST_QUESTION_TOOL } from '../../../agents/chat.types';
+import type { QuestionAttachmentsService } from '../../../agents/services/question-attachments.service';
 import type { UserQuestionBroker } from '../../../agents/services/user-question.broker';
 import {
   hostQuestionTextOverflow,
@@ -15,6 +16,8 @@ import { askUserQuestionInstructions } from './ask-user-question.instructions';
 import {
   hostQuestionResultText,
   readHostQuestionTitle,
+  readQuestionArtifacts,
+  unknownQuestionArtifactsText,
 } from './ask-user-question.reader';
 import { askUserQuestionSchema } from './ask-user-question.schema';
 
@@ -28,7 +31,10 @@ import { askUserQuestionSchema } from './ask-user-question.schema';
 export class AskUserQuestionTool extends BaseMcpTool {
   readonly name = HOST_QUESTION_TOOL;
 
-  constructor(private readonly questions: UserQuestionBroker) {
+  constructor(
+    private readonly questions: UserQuestionBroker,
+    private readonly pages?: QuestionAttachmentsService,
+  ) {
     super();
   }
 
@@ -68,8 +74,30 @@ export class AskUserQuestionTool extends BaseMcpTool {
       );
     }
     const title = readHostQuestionTitle(args);
+    const artifacts = readQuestionArtifacts(args);
+    if (!artifacts.ok) {
+      return this.invalidArgs(artifacts.error);
+    }
+    if (artifacts.ids.length > 0 && this.pages !== undefined) {
+      const { unknown, published } = await this.pages.unknownPages(
+        runId,
+        artifacts.ids,
+      );
+      if (unknown.length > 0) {
+        return this.invalidArgs(
+          unknownQuestionArtifactsText(unknown, published),
+        );
+      }
+    }
     const outcome = await context.whileCancellable((signal) =>
-      this.questions.ask(runId, caller, questions, title, signal),
+      this.questions.ask(
+        runId,
+        caller,
+        questions,
+        title,
+        signal,
+        artifacts.ids,
+      ),
     );
     // None of the three outcomes is a tool FAILURE: a dismissal and an
     // unavailable channel are both answers the agent carries on from,

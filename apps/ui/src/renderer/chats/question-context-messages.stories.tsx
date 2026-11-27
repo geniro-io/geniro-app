@@ -136,3 +136,35 @@ export const NothingBeforeQuestion: Story = {
 export const Unreadable: Story = {
   decorators: [withRead(() => Promise.reject(new Error('daemon down')))],
 };
+
+export const WithAttachedPage: Story = {
+  args: {
+    attachments: {
+      attachments: [
+        {
+          kind: 'artifact',
+          artifactId: 'pr-673-acceptance',
+          title: 'PR #673 — acceptance',
+          version: 1,
+        },
+      ],
+      moreAttachments: 0,
+    },
+  },
+  decorators: [
+    withRead(() => Promise.resolve(MESSAGES), {
+      artifactUrl: () => () => PAGE_HTML,
+      loadImage: () => () => Promise.resolve(STUB_PICTURE_DATA_URL),
+      artifacts: () =>
+        Promise.resolve([
+          {
+            artifactId: 'pr-673-acceptance',
+            version: 1,
+            title: 'PR #673 — acceptance',
+            summary: null,
+            key: 'k'.repeat(64),
+          },
+        ]),
+    }),
+  ],
+};

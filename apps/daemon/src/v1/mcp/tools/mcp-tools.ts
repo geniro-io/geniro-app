@@ -24,6 +24,7 @@ import type { PluginProposalBroker } from '../../agents/services/plugin-proposal
 import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import type { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { ReviewCommentsService } from '../../agents/services/review-comments.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { SurfaceBroker } from '../../agents/services/surface.broker';
@@ -163,6 +164,8 @@ export interface McpToolDeps {
   teamOverlays: TeamOverlayService;
   teamProposals: TeamProposalService;
   chatTeams: ChatTeamService;
+  /** Checks `ask_user_question`'s `artifacts`; optional for the positional specs. */
+  questionPages?: QuestionAttachmentsService;
   shares: ShareService;
   threadDelivery: ThreadDeliveryService;
   commandCenters: CommandCenterBroker;
@@ -201,7 +204,7 @@ function allMcpTools(deps: McpToolDeps): McpTool[] {
     new GoalsTool(deps.goals, deps.goalWriters),
     new AnswerReviewCommentTool(deps.reviewComments),
     new FlagIssueTool(deps.flags),
-    new AskUserQuestionTool(deps.questions),
+    new AskUserQuestionTool(deps.questions, deps.questionPages),
     new ShowChartTool(deps.charts),
     new ShowMetricsTool(deps.metrics),
     new ShowComparisonTool(deps.comparisons),

@@ -27,6 +27,7 @@ import { PluginProposalBroker } from '../agents/services/plugin-proposal.broker'
 import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
+import { QuestionAttachmentsService } from '../agents/services/question-attachments.service';
 import { ReviewCommentsService } from '../agents/services/review-comments.service';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
 import { SurfaceBroker } from '../agents/services/surface.broker';
@@ -147,6 +148,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         pluginCards: PluginProposalBroker,
         pluginProposals: PluginProposalService,
         chatTeams: ChatTeamService,
+        questionPages: QuestionAttachmentsService,
       ) =>
         createMcpTools({
           calls,
@@ -200,6 +202,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           pluginCards,
           pluginProposals,
           chatTeams,
+          questionPages,
         }),
       inject: [
         CallBroker,
@@ -253,6 +256,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         PluginProposalBroker,
         PluginProposalService,
         ChatTeamService,
+        QuestionAttachmentsService,
       ],
     },
     McpServerService,

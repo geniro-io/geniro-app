@@ -14,11 +14,14 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import type { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import type { ChatService } from '../../agents/services/chat.service';
+import { ChatArtifactsService } from '../../agents/services/chat-artifacts.service';
 import type { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import { QUESTION_ALREADY_STANDING } from '../../agents/utils/pending-question';
 import { serializeTeamProjectCard } from '../../agents/utils/team-project-card';
 import type { StageWakeService } from './stage-wake.service';
@@ -135,6 +138,19 @@ function harness(
         createdAt: new Date(),
       });
     },
+    artifactRows: (runId: string) =>
+      Promise.resolve(
+        rows
+          .filter((row) => row.runId === runId && row.kind === 'show_artifact')
+          .map((row) => ({
+            seq: 0,
+            payload: JSON.stringify(row.payload),
+            createdAt: new Date(0),
+          })),
+      ),
+    rowsOfKinds: () => Promise.resolve([]),
+    rowsOfKindsBetween: () => Promise.resolve([]),
+    latestUserMessage: () => Promise.resolve(null),
     rowsByPayloadId: (runId: string, kinds: string[], ids: string[]) =>
       Promise.resolve(
         rows.filter(
@@ -145,6 +161,16 @@ function harness(
         ),
       ),
   };
+  const questionAttachments = new QuestionAttachmentsService(
+    fakeEntityManager(),
+    itemDao as unknown as ItemDao,
+    new ChatArtifactsService(
+      fakeEntityManager(),
+      runDao as unknown as RunDao,
+      itemDao as unknown as ItemDao,
+      {} as unknown as ArtifactStoreService,
+    ),
+  );
   const service = new TeamCardsService(
     fakeEntityManager(),
     runDao as unknown as RunDao,
@@ -169,12 +195,14 @@ function harness(
     { wakeLead } as unknown as StageWakeService,
     { write: writeChange } as unknown as ProjectInstructionsChangeService,
     { write: writePlugin } as unknown as PluginProposalBroker,
+    questionAttachments,
   );
   const rowsOf = (kind: string) => rows.filter((row) => row.kind === kind);
   return {
     service,
     runs,
     rows,
+    itemDao,
     rowsOf,
     approvals,
     wakeLead,
@@ -538,6 +566,41 @@ describe('TeamCardsService — a member’s own question', () => {
   const QUESTIONS = [
     { question: 'Which database?', options: [{ label: 'Postgres' }] },
   ];
+
+  it('writes the pages a member’s deferred question carries, the explicit ones first', async () => {
+    const { service, rowsOf, itemDao } = harness();
+    await itemDao.create({
+      runId: RUN,
+      memberId: null,
+      kind: 'show_artifact',
+      payload: JSON.stringify({
+        artifactId: 'plan-page',
+        version: 1,
+        title: 'Launch plan',
+        key: 'k'.repeat(64),
+      }),
+    });
+
+    expect(
+      await service.askMember(RUN, 'worker', QUESTIONS, 'Storage', undefined, [
+        'plan-page',
+      ]),
+    ).toEqual({ status: 'posted' });
+    const [row] = rowsOf('approval_request');
+    expect(row).toMatchObject({
+      payload: {
+        attachments: [
+          {
+            kind: 'artifact',
+            artifactId: 'plan-page',
+            title: 'Launch plan',
+            version: 1,
+          },
+        ],
+        moreAttachments: 0,
+      },
+    });
+  });
 
   it('puts the card in the asking member’s flow, answers at once and keeps one per member', async () => {
     const { service, runs, rowsOf, approvals } = harness();

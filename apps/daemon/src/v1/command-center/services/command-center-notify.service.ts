@@ -468,6 +468,12 @@ export class CommandCenterNotifyService
           ? {}
           : { questions: payload.questions }),
         ...(payload.options === undefined ? {} : { options: payload.options }),
+        ...(payload.attachments === undefined
+          ? {}
+          : {
+              attachments: payload.attachments,
+              moreAttachments: payload.moreAttachments ?? 0,
+            }),
       };
       this.relays.set(relayKey(run.id, entry.requestId), relay);
       try {

@@ -2,6 +2,7 @@ import type { LocalImageLoader } from '../chats/local-image-loader';
 import type {
   ArtifactAnswersStore,
   ArtifactUrlBuilder,
+  PublishedArtifact,
 } from '../chats/published-artifact';
 import type { ThreadContextReader } from '../chats/thread-question-context';
 
@@ -31,6 +32,7 @@ function memoryAnswersStore(): ArtifactAnswersStore {
 export function stubThreadContextReader(
   read: ThreadContextReader['read'],
   options: {
+    artifacts?: (threadRunId: string) => Promise<PublishedArtifact[]>;
     artifactUrl?: (threadRunId: string) => ArtifactUrlBuilder;
     loadImage?: (threadRunId: string) => LocalImageLoader;
     answers?: (threadRunId: string) => ArtifactAnswersStore;
@@ -38,6 +40,7 @@ export function stubThreadContextReader(
 ): ThreadContextReader {
   return {
     read,
+    artifacts: options.artifacts ?? (() => Promise.resolve([])),
     artifactUrl:
       options.artifactUrl ??
       ((threadRunId) => (artifact) =>

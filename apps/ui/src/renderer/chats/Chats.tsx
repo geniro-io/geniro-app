@@ -278,6 +278,7 @@ import {
   type ArtifactUrlBuilder,
   artifactUrlBuilder,
 } from './published-artifact';
+import { questionAttachmentSetOf } from './question-attachments-payload';
 import { QueuedStrip } from './queued-strip';
 import { holdReadingPlace } from './reading-anchor';
 import type {
@@ -5252,6 +5253,8 @@ export function Chats({
           // hold, and a replayed transcript reads exactly like the live one.
           answer={settled?.answer ?? null}
           outcome={settled?.outcome ?? null}
+          attached={questionAttachmentSetOf(item.payload) ?? undefined}
+          runId={item.runId}
           onOpenTeam={onOpenTeam}
           onOpenProject={onOpenProject}
           expired={

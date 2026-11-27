@@ -137,6 +137,7 @@ import { BrowserBroker } from './browser.broker';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
 import { ChatActionsService } from './chat-actions.service';
+import { ChatArtifactsService } from './chat-artifacts.service';
 import type { ChatUploadStoreService } from './chat-upload-store.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { CommandCenterBroker } from './command-center.broker';
@@ -168,6 +169,7 @@ import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import type { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
+import { QuestionAttachmentsService } from './question-attachments.service';
 import { RunContextRegistry } from './run-context.registry';
 import type { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
@@ -669,6 +671,25 @@ class FakeItemDao {
   async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
     return this.items
       .filter((i) => i.runId === runId && kinds.includes(i.kind))
+      .sort((a, b) => a.seq - b.seq);
+  }
+  async artifactRows(runId: string): Promise<Item[]> {
+    return this.rowsOfKinds(runId, ['show_artifact']);
+  }
+  async rowsOfKindsBetween(
+    runId: string,
+    kinds: readonly string[],
+    afterSeq: number,
+    throughSeq: number,
+  ): Promise<Item[]> {
+    return this.items
+      .filter(
+        (i) =>
+          i.runId === runId &&
+          kinds.includes(i.kind) &&
+          i.seq > afterSeq &&
+          i.seq <= throughSeq,
+      )
       .sort((a, b) => a.seq - b.seq);
   }
   /** The real one's contract: rows of `kinds` whose payload's `id` is in `ids`. */
@@ -1442,6 +1463,16 @@ function setup(
       assertedGroups.push(groupId);
     },
   } as unknown as RunGroupsService;
+  const questionAttachments = new QuestionAttachmentsService(
+    em,
+    itemDao as unknown as ItemDao,
+    new ChatArtifactsService(
+      em,
+      runDao as unknown as RunDao,
+      itemDao as unknown as ItemDao,
+      artifactStore,
+    ),
+  );
   const service = new ChatService(
     em,
     runDao as unknown as RunDao,
@@ -1570,6 +1601,7 @@ function setup(
     undefined,
     undefined,
     opts.pluginCards,
+    questionAttachments,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -2351,6 +2383,248 @@ describe('ChatService', () => {
         hostQuestionDeferredReason: null,
       });
     }
+
+    describe('the pages a question card carries', () => {
+      const QUESTION_INPUT = {
+        questions: [
+          { question: 'Which database?', options: [{ label: 'Postgres' }] },
+        ],
+      };
+      const CARD_QUESTIONS = [
+        {
+          question: 'Which database?',
+          header: null,
+          multiSelect: false,
+          options: [{ label: 'Postgres', description: null, preview: null }],
+        },
+      ];
+
+      function publish(
+        itemDao: Pick<FakeItemDao, 'create'>,
+        runId: string,
+        seq: number,
+        artifactId: string,
+        title: string,
+      ): Promise<unknown> {
+        return itemDao.create({
+          runId,
+          seq,
+          kind: 'show_artifact',
+          payload: JSON.stringify({
+            artifactId,
+            version: 1,
+            title,
+            key: 'k'.repeat(64),
+          }),
+        });
+      }
+
+      function cardPayload(itemDao: FakeItemDao): Record<string, unknown> {
+        const card = itemDao.items.find(
+          (item) => item.kind === 'approval_request',
+        );
+        return JSON.parse(String(card?.payload)) as Record<string, unknown>;
+      }
+
+      it('writes the pages a blocking question names, the explicit ones first', async () => {
+        const { service, cursor, userQuestions, approvals, itemDao } = setup();
+        holdsCallsOpen(cursor);
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await publish(itemDao, run.id, 1, 'plan-page', 'Launch plan');
+        await publish(itemDao, run.id, 2, 'chart-page', 'Quarterly chart');
+        await service.sendMessage(run.id, 'hello');
+
+        const asked = userQuestions.ask(
+          run.id,
+          SINGLE_AGENT_NODE,
+          [
+            {
+              question: 'Show the Quarterly chart?',
+              options: [{ label: 'Yes' }],
+            },
+          ],
+          null,
+          new AbortController().signal,
+          ['plan-page'],
+        );
+        await drain();
+
+        expect(cardPayload(itemDao)).toMatchObject({
+          attachments: [
+            {
+              kind: 'artifact',
+              artifactId: 'plan-page',
+              title: 'Launch plan',
+              version: 1,
+            },
+            {
+              kind: 'artifact',
+              artifactId: 'chart-page',
+              title: 'Quarterly chart',
+              version: 1,
+            },
+          ],
+          moreAttachments: 0,
+        });
+        approvals.resolve(
+          run.id,
+          approvals.listByRun(run.id)[0]!.requestId,
+          true,
+          'Yes',
+        );
+        expect(await asked).toEqual({ status: 'answered', answer: 'Yes' });
+      });
+
+      it('writes an empty attachments list for a question that names no page', async () => {
+        const { service, cursor, userQuestions, approvals, itemDao } = setup();
+        holdsCallsOpen(cursor);
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await service.sendMessage(run.id, 'hello');
+
+        const asked = userQuestions.ask(
+          run.id,
+          SINGLE_AGENT_NODE,
+          [{ question: 'Which database?', options: [{ label: 'Postgres' }] }],
+          null,
+        );
+        await drain();
+
+        expect(cardPayload(itemDao)).toMatchObject({
+          attachments: [],
+          moreAttachments: 0,
+        });
+        approvals.resolve(
+          run.id,
+          approvals.listByRun(run.id)[0]!.requestId,
+          true,
+          'Postgres',
+        );
+        expect(await asked).toEqual({
+          status: 'answered',
+          answer: 'Postgres',
+        });
+      });
+
+      it('writes the pages a deferred question carries, the explicit ones first', async () => {
+        const { service, userQuestions, itemDao } = setup();
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await publish(itemDao, run.id, 1, 'plan-page', 'Launch plan');
+        await service.sendMessage(run.id, 'hello');
+
+        expect(
+          await userQuestions.ask(
+            run.id,
+            SINGLE_AGENT_NODE,
+            [{ question: 'Use it?', options: [{ label: 'Yes' }] }],
+            null,
+            undefined,
+            ['plan-page'],
+          ),
+        ).toMatchObject({ status: 'posted' });
+        expect(cardPayload(itemDao)).toMatchObject({
+          attachments: [
+            {
+              kind: 'artifact',
+              artifactId: 'plan-page',
+              title: 'Launch plan',
+              version: 1,
+            },
+          ],
+          moreAttachments: 0,
+        });
+      });
+
+      it('writes the pages of the turn a CLI question is asked in', async () => {
+        const { service, claude, itemDao } = setup();
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hi');
+        await publish(itemDao, run.id, 100, 'chart-page', 'Quarterly chart');
+
+        claude.emit({
+          type: 'approval_request',
+          id: 'q-1',
+          toolName: 'AskUserQuestion',
+          input: QUESTION_INPUT,
+          questions: CARD_QUESTIONS,
+          requiresUserInteraction: true,
+        });
+        await drain();
+
+        expect(cardPayload(itemDao)).toMatchObject({
+          questions: expect.any(Array),
+          attachments: [
+            {
+              kind: 'artifact',
+              artifactId: 'chart-page',
+              title: 'Quarterly chart',
+              version: 1,
+            },
+          ],
+          moreAttachments: 0,
+        });
+      });
+
+      it('writes the pages of the last turn a CLI question is asked after it ended', async () => {
+        const { service, claude, itemDao } = setup();
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hi');
+        await publish(itemDao, run.id, 100, 'chart-page', 'Quarterly chart');
+        await settle(claude);
+
+        claude.emit({
+          type: 'approval_request',
+          id: 'q-2',
+          toolName: 'AskUserQuestion',
+          input: QUESTION_INPUT,
+          questions: CARD_QUESTIONS,
+          requiresUserInteraction: true,
+        });
+        await drain();
+
+        expect(cardPayload(itemDao)).toMatchObject({
+          questions: expect.any(Array),
+          attachments: [
+            {
+              kind: 'artifact',
+              artifactId: 'chart-page',
+              title: 'Quarterly chart',
+              version: 1,
+            },
+          ],
+        });
+      });
+
+      it('writes no attachments key on a permission card', async () => {
+        const { service, claude, itemDao } = setup();
+        const run = await service.createChat({
+          agentKind: 'claude',
+          cwd: dir,
+          approval: 'ask',
+        });
+        await service.sendMessage(run.id, 'hi');
+        await publish(itemDao, run.id, 100, 'chart-page', 'Quarterly chart');
+
+        claude.emit({
+          type: 'approval_request',
+          id: 'p-1',
+          toolName: 'Bash',
+          input: { command: 'ls' },
+        });
+        await drain();
+
+        expect(cardPayload(itemDao)).not.toHaveProperty('attachments');
+        expect(cardPayload(itemDao)).not.toHaveProperty('moreAttachments');
+      });
+    });
 
     it('hands a cursor turn geniro’s own question tool, and lets it be asked', async () => {
       const { service, cursor, userQuestions, callTokens } = setup();

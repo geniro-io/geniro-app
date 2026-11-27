@@ -1,16 +1,12 @@
 import { ChevronUp, History } from 'lucide-react';
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 
 import { ThreadActionButton } from '../components/thread-head';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { ArtifactShareContext } from './artifact-share';
 import { ClampedBlock, isLongMarkdown } from './clamped-markdown';
-import { LocalImageLoaderContext } from './local-image-loader';
 import { MarkdownContent } from './markdown-content';
-import {
-  ArtifactAnswersContext,
-  ArtifactUrlContext,
-} from './published-artifact';
+import { QuestionAttachments } from './question-attachments';
+import type { QuestionAttachmentSet } from './question-attachments-payload';
 import { QuestionContextVisual } from './question-context-visual';
 import {
   isThreadContextVisual,
@@ -18,6 +14,7 @@ import {
   type ThreadContextMessage,
   ThreadContextReaderContext,
 } from './thread-question-context';
+import { ThreadRunBindings } from './thread-run-bindings';
 
 /** The lines the messages before a question may fill before they fold. */
 const MESSAGES_LINES = 8;
@@ -39,21 +36,24 @@ type ContextState =
   | { kind: 'failed' };
 
 /**
- * The messages fold under one Show more; the pages and pictures stand beside
- * them, never under the fold, since they are what the question may point at.
+ * The messages fold under one Show more. The pages and pictures of a question
+ * that carries no attachments stand beside them, never under the fold, since
+ * they are what the question may point at.
  */
 function ContextMessages({
   state,
   memoryKey,
+  showVisuals,
 }: {
   state: Exclude<ContextState, { kind: 'hidden' }>;
   memoryKey: string;
+  showVisuals: boolean;
 }): React.JSX.Element {
   const entries = state.kind === 'shown' ? state.entries : [];
   const messages = entries.filter(
     (entry): entry is ThreadContextMessage => !isThreadContextVisual(entry),
   );
-  const visuals = entries.filter(isThreadContextVisual);
+  const visuals = showVisuals ? entries.filter(isThreadContextVisual) : [];
   return (
     <div
       data-slot="thread-question-context"
@@ -112,31 +112,29 @@ function ContextMessages({
  * The messages a relayed question's thread sent right before it, read as they
  * stand and drawn expanded, with a toggle that folds them and reads them again.
  * Drawn wherever the question is answered: the manager chat's card and the
- * canvas popover. Nothing is drawn where no reader is provided. The pages and
- * pictures in it are bound to the thread's run: what the user picks on a page
- * is kept for the thread, and no page is shared from here.
+ * canvas popover. Nothing is drawn where no reader is provided.
+ *
+ * A question row that carries `attachments` draws exactly those pages and
+ * pictures, beneath the toggle and never folded with it. A question without the
+ * key predates them, and keeps the pages its asking turn showed, read from the
+ * thread. The pages are bound to the thread's run: what the user picks on a
+ * page is kept for the thread, and no page is shared from here. A question no
+ * longer open draws its attachments as chips, loading no page until pressed.
  */
 export function QuestionContextMessages({
   threadRunId,
   threadRequestId,
+  attachments,
+  attachmentsVariant = 'preview',
 }: {
   threadRunId: string;
   /** The question's request id; null reads the thread's newest messages. */
   threadRequestId: string | null;
+  /** Undefined for a question written before attachments existed. */
+  attachments?: QuestionAttachmentSet;
+  attachmentsVariant?: 'preview' | 'chips';
 }): React.JSX.Element | null {
   const readContext = useContext(ThreadContextReaderContext);
-  const artifactUrl = useMemo(
-    () => readContext?.artifactUrl(threadRunId) ?? null,
-    [readContext, threadRunId],
-  );
-  const loadImage = useMemo(
-    () => readContext?.loadImage(threadRunId) ?? null,
-    [readContext, threadRunId],
-  );
-  const answers = useMemo(
-    () => readContext?.answers(threadRunId) ?? null,
-    [readContext, threadRunId],
-  );
   const [context, setContext] = useState<ContextState>({ kind: 'loading' });
   const reading = useRef(0);
   const load = useLatestCallback((): void => {
@@ -201,18 +199,22 @@ export function QuestionContextMessages({
         {hidden ? 'Show a few messages' : 'Hide messages'}
       </ThreadActionButton>
       {hidden ? null : (
-        <LocalImageLoaderContext.Provider value={loadImage}>
-          <ArtifactUrlContext.Provider value={artifactUrl}>
-            <ArtifactShareContext.Provider value={null}>
-              <ArtifactAnswersContext.Provider value={answers}>
-                <ContextMessages
-                  state={context}
-                  memoryKey={`question-context:${threadRunId}:${threadRequestId ?? 'latest'}`}
-                />
-              </ArtifactAnswersContext.Provider>
-            </ArtifactShareContext.Provider>
-          </ArtifactUrlContext.Provider>
-        </LocalImageLoaderContext.Provider>
+        <ThreadRunBindings reader={readContext} threadRunId={threadRunId}>
+          <ContextMessages
+            state={context}
+            memoryKey={`question-context:${threadRunId}:${threadRequestId ?? 'latest'}`}
+            showVisuals={attachments === undefined}
+          />
+        </ThreadRunBindings>
+      )}
+      {attachments === undefined ? null : (
+        <div className="w-full min-w-0">
+          <QuestionAttachments
+            threadRunId={threadRunId}
+            set={attachments}
+            variant={attachmentsVariant}
+          />
+        </div>
       )}
     </div>
   );

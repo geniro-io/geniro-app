@@ -2,6 +2,7 @@ import { MessageSquareText } from 'lucide-react';
 import { Fragment, useMemo } from 'react';
 
 import type { ProfileColor } from '../../shared/contracts';
+import { questionAttachmentSetOf } from '../chats/question-attachments-payload';
 import { QuestionContextMessages } from '../chats/question-context-messages';
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
@@ -86,6 +87,9 @@ export function AnswerPopover({
             <QuestionContextMessages
               threadRunId={request.runId}
               threadRequestId={request.requestId}
+              attachments={
+                questionAttachmentSetOf(request.item.payload) ?? undefined
+              }
             />
             <RequestCard request={request} onAnswer={onAnswer} />
           </Fragment>

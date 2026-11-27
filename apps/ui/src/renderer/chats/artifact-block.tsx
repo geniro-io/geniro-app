@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import { ErrorText } from '../components/error-text';
 import { Button } from '../components/ui/button';
+import { cn } from '../components/ui/utils';
 import { ArtifactDialog } from './artifact-dialog';
 import { ArtifactFrame } from './artifact-frame';
 import { ArtifactSaveButton, useArtifactSaver } from './artifact-save';
@@ -28,6 +29,7 @@ export function ArtifactCard({
   artifact,
   latest = true,
   memoryKey,
+  labelledFullScreen = false,
 }: {
   artifact: PublishedArtifact;
   /**
@@ -39,6 +41,11 @@ export function ArtifactCard({
   latest?: boolean;
   /** Where the card's fold is remembered within its thread. */
   memoryKey?: string;
+  /**
+   * Draws a labelled "Open full screen" button beside the title. The corner
+   * control then leaves the accessibility tree, since it has the same name.
+   */
+  labelledFullScreen?: boolean;
 }): React.JSX.Element {
   const [override, setOverride] = useThreadOverride(memoryKey);
   const [full, setFull] = useState(false);
@@ -74,6 +81,8 @@ export function ArtifactCard({
         size="icon"
         className="size-5 shrink-0 text-muted-foreground"
         aria-label={`Open ${artifact.title} full screen`}
+        aria-hidden={labelledFullScreen || undefined}
+        tabIndex={labelledFullScreen ? -1 : undefined}
         onClick={() => setFull(true)}>
         <Maximize2 className="size-3" />
       </Button>
@@ -82,7 +91,11 @@ export function ArtifactCard({
 
   return (
     <div data-slot="artifact-card" data-open={open} className="min-w-0">
-      <div className="flex min-w-0 items-center gap-1">
+      <div
+        className={cn(
+          'flex min-w-0 items-center gap-1',
+          labelledFullScreen && 'flex-wrap',
+        )}>
         <div className="min-w-0">
           <SectionLabel>
             <span className="flex min-w-0 items-center gap-1">
@@ -106,6 +119,18 @@ export function ArtifactCard({
             </span>
           </SectionLabel>
         </div>
+        {labelledFullScreen && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0 text-muted-foreground"
+            aria-label={`Open ${artifact.title} full screen`}
+            onClick={() => setFull(true)}>
+            <Maximize2 aria-hidden="true" className="size-3" />
+            Open full screen
+          </Button>
+        )}
         {/* FOLDED only — see the block comment on {@link controls}. */}
         {!open && (
           <span className="mb-1 ml-auto flex shrink-0 items-center gap-1">

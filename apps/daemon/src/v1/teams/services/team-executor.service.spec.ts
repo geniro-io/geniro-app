@@ -99,6 +99,7 @@ import type { ArtifactStoreService } from '../../agents/services/artifact-store.
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { BrowserBroker } from '../../agents/services/browser.broker';
 import { ChatActionsService } from '../../agents/services/chat-actions.service';
+import { ChatArtifactsService } from '../../agents/services/chat-artifacts.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
 import {
   COMMAND_END_WAKE_BATCH_MS,
@@ -118,6 +119,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { PromptCacheKeepAliveService } from '../../agents/services/prompt-cache-keep-alive.service';
 import type { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunOutcomeHistoryService } from '../../agents/services/run-outcome-history.service';
@@ -587,6 +589,34 @@ class FakeItemDao {
       counts.set(key, count);
     }
     return [...counts.values()];
+  }
+  async artifactRows(runId: string): Promise<Item[]> {
+    return this.rowsOfKinds(runId, ['show_artifact']);
+  }
+  async rowsOfKindsBetween(
+    runId: string,
+    kinds: readonly string[],
+    afterSeq: number,
+    throughSeq: number,
+  ): Promise<Item[]> {
+    return this.items
+      .filter(
+        (i) =>
+          i.runId === runId &&
+          kinds.includes(i.kind) &&
+          i.seq > afterSeq &&
+          i.seq <= throughSeq,
+      )
+      .sort((a, b) => a.seq - b.seq);
+  }
+  async latestUserMessage(runId: string): Promise<Item | null> {
+    return (
+      this.items
+        .filter(
+          (i) => i.runId === runId && i.kind === 'message' && i.role === 'user',
+        )
+        .sort((a, b) => b.seq - a.seq)[0] ?? null
+    );
   }
   async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
     return this.ofKinds(runId, kinds);
@@ -1756,6 +1786,16 @@ function setup(
     runTeams,
     new RunWriteQueue(),
   );
+  const questionAttachments = new QuestionAttachmentsService(
+    em,
+    itemDao as unknown as ItemDao,
+    new ChatArtifactsService(
+      em,
+      runDao as unknown as RunDao,
+      itemDao as unknown as ItemDao,
+      {} as unknown as ArtifactStoreService,
+    ),
+  );
   const service = new TeamExecutorService(
     em,
     runDao as unknown as RunDao,
@@ -1897,6 +1937,7 @@ function setup(
     surfaces,
     opts.pluginCards,
     opts.contextRecorder as FreshSessionContextRecorder | undefined,
+    questionAttachments,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -23580,8 +23621,17 @@ describe("TeamExecutorService — geniro's own question tool", () => {
       onScreen?: string;
     }[] = [];
     const retired: string[] = [];
+    const deferredArtifacts: (readonly string[])[] = [];
     harness.service.useMemberQuestionCards({
-      ask: async (_runId, memberId, _questions, title, onScreen) => {
+      ask: async (
+        _runId,
+        memberId,
+        _questions,
+        title,
+        onScreen,
+        artifacts = [],
+      ) => {
+        deferredArtifacts.push([...artifacts]);
         deferred.push({
           memberId,
           title,
@@ -23593,7 +23643,7 @@ describe("TeamExecutorService — geniro's own question tool", () => {
         retired.push(runId);
       },
     });
-    return { ...harness, userQuestions, deferred, retired };
+    return { ...harness, userQuestions, deferred, retired, deferredArtifacts };
   }
 
   it('offers it to a member whose CLI has no question tool of its own, never to a claude member', async () => {
@@ -23650,6 +23700,153 @@ describe("TeamExecutorService — geniro's own question tool", () => {
     await service.sendMessage(run.id, 'never mind, use SQLite');
     await drain();
     expect(retired).toEqual([run.id]);
+  });
+
+  describe('the pages a question card carries', () => {
+    const PAGE_CARD_QUESTIONS = [
+      {
+        question: 'Which database?',
+        header: null,
+        multiSelect: false,
+        options: [{ label: 'Postgres', description: null, preview: null }],
+      },
+    ];
+
+    function publish(
+      itemDao: Pick<FakeItemDao, 'create'>,
+      runId: string,
+      seq: number,
+      artifactId: string,
+      title: string,
+    ): Promise<unknown> {
+      return itemDao.create({
+        runId,
+        seq,
+        kind: 'show_artifact',
+        payload: JSON.stringify({
+          artifactId,
+          version: 1,
+          title,
+          key: 'k'.repeat(64),
+        }),
+      });
+    }
+
+    function cardPayload(itemDao: FakeItemDao): Record<string, unknown> {
+      const row = itemDao.items.find((i) => i.kind === 'approval_request');
+      return JSON.parse(String(row?.payload)) as Record<string, unknown>;
+    }
+
+    it('writes the pages a blocking member question names, the explicit ones first', async () => {
+      const { service, cursor, userQuestions, approvals, itemDao } =
+        questionSetup();
+      cursor.holdsQuestionCallsOpen = true;
+      const run = await service.startRun({
+        slug: 'q',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 'q' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await publish(itemDao, run.id, -2, 'plan-page', 'Launch plan');
+      await publish(itemDao, run.id, -1, 'chart-page', 'Quarterly chart');
+
+      const answer = userQuestions.ask(
+        run.id,
+        'a',
+        [
+          {
+            question: 'Show the Quarterly chart?',
+            options: [{ label: 'Yes' }],
+          },
+        ],
+        null,
+        new AbortController().signal,
+        ['plan-page'],
+      );
+      await drain();
+
+      expect(cardPayload(itemDao)).toMatchObject({
+        attachments: [
+          {
+            kind: 'artifact',
+            artifactId: 'plan-page',
+            title: 'Launch plan',
+            version: 1,
+          },
+          {
+            kind: 'artifact',
+            artifactId: 'chart-page',
+            title: 'Quarterly chart',
+            version: 1,
+          },
+        ],
+        moreAttachments: 0,
+      });
+      approvals.resolve(
+        run.id,
+        approvals.listByRun(run.id)[0]!.requestId,
+        true,
+        'Yes',
+      );
+      expect(await answer).toEqual({ status: 'answered', answer: 'Yes' });
+      await drain();
+      completeTurn(cursor.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('hands a deferred member question its explicit pages for the card', async () => {
+      const { service, userQuestions, deferredArtifacts } = questionSetup();
+      const run = await service.startRun({
+        slug: 'q',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 'q' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(
+        await userQuestions.ask(run.id, 'a', QUESTIONS, null, undefined, [
+          'plan-page',
+        ]),
+      ).toEqual({ status: 'posted' });
+      expect(deferredArtifacts).toEqual([['plan-page']]);
+    });
+
+    it('writes the pages of the turn a member’s CLI question is asked in', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 'q',
+        team: teamOf([member('a')], { name: 'q' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await publish(itemDao, run.id, 100, 'chart-page', 'Quarterly chart');
+
+      claude.starts[0]!.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: { questions: PAGE_CARD_QUESTIONS },
+        questions: PAGE_CARD_QUESTIONS,
+        requiresUserInteraction: true,
+      });
+      await drain();
+
+      expect(cardPayload(itemDao)).toMatchObject({
+        questions: expect.any(Array),
+        attachments: [
+          {
+            kind: 'artifact',
+            artifactId: 'chart-page',
+            title: 'Quarterly chart',
+            version: 1,
+          },
+        ],
+        moreAttachments: 0,
+      });
+    });
   });
 
   it('on a CLI that holds the call open, raises one card in the member’s flow and answers the call with the user’s words', async () => {

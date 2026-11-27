@@ -1987,6 +1987,7 @@ export interface MemberQuestionCards {
     questions: HostQuestion[],
     title: string | null,
     onScreen?: string,
+    artifacts?: readonly string[],
   ): Promise<HostQuestionOutcome>;
   /** The user wrote to the run instead of answering: close every standing one. */
   retireForUserMessage(runId: string): Promise<void>;

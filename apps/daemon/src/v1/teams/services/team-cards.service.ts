@@ -35,6 +35,7 @@ import { ItemCallIndexService } from '../../agents/services/item-call-index.serv
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { PluginProposalBroker } from '../../agents/services/plugin-proposal.broker';
 import { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
+import { QuestionAttachmentsService } from '../../agents/services/question-attachments.service';
 import {
   hostPluginResultText,
   pluginCardInput,
@@ -120,6 +121,8 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     private readonly stageWakes: StageWakeService,
     private readonly changes: ProjectInstructionsChangeService,
     @Optional() private readonly pluginCards?: PluginProposalBroker,
+    @Optional()
+    private readonly questionAttachments?: QuestionAttachmentsService,
   ) {}
 
   onModuleInit(): void {
@@ -130,8 +133,8 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       this.proposePlugin(runId, proposal),
     );
     this.executor.useMemberQuestionCards({
-      ask: (runId, memberId, questions, title, onScreen) =>
-        this.askMember(runId, memberId, questions, title, onScreen),
+      ask: (runId, memberId, questions, title, onScreen, artifacts) =>
+        this.askMember(runId, memberId, questions, title, onScreen, artifacts),
       retireForUserMessage: (runId) => this.retireMemberQuestions(runId),
     });
   }
@@ -522,6 +525,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     questions: HostQuestion[],
     title: string | null,
     onScreen?: string,
+    artifacts: readonly string[] = [],
   ): Promise<HostQuestionOutcome> {
     const key = StandingQuestions.keyFor(title, questions);
     const claim = `${runId}::${memberId}`;
@@ -538,6 +542,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
       questions,
       title,
       onScreen,
+      artifacts,
     );
     this.asking.set(claim, { key, outcome });
     return outcome.finally(() => {
@@ -554,6 +559,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     questions: HostQuestion[],
     title: string | null,
     onScreen: string | undefined,
+    artifacts: readonly string[],
   ): Promise<HostQuestionOutcome> {
     const standing = (await this.memberQuestions(runId)).find(
       (entry) => entry.memberId === memberId,
@@ -588,6 +594,12 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
           toolName: HOST_QUESTION_TOOL,
           input: hostQuestionCardInput(title, questions),
           questions: hostCardQuestions(questions),
+          ...(await this.questionAttachments?.cardFields(
+            runId,
+            title,
+            hostCardQuestions(questions),
+            artifacts,
+          )),
         });
         raised = true;
       }

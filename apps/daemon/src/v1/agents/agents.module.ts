@@ -147,6 +147,7 @@ import { PromptCacheKeepAliveService } from './services/prompt-cache-keep-alive.
 import { PullRequestAfterDoneService } from './services/pull-request-after-done.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { PullRequestLifecycleService } from './services/pull-request-lifecycle.service';
+import { QuestionAttachmentsService } from './services/question-attachments.service';
 import { RecommendationsApplyService } from './services/recommendations-apply.service';
 import { ResourceAlertEventBus } from './services/resource-alert-events.bus';
 import { ResourceWatchService } from './services/resource-watch.service';
@@ -256,6 +257,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     GlobalChatSearchService,
     ChatActionsService,
     ChatArtifactsService,
+    QuestionAttachmentsService,
     ChatTeamNotesService,
     ChatRunOutcomesService,
     ChatTimelineService,
@@ -798,6 +800,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // executor is the turn that persists that row.
     ArtifactStoreService,
     ChatArtifactsService,
+    QuestionAttachmentsService,
     // For v1/shares, which encrypts the same document a saved file carries.
     ArtifactPageService,
     PlanBroker,

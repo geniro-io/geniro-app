@@ -17,6 +17,7 @@ export type HostQuestionAsker = (
   questions: HostQuestion[],
   title: string | null,
   signal?: AbortSignal,
+  artifacts?: readonly string[],
 ) => Promise<HostQuestionOutcome>;
 
 @Injectable()
@@ -40,13 +41,14 @@ export class UserQuestionBroker extends HostSinkBroker<HostQuestionAsker> {
     questions: HostQuestion[],
     title: string | null,
     signal?: AbortSignal,
+    artifacts: readonly string[] = [],
   ): Promise<HostQuestionOutcome> {
     return this.deliver(
       runId,
       memberId,
       'no turn is running that could put this question on screen',
       'ask the user',
-      (asker) => asker(questions, title, signal),
+      (asker) => asker(questions, title, signal, artifacts),
     );
   }
 }

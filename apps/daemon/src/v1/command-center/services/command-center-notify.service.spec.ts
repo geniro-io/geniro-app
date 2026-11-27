@@ -226,6 +226,7 @@ describe('CommandCenterNotifyService', () => {
   async function openQuestion(
     runId: string,
     respond: Responder,
+    extra: Record<string, unknown> = {},
   ): Promise<void> {
     await db.seedItem(runId, 1, new Date(), 'approval_request', {
       id: REQUEST,
@@ -233,6 +234,7 @@ describe('CommandCenterNotifyService', () => {
       input: ASK_INPUT,
       questions: QUESTIONS,
       options: OPTIONS,
+      ...extra,
     });
     approvals.track({
       runId,
@@ -1045,6 +1047,52 @@ describe('CommandCenterNotifyService', () => {
       expect.any(Function),
     );
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('puts the thread question’s attachments on the manager card', async () => {
+    boardThreads.add(THREAD);
+    setThread({ id: THREAD, title: 'Billing cache', status: 'running' });
+    const attachments = [
+      {
+        kind: 'artifact',
+        artifactId: 'plan-page',
+        title: 'Launch plan',
+        version: 2,
+      },
+    ];
+    await openQuestion(
+      THREAD,
+      vi.fn<Responder>(() => true),
+      {
+        attachments,
+        moreAttachments: 1,
+      },
+    );
+
+    await service.review(THREAD);
+
+    expect(raiseOwnedCard).toHaveBeenCalledTimes(1);
+    expect(raiseOwnedCard.mock.calls[0]?.[2].input).toMatchObject({
+      threadRequestId: REQUEST,
+      attachments,
+      moreAttachments: 1,
+    });
+  });
+
+  it('puts no attachments on the manager card for a question row written before they existed', async () => {
+    boardThreads.add(THREAD);
+    setThread({ id: THREAD, title: 'Billing cache', status: 'running' });
+    await openQuestion(
+      THREAD,
+      vi.fn<Responder>(() => true),
+    );
+
+    await service.review(THREAD);
+
+    expect(raiseOwnedCard).toHaveBeenCalledTimes(1);
+    const input = raiseOwnedCard.mock.calls[0]?.[2].input;
+    expect(input).not.toHaveProperty('attachments');
+    expect(input).not.toHaveProperty('moreAttachments');
   });
 
   it('relays the question of a board thread the roster has not caught up with yet', async () => {

@@ -3,8 +3,53 @@ import { describe, expect, it } from 'vitest';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../../agents/utils/host-question';
 import {
   hostQuestionResultText,
+  MAX_QUESTION_ARTIFACT_ID_LENGTH,
   readHostQuestionTitle,
+  readQuestionArtifacts,
+  unknownQuestionArtifactsText,
 } from './ask-user-question.reader';
+
+describe('readQuestionArtifacts', () => {
+  it('reads none when the argument is absent', () => {
+    expect(readQuestionArtifacts({})).toEqual({ ok: true, ids: [] });
+  });
+
+  it('reads the ids trimmed, in order, repeats dropped', () => {
+    expect(
+      readQuestionArtifacts({ artifacts: [' voices ', 'report', 'voices'] }),
+    ).toEqual({ ok: true, ids: ['voices', 'report'] });
+  });
+
+  it('refuses more than three pages rather than cutting them', () => {
+    const read = readQuestionArtifacts({ artifacts: ['a', 'b', 'c', 'd'] });
+    expect(read.ok).toBe(false);
+  });
+
+  it('refuses a blank entry, a non-array and an id over the length cap', () => {
+    expect(readQuestionArtifacts({ artifacts: ['ok', ''] }).ok).toBe(false);
+    expect(readQuestionArtifacts({ artifacts: 'voices' }).ok).toBe(false);
+    expect(
+      readQuestionArtifacts({
+        artifacts: ['x'.repeat(MAX_QUESTION_ARTIFACT_ID_LENGTH + 1)],
+      }).ok,
+    ).toBe(false);
+  });
+});
+
+describe('unknownQuestionArtifactsText', () => {
+  it('names the unknown id and the pages the thread did publish', () => {
+    const text = unknownQuestionArtifactsText(['ghost'], ['voices', 'report']);
+    expect(text).toContain("'ghost'");
+    expect(text).toContain("'voices', 'report'");
+    expect(text).toContain('was not asked');
+  });
+
+  it('says so when the thread published no page', () => {
+    expect(unknownQuestionArtifactsText(['ghost'], [])).toContain(
+      'published no page yet',
+    );
+  });
+});
 
 describe('readHostQuestionTitle', () => {
   it('reads a title and truncates it to its cap', () => {

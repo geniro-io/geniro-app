@@ -4786,7 +4786,8 @@ export class TeamExecutorService
       sessionId: string | null;
       again: boolean;
     }[] = [];
-    for (const call of openCalls(history)) {
+    const handOffs = await this.itemDao.callHandOffRows(run.id, undefined, em);
+    for (const call of openCalls(history, handOffs)) {
       const record = seed.records.find((entry) => entry.callId === call.callId);
       const conversation = callConversation(seed.records, call.callId);
       const sessionId =

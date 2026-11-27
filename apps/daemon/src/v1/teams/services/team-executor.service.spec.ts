@@ -624,6 +624,14 @@ class FakeItemDao {
   async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
     return this.ofKinds(runId, kinds);
   }
+  async callHandOffRows(runId: string): Promise<Item[]> {
+    return this.ofKinds(runId, ['system']).filter((row) => {
+      const payload = JSON.parse(row.payload) as Record<string, unknown> | null;
+      return (
+        typeof payload?.callId === 'string' && payload.member !== undefined
+      );
+    });
+  }
   async poolHandOffRows(runId: string): Promise<Item[]> {
     return this.ofKinds(runId, ['system']).filter(
       (row) =>
@@ -18416,6 +18424,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       leadCutOff: boolean,
       cause: InterruptCause = 'self-update',
       team: Team = CALL_TEAM,
+      runCallee?: (ctx: ReturnType<typeof setup>) => Promise<FakeTurn>,
     ) {
       const ctx = setup();
       const run = await ctx.service.startRun({
@@ -18432,7 +18441,10 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         mode: 'async',
       });
       await drain();
-      completeTurn(ctx.claude.starts[1]!, 'half done');
+      completeTurn(
+        runCallee === undefined ? ctx.claude.starts[1]! : await runCallee(ctx),
+        'half done',
+      );
       completeTurn(ctx.claude.starts[0]!, 'waiting');
       await drain();
       while (ctx.registry.has(run.id)) {
@@ -18468,7 +18480,9 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         });
       }
       ctx.runDao.runs.get(run.id)!.status = 'running';
-      ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      if (runCallee === undefined) {
+        ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      }
       await ctx.service.reconcileOrphanedRuns(cause);
       const record = readRestartContinuation(
         ctx.runDao.runs.get(run.id)!.restartContinuation,
@@ -18539,7 +18553,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       expect(callee!.input.resumeSessionId).toBe('sess-callee');
     });
 
-    it("asks about a cut-off call's session under the profile of the pool member it ran on", async () => {
+    it('continues a cut-off call that was handed on to another pool member on that member, resuming its session', async () => {
       const profile = join(dir, 'second-account');
       mkdirSync(profile, { recursive: true });
       const ctx = await cutOffByUpdate(
@@ -18554,17 +18568,31 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
           ],
           { name: 'bg' },
         ),
+        async ({ claude }) => {
+          claude.starts[1]!.emit({ type: 'error', message: 'unknown model' });
+          claude.starts[1]!.finish();
+          await drain();
+          const second = claude.starts[2]!;
+          second.emit({ type: 'session', sessionId: 'sess-member-2' });
+          await drain();
+          return second;
+        },
       );
+      expect(ctx.claude.starts[2]!.input.configDir).toBe(profile);
+      const before = ctx.claude.starts.length;
 
-      await ctx.service.continueAfterRestart(ctx.run.id, {
-        ...ctx.record,
-        calls: ctx.record.calls.map((call) => ({ ...call, member: 2 })),
-      });
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
       await drain();
 
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
       expect(ctx.claude.resumableAsked).toEqual([
-        { sessionId: 'sess-callee', configDir: profile, cwd: dir },
+        { sessionId: 'sess-member-2', configDir: profile, cwd: dir },
       ]);
+      expect(callee!.input.configDir).toBe(profile);
+      expect(callee!.input.resumeSessionId).toBe('sess-member-2');
+      expect(callee!.input.prompt).toContain('Your session is intact');
     });
 
     it('continues a run a crash cut off when the user writes into it, delivering the message in the same pass', async () => {

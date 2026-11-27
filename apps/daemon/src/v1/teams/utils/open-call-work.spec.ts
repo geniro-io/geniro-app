@@ -114,6 +114,35 @@ describe('openCalls', () => {
 
     expect(calls.map((call) => call.member)).toEqual([null, null, null]);
   });
+
+  it("names the member of a call's newest hand-off, and leaves other calls on their start's", () => {
+    const calls = openCalls(
+      [
+        row('call_started', 'orch', {
+          callId: 'moved',
+          callerNodeId: 'orch',
+          calleeNodeId: 'critic',
+          member: 1,
+        }),
+        row('call_started', 'orch', {
+          callId: 'stayed',
+          callerNodeId: 'orch',
+          calleeNodeId: 'critic',
+          member: 1,
+        }),
+      ],
+      [
+        row('system', 'critic', { callId: 'moved', member: 2 }),
+        row('system', 'critic', { callId: 'moved', member: 3 }),
+        row('system', 'critic', { callId: 'elsewhere', member: 2 }),
+      ],
+    );
+
+    expect(calls.map((call) => [call.callId, call.member])).toEqual([
+      ['moved', 3],
+      ['stayed', 1],
+    ]);
+  });
 });
 
 describe('OPEN_WORK_KINDS', () => {

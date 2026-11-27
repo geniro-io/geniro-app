@@ -87,6 +87,15 @@ export const CLAUDE_THINKING_DISPLAY_ACCEPTED =
 export const CLAUDE_MODEL_FLAG = '--model';
 export const CLAUDE_EFFORT_FLAG = '--effort';
 export const CLAUDE_RESUME_FLAG = '--resume';
+/**
+ * Names the session a fresh process opens, so the daemon knows the id at spawn:
+ * the CLI prints `system/init` only once it has read the first prompt, which
+ * waits behind the MCP readiness gate. Measured on 2.1.331: init reports the
+ * id given, and `--resume <id>` continues it once the prompt was read; a
+ * process killed before it read the prompt wrote no session file, and
+ * `--resume` then answers "No conversation found with session ID".
+ */
+export const CLAUDE_SESSION_ID_FLAG = '--session-id';
 
 // ── Compacting before the window fills ─────────────────────────────────────
 /**

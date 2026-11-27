@@ -69,9 +69,24 @@ export interface ClaudeTurnDriverDeps {
   logger?: { warn(message: string): void; debug?(message: string): void };
   /** Settles each delegate's figures from its own transcript as it ends. */
   delegateSettler?: ClaudeDelegateSettler;
+  /** The id this process's session was opened under, announced at its start. */
+  assignedSessionId?: string | null;
   /** Injected so a spec can run the gate's whole loop in no wall-clock time. */
   now?: () => number;
   delay?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Tell the turn which session id the process was spawned under — every claude
+ * driver path calls this from its first opening hook, before `system/init`.
+ */
+export function announceAssignedSession(
+  io: TurnIo,
+  sessionId: string | null,
+): void {
+  if (sessionId !== null) {
+    io.emit({ type: 'session_assigned', sessionId });
+  }
 }
 
 /** Resolvers for the one poll currently in flight. */
@@ -133,6 +148,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    */
   private readonly runningHooks = new Set<string>();
   private lastHookSignalAt: number | null = null;
+  private assignedSessionAnnounced = false;
 
   constructor(private readonly deps: ClaudeTurnDriverDeps) {
     this.modelMismatch = new ClaudeModelMismatchNotice(deps.requestedModel);
@@ -147,6 +163,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    * failure than the one it is fixing.
    */
   async awaitPromptReady(io: TurnIo): Promise<void> {
+    this.announceAssignedSession(io);
     this.io = io;
     this.deps.delegateSettler?.attach(io);
     const now = this.deps.now ?? Date.now;
@@ -283,8 +300,18 @@ export class ClaudeTurnDriver implements TurnDriver {
   private io: TurnIo | null = null;
 
   onStdinReady(io: TurnIo): void {
+    this.announceAssignedSession(io);
     this.io = io;
     this.deps.delegateSettler?.attach(io);
+  }
+
+  /** Once per process, from whichever opening hook runs first. */
+  private announceAssignedSession(io: TurnIo): void {
+    if (this.assignedSessionAnnounced) {
+      return;
+    }
+    this.assignedSessionAnnounced = true;
+    announceAssignedSession(io, this.deps.assignedSessionId ?? null);
   }
 
   onMessage(obj: unknown): AgentEvent[] {

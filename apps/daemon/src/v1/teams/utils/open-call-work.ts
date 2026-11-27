@@ -25,7 +25,10 @@ export interface OpenCall {
   callerConversationId: string | null;
   calleeMemberId: string | null;
   mode: string | null;
-  /** The callee pool member it started on, null without a pool. */
+  /**
+   * The callee pool member it runs on now — its newest hand-off's, else the
+   * one it started on — null without a pool.
+   */
   member: number | null;
 }
 
@@ -128,12 +131,26 @@ export function turnsLeftForContinuation(
     .map((entry) => entry.turn);
 }
 
+function memberField(payload: Record<string, unknown> | null): number | null {
+  const member = payload?.member;
+  return typeof member === 'number' && Number.isInteger(member) && member >= 1
+    ? member
+    : null;
+}
+
 /**
  * The calls a transcript announced and never settled. A call's block is drawn
  * from its `call_started` row and closed by its `call_result`, so one left
  * without a result reads as in flight for as long as the transcript exists.
+ *
+ * `handOffs` are the run's pool hand-off rows (`ItemDao.callHandOffRows`), in
+ * seq order: a call's `member` is its newest hand-off's, so it names the
+ * member whose session the call last ran in.
  */
-export function openCalls(items: readonly Item[]): OpenCall[] {
+export function openCalls(
+  items: readonly Item[],
+  handOffs: readonly Item[] = [],
+): OpenCall[] {
   const open = new Map<string, OpenCall>();
   for (const item of items) {
     if (item.kind !== 'call_started' && item.kind !== 'call_result') {
@@ -148,18 +165,22 @@ export function openCalls(items: readonly Item[]): OpenCall[] {
       open.delete(callId);
       continue;
     }
-    const member = payload?.member;
     open.set(callId, {
       callId,
       callerMemberId: stringField(payload, 'callerNodeId') ?? item.memberId,
       callerConversationId: stringField(payload, 'callerConversationId'),
       calleeMemberId: stringField(payload, 'calleeNodeId'),
       mode: stringField(payload, 'mode'),
-      member:
-        typeof member === 'number' && Number.isInteger(member) && member >= 1
-          ? member
-          : null,
+      member: memberField(payload),
     });
+  }
+  for (const row of handOffs) {
+    const payload = payloadOf(row);
+    const call = open.get(stringField(payload, 'callId') ?? '');
+    const member = memberField(payload);
+    if (call !== undefined && member !== null) {
+      call.member = member;
+    }
   }
   return [...open.values()];
 }

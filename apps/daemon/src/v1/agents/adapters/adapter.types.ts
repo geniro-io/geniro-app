@@ -1292,6 +1292,17 @@ type AgentEventBody =
   | { type: 'session'; sessionId: string }
   | {
       /**
+       * The id this process's CLI was told to open its new session under, sent
+       * when the process starts and so before the CLI has read the prompt or
+       * written anything: a session the CLI never wrote cannot be resumed
+       * (`AgentAdapter.sessionResumable`). The CLI's own `session` follows
+       * once it opens the session, naming the same id.
+       */
+      type: 'session_assigned';
+      sessionId: string;
+    }
+  | {
+      /**
        * A notice about THIS turn, persisted as a `system` transcript item so it
        * is visible to the user rather than silent. NOT terminal: the turn
        * continues after one.
@@ -4220,6 +4231,18 @@ export interface CarrySessionInput {
   readonly from: string | null;
   /** The profile it should also be readable from — null for the default. */
   readonly to: string | null;
+}
+
+/**
+ * Which conversation {@link AgentAdapter.sessionResumable} is asked about.
+ */
+export interface SessionResumableInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that would resume it — null for the CLI's own default. */
+  readonly configDir: string | null;
+  /** The folder it ran in, a hint for a CLI that files sessions by folder. */
+  readonly cwd: string | null;
 }
 
 /**

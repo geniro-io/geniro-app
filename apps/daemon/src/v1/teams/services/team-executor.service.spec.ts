@@ -46,6 +46,7 @@ import type {
   InstalledApprovalSupport,
   LiveStreamSupport,
   SessionCloseCause,
+  SessionResumableInput,
   TurnInstructionInput,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
@@ -623,6 +624,14 @@ class FakeItemDao {
   async rowsOfKinds(runId: string, kinds: readonly string[]): Promise<Item[]> {
     return this.ofKinds(runId, kinds);
   }
+  async callHandOffRows(runId: string): Promise<Item[]> {
+    return this.ofKinds(runId, ['system']).filter((row) => {
+      const payload = JSON.parse(row.payload) as Record<string, unknown> | null;
+      return (
+        typeof payload?.callId === 'string' && payload.member !== undefined
+      );
+    });
+  }
   async poolHandOffRows(runId: string): Promise<Item[]> {
     return this.ofKinds(runId, ['system']).filter(
       (row) =>
@@ -944,6 +953,19 @@ class FakeAdapter {
   sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
+  /** Session ids this CLI never wrote, so `sessionResumable` answers no. */
+  readonly unwrittenSessions = new Set<string>();
+  /** Every `sessionResumable` the executor asked, in order. */
+  readonly resumableAsked: SessionResumableInput[] = [];
+  /** When set, `sessionResumable` rejects with it. */
+  resumableFailure: Error | null = null;
+  async sessionResumable(input: SessionResumableInput): Promise<boolean> {
+    this.resumableAsked.push(input);
+    if (this.resumableFailure !== null) {
+      throw this.resumableFailure;
+    }
+    return !this.unwrittenSessions.has(input.sessionId);
+  }
 
   /**
    * The SHIPPED adapter's session key for a turn — what decides whether a kept
@@ -18354,15 +18376,60 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
     ).toEqual([{ usage: { ...NO_USAGE, costUsd: 0.24 }, nodeId: 'a' }]);
   });
 
+  it("records the session id a callee is assigned at spawn for its call, and not for a member's own turn", async () => {
+    const ctx = setup();
+    const run = await ctx.service.startRun({
+      slug: 'bg',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    ctx.claude.starts[0]!.emit({
+      type: 'session_assigned',
+      sessionId: 'sess-lead-early',
+    });
+    await ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'work',
+      agent: 'callee',
+      message: 'build it',
+      mode: 'async',
+    });
+    await drain();
+    ctx.claude.starts[1]!.emit({
+      type: 'session_assigned',
+      sessionId: 'sess-callee-early',
+    });
+    await drain();
+
+    expect(ctx.callContextDao.sessions.get('call-1')).toEqual([
+      'sess-callee-early',
+    ]);
+    expect(ctx.nodeDao.rows.get(`${run.id}:callee`)?.agentSessionId).toBe(
+      'sess-callee-early',
+    );
+    expect(
+      ctx.nodeDao.rows.get(`${run.id}:a`)?.agentSessionId ?? null,
+    ).toBeNull();
+    expect(ctx.nodeDao.history.get(`${run.id}/a`)).toBeUndefined();
+    expect(
+      ctx.itemDao.items.some(
+        (i) => i.runId === run.id && i.payload.includes('sess-lead-early'),
+      ),
+    ).toBe(false);
+  });
+
   describe('continued after an update or a restart', () => {
     async function cutOffByUpdate(
       leadCutOff: boolean,
       cause: InterruptCause = 'self-update',
+      team: Team = CALL_TEAM,
+      runCallee?: (ctx: ReturnType<typeof setup>) => Promise<FakeTurn>,
     ) {
       const ctx = setup();
       const run = await ctx.service.startRun({
         slug: 'bg',
-        team: CALL_TEAM,
+        team,
         cwd: dir,
         prompt: 'go',
       });
@@ -18374,7 +18441,10 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         mode: 'async',
       });
       await drain();
-      completeTurn(ctx.claude.starts[1]!, 'half done');
+      completeTurn(
+        runCallee === undefined ? ctx.claude.starts[1]! : await runCallee(ctx),
+        'half done',
+      );
       completeTurn(ctx.claude.starts[0]!, 'waiting');
       await drain();
       while (ctx.registry.has(run.id)) {
@@ -18410,7 +18480,9 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         });
       }
       ctx.runDao.runs.get(run.id)!.status = 'running';
-      ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      if (runCallee === undefined) {
+        ctx.callContextDao.sessions.set('call-1', ['sess-callee']);
+      }
       await ctx.service.reconcileOrphanedRuns(cause);
       const record = readRestartContinuation(
         ctx.runDao.runs.get(run.id)!.restartContinuation,
@@ -18438,11 +18510,89 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
         /^\[geniro\] The app was quit while you were working on this call\./,
       );
       expect(callee!.input.resumeSessionId).toBe('sess-callee');
+      expect(callee!.input.prompt).toContain('Your session is intact');
       expect(
         ctx.itemDao.items.filter(
           (i) => i.runId === ctx.run.id && i.kind === 'call_started',
         ),
       ).toHaveLength(1);
+    });
+
+    it('continues a cut-off call fresh, with its brief, when its CLI never wrote the saved session', async () => {
+      const ctx = await cutOffByUpdate(true, 'quit');
+      ctx.claude.unwrittenSessions.add('sess-callee');
+      const before = ctx.claude.starts.length;
+
+      expect(
+        await ctx.service.continueAfterRestart(ctx.run.id, ctx.record),
+      ).toBe('continued');
+      await drain();
+
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
+      expect(ctx.claude.resumableAsked).toEqual([
+        { sessionId: 'sess-callee', configDir: null, cwd: dir },
+      ]);
+      expect(callee!.input.resumeSessionId ?? null).toBeNull();
+      expect(callee!.input.prompt).not.toContain('Your session is intact');
+      expect(callee!.input.prompt).toContain('build it');
+    });
+
+    it('resumes a cut-off call in its session as before when its CLI cannot answer whether it wrote it', async () => {
+      const ctx = await cutOffByUpdate(true, 'quit');
+      ctx.claude.resumableFailure = new Error('store unreadable');
+      const before = ctx.claude.starts.length;
+
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
+      await drain();
+
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
+      expect(callee!.input.resumeSessionId).toBe('sess-callee');
+    });
+
+    it('continues a cut-off call that was handed on to another pool member on that member, resuming its session', async () => {
+      const profile = join(dir, 'second-account');
+      mkdirSync(profile, { recursive: true });
+      const ctx = await cutOffByUpdate(
+        true,
+        'quit',
+        teamOf(
+          [
+            member('a'),
+            member('callee', {
+              pool: [{ agent: 'claude', configDir: profile }],
+            }),
+          ],
+          { name: 'bg' },
+        ),
+        async ({ claude }) => {
+          claude.starts[1]!.emit({ type: 'error', message: 'unknown model' });
+          claude.starts[1]!.finish();
+          await drain();
+          const second = claude.starts[2]!;
+          second.emit({ type: 'session', sessionId: 'sess-member-2' });
+          await drain();
+          return second;
+        },
+      );
+      expect(ctx.claude.starts[2]!.input.configDir).toBe(profile);
+      const before = ctx.claude.starts.length;
+
+      await ctx.service.continueAfterRestart(ctx.run.id, ctx.record);
+      await drain();
+
+      const callee = ctx.claude.starts
+        .slice(before)
+        .find((t) => t.input.prompt.includes('on this call'));
+      expect(ctx.claude.resumableAsked).toEqual([
+        { sessionId: 'sess-member-2', configDir: profile, cwd: dir },
+      ]);
+      expect(callee!.input.configDir).toBe(profile);
+      expect(callee!.input.resumeSessionId).toBe('sess-member-2');
+      expect(callee!.input.prompt).toContain('Your session is intact');
     });
 
     it('continues a run a crash cut off when the user writes into it, delivering the message in the same pass', async () => {

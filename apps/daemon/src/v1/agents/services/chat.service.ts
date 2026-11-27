@@ -5136,7 +5136,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.seqs.reserve(runId),
         mapped.kind,
         mapped.role,
-        mapped.payload,
+        ownsLivePlane
+          ? {
+              ...mapped.payload,
+              ...this.partials.thoughtFields(
+                runId,
+                SINGLE_AGENT_NODE,
+                mapped.kind,
+                endsReasoningStretch(event),
+              ),
+            }
+          : mapped.payload,
       );
       // Main thread only, exactly as in the in-turn path above: the tail holds
       // the main agent's words, so a delegate's durable message must not take
@@ -8528,7 +8538,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               await this.seqs.reserve(runId),
               mapped.kind,
               mapped.role,
-              mapped.payload,
+              {
+                ...mapped.payload,
+                ...this.partials.thoughtFields(
+                  runId,
+                  SINGLE_AGENT_NODE,
+                  mapped.kind,
+                  endsReasoningStretch(event),
+                ),
+              },
             );
             // ONLY a message retires the tail: it is the durable copy of the
             // very words being streamed. Retiring on any item would let a

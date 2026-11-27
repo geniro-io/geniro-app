@@ -18112,6 +18112,53 @@ describe('ChatService — the live tail belongs to the MAIN thread', () => {
     await drain();
   });
 
+  it('stamps how long the agent thought on its reasoning row, in a turn and between turns', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    const thoughts = (): (number | undefined)[] =>
+      itemDao.items
+        .filter((item) => item.runId === run.id && item.kind === 'reasoning')
+        .map(
+          (item) =>
+            (JSON.parse(item.payload) as { thoughtMs?: number }).thoughtMs,
+        );
+    const now = vi.spyOn(Date, 'now');
+    try {
+      await service.sendMessage(run.id, 'go');
+      await drain();
+      now.mockReturnValue(2_000_000);
+      claude.emit({ type: 'reasoning_delta', text: 'Reading the brief' });
+      await drain();
+      now.mockReturnValue(2_007_000);
+      claude.emit({ type: 'reasoning', text: 'Reading the brief' });
+      await drain();
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+
+      const offTurn = (event: AgentEvent): void =>
+        claude.sessions[0]?.onBetweenTurnEvent?.(event);
+      now.mockReturnValue(3_000_000);
+      offTurn({ type: 'reasoning_delta', text: 'The build is back' });
+      await drain();
+      now.mockReturnValue(3_003_000);
+      offTurn({ type: 'reasoning', text: 'The build is back' });
+      await drain();
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(thoughts()).toEqual([7_000, 3_000]);
+  });
+
   it('keeps thinking the CLI runs by itself whole while a background delegate settles', async () => {
     const { service, claude, deltas } = setup();
     const run = await service.createChat({

@@ -57,6 +57,12 @@ interface LiveState {
   thinkingText: string;
   /** When the CURRENT stretch began (epoch ms), or null when not reasoning. */
   thinkingSince: number | null;
+  /**
+   * How long the stretch that closed last lasted, until the reasoning row it
+   * became claims it ({@link PartialStreamService.takeThought}); null when
+   * there is none to claim.
+   */
+  thoughtMs: number | null;
   /** Prompt-side tokens as of the turn's most recent request, or null. */
   contextTokens: number | null;
   /**
@@ -128,6 +134,8 @@ export class PartialStreamService {
   private readonly logger = new Logger(PartialStreamService.name);
   /** runId -> ownerKey -> what that agent is doing right now. */
   private readonly tails = new Map<string, Map<string, LiveState>>();
+  /** runId -> conversation -> the owner key its live plane is written under. */
+  private readonly conversationOwners = new Map<string, Map<string, string>>();
   /**
    * (runId, ownerKey) -> the context window the CLI last reported for it.
    *
@@ -235,8 +243,7 @@ export class PartialStreamService {
       // reworked to fix.
       const endedAStretch =
         this.isReasoning(state) || state.composingTool !== null;
-      state.thinkingCurrent = null;
-      state.thinkingText = '';
+      this.closeStretch(state);
       // Words arriving end a COMPOSITION too, on the same reasoning. The CLI's
       // own `content_block_stop` normally closes it a frame earlier; this is
       // what keeps a CLI that omits that frame from leaving a card skeleton on
@@ -278,6 +285,7 @@ export class PartialStreamService {
       if (!this.isReasoning(state)) {
         state.thinkingStretch += 1;
         state.thinkingSince = Date.now();
+        state.thoughtMs = null;
       }
       state.thinkingCurrent = tokens;
       this.publish(this.eventOf(runId, ownerKey, memberId, state));
@@ -313,6 +321,7 @@ export class PartialStreamService {
       if (opened) {
         state.thinkingStretch += 1;
         state.thinkingSince = Date.now();
+        state.thoughtMs = null;
       }
       // Past the cap the stretch is already open and the text cannot grow, so
       // there is nothing new to say — publishing anyway would put a
@@ -372,8 +381,7 @@ export class PartialStreamService {
         // producing. Without this a model that thinks and then calls a tool
         // without saying anything keeps a `Thinking…` row above the loader for
         // the whole composition, which is two rows about one wait.
-        state.thinkingCurrent = null;
-        state.thinkingText = '';
+        this.closeStretch(state);
       } else {
         if (state.composingTool === null) {
           return;
@@ -411,6 +419,104 @@ export class PartialStreamService {
     return state.thinkingCurrent !== null || state.thinkingText !== '';
   }
 
+  /** End the open stretch, keeping how long it lasted for its reasoning row. */
+  private closeStretch(state: LiveState): void {
+    if (this.isReasoning(state) && state.thinkingSince !== null) {
+      state.thoughtMs = Math.max(0, Date.now() - state.thinkingSince);
+    }
+    state.thinkingCurrent = null;
+    state.thinkingText = '';
+  }
+
+  /**
+   * How long the stretch that closed last lasted, handed out once: the durable
+   * reasoning row that stretch became carries it. Null when no closed stretch
+   * is waiting — a row written after a newer stretch opened, or one this plane
+   * never saw open.
+   */
+  private takeThought(runId: string, ownerKey: string): number | null {
+    const state = this.tails.get(runId)?.get(ownerKey);
+    if (!state) {
+      return null;
+    }
+    const thought = state.thoughtMs;
+    state.thoughtMs = null;
+    return thought;
+  }
+
+  /**
+   * The fields a durable row adds for the stretch it closed: how long the
+   * thinking took, on the agent's own reasoning row only. Any other row of the
+   * agent's own spends the claim too, so a stretch that became no reasoning
+   * row never lends its length to a later one; a report about work beside the
+   * agent (`ownRow` false) leaves it waiting.
+   */
+  thoughtFields(
+    runId: string,
+    ownerKey: string,
+    kind: string,
+    ownRow: boolean,
+  ): { thoughtMs?: number } {
+    if (!ownRow) {
+      return {};
+    }
+    const thoughtMs = this.takeThought(runId, ownerKey);
+    return kind === 'reasoning' && thoughtMs !== null ? { thoughtMs } : {};
+  }
+
+  /**
+   * A turn opens on `conversation` under `ownerKey`, and that conversation's
+   * live plane is written there from now on. Answers the key it was written
+   * under before when that is another one — a callee conversation continued by
+   * a new call, whose kept process may have been mid-stretch under the previous
+   * call's key — so the caller can close it ({@link closeOwner}); else null.
+   */
+  moveConversation(
+    runId: string,
+    conversation: string,
+    ownerKey: string,
+  ): string | null {
+    const byConversation =
+      this.conversationOwners.get(runId) ?? new Map<string, string>();
+    this.conversationOwners.set(runId, byConversation);
+    const previous = byConversation.get(conversation) ?? null;
+    byConversation.set(conversation, ownerKey);
+    return previous === ownerKey ? null : previous;
+  }
+
+  /**
+   * Take one owner off the plane without ending the run's turn: its words,
+   * reasoning, composition and unrecorded spend come down and the empty state
+   * is announced, so neither a live client nor one joining later
+   * ({@link snapshot}) keeps a stretch nobody will ever close. Its delegates
+   * stay, as at a turn's end.
+   */
+  closeOwner(runId: string, ownerKey: string, memberId: string | null): void {
+    try {
+      this.spendStore.set(runId, ownerKey, null);
+      const byOwner = this.tails.get(runId);
+      const state = byOwner?.get(ownerKey);
+      if (!byOwner || !state) {
+        return;
+      }
+      byOwner.delete(ownerKey);
+      this.publish(
+        this.eventOf(runId, ownerKey, memberId, {
+          ...state,
+          text: '',
+          thinkingCurrent: null,
+          thinkingText: '',
+          composingTool: null,
+          spentCostUsd: null,
+          spentEstimatedCostUsd: null,
+        }),
+      );
+      this.retainDelegates(runId, ownerKey, state);
+    } catch (err) {
+      this.warn('closeOwner', err);
+    }
+  }
+
   /**
    * Report that the agent is no longer reasoning — anything else it does ends
    * the stretch.
@@ -437,8 +543,7 @@ export class PartialStreamService {
       if (!this.isReasoning(state)) {
         return;
       }
-      state.thinkingCurrent = null;
-      state.thinkingText = '';
+      this.closeStretch(state);
       this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('endThinking', err);
@@ -627,6 +732,7 @@ export class PartialStreamService {
   startTurn(runId: string, ownerKey: string): void {
     try {
       const state = this.stateOf(runId, ownerKey);
+      state.thoughtMs = null;
       state.spentInputTokens = null;
       state.spentOutputTokens = null;
       state.spentCacheReadTokens = null;
@@ -907,8 +1013,7 @@ export class PartialStreamService {
         return;
       }
       state.text = '';
-      state.thinkingCurrent = null;
-      state.thinkingText = '';
+      this.closeStretch(state);
       state.composingTool = null;
       state.composingBytes = 0;
       this.publish(this.eventOf(runId, ownerKey, memberId, state));
@@ -1075,6 +1180,7 @@ export class PartialStreamService {
   forgetRun(runId: string): void {
     try {
       this.tails.delete(runId);
+      this.conversationOwners.delete(runId);
       // Swept by PREFIX, because these two are keyed per (run, owner) and a
       // team run has one entry per NODE. Deleting `runId` alone was correct
       // only while every run had exactly one owner; it now leaves a member's
@@ -1182,6 +1288,7 @@ function newLiveState(): LiveState {
     thinkingCurrent: null,
     thinkingText: '',
     thinkingSince: null,
+    thoughtMs: null,
     contextTokens: null,
     spentInputTokens: null,
     spentOutputTokens: null,

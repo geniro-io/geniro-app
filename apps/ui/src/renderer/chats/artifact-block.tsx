@@ -171,7 +171,7 @@ export function ArtifactCard({
               labelledFullScreen ? null : (
                 <Button
                   type="button"
-                  variant="secondary"
+                  variant="outline"
                   size="sm"
                   onClick={() => setFull(true)}>
                   <Maximize2 aria-hidden="true" className="size-3" />

@@ -112,6 +112,9 @@ vi.mock('./daemon-client', () => ({
     onResourceAlertsChanged(): () => void {
       return () => {};
     }
+    onRunStatus(): () => void {
+      return () => {};
+    }
   },
 }));
 const commandCenterMock = vi.hoisted(() => ({ mounts: 0 }));

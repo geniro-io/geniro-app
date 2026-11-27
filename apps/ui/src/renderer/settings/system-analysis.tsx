@@ -463,12 +463,12 @@ function ThreadsDialog({
                 data-slot="system-analysis-thread"
                 className="flex min-w-0 flex-col gap-1 py-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  <span className="min-w-0 truncate text-sm font-medium">
                     {thread.title ?? 'Untitled thread'}
                   </span>
                   <Badge variant="secondary">{KIND_LABEL[thread.kind]}</Badge>
                   <span
-                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                    className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums"
                     title="How strongly its signals point at it">
                     score {thread.score}
                   </span>

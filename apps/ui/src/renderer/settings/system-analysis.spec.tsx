@@ -554,10 +554,11 @@ describe('SystemAnalysisPage', () => {
     expect(line.classList.contains('flex-wrap')).toBe(false);
     expect(title!.textContent).toBe(longTitle);
     expect(title!.classList.contains('min-w-0')).toBe(true);
-    expect(title!.classList.contains('flex-1')).toBe(true);
+    expect(title!.classList.contains('flex-1')).toBe(false);
     expect(title!.classList.contains('truncate')).toBe(true);
     expect(badge!.textContent).toBe('Chat');
     expect(score!.textContent).toBe('score 5');
+    expect(score!.classList.contains('ml-auto')).toBe(true);
     expect(score!.classList.contains('shrink-0')).toBe(true);
   });
 });

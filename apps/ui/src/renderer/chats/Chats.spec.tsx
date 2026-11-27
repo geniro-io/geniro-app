@@ -17209,6 +17209,17 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
   const pinned = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('[data-slot="pinned-request"]');
 
+  const pinnedCards = (container: HTMLElement): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>(
+      '[data-slot="pinned-request-cards"] > div',
+    ),
+  ];
+
+  const pinnedToggle = (container: HTMLElement): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>(
+      '[data-slot="pinned-request-toggle"]',
+    )!;
+
   // The scroller by NAME, not by position: it was reached through the pinned
   // card's `previousElementSibling`, so the jump-to-latest control landing
   // between the two made this assert against that control's own text.
@@ -17287,11 +17298,10 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     );
   });
 
-  it('bounds the pinned card and lets it scroll, so a tall card cannot push the composer away', async () => {
-    // Several option previews stacked above the options made the pinned region
-    // taller than the pane, and nothing on it could scroll: the options, the
-    // answer field and the composer went off screen. The CLASSES, because jsdom
-    // lays nothing out — the bound and the scroll are what regressed.
+  it('bounds the pinned card to half the chat column and lets it scroll', async () => {
+    // Half of the chat column, not of the window, so a short column (the
+    // command center's manager window, a tablet browser) always leaves the
+    // transcript the other half. The CLASSES, because jsdom lays nothing out.
     api.listRunItems.mockResolvedValue([
       msg(0, 'user', 'hi'),
       approval('r1', 1, 'req-1'),
@@ -17301,8 +17311,20 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     await clickRun(container, 'My chat');
 
     const classes = classesOf(pinned(container)!);
-    expect(classes).toContain('max-h-[60vh]');
-    expect(classes).toContain('overflow-y-auto');
+    expect(classes).toContain('max-h-[50%]');
+    expect(classes).not.toContain('max-h-[60vh]');
+    expect(
+      classesOf(
+        container.querySelector<HTMLElement>(
+          '[data-slot="pinned-request-cards"]',
+        )!,
+      ),
+    ).toContain('overflow-y-auto');
+    // The jump-to-latest row sits right above the region, so its button hangs
+    // over the transcript and never over the region's header row.
+    expect(
+      classesOf(pinned(container)!.previousElementSibling as HTMLElement),
+    ).toContain('h-0');
   });
 
   it('unpins as soon as the request is answered', async () => {
@@ -17356,7 +17378,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     // older card stays mounted on purpose, which is what keeps a half-typed
     // answer alive when a newer question takes the pin. `textContent` includes
     // hidden nodes, so asserting on it here would pass either way.
-    const cards = [...pinned(container)!.querySelectorAll(':scope > div')];
+    const cards = pinnedCards(container);
     const visible = cards.filter((card) => !card.hasAttribute('hidden'));
     expect(visible).toHaveLength(1);
     expect(visible[0]!.textContent).toContain('ls /newest');
@@ -17409,9 +17431,9 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       });
     });
 
-    const concealed = [
-      ...pinned(container)!.querySelectorAll(':scope > div[hidden]'),
-    ];
+    const concealed = pinnedCards(container).filter((card) =>
+      card.hasAttribute('hidden'),
+    );
     expect(concealed).toHaveLength(1);
     expect(concealed[0]!.querySelector<HTMLInputElement>('input')!.value).toBe(
       'half an answer',
@@ -17445,6 +17467,177 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
 
     await clickRun(container, 'My chat');
     expect(pinned(container)).not.toBeNull();
+  });
+
+  describe('its header row', () => {
+    afterEach(() => {
+      localStorage.clear();
+    });
+
+    const asked = (runId: string, seq: number, id: string): ChatItem => ({
+      ...approval(runId, seq, id),
+      payload: {
+        id,
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Which looks right?', options: [] }] },
+        questions: [{ question: 'Which looks right?', options: [] }],
+      },
+    });
+
+    const typeInto = async (field: HTMLInputElement, text: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )!.set!.call(field, text);
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+
+    it('says what waits and how many, unfolded by default', async () => {
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        approval('r1', 1, 'req-1'),
+      ]);
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+
+      expect(pinnedToggle(container).textContent).toBe(
+        'Waiting on you · 1 question',
+      );
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'true',
+      );
+      expect(pinnedToggle(container).title).not.toContain('opens the next');
+
+      await act(async () => {
+        emitItem(approval('r1', 2, 'req-2'));
+      });
+
+      expect(pinnedToggle(container).textContent).toBe(
+        'Waiting on you · 2 questions',
+      );
+      expect(pinnedToggle(container).title).toContain(
+        'Answering this one opens the next.',
+      );
+    });
+
+    it('folds the cards to that one row and back without losing a typed answer', async () => {
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        asked('r1', 1, 'req-1'),
+      ]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      const cards = (): HTMLElement =>
+        container.querySelector<HTMLElement>(
+          '[data-slot="pinned-request-cards"]',
+        )!;
+      await typeInto(
+        cards().querySelector<HTMLInputElement>('input')!,
+        'half an answer',
+      );
+
+      await act(async () => {
+        pinnedToggle(container).click();
+      });
+
+      expect(cards().hasAttribute('hidden')).toBe(true);
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'false',
+      );
+      expect(pinnedToggle(container).textContent).toBe(
+        'Waiting on you · 1 question',
+      );
+
+      await act(async () => {
+        pinnedToggle(container).click();
+      });
+
+      expect(cards().hasAttribute('hidden')).toBe(false);
+      expect(cards().querySelector<HTMLInputElement>('input')!.value).toBe(
+        'half an answer',
+      );
+    });
+
+    it('shows a newer question unfolded even after the pinned one was folded', async () => {
+      api.listRunItems.mockResolvedValue([
+        msg(0, 'user', 'hi'),
+        asked('r1', 1, 'req-old'),
+      ]);
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      await typeInto(
+        pinnedCards(container)[0]!.querySelector<HTMLInputElement>('input')!,
+        'half an answer',
+      );
+      await act(async () => {
+        pinnedToggle(container).click();
+      });
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'false',
+      );
+
+      await act(async () => {
+        emitItem({
+          ...approval('r1', 2, 'req-new'),
+          payload: {
+            id: 'req-new',
+            toolName: 'Bash',
+            input: { command: 'ls /newest' },
+          },
+        });
+      });
+
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'true',
+      );
+      expect(pinnedToggle(container).textContent).toBe(
+        'Waiting on you · 2 questions',
+      );
+      const cards = pinnedCards(container);
+      expect(cards).toHaveLength(2);
+      expect(
+        cards.filter((card) => !card.hasAttribute('hidden'))[0]!.textContent,
+      ).toContain('ls /newest');
+      expect(cards[0]!.querySelector<HTMLInputElement>('input')!.value).toBe(
+        'half an answer',
+      );
+    });
+
+    it('remembers the fold per thread', async () => {
+      api.listChats.mockResolvedValue([
+        run1,
+        { ...run1, id: 'r2', title: 'Other chat' },
+      ]);
+      api.listRunItems.mockImplementation(
+        ({ runId }: { runId: string }): Promise<ChatItem[]> =>
+          Promise.resolve([msg(0, 'user', 'hi'), approval(runId, 1, 'req-1')]),
+      );
+      const { client } = makeClient();
+      const container = await mount(client);
+
+      await clickRun(container, 'My chat');
+      await act(async () => {
+        pinnedToggle(container).click();
+      });
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'false',
+      );
+
+      await clickRun(container, 'Other chat');
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'true',
+      );
+
+      await clickRun(container, 'My chat');
+      expect(pinnedToggle(container).getAttribute('aria-expanded')).toBe(
+        'false',
+      );
+    });
   });
 });
 

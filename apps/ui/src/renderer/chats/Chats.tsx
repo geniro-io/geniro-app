@@ -264,6 +264,7 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
+import { PinnedRequests } from './pinned-requests';
 import { PluginBlocks } from './plugin-blocks';
 import {
   ProgressChip,
@@ -11246,42 +11247,11 @@ export function Chats({
                   gets typed — the question and the reply belong on the same
                   edge of the screen. */}
                         {pinnedRequest ? (
-                          <div
-                            data-slot="pinned-request"
-                            // Named and given a role that can CARRY a name, so a
-                            // screen-reader user typing into the composer learns the
-                            // turn has stopped on them. Deliberately NOT `aria-live`:
-                            // the card inside is a tablist full of interactive
-                            // controls, and announcing the whole region on every
-                            // keystroke inside it would be worse than saying nothing.
-                            role="region"
-                            aria-label="Question waiting on your answer"
-                            // Bounded and scrolling itself, so option previews stacked
-                            // above the options cannot push them, the answer field and
-                            // the composer off screen.
-                            className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
-                            {openRequests.length > 1 ? (
-                              <p className="m-0 mb-1.5 text-xs text-muted-foreground">
-                                {openRequests.length} questions waiting —
-                                answering this one opens the next
-                              </p>
-                            ) : null}
-                            {/* Every open request is rendered, and all but the newest are
-                      `hidden`. Rendering only the pinned one would unmount the
-                      card being typed into the moment a newer question arrived,
-                      resetting its picks, its text and every staged attachment
-                      — with no way for the user to get any of it back. `hidden`
-                      also keeps the concealed cards out of the tab order and
-                      the accessibility tree, which `display:none` via a class
-                      would not guarantee against a utility being overridden. */}
-                            {openRequests.map((request) => (
-                              <div
-                                key={request.id}
-                                hidden={request.id !== pinnedRequest.id}>
-                                {approvalCardFor(request)}
-                              </div>
-                            ))}
-                          </div>
+                          <PinnedRequests
+                            requests={openRequests}
+                            pinnedId={pinnedRequest.id}
+                            renderCard={approvalCardFor}
+                          />
                         ) : null}
                       </TranscriptContexts>
 

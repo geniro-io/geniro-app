@@ -341,8 +341,8 @@ function RecentMessages({
  * and a press on any of them opens that whole conversation.
  *
  * It floats over the transcript rather than taking a column, so it appearing
- * never reflows the text under the reader. The hanging row it sits in lets
- * every click but the card's own through.
+ * never reflows the text under the reader. Chats hangs it in the transcript's
+ * corner beside the threads card.
  */
 export function WorkingAgentsCard({
   rows,
@@ -389,73 +389,71 @@ export function WorkingAgentsCard({
   const anyoneWorking = rows.some((row) => row.state === 'working');
   return (
     <>
-      <div className="pointer-events-none relative z-20 h-0 w-full overflow-visible">
-        <section
-          data-slot="working-agents-card"
-          aria-label="Agents this run started"
-          className={cn(
-            popoverSurface,
-            'pointer-events-auto right-4 -bottom-2 z-20 flex flex-col',
-            !panelOpen &&
-              live.length === 0 &&
-              unseenFailures.length === 0 &&
-              'opacity-60 transition-opacity focus-within:opacity-100 hover:opacity-100',
-          )}>
-          <HoverPopover
-            slot="working-agents-toggle"
-            label={`Agents · ${summary}`}
-            panelLabel="Agents this run started"
-            side="top"
-            onOpenChange={setPanelOpen}
-            className="shrink-0"
-            triggerClassName={cn(
-              'group relative min-w-0 rounded-xl text-left font-normal',
-              CONTROL_HOVER,
-            )}
-            panelClassName="w-80 p-0"
-            trigger={
-              <>
-                {tile === null ? null : (
-                  <AgentsTile
-                    face={{
-                      name: tile.lead.callee,
-                      colorKey: tile.lead.calleeKey,
-                      avatar: tile.lead.calleeAvatar,
-                    }}
-                    others={tile.others}
-                    activity={
-                      anyoneWorking
-                        ? 'working'
-                        : live.length > 0
-                          ? 'waiting'
-                          : 'idle'
-                    }
-                  />
-                )}
-                {unseenFailures.length > 0 ? (
-                  <StatusDot
-                    tone="bad"
-                    className="absolute -top-0.5 -right-0.5 size-2 ring-2 ring-popover"
-                  />
-                ) : null}
-              </>
-            }>
-            {(close) => (
-              <AgentsPanel
-                rows={rows}
-                runId={runId}
-                api={api}
-                client={client}
-                work={work === undefined ? undefined : openingFrom(work, close)}
-                onOpen={(row) => {
-                  close();
-                  setDialogId(row.conversationId);
-                }}
-              />
-            )}
-          </HoverPopover>
-        </section>
-      </div>
+      <section
+        data-slot="working-agents-card"
+        aria-label="Agents this run started"
+        className={cn(
+          popoverSurface,
+          'pointer-events-auto relative z-20 flex flex-col',
+          !panelOpen &&
+            live.length === 0 &&
+            unseenFailures.length === 0 &&
+            'opacity-60 transition-opacity focus-within:opacity-100 hover:opacity-100',
+        )}>
+        <HoverPopover
+          slot="working-agents-toggle"
+          label={`Agents · ${summary}`}
+          panelLabel="Agents this run started"
+          side="top"
+          onOpenChange={setPanelOpen}
+          className="shrink-0"
+          triggerClassName={cn(
+            'group relative min-w-0 rounded-xl text-left font-normal',
+            CONTROL_HOVER,
+          )}
+          panelClassName="w-80 p-0"
+          trigger={
+            <>
+              {tile === null ? null : (
+                <AgentsTile
+                  face={{
+                    name: tile.lead.callee,
+                    colorKey: tile.lead.calleeKey,
+                    avatar: tile.lead.calleeAvatar,
+                  }}
+                  others={tile.others}
+                  activity={
+                    anyoneWorking
+                      ? 'working'
+                      : live.length > 0
+                        ? 'waiting'
+                        : 'idle'
+                  }
+                />
+              )}
+              {unseenFailures.length > 0 ? (
+                <StatusDot
+                  tone="bad"
+                  className="absolute -top-0.5 -right-0.5 size-2 ring-2 ring-popover"
+                />
+              ) : null}
+            </>
+          }>
+          {(close) => (
+            <AgentsPanel
+              rows={rows}
+              runId={runId}
+              api={api}
+              client={client}
+              work={work === undefined ? undefined : openingFrom(work, close)}
+              onOpen={(row) => {
+                close();
+                setDialogId(row.conversationId);
+              }}
+            />
+          )}
+        </HoverPopover>
+      </section>
       <CallConversationDialog
         row={rows.find((row) => row.conversationId === dialogId) ?? null}
         onClose={() => setDialogId(null)}

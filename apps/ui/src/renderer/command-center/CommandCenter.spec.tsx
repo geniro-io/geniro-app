@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import type * as chatsUseThreadPullRequestsModule from '../chats/use-thread-pull-requests';
+import type { WorkingThread } from '../chats/working-threads-card';
 import type * as componentsUiSelectModule from '../components/ui/select';
 import type * as daemonApiModule from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
@@ -19,7 +20,10 @@ const { probes, fakes } = vi.hoisted(() => {
   return {
     probes: {
       graph: null as GraphViewProps | null,
-      dock: null as { onOpenThread: (runId: string) => void } | null,
+      dock: null as {
+        onOpenThread: (runId: string) => void;
+        workingThreads: readonly WorkingThread[];
+      } | null,
     },
     fakes: {
       board: unset,
@@ -82,7 +86,10 @@ vi.mock('./graph-view', () => ({
   },
 }));
 vi.mock('./manager-dock', () => ({
-  ManagerDock: (props: { onOpenThread: (runId: string) => void }) => {
+  ManagerDock: (props: {
+    onOpenThread: (runId: string) => void;
+    workingThreads: readonly WorkingThread[];
+  }) => {
     probes.dock = props;
     return (
       <div data-slot="stub-manager-dock">
@@ -92,6 +99,16 @@ vi.mock('./manager-dock', () => ({
           onClick={() => props.onOpenThread('run-b')}>
           Open chat
         </button>
+        {props.workingThreads.map((thread) => (
+          <button
+            key={thread.runId}
+            type="button"
+            data-slot="stub-working-thread"
+            data-run={thread.runId}
+            onClick={() => props.onOpenThread(thread.runId)}>
+            Open working thread
+          </button>
+        ))}
       </div>
     );
   },
@@ -1349,7 +1366,7 @@ describe('CommandCenter — the working tile on the canvas', () => {
   });
 });
 
-describe('CommandCenter — the working strip in the maximised manager chat', () => {
+describe('CommandCenter — the working threads in the manager chat’s corner', () => {
   const openChat = (): void =>
     clickOn(
       container.querySelector('[data-slot="command-center-chat-toggle"]'),
@@ -1358,27 +1375,27 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
     clickOn(
       container.querySelector('[data-slot="command-center-chat-maximise"]'),
     );
-  const stripOf = (): HTMLElement | null =>
-    container.querySelector<HTMLElement>('[data-slot="working-strip"]');
-  const facesOf = (): string[] =>
-    [
-      ...container.querySelectorAll<HTMLElement>(
-        '[data-slot="working-strip-thread"]',
-      ),
-    ].map((face) => face.dataset.run!);
+  const workingOf = (): string[] =>
+    probes.dock!.workingThreads.map((thread) => thread.runId);
 
-  it('draws no strip while the chat window is open but not maximised', async () => {
+  it('keeps the window head to its title and window controls once the chat is maximised', async () => {
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'working'),
+      cardOf('run-x', 'p2', 'working'),
       cardOf('run-a', 'p1'),
     ]);
     await renderPage();
     openChat();
+    maximiseChat();
 
-    expect(stripOf()).toBeNull();
+    expect(container.querySelector('[data-slot="working-strip"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="command-center-chat-head"]')!
+        .textContent,
+    ).toBe('Manager');
   });
 
-  it('draws one face per working thread once the chat is maximised, and counts what the graph counts', async () => {
+  it('hands the chat the threads the graph counts as working, in graph order', async () => {
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'working'),
       cardOf('run-x', 'p2', 'working'),
@@ -1386,62 +1403,54 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
       cardOf('run-a', 'p1'),
     ]);
     await renderPage();
-    openChat();
-    maximiseChat();
 
-    expect(facesOf()).toEqual(['run-w', 'run-x']);
-    expect(facesOf()).toHaveLength(
+    expect(workingOf()).toEqual(['run-w', 'run-x']);
+    expect(probes.dock!.workingThreads.map((thread) => thread.status)).toEqual([
+      'working',
+      'working',
+    ]);
+    expect(workingOf()).toHaveLength(
       probes.graph!.threads.filter((thread) => thread.view.status === 'working')
         .length,
     );
   });
 
-  it('follows the board: a thread that stops working leaves the strip, and none working removes it', async () => {
+  it('follows the board: a thread that stops working leaves the chat’s corner, and none working leaves none', async () => {
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'working'),
       cardOf('run-x', 'p2', 'working'),
     ]);
     await renderPage();
-    openChat();
-    maximiseChat();
-    expect(facesOf()).toEqual(['run-w', 'run-x']);
+    expect(workingOf()).toEqual(['run-w', 'run-x']);
 
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'idle'),
       cardOf('run-x', 'p2', 'working'),
     ]);
     await renderPage();
-    expect(facesOf()).toEqual(['run-x']);
+    expect(workingOf()).toEqual(['run-x']);
 
     fakes.board = boardOf([cardOf('run-x', 'p2', 'done')]);
     await renderPage();
-    expect(stripOf()).toBeNull();
+    expect(workingOf()).toEqual([]);
   });
 
-  it('opens a pressed face as its card over the maximised window, as the window’s own Open chat does, and keeps it there through a press in the window', async () => {
+  it('opens a pressed thread as its card over the window, as the window’s own Open chat does, and keeps it there through a press in the window', async () => {
     fakes.board = boardOf([
       cardOf('run-w', 'p1', 'working'),
       cardOf('run-a', 'p1'),
     ]);
     await renderPage();
     openChat();
-    maximiseChat();
 
-    const face = container.querySelector<HTMLElement>(
-      '[data-slot="working-strip-thread"][data-run="run-w"]',
-    )!;
-    act(() => {
-      face.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    });
-    clickOn(face);
-
+    clickOn(
+      container.querySelector<HTMLElement>(
+        '[data-slot="stub-working-thread"][data-run="run-w"]',
+      ),
+    );
     expect(probes.graph!.openCards).toEqual([
       expect.objectContaining({ runId: 'run-w', aboveWindow: true }),
     ]);
-    expect(
-      container.querySelector<HTMLElement>('[data-slot="command-center-chat"]')!
-        .dataset.state,
-    ).toBe('maximised');
     expect(onOpenThread).not.toHaveBeenCalled();
 
     act(() => {
@@ -1463,9 +1472,7 @@ describe('CommandCenter — the working strip in the maximised manager chat', ()
       cardOf('run-old', 'p1', 'working', '2026-11-17T10:00:00.000Z'),
     ]);
     await renderPage();
-    openChat();
-    maximiseChat();
 
-    expect(facesOf()).toEqual(['run-old', 'run-new']);
+    expect(workingOf()).toEqual(['run-old', 'run-new']);
   });
 });

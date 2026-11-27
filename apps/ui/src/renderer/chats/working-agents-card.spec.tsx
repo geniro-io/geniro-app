@@ -285,12 +285,12 @@ describe('WorkingAgentsCard', () => {
     expect(slot(el, 'working-agents-card')).toBeNull();
   });
 
-  it('anchors to the bottom right corner', () => {
+  it('takes its place in the corner its host gives it, in the flow of that corner', () => {
     const { el } = renderSquare([row()]);
     const card = slot(el, 'working-agents-card')!;
 
-    expect(card.className).toContain('right-4');
-    expect(card.className).toContain('-bottom-2');
+    expect(card.className).toContain('relative');
+    expect(card.className).not.toContain('right-4');
   });
 
   describe('its panel', () => {

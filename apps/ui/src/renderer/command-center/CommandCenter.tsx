@@ -28,6 +28,7 @@ import {
 } from '../chats/use-thread-pull-requests';
 import {
   WORKING_THREADS_CEILING,
+  type WorkingThread,
   WorkingThreadsCard,
 } from '../chats/working-threads-card';
 import { ActionNotice } from '../components/action-notice';
@@ -69,6 +70,7 @@ import {
   sameThreadReports,
   type TeamFace,
   teamFacesOf,
+  type ThreadCardView,
   threadCardViewOf,
   threadIdentitiesOf,
   threadReportsOf,
@@ -93,7 +95,6 @@ import {
   type OpenRequest,
   useOpenRequests,
 } from './use-open-requests';
-import { WorkingStrip } from './working-strip';
 
 const GraphView = lazy(() =>
   import('./graph-view').then((m) => ({ default: m.GraphView })),
@@ -565,29 +566,35 @@ export function CommandCenter({
     [undoArchive],
   );
 
+  const workingThreadOf = (
+    card: CommandCenterCard,
+    view: ThreadCardView,
+    status: WorkingThread['status'],
+  ): WorkingThread => ({
+    runId: card.run.id,
+    identity:
+      threadIdentities.get(card.run.id) ?? bareThreadIdentity(view.title),
+    status,
+    lastMessage: view.lastMessage,
+    lastAt: view.lastAt,
+    background: {
+      held: (card.run.holdingFor ?? 0) > 0,
+      subagents: card.run.subagentsOut ?? 0,
+      commands: card.run.shellsOpen ?? 0,
+      monitors: card.run.monitorsOpen ?? 0,
+    },
+  });
+
   const workingThreads = (board.cards ?? []).flatMap((card) => {
     if (card.column !== 'working' && card.column !== 'waiting') {
       return [];
     }
-    const view = viewOf(card);
     return [
-      {
-        runId: card.run.id,
-        identity:
-          threadIdentities.get(card.run.id) ?? bareThreadIdentity(view.title),
-        status:
-          card.column === 'working'
-            ? ('working' as const)
-            : ('waiting' as const),
-        lastMessage: view.lastMessage,
-        lastAt: view.lastAt,
-        background: {
-          held: (card.run.holdingFor ?? 0) > 0,
-          subagents: card.run.subagentsOut ?? 0,
-          commands: card.run.shellsOpen ?? 0,
-          monitors: card.run.monitorsOpen ?? 0,
-        },
-      },
+      workingThreadOf(
+        card,
+        viewOf(card),
+        card.column === 'working' ? 'working' : 'waiting',
+      ),
     ];
   });
 
@@ -602,19 +609,19 @@ export function CommandCenter({
     };
   });
   const openBands = new Map(cards.cards.map((card) => [card.runId, card]));
-  const workingStrip = workingThreadsInGraphOrder(
+  const cardOfRun = new Map(shown.map((card) => [card.run.id, card]));
+  const managerWorkingThreads = workingThreadsInGraphOrder(
     graphThreads,
     shownProjects,
     openBands,
     blockOrders.orders,
     narrow ? new Map() : openBands,
-  ).map((thread) => ({
-    runId: thread.id,
-    identity:
-      threadIdentities.get(thread.id) ?? bareThreadIdentity(thread.view.title),
-    attention: thread.view.attention,
-    statusText: thread.view.statusText,
-  }));
+  ).flatMap((thread) => {
+    const card = cardOfRun.get(thread.id);
+    return card === undefined
+      ? []
+      : [workingThreadOf(card, thread.view, 'working')];
+  });
   const contacts = Object.fromEntries(
     shown.map((card) => [
       card.run.id,
@@ -838,12 +845,6 @@ export function CommandCenter({
                   phone={narrow}
                   initialRect={managerWindowRect}
                   onActivate={() => setFront('manager')}
-                  fullHead={
-                    <WorkingStrip
-                      threads={workingStrip}
-                      onOpenThread={showThreadFromWindow}
-                    />
-                  }
                   onClose={() => setChatOpen(false)}>
                   {managerRunId === null ? (
                     managerChoice.choice === null ? null : (
@@ -871,6 +872,7 @@ export function CommandCenter({
                       active={active}
                       threadIdentities={threadIdentities}
                       threadReports={threadReports}
+                      workingThreads={managerWorkingThreads}
                       onOpenThread={showThreadFromWindow}
                       onOpenMemoryConflicts={onOpenMemoryConflicts}
                       onTurnSettled={board.reload}

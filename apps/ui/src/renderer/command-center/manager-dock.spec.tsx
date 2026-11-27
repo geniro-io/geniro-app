@@ -138,6 +138,7 @@ async function paint(): Promise<void> {
         hidden={false}
         threadIdentities={IDENTITIES}
         threadReports={REPORTS}
+        workingThreads={[]}
         active
         onOpenThread={vi.fn()}
         onTurnSettled={vi.fn()}
@@ -184,6 +185,7 @@ describe('ManagerDock', () => {
     await paint();
 
     expect(drawn.hosted?.threadReports).toBe(REPORTS);
+    expect(drawn.hosted?.workingThreads).toEqual([]);
     expect(drawn.hosted?.commandCenterManager).toBe(true);
   });
 

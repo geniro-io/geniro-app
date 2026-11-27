@@ -10,6 +10,7 @@ import { ProjectQueueService } from '../../projects/services/project-queue.servi
 import { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import { membersThatAsk } from '../../teams/utils/unattended';
+import { leavesFinishedCardsAlone } from '../utils/armed-intake';
 import {
   isRunTargetProblem,
   resolveRunTarget,
@@ -117,6 +118,7 @@ export class TaskQueueService {
     const blocked: BlockedTask[] = [];
     const stopped = new Set(raw.stoppedTaskIds);
     const working = new Set(raw.active.map((active) => active.id));
+    const finished = new Set(raw.finishedTaskIds);
     const now = Date.now();
     for (const task of raw.waitingTasks) {
       // A card sitting in the intake column whose run is still LIVE is not
@@ -152,6 +154,11 @@ export class TaskQueueService {
           kind: 'stopped',
           retryInMs: null,
         });
+        continue;
+      }
+      // Its run completed and the agent has the card. An intake the autopilot
+      // starts from would send its brief into that finished thread every tick.
+      if (leavesFinishedCardsAlone(raw.intakeStatus) && finished.has(task.id)) {
         continue;
       }
       // The same resolution the start route performs, asked here so the

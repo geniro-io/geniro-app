@@ -403,6 +403,67 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.active.map((row) => row.runId)).toEqual([live.id]);
   });
 
+  describe('a card whose run finished', () => {
+    async function addFinishedRun(teamId: string | null): Promise<Run> {
+      const run = await runDao.create({
+        status: 'completed',
+        agentKind: 'claude',
+        teamId,
+      });
+      await em.flush();
+      return run;
+    }
+
+    it.each([
+      ['chat', null],
+      ['team', 'dev-team'],
+    ] as const)(
+      'is neither handed out nor blocked from an in_progress intake, for a finished %s run',
+      async (_kind, teamId) => {
+        await arm({ autopilotIntakeStatus: 'in_progress' });
+        const run = await addFinishedRun(teamId);
+        await addTask('finished', 'in_progress', 0, run.id);
+        await addTask('waiting', 'in_progress', 1);
+
+        const queue = await service.read(projectId);
+
+        expect(queue.eligible.map((task) => task.title)).toEqual(['waiting']);
+        expect(queue.blocked).toEqual([]);
+      },
+    );
+
+    it.each(['todo', 'backlog'] as const)(
+      'is still handed out from a %s intake, as it always was',
+      async (intake) => {
+        await arm({ autopilotIntakeStatus: intake });
+        const run = await addFinishedRun(null);
+        await addTask('finished', intake, 0, run.id);
+
+        const queue = await service.read(projectId);
+
+        expect(queue.eligible.map((task) => task.title)).toEqual(['finished']);
+      },
+    );
+
+    it('is still held as stopped when its user stopped it before carrying the thread on', async () => {
+      await arm({ autopilotIntakeStatus: 'in_progress' });
+      const run = await addFinishedRun(null);
+      const task = await addTask('stopped', 'in_progress', 0, run.id);
+      await taskDao.setStoppedAt(task.id, new Date(), em);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.eligible).toEqual([]);
+      expect(queue.blocked).toEqual([
+        expect.objectContaining({
+          title: 'stopped',
+          kind: 'stopped',
+          reason: STOPPED_BY_USER_REASON,
+        }),
+      ]);
+    });
+  });
+
   it('hands out the folder each CARD names, else the project one', async () => {
     const own = mkdtempSync(join(tmpdir(), 'geniro-card-'));
     try {

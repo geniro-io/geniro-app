@@ -38,6 +38,7 @@ import {
   type StartTaskRun,
   type TaskWire,
 } from '../tasks.types';
+import { leavesFinishedCardsAlone } from '../utils/armed-intake';
 import { composeLabelInstructions } from '../utils/label-instructions-prompt';
 import {
   isRunTargetProblem,
@@ -259,7 +260,7 @@ export class TaskRunsService {
       );
     }
     await this.assertNotAlreadyRunning(task, em);
-    await this.assertAutopilotMayStart(project, task, input);
+    await this.assertAutopilotMayStart(project, task, input, em);
     const placed: PlacedTaskRun = {
       ...input,
       cwd: taskRunFolder(
@@ -883,11 +884,15 @@ export class TaskRunsService {
    * (`Task.interruptedBy`), is
    * refused here too, for the same reason the cap is: the queue already keeps
    * it out of the handout, and that is the fast answer rather than the line.
+   *
+   * So is a card whose run COMPLETED, while the intake is not a waiting column:
+   * the queue drops it there too.
    */
   private async assertAutopilotMayStart(
     project: Project,
     task: Task,
     input: StartTaskRun,
+    em: EntityManager,
   ): Promise<void> {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return;
@@ -902,6 +907,16 @@ export class TaskRunsService {
       throw new ConflictException(
         'TASK_STOPPED_BY_USER',
         `task ${task.id} was stopped by its user — the autopilot leaves it alone until Run is pressed`,
+      );
+    }
+    if (
+      leavesFinishedCardsAlone(project.autopilotIntakeStatus) &&
+      task.runId !== null &&
+      (await this.runDao.getById(task.runId, em))?.status === 'completed'
+    ) {
+      throw new ConflictException(
+        'TASK_FINISHED',
+        `task ${task.id}'s run has finished — the autopilot leaves it alone until Run is pressed`,
       );
     }
     const queue = await this.queue.readRaw(project.id);

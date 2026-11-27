@@ -1,10 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
-import {
-  type InterruptCause,
-  resumesUnattended,
-} from '../../../utils/stop-cause';
+import { resumesUnattended } from '../../../utils/stop-cause';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
@@ -31,6 +28,7 @@ import { resetInstantFrom } from '../../teams/utils/reset-instant';
 import { TaskDao } from '../dao/task.dao';
 import type { Task } from '../entity/task.entity';
 import type { TaskStatus, TaskWire } from '../tasks.types';
+import { WAITING_COLUMNS } from '../utils/armed-intake';
 import { TaskEventBus } from './task-events.bus';
 import { TasksService } from './tasks.service';
 
@@ -61,16 +59,6 @@ const ENDED_TASK_STATUS: Partial<Record<RunStatus, TaskStatus>> = {
  * rather than by anything the agent or the user did.
  */
 type RunEnding = RunStatus | 'interrupted';
-
-/**
- * Where an interrupted card waits to be picked up again, when the project's
- * intake column is not one a card can wait in.
- *
- * The intake column is a free choice in the autopilot's settings, and moving a
- * card to `done` would announce its work FINISHED and have its worktree
- * collected — so only the two waiting columns are honoured.
- */
-const WAITING_COLUMNS: readonly TaskStatus[] = ['backlog', 'todo'];
 
 /**
  * What the board does when a task's run ends by itself.

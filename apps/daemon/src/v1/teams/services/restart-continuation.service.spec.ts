@@ -330,16 +330,21 @@ describe('RestartContinuationService with runs a crash cut off', () => {
     expect(ctx.rows.get('team-1')!.restartContinuation).not.toBeNull();
   });
 
-  it('lists only the held team runs that are not archived', async () => {
+  it('lists only the held team runs that are neither archived nor stopped', async () => {
     const ctx = setup([
       heldRun('team-1'),
       heldRun('team-2', { archivedAt: new Date() }),
+      heldRun('team-4', { status: 'cancelled' }),
       {
         id: 'team-3',
         teamId: 'crew',
         restartContinuation: JSON.stringify(TEAM_RECORD),
       },
-      { id: 'chat-1', teamId: null, restartContinuation: JSON.stringify(CHAT_RECORD) },
+      {
+        id: 'chat-1',
+        teamId: null,
+        restartContinuation: JSON.stringify(CHAT_RECORD),
+      },
     ]);
 
     expect(await ctx.service.listHeld()).toEqual([
@@ -374,7 +379,10 @@ describe('RestartContinuationService with runs a crash cut off', () => {
   it('tells each declined run’s monitor owners, in their own conversations, which monitors stopped', async () => {
     const ctx = setup([heldRun('team-2')]);
 
-    await ctx.service.answerHeld({ continueRunIds: [], declineRunIds: ['team-2'] });
+    await ctx.service.answerHeld({
+      continueRunIds: [],
+      declineRunIds: ['team-2'],
+    });
 
     expect(ctx.sessions.oweKeyNote).toHaveBeenCalledWith(
       nodeSessionKey('team-2', 'lead'),
@@ -389,7 +397,10 @@ describe('RestartContinuationService with runs a crash cut off', () => {
   it('ends no run that had already settled when it declines one that only lost its monitors', async () => {
     const ctx = setup([heldRun('team-2', { status: 'completed' })]);
 
-    await ctx.service.answerHeld({ continueRunIds: [], declineRunIds: ['team-2'] });
+    await ctx.service.answerHeld({
+      continueRunIds: [],
+      declineRunIds: ['team-2'],
+    });
 
     expect(ctx.teams.abandonRestartContinuation).not.toHaveBeenCalled();
     expect(ctx.rows.get('team-2')!.restartContinuation).toBeNull();
@@ -428,7 +439,11 @@ describe('RestartContinuationService with runs a crash cut off', () => {
         teamId: 'crew',
         restartContinuation: JSON.stringify(TEAM_RECORD),
       },
-      { id: 'chat-1', teamId: null, restartContinuation: JSON.stringify(CHAT_RECORD) },
+      {
+        id: 'chat-1',
+        teamId: null,
+        restartContinuation: JSON.stringify(CHAT_RECORD),
+      },
     ]);
 
     await ctx.service.holdTeamContinuations();

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { InterruptCause } from '../../utils/stop-cause';
 import type { BrowserOutcome } from '../browser/browser.types';
 import type { ProjectInstructionBlock } from '../projects/projects.types';
 import type { Item } from '../runs/entity/item.entity';
@@ -14,7 +15,6 @@ import {
   type RunStatus,
   RunStatusSchema,
 } from '../runs/runs.types';
-import type { InterruptCause } from '../../utils/stop-cause';
 import type { AgentUsage } from './adapters/adapter.types';
 import type { AgentOptionsSnapshot } from './utils/agent-options';
 import { hasHiddenText } from './utils/hidden-text';

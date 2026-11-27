@@ -7,7 +7,6 @@ import type { MonitorRowPayload } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { monitorRowEntry, monitorRowPayload } from '../utils/monitor-text';
-import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import type { MonitorRegistry } from './monitor.registry';
 import type { MonitorChatDelivery } from './monitor-chat-delivery.service';

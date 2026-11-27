@@ -9,19 +9,15 @@ import { AgentSessionRegistry } from '../../agents/services/agent-session.regist
 import { ChatService } from '../../agents/services/chat.service';
 import { stoppedMonitorsText } from '../../agents/utils/monitor-text';
 import {
-  callSessionKey,
-  nodeSessionKey,
-} from '../../agents/utils/session-keys';
-import {
   readRestartContinuation,
   restartContinuationColumn,
   restartContinuationPrompt,
 } from '../../agents/utils/run-restart-continuation';
-import type {
-  AnswerHeldRuns,
-  HeldRun,
-  HeldRunsAnswered,
-} from '../teams.types';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
+import type { AnswerHeldRuns, HeldRun, HeldRunsAnswered } from '../teams.types';
 import { TeamExecutorService } from './team-executor.service';
 
 /** How long a run still settling a pass is waited for before the next try. */
@@ -29,7 +25,6 @@ export const RESTART_CONTINUE_RETRY_MS = 5_000;
 
 /** Tries before a run that stays busy is ended as a stop nobody continues. */
 export const RESTART_CONTINUE_ATTEMPTS = 12;
-
 
 /**
  * Continues, once the daemon listens, every run an update or a deliberate
@@ -107,7 +102,8 @@ export class RestartContinuationService implements OnModuleInit {
       return isChatRun(run.teamId) ||
         record === null ||
         !record.held ||
-        run.archivedAt !== null
+        run.archivedAt !== null ||
+        run.status === 'cancelled'
         ? []
         : [{ runId: run.id, title: run.title, cause: record.cause }];
     });
@@ -184,7 +180,7 @@ export class RestartContinuationService implements OnModuleInit {
     try {
       const outcome = isChatRun(run.teamId)
         ? await this.continueChat(runId, record)
-          : await this.teams.continueAfterRestart(runId, record);
+        : await this.teams.continueAfterRestart(runId, record);
       if (outcome === 'busy') {
         await this.retryLater(runId, record);
         return;

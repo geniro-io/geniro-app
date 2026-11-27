@@ -472,11 +472,34 @@ export function BrowserPane({
           </>
         )}
         <BrowserAddressField
-          className="flex-1"
+          className="min-w-28 flex-1"
           address={active?.url ?? ''}
           loading={loading}
           onSubmit={openAddress}
         />
+        {active === null || active.drivenBy === null ? null : (
+          <div
+            data-slot="browser-driving-banner"
+            role="status"
+            title={`${active.drivenBy} is driving this tab`}
+            className="flex h-8 min-w-0 shrink items-center gap-1.5 rounded-md bg-muted pr-0.5 pl-2 text-sm">
+            <Bot className="size-4 shrink-0 text-primary" aria-hidden="true" />
+            <span className="min-w-0 truncate">
+              {active.drivenBy}
+              <span className="sr-only"> is driving this tab</span>
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0"
+              onClick={() =>
+                attempt(window.geniro.browserStopAgent(runId, active.id))
+              }>
+              Stop
+            </Button>
+          </div>
+        )}
         {pageMenu}
       </div>
       {active === null ||
@@ -495,27 +518,6 @@ export function BrowserPane({
               {active.openedBy}
             </Badge>
           )}
-        </div>
-      )}
-      {active === null || active.drivenBy === null ? null : (
-        <div
-          data-slot="browser-driving-banner"
-          role="status"
-          className="flex shrink-0 items-center gap-2 border-y border-border bg-muted px-3 py-1.5 text-sm">
-          <Bot className="size-4 shrink-0 text-primary" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate">
-            {active.drivenBy} is driving this tab
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7"
-            onClick={() =>
-              attempt(window.geniro.browserStopAgent(runId, active.id))
-            }>
-            Stop
-          </Button>
         </div>
       )}
       {failure === null ? null : (

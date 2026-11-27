@@ -118,18 +118,21 @@ function ContextMessages({
  * pictures, beneath the toggle and never folded with it. A question without the
  * key predates them, and keeps the pages its asking turn showed, read from the
  * thread. The pages are bound to the thread's run: what the user picks on a
- * page is kept for the thread, and no page is shared from here.
+ * page is kept for the thread, and no page is shared from here. A question no
+ * longer open draws its attachments as chips, loading no page until pressed.
  */
 export function QuestionContextMessages({
   threadRunId,
   threadRequestId,
   attachments,
+  attachmentsVariant = 'preview',
 }: {
   threadRunId: string;
   /** The question's request id; null reads the thread's newest messages. */
   threadRequestId: string | null;
   /** Undefined for a question written before attachments existed. */
   attachments?: QuestionAttachmentSet;
+  attachmentsVariant?: 'preview' | 'chips';
 }): React.JSX.Element | null {
   const readContext = useContext(ThreadContextReaderContext);
   const [context, setContext] = useState<ContextState>({ kind: 'loading' });
@@ -209,7 +212,7 @@ export function QuestionContextMessages({
           <QuestionAttachments
             threadRunId={threadRunId}
             set={attachments}
-            variant="preview"
+            variant={attachmentsVariant}
           />
         </div>
       )}

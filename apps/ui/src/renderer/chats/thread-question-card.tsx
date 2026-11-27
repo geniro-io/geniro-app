@@ -283,6 +283,7 @@ export function ThreadQuestionCard({
         threadRunId={relay.threadRunId}
         threadRequestId={relay.threadRequestId ?? null}
         attachments={relay.attached}
+        attachmentsVariant={state === 'closed' ? 'chips' : 'preview'}
       />
       {state === 'closed' ? (
         <p className="text-xs text-muted-foreground">

@@ -12,6 +12,7 @@ import type { DaemonApis } from '../daemon-api';
 import type { RunStatusEvent } from '../daemon-client';
 import { ApprovalCard } from './approval-card';
 import { THREAD_QUESTION_CARD } from './geniro-tool';
+import { PAGE_UNAVAILABLE_TEXT } from './question-attachments';
 import {
   deliverRelayedImages,
   readThreadQuestionRelay,
@@ -406,6 +407,47 @@ describe('a thread question relayed into the manager chat', () => {
     );
   });
 
+  it('keeps the question answerable, with the unavailable note, when the thread’s page listing cannot be read', async () => {
+    const onRespond = vi.fn();
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () => Promise.reject(new Error('listing unreadable')),
+    });
+    await act(async () => {
+      root.render(
+        <ThreadContextReaderContext.Provider value={reader}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={{
+              ...RELAYED_QUESTION,
+              attachments: [
+                {
+                  kind: 'artifact',
+                  artifactId: 'plan',
+                  title: 'Plan',
+                  version: 1,
+                },
+              ],
+              moreAttachments: 0,
+            }}
+            requestId="relay-1"
+            verdict={null}
+            onRespond={onRespond}
+          />
+        </ThreadContextReaderContext.Provider>,
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    expect(container.textContent).toContain(PAGE_UNAVAILABLE_TEXT);
+    expect(container.querySelector('iframe')).toBeNull();
+    const redis = [...container.querySelectorAll('button')].find((candidate) =>
+      candidate.textContent?.startsWith('Redis'),
+    );
+    act(() => redis!.click());
+    expect(onRespond).toHaveBeenCalledWith(true, 'Redis');
+  });
+
   it('draws an answerable permission card when the relay cannot be read', () => {
     const onRespond = renderCard({});
     expect(
@@ -549,6 +591,56 @@ describe('a relayed question once settled', () => {
     expect(
       card().querySelectorAll('[data-slot="question-attachment-chip"]'),
     ).toHaveLength(0);
+  });
+
+  it('draws the pages of a card closed with no answer as chips, loading no page', async () => {
+    const reader = stubThreadContextReader(() => Promise.resolve([]), {
+      artifacts: () =>
+        Promise.resolve([
+          {
+            artifactId: 'plan',
+            version: 1,
+            title: 'Plan',
+            summary: null,
+            key: 'k',
+          },
+        ]),
+    });
+    await act(async () => {
+      root.render(
+        <ThreadContextReaderContext.Provider value={reader}>
+          <ApprovalCard
+            toolName={THREAD_QUESTION_CARD}
+            input={{
+              ...RELAYED_QUESTION,
+              attachments: [
+                {
+                  kind: 'artifact',
+                  artifactId: 'plan',
+                  title: 'Plan',
+                  version: 1,
+                },
+              ],
+              moreAttachments: 0,
+            }}
+            requestId="relay-1"
+            verdict={null}
+            expired
+            onRespond={vi.fn()}
+          />
+        </ThreadContextReaderContext.Provider>,
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    expect(container.textContent).toContain('No longer open');
+    const chips = card().querySelectorAll(
+      '[data-slot="question-attachment-chip"]',
+    );
+    expect(chips).toHaveLength(1);
+    expect(chips[0]?.getAttribute('data-state')).toBe('available');
+    expect(card().querySelector('iframe')).toBeNull();
   });
 
   it('opens the whole card with one press and folds it back with the next', () => {

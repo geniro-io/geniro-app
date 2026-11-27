@@ -43,7 +43,10 @@ import { COMPOSER_MAX_LINES } from './composer-card';
 import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { HostedThread } from './hosted-thread';
 import type { LiveTextEvent } from './live-text';
-import { PIN_QUESTION_MIN_COLUMN_PX } from './question-placement';
+import {
+  COLUMN_SETTLE_MS,
+  PIN_QUESTION_MIN_COLUMN_PX,
+} from './question-placement';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { FRAME_GESTURE_EVENT, TOUCH_SETTLE_MS } from './scroll-follow';
 import { forgetThread } from './thread-ui-memory';
@@ -17344,6 +17347,13 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
     });
+    const settle = async (): Promise<void> => {
+      await act(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, COLUMN_SETTLE_MS + 20);
+        });
+      });
+    };
     const approveButtons = (root: HTMLElement): HTMLButtonElement[] =>
       [...root.querySelectorAll('button')].filter(
         (b) => b.textContent === 'Approve',
@@ -17358,6 +17368,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
 
       expect(pinned(container)).toBeNull();
       expect(approveButtons(transcript(container))).toHaveLength(1);
@@ -17376,6 +17387,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
 
       expect(approveButtons(pinned(container)!)).toHaveLength(1);
       expect(approveButtons(transcript(container))).toHaveLength(0);
@@ -17394,6 +17406,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
 
       expect(approveButtons(pinned(container)!)).toHaveLength(1);
     });
@@ -17407,9 +17420,11 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
       const card = approveButtons(transcript(container))[0];
 
       resize(PIN_QUESTION_MIN_COLUMN_PX + 400);
+      await settle();
 
       expect(pinned(container)).toBeNull();
       expect(approveButtons(transcript(container))[0]).toBe(card);
@@ -17424,9 +17439,11 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
       const card = approveButtons(pinned(container)!)[0];
 
       resize(PIN_QUESTION_MIN_COLUMN_PX - 100);
+      await settle();
 
       expect(approveButtons(pinned(container)!)[0]).toBe(card);
       expect(approveButtons(transcript(container))).toHaveLength(0);
@@ -17441,6 +17458,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       const { client, emitItem } = makeClient();
       const container = await mount(client);
       await clickRun(container, 'My chat');
+      await settle();
       const scroller = transcript(container);
       expect(approveButtons(scroller)).toHaveLength(1);
       Object.defineProperty(scroller, 'scrollHeight', {

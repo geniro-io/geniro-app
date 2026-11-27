@@ -5,6 +5,13 @@
  */
 export const PIN_QUESTION_MIN_COLUMN_PX = 800;
 
+/**
+ * How long the column height must hold before a question is placed by it: a
+ * dock that is opening measures several heights (thousands of pixels for a
+ * frame) before it settles.
+ */
+export const COLUMN_SETTLE_MS = 250;
+
 export type QuestionPlacement = 'feed' | 'pinned';
 
 /**

@@ -83,6 +83,7 @@ import { useElementSize } from '../components/use-element-size';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { usePhoneBackEntry } from '../components/use-phone-back-entry';
+import { useSettledValue } from '../components/use-settled-value';
 import {
   createDaemonApis,
   daemonErrorCode,
@@ -282,6 +283,7 @@ import {
 } from './published-artifact';
 import { questionAttachmentSetOf } from './question-attachments-payload';
 import {
+  COLUMN_SETTLE_MS,
   placeOpenQuestions,
   type QuestionPlacement,
 } from './question-placement';
@@ -6951,6 +6953,11 @@ export function Chats({
     drawnEntriesRef.current = transcriptEntries;
   }, [transcriptEntries]);
   const [measureChatColumn, chatColumn] = useElementSize<HTMLElement>();
+  const chatColumnHeight = useSettledValue(
+    chatColumn.height,
+    COLUMN_SETTLE_MS,
+    0,
+  );
   const questionPlacementsRef = useRef<ReadonlyMap<string, QuestionPlacement>>(
     new Map(),
   );
@@ -6965,11 +6972,11 @@ export function Chats({
       questionPlacementsRef.current,
       openRequests.map((request) => request.id),
       threadOpening ? null : drawn,
-      chatColumn.height,
+      chatColumnHeight,
     );
     questionPlacementsRef.current = placed;
     return placed;
-  }, [openRequests, transcriptEntries, threadOpening, chatColumn.height]);
+  }, [openRequests, transcriptEntries, threadOpening, chatColumnHeight]);
   const pinnedRequests = useMemo(
     () =>
       openRequests.filter(

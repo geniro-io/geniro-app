@@ -37,7 +37,17 @@ type Page = PublishedArtifact | 'gone' | null;
  * key, which an attachment does not; a listing that cannot be read leaves every
  * page unavailable rather than failing the question.
  */
-function usePages(reader: ThreadContextReader, threadRunId: string): Pages {
+function usePages(
+  reader: ThreadContextReader,
+  threadRunId: string,
+  set: QuestionAttachmentSet,
+): Pages {
+  const wanted = set.attachments.flatMap((attachment) =>
+    attachment.kind === 'artifact'
+      ? [`${attachment.artifactId}@${attachment.version}`]
+      : [],
+  );
+  const wantedKey = wanted.join('\n');
   const [read, setRead] = useState<{
     reader: ThreadContextReader;
     threadRunId: string;
@@ -50,7 +60,17 @@ function usePages(reader: ThreadContextReader, threadRunId: string): Pages {
         setRead({ reader, threadRunId, pages });
       }
     };
-    reader.artifacts(threadRunId).then(
+    const wants =
+      wantedKey === ''
+        ? []
+        : wantedKey.split('\n').map((entry) => {
+            const at = entry.lastIndexOf('@');
+            return {
+              artifactId: entry.slice(0, at),
+              version: Number(entry.slice(at + 1)),
+            };
+          });
+    reader.artifacts(threadRunId, wants).then(
       (listed) =>
         settle(new Map(listed.map((page) => [page.artifactId, page]))),
       () => settle('failed'),
@@ -58,7 +78,7 @@ function usePages(reader: ThreadContextReader, threadRunId: string): Pages {
     return () => {
       current = false;
     };
-  }, [reader, threadRunId]);
+  }, [reader, threadRunId, wantedKey]);
   if (
     read === null ||
     read.reader !== reader ||
@@ -238,7 +258,7 @@ function AttachmentList({
   set: QuestionAttachmentSet;
   variant: 'preview' | 'chips';
 }): React.JSX.Element {
-  const pages = usePages(reader, threadRunId);
+  const pages = usePages(reader, threadRunId, set);
   if (variant === 'chips') {
     return (
       <div

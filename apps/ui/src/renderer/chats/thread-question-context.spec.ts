@@ -722,4 +722,37 @@ describe('the listing of a thread run a reader keeps', () => {
     await expect(reader.artifacts('thread-1')).resolves.toEqual([]);
     expect(readRunArtifacts).toHaveBeenCalledTimes(2);
   });
+
+  it('reads the listing again when a kept one lacks a wanted page or holds an older version', async () => {
+    const row = (artifactId: string, version: number) => ({
+      artifactId,
+      version,
+      title: artifactId,
+      summary: null,
+      key: 'k',
+      at: '2026-09-20T00:00:00.000Z',
+      seq: 3,
+    });
+    const readRunArtifacts = vi
+      .fn()
+      .mockResolvedValueOnce({ artifacts: [row('plan', 1)] })
+      .mockResolvedValueOnce({ artifacts: [row('plan', 1), row('voices', 1)] })
+      .mockResolvedValueOnce({ artifacts: [row('plan', 2), row('voices', 1)] });
+    const reader = threadContextReaderOf(chatsWith(readRunArtifacts), HANDLE);
+
+    await reader.artifacts('thread-1');
+    const withNew = await reader.artifacts('thread-1', [
+      { artifactId: 'voices', version: 1 },
+    ]);
+    const withNewer = await reader.artifacts('thread-1', [
+      { artifactId: 'plan', version: 2 },
+    ]);
+    await reader.artifacts('thread-1', [{ artifactId: 'plan', version: 2 }]);
+
+    expect(withNew.map((page) => page.artifactId)).toContain('voices');
+    expect(withNewer.find((page) => page.artifactId === 'plan')?.version).toBe(
+      2,
+    );
+    expect(readRunArtifacts).toHaveBeenCalledTimes(3);
+  });
 });

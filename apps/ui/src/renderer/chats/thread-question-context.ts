@@ -74,9 +74,14 @@ export interface ThreadContextReader {
   ): Promise<ThreadContextEntry[]>;
   /**
    * The thread run's pages at their newest version, as its listing names them.
-   * Rejects when the listing cannot be read; a page missing from it is gone.
+   * Read again when a kept listing lacks a `wanted` page or holds it at an
+   * older version. Rejects when the listing cannot be read; a page missing from
+   * it is gone.
    */
-  artifacts(threadRunId: string): Promise<PublishedArtifact[]>;
+  artifacts(
+    threadRunId: string,
+    wanted?: readonly { artifactId: string; version: number }[],
+  ): Promise<PublishedArtifact[]>;
   artifactUrl(threadRunId: string): ArtifactUrlBuilder;
   loadImage(threadRunId: string): LocalImageLoader;
   answers(threadRunId: string): ArtifactAnswersStore;
@@ -283,9 +288,22 @@ export function threadContextReaderOf(
   handle: DaemonHandle,
 ): ThreadContextReader {
   const listings = new Map<string, Promise<PublishedArtifact[]>>();
-  const listed = (threadRunId: string): Promise<PublishedArtifact[]> => {
-    const known = listings.get(threadRunId);
-    if (known !== undefined) {
+  const holds = (
+    pages: readonly PublishedArtifact[],
+    wanted: readonly { artifactId: string; version: number }[],
+  ): boolean =>
+    wanted.every((want) =>
+      pages.some(
+        (page) =>
+          page.artifactId === want.artifactId && page.version >= want.version,
+      ),
+    );
+  const listed = async (
+    threadRunId: string,
+    wanted: readonly { artifactId: string; version: number }[] = [],
+  ): Promise<PublishedArtifact[]> => {
+    const known = await listings.get(threadRunId)?.catch(() => null);
+    if (known !== undefined && known !== null && holds(known, wanted)) {
       return known;
     }
     const listing = chats

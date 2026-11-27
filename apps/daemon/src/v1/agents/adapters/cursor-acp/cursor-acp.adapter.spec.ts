@@ -2073,8 +2073,14 @@ describe('CursorAcpAdapter — cannot reopen a conversation', () => {
   });
 });
 
-/** Cursor's store for session `s`, holding the turn's prompt as saved. */
-function saveConversation(sessionStoreDir: string): void {
+/** Cursor's store for session `s`, holding one saved message — the turn's prompt by default. */
+function saveConversation(
+  sessionStoreDir: string,
+  message: { role: string; content: unknown } = {
+    role: 'user',
+    content: [{ type: 'text', text: '<user_query>\nship it\n</user_query>' }],
+  },
+): void {
   const rootId = 'root-of-session-s';
   const messageId = createHash('sha256').update('ship it').digest('hex');
   mkdirSync(join(sessionStoreDir, 's'), { recursive: true });
@@ -2089,17 +2095,7 @@ function saveConversation(sessionStoreDir: string): void {
     rootId,
     new Uint8Array([0x0a, 0x20, ...Buffer.from(messageId, 'hex')]),
   );
-  insert.run(
-    messageId,
-    Buffer.from(
-      JSON.stringify({
-        role: 'user',
-        content: [
-          { type: 'text', text: '<user_query>\nship it\n</user_query>' },
-        ],
-      }),
-    ),
-  );
+  insert.run(messageId, Buffer.from(JSON.stringify(message)));
   db.close();
 }
 
@@ -2315,6 +2311,17 @@ describe('CursorAcpAdapter.sessionResumable', () => {
         );
         db.close();
       }),
+    ).resolves.toBe(false);
+  });
+
+  it('does not resume a session whose saved messages hold no user message', async () => {
+    await expect(
+      resumable((store) =>
+        saveConversation(store, {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'on it' }],
+        }),
+      ),
     ).resolves.toBe(false);
   });
 

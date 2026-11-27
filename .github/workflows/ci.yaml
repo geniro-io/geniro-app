@@ -103,6 +103,11 @@ jobs:
       - name: Rebuild native modules for Electron's ABI
         run: pnpm rebuild:native
 
+      # The daemon's kill guard specs run real zsh, the shell every agent CLI
+      # uses on macOS; the runner image ships bash only.
+      - name: Install zsh
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
       - name: Build packages
         run: pnpm build:packages
 

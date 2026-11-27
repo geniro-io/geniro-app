@@ -49,6 +49,10 @@ import {
   configureChildJournal,
 } from './v1/agents/utils/child-journal';
 import {
+  installChildKillGuard,
+  KILL_GUARD_DIR_NAME,
+} from './v1/agents/utils/child-kill-guard';
+import {
   configureDebugSink,
   DEBUG_LOG_DIR_NAME,
 } from './v1/diagnostics/utils/debug-sink';
@@ -113,6 +117,9 @@ registerSecret(token, 'launch token');
 // WHY a boot failed. Console output is unchanged: SinkLogger extends
 // ConsoleLogger and only adds a destination.
 Logger.overrideLogger(new SinkLogger());
+
+// Before any child is spawned: every shell a child starts reads it.
+installChildKillGuard(join(environment.userDataDir, KILL_GUARD_DIR_NAME));
 const runtime: RuntimeInfo = {
   token,
   version: environment.version,

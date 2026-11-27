@@ -1,6 +1,15 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildChildEnv, registerIsolatedEnvKeys } from './child-env';
+import {
+  installChildKillGuard,
+  KILL_GUARD_USER_BASH_ENV_ENV,
+  KILL_GUARD_USER_ZDOTDIR_ENV,
+} from './child-kill-guard';
 
 const TOUCHED = [
   'GENIRO_TEST_SECRET',
@@ -89,5 +98,58 @@ describe('buildChildEnv', () => {
     const env = buildChildEnv({ CHILD_ENV_SPEC_PLAIN: 'overridden' });
 
     expect(env.CHILD_ENV_SPEC_PLAIN).toBe('overridden');
+  });
+});
+
+describe('buildChildEnv with the kill guard installed', () => {
+  const saved = {
+    ZDOTDIR: process.env.ZDOTDIR,
+    BASH_ENV: process.env.BASH_ENV,
+  };
+  let root = '';
+  let uninstall: () => void = () => undefined;
+
+  afterEach(() => {
+    uninstall();
+    rmSync(root, { recursive: true, force: true });
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  function install(): string {
+    root = mkdtempSync(join(tmpdir(), 'child-env-guard-'));
+    const dir = join(root, 'kill-guard');
+    uninstall = installChildKillGuard(dir, {
+      builtin: ['true'],
+      external: '/usr/bin/true',
+    });
+    return dir;
+  }
+
+  it('starts every child under the guard, after whatever extra sets', () => {
+    const dir = install();
+
+    const env = buildChildEnv({ PATH: '/opt/tool/bin', ZDOTDIR: '/u/zsh' });
+
+    expect(env.ZDOTDIR).toBe(dir);
+    expect(env.BASH_ENV).toBe(join(dir, 'bash-env'));
+    expect(env.PATH).toBe(`${join(dir, 'bin')}:/opt/tool/bin`);
+    expect(env[KILL_GUARD_USER_ZDOTDIR_ENV]).toBe('/u/zsh');
+  });
+
+  it("carries the daemon's own ZDOTDIR and BASH_ENV as the user's", () => {
+    install();
+    process.env.ZDOTDIR = '/u/config/zsh';
+    process.env.BASH_ENV = '/u/bash-env';
+
+    const env = buildChildEnv();
+
+    expect(env[KILL_GUARD_USER_ZDOTDIR_ENV]).toBe('/u/config/zsh');
+    expect(env[KILL_GUARD_USER_BASH_ENV_ENV]).toBe('/u/bash-env');
   });
 });

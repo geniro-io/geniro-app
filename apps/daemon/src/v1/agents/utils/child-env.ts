@@ -6,7 +6,9 @@
  * app, so it carries its own copy of the same rule, composed from its own
  * per-agent descriptors. A name added to an adapter's
  * `AdapterConfig.auth.isolatedEnvKeys` belongs in that CLI's descriptor there
- * too, and the reverse — nothing type-checks across the boundary.
+ * too, and the reverse — nothing type-checks across the boundary. The kill
+ * guard ({@link withChildKillGuard}) is daemon-only: main's probes run vendor
+ * binaries, never an agent's shell.
  *
  * What a child must never inherit: every `GENIRO_`-prefixed key (the daemon's
  * own config), the daemon's runtime switch ({@link DAEMON_RUNTIME_ENV_KEYS}),
@@ -17,6 +19,8 @@
  * (`AgentAdapter.registerEnvIsolation`). That happens at DI time, before any
  * child is spawned, so no spawn can see a partial set.
  */
+import { withChildKillGuard } from './child-kill-guard';
+
 const isolatedKeys = new Set<string>();
 
 /**
@@ -48,8 +52,9 @@ export function registerIsolatedEnvKeys(keys: Iterable<string>): void {
  * `GENIRO_`-prefixed key, the daemon's own runtime switch
  * ({@link DAEMON_RUNTIME_ENV_KEYS}) and every registered isolated name, then
  * merging `extra` on top — which is how an adapter hands its OWN child a
- * credential or a setting the strip removed. Shared by every daemon spawn
- * path — extracted, never mirrored.
+ * credential or a setting the strip removed — then the kill guard's shell
+ * env, last, so no caller's PATH or ZDOTDIR drops it. Shared by every daemon
+ * spawn path — extracted, never mirrored.
  */
 export function buildChildEnv(
   extra?: Record<string, string>,
@@ -64,5 +69,5 @@ export function buildChildEnv(
       env[key] = value;
     }
   }
-  return { ...env, ...extra };
+  return withChildKillGuard({ ...env, ...extra });
 }

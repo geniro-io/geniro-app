@@ -12,6 +12,7 @@ import { MODEL_VOCABULARIES_FILE_NAME } from '../../agents/services/model-vocabu
 import { SKILL_HARVEST_FILE_NAME } from '../../agents/services/skill-harvest.store';
 import { WALL_WORK_MARKER_FILE } from '../../agents/services/wall-work.service';
 import { CHILD_JOURNAL_FILE_NAME } from '../../agents/utils/child-journal';
+import { KILL_GUARD_DIR_NAME } from '../../agents/utils/child-kill-guard';
 import { FOLDERLESS_DIR_NAME } from '../../agents/utils/folderless-dir';
 import { MANAGER_DIR_NAME } from '../../command-center/utils/manager-folder';
 import { DEBUG_LOG_DIR_NAME } from '../../diagnostics/utils/debug-sink';
@@ -78,6 +79,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [DAEMON_PIDFILE_NAME]: 'appState',
   [DAEMON_LOCK_FILE_NAME]: 'appState',
   [CHILD_JOURNAL_FILE_NAME]: 'appState',
+  [KILL_GUARD_DIR_NAME]: 'appState',
   [CALL_MEMBERSHIP_MARKER_FILE]: 'appState',
   [WALL_WORK_MARKER_FILE]: 'appState',
   [MEMORY_USAGE_MARKER_FILE]: 'appState',

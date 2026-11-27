@@ -220,7 +220,7 @@ export function restartContinuationPrompt(
   const parts = [
     working === 'idle'
       ? `[geniro] ${head} while you were waiting.`
-      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. That stop was geniro's, not the user's: a "user doesn't want to proceed" or "stop and wait" note it left in your transcript does not apply. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, run the interrupted command again, then carry on${working === 'call' ? ' and answer the call' : ''}.`,
+      : `[geniro] ${head} while you were working${working === 'call' ? ' on this call' : ''}. That stop was geniro's, not the user's: a "user doesn't want to proceed" or "stop and wait" note it left in your transcript does not apply. ${fresh ? 'Check' : 'Your session is intact — check'} what is already done, run the interrupted command again, then carry on${working === 'call' ? ' and answer the call' : ''}. The interrupted command may still be running: check for it before you run it again.`,
   ];
   if (calls.length > 0) {
     const named = calls

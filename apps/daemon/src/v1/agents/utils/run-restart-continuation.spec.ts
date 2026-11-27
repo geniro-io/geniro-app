@@ -432,7 +432,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on.',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. The interrupted command may still be running: check for it before you run it again.',
     );
   });
 
@@ -444,7 +444,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The app was updated while you were working on this call. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on and answer the call.',
+      '[geniro] The app was updated while you were working on this call. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on and answer the call. The interrupted command may still be running: check for it before you run it again.',
     );
   });
 
@@ -460,6 +460,19 @@ describe('restartContinuationPrompt', () => {
     expect(prompt).toContain(
       'Check what is already done, run the interrupted command again',
     );
+    expect(prompt).toContain(
+      'The interrupted command may still be running: check for it before you run it again.',
+    );
+  });
+
+  it('says nothing of an interrupted command to a conversation that was only waiting', () => {
+    expect(
+      restartContinuationPrompt('quit', {
+        working: 'idle',
+        calls: [],
+        monitors: [],
+      }),
+    ).not.toContain('may still be running');
   });
 
   it('names a call the boot failed and asks to take it over', () => {
@@ -509,7 +522,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. Still open: call-3 (critic) continues; collect it with await_agent(call-3).',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. The interrupted command may still be running: check for it before you run it again. Still open: call-3 (critic) continues; collect it with await_agent(call-3).',
     );
   });
 
@@ -524,7 +537,7 @@ describe('restartContinuationPrompt', () => {
         monitors: [],
       }),
     ).toBe(
-      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. Still open: call-3 (critic), call-4 (writer) continue; collect them with await_agent.',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. The interrupted command may still be running: check for it before you run it again. Still open: call-3 (critic), call-4 (writer) continue; collect them with await_agent.',
     );
   });
 

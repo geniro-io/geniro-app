@@ -18517,7 +18517,7 @@ describe('TeamExecutorService — a callee process outlives its turn', () => {
       const lead = fresh.find((t) => t.input.prompt.includes('collect it'));
       const callee = fresh.find((t) => t.input.prompt.includes('on this call'));
       expect(lead!.input.prompt).toMatch(
-        /^\[geniro\] The app was updated while you were working\. That stop was geniro's, not the user's: .* Check what is already done, run the interrupted command again, then carry on\. Still open: call-1 \(callee\) continues; collect it with await_agent\(call-1\)\.\n\nYour earlier session could not be resumed after the restart/,
+        /^\[geniro\] The app was updated while you were working\. That stop was geniro's, not the user's: .* Check what is already done, run the interrupted command again, then carry on\. The interrupted command may still be running: check for it before you run it again\. Still open: call-1 \(callee\) continues; collect it with await_agent\(call-1\)\.\n\nYour earlier session could not be resumed after the restart/,
       );
       expect(callee!.input.resumeSessionId).toBe('sess-callee');
       const rows = ctx.itemDao.items.filter((i) => i.runId === ctx.run.id);

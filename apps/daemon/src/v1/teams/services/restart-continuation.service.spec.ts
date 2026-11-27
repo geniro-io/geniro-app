@@ -198,7 +198,7 @@ describe('RestartContinuationService', () => {
 
     expect(ctx.chats.sendMessage).toHaveBeenCalledWith(
       'chat-1',
-      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. Stopped monitors (not started again): m2 — CI run — `gh run watch 7` (~6 min were left); start them again with monitor if you still need them.',
+      '[geniro] The daemon was restarted while you were working. That stop was geniro\'s, not the user\'s: a "user doesn\'t want to proceed" or "stop and wait" note it left in your transcript does not apply. Your session is intact — check what is already done, run the interrupted command again, then carry on. The interrupted command may still be running: check for it before you run it again. Stopped monitors (not started again): m2 — CI run — `gh run watch 7` (~6 min were left); start them again with monitor if you still need them.',
       [],
       {
         ownTurn: true,

@@ -78,6 +78,7 @@ import type {
   DeleteSessionTranscriptResult,
   NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
+  SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
   TurnDriver,
@@ -2824,6 +2825,17 @@ export class CursorAcpAdapter extends AgentAdapter {
       sessionId,
       CURSOR_SESSION_STORE_DB_NAME,
     );
+  }
+
+  /**
+   * The store holds a saved user message. Measured on 2026.11.22: a session
+   * killed before its first prompt or a second after it has no `store.db`, and
+   * one killed before its first checkpoint (3 s in) loads with no prompt in
+   * it. A store that cannot be read keeps the base's yes.
+   */
+  override sessionResumable(input: SessionResumableInput): Promise<boolean> {
+    const reading = this.readSessionConversation(input.sessionId, 0);
+    return Promise.resolve(reading === null || reading.userTexts.length > 0);
   }
 
   /**

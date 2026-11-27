@@ -2073,8 +2073,14 @@ describe('CursorAcpAdapter — cannot reopen a conversation', () => {
   });
 });
 
-/** Cursor's store for session `s`, holding the turn's prompt as saved. */
-function saveConversation(sessionStoreDir: string): void {
+/** Cursor's store for session `s`, holding one saved message — the turn's prompt by default. */
+function saveConversation(
+  sessionStoreDir: string,
+  message: { role: string; content: unknown } = {
+    role: 'user',
+    content: [{ type: 'text', text: '<user_query>\nship it\n</user_query>' }],
+  },
+): void {
   const rootId = 'root-of-session-s';
   const messageId = createHash('sha256').update('ship it').digest('hex');
   mkdirSync(join(sessionStoreDir, 's'), { recursive: true });
@@ -2089,17 +2095,7 @@ function saveConversation(sessionStoreDir: string): void {
     rootId,
     new Uint8Array([0x0a, 0x20, ...Buffer.from(messageId, 'hex')]),
   );
-  insert.run(
-    messageId,
-    Buffer.from(
-      JSON.stringify({
-        role: 'user',
-        content: [
-          { type: 'text', text: '<user_query>\nship it\n</user_query>' },
-        ],
-      }),
-    ),
-  );
+  insert.run(messageId, Buffer.from(JSON.stringify(message)));
   db.close();
 }
 
@@ -2278,6 +2274,68 @@ describe('CursorAcpAdapter — the notice for a failure, and for a refused load'
     refuseLoad(child);
 
     expect(events.filter(reopenNotice)).toHaveLength(1);
+  });
+});
+
+describe('CursorAcpAdapter.sessionResumable', () => {
+  const stores: string[] = [];
+  afterEach(() => {
+    for (const store of stores.splice(0)) {
+      rmSync(store, { recursive: true, force: true });
+    }
+  });
+
+  function resumable(prepare: (store: string) => void): Promise<boolean> {
+    const store = mkdtempSync(join(tmpdir(), 'cursor-resumable-store-'));
+    stores.push(store);
+    prepare(store);
+    return new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      sessionStoreDir: store,
+    }).sessionResumable({ sessionId: 's', configDir: null, cwd: '/proj' });
+  }
+
+  it('resumes a session whose store saved its prompt', async () => {
+    await expect(resumable(saveConversation)).resolves.toBe(true);
+  });
+
+  it('does not resume a session with no checkpoint yet', async () => {
+    await expect(
+      resumable((store) => {
+        mkdirSync(join(store, 's'));
+        const db = new DatabaseSync(join(store, 's', 'store.db'));
+        db.exec('CREATE TABLE meta (value TEXT)');
+        db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
+        db.prepare('INSERT INTO meta (value) VALUES (?)').run(
+          Buffer.from(JSON.stringify({ latestRootBlobId: '' })).toString('hex'),
+        );
+        db.close();
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('does not resume a session whose saved messages hold no user message', async () => {
+    await expect(
+      resumable((store) =>
+        saveConversation(store, {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'on it' }],
+        }),
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it('does not resume a session the CLI never wrote', async () => {
+    await expect(resumable(() => {})).resolves.toBe(false);
+  });
+
+  it('resumes as before when the store cannot be read', async () => {
+    await expect(
+      resumable((store) => {
+        mkdirSync(join(store, 's'));
+        writeFileSync(join(store, 's', 'store.db'), 'not a sqlite database');
+      }),
+    ).resolves.toBe(true);
   });
 });
 

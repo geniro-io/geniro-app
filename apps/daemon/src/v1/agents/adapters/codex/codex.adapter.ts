@@ -47,6 +47,7 @@ import type {
   DeleteSessionTranscriptResult,
   NativeMemoryReading,
   RecoveredSubagentOutcome,
+  SessionResumableInput,
   SubagentRecoveryRef,
   ToolCallMetric,
   TurnDriver,
@@ -162,6 +163,7 @@ import {
 } from './utils/codex-subagent-recovery.utils';
 import {
   codexThreadHistory,
+  codexThreadHoldsPrompt,
   readCodexThreads,
 } from './utils/codex-threads.utils';
 
@@ -1498,6 +1500,33 @@ export class CodexAdapter extends AgentAdapter {
       return result === null ? null : codexThreadHistory(result, input.limit);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * The thread holds a user message. Measured on 0.172.0: a thread killed
+   * before its first prompt is refused (`thread not loaded`), and one killed
+   * before codex recorded its prompt (1.6–5 s in) reads as one turn with no
+   * items. A read that gets no answer keeps the base's yes.
+   */
+  override async sessionResumable(
+    input: SessionResumableInput,
+  ): Promise<boolean> {
+    try {
+      const reply = await this.oneshotReply(
+        CODEX_METHODS.threadRead,
+        { threadId: input.sessionId, includeTurns: true },
+        {
+          configDir: input.configDir,
+          cwd: this.codexOptions.homeDir ?? homedir(),
+        },
+      );
+      if (reply === null) {
+        return true;
+      }
+      return reply.ok ? (codexThreadHoldsPrompt(reply.result) ?? true) : false;
+    } catch {
+      return true;
     }
   }
 

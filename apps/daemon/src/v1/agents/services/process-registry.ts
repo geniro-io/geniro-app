@@ -3,10 +3,11 @@ import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
 import type { AgentTurnHandle } from '../adapters/adapter.types';
 
 /**
- * Max time graceful shutdown waits for cancelled children to exit before
- * clearing. Coupled across the process boundary: must stay below the UI's kill
- * grace (SHUTDOWN_GRACE_MS = 7s, apps/ui/src/main/daemon-supervisor.ts) and the
- * crash guards' failsafe, or the daemon is killed mid-drain.
+ * Max time graceful shutdown waits for cancelled turns, and for the kept agent
+ * processes `AgentSessionRegistry.closeAll` ends, to exit. Coupled across the
+ * process boundary: must stay below the UI's kill grace (SHUTDOWN_GRACE_MS =
+ * 7s, apps/ui/src/main/daemon-supervisor.ts) and the crash guards' failsafe, or
+ * the daemon is killed mid-drain.
  */
 // Exported so the crash-guards spec can pin the failsafe > drain invariant
 // against the LIVE constant rather than a literal mirror.

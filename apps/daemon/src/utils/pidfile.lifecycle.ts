@@ -20,7 +20,7 @@ import { removePidfile } from './pidfile';
  * faithful to that shape and lets Nest own graceful shutdown).
  *
  * Only once every in-flight turn is drained and every kept agent process
- * signalled: the pidfile is how the app finds a running daemon, and removing
+ * has ended: the pidfile is how the app finds a running daemon, and removing
  * it first lets a new launch start beside this daemon's agent children.
  */
 @Injectable()
@@ -36,9 +36,9 @@ export class PidfileLifecycle implements OnApplicationShutdown {
     // tick the drain starts is what keeps a graceful quit from waiting out the
     // whole drain window, and keeps the close listeners suppressed.
     const drained = this.processes.drain();
-    this.sessions.closeAll();
+    const ended = this.sessions.closeAll();
     this.embeddings?.closeAll();
-    await drained;
+    await Promise.all([drained, ended]);
     removePidfile(environment.pidfilePath);
   }
 }

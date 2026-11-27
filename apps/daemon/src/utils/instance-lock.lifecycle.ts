@@ -30,7 +30,7 @@ import { DAEMON_LOCK_FILE_NAME, releaseInstanceLock } from './instance-lock';
  * reason about, and it made this module's own doc claim untrue.
  *
  * Released only once every in-flight turn is drained and every kept agent
- * process signalled, for the pidfile's reason: the lock is what keeps a second
+ * process has ended, for the pidfile's reason: the lock is what keeps a second
  * daemon off this userData dir, and letting it go first admits one while this
  * daemon's children run.
  */
@@ -47,9 +47,9 @@ export class InstanceLockLifecycle implements OnApplicationShutdown {
     // tick the drain starts is what keeps a graceful quit from waiting out the
     // whole drain window, and keeps the close listeners suppressed.
     const drained = this.processes.drain();
-    this.sessions.closeAll();
+    const ended = this.sessions.closeAll();
     this.embeddings?.closeAll();
-    await drained;
+    await Promise.all([drained, ended]);
     releaseInstanceLock(join(environment.userDataDir, DAEMON_LOCK_FILE_NAME));
   }
 }

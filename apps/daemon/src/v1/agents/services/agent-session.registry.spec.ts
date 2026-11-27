@@ -40,6 +40,7 @@ import {
   SESSION_MEMORY_COST_BYTES,
   sessionCeilingFor,
 } from './agent-session.registry';
+import { SHUTDOWN_DRAIN_MS } from './process-registry';
 
 /**
  * The ceiling every case in this file runs under, PINNED.
@@ -686,7 +687,7 @@ describe('AgentSessionRegistry — ending a process', () => {
     registry.startTurn('run-1', adapter, INPUT, noop);
     registry.startTurn('run-2', adapter, INPUT, noop);
 
-    registry.onApplicationShutdown();
+    void registry.onApplicationShutdown();
 
     expect(sessions.map((s) => s.closes)).toEqual([1, 1]);
     expect(registry.liveCount).toBe(0);
@@ -702,7 +703,7 @@ describe('AgentSessionRegistry — ending a process', () => {
     registry.startTurn('run-2', adapter, INPUT, noop);
     at(sessions, 0).closeThrows = true;
 
-    registry.onApplicationShutdown();
+    void registry.onApplicationShutdown();
 
     expect(at(sessions, 1).closes).toBe(1);
     expect(registry.liveCount).toBe(0);
@@ -719,7 +720,7 @@ describe('AgentSessionRegistry — ending a process', () => {
       getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
 
-    registry.onApplicationShutdown();
+    void registry.onApplicationShutdown();
     registry.startTurn('run-1', adapter, INPUT, noop);
 
     expect(startSession).toHaveBeenCalledWith(INPUT, {
@@ -975,7 +976,7 @@ describe('AgentSessionRegistry — closing an idle process gracefully', () => {
     registry.closeRun('torn-down');
     await at(sessions, 2).endTurn();
 
-    registry.closeAll();
+    void registry.closeAll();
 
     expect(sessions.map((session) => session.closeOptions)).toEqual([
       [undefined],
@@ -1043,12 +1044,81 @@ describe('AgentSessionRegistry — closing an idle process gracefully', () => {
     at(sessions, 0).lingers = true;
     await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
 
-    registry.closeAll();
+    void registry.closeAll();
 
     expect(at(sessions, 0).closeOptions).toEqual([
       { graceful: true },
       undefined,
     ]);
+  });
+});
+
+describe('AgentSessionRegistry — waiting out the processes on shutdown', () => {
+  it('resolves only once every process it closed has ended', async () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-2', 'qa'), adapter, INPUT, noop);
+    for (const session of sessions) {
+      await session.endTurn();
+      session.lingers = true;
+    }
+
+    let ended = false;
+    const shutdown = registry.closeAll().then(() => {
+      ended = true;
+    });
+    at(sessions, 0).exit();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ended).toBe(false);
+
+    at(sessions, 1).exit();
+    await shutdown;
+    expect(ended).toBe(true);
+  });
+
+  it('waits for a graceful close it escalated, and every later call waits for it too', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).lingers = true;
+    await vi.advanceTimersByTimeAsync(SESSION_IDLE_MS);
+
+    let first = false;
+    let second = false;
+    void registry.closeAll().then(() => {
+      first = true;
+    });
+    void registry.closeAll().then(() => {
+      second = true;
+    });
+    await vi.advanceTimersByTimeAsync(SHUTDOWN_DRAIN_MS - 1);
+    expect([first, second]).toEqual([false, false]);
+
+    at(sessions, 0).exit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect([first, second]).toEqual([true, true]);
+  });
+
+  it('stops waiting for a process that will not end once the drain window is over', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).lingers = true;
+
+    let ended = false;
+    void registry.closeAll().then(() => {
+      ended = true;
+    });
+    await vi.advanceTimersByTimeAsync(SHUTDOWN_DRAIN_MS - 1);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ended).toBe(true);
   });
 });
 
@@ -1294,7 +1364,7 @@ describe('AgentSessionRegistry — telling that a run went unused', () => {
     registry.retire('stale', 'its conversation was compacted');
     registry.startTurn('stale', adapter, INPUT, noop);
     registry.closeRun('third');
-    registry.closeAll();
+    void registry.closeAll();
     await settleRegistry();
 
     expect(sessions.slice(0, 3).map((session) => session.closes)).toEqual([
@@ -1401,7 +1471,7 @@ describe('AgentSessionRegistry.oweRunNote', () => {
   it('owes nothing once the daemon is shutting down', () => {
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
-    registry.closeAll();
+    void registry.closeAll();
     registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
 
     registry.startTurn('run-1', adapter, INPUT, noop);
@@ -1648,7 +1718,7 @@ describe('AgentSessionRegistry — what a process left running', () => {
   it('says nothing on shutdown, where the daemon is going too', async () => {
     const { registry, heard } = await opened();
 
-    registry.closeAll();
+    void registry.closeAll();
     await settleRegistry();
 
     expect(heard).toEqual([]);
@@ -2074,7 +2144,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     const closed: string[] = [];
     registry.onClosed((runId) => closed.push(runId));
 
-    registry.onApplicationShutdown();
+    void registry.onApplicationShutdown();
     registry.startTurn('run-1', adapter, INPUT, noop);
     await at(sessions, 0).endTurn();
     at(sessions, 0).die();

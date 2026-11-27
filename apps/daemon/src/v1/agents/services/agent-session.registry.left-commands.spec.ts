@@ -287,6 +287,6 @@ describe('the command groups a CLI recorded, in the child journal', () => {
 
     expect(stopped).toEqual([[]]);
     expect(commandRows()).toHaveLength(2);
-    registry.closeAll();
+    void registry.closeAll();
   }, 30_000);
 });

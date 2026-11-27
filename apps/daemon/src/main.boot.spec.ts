@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { connect, type Socket as NetSocket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +34,9 @@ import { MIGRATIONS } from './v1/migrations/utils/migration-registry';
 
 const SOCKET_TIMEOUT_MS = 5_000;
 
+/** How long the app waits after its SIGTERM before it sends SIGKILL. */
+const APP_KILL_GRACE_MS = 7_000;
+
 let child: ChildProcess;
 let userData: string;
 let info: DaemonInfo;
@@ -41,15 +45,7 @@ let output = (): string => '';
 const base = () => `http://${info.host}:${info.port}`;
 const auth = () => ({ authorization: `Bearer ${info.token}` });
 
-/**
- * `fetch`, with the response body read to its end before it is returned.
- *
- * A case that read only `status` left the body unread, and its connection
- * with it. The SIGTERM case's graceful close then waited on those
- * connections: at load average 90–180 the daemon was still up when the case
- * timed out in 5 runs of 21, and exited only at its own idle exit a minute
- * later. With every body read it exited in 36–226ms, 10 runs of 10.
- */
+/** `fetch`, with the response body read to its end, so no case leaves its connection open. */
 async function request(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, init);
   return new Response(await res.arrayBuffer(), {
@@ -289,12 +285,46 @@ describe('the daemon boots and serves', () => {
     SOCKET_TIMEOUT_MS * 2,
   );
 
-  it('shuts down on SIGTERM and clears its pidfile and lock', async () => {
-    const exited = new Promise<void>((resolve) => {
-      child.once('exit', () => resolve());
+  it('shuts down on SIGTERM within the app’s kill grace while a request is still open, and clears its pidfile and lock', async () => {
+    // A request the daemon is still serving, the way an agent's MCP call
+    // waiting on a team callee or a parked card is: its headers are in, its
+    // body never ends.
+    const open: NetSocket = connect(info.port, info.host);
+    await within(
+      new Promise<void>((resolve, reject) => {
+        open.once('connect', () => resolve());
+        open.once('error', reject);
+      }),
+      'connect',
+    );
+    open.on('error', () => undefined);
+    open.write(
+      [
+        'POST /health/check HTTP/1.1',
+        `Host: ${info.host}:${info.port}`,
+        'Content-Type: application/json',
+        'Content-Length: 100',
+        '',
+        '{"held":',
+      ].join('\r\n'),
+    );
+    // A second connection's round trip, so the held request has arrived.
+    expect((await request(`${base()}/health/check`)).status).toBe(200);
+
+    const exited = new Promise<'exited'>((resolve) => {
+      child.once('exit', () => resolve('exited'));
+    });
+    let grace: NodeJS.Timeout | undefined;
+    const killed = new Promise<'still running'>((resolve) => {
+      grace = setTimeout(() => resolve('still running'), APP_KILL_GRACE_MS);
     });
     child.kill('SIGTERM');
-    await exited;
+    try {
+      expect(await Promise.race([exited, killed])).toBe('exited');
+    } finally {
+      clearTimeout(grace);
+      open.destroy();
+    }
     expect(existsSync(join(userData, 'daemon.json'))).toBe(false);
     expect(existsSync(join(userData, 'daemon.lock'))).toBe(false);
   }, 15_000);

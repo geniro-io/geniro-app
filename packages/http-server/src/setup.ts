@@ -419,6 +419,10 @@ export const buildHttpNestApp = async (
     adapter as unknown as FastifyAdapter,
     {
       rawBody: true,
+      // Without it a request still open at shutdown (an agent's MCP call
+      // waiting on a team callee) holds the server's close, and with it every
+      // shutdown hook, until that request ends on its own.
+      forceCloseConnections: true,
     },
   );
 

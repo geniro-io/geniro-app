@@ -497,6 +497,7 @@ import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 import { WaitingMessagesStrip } from './waiting-messages-strip';
 import { type WorkingAgentRow, workingAgentRows } from './working-agents';
 import { WorkingAgentsCard } from './working-agents-card';
+import { WorkingThreadsCard } from './working-threads-card';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -11212,19 +11213,32 @@ export function Chats({
                           <div ref={transcriptEndRef} />
                         </div>
                         {activeRun === null ? null : (
-                          <WorkingAgentsCard
-                            key={activeRun.id}
-                            rows={startedAgents}
-                            runId={activeRun.id}
-                            api={chatApi}
-                            client={client}
-                            onShowInChat={openCall}
-                            nodes={nodeMeta}
-                            chatAgentName={activeRun.agentKind}
-                            delegateState={runState}
-                            collapseToolSteps={collapseToolSteps}
-                            work={startedAgentsWork}
-                          />
+                          <div className="pointer-events-none relative h-0 w-full overflow-visible">
+                            <div
+                              data-slot="transcript-corner"
+                              className="pointer-events-auto absolute right-4 -bottom-2 flex items-end gap-2">
+                              {hosted?.workingThreads === undefined ||
+                              hosted.workingThreads.length === 0 ? null : (
+                                <WorkingThreadsCard
+                                  threads={hosted.workingThreads}
+                                  onOpenThread={hosted.onOpenThread}
+                                />
+                              )}
+                              <WorkingAgentsCard
+                                key={activeRun.id}
+                                rows={startedAgents}
+                                runId={activeRun.id}
+                                api={chatApi}
+                                client={client}
+                                onShowInChat={openCall}
+                                nodes={nodeMeta}
+                                chatAgentName={activeRun.agentKind}
+                                delegateState={runState}
+                                collapseToolSteps={collapseToolSteps}
+                                work={startedAgentsWork}
+                              />
+                            </div>
+                          </div>
                         )}
 
                         {/* Between the scroller and the composer, and drawn OVER

@@ -38,6 +38,17 @@ const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
 /** Opens the reason phrase of the 502 the proxy sends when it could not reach a site; the error follows it. */
 export const PROXY_CONNECT_FAILED = 'Proxy could not connect: ';
 
+/** The error behind a load that committed as the proxy's own 502, or null for any other response. */
+export function proxyConnectFailure(
+  httpResponseCode: number,
+  httpStatusText: string,
+): string | null {
+  return httpResponseCode === 502 &&
+    httpStatusText.startsWith(PROXY_CONNECT_FAILED)
+    ? httpStatusText.slice(PROXY_CONNECT_FAILED.length)
+    : null;
+}
+
 const BAD_GATEWAY = 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n';
 const BAD_REQUEST = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n';
 const TUNNEL_ESTABLISHED = 'HTTP/1.1 200 Connection Established\r\n\r\n';
@@ -224,7 +235,9 @@ function forward(
   upstream.once('response', (answer) => {
     res.writeHead(
       answer.statusCode ?? 502,
-      answer.statusMessage,
+      answer.statusMessage?.startsWith(PROXY_CONNECT_FAILED)
+        ? undefined
+        : answer.statusMessage,
       forwardedHeaders(answer.headers),
     );
     answer.on('error', () => res.destroy());

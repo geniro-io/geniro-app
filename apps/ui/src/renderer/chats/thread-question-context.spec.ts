@@ -66,6 +66,25 @@ describe('messagesBefore', () => {
     );
   });
 
+  it('leaves out every page and picture the asking turn showed', () => {
+    const shown = [
+      ...ROWS.slice(0, 6),
+      row(61, 'show_artifact', null, {
+        artifactId: 'plan-page',
+        version: 1,
+        title: 'Launch plan',
+        key: 'k'.repeat(64),
+      }),
+      row(62, 'show_gallery', null, { images: [{ path: '/tmp/a.png' }] }),
+      ...ROWS.slice(6),
+    ];
+    expect(messagesBefore(shown, 'req-1')).toEqual([
+      { seq: 2, role: 'assistant', text: 'Looking at it' },
+      { seq: 5, role: 'assistant', text: 'Two caches could be meant' },
+      { seq: 6, role: 'user', text: 'The shared one' },
+    ]);
+  });
+
   it('reads rows in seq order whatever order the page came in', () => {
     expect(messagesBefore([...ROWS].reverse(), 'req-1').at(-1)?.seq).toBe(6);
   });
@@ -230,47 +249,6 @@ describe('threadContextReaderOf', () => {
   });
 });
 
-describe('a relayed question names the page its thread showed right before asking', () => {
-  const PAGE_ROWS: ItemDto[] = [
-    row(5560, 'message', 'assistant', { text: 'Both fixes held on the stand' }),
-    row(5565, 'message', 'assistant', {
-      text: 'Verification is done, preparing the screenshots for acceptance',
-    }),
-    row(5573, 'show_artifact', 'assistant', {
-      artifactId: 'pr-673-acceptance',
-      version: 1,
-      title: 'PR #673 — acceptance',
-      key: 'a'.repeat(64),
-      summary: 'Working-threads strip',
-    }),
-    row(5574, 'show_gallery', 'assistant', {
-      title: 'Strip screenshots',
-      images: [{ path: '/tmp/pr-shots/strip.png', caption: 'strip' }],
-    }),
-    row(5576, 'approval_request', null, {
-      id: 'req-acceptance',
-      toolName: 'AskUserQuestion',
-    }),
-  ];
-
-  it('keeps the show_artifact page and the show_gallery pictures published before the question in its context', () => {
-    const context = messagesBefore(PAGE_ROWS, 'req-acceptance');
-
-    expect(context).toContainEqual(
-      expect.objectContaining({
-        seq: 5573,
-        artifact: expect.objectContaining({ artifactId: 'pr-673-acceptance' }),
-      }),
-    );
-    expect(context).toContainEqual(
-      expect.objectContaining({
-        seq: 5574,
-        gallery: expect.objectContaining({ title: 'Strip screenshots' }),
-      }),
-    );
-  });
-});
-
 const PAGE = (artifactId: string, version: number): PublishedArtifact => ({
   artifactId,
   version,
@@ -279,93 +257,7 @@ const PAGE = (artifactId: string, version: number): PublishedArtifact => ({
   key: 'a'.repeat(64),
 });
 
-const PAGE_PAYLOAD = (artifactId: string, version: number) => ({
-  artifactId,
-  version,
-  title: artifactId,
-  key: 'a'.repeat(64),
-});
-
-describe('the pages and pictures a question shows', () => {
-  it('keeps the visual rows of the asking turn, not the ones an earlier turn showed', () => {
-    const rows: ItemDto[] = [
-      row(1, 'message', 'user', { text: 'Show the first run' }),
-      row(2, 'show_artifact', 'assistant', PAGE_PAYLOAD('old-page', 1)),
-      row(3, 'message', 'assistant', { text: 'Here it is' }),
-      row(4, 'message', 'user', { text: 'Now the second run' }),
-      row(5, 'show_artifact', 'assistant', PAGE_PAYLOAD('pr-1', 1)),
-      row(6, 'show_gallery', 'assistant', {
-        title: 'Shots',
-        images: [{ path: '/tmp/a.png' }],
-      }),
-      row(7, 'approval_request', null, {
-        id: 'req-x',
-        toolName: 'AskUserQuestion',
-      }),
-    ];
-
-    expect(messagesBefore(rows, 'req-x').map((entry) => entry.seq)).toEqual([
-      1, 3, 4, 5, 6,
-    ]);
-  });
-
-  it('keeps the newest three pages and pictures of the asking turn', () => {
-    const rows: ItemDto[] = [
-      row(2, 'message', 'user', { text: 'Take the screenshots' }),
-      ...[3, 4, 5, 6].map((seq) =>
-        row(seq, 'show_gallery', 'assistant', {
-          title: `Shots ${seq}`,
-          images: [{ path: `/tmp/${seq}.png` }],
-        }),
-      ),
-      row(7, 'approval_request', null, {
-        id: 'req-y',
-        toolName: 'AskUserQuestion',
-      }),
-    ];
-
-    expect(messagesBefore(rows, 'req-y').map((entry) => entry.seq)).toEqual([
-      2, 4, 5, 6,
-    ]);
-  });
-
-  it('shows a page once, at the version the turn published last', () => {
-    const rows: ItemDto[] = [
-      row(2, 'message', 'user', { text: 'Publish the plan' }),
-      row(3, 'show_artifact', 'assistant', PAGE_PAYLOAD('plan', 1)),
-      row(4, 'show_artifact', 'assistant', PAGE_PAYLOAD('plan', 2)),
-      row(5, 'approval_request', null, {
-        id: 'req-z',
-        toolName: 'AskUserQuestion',
-      }),
-    ];
-
-    expect(messagesBefore(rows, 'req-z')).toEqual([
-      { seq: 2, role: 'user', text: 'Publish the plan' },
-      expect.objectContaining({
-        seq: 4,
-        artifact: expect.objectContaining({ artifactId: 'plan', version: 2 }),
-      }),
-    ]);
-  });
-
-  it('takes every visual row when no user message is on the page', () => {
-    const rows: ItemDto[] = [
-      row(1, 'message', 'assistant', { text: 'Working on it' }),
-      row(2, 'show_artifact', 'assistant', PAGE_PAYLOAD('pr-2', 1)),
-      row(3, 'approval_request', null, {
-        id: 'req-w',
-        toolName: 'AskUserQuestion',
-      }),
-    ];
-
-    expect(messagesBefore(rows, 'req-w').map((entry) => entry.seq)).toEqual([
-      1, 2,
-    ]);
-  });
-});
-
-describe('threadContextReaderOf and the pages and pictures', () => {
+describe('threadContextReaderOf over a member call', () => {
   const callRow = (
     seq: number,
     kind: string,
@@ -382,25 +274,10 @@ describe('threadContextReaderOf and the pages and pictures', () => {
   ): ItemDto => ({ ...row(seq, kind, 'assistant', payload), memberId });
 
   const CALL_ROOT: ItemDto[] = [
-    row(1, 'show_artifact', 'assistant', PAGE_PAYLOAD('root-page', 1)),
-    memberRow(
-      2,
-      'show_artifact',
-      PAGE_PAYLOAD('earlier-call-page', 1),
-      'helper',
-    ),
     row(4, 'call_started', null, {
       callId: 'call-1',
       message: 'Run your command',
     }),
-    memberRow(6, 'show_artifact', PAGE_PAYLOAD('call-page', 1), 'helper'),
-    memberRow(
-      7,
-      'show_gallery',
-      { title: 'Call shots', images: [{ path: '/tmp/call.png' }] },
-      'helper',
-    ),
-    memberRow(8, 'show_artifact', PAGE_PAYLOAD('lead-page', 1), 'manager'),
     {
       ...row(9, 'approval_request', null, {
         id: 'thread-1::call:call-1#approval',
@@ -417,41 +294,6 @@ describe('threadContextReaderOf and the pages and pictures', () => {
     ],
     hasOlder: false,
   };
-
-  it('takes a call’s pages and pictures from the root page, by the member that asked, after the call’s brief', async () => {
-    const listRunItems = vi
-      .fn()
-      .mockResolvedValue({ items: CALL_ROOT, anchors: [] });
-    const reader = threadContextReaderOf(
-      {
-        readRunArtifacts: vi.fn(),
-        listRunItems,
-        listCallMessages: vi.fn().mockResolvedValue(CALL_MESSAGES),
-        readLocalImage: vi.fn(),
-        ...NO_ANSWERS,
-      },
-      HANDLE,
-    );
-
-    const entries = await reader.read(
-      'thread-1',
-      'thread-1::call:call-1#approval',
-    );
-
-    expect(listRunItems).toHaveBeenCalledTimes(1);
-    expect(entries).toEqual([
-      { seq: 4, role: 'user', text: 'Run your command' },
-      { seq: 5, role: 'assistant', text: 'Helper context' },
-      expect.objectContaining({
-        seq: 6,
-        artifact: expect.objectContaining({ artifactId: 'call-page' }),
-      }),
-      expect.objectContaining({
-        seq: 7,
-        gallery: expect.objectContaining({ title: 'Call shots' }),
-      }),
-    ]);
-  });
 
   it('keeps a call’s brief from the root page though the whole run’s newest rows no longer hold it', async () => {
     const listRunItems = vi.fn(async (request: { conversation?: string }) => ({
@@ -472,19 +314,19 @@ describe('threadContextReaderOf and the pages and pictures', () => {
       HANDLE,
     );
 
-    const entries = await reader.read(
+    const messages = await reader.read(
       'thread-1',
       'thread-1::call:call-1#approval',
     );
 
-    expect(entries[0]).toEqual({
+    expect(messages[0]).toEqual({
       seq: 4,
       role: 'user',
       text: 'Run your command',
     });
   });
 
-  it('keeps a call’s brief and its member’s pages however many rows of the run’s own flow stand between them and the question', async () => {
+  it('keeps a call’s brief that the root page carries as an anchor, however many rows of the run’s own flow stand between it and the question', async () => {
     const brief = row(4, 'call_started', null, {
       callId: 'call-1',
       message: 'Run your command',
@@ -497,40 +339,20 @@ describe('threadContextReaderOf and the pages and pictures', () => {
         'reviewer',
       ),
     );
-    const flow: ItemDto[] = [
-      memberRow(2, 'show_artifact', PAGE_PAYLOAD('earlier-page', 1), 'helper'),
-      brief,
-      memberRow(6, 'show_artifact', PAGE_PAYLOAD('call-page', 1), 'helper'),
-      ...busy,
-      {
-        ...row(900, 'approval_request', null, {
-          id: 'thread-1::call:call-1#approval',
-          toolName: 'Bash',
-          callId: 'call-1',
-        }),
-        memberId: 'helper',
-      },
-    ];
+    const asked: ItemDto = {
+      ...row(900, 'approval_request', null, {
+        id: 'thread-1::call:call-1#approval',
+        toolName: 'Bash',
+        callId: 'call-1',
+      }),
+      memberId: 'helper',
+    };
     const listRunItems = vi.fn(
-      async (request: {
-        conversation?: string;
-        limit?: number;
-        beforeSeq?: number;
-      }) => {
-        if (request.conversation !== 'root') {
-          return { items: busy.slice(-(request.limit ?? 0)), anchors: [] };
-        }
-        const items = flow
-          .filter(
-            (item) =>
-              request.beforeSeq === undefined || item.seq < request.beforeSeq,
-          )
-          .slice(-(request.limit ?? flow.length));
-        const firstSeq = items[0]?.seq ?? Infinity;
-        return {
-          items,
-          anchors: brief.seq < firstSeq ? [brief] : [],
-        };
+      async (request: { conversation?: string; limit?: number }) => {
+        const limit = request.limit ?? busy.length;
+        return request.conversation === 'root'
+          ? { items: busy.slice(-limit), anchors: [brief] }
+          : { items: [...busy, asked].slice(-limit), anchors: [] };
       },
     );
     const reader = threadContextReaderOf(
@@ -544,23 +366,15 @@ describe('threadContextReaderOf and the pages and pictures', () => {
       HANDLE,
     );
 
-    const entries = await reader.read(
+    const messages = await reader.read(
       'thread-1',
       'thread-1::call:call-1#approval',
     );
 
-    expect(entries).toEqual([
+    expect(messages).toEqual([
       { seq: 4, role: 'user', text: 'Run your command' },
       { seq: 5, role: 'assistant', text: 'Helper context' },
-      expect.objectContaining({
-        seq: 6,
-        artifact: expect.objectContaining({ artifactId: 'call-page' }),
-      }),
     ]);
-    expect(listRunItems).toHaveBeenCalledTimes(3);
-    expect(listRunItems).toHaveBeenLastCalledWith(
-      expect.objectContaining({ conversation: 'root', beforeSeq: 151 }),
-    );
   });
 
   it('keeps a call’s brief beside the member’s last three messages, never in place of one', async () => {
@@ -599,16 +413,18 @@ describe('threadContextReaderOf and the pages and pictures', () => {
       HANDLE,
     );
 
-    const entries = await reader.read(
+    const messages = await reader.read(
       'thread-1',
       'thread-1::call:call-1#approval',
     );
 
     expect(
-      entries.flatMap((entry) => ('text' in entry ? [entry.text] : [])),
+      messages.flatMap((entry) => ('text' in entry ? [entry.text] : [])),
     ).toEqual(['Run your command', 'Second', 'Third', 'Fourth']);
   });
+});
 
+describe('threadContextReaderOf binds its thread’s run', () => {
   it('binds the picture loader, the page URL and the answers store to the thread’s run', async () => {
     const readLocalImage = vi
       .fn()

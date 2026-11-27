@@ -162,8 +162,6 @@ function harness(
       ),
   };
   const questionAttachments = new QuestionAttachmentsService(
-    fakeEntityManager(),
-    itemDao as unknown as ItemDao,
     new ChatArtifactsService(
       fakeEntityManager(),
       runDao as unknown as RunDao,
@@ -567,7 +565,7 @@ describe('TeamCardsService — a member’s own question', () => {
     { question: 'Which database?', options: [{ label: 'Postgres' }] },
   ];
 
-  it('writes the pages a member’s deferred question carries, the explicit ones first', async () => {
+  it('writes the pages a member’s deferred question passes', async () => {
     const { service, rowsOf, itemDao } = harness();
     await itemDao.create({
       runId: RUN,
@@ -597,7 +595,6 @@ describe('TeamCardsService — a member’s own question', () => {
             version: 1,
           },
         ],
-        moreAttachments: 0,
       },
     });
   });

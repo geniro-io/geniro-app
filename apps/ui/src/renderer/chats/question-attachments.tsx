@@ -1,13 +1,9 @@
-import { FileText, FileX, Images } from 'lucide-react';
+import { FileText, FileX } from 'lucide-react';
 import { useContext, useEffect, useState } from 'react';
 
-import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
-import { Dialog } from '../components/ui/dialog';
 import { ArtifactCard } from './artifact-block';
 import { ArtifactDialog } from './artifact-dialog';
-import { GalleryCard } from './gallery-block';
-import { type GallerySpec } from './gallery-payload';
 import type { PublishedArtifact } from './published-artifact';
 import type {
   QuestionAttachment,
@@ -18,13 +14,10 @@ import {
   ThreadContextReaderContext,
 } from './thread-question-context';
 import { ThreadRunBindings } from './thread-run-bindings';
-import { ThreadOpenContext } from './thread-title';
 
 /** What a question card says of a page that is no longer there. */
 export const PAGE_UNAVAILABLE_TEXT =
   'This page is no longer available — its chat was deleted or the page was removed. The question can still be answered.';
-
-type ArtifactAttachment = Extract<QuestionAttachment, { kind: 'artifact' }>;
 
 /** The thread's pages by id; null while its listing is read, 'failed' when it cannot be. */
 type Pages = Map<string, PublishedArtifact> | 'failed' | null;
@@ -42,12 +35,9 @@ function usePages(
   threadRunId: string,
   set: QuestionAttachmentSet,
 ): Pages {
-  const wanted = set.attachments.flatMap((attachment) =>
-    attachment.kind === 'artifact'
-      ? [`${attachment.artifactId}@${attachment.version}`]
-      : [],
-  );
-  const wantedKey = wanted.join('\n');
+  const wantedKey = set.attachments
+    .map((attachment) => `${attachment.artifactId}@${attachment.version}`)
+    .join('\n');
   const [read, setRead] = useState<{
     reader: ThreadContextReader;
     threadRunId: string;
@@ -89,7 +79,7 @@ function usePages(
   return read.pages;
 }
 
-function pageOf(attachment: ArtifactAttachment, pages: Pages): Page {
+function pageOf(attachment: QuestionAttachment, pages: Pages): Page {
   if (pages === null) {
     return null;
   }
@@ -97,12 +87,6 @@ function pageOf(attachment: ArtifactAttachment, pages: Pages): Page {
     return 'gone';
   }
   return pages.get(attachment.artifactId) ?? 'gone';
-}
-
-function keyOf(attachment: QuestionAttachment): string {
-  return attachment.kind === 'artifact'
-    ? attachment.artifactId
-    : `gallery-${attachment.seq}`;
 }
 
 function PageGone({ title }: { title: string }): React.JSX.Element {
@@ -125,7 +109,7 @@ function PagePreview({
   attachment,
   pages,
 }: {
-  attachment: ArtifactAttachment;
+  attachment: QuestionAttachment;
   pages: Pages;
 }): React.JSX.Element {
   const page = pageOf(attachment, pages);
@@ -146,7 +130,7 @@ function PageChip({
   attachment,
   pages,
 }: {
-  attachment: ArtifactAttachment;
+  attachment: QuestionAttachment;
   pages: Pages;
 }): React.JSX.Element {
   const page = pageOf(attachment, pages);
@@ -182,71 +166,6 @@ function PageChip({
   );
 }
 
-function GalleryChip({ gallery }: { gallery: GallerySpec }): React.JSX.Element {
-  const [viewing, setViewing] = useState(false);
-  const count = gallery.images.length;
-  const label = [
-    `${count} ${count === 1 ? 'picture' : 'pictures'}`,
-    gallery.title,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(' · ');
-  return (
-    <>
-      <Chip asChild interactive tone="active">
-        <button
-          type="button"
-          data-slot="question-attachment-chip"
-          title={label}
-          aria-label={label}
-          onClick={() => setViewing(true)}
-          className="max-w-full">
-          <Images aria-hidden="true" />
-          <span className="min-w-0 truncate">{label}</span>
-        </button>
-      </Chip>
-      <Dialog
-        open={viewing}
-        onClose={() => setViewing(false)}
-        title={gallery.title ?? 'Pictures'}>
-        <GalleryCard gallery={gallery} />
-      </Dialog>
-    </>
-  );
-}
-
-function MoreAttachments({
-  threadRunId,
-  count,
-}: {
-  threadRunId: string;
-  count: number;
-}): React.JSX.Element | null {
-  const open = useContext(ThreadOpenContext);
-  if (count === 0) {
-    return null;
-  }
-  const label = `+${count} more`;
-  return open === null ? (
-    <span
-      data-slot="question-attachments-more"
-      className="text-xs text-muted-foreground">
-      {label}
-    </span>
-  ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      data-slot="question-attachments-more"
-      title="Show this thread and open its chat"
-      className="text-xs text-muted-foreground"
-      onClick={() => open(threadRunId)}>
-      {label}
-    </Button>
-  );
-}
-
 function AttachmentList({
   reader,
   threadRunId,
@@ -265,21 +184,13 @@ function AttachmentList({
         data-slot="question-attachments"
         data-variant="chips"
         className="flex min-w-0 flex-wrap items-center gap-1.5">
-        {set.attachments.map((attachment) =>
-          attachment.kind === 'artifact' ? (
-            <PageChip
-              key={keyOf(attachment)}
-              attachment={attachment}
-              pages={pages}
-            />
-          ) : (
-            <GalleryChip key={keyOf(attachment)} gallery={attachment.gallery} />
-          ),
-        )}
-        <MoreAttachments
-          threadRunId={threadRunId}
-          count={set.moreAttachments}
-        />
+        {set.attachments.map((attachment) => (
+          <PageChip
+            key={attachment.artifactId}
+            attachment={attachment}
+            pages={pages}
+          />
+        ))}
       </div>
     );
   }
@@ -288,30 +199,25 @@ function AttachmentList({
       data-slot="question-attachments"
       data-variant="preview"
       className="flex min-w-0 flex-col gap-2">
-      {set.attachments.map((attachment) =>
-        attachment.kind === 'artifact' ? (
-          <PagePreview
-            key={keyOf(attachment)}
-            attachment={attachment}
-            pages={pages}
-          />
-        ) : (
-          <GalleryCard key={keyOf(attachment)} gallery={attachment.gallery} />
-        ),
-      )}
-      <MoreAttachments threadRunId={threadRunId} count={set.moreAttachments} />
+      {set.attachments.map((attachment) => (
+        <PagePreview
+          key={attachment.artifactId}
+          attachment={attachment}
+          pages={pages}
+        />
+      ))}
     </div>
   );
 }
 
 /**
- * The pages and pictures a question was asked about, drawn on its card.
+ * The pages a question was asked about, drawn on its card; nothing when it was
+ * asked about none.
  *
- * `preview` draws each page inline with its labelled full-screen button, as the
- * asking turn's pages are drawn; `chips` draws one chip per attachment and
- * loads nothing but the thread's listing until a chip is pressed, which then
- * opens the page or the picture set. A page the listing does not hold — or a
- * listing that cannot be read — is unavailable: a placeholder, or an
+ * `preview` draws each page inline with its labelled full-screen button; `chips`
+ * draws one chip per page and loads nothing but the thread's listing until a
+ * chip is pressed, which then opens the page. A page the listing does not hold —
+ * or a listing that cannot be read — is unavailable: a placeholder, or an
  * "unavailable" chip. Bound to the thread's run, as the reader's pages are.
  */
 export function QuestionAttachments({
@@ -324,7 +230,7 @@ export function QuestionAttachments({
   variant: 'preview' | 'chips';
 }): React.JSX.Element | null {
   const reader = useContext(ThreadContextReaderContext);
-  if (reader === null) {
+  if (reader === null || set.attachments.length === 0) {
     return null;
   }
   return (

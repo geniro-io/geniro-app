@@ -3207,7 +3207,6 @@ describe("a question the thread asked, on the thread's own card", () => {
                 version: 1,
               },
             ],
-            moreAttachments: 0,
           }}
         />
       </ThreadContextReaderContext.Provider>,

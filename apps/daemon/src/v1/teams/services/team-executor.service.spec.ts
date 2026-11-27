@@ -1811,8 +1811,6 @@ function setup(
     new RunWriteQueue(),
   );
   const questionAttachments = new QuestionAttachmentsService(
-    em,
-    itemDao as unknown as ItemDao,
     new ChatArtifactsService(
       em,
       runDao as unknown as RunDao,
@@ -24122,7 +24120,7 @@ describe("TeamExecutorService — geniro's own question tool", () => {
       return JSON.parse(String(row?.payload)) as Record<string, unknown>;
     }
 
-    it('writes the pages a blocking member question names, the explicit ones first', async () => {
+    it('writes exactly the pages a blocking member question passes, never one it only names', async () => {
       const { service, cursor, userQuestions, approvals, itemDao } =
         questionSetup();
       cursor.holdsQuestionCallsOpen = true;
@@ -24159,14 +24157,7 @@ describe("TeamExecutorService — geniro's own question tool", () => {
             title: 'Launch plan',
             version: 1,
           },
-          {
-            kind: 'artifact',
-            artifactId: 'chart-page',
-            title: 'Quarterly chart',
-            version: 1,
-          },
         ],
-        moreAttachments: 0,
       });
       approvals.resolve(
         run.id,
@@ -24198,7 +24189,7 @@ describe("TeamExecutorService — geniro's own question tool", () => {
       expect(deferredArtifacts).toEqual([['plan-page']]);
     });
 
-    it('writes the pages of the turn a member’s CLI question is asked in', async () => {
+    it('writes no page on a member’s CLI question, even one its turn published', async () => {
       const { service, claude, itemDao } = setup();
       const run = await service.startRun({
         slug: 'q',
@@ -24221,15 +24212,7 @@ describe("TeamExecutorService — geniro's own question tool", () => {
 
       expect(cardPayload(itemDao)).toMatchObject({
         questions: expect.any(Array),
-        attachments: [
-          {
-            kind: 'artifact',
-            artifactId: 'chart-page',
-            title: 'Quarterly chart',
-            version: 1,
-          },
-        ],
-        moreAttachments: 0,
+        attachments: [],
       });
     });
   });

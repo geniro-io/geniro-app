@@ -189,6 +189,7 @@ import { GoalsTool } from '../tools/goals/goals.tool';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
+import { showArtifactInstructions } from '../tools/show-artifact/show-artifact.instructions';
 import { ShowArtifactTool } from '../tools/show-artifact/show-artifact.tool';
 import { ShowUiTool } from '../tools/show-ui/show-ui.tool';
 import { McpServerService } from './mcp-server.service';
@@ -1969,6 +1970,36 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).toContain(
       `questions[0].question is ${MAX_HOST_QUESTION_TEXT_LENGTH + 1} characters; the limit is ${MAX_HOST_QUESTION_TEXT_LENGTH}`,
     );
+  });
+
+  it('tells an agent that no page is ever attached to its question for it', async () => {
+    const questions = new UserQuestionBroker();
+    questions.register('run-1', 'agent', async () => ({ status: 'declined' }));
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tool = (
+      json().result as {
+        tools: {
+          name: string;
+          description: string;
+          inputSchema: { properties: { artifacts: { description: string } } };
+        }[];
+      }
+    ).tools.find((entry) => entry.name === HOST_QUESTION_TOOL)!;
+    expect(tool.description).toContain(
+      'No page is ever attached to the card for you',
+    );
+    expect(tool.description).not.toContain('exact title');
+    expect(tool.inputSchema.properties.artifacts.description).toContain(
+      'no page is ever attached for you',
+    );
+    const pages = showArtifactInstructions(false, false);
+    expect(pages).toContain('never one by itself');
+    expect(pages).not.toContain('exact title');
   });
 
   it('states each text limit of ask_user_question in its schema, before the model calls it', async () => {

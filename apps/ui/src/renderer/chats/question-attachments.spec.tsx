@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   STUB_PICTURE_DATA_URL,
@@ -34,6 +34,14 @@ const PLAN: PublishedArtifact = {
   key: 'key-plan',
 };
 
+const REPORT: PublishedArtifact = {
+  artifactId: 'report',
+  version: 1,
+  title: 'Report',
+  summary: null,
+  key: 'key-report',
+};
+
 const PLAN_SET: QuestionAttachmentSet = {
   attachments: [
     {
@@ -43,7 +51,6 @@ const PLAN_SET: QuestionAttachmentSet = {
       version: 2,
     },
   ],
-  moreAttachments: 0,
 };
 
 let root: Root;
@@ -172,73 +179,46 @@ describe('QuestionAttachments preview variant', () => {
     expect(document.querySelector('iframe')).toBeNull();
   });
 
-  it('draws a picture set with its gallery card', async () => {
+  it('draws exactly the pages it names, each inline once and in order', async () => {
     await draw(
       <QuestionAttachments
         threadRunId="thread-1"
         set={{
           attachments: [
+            { ...PLAN_SET.attachments[0]!, title: 'Plan for the cache' },
             {
-              kind: 'gallery',
-              seq: 7,
-              gallery: {
-                title: 'Trip',
-                images: [
-                  {
-                    path: 'a.png',
-                    caption: null,
-                    description: null,
-                    source: null,
-                  },
-                ],
-              },
+              kind: 'artifact',
+              artifactId: 'report',
+              title: 'Report',
+              version: 1,
             },
           ],
-          moreAttachments: 0,
         }}
         variant="preview"
       />,
-      readerWith([]),
+      readerWith([PLAN, REPORT]),
     );
 
-    expect(document.querySelector('[data-slot="gallery-card"]')).not.toBeNull();
+    expect(document.querySelectorAll('iframe')).toHaveLength(2);
+    expect(buttonsNamed('Open Plan for the cache full screen')).toHaveLength(2);
+    expect(buttonsNamed('Open Report full screen')).toHaveLength(2);
   });
 
-  it('names the rest as plain text when there is no thread to open', async () => {
+  it('draws no attachments block and no "+N more" line when the set names no page', async () => {
     await draw(
       <QuestionAttachments
         threadRunId="thread-1"
-        set={{ ...PLAN_SET, moreAttachments: 2 }}
+        set={{ attachments: [] }}
         variant="preview"
       />,
       readerWith([PLAN]),
+      () => undefined,
     );
 
-    const more = document.querySelector(
-      '[data-slot="question-attachments-more"]',
-    );
-    expect(more?.textContent).toBe('+2 more');
-    expect(more?.tagName).toBe('SPAN');
-  });
-
-  it('opens the thread from +N more when the thread can be opened', async () => {
-    const opened = vi.fn();
-    await draw(
-      <QuestionAttachments
-        threadRunId="thread-1"
-        set={{ ...PLAN_SET, moreAttachments: 2 }}
-        variant="preview"
-      />,
-      readerWith([PLAN]),
-      opened,
-    );
-
-    const more = document.querySelector<HTMLButtonElement>(
-      '[data-slot="question-attachments-more"]',
-    );
-    expect(more?.tagName).toBe('BUTTON');
-    act(() => more?.click());
-    expect(opened).toHaveBeenCalledWith('thread-1');
+    expect(
+      document.querySelector('[data-slot="question-attachments"]'),
+    ).toBeNull();
+    expect(container.textContent).toBe('');
   });
 });
 
@@ -263,6 +243,32 @@ describe('QuestionAttachments chips variant', () => {
     expect(document.querySelector('iframe')).not.toBeNull();
   });
 
+  it('draws one chip for each page the set names, in its order', async () => {
+    await draw(
+      <QuestionAttachments
+        threadRunId="thread-1"
+        set={{
+          attachments: [
+            {
+              kind: 'artifact',
+              artifactId: 'report',
+              title: 'Report',
+              version: 1,
+            },
+            { ...PLAN_SET.attachments[0]! },
+          ],
+        }}
+        variant="chips"
+      />,
+      readerWith([PLAN, REPORT]),
+    );
+
+    expect(chips().map((chip) => chip.getAttribute('aria-label'))).toEqual([
+      'Report',
+      'Plan for the cache',
+    ]);
+  });
+
   it('reads an unavailable chip as the title with "unavailable"', async () => {
     await draw(
       <QuestionAttachments
@@ -280,54 +286,11 @@ describe('QuestionAttachments chips variant', () => {
     expect(document.querySelector('iframe')).toBeNull();
   });
 
-  it('names a picture set "N pictures · title" and opens its pictures when pressed', async () => {
-    await draw(
-      <QuestionAttachments
-        threadRunId="thread-1"
-        set={{
-          attachments: [
-            {
-              kind: 'gallery',
-              seq: 9,
-              gallery: {
-                title: 'Trip',
-                images: [
-                  {
-                    path: 'a.png',
-                    caption: null,
-                    description: null,
-                    source: null,
-                  },
-                  {
-                    path: 'b.png',
-                    caption: null,
-                    description: null,
-                    source: null,
-                  },
-                ],
-              },
-            },
-          ],
-          moreAttachments: 0,
-        }}
-        variant="chips"
-      />,
-      readerWith([]),
-    );
-
-    expect(chips()[0]?.getAttribute('aria-label')).toBe('2 pictures · Trip');
-    expect(document.querySelector('[data-slot="gallery-card"]')).toBeNull();
-
-    act(() => chips()[0]?.click());
-
-    expect(document.querySelector('[data-slot="gallery-card"]')).not.toBeNull();
-  });
-
   it("draws no page in the thread's own card when the question names none", async () => {
     await draw(
       <QuestionAttachments
         threadRunId="thread-1"
-        set={{ attachments: [], moreAttachments: 0 }}
+        set={{ attachments: [] }}
         variant="chips"
       />,
       readerWith([PLAN]),

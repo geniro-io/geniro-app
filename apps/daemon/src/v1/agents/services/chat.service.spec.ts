@@ -1464,8 +1464,6 @@ function setup(
     },
   } as unknown as RunGroupsService;
   const questionAttachments = new QuestionAttachmentsService(
-    em,
-    itemDao as unknown as ItemDao,
     new ChatArtifactsService(
       em,
       runDao as unknown as RunDao,
@@ -2426,7 +2424,7 @@ describe('ChatService', () => {
         return JSON.parse(String(card?.payload)) as Record<string, unknown>;
       }
 
-      it('writes the pages a blocking question names, the explicit ones first', async () => {
+      it('writes exactly the pages a blocking question passes, never one it only names', async () => {
         const { service, cursor, userQuestions, approvals, itemDao } = setup();
         holdsCallsOpen(cursor);
         const run = await service.createChat({
@@ -2460,14 +2458,7 @@ describe('ChatService', () => {
               title: 'Launch plan',
               version: 1,
             },
-            {
-              kind: 'artifact',
-              artifactId: 'chart-page',
-              title: 'Quarterly chart',
-              version: 1,
-            },
           ],
-          moreAttachments: 0,
         });
         approvals.resolve(
           run.id,
@@ -2497,7 +2488,6 @@ describe('ChatService', () => {
 
         expect(cardPayload(itemDao)).toMatchObject({
           attachments: [],
-          moreAttachments: 0,
         });
         approvals.resolve(
           run.id,
@@ -2511,7 +2501,7 @@ describe('ChatService', () => {
         });
       });
 
-      it('writes the pages a deferred question carries, the explicit ones first', async () => {
+      it('writes the pages a deferred question passes', async () => {
         const { service, userQuestions, itemDao } = setup();
         const run = await service.createChat({
           agentKind: 'cursor-agent',
@@ -2539,11 +2529,10 @@ describe('ChatService', () => {
               version: 1,
             },
           ],
-          moreAttachments: 0,
         });
       });
 
-      it('writes the pages of the turn a CLI question is asked in', async () => {
+      it('writes no page on a CLI question, even one its turn published', async () => {
         const { service, claude, itemDao } = setup();
         const run = await service.createChat({ agentKind: 'claude', cwd: dir });
         await service.sendMessage(run.id, 'hi');
@@ -2561,19 +2550,11 @@ describe('ChatService', () => {
 
         expect(cardPayload(itemDao)).toMatchObject({
           questions: expect.any(Array),
-          attachments: [
-            {
-              kind: 'artifact',
-              artifactId: 'chart-page',
-              title: 'Quarterly chart',
-              version: 1,
-            },
-          ],
-          moreAttachments: 0,
+          attachments: [],
         });
       });
 
-      it('writes the pages of the last turn a CLI question is asked after it ended', async () => {
+      it('writes no page on a CLI question asked after its turn ended', async () => {
         const { service, claude, itemDao } = setup();
         const run = await service.createChat({ agentKind: 'claude', cwd: dir });
         await service.sendMessage(run.id, 'hi');
@@ -2592,14 +2573,7 @@ describe('ChatService', () => {
 
         expect(cardPayload(itemDao)).toMatchObject({
           questions: expect.any(Array),
-          attachments: [
-            {
-              kind: 'artifact',
-              artifactId: 'chart-page',
-              title: 'Quarterly chart',
-              version: 1,
-            },
-          ],
+          attachments: [],
         });
       });
 

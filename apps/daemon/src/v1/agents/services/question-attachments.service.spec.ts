@@ -79,7 +79,7 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
       items,
       new ArtifactStoreService({ root: join(tmpdir(), 'unused') }),
     );
-    service = new QuestionAttachmentsService(em, items, artifacts);
+    service = new QuestionAttachmentsService(artifacts);
   });
 
   afterEach(() => {
@@ -101,114 +101,66 @@ describe('QuestionAttachmentsService (in-memory sqlite)', () => {
     });
   }
 
-  it('attaches a page from an earlier turn only when the question names its exact title', async () => {
-    await write(1, 'show_artifact', page('plan-page', 'Launch plan'));
-    await write(2, 'message', { text: 'hi' }, 'user');
-
-    expect(
-      await service.cardFields(RUN, null, asks('Use the Launch plan or not?')),
-    ).toEqual({
-      attachments: [
-        {
-          kind: 'artifact',
-          artifactId: 'plan-page',
-          title: 'Launch plan',
-          version: 1,
-        },
-      ],
-      moreAttachments: 0,
-    });
-    expect(
-      await service.cardFields(RUN, null, asks('Use the launch option?')),
-    ).toEqual({ attachments: [], moreAttachments: 0 });
-  });
-
-  it('attaches the asking turn’s pages and picture sets, newest row first', async () => {
+  it('attaches no page to a question that passed none, even one it names or its turn showed', async () => {
     await write(1, 'message', { text: 'hi' }, 'user');
-    await write(2, 'show_artifact', page('chart-page', 'Quarterly chart'));
+    await write(2, 'show_artifact', page('plan-page', 'Launch plan'));
     await write(3, 'show_gallery', {
       title: 'Office photos',
       images: [{ path: '/tmp/a.png' }],
     });
 
     expect(
-      await service.cardFields(RUN, null, asks('Which one fits?')),
+      await service.cardFields(RUN, asks('Use the Launch plan or not?')),
+    ).toEqual({ attachments: [] });
+    expect(
+      await service.cardFields(RUN, asks('Use the Launch plan?'), []),
+    ).toEqual({ attachments: [] });
+  });
+
+  it('attaches exactly the pages passed, each once at its newest version', async () => {
+    await write(1, 'show_artifact', page('plan-page', 'Launch plan'));
+    await write(2, 'show_artifact', page('chart-page', 'Quarterly chart'));
+    await write(3, 'show_artifact', {
+      ...page('plan-page', 'Launch plan'),
+      version: 2,
+    });
+
+    expect(
+      await service.cardFields(RUN, asks('Which one?'), [
+        'plan-page',
+        'plan-page',
+      ]),
     ).toEqual({
       attachments: [
         {
-          kind: 'gallery',
-          seq: 3,
-          title: 'Office photos',
-          count: 1,
-          gallery: {
-            title: 'Office photos',
-            images: [{ path: '/tmp/a.png' }],
-          },
-        },
-        {
           kind: 'artifact',
-          artifactId: 'chart-page',
-          title: 'Quarterly chart',
-          version: 1,
+          artifactId: 'plan-page',
+          title: 'Launch plan',
+          version: 2,
         },
-      ],
-      moreAttachments: 0,
-    });
-  });
-
-  it('starts a call’s turn at its call_started row when the card names a callId', async () => {
-    await write(1, 'message', { text: 'hi' }, 'user');
-    await write(2, 'show_gallery', {
-      title: 'Before the call',
-      images: [{ path: '/tmp/b.png' }],
-    });
-    await write(3, 'call_started', { callId: 'call-7' });
-    await write(4, 'show_gallery', {
-      title: 'Inside the call',
-      images: [{ path: '/tmp/c.png' }],
-    });
-
-    const inCall = await service.cardFields(
-      RUN,
-      null,
-      asks('Pick one'),
-      [],
-      'call-7',
-    );
-    expect(inCall).toMatchObject({
-      attachments: [{ kind: 'gallery', seq: 4, title: 'Inside the call' }],
-    });
-
-    const wholeTurn = await service.cardFields(RUN, null, asks('Pick one'));
-    expect(wholeTurn).toMatchObject({
-      attachments: [
-        { kind: 'gallery', seq: 4 },
-        { kind: 'gallery', seq: 2 },
       ],
     });
   });
 
   it('attaches nothing and does not throw when the run’s pages cannot be read', async () => {
     await write(1, 'show_artifact', page('plan-page', 'Launch plan'));
-    await write(2, 'message', { text: 'hi' }, 'user');
     vi.spyOn(artifacts, 'read').mockRejectedValueOnce(
       new Error('the page listing is gone'),
     );
 
     await expect(
-      service.cardFields(RUN, null, asks('Use the Launch plan?')),
-    ).resolves.toEqual({ attachments: [], moreAttachments: 0 });
+      service.cardFields(RUN, asks('Use it?'), ['plan-page']),
+    ).resolves.toEqual({ attachments: [] });
     expect(
-      await service.cardFields(RUN, null, asks('Use the Launch plan?')),
+      await service.cardFields(RUN, asks('Use it?'), ['plan-page']),
     ).toMatchObject({ attachments: [{ artifactId: 'plan-page' }] });
   });
 
-  it('gives no fields to a card with no questions, whatever its title names', async () => {
+  it('gives no fields to a card with no questions, whatever pages it passed', async () => {
     await write(1, 'show_artifact', page('plan-page', 'Launch plan'));
-    await write(2, 'message', { text: 'hi' }, 'user');
 
-    expect(await service.cardFields(RUN, 'Launch plan', undefined)).toEqual({});
-    expect(await service.cardFields(RUN, 'Launch plan', [])).toEqual({});
+    expect(await service.cardFields(RUN, undefined, ['plan-page'])).toEqual({});
+    expect(await service.cardFields(RUN, [], ['plan-page'])).toEqual({});
   });
 
   it('tells the unknown page ids apart from the ones the run published', async () => {

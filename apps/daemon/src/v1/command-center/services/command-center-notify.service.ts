@@ -470,10 +470,7 @@ export class CommandCenterNotifyService
         ...(payload.options === undefined ? {} : { options: payload.options }),
         ...(payload.attachments === undefined
           ? {}
-          : {
-              attachments: payload.attachments,
-              moreAttachments: payload.moreAttachments ?? 0,
-            }),
+          : { attachments: payload.attachments }),
       };
       this.relays.set(relayKey(run.id, entry.requestId), relay);
       try {

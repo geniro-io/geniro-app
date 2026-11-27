@@ -2397,7 +2397,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         questions: cardQuestions,
         ...(await this.questionAttachments?.cardFields(
           runId,
-          title,
           cardQuestions,
           artifacts,
         )),
@@ -4769,7 +4768,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             )),
             ...(await this.questionAttachments?.cardFields(
               runId,
-              null,
               mapped.payload.questions,
             )),
           },
@@ -7352,7 +7350,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   questions: hostCardQuestions(questions),
                   ...(await this.questionAttachments?.cardFields(
                     runId,
-                    title,
                     hostCardQuestions(questions),
                     artifacts,
                   )),
@@ -8418,7 +8415,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                     )),
                     ...(await this.questionAttachments?.cardFields(
                       runId,
-                      null,
                       mapped.payload.questions,
                     )),
                   },

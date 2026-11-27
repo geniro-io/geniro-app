@@ -596,7 +596,6 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
           questions: hostCardQuestions(questions),
           ...(await this.questionAttachments?.cardFields(
             runId,
-            title,
             hostCardQuestions(questions),
             artifacts,
           )),

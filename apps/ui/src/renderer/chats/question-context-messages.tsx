@@ -7,10 +7,7 @@ import { ClampedBlock, isLongMarkdown } from './clamped-markdown';
 import { MarkdownContent } from './markdown-content';
 import { QuestionAttachments } from './question-attachments';
 import type { QuestionAttachmentSet } from './question-attachments-payload';
-import { QuestionContextVisual } from './question-context-visual';
 import {
-  isThreadContextVisual,
-  type ThreadContextEntry,
   type ThreadContextMessage,
   ThreadContextReaderContext,
 } from './thread-question-context';
@@ -32,28 +29,18 @@ function messagesText(messages: ThreadContextMessage[]): string {
 type ContextState =
   | { kind: 'hidden' }
   | { kind: 'loading' }
-  | { kind: 'shown'; entries: ThreadContextEntry[] }
+  | { kind: 'shown'; messages: ThreadContextMessage[] }
   | { kind: 'failed' };
 
-/**
- * The messages fold under one Show more. The pages and pictures of a question
- * that carries no attachments stand beside them, never under the fold, since
- * they are what the question may point at.
- */
+/** The messages fold under one Show more. */
 function ContextMessages({
   state,
   memoryKey,
-  showVisuals,
 }: {
   state: Exclude<ContextState, { kind: 'hidden' }>;
   memoryKey: string;
-  showVisuals: boolean;
 }): React.JSX.Element {
-  const entries = state.kind === 'shown' ? state.entries : [];
-  const messages = entries.filter(
-    (entry): entry is ThreadContextMessage => !isThreadContextVisual(entry),
-  );
-  const visuals = showVisuals ? entries.filter(isThreadContextVisual) : [];
+  const messages = state.kind === 'shown' ? state.messages : [];
   return (
     <div
       data-slot="thread-question-context"
@@ -67,42 +54,32 @@ function ContextMessages({
         <p className="text-xs text-destructive">
           Could not read the thread’s messages.
         </p>
-      ) : entries.length === 0 ? (
+      ) : messages.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           The thread said nothing before this question.
         </p>
       ) : (
-        <>
-          {messages.length === 0 ? null : (
-            <ClampedBlock
-              long={isLongMarkdown(messagesText(messages), MESSAGES_LINES)}
-              lines={MESSAGES_LINES}
-              slot="thread-question-context-messages"
-              toggleClassName="text-xs"
-              memoryKey={memoryKey}>
-              <div className="flex min-w-0 flex-col gap-2">
-                {messages.map((message) => (
-                  <div
-                    key={message.seq}
-                    data-slot="thread-question-context-message"
-                    data-role={message.role}
-                    className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-[11px] font-medium text-muted-foreground">
-                      {messageLabel(message.role)}
-                    </span>
-                    <MarkdownContent
-                      content={message.text}
-                      className="text-xs"
-                    />
-                  </div>
-                ))}
+        <ClampedBlock
+          long={isLongMarkdown(messagesText(messages), MESSAGES_LINES)}
+          lines={MESSAGES_LINES}
+          slot="thread-question-context-messages"
+          toggleClassName="text-xs"
+          memoryKey={memoryKey}>
+          <div className="flex min-w-0 flex-col gap-2">
+            {messages.map((message) => (
+              <div
+                key={message.seq}
+                data-slot="thread-question-context-message"
+                data-role={message.role}
+                className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {messageLabel(message.role)}
+                </span>
+                <MarkdownContent content={message.text} className="text-xs" />
               </div>
-            </ClampedBlock>
-          )}
-          {visuals.map((visual) => (
-            <QuestionContextVisual key={visual.seq} entry={visual} />
-          ))}
-        </>
+            ))}
+          </div>
+        </ClampedBlock>
       )}
     </div>
   );
@@ -114,12 +91,12 @@ function ContextMessages({
  * Drawn wherever the question is answered: the manager chat's card and the
  * canvas popover. Nothing is drawn where no reader is provided.
  *
- * A question row that carries `attachments` draws exactly those pages and
- * pictures, beneath the toggle and never folded with it. A question without the
- * key predates them, and keeps the pages its asking turn showed, read from the
- * thread. The pages are bound to the thread's run: what the user picks on a
- * page is kept for the thread, and no page is shared from here. A question no
- * longer open draws its attachments as chips, loading no page until pressed.
+ * The pages the question was asked about are drawn beneath the toggle, never
+ * folded with it: exactly the `attachments` of its row, and none for a question
+ * written before attachments existed. The pages are bound to the thread's run:
+ * what the user picks on a page is kept for the thread, and no page is shared
+ * from here. A question no longer open draws its attachments as chips, loading
+ * no page until pressed.
  */
 export function QuestionContextMessages({
   threadRunId,
@@ -144,9 +121,9 @@ export function QuestionContextMessages({
     const read = (reading.current += 1);
     setContext({ kind: 'loading' });
     readContext.read(threadRunId, threadRequestId).then(
-      (entries) => {
+      (messages) => {
         if (reading.current === read) {
-          setContext({ kind: 'shown', entries });
+          setContext({ kind: 'shown', messages });
         }
       },
       () => {
@@ -203,7 +180,6 @@ export function QuestionContextMessages({
           <ContextMessages
             state={context}
             memoryKey={`question-context:${threadRunId}:${threadRequestId ?? 'latest'}`}
-            showVisuals={attachments === undefined}
           />
         </ThreadRunBindings>
       )}

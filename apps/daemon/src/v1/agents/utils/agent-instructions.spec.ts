@@ -106,6 +106,12 @@ const BOARD_TOOLS_NAMED: readonly HostBoardTool[] = [
 ];
 
 describe('GENIRO_UI_PREAMBLE', () => {
+  it('promises no page on a question that its agent did not pass in artifacts', () => {
+    const pages = lineStartingWith('- `show_artifact`');
+    expect(pages).toContain('never one by itself');
+    expect(pages).not.toContain('exact title');
+  });
+
   it('contradicts the terminal claim rather than only stating the truth', () => {
     // The CLI's own system prompt says the output goes to a terminal, and
     // `--append-system-prompt` cannot delete that line. Dropping the rebuttal

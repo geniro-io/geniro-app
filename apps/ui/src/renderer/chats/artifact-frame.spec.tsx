@@ -120,6 +120,11 @@ describe('ArtifactFrame — clipped, for a touch screen', () => {
     const cut = frame()?.parentElement;
     expect(cut?.style.maxHeight).toBe(`${MAX_INLINE_HEIGHT}px`);
     expect(cut?.className).toContain('overflow-clip');
+    // A border inside the frame's own height would leave the page a couple of
+    // pixels to scroll, and a swipe over it would move the page, not the chat.
+    expect(frame()?.className).not.toMatch(/(^|\s)border(\s|$)/);
+    expect(cut?.className).toMatch(/(^|\s)border(\s|$)/);
+    expect(cut?.className).toContain('box-content');
     expect(cut?.className).toContain('mask-b-from-70%');
     expect(clip()?.getAttribute('data-cut-off')).toBe('true');
     expect(action()).toBeDefined();
@@ -250,6 +255,12 @@ describe('ArtifactFrame', () => {
       );
     });
     expect(frame()?.style.height).toBe(before);
+  });
+
+  it('keeps its own border when it is not clipped', async () => {
+    await render();
+    expect(frame()?.className).toMatch(/(^|\s)border(\s|$)/);
+    expect(frame()?.className).toContain('rounded-lg');
   });
 
   it('caps its own growth so one artifact cannot own the transcript', async () => {

@@ -475,7 +475,8 @@ export function ArtifactFrame({
       referrerPolicy="no-referrer"
       onLoad={postTheme}
       className={cn(
-        'w-full rounded-lg border border-border bg-transparent',
+        'w-full bg-transparent',
+        !inlineClip && 'rounded-lg border border-border',
         className,
       )}
       style={fill ? undefined : { height: frameHeight }}
@@ -489,9 +490,11 @@ export function ArtifactFrame({
           data-slot="artifact-frame-clip"
           data-cut-off={cutOff}
           className="relative">
+          {/* The border sits on this box, outside its content, so the frame is
+              exactly as tall as the page and leaves it no pixel to scroll. */}
           <div
             className={cn(
-              'overflow-clip rounded-lg',
+              'box-content overflow-clip rounded-lg border border-border',
               cutOff && 'mask-b-from-70%',
             )}
             style={{ maxHeight: MAX_INLINE_HEIGHT }}>

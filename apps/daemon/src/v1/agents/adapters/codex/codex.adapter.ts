@@ -1506,7 +1506,7 @@ export class CodexAdapter extends AgentAdapter {
   /**
    * The thread holds a user message. Measured on 0.172.0: a thread killed
    * before its first prompt is refused (`thread not loaded`), and one killed
-   * before codex recorded its prompt (about 3.7 s in) reads as one turn with no
+   * before codex recorded its prompt (1.6–5 s in) reads as one turn with no
    * items. A read that gets no answer keeps the base's yes.
    */
   override async sessionResumable(

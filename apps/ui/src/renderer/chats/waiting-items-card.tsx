@@ -10,7 +10,6 @@ import { MemoryRow } from '../components/memory-row';
 import { ShowAllButton, useShowAll } from '../components/show-all';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
-import { cn } from '../components/ui/utils';
 import {
   awaitsApproval,
   editingOf,
@@ -20,10 +19,10 @@ import { daemonErrorCode, describeDaemonError } from '../daemon-api';
 import { KnowledgeReview } from '../knowledge/knowledge-review';
 import { byLine } from '../knowledge/knowledge-text';
 import { LessonProposalRow } from '../settings/waiting-lessons';
-import { EventLine } from './agent-event-card';
 import { KnowledgeOpenContext } from './knowledge-tool-row';
 import { documentsReaderOf } from './lessons-api-context';
 import { MemoryOpenContext } from './memory-tool-row';
+import { NoticeCard } from './notice-card';
 import type { WaitingItemsRowView } from './thread-message-payload';
 import {
   WaitingItemsContext,
@@ -259,23 +258,17 @@ function Frame({
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div
-      data-slot="waiting-items-card"
-      data-kind={kind}
-      data-decided={decided ? '' : undefined}
-      className={cn(
-        'flex min-w-0 flex-col gap-2 rounded-card border border-border border-l-2 bg-card px-3 py-2',
-        decided ? 'border-l-success/50 opacity-80' : 'border-l-warning/50',
-      )}>
-      <EventLine
-        icon={decided ? CircleCheck : Inbox}
-        tone={decided ? 'success' : 'warning'}
-        label={decided ? 'Reviewed' : 'Waiting for your review'}
-        slot="waiting-items"
-        member={heading}
-      />
+    <NoticeCard
+      slot="waiting-items"
+      kind={kind}
+      icon={Inbox}
+      label="Waiting for your review"
+      heading={heading}
+      settled={decided}
+      settledIcon={CircleCheck}
+      settledLabel="Reviewed">
       {children}
-    </div>
+    </NoticeCard>
   );
 }
 

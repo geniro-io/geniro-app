@@ -141,6 +141,7 @@ export function CommandCenter({
   client,
   active,
   onOpenThread,
+  onOpenMemoryConflicts,
 }: {
   handle: DaemonHandle;
   client: DaemonClient | null;
@@ -150,6 +151,8 @@ export function CommandCenter({
    */
   active: boolean;
   onOpenThread: (runId: string) => void;
+  /** Open Settings → Memory → Clean up on its Conflicts tab. */
+  onOpenMemoryConflicts?: () => void;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
   const contextReader = useMemo(
@@ -869,6 +872,7 @@ export function CommandCenter({
                       threadIdentities={threadIdentities}
                       threadReports={threadReports}
                       onOpenThread={showThreadFromWindow}
+                      onOpenMemoryConflicts={onOpenMemoryConflicts}
                       onTurnSettled={board.reload}
                       onDiscarded={board.reload}
                     />

@@ -250,4 +250,45 @@ describe('useCliAttention', () => {
     expect(detectClis).toHaveBeenLastCalledWith(undefined);
     expect(shown('updates')).toBe('0');
   });
+
+  it('hands over the detections themselves, null until the first reading lands', async () => {
+    let answer: (detections: CliDetection[]) => void = () => undefined;
+    detectClis.mockReturnValueOnce(
+      new Promise<CliDetection[]>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    expect(attention.detections).toBeNull();
+
+    const read = [det('claude', { loggedIn: false })];
+    await act(async () => {
+      answer(read);
+    });
+
+    expect(attention.detections).toEqual(read);
+  });
+
+  it('probes the CLIs afresh on refresh(true) and asks the cache on refresh(false)', async () => {
+    detectClis.mockResolvedValue([]);
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    detectClis.mockResolvedValue([det('claude', { loggedIn: false })]);
+
+    await act(async () => {
+      attention.refresh(true);
+    });
+    expect(detectClis).toHaveBeenLastCalledWith(undefined);
+    expect(shown('sign-ins')).toBe('1');
+
+    await act(async () => {
+      attention.refresh(false);
+    });
+    expect(detectClis).toHaveBeenLastCalledWith({
+      maxAgeMs: DETECTION_MAX_AGE_MS,
+    });
+  });
 });

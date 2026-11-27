@@ -56,4 +56,6 @@ export interface HostedThread {
   threadReports?: ReadonlyMap<string, string>;
   /** The conversation is the command center's manager, whose transcript draws review-item cards. */
   commandCenterManager?: boolean;
+  /** Open Settings → Memory → Clean up on its Conflicts tab, for the manager's conflicts card. */
+  onOpenMemoryConflicts?: () => void;
 }

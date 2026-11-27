@@ -314,6 +314,7 @@ export function App(): React.JSX.Element {
    */
   const [settingsSectionOpen, setSettingsSectionOpen] = useState(false);
   const [memoryFocus, setMemoryFocus] = useState<string | null>(null);
+  const [memoryConflictsRequest, setMemoryConflictsRequest] = useState(false);
   /** Leaves the section for the list — see `usePhoneBackEntry`. */
   const settingsBack = usePhoneBackEntry(
     'settings',
@@ -633,6 +634,12 @@ export function App(): React.JSX.Element {
   const openThreadFromTitleBar = useLatestCallback((runId: string): void => {
     setThreadRequest(runId);
     setView('chats');
+  }, []);
+  const openMemoryConflicts = useLatestCallback((): void => {
+    setMemoryConflictsRequest(true);
+    setSettingsSection('memory');
+    setSettingsSectionOpen(true);
+    setView('settings');
   }, []);
   const openLessonsReview = useLatestCallback((): void => {
     setSettingsSection('memory');
@@ -1075,6 +1082,7 @@ export function App(): React.JSX.Element {
                           setThreadRequest(runId);
                           setView('chats');
                         }}
+                        onOpenMemoryConflicts={openMemoryConflicts}
                       />
                     </div>
                   ) : null}
@@ -1109,6 +1117,12 @@ export function App(): React.JSX.Element {
                           settingsSection === 'memory' ? memoryFocus : null
                         }
                         onMemoryFocusDone={() => setMemoryFocus(null)}
+                        memoryConflicts={
+                          settingsSection === 'memory' && memoryConflictsRequest
+                        }
+                        onMemoryConflictsOpened={() =>
+                          setMemoryConflictsRequest(false)
+                        }
                         memoryWaiting={memoryWaiting}
                         onClisDetected={cliAttention.adopt}
                         onOpenOnboarding={

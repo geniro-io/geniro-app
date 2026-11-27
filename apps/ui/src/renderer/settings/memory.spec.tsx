@@ -2516,6 +2516,21 @@ describe('Memory duplicates and contradictions', () => {
     );
   });
 
+  it('opens Clean up on its Conflicts tab when asked, and says once that it did', async () => {
+    const onConflictsOpened = vi.fn();
+    await render({
+      api: fakeApi(undefined, undefined, undefined, { findings: [FINDING] }),
+      openConflicts: true,
+      onConflictsOpened,
+    });
+
+    expect(inDialog().querySelector('h3')?.textContent).toBe(
+      'Duplicates & contradictions',
+    );
+    expect(finding().textContent).toContain('Contradiction');
+    expect(onConflictsOpened).toHaveBeenCalledTimes(1);
+  });
+
   it('the check is refused from a paired device', async () => {
     const api = fakeApi(undefined, undefined, undefined, {
       pairs: pairsOf(3),

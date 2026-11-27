@@ -63,15 +63,20 @@ async function readPendingRevisions({
   );
 }
 
-type Subscribe = (client: DaemonClient, reload: () => void) => () => void;
+export type Subscribe = (
+  client: DaemonClient,
+  reload: () => void,
+) => () => void;
 
-const ON_MEMORY: Subscribe = (client, reload) => client.onMemoryChanged(reload);
+export const ON_MEMORY: Subscribe = (client, reload) =>
+  client.onMemoryChanged(reload);
 const ON_LESSONS: Subscribe = (client, reload) =>
   client.onLessonsChanged(reload);
 const ON_KNOWLEDGE: Subscribe = (client, reload) =>
   client.onKnowledgeChanged(reload);
 
-function useWaitingSet<T extends { id: string }>(
+/** One daemon list by id while `active`, re-read on its own change announce and after a reconnect. */
+export function useWaitingSet<T extends { id: string }>(
   apis: DaemonApis | null,
   client: DaemonClient | null,
   active: boolean,

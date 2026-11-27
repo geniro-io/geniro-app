@@ -22303,6 +22303,48 @@ describe('Chats — one hosted conversation', () => {
     });
   }
 
+  it('ends only the command center manager’s transcript with what waits in Settings', async () => {
+    (
+      window as unknown as { geniro: { detectClis: ReturnType<typeof vi.fn> } }
+    ).geniro.detectClis.mockResolvedValue([
+      {
+        kind: 'claude',
+        found: true,
+        path: '/bin/claude',
+        version: '2',
+        loggedIn: true,
+        update: {
+          available: true,
+          latestVersion: '3',
+          checkUnavailableReason: null,
+        },
+      },
+    ]);
+    const { client } = makeClient();
+    const quiet = (): (() => void) => () => undefined;
+    for (const name of [
+      'onMemoryChanged',
+      'onLessonsChanged',
+      'onKnowledgeChanged',
+      'onSharesChanged',
+    ] as const) {
+      Object.assign(client, { [name]: client[name] ?? quiet });
+    }
+    const manager = await mount(client, undefined, {
+      hosted: hostedThread({ commandCenterManager: true }),
+    });
+
+    const cards = manager.querySelector('[data-slot="settings-attention"]');
+    expect(cards?.closest('[data-slot="transcript"]')).not.toBeNull();
+    expect(cards?.textContent).toContain('claude 2 → 3');
+
+    const other = await mount(makeClient().client, undefined, {
+      hosted: hostedThread(),
+    });
+
+    expect(other.querySelector('[data-slot="settings-attention"]')).toBeNull();
+  });
+
   it('draws the one conversation the surface opens, with no list and no new-chat composer', async () => {
     const { client } = makeClient();
     const hosted = hostedThread({

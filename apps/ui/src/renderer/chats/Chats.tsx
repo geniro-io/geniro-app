@@ -341,6 +341,7 @@ import {
   SESSION_SEARCH_CONCURRENCY,
   sessionProfiles,
 } from './session-search';
+import { SettingsAttentionCards } from './settings-attention-cards';
 import { settleMomentOf } from './settled-status';
 import { groupRunningShells, type ShellRun, shellRuns } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
@@ -11162,6 +11163,16 @@ export function Chats({
                               ),
                             );
                           })}
+                          {managerChat && !threadOpening ? (
+                            <SettingsAttentionCards
+                              apis={apis}
+                              client={client}
+                              active={active}
+                              onOpenMemoryConflicts={
+                                hosted?.onOpenMemoryConflicts ?? null
+                              }
+                            />
+                          ) : null}
                           <div ref={transcriptEndRef} />
                         </div>
                         {activeRun === null ? null : (
